@@ -1495,8 +1495,9 @@ impl WorkHost {
     /// - no work of it has been witnessed yet: its handoff has not been given to a turn of
     ///   Stu's and no helper of it was dispatched. That is an assignment between its
     ///   registration and its first worker (`work_gate.rs`, §6.4), which still blocks;
-    /// - one of its receipts may still have a run in flight and that session's own worker
-    ///   reading is not an observed clear (`app_workers::status`, a liveness syscall per run).
+    /// - one of its receipts may still have a run in flight, that session's own worker reading
+    ///   is not an observed clear (`app_workers::status`), and the session itself has not
+    ///   demonstrably ended ([`Self::provider_ended`]).
     ///
     /// Stu's back end is per conversation, not per job: while it is in a turn (ours or an
     /// automatic one) or has saved input it has not been given, that conversation counts at
@@ -1506,6 +1507,7 @@ impl WorkHost {
         for record in open {
             threads.entry((record.entity_id.as_str(), record.thread_id.as_str())).or_default().push(record);
         }
+        let hosted = self.lease_sessions();
         let mut sessions: std::collections::HashMap<String, bool> = Default::default();
         let mut live = 0;
         for ((entity, thread), records) in threads {
@@ -1519,8 +1521,9 @@ impl WorkHost {
             let mut session_live = |session: &str| {
                 // A receipt naming no session has no worker reading that could clear it.
                 *sessions.entry(session.to_string()).or_insert_with(|| {
-                    session.is_empty() || crate::work_gate::workers(&crate::app_workers::status(&self.state, Some(session))).0
+                    session.is_empty() || (crate::work_gate::workers(&crate::app_workers::status(&self.state, Some(session))).0
                         != crate::work_gate::Liveness::Clear
+                        && !self.provider_ended(entity, thread, session, &hosted))
                 })
             };
             let own = records.iter().filter(|record| {
@@ -1546,6 +1549,34 @@ impl WorkHost {
             live += own.max(usize::from(self.stu_busy(&scope)));
         }
         live
+    }
+
+    /// **This provider session has demonstrably ended, and no process of it still runs.** A
+    /// provider that ends on a lost connection or a restart need not deliver its helpers'
+    /// `SubagentStop` (second review rv-20261029T004310Z-6c4c304f-d238 of `6c4c304f4`: a
+    /// receipt of such a session kept the update gate busy for as long as it stayed). The
+    /// terminal evidence is the engine's own (`workspaces.py` `session_state`): its journal's
+    /// last session row is `SessionEnd` (`app_workers::session_ended`), its canonical record
+    /// carries `ended_at`, or the process recorded running it is gone or is now another
+    /// process. Never ended while this host holds it as a live lease, while its recorded
+    /// process still runs, or when either of those cannot be read (fail toward waiting).
+    fn provider_ended(&self, entity: &str, thread: &str, session: &str, hosted: &[String]) -> bool {
+        if hosted.iter().any(|live| live == session) {
+            return false;
+        }
+        let Ok(record) = crate::work_status::session_record(&self.state, entity, thread, session) else {
+            return false;
+        };
+        let record = record.unwrap_or_default();
+        let process_gone = match &record.process {
+            None => false,
+            Some((pid, start)) => match crate::app_cleanup::process_start(*pid) {
+                crate::app_cleanup::ProcessStart::Running(now) if now == *start => return false,
+                crate::app_cleanup::ProcessStart::Running(_) | crate::app_cleanup::ProcessStart::Gone => true,
+                crate::app_cleanup::ProcessStart::Unreadable => return false,
+            },
+        };
+        process_gone || record.ended || crate::app_workers::session_ended(&self.state, session) == Some(true)
     }
 
     /// Stu's back end for this conversation is in a turn (ours or an automatic one), or has
@@ -4740,6 +4771,90 @@ read -r keep_alive
         let work = h.host.background_work();
         assert_eq!((work.running, work.awaiting_you), (0, 1));
         assert_eq!(gate(&h), (crate::work_gate::Liveness::Busy, Some("An assignment is waiting for you to approve it.".into())));
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **(d) A helper's session that has demonstrably ended is not running** (second review
+    /// rv-20261029T004310Z-6c4c304f-d238 of `6c4c304f4`, from its fixture `ended-session.rs`).
+    /// A provider that ends on a lost connection or a restart need not deliver its helper's
+    /// `SubagentStop`; it leaves `SessionEnd` in the session's callback journal and `ended_at`
+    /// on its canonical session record (`workspaces.py` `record_session_end`), or its recorded
+    /// process is gone. The helper's receipt still says `running`, and that session's worker
+    /// reading still shows the helper launched and not stopped: on `6c4c304f4` the update gate
+    /// read "1 assignment is still running in the background." for as long as the receipt
+    /// stayed. It does not run now. A session with no terminal evidence, one that started
+    /// again, one this host has live, and one whose recorded process still runs keep counting.
+    #[test]
+    fn a_helper_whose_provider_session_has_ended_is_not_running_and_a_live_session_still_is() {
+        use sha2::Digest;
+        let h = harness(0);
+        assignment::register(&h.state, &registration(&h)).unwrap();
+        helper_receipt(&h, "running");
+        let partition = format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"));
+        let sessions = h.state.join("workspaces").join(&partition).join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let record = sessions.join("work-session-one.json");
+        let evidence = h.state.join("evidence/work-session-one");
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join(".lock"), "").unwrap();
+        let row = |event: &str, more: serde_json::Value| {
+            let mut callback = serde_json::json!({"session_id": "work-session-one", "hook_event_name": event});
+            for (key, value) in more.as_object().unwrap() { callback[key] = value.clone(); }
+            serde_json::json!({"schema": 1, "callback": callback}).to_string() + "\n"
+        };
+        let launched = row("SubagentStart", serde_json::json!({"agent_id": "agent-one"}))
+            + &row("PostToolUse", serde_json::json!({"tool_name": "Agent",
+                "tool_response": {"status": "async_launched", "agentId": "agent-one"}}));
+        let ended = launched.clone() + &row("SessionEnd", serde_json::json!({"reason": "other"}));
+        let journal = |text: &str| std::fs::write(evidence.join("callbacks.jsonl"), text).unwrap();
+        let canonical = |value: serde_json::Value| std::fs::write(&record, value.to_string()).unwrap();
+        let end_record = serde_json::json!({"session_id": "work-session-one",
+            "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"});
+        let busy = (crate::work_gate::Liveness::Busy, Some("1 assignment is still running in the background.".to_string()));
+        let clear = (crate::work_gate::Liveness::Clear, None);
+
+        // Control: the session is live by every reading there is. Running.
+        journal(&launched);
+        assert_eq!((h.host.background_work().running, gate(&h)), (1, busy.clone()),
+            "a helper of a session with no terminal evidence was read as ended");
+        // The reviewer's case: SessionEnd and the canonical end, no provider running. Not running.
+        journal(&ended);
+        canonical(end_record.clone());
+        assert_eq!((h.host.background_work().running, gate(&h)), (0, clear.clone()),
+            "a helper of a provider session that has ended still blocked the update");
+        // Either witness alone is terminal evidence.
+        std::fs::remove_file(&record).unwrap();
+        assert_eq!(h.host.background_work().running, 0, "SessionEnd in the journal was not read as the session's end");
+        journal(&launched);
+        canonical(end_record.clone());
+        assert_eq!(h.host.background_work().running, 0, "the canonical ended_at record was not read as the session's end");
+        // Its recorded process is gone: an identity that is no longer that process.
+        let own = std::process::id();
+        canonical(serde_json::json!({"session_id": "work-session-one", "pid": own, "pid_start": "Thu Jan  1 00:00:00 1970"}));
+        assert_eq!(h.host.background_work().running, 0, "a session whose recorded process is gone was read as live");
+
+        // Controls: each live session keeps counting.
+        // It started again after its end (resumed): SessionStart follows, and the record drops ended_at.
+        journal(&(ended.clone() + &row("SessionStart", serde_json::json!({"source": "resume"}))));
+        std::fs::remove_file(&record).unwrap();
+        assert_eq!(h.host.background_work().running, 1, "a session that started again after its end was read as ended");
+        // Its recorded provider process still runs (this process, with its own start).
+        journal(&ended);
+        let start = crate::app_cleanup::own_start().expect("this process's start");
+        canonical(serde_json::json!({"session_id": "work-session-one", "pid": own, "pid_start": start,
+            "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"}));
+        assert_eq!((h.host.background_work().running, gate(&h)), (1, busy.clone()),
+            "a session whose provider process still runs was read as ended");
+        // This host has it live as Stu's lease.
+        canonical(end_record);
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("work-session-one".into());
+        h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
+        assert_eq!((h.host.background_work().running, gate(&h)), (1, busy),
+            "a session this host has live was read as ended");
+        h.host.backends.lock().unwrap().clear();
+        assert_eq!(gate(&h), clear);
+        h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 

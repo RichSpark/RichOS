@@ -602,6 +602,53 @@ pub fn launches(state: &Path, entity: &str, thread: &str) -> Result<std::collect
     Ok(out)
 }
 
+/// **What a provider session's canonical record says of its end** — the record the engine keeps
+/// per session in this conversation's registry (`workspaces/<partition>/sessions/<id>.json`,
+/// `workspaces.py` `session_start` / `record_session_end`). A session's start clears `ended_at`,
+/// so `ended` describes its latest run, not some earlier one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionRecord {
+    /// It recorded its end (`ended_at`, written at `SessionEnd`).
+    pub ended: bool,
+    /// The process recorded running it, and that process's start (`pid`, `pid_start`): the
+    /// identity `workspaces.py` `session_state` reads from the operating system.
+    pub process: Option<(u32, String)>,
+}
+
+/// [`SessionRecord`] for `session` in this conversation, `None` when it never wrote one. A
+/// record that cannot be read, or names another session, is an error, never "not ended".
+pub fn session_record(state: &Path, entity: &str, thread: &str, session: &str) -> Result<Option<SessionRecord>, String> {
+    if session.is_empty() || session.len() > 128 || !session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Err("A session reference is invalid.".into());
+    }
+    let identity = serde_json::to_vec(&[entity, thread]).map_err(|e| e.to_string())?;
+    let parent = state.join("workspaces");
+    let registry = parent.join(format!("{:x}", Sha256::digest(identity)));
+    let sessions = registry.join("sessions");
+    if [&parent, &registry, &sessions].iter().any(|p| p.is_symlink()) {
+        return Err("Work records have been redirected.".into());
+    }
+    let path = sessions.join(format!("{session}.json"));
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("A session record could not be read.".into()),
+    };
+    if !meta.is_file() || meta.len() > 1024 * 1024 {
+        return Err("A session record is too large or redirected.".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|_| "A session record could not be read.")?;
+    let record: Value = serde_json::from_slice(&bytes).map_err(|_| "A session record is damaged.")?;
+    if record["session_id"] != session {
+        return Err("A session record has a different identity.".into());
+    }
+    let process = match (record["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()), record["pid_start"].as_str()) {
+        (Some(pid), Some(start)) if pid > 0 && !start.is_empty() => Some((pid, start.to_string())),
+        _ => None,
+    };
+    Ok(Some(SessionRecord { ended: record["ended_at"].as_str().is_some_and(|at| !at.is_empty()), process }))
+}
+
 #[cfg(test)] mod tests {
     use super::*;
     #[test] fn scoped_saved_evidence_never_infers_liveness_or_completion() {
