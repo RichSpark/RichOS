@@ -44,6 +44,11 @@ enum Renewal {
 enum InputReceipt { Peer(u64), Answer(String) }
 impl InputReceipt {
     fn input_id(&self)->String {match self {Self::Peer(through)=>format!("peer:{through}"),Self::Answer(id)=>format!("answer:{id}")}}
+    /// The receipt of a run-loop turn named `turn` (`peer:<offset>` or `answer:<id>`).
+    fn of_turn(turn: &str) -> Option<Self> {
+        turn.strip_prefix("peer:").and_then(|through| through.parse().ok()).map(Self::Peer)
+            .or_else(|| turn.strip_prefix("answer:").map(|id| Self::Answer(id.to_string())))
+    }
 }
 
 /// A wait of the workers' overload clock on one Stu session: the retry it is and how long it
@@ -120,6 +125,13 @@ struct Inner {
     /// given to it again here; the next process hands it back once, as a reconciliation that
     /// names the earlier attempt.
     delivered: std::collections::HashMap<String, std::collections::HashSet<u64>>,
+    /// **Input each provider session was given in a turn that ended without `end_turn`**, by
+    /// session id, that nothing will send again (Otto's trace of 2026-10-29: a message delivered
+    /// into a turn a 429 cut stayed only received; this process never sent it again, its sent
+    /// set lives here, but the next one did, after Stu had acted on it, at 11:44Z). Once a later
+    /// turn of the same session ends with `end_turn`, he has had it: it is marked done
+    /// ([`WorkHost::settle_cut`]), as its own turn ending so would have done.
+    cut: std::collections::HashMap<String, Vec<InputReceipt>>,
 }
 impl Inner {
     /// What `session` was already given in this process, for [`WorkHost::next_for_stu`].
@@ -216,6 +228,33 @@ impl WorkHost {
         let ended = inner.closing || inner.lease_session.as_deref() != Some(session);
         drop(inner);
         ended || message.is_some_and(|message| self.handoff_stopped(binding, message).unwrap_or(true))
+    }
+
+    /// `input` was given to a turn of `session` that ended without `end_turn`, and nothing sends
+    /// it again ([`Inner::cut`]).
+    fn note_cut(&self, backend: &Backend, session: Option<&str>, input: InputReceipt) {
+        let Some(session) = session.filter(|session| !session.is_empty()) else { return };
+        backend.inner.lock().unwrap().cut.entry(session.to_string()).or_default().push(input);
+    }
+
+    /// **A turn of `session` ended with `end_turn`**: the input that session was given in an
+    /// earlier turn that did not ([`Inner::cut`]) is done now, as it would have been had its own
+    /// turn ended so. A handoff whose job is still open stays open on its record, as at any
+    /// `end_turn` (`session_tools::acknowledge`).
+    fn settle_cut(&self, backend: &Backend, binding: &ThreadBinding, session: &str) {
+        let cut = backend.inner.lock().unwrap().cut.remove(session).unwrap_or_default();
+        if cut.is_empty() { return; }
+        let scope = self.message_scope(binding);
+        for input in cut {
+            let done = match &input {
+                InputReceipt::Peer(through) => crate::session_tools::acknowledge(&scope, "stu", *through),
+                InputReceipt::Answer(id) => crate::question_work::taken(&self.state, std::slice::from_ref(id), session)
+                    .and_then(|_| crate::session_tools::complete_attempt(&scope, "stu", &input.input_id())),
+            };
+            if let Err(error) = done {
+                eprintln!("[richos] input a cut turn was given stays open: {error}");
+            }
+        }
     }
 
     /// **A turn of Stu's that a usage limit cut** (`error` is the lease's
@@ -325,9 +364,12 @@ impl WorkHost {
             let (Some(host), Some(backend)) = (host.upgrade(), receiving.upgrade()) else { return };
             let (input, cut_session) = delivered;
             let input_id = input.input_id();
-            let failed = || if let Err(error) = host.observe_turn_result(&binding, Some(&message), Some(&input_id),
-                cut_session.as_deref().unwrap_or(""), &original) {
-                eprintln!("[richos] native input status: {error}");
+            let failed = || {
+                if let Err(error) = host.observe_turn_result(&binding, Some(&message), Some(&input_id),
+                    cut_session.as_deref().unwrap_or(""), &original) {
+                    eprintln!("[richos] native input status: {error}");
+                }
+                host.note_cut(&backend, cut_session.as_deref(), input.clone());
             };
             let error = original.as_ref().err().cloned().unwrap_or_default();
             let Some(hold) = host.usage_limit_hold(&backend, &binding, &error) else { failed(); return };
@@ -472,6 +514,9 @@ impl WorkHost {
                 InputReceipt::Answer(_)=>Ok(()),
             };
             if let Err(error) = receipt { eprintln!("[richos] native input receipt remains pending: {error}"); }
+            if succeeded {
+                if let Some(session) = session.as_deref() { host.settle_cut(&backend, &binding, session); }
+            }
             if outcome.report_failure {
                 if let Some(wait) = host.overload_wait(&backend, &binding, &outcome.result) {
                     // The native reader must keep reading while the existing retry clock waits.
@@ -494,13 +539,14 @@ impl WorkHost {
                         let input = backend.inner.lock().unwrap().peer_stopper.clone()
                             .filter(|(session, _)| session == owner).map(|(_, input)| input);
                         let completed = host.live_completion_with(&backend, &retry_binding, retry_message.clone(),
-                            (retry_receipt, retry_session.clone()), retry_text.clone(), limit_retry);
+                            (retry_receipt.clone(), retry_session.clone()), retry_text.clone(), limit_retry);
                         let sent = input.map(|input|input.send_input(&uuid::Uuid::new_v4().to_string(), &retry_text, completed));
                         if !matches!(sent, Some(Ok(true))) {
                             if let Err(error) = host.observe_turn_result(&retry_binding, Some(&retry_message),
                                 Some(&retry_input_id), owner, &original_error) {
                                 eprintln!("[richos] native input status: {error}");
                             }
+                            host.note_cut(&backend, retry_session.as_deref(), retry_receipt);
                         }
                     });
                     if retry.is_ok() { backend.wake.notify_all(); return; }
@@ -517,6 +563,8 @@ impl WorkHost {
                     eprintln!("[richos] native input status: {error}");
                 }
             }
+            // Given to a turn that did not end normally, and nothing sends it again.
+            if !succeeded { host.note_cut(&backend, session.as_deref(), input); }
             backend.wake.notify_all();
         })
     }
@@ -619,6 +667,9 @@ impl WorkHost {
     /// inbox to carry on. When the schedule grants no retry, the failure reaches Rich as before.
     fn observe_automatic_turn(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, session: &str,
         result: &Result<String, String>) {
+        if result.as_ref().is_ok_and(|reason| reason == "end_turn") {
+            self.settle_cut(backend, binding, session);
+        }
         if let Some(wait) = self.overload_wait(backend, binding, result) {
             let fact = serde_json::json!({"event":"turn_overload","error":result.as_ref().err(),"waited_minutes":wait.as_secs()/60});
             match self.tell_stu_after(backend, binding, session, Some(wait), move |_, elapsed| if elapsed { vec![fact] } else { vec![] }) {
@@ -1030,6 +1081,8 @@ impl WorkHost {
     ) -> Result<String, String> {
         // One delivery of `message` as a turn of Stu's. Called once, and a second time only
         // after a usage limit (below), so it is never a retry loop.
+        // The session a delivery's turn ran to a result on (its input is in that transcript).
+        let ran: std::cell::RefCell<Option<String>> = Default::default();
         let deliver=|| {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
@@ -1123,10 +1176,14 @@ impl WorkHost {
                 self.note_back_end(binding, None);
                 backend.inner.lock().unwrap().peer_active_through=None;
             }
+            if !matches!(&result, Err(CognitionError::Io(_))) {
+                *ran.borrow_mut() = Some(session.clone());
+            }
             let reason = result.map_err(|e| e.to_string())?;
             if reason != "end_turn" {
                 return Err(format!("Operator input did not complete: {reason}"));
             }
+            self.settle_cut(backend, binding, &session);
             let lease = guard
                 .as_mut()
                 .ok_or("The operator connection closed during team reload")?;
@@ -1146,6 +1203,9 @@ impl WorkHost {
             None => result,
         };
         if result.is_err() {
+            if let (Some(cut), Some(input)) = (ran.borrow_mut().take(), InputReceipt::of_turn(turn)) {
+                self.note_cut(backend, Some(&cut), input);
+            }
             let session=backend.inner.lock().unwrap().lease_session.clone().unwrap_or_default();
             self.observe_turn_result(binding,Some(message),Some(turn),&session,&result)?;
         }
@@ -3160,12 +3220,16 @@ mod tests {
         let resumed=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();assert_eq!(resumed.1,through);
         let factory=Factory{spawns:h.spawns.clone(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),gate:h.start_gate.clone()};
         let restarted=WorkHost::new(&h.state,Box::new(factory),Arc::new(SilentNotifier));
-        let recovered=if matches!(result,"end_turn"|"provider_error") {1}else{2};
+        // Only the open handoff comes back. The correction's own turn may have ended without
+        // `end_turn`, but the next turn of the same session did, so Stu had it (Otto's trace of
+        // 2026-10-29: such input came back after a restart although he had acted on it).
+        let recovered=1;
         restarted.wake_messages(&h.binding);assert!(restarted.wait_for_completed(recovered,std::time::Duration::from_secs(30)));
         let prompts=h.work_prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(),3+retry+recovered as usize,"restart repeated input beyond its unfinished receipts: {prompts:?}");
         assert!(prompts[3+retry].contains("Land the three branches"));
-        if !matches!(result,"end_turn"|"provider_error") {assert!(prompts[4+retry].contains("Keep the original release date"),"the uncertain correction was lost");}
+        assert!(!prompts[3+retry..].iter().any(|p|p.contains("Keep the original release date")),
+            "{result}: a correction a later normal turn of the same session followed was sent again: {prompts:?}");
         assert!(!prompts[3+retry..].iter().any(|p|p.contains("Use the connected repository")),"successfully completed input replayed");
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_some());
         // Only Stu's actual terminal report retires the original input.
@@ -3214,6 +3278,8 @@ mod tests {
                 crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Independent later input"})).unwrap();
                 h.host.wake_messages(&h.binding);
                 until("later input must pass an answer already received by live Stu", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("Independent later input")));
+                // Its turn has ended, so what it settles is settled before the restart below.
+                assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(30)), "{kind}/{result}: the later input's turn did not end");
                 h.host.shutdown();
                 let prompts = h.work_prompts.lock().unwrap().clone();
                 let recovered_overload = matches!(result,"provider_error"|"pre_model_529");
@@ -3238,7 +3304,11 @@ mod tests {
                 until("restart must deliver its new input", || h.work_prompts.lock().unwrap().iter().any(|p| p.contains("After restart")));
                 restarted.shutdown();
                 let prompts = h.work_prompts.lock().unwrap().clone();
-                let unfinished = kind == "handoff" || (!matches!(result,"end_turn"|"io_error") && !recovered_overload);
+                // Only an open handoff comes back: whatever the input's own turn came to, the later
+                // input's turn on the same session ended `end_turn`, so Stu had it (Otto's trace of
+                // 2026-10-29); after `io_error` that later turn is on a new session, and the input
+                // was sent again there.
+                let unfinished = kind == "handoff";
                 assert_eq!(prompts[before..].iter().filter(|p| p.contains("Input under test")).count(), usize::from(unfinished),
                     "{kind}/{result}: new session lost or repeated recovery input: {prompts:?}");
                 assert!(!prompts[before..].iter().any(|p| p.contains("Independent later input")), "completed input replayed");
@@ -3919,6 +3989,49 @@ mod tests {
         assert_eq!(*stu.clock.0.lock().unwrap(),[std::time::Duration::ZERO],"Home had room: no hold");
         assert!(stu.failures().is_empty());
         stu.end();
+    }
+
+    /// **Input a cut turn was given is done once a later turn of the same session ends normally**
+    /// (Otto's trace of 2026-10-29: messages Stu had already acted on came back at 11:44Z, after
+    /// a restart). Message A goes live into a turn that a usage limit cuts (no quota service, so
+    /// no retry: the case before this branch). The next turn on the same session, message B's,
+    /// ends with `end_turn`. A fresh WorkHost on the same state, as after a restart, has nothing
+    /// to hand Stu again: before this, `pending_after` gave A back, naming its earlier attempt.
+    #[test]
+    fn input_a_cut_turn_was_given_is_done_once_a_later_turn_of_the_session_ends_normally() {
+        let h=harness(0);
+        let scope=h.host.message_scope(&h.binding);
+        let path=h.root.join("peer-status.json");
+        crate::session_tools::bind(&path,&scope,"front","rich",None).unwrap();
+        let backend=Backend::new();
+        let session="stu-live".to_string();
+        backend.inner.lock().unwrap().lease_session=Some(session.clone());
+        let live=|text: &str, after: u64| {
+            crate::session_tools::send(&path,&scope,serde_json::json!({"text":text})).unwrap();
+            let (message,through)=crate::session_tools::pending_after(&scope,"stu",after).unwrap().unwrap();
+            crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),&session).unwrap();
+            let completed=h.host.live_completion(&backend,&h.binding,message,(InputReceipt::Peer(through),Some(session.clone())),text.into());
+            (completed,through)
+        };
+
+        let (cut,a)=live("Message A",0);
+        cut(crate::steering::InputOutcome {result:Err(crate::claude_accounts::usage_limit_error(None,"[\"You've hit your session limit\"]")),report_failure:true});
+        assert!(crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{a}")).unwrap().is_some(),"A was not left received");
+        let (next,b)=live("Message B",a);
+        next(crate::steering::InputOutcome {result:Ok("end_turn".into()),report_failure:true});
+        h.host.shutdown();
+
+        let fresh=WorkHost::new(&h.state,Box::new(Factory {spawns:Arc::new(AtomicUsize::new(0)),prompts:Arc::new(Mutex::new(vec![])),
+            commands:Arc::new(Mutex::new(None)),team:Arc::new(Mutex::new(TeamScript::default())),gate:StartGate::open_now()}),
+            Arc::new(RecordingNotifier::default()));
+        let fresh_scope=fresh.message_scope(&h.binding);
+        let left=crate::session_tools::pending_after(&fresh_scope,"stu",0).unwrap();
+        assert!(left.is_none(),"handed to Stu again after a restart: {:?}",left.map(|(message,through)| (message.text,
+            crate::session_tools::previous_attempt(&fresh_scope,"stu",&format!("peer:{through}")).unwrap())));
+        assert!(crate::session_tools::previous_attempt(&fresh_scope,"stu",&format!("peer:{a}")).unwrap().is_none());
+        assert!(crate::session_tools::previous_attempt(&fresh_scope,"stu",&format!("peer:{b}")).unwrap().is_none());
+        fresh.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     /// The `worker_overload` (and `turn_overload`) facts Stu has been sent, in order.
