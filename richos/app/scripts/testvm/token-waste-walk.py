@@ -11,7 +11,8 @@ It reuses stu-reminder-walk.py's class and its first steps; only the job's words
 steps are this walk's.
 
 STEPS, in the guest, never on the host's screen (CEO ruling 65):
-  identity, first-run, relaunch   as stu-reminder-walk.py
+  identity, first-run, relaunch   as stu-reminder-walk.py; first-run also seeds a git name and email
+              in the fixture home's ~/.gitconfig, so Stu does not stop to ask who he is (job seeds it too)
   job         typed: a job for the back end (Stu) that also asks him to line up (prepare) a second
               teammate and then NOT send it. PASS needs the job SETTLED, as before.
   idle        Stu's turn ended (the lead file says so)
@@ -49,7 +50,9 @@ JOB = ('Please add a file named notes.md whose whole content is the line "Notes 
        'to the Acme repository and commit it, and land it. While you plan, line up (prepare) a second '
        'teammate for a file named extra.md in the same repository, then decide it is not needed and '
        'never send it. Finish the job without it.')
-FIXTURE_SESSION = 'beadfeed-0000-4000-8000-00000000w001'
+GIT_NAME = 'QA'
+GIT_EMAIL = 'qa@example.invalid'
+FIXTURE_SESSION ='beadfeed-0000-4000-8000-00000000w001'
 SILENT_CONTROL = 'control-silent'
 NEVER_STARTED = ('lined-up-never-started', 'refused-never-started')
 
@@ -85,6 +88,25 @@ def judge_quiet(done):
 
 
 class TokenWasteWalk(base.StuReminderWalk):
+    def seed_git_identity(self):
+        """Give the fixture home a git name and email, as a user's own ~/.gitconfig does. The base
+        walk's -c flags cover only its seed commit; Stu's commit in the job runs in the app's home,
+        and with no identity Stu stops to ask "What name should go on your team's saved work?" and
+        the job stalls for its whole window (run 1, 2026-10-29: 1200 s). Idempotent, so --steps can
+        run job alone against a guest that already has it."""
+        gitconfig = shlex.quote(self.home + '/.gitconfig')
+        guest(self.vm, 'git config --file {g} user.name {n} && git config --file {g} user.email {e}'.format(
+            g=gitconfig, n=shlex.quote(GIT_NAME), e=shlex.quote(GIT_EMAIL)), 60)
+
+    def first_run(self):
+        result = super().first_run()
+        self.seed_git_identity()
+        return result
+
+    def job(self):
+        self.seed_git_identity()
+        return super().job()
+
     def receipts(self):
         made = self.payload + '/token-waste'
         guest(self.vm, 'mkdir -p ' + shlex.quote(made), 60)
