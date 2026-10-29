@@ -2161,13 +2161,13 @@ pub(crate) mod tests {
     /// **A model the account used only a little is still read, and its burst still hands off**
     /// (Tom's review of 1ff534f44). Work's first six learned episodes exactly as
     /// `claude-token-points.json` keeps them: Fable is in three of them, 8,760,602 tokens in all,
-    /// under the cheapest whole point (the fourth episode, 17,869,132), so the fit leaves it
-    /// out. Then a Fable burst through a lease: 20 requests of 1M tokens in the last minute.
-    /// 1ff534f44 read it as nothing (the week's point stayed 99, so Work at 93% was not left).
-    /// Priced at the cheapest point it is 20M / 17,869,132 = 1.119 points a minute, fast
-    /// (1.119 x 5 >= 5), so I = 1 minute and H the default 5:
-    /// 99 - (ceil(1.119 x 6 = 6.72) - 1) = 93. (Main's fit gave Fable about 7.97M tokens a point:
-    /// 2.51 a minute, 99 - (ceil(15.06) - 1) = 84. Work's 12-episode figure, 16.5M, gives 92.)
+    /// under the cheapest whole point (the fourth episode, 17,869,132). Then a Fable burst through
+    /// a lease: 20 requests of 1M tokens in the last minute. 1ff534f44 left Fable out of the fit
+    /// and read it as nothing (the week's point stayed 99, so Work at 93% was not left). The fit
+    /// measures Fable at about 7.97M tokens a point, as main does, above its card floor
+    /// (13,890,036 / 2.75 = 5.05M): 20M is 2.51 points a minute, fast (2.51 x 5 >= 5), so I = 1
+    /// minute and H the default 5: 99 - (ceil(2.51 x 6 = 15.06) - 1) = 84, at or under 93.
+    /// (Work's 12-episode figure, 16.5M, gives 1.21 a minute and 92.)
     #[test]
     fn a_minority_models_burst_still_hands_off() {
         let root = Scratch::new();
