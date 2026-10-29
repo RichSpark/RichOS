@@ -41,9 +41,12 @@ with tempfile.TemporaryDirectory(prefix="claude-quota-proof-") as temporary:
     # interpreter whose path has a space in it (the engine's own Python lives under
     # "Application Support"), and the kernel then answers ENOENT for the fixture itself.
     fixture = root / "claude-fixture"
-    body = root / "claude-fixture.py"
-    fixture.write_text("#!/bin/sh\nexec %s %s \"$@\"\n" % (shlex.quote(sys.executable), shlex.quote(str(body))))
-    body.write_text('''import json, os, sys
+    # A shell wrapper, never `#!<python>`: the app's own Python lives under "Application Support",
+    # and a shebang path with a space cannot be executed (ENOENT, "usage reader could not start").
+    fixture_code = root / "claude-fixture.py"
+    fixture.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                       + shlex.quote(str(fixture_code)) + ' "$@"\n')
+    fixture_code.write_text('''import json, os, sys
 from pathlib import Path
 if os.environ.get("QUOTA_PROOF_EOF") == "1":
     sys.exit(0)
