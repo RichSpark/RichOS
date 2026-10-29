@@ -2408,7 +2408,7 @@ pub(crate) mod tests {
         // Past the weekly reset only the five-hour window holds, inside its 20 minutes. Until
         // 2026-10-29 that admitted work at once; now it is the staggered release, and at 100%
         // nothing is released: it waits for the five-hour reset.
-        let five_hour_only = |view: View| (view.admission, view.release.map(|r| r.allows(1, 1)));
+        let five_hour_only = |view: View| (view.admission, view.release.map(|r| r.allows(1, 0, 1)));
         assert_eq!(five_hour_only(state.view(policy(), NOW + 600_000)),
             (Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 }, Some(false)));
         state.windows[1].resets_at = None;
@@ -2452,7 +2452,7 @@ pub(crate) mod tests {
         let near = snapshot(100., RESET_EXEMPTION_MS - 1).view(policy(), NOW);
         assert_eq!(near.admission, Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 });
         assert_eq!(near.release.map(|r| (r.used, r.resets_at)), Some((100., NOW + RESET_EXEMPTION_MS - 1)));
-        assert!(!near.release.unwrap().allows(1, 1), "at 100% nothing is released: it waits for the reset");
+        assert!(!near.release.unwrap().allows(1, 0, 1), "at 100% nothing is released: it waits for the reset");
         assert_eq!(snapshot(93., RESET_EXEMPTION_MS).view(policy(), NOW).release, None, "the window has not begun");
         assert_eq!(
             snapshot(93., 0).view(policy(), NOW).admission,
@@ -2497,16 +2497,16 @@ pub(crate) mod tests {
         assert_eq!(near.admission, Admission::Held { resets_at: NOW + 3_600_000 });
         // No speed measured before the hold or since: no measurement, so nobody goes before the
         // reset (second review of 2026-10-29, finding 2).
-        assert!(near.release.is_some_and(|r| !r.allows(1, 1)), "94% with no speed measured: it waits");
+        assert!(near.release.is_some_and(|r| !r.allows(1, 0, 1)), "94% with no speed measured: it waits");
         // The climb into the hold measured: projected from the stale reading itself (taken an
         // hour before the reset), 0.1 points a minute reaches 94 + 0.1 x 60 = 100 and waits,
         // 0.05 reaches 94 + 0.05 x 60 = 97 and one may go.
         s.rise_log.insert("five_hour".into(), vec![(90., 0.1 / 60_000.)]);
         let measured = s.view(policy(), NOW + 2_400_001);
-        assert!(measured.release.is_some_and(|r| !r.allows(1, 1)), "94% at 0.1 a minute for 60: 100%");
+        assert!(measured.release.is_some_and(|r| !r.allows(1, 0, 1)), "94% at 0.1 a minute for 60: 100%");
         s.rise_log.insert("five_hour".into(), vec![(90., 0.05 / 60_000.)]);
         let measured = s.view(policy(), NOW + 2_400_001);
-        assert!(measured.release.is_some_and(|r| r.allows(1, 1)), "94% at 0.05 a minute: one may go");
+        assert!(measured.release.is_some_and(|r| r.allows(1, 0, 1)), "94% at 0.05 a minute: one may go");
         assert_eq!(
             s.view(policy(), NOW + 3_600_000).admission,
             Admission::Unknown
@@ -2679,7 +2679,7 @@ pub(crate) mod tests {
         assert!((pre - 11.).abs() < 1e-9, "{pre} points a minute");
         let held = s.view(policy(), NOW);
         assert_eq!(held.admission, Admission::Held { resets_at: NOW + 19 * MINUTE });
-        assert!(held.release.is_some_and(|r| !r.allows(1, 10)), "92 + 1.1 x 19 = 112.9");
+        assert!(held.release.is_some_and(|r| !r.allows(1, 0, 10)), "92 + 1.1 x 19 = 112.9");
 
         let dir = Scratch::new();
         let state = dir.path().join("engine-state");
@@ -2687,11 +2687,11 @@ pub(crate) mod tests {
         let check = |s: &Snapshot, at: u64, what: &str| {
             let view = s.view(policy(), at);
             assert_eq!(view.admission, Admission::Held { resets_at: NOW + 19 * MINUTE }, "{what}: the service");
-            assert!(view.release.is_some_and(|r| !r.allows(1, 10)), "{what}: nobody is released early");
+            assert!(view.release.is_some_and(|r| !r.allows(1, 0, 10)), "{what}: nobody is released early");
             atomic_write(&state.join("claude-quota.json"), &view).unwrap();
             let (gate, release) = gate::decide(&state, None, at);
             assert!(matches!(gate, Admission::Held { .. }), "{what}: the gate, {gate:?}");
-            assert!(release.is_some_and(|r| !r.allows(1, 10)), "{what}: the gate releases nobody early");
+            assert!(release.is_some_and(|r| !r.allows(1, 0, 10)), "{what}: the gate releases nobody early");
         };
         s.accept(at(92.), NOW + MINUTE);
         assert_eq!(s.speeds["five_hour"], 0., "the held team's flat reading measures 0");

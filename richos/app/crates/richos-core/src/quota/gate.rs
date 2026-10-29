@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(held, Admission::Held { resets_at: five_reset });
         // 94% and no speed measured before the hold or since: no measurement, so nobody goes
         // before the reset (second review of 2026-10-29, finding 2).
-        assert!(release.is_some_and(|r| !r.allows(1, 1)), "94%, no speed measured: it waits for the reset");
+        assert!(release.is_some_and(|r| !r.allows(1, 0, 1)), "94%, no speed measured: it waits for the reset");
         service.snapshot.lock().unwrap().windows[0].resets_at = Some(now + 3_600_000);
         service.publish().unwrap();
         assert!(matches!(admission(&state, now), Admission::Held { .. }));
