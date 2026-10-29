@@ -174,8 +174,11 @@ fn two_accounts(tag: &str, one_five: f64) -> (std::path::PathBuf, Arc<richos_cor
     let bin = dir.join("claude-fixture");
     std::fs::write(&bin, format!(r#"#!/usr/bin/env python3
 import json, os, sys
+# Work's folder is under this data folder's claude-accounts/. Account 1 inherits the caller's
+# CLAUDE_CONFIG_DIR, which may be any .../claude-accounts/<id> of the developer's own.
+accounts = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-accounts") + os.sep
 folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
-five = 5 if "claude-accounts" in folder else {one_five}
+five = 5 if folder and os.path.realpath(folder).startswith(accounts) else {one_five}
 for line in sys.stdin:
     v = json.loads(line)
     payload = {{}} if v["request"]["subtype"] == "initialize" else {{"rate_limits_available": True, "rate_limits": {{

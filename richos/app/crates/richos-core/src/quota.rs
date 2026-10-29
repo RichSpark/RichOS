@@ -2915,15 +2915,16 @@ pub(crate) mod tests {
 
     /// A fake `claude` that answers `get_usage` with the figures in `usage.json` of the
     /// folder it was started under (`CLAUDE_CONFIG_DIR`), or `usage-1.json` beside it for
-    /// Account 1, which runs with the app's own environment.
+    /// Account 1, which runs with the app's own environment. `root` is the quota service's
+    /// data folder, so an added account's folder is under `root/claude-accounts/`.
     #[cfg(unix)]
     pub(crate) fn fake_claude(root: &Path) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let path = root.join("claude-fixture");
         fs::write(&path, format!(r#"#!/usr/bin/env python3
 import json, os, sys
-folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
-usage = os.path.join(folder, "usage.json") if "claude-accounts" in folder else "{}"
+{ADDED_ACCOUNT_PY}
+usage = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "usage.json") if added else "{}"
 for line in sys.stdin:
     v = json.loads(line)
     kind = v["request"]["subtype"]
@@ -2936,6 +2937,18 @@ for line in sys.stdin:
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
+    /// Python for a fake `claude` beside the quota service's data folder: `root` is that
+    /// folder and `added` says whether this process runs for an added account, whose
+    /// `CLAUDE_CONFIG_DIR` the probe sets to a folder under `root/claude-accounts/`. Account 1's
+    /// reader inherits the caller's `CLAUDE_CONFIG_DIR`, which can be ANY folder, including
+    /// one of the developer's own `.../claude-accounts/<id>` (the lead's session on its second
+    /// account, 2026-10-29): only the test's own folder says it is an added account.
+    #[cfg(unix)]
+    const ADDED_ACCOUNT_PY: &str = r#"root = os.path.dirname(os.path.realpath(__file__))
+_accounts = os.path.join(root, "claude-accounts") + os.sep
+_folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
+added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
+
     pub(crate) fn usage(path: &Path, five: f64, weekly: f64, weekly_reset: &str) {
         fs::write(path, serde_json::to_vec(&json!([five, weekly, weekly_reset])).unwrap()).unwrap();
     }
@@ -3449,11 +3462,10 @@ for line in sys.stdin:
     fn overlapping_refreshes_never_read_an_added_account_with_account_ones_reader() {
         let root = Scratch::new();
         let dir = root.path().to_path_buf();
-        let bin = script(&dir.join("claude-fixture"), r#"#!/usr/bin/env python3
+        let bin = script(&dir.join("claude-fixture"), &format!("#!/usr/bin/env python3
 import json, os, sys, time
-root = os.path.dirname(os.path.abspath(__file__))
-added = "claude-accounts" in os.environ.get("CLAUDE_CONFIG_DIR", "")
-for line in sys.stdin:
+{ADDED_ACCOUNT_PY}
+{}", r#"for line in sys.stdin:
     v = json.loads(line)
     payload = {}
     if v["request"]["subtype"] != "initialize":
@@ -3470,7 +3482,7 @@ for line in sys.stdin:
             "five_hour": {"utilization": 10, "resets_at": "2099-01-01T00:00:00Z"},
             "seven_day": {"utilization": used, "resets_at": "2099-01-05T00:00:00Z"}}}
     print(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": v["request_id"], "response": payload}}), flush=True)
-"#);
+"#));
         let service = std::sync::Arc::new(Service::open(&dir).unwrap());
         let work = service.accounts.add("Work").unwrap();
         let (one, b1) = (service.clone(), bin.clone());
@@ -3534,11 +3546,10 @@ for line in sys.stdin:
     fn shutdown_interrupts_account_ones_pending_read_after_another_account_was_read() {
         let root = Scratch::new();
         let dir = root.path().to_path_buf();
-        let bin = script(&dir.join("claude-fixture"), r#"#!/usr/bin/env python3
+        let bin = script(&dir.join("claude-fixture"), &format!("#!/usr/bin/env python3
 import json, os, sys, time
-root = os.path.dirname(os.path.abspath(__file__))
-added = "claude-accounts" in os.environ.get("CLAUDE_CONFIG_DIR", "")
-n = 0
+{ADDED_ACCOUNT_PY}
+{}", r#"n = 0
 for line in sys.stdin:
     v = json.loads(line)
     payload = {}
@@ -3551,7 +3562,7 @@ for line in sys.stdin:
             "five_hour": {"utilization": 5, "resets_at": "2099-01-01T00:00:00Z"},
             "seven_day": {"utilization": 5, "resets_at": "2099-01-05T00:00:00Z"}}}
     print(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": v["request_id"], "response": payload}}), flush=True)
-"#);
+"#));
         let service = std::sync::Arc::new(Service::open(&dir).unwrap());
         service.accounts.add("Work").unwrap();
         let first = service.refresh(&bin, true);
