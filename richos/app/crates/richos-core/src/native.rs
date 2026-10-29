@@ -1267,6 +1267,14 @@ impl ActionGrant {
             Self::Assignments(path) => crate::assignment_tools::set_actions_allowed(path, allowed),
         }
     }
+    /// [`Self::set`]`(false)`, naming who closed it on the work scope, so the refusal it
+    /// causes can say ([`crate::ecs::closed_by`]). Every other grant has no such record.
+    fn close(&self, by: &str) -> Result<(), String> {
+        match self {
+            Self::Continuity(path) => crate::ecs::revoke_by(path, by).map_err(|e| e.to_string()),
+            _ => self.set(false),
+        }
+    }
     fn path(&self) -> &Path {
         match self {
             Self::Onboarding(path)
@@ -3610,7 +3618,7 @@ impl TurnCancel for NativeCancelHandle {
         // Revoke before interrupting, while holding the same lock as grant activation.
         // Missing scopes are normal before the initial company/thread binding.
         for grant in &self.action_grants {
-            if grant.path().exists() && grant.set(false).is_err() {
+            if grant.path().exists() && grant.close(crate::ecs::closed_by::STOP).is_err() {
                 if std::fs::remove_file(grant.path()).is_err() { self.process_fence.kill(); }
             }
         }
@@ -3984,6 +3992,7 @@ impl NativeTurnScope {
         crate::ecs::write_scope(path, &crate::ecs::ToolScope {  version:1, actions_allowed:false, bridge:bridge.clone(), binding:scope,
             user_instruction:user_instruction.clone(),
             background_work_allowed: false,
+            closed: crate::ecs::GrantClosed::now(crate::ecs::closed_by::NOT_STARTED),
             seat: seat.clone() })
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         if let Some(tools_path) = &self.continuity_tools_scope {
@@ -4359,9 +4368,15 @@ impl Cognition for NativeCognition {
         let seat=format!("stu-thread:{}",binding.thread_id());
         let bound=bridge.bind(binding.entity_id().as_str(),binding.thread_id(),&self.session_id,turn,Some(&seat),"rich")
             .map_err(|e|CognitionError::Io(e.to_string()))?;
-        crate::ecs::write_scope(path,&crate::ecs::ToolScope {version:1,actions_allowed:false,
+        // **The message's scope, without closing the turn already running on this session**
+        // (`ecs::write_next_scope`): this is called the moment the host takes the message from
+        // the inbox, which can be while Stu is still in a turn of his own (a task notification's,
+        // or one the host already counted as ended), and writing the grant closed here refused
+        // that turn's prepare and dispatch until this message's own turn began (2026-10-28
+        // 17:54Z and 18:27Z, 2026-10-29 08:05Z). This message's turn opens it as before.
+        crate::ecs::write_next_scope(path,crate::ecs::ToolScope {version:1,actions_allowed:false,
             bridge:bridge.clone(),binding:bound.clone(),user_instruction:None,
-            seat:Some(seat.clone()),background_work_allowed:true}).map_err(|e|CognitionError::Io(e.to_string()))?;
+            seat:Some(seat.clone()),background_work_allowed:true,closed:None}).map_err(|e|CognitionError::Io(e.to_string()))?;
         if let (Some(profile),Some(status))=(&self.engine_profile,&self.status_scope) {
             let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),
                 entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
@@ -4452,6 +4467,7 @@ impl Cognition for NativeCognition {
             // is the only time they run. Both are withdrawn together by `ecs::revoke` when
             // the CEO stops the work; an ordinary turn end takes the first and leaves this.
             background_work_allowed: true,
+            closed: None,
         })
         .map_err(|e| CognitionError::Io(e.to_string()))?;
         if let (Some(path),Some(profile))=(&self.status_scope,&self.engine_profile) {
@@ -4493,7 +4509,7 @@ impl Cognition for NativeCognition {
         // continuation turn. Every permission this scope carries goes with it, the standing
         // one its background workers hold included. The turn-by-turn close inside `prompt`
         // is the other call and deliberately keeps that one.
-        if let Err(error) = crate::ecs::revoke(path) {
+        if let Err(error) = crate::ecs::revoke_by(path, crate::ecs::closed_by::ASSIGNMENT_END) {
             let _ = self.client.child.kill();
             let _ = self.client.child.wait();
             let _ = std::fs::remove_file(path);
@@ -4554,7 +4570,7 @@ impl Cognition for NativeCognition {
                 for (index, grant) in grants.iter().enumerate() {
                     if let Err(error) = grant.set(true) {
                         for previous in &grants[..index] {
-                            if previous.set(false).is_err() { let _ = std::fs::remove_file(previous.path()); }
+                            if previous.close(crate::ecs::closed_by::TURN_START_FAILED).is_err() { let _ = std::fs::remove_file(previous.path()); }
                         }
                         return Err(error);
                     }
@@ -4714,6 +4730,59 @@ read -r prompt
         cognition.prepare_agent_message(&binding,"peer:retry",&messages[0]).unwrap();
         assert_eq!(crate::assignment::read_all(&scope.state_root,&scope.entity_id,&thread).unwrap().len(),2,"recovery duplicated job records");
         assert_eq!(std::fs::read_to_string(inbox).unwrap(),saved,"upgrade rewrote durable inbox history");
+    }
+
+    /// **A NOTICE ARRIVING WHILE STU IS IN A TURN NEVER CLOSES THAT TURN** (P1-A, follow-up
+    /// "work tools refuse to dispatch in notification turns", 2026-10-28 17:54Z and 18:27Z,
+    /// 2026-10-29 08:05Z). The host takes his next inbox message the moment it is free to, which
+    /// can be while his own turn still runs: a task notification's turn, or a turn it had already
+    /// counted as over. `prepare_agent_message` then wrote the scope with `actions_allowed: false`
+    /// until that message's turn began, and every prepare and Agent call of the running turn was
+    /// refused ("work tools require a current visible app turn"; the quota gate's "This app work
+    /// has ended or was stopped"). In the callbacks each refusal is followed by the stall-watch
+    /// notice's own prompt. On main the second assertion fails: the grant reads false.
+    #[test]
+    fn a_message_queued_while_stu_is_in_a_turn_never_closes_that_turns_grant() {
+        use crate::ledger::Ledger;
+        let script=write_script("stu-queued-mid-turn",SILENT_AFTER_HANDSHAKE);
+        let root=script.parent().unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine"),&root.join("ecs")).unwrap();
+        let mut cognition=NativeCognition::start_with_continuity(&script,root,root,&skills_fixture(),&script,bridge.clone(),None).unwrap();
+        let mut ledger=Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
+        let entity=crate::entity::EntityId::parse("company").unwrap();
+        let thread=ledger.create_thread("work",&entity).unwrap();let binding=ledger.thread_binding(&thread).unwrap();
+        bridge.bind(entity.as_str(),&thread,"fixture-rich","opening",crate::ecs::ceo_seat(&thread).as_deref(),"ceo").unwrap();
+        let path=cognition.continuity.as_ref().unwrap().1.clone();
+        let read=|| -> crate::ecs::ToolScope {serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()};
+        let notice=|text:&str| crate::session_tools::Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None};
+
+        // His turn for one message: written closed until it starts, then opened by the turn.
+        cognition.prepare_agent_message(&binding,"peer:1",&notice("Rich: dispatch Tom's review")).unwrap();
+        let waiting=read();
+        assert!(!waiting.actions_allowed,"a scope for an input whose turn has not started is open");
+        assert_eq!(waiting.closed.as_ref().map(|c|c.by.as_str()),Some(crate::ecs::closed_by::NOT_STARTED));
+        crate::ecs::set_actions_allowed(&path,true).unwrap();
+        let running=read();
+
+        // A stall-watch notice is taken from his inbox while that turn (or a notification turn
+        // after it) is still running.
+        cognition.prepare_agent_message(&binding,"peer:2",&notice("STALL-WATCH 18:27Z: 1 stall")).unwrap();
+        let queued=read();
+        assert!(queued.actions_allowed,
+            "queueing a notice closed the grant of the turn still running, so its prepare and Agent calls are refused");
+        assert!(queued.background_work_allowed);
+        assert_eq!(queued.closed,None);
+        assert_eq!(queued.binding.session_id,running.binding.session_id);
+
+        // A Stop is not undone by the next message: it stays closed, with who closed it, until
+        // that message's own turn opens it.
+        crate::ecs::revoke(&path).unwrap();
+        cognition.prepare_agent_message(&binding,"peer:3",&notice("after the Stop")).unwrap();
+        let stopped=read();
+        assert!(!stopped.actions_allowed,"a message reopened a grant the user's Stop had closed");
+        assert_eq!(stopped.closed.map(|c|c.by),Some(crate::ecs::closed_by::STOP.to_string()));
     }
     #[test]
     fn a_rejected_rate_limit_event_is_a_usage_limit() {
@@ -5499,6 +5568,7 @@ exec /bin/sleep 1000
             user_instruction: None,
             seat: Some("ceo-thread:thr_one".into()),
             background_work_allowed: false,
+            closed: None,
         })
         .unwrap();
         // **The one grant on a work lease that DOES have a file under it**, written here
@@ -5524,6 +5594,7 @@ exec /bin/sleep 1000
             // The state `start_work_lease` leaves behind: nothing is granted until
             // `bind_work_assignment` writes the standing grant for one assignment.
             background_work_allowed: false,
+            closed: None,
         })
         .unwrap();
         let (doctrine, skills) = (doctrine_fixture(), skills_fixture());
