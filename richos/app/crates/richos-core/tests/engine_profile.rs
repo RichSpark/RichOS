@@ -597,6 +597,9 @@ fn resource_access_preserves_commented_and_multiline_tool_definitions() {
         ("tools: [\n  Read,\n  Bash, # last tool\n]",format!("tools: [Read,\n  Bash, {tool}]")),
         ("tools: # list\n# keep this comment\n  - Read",format!("tools: # list\n# keep this comment\n  - {tool}\n  - Read")),
         ("tools: Read # mcp__richos_status__system_resources is not yet allowed",format!("tools: Read, {tool} # mcp__richos_status__system_resources is not yet allowed")),
+        ("tools: Read, Glob,\n  Grep, Bash",format!("tools: Read, Glob,\n  Grep, Bash, {tool}")),
+        ("tools: Read, Glob,\n  Grep, Bash, # keep",format!("tools: Read, Glob,\n  Grep, Bash, {tool} # keep")),
+        ("tools: Read, Bash,",format!("tools: Read, Bash, {tool}")),
     ] {
         let original=format!("---\nname: fixture\n{before}\nmodel: sonnet\n---\nInstructions stay exactly here.\n");
         let expected=format!("---\nname: fixture\n{after}\nmodel: sonnet\n---\nInstructions stay exactly here.\n");

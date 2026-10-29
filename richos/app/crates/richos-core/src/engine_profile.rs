@@ -440,7 +440,13 @@ pub fn with_resource_access(body: &str) -> String {
                 lines[i]=format!("tools: {value}{comment}\n");
             }
         } else if value!="null" && value!="~" {
-            lines[i]=format!("tools: {value}, {tool}{comment}\n");
+            // YAML folds a hand-wrapped plain scalar. Append at its end, not
+            // between the first line's comma and the continuation's next tool.
+            let last=(i..field_end).rev().find(|j|!tool_yaml_code(&lines[*j]).trim().is_empty()).unwrap_or(i);
+            let code=tool_yaml_code(&lines[last]).trim_end();
+            let separator=if code.ends_with(',') { " " } else { ", " };
+            let comment=unquoted_delimiter(&lines[last],'#').map(|at|format!(" {}",lines[last][at..].trim_end())).unwrap_or_default();
+            lines[last]=format!("{code}{separator}{tool}{comment}\n");
         }
         return lines.concat();
     }
