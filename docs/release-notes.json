@@ -141,5 +141,16 @@
     "previous_tag": "v1.2.5-nightly.20261028.78",
     "previous_source": "19454cbb94591c48d8aff83d7c21ef6ae7a3a3a8",
     "entry": "- Fixed your team being unable to check or save work in a folder where a file or folder name has an accent or other non-English letter, such as caf\u00e9.txt\n- [technical] Fixed a Claude Code session in Terminal that uses RichOS's engine stopping and deleting work your team had in progress in the app on the same Mac"
+  },
+  "v1.2.5-nightly.20261029.80": {
+    "schema": 1,
+    "tag": "v1.2.5-nightly.20261029.80",
+    "version": "1.2.5-nightly.20261029.80",
+    "channel": "nightly",
+    "source_commit": "b161267d20bfc172913adc760ccbe3f5fe4d5785",
+    "build_commit": "8e31e9842d41be54066e5784c2b611c1523dd99d",
+    "previous_tag": "v1.2.5-nightly.20261028.79",
+    "previous_source": "c2732b9856f61143be5fc5e8b302279bea1abe9d",
+    "entry": "- Fixed a finished job staying open because a teammate Stu had lined up for it never started; such a teammate is now cleared away and any work in its folder is kept\n- Fixed Stu being unable to start a teammate he had lined up before his last reply\n- Fixed Stu being told a teammate had gone quiet when that teammate had never started\n- [technical] Added a way for Stu to clear a teammate he lined up and will not start and to set aside a stray record left by a test run, which had stopped the cleanup of leftover teammate folders in that conversation\n- [technical] Fixed every open Stu conversation being told about the same problem with the scheduled cleanup run by a RichOS engine installed from Terminal and told again after Stu had acknowledged it; now one conversation is told and again only when the problem changes"
   }
 }
