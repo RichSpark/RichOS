@@ -48,12 +48,12 @@ async function main() {
     if (opts.clock) await page.clock.install();
     page.setDefaultTimeout(30000); // load-bound: a hang guard only; every wait below waits for a fact
     page.on("pageerror", e => errors.push(String(e)));
-    await page.addInitScript(({ theme, quota, signIn, policy, emails }) => {
+    await page.addInitScript(({ theme, quota, signIn, policy, emails, moveWaits }) => {
       localStorage.setItem("richos-theme", theme);
       localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100 }));
       localStorage.setItem("richos-mock-quota-policy", JSON.stringify(policy || { enabled: false, pausePercent: 93 }));
-      window.__RICHOS_MOCK_PRESET__ = { quota, signIn, emails };
-    }, { theme, quota, signIn: opts.signIn || [], policy: opts.policy, emails: opts.emails || {} });
+      window.__RICHOS_MOCK_PRESET__ = { quota, signIn, emails, moveWaits };
+    }, { theme, quota, signIn: opts.signIn || [], policy: opts.policy, emails: opts.emails || {}, moveWaits: opts.moveWaits || null });
     await page.goto("file://" + path.join(UI_DIR, "index.html"));
     await page.waitForSelector("#set-btn");
     await page.evaluate(() => window.RichSplash.yieldNow("accounts-test"));
@@ -251,6 +251,38 @@ async function main() {
     assertEqual(await text(page, ".acc-feedback"), "Rich now uses Work. Work has already used 93% of its week, so Rich will switch again when it reaches 99%. Undo");
     await page.close();
     return "Work first, then Home; the 93% account says the 99% switch";
+  });
+
+  // Review rv-20261029T150133Z-2f57a3fd-6d74, finding 2: with work still running on Home, Use this
+  // one now only decides the move (`view.moving`), and the line said "Rich now uses Work." the
+  // moment the command answered, even when that answer said the move was blocked. Item 3 of the
+  // CEO's 2026-10-29: "It never shows a switch that didn't happen". The line follows the move: a
+  // blocked move says it cannot move yet, a move under way says Switching, and "Rich now uses Work."
+  // comes only once the work runs on Work. In both themes.
+  await run.check("Use this one now with work still on the account in use: Can't move yet, or Switching, and Rich now uses Work only once the work has moved", async () => {
+    const said = [];
+    for (const theme of ["light", "dark"]) {
+      let page = await open(theme, two([58, 72], [0, 12], { working: { "1": ["team"] } }), { moveWaits: "blocked" });
+      await sheet(page);
+      await page.click('[aria-label="Use Work now"]');
+      await page.waitForSelector(".acc-feedback");
+      assertEqual(await text(page, ".acc-feedback"), "Can't move yet: work is still running on Home. Undo", theme + ": a blocked move");
+      assertEqual(await texts(page, ".acc-name"), ["Home", "Work"], theme + ": the work still runs on Home");
+      said.push(theme + ": " + await text(page, ".acc-feedback"));
+      await page.close();
+      page = await open(theme, two([58, 72], [0, 12], { working: { "1": ["team"] } }), { moveWaits: "pending" });
+      await sheet(page);
+      await page.click('[aria-label="Use Work now"]');
+      await page.waitForSelector(".acc-feedback");
+      assertEqual(await text(page, ".acc-feedback"), "Switching to Work. Undo", theme + ": a move under way");
+      await page.evaluate(() => window.__RICHOS_MOCK__.finishAccountMove());
+      await page.evaluate(() => window.RichAccounts.refresh());
+      await page.waitForFunction(() => document.querySelector(".acc-card").dataset.id === "2");
+      assertEqual(await text(page, ".acc-feedback"), "Rich now uses Work. Home is next. Undo", theme + ": once the work has moved");
+      said.push(theme + ": Switching to Work, then Rich now uses Work");
+      await page.close();
+    }
+    return said.join(" / ");
   });
 
   // ---- 3. adding a second account in two steps ----------------------------------------------
@@ -633,6 +665,7 @@ async function main() {
       await p.click("#acc-open-signin"); await p.waitForSelector(".acc-waiting"); }],
     ["add-same", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.fill("#acc-nu", "Work"); await p.click("#acc-continue"); await p.click("#acc-open-signin"); await p.waitForSelector("#acc-try-again"); }, { signIn: ["same-account"] }],
     ["two", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click('[aria-label="Use Work now"]'); await p.waitForSelector(".acc-feedback"); }],
+    ["use-blocked", two([58, 72], [0, 12], { working: { "1": ["team"] } }), async p => { await sheet(p); await p.click('[aria-label="Use Work now"]'); await p.waitForSelector(".acc-feedback"); }, { moveWaits: "blocked" }],
     ["remove", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click('[aria-label="Remove Work"]'); }],
     ["idle-signed-in", idleSignedIn("1", "2"), sheet],
     ["switched", two([64, 99], [6, 4], { inUse: "2", homeGone: now + 2 * DAY, lastSwitch: { from: "1", to: "2", at: now - 3 * 60000, why: "weekly", used: 99 } }), sheet],

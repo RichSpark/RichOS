@@ -590,17 +590,36 @@
   }
 
   // ---- the sheet's actions ----------------------------------------------------------------
+  // WHAT "USE THIS ONE NOW" SAYS FOLLOWS THE MOVE ITSELF (review rv-20261029T150133Z-2f57a3fd-6d74,
+  // finding 2; item 3 of the CEO's 2026-10-29: "It never shows a switch that didn't happen"). The
+  // command decides the move; the work moves once what runs on the account being left lets it
+  // (`view.moving`). So the line is read from the view each time it is drawn: "Switching to Work."
+  // while the move is under way, "Can't move yet: work is still running on Home." while it is
+  // blocked, and "Rich now uses Work." only once Work is the account the work runs on (`inUse`).
+  // Before, "Rich now uses Work." came the moment the command answered, even when its own answer
+  // said the move was blocked.
+  function moveSaid(id) {
+    const to = list().find(a => a.id === id), cur = inUse();
+    if (!to || !cur) return "";
+    if (cur.id !== to.id) {
+      if (moving() && target().id === to.id) return blocked()
+        ? `Can't move yet: work is still running on <b>${esc(cur.label)}</b>.`
+        : `Switching to <b>${esc(to.label)}</b>.`;
+      return `Rich still uses <b>${esc(cur.label)}</b>.`;
+    }
+    const week = weekOf(to), nx = nextAcct();
+    const then = week && week.usedPercent >= NEAR
+      ? ` ${esc(to.label)} has already used ${Math.floor(week.usedPercent)}% of its week, so Rich will switch again when it reaches 99%.`
+      : nx ? ` ${esc(nx.label)} is next.` : "";
+    return `Rich now uses <b>${esc(to.label)}</b>.${then}`;
+  }
   async function useNow(id, undoing) {
     const from = inUse(), to = list().find(a => a.id === id);
     if (!to) return;
     const result = await call("claude_account_use_first", { id });
     if (!result.ok) return;
     if (undoing) { feedback = null; render(); return; }
-    const week = weekOf(to), nx = nextAcct();
-    const then = week && week.usedPercent >= NEAR
-      ? ` ${esc(to.label)} has already used ${Math.floor(week.usedPercent)}% of its week, so Rich will switch again when it reaches 99%.`
-      : nx ? ` ${esc(nx.label)} is next.` : "";
-    feedback = { html: `Rich now uses <b>${esc(to.label)}</b>.${then}`, undo: from ? from.id : null };
+    feedback = { get html() { return moveSaid(id); }, undo: from ? from.id : null };
     render();
   }
   async function setFive(value) {
