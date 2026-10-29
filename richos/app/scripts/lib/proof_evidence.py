@@ -215,6 +215,35 @@ def identity_differences(before, after, prefix):
     return found
 
 
+def identity_changed_keys(planned, now, limit=4):
+    """'; identity differs at: <key paths>' for an invalidation note, or '' when nothing differs.
+
+    Walks the two identities (planned, read when the run was planned; now, read at the
+    boundary that judged it) and names the dotted key paths whose values differ, for example
+    installed.playwright.installs.ffmpeg-1011.metadata. Whole-checkout checks declare no paths, so
+    describe_input_change can only say "nothing under its declared paths"; this says which
+    part of the identity moved. Values are never shown (digests are no help to a reader)."""
+    found = []
+
+    def walk(path, have, want):
+        if have == want:
+            return
+        if isinstance(have, dict) and isinstance(want, dict):
+            for key in sorted(set(have) | set(want), key=str):
+                walk(path + [str(key)], have.get(key, _ABSENT), want.get(key, _ABSENT))
+        else:
+            found.append(".".join(path) or "identity")
+
+    try:
+        walk([], planned, now)
+    except Exception:  # noqa: BLE001 — an explanation never breaks the verdict it explains
+        return ""
+    if not found:
+        return ""
+    more = " (+%d more)" % (len(found) - limit) if len(found) > limit else ""
+    return "; identity differs at: " + ", ".join(found[:limit]) + more
+
+
 def inventory_identity(path):
     """Bind discovery and existence without hashing unrelated regular-file bytes.
 
@@ -479,6 +508,16 @@ def checkout_installs(root):
     return found
 
 
+# A DEPENDENCIES_VALIDATED MARKER IS A CACHE STAMP, NOT A BROWSER (2026-10-29). Playwright
+# rewrites <install>/DEPENDENCIES_VALIDATED whenever it re-validates the host libraries for an
+# install, and the postinstall of an unrelated `npm install` does it for every install on the
+# machine (ffmpeg-1011 at 22:16:11Z). Its mtime and ctime were hashed into playwright_installs
+# and so into every whole-checkout identity and every UI recipe: 39 passing checks in three
+# running proof runs were marked invalid by a file no browser reads. Only the marker at the top
+# of an install folder is left out; INSTALLATION_COMPLETE and every other file stay bound.
+PLAYWRIGHT_VALIDATION_MARKER = "DEPENDENCIES_VALIDATED"
+
+
 def playwright_installs(environment):
     """The Playwright browser installs a check would launch, by install identity.
 
@@ -505,6 +544,8 @@ def playwright_installs(environment):
             for directory, dirs, files in os.walk(entry.path, followlinks=False):
                 for name in sorted(dirs + files):
                     path = Path(directory) / name
+                    if directory == entry.path and name == PLAYWRIGHT_VALIDATION_MARKER:
+                        continue  # a cache stamp, not part of the browser (see above)
                     info = path.lstat()
                     rows.append([str(path.relative_to(entry.path)), info.st_mode, info.st_ino,
                                  info.st_size, info.st_mtime_ns, info.st_ctime_ns,
@@ -1720,8 +1761,10 @@ class Record:
                                      "so every change is one of its inputs)")
             else:
                 try:
-                    if self.current_identity(item) != self.identities[item.label]:
-                        raise ValueError("execution inputs changed during the check" + self.explain(item))
+                    now = self.current_identity(item)
+                    if now != self.identities[item.label]:
+                        raise ValueError("execution inputs changed since the run was planned"
+                                         + self.explain(item) + identity_changed_keys(self.identities[item.label], now))
                     result["receipt_sha"] = getattr(item, "receipt_sha", source["commit"])
                     result["receipt"] = completed_receipt(item, result["receipt_sha"],
                         allow_known_red=not getattr(item, "reused_from", None))
@@ -1769,9 +1812,11 @@ class Record:
                         and source != row["source"]):
                     raise ValueError("inputs changed after this check completed (it declares no inputs)")
                 if identities[item.label] != again[item.label]:
-                    raise ValueError("inputs changed while they were being read" + self.explain(item))
+                    raise ValueError("inputs changed while they were being read" + self.explain(item)
+                                     + identity_changed_keys(identities[item.label], again[item.label]))
                 if identities[item.label] != row["input"]:
-                    raise ValueError("inputs changed after this check completed" + self.explain(item))
+                    raise ValueError("inputs changed since the run was planned (found when the run finished)"
+                                     + self.explain(item) + identity_changed_keys(row["input"], identities[item.label]))
                 if file_digest(item.log) != row["log_sha256"]:
                     raise ValueError("completed check log changed")
                 if row["receipt"] and file_digest(row["receipt"]["path"]) != row["receipt"]["sha256"]:
