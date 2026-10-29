@@ -190,6 +190,47 @@ pub struct ToolScope {
     /// written by anything but the work lease, refuses a worker exactly as it does today.
     #[serde(default, skip_serializing_if = "is_not_granted")]
     pub background_work_allowed: bool,
+    /// **Who closed this scope's grant, and when** — so every refusal it causes can name its
+    /// real cause rather than guess (2026-10-28: "This app work has ended or was stopped" was
+    /// read as a Stop nobody had made; it was a message being queued). Written by
+    /// [`set_actions_allowed`]`(false)`, [`revoke_by`] and a scope written closed; cleared when
+    /// the grant opens. Absent on a scope an older app wrote, which readers say plainly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed: Option<GrantClosed>,
+}
+
+/// Why a scope's grant is closed: one of the [`closed_by`] codes and the moment, in Unix
+/// milliseconds. The codes are read by the engine's hook and work tools
+/// (`engine/scripts/lib/scope_closure.py`) and by the quota gate (`quota/gate.rs`), which turn
+/// them into the sentence a refusal says.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantClosed {
+    pub by: String,
+    pub at_ms: u64,
+}
+
+/// The codes [`GrantClosed::by`] carries. Keep `scope_closure.py`'s table and `gate.rs`'s
+/// `closed_sentence` in step with this list.
+pub mod closed_by {
+    /// A Stop: the user's, or the app ending this connection (`NativeCancelHandle::cancel`).
+    pub const STOP: &str = "stop";
+    /// The assignment this work lease carried ended (`revoke_work_assignment`).
+    pub const ASSIGNMENT_END: &str = "assignment-end";
+    /// The app's start-up sweep after a crash (`recovery.rs`'s `close_orphan_grants`).
+    pub const CRASH_RECOVERY: &str = "crash-recovery";
+    /// A conversation turn ended (the conversation lease's turn-end completion).
+    pub const TURN_END: &str = "turn-end";
+    /// A turn could not open every grant, so the ones it had opened were closed again.
+    pub const TURN_START_FAILED: &str = "turn-start-failed";
+    /// The scope was written for an input whose turn has not started yet.
+    pub const NOT_STARTED: &str = "not-started";
+}
+
+impl GrantClosed {
+    pub fn now(by: &str) -> Option<Self> {
+        Some(GrantClosed { by: by.to_string(), at_ms: crate::util::now_millis() })
+    }
 }
 
 fn is_not_granted(granted: &bool) -> bool {
@@ -225,7 +266,59 @@ pub fn set_actions_allowed(path: &Path, allowed: bool) -> Result<(), EcsError> {
     let bytes = std::fs::read(path).map_err(|e| EcsError(e.to_string()))?;
     let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
     scope.actions_allowed = allowed;
+    scope.closed = if allowed { None } else { GrantClosed::now(closed_by::TURN_END) };
     write_scope(path, &scope)
+}
+
+/// **A scope for the input about to be given, written without closing the turn already
+/// running on the same session** (2026-10-28/29: Stu's own turn — a notification turn, or a
+/// turn the host had already counted as over — had its prepare and Agent calls refused with
+/// "work tools require a current visible app turn" the moment the app queued his next inbox
+/// message, because that queueing wrote the scope closed until the message's own turn began).
+///
+/// `next` is the scope the input's turn will run under; its own grant is opened when that
+/// turn starts, exactly as before. What this decides is only the window in between: a grant
+/// that is OPEN on the file now, for the SAME provider session, stays open, because the
+/// session it belongs to may still be in a turn and nothing has withdrawn it. A grant that is
+/// closed (a Stop, the end of an assignment, a crash sweep) stays closed, with its reason,
+/// until the new turn opens it. A file that is missing or unreadable, or one written for
+/// another session, is written closed, as before.
+///
+/// It reads the file and writes it back, so its caller holds the lock a Stop revokes under
+/// (`NativeCognition::agent_message_binding`); otherwise a Stop landing between the two is
+/// written open again.
+pub fn write_next_scope(path: &Path, mut next: ToolScope) -> Result<(), EcsError> {
+    let current = scope_of_session(path, &next.binding.session_id);
+    match current {
+        Some(current) if current.actions_allowed => {
+            next.actions_allowed = true;
+            next.closed = None;
+        }
+        Some(current) => {
+            next.actions_allowed = false;
+            next.closed = current.closed.or_else(|| GrantClosed::now(closed_by::NOT_STARTED));
+        }
+        None => {
+            next.actions_allowed = false;
+            next.closed = GrantClosed::now(closed_by::NOT_STARTED);
+        }
+    }
+    write_scope(path, &next)
+}
+
+/// The scope on `path` when it is one written for `session_id`; `None` when it is missing,
+/// unreadable or another session's.
+fn scope_of_session(path: &Path, session_id: &str) -> Option<ToolScope> {
+    std::fs::read(path).ok()
+        .and_then(|bytes| serde_json::from_slice::<ToolScope>(&bytes).ok())
+        .filter(|current| current.binding.session_id == session_id)
+}
+
+/// **Is a turn of `session_id` possibly running under this scope?** Its grant is open on the
+/// file, for that session. A queued input is not bound while it is (second review of 6e9a03c3,
+/// finding 2): binding it would make every operation of the running turn stale to ECS.
+pub fn grant_open_for(path: &Path, session_id: &str) -> bool {
+    scope_of_session(path, session_id).is_some_and(|scope| scope.actions_allowed)
 }
 
 /// **EVERYTHING this scope grants, withdrawn in one write** — the turn's actions and the
@@ -237,10 +330,16 @@ pub fn set_actions_allowed(path: &Path, allowed: bool) -> Result<(), EcsError> {
 /// CEO's stop, a shutdown and a failed turn-start rollback withdraw the lot. One write rather
 /// than two so a stop cannot be observed half-applied.
 pub fn revoke(path: &Path) -> Result<(), EcsError> {
+    revoke_by(path, closed_by::STOP)
+}
+
+/// [`revoke`], naming who withdrew the grant ([`closed_by`]), so the refusal it causes can say.
+pub fn revoke_by(path: &Path, by: &str) -> Result<(), EcsError> {
     let bytes = std::fs::read(path).map_err(|e| EcsError(e.to_string()))?;
     let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
     scope.actions_allowed = false;
     scope.background_work_allowed = false;
+    scope.closed = GrantClosed::now(by);
     write_scope(path, &scope)
 }
 

@@ -885,7 +885,7 @@ async function main() {
     page = await open("dark", quota, 100, activity, true);
     await enableTechnical(page); await page.click("#set-quota-open");
     await page.waitForFunction(() => document.getElementById("quota-hold-status").textContent.startsWith("Holding 3 agents since "));
-    assert(/^The five-hour window is at 94% used, past your 93% line\. Each has kept its place\. They resume at .+, 20 minutes before the reset, or sooner if a fresh reading is back under the line\.$/.test(await text("#quota-hold-detail")),
+    assert(/^The five-hour window is at 94% used, past your 93% line\. Each has kept its place\. They resume one at a time from .+, never past 100%; the rest at the reset or sooner if a fresh reading is back under the line\.$/.test(await text("#quota-hold-detail")),
       await text("#quota-hold-detail"));
     await page.close();
   });
