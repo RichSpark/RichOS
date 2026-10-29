@@ -3531,6 +3531,13 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
     /// check, a reading fresh, old, missing or dated ahead, an empty answer, an error, every
     /// account exhausted, the published policy and the setting file beside it. It must hold exactly
     /// when `gate::admission` does not allow work, until the same moment.
+    ///
+    /// With main's staggered release (merge of 2026-10-29) the gate also judges the five-hour
+    /// point on the speed before the hold (`preHold`), holds inside the last 20 minutes, and judges
+    /// a call on its own account's row (`gate::decide` with an account). So the files vary
+    /// `preHold` too, a third carry an `accounts` list whose row for Work has its own reading, and
+    /// the account asked about is Work, Home, one with no row, or none: the reader must agree
+    /// with `gate::decide` for that account.
     #[test]
     fn the_review_hold_is_the_gates_own_decision() {
         let root = Scratch::new();
@@ -3556,26 +3563,40 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
             Some(json!({"enabled": true, "pausePercent": 80})), Some(json!({"enabled": "yes"}))];
         let window = |id: &str, used: f64, resets: Option<u64>| json!({"id": id, "label": id, "usedPercent": used,
             "resetsAt": resets, "durationMs": if id == "five_hour" { 18_000_000u64 } else { 604_800_000u64 }});
+        let pre_holds = [None, Some(0.), Some(1. / 60_000.), Some(2e-5), Some(5e-4)];
         let mut cases = Vec::new();
         for i in 0..600 {
             let app = root.path().join(format!("case-{i}"));
             let state = app.join("engine-state");
             fs::create_dir_all(&state).unwrap();
             let mut view = template.clone();
-            let mut windows = Vec::new();
-            if pick(8) != 0 { windows.push(window("five_hour", five_used[pick(five_used.len())], offsets(&five_reset, pick(five_reset.len())))); }
-            if pick(4) != 0 { windows.push(window("seven_day", week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len())))); }
-            view["windows"] = json!(windows);
-            let mut speed_map = serde_json::Map::new();
-            for id in ["five_hour", "seven_day"] {
-                if let Some(s) = speeds[pick(speeds.len())] { speed_map.insert(id.into(), json!(s)); }
+            // One account's reading, the fields `gate::decide` takes from a row or the top level.
+            let reading = |pick: &mut dyn FnMut(usize) -> usize, into: &mut Value| {
+                let mut windows = Vec::new();
+                if pick(8) != 0 { windows.push(window("five_hour", five_used[pick(five_used.len())], offsets(&five_reset, pick(five_reset.len())))); }
+                if pick(4) != 0 { windows.push(window("seven_day", week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len())))); }
+                into["windows"] = json!(windows);
+                let mut speed_map = serde_json::Map::new();
+                for id in ["five_hour", "seven_day"] {
+                    if let Some(s) = speeds[pick(speeds.len())] { speed_map.insert(id.into(), json!(s)); }
+                }
+                into["speeds"] = Value::Object(speed_map);
+                into["preHold"] = match pre_holds[pick(pre_holds.len())] { Some(s) => json!({"five_hour": s}), None => json!({}) };
+                let checked_at = offsets(&checked, pick(checked.len()));
+                into["checkedAt"] = json!(checked_at);
+                into["emptyAt"] = match pick(4) {
+                    0 => json!(checked_at.map(|c| c - 1)), 1 => json!(checked_at.map(|c| c + 1)), 2 => json!(now - 10), _ => Value::Null };
+                into["message"] = if pick(5) == 0 { json!("fixture error") } else { Value::Null };
+            };
+            reading(&mut pick, &mut view);
+            if pick(3) == 0 {
+                let mut work = json!({"id": "2", "label": "Work", "inUse": true});
+                reading(&mut pick, &mut work);
+                let mut home = json!({"id": "1", "label": "Home", "inUse": false});
+                for key in ["windows", "speeds", "preHold", "checkedAt", "emptyAt", "message"] { home[key] = view[key].clone(); }
+                view["accounts"] = json!([home, work]);
             }
-            view["speeds"] = Value::Object(speed_map);
-            let checked_at = offsets(&checked, pick(checked.len()));
-            view["checkedAt"] = json!(checked_at);
-            view["emptyAt"] = match pick(4) {
-                0 => json!(checked_at.map(|c| c - 1)), 1 => json!(checked_at.map(|c| c + 1)), 2 => json!(now - 10), _ => Value::Null };
-            view["message"] = if pick(5) == 0 { json!("fixture error") } else { Value::Null };
+            let account = [None, Some("1"), Some("2"), Some("9")][pick(4)];
             view["heldUntil"] = json!(offsets(&held_until, pick(held_until.len())));
             view["policy"] = policies[pick(policies.len())].clone();
             // The published admission is never the answer: here it is a coin toss.
@@ -3584,27 +3605,27 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
             if let Some(setting) = &settings[pick(settings.len())] {
                 fs::write(app.join("claude-quota-policy.json"), setting.to_string()).unwrap();
             }
-            let gate = gate::admission(&state, now);
-            cases.push((state, gate, view));
+            let gate = gate::decide(&state, account, now).0;
+            cases.push((state, account, gate, view));
         }
         let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
         let program = "import json, sys\nsys.path.insert(0, sys.argv[1])\nimport quota_watch\n\
-            print(json.dumps([quota_watch.gate_admission(s, n / 1000) for s, n in json.load(sys.stdin)]))";
+            print(json.dumps([quota_watch.gate_admission(s, n / 1000, a) for s, n, a in json.load(sys.stdin)]))";
         let mut child = std::process::Command::new("python3").arg("-I").arg("-c").arg(program).arg(engine.join("scripts/lib"))
             .env("PYTHONDONTWRITEBYTECODE", "1")
             .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
-        let input = json!(cases.iter().map(|(state, _, _)| json!([state, now])).collect::<Vec<_>>()).to_string();
+        let input = json!(cases.iter().map(|(state, account, _, _)| json!([state, now, account])).collect::<Vec<_>>()).to_string();
         std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
         let out = child.wait_with_output().unwrap();
         assert!(out.status.success());
         let answers: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
         let mut differ = Vec::new();
         let mut held_seen = 0;
-        for ((_, gate, view), answer) in cases.iter().zip(&answers) {
+        for ((_, account, gate, view), answer) in cases.iter().zip(&answers) {
             let want_until = match gate { Admission::Held { resets_at } => Some(resets_at / 1000), _ => None };
             held_seen += usize::from(want_until.is_some());
             if answer["held"].as_bool() != Some(!gate.allows_work()) || answer["until"].as_u64() != want_until {
-                differ.push(format!("gate {gate:?}, review {answer} for {view}"));
+                differ.push(format!("gate {gate:?} on {account:?}, review {answer} for {view}"));
             }
         }
         assert!(differ.is_empty(), "{} of 600 differ; first: {}", differ.len(), differ[0]);
@@ -3864,6 +3885,16 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         let now = crate::util::now_millis();
         assert!(matches!(gate::decide(&state, Some("1"), now).0, Admission::Held { .. }), "a helper still on Home is held");
         assert!(gate::decide(&state, Some(&work.id), now).0.allows_work(), "a helper on Work goes on");
+        // **The file names the account its figures are** (merge of main into the account-in-use
+        // fix, 2026-10-29): during the move the top level is Home's, where the work still runs,
+        // so `inUse` names Home, the row marked in use, never Work, where new sessions start.
+        // A held call is refused with the name of its own account.
+        let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+        assert_eq!(published.in_use.as_ref().map(|a| (a.id.as_str(), a.label.as_str())), Some(("1", "Home")),
+            "the top level is Home's 95%: it must name Home");
+        assert_eq!(published.windows.iter().find(|w| w.id == "five_hour").map(|w| w.used_percent), Some(95.));
+        assert_eq!(gate::held_named(&state, "1"), "Home (account 1)");
+        assert_eq!(gate::held_named(&state, &work.id), format!("Work (account {})", work.id));
 
         service.accounts.back_end_on("thread-stu", Some(&work.id));
         let view = service.view();

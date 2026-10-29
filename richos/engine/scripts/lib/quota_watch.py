@@ -674,14 +674,18 @@ def _ms(value):
     return int(value)
 
 
-def gate_admission(state, now):
+def gate_admission(state, now, account=None):
     """THE APP'S OWN HOLD, AS ITS GATE DECIDES IT (richos-hq follow-ups.md, "app-launched reviews
     never apply the usage hold"). Never raises. {"held", "until" (epoch s or None), "account",
     "line"}.
 
-    In the app the hold is the desktop gate's (quota/gate.rs `admission`), read from the file the
-    quota service publishes (<state>/claude-quota.json, whose top level is the account in use) and
-    the pause setting beside it. It needs no terminal entity config: the app's watcher starts with
+    In the app the hold is the desktop gate's (quota/gate.rs `decide`), read from the file the
+    quota service publishes (<state>/claude-quota.json) and the pause setting beside it. `account`
+    is the id of the account the work will run on: the gate judges a call on that account's own
+    row of `accounts`, and on the top level (the account the work runs on now, `inUse`) only when
+    there is no row for it, one account or no id. During a move the two differ (main's `moving`:
+    the top level is still the account being left, while a new session, a review's included,
+    starts on the account in use). It needs no terminal entity config: the app's watcher starts with
     a cleared environment (review_watch.rs `environment`), so quota-watch's QUOTA_PAUSE_PERCENT was
     never found there and every app review answered UNKNOWN and started during a hold.
 
@@ -718,9 +722,16 @@ def gate_admission(state, now):
         return admitted("its usage reading at %s cannot be read (%s; the gate's Unknown)" % (path, e.__class__.__name__))
     if not isinstance(data, dict):
         return admitted("%s is not the app's usage reading (the gate's Unknown)" % path)
-    who = out["account"] = app_account(data)
+    row = next((x for x in data.get("accounts") or [] if isinstance(x, dict) and account is not None
+                and x.get("id") == str(account)), None)
+    src = row if row is not None else data
+    if row is not None:
+        label = "".join(c for c in str(row.get("label") or "not named")[:80] if c.isprintable())
+        who = out["account"] = {"id": str(row["id"]), "label": label}
+    else:
+        who = out["account"] = app_account(data)
     named = "%s (account %s)" % (who["label"], who["id"]) if who["id"] else "the account in use (%s)" % who["label"]
-    five = next((w for w in data.get("windows") or [] if isinstance(w, dict) and w.get("id") == "five_hour"), None)
+    five = next((w for w in src.get("windows") or [] if isinstance(w, dict) and w.get("id") == "five_hour"), None)
     figure = "; five-hour %s%%" % fmt_pct(five["usedPercent"]) if five and isinstance(
         five.get("usedPercent"), (int, float)) and not isinstance(five.get("usedPercent"), bool) else ""
 
@@ -743,10 +754,10 @@ def gate_admission(state, now):
         return admitted("its automatic pause is off (%s)" % named)
     if not 1 <= percent <= 99:
         return admitted("UNKNOWN: its pause setting %d%% is not 1-99%% (the gate's Unknown; %s)" % (percent, named))
-    checked = _ms(data.get("checkedAt"))
+    checked = _ms(src.get("checkedAt"))
     if checked is not None and checked > now_ms:
         return admitted("UNKNOWN: its reading is dated in the future (the gate's Unknown; %s)" % named)
-    decided = _gate_recompute(data, percent, now_ms)
+    decided = _gate_recompute(data, src, percent, now_ms)
     if decided is None:
         return admitted("%s does not parse as the app's reading (the gate's Unknown)" % path)
     kind, resets, why = decided
@@ -776,20 +787,28 @@ WEEKLY_THRESHOLD = 99.0
 RESET_EXEMPTION_MS = 20 * 60_000
 
 
-def _gate_recompute(data, percent, now_ms):
+def _gate_recompute(data, src, percent, now_ms):
     """("held" | another admission, resets_at ms or None, why), or None when the file would not parse.
 
     THE GATE'S OWN RECOMPUTE, rule for rule (second review of 2097df51c: the published admission is
     the service's, computed with the account's measured handoff, token speed and expected rise; the
-    gate builds a fresh Snapshot from the published windows, checkedAt, message, speeds and emptyAt
-    alone and decides again, quota/gate.rs `admission` -> quota.rs `Snapshot::view_with`). So: no
-    token speed, no since-reading points, no expected rise, no cut-off, and the 5-minute default
-    handoff with no points. quota::tests::the_review_hold_is_the_gates_own_decision runs this against
-    gate::admission over the same files, so the two cannot drift apart unseen."""
+    gate builds a fresh Snapshot from the published windows, checkedAt, message, speeds, preHold and
+    emptyAt alone and decides again, quota/gate.rs `decide` -> quota.rs `Snapshot::view_with`). So:
+    no token speed, no since-reading points, no expected rise, no cut-off, and the 5-minute default
+    handoff with no points. `src` is what the gate judges the call on: the call's own account's row
+    of `accounts` with two or more accounts, else the top level (`data`, the account the figures
+    describe). quota::tests::the_review_hold_is_the_gates_own_decision runs this against the gate's
+    `decide` over the same files, so the two cannot drift apart unseen.
+
+    Two rules came with the staggered release (main, Rich 2026-10-29): the five-hour point is set by
+    the larger of the speed measured now and the speed before the hold (`preHold`), and the last 20
+    minutes before the five-hour reset no longer admit: the window still HOLDS, and the gate lets
+    held tool calls out one at a time (`stagger::admit`, a per-call permit). A review takes no such
+    permit, so it waits for the reset, as the gate's admission says."""
     if not all(k in data for k in ("state", "windows", "refreshIntervalMs", "admission")):
         return None
     windows = []
-    for w in data.get("windows") if isinstance(data.get("windows"), list) else [None]:
+    for w in src.get("windows") if isinstance(src.get("windows"), list) else [None]:
         if not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("label"), str):
             return None
         used, reset, duration = w.get("usedPercent"), w.get("resetsAt"), w.get("durationMs")
@@ -800,22 +819,31 @@ def _gate_recompute(data, percent, now_ms):
         if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
             return None
         windows.append({"id": w["id"], "used": float(used), "resets": reset})
-    speeds = data.get("speeds") or {}
-    if not isinstance(speeds, dict) or any(isinstance(s, bool) or not isinstance(s, (int, float)) for s in speeds.values()):
-        return None
+    number = lambda v: not isinstance(v, bool) and isinstance(v, (int, float))
+    speeds, pre_hold = src.get("speeds") or {}, src.get("preHold") or {}
+    for table in (speeds, pre_hold):
+        if not isinstance(table, dict) or not all(number(s) for s in table.values()):
+            return None
     speed = lambda w: float(speeds.get(w["id"], 0.0))
-    checked = data.get("checkedAt")
-    empty_at = data.get("emptyAt")
-    error = data.get("message") is not None
+    checked = src.get("checkedAt")
+    empty_at = src.get("emptyAt")
+    error = src.get("message") is not None
     # Reading::interval with `expected` false: one minute while any speed is fast, else five.
-    fast = any(float(s) * REFRESH_INTERVAL_MS >= FAST_POINTS_PER_CHECK for s in speeds.values())
-    interval = FAST_REFRESH_INTERVAL_MS if fast else REFRESH_INTERVAL_MS
+    is_fast = lambda table: any(float(s) * REFRESH_INTERVAL_MS >= FAST_POINTS_PER_CHECK for s in table.values())
+    interval = FAST_REFRESH_INTERVAL_MS if is_fast(speeds) else REFRESH_INTERVAL_MS
     clamp = lambda v: min(max(v, 0.0), 100.0)
-    act_point = lambda w: clamp(min(float(percent), 100.0 - speed(w) * interval))
     def weekly_point(w):
         s = speed(w)
         points = s * interval + max(s * HANDOFF_DEFAULT_MS, 0.0)
         return clamp(WEEKLY_THRESHOLD - max(math.ceil(points) - 1.0, 0.0))
+    # Snapshot::pre_hold over the gate's one-entry rise log (0% -> the published speed): 0% is under
+    # every valid line, so it is the published five-hour speed, counted only above 0 (`view_with`).
+    before = float(pre_hold.get("five_hour", 0.0))
+    judged = dict(speeds)
+    if before > 0.0:
+        judged["five_hour"] = max(float(judged.get("five_hour", 0.0)), before)
+    judged_interval = FAST_REFRESH_INTERVAL_MS if is_fast(judged) else REFRESH_INTERVAL_MS
+    act_point = lambda w: clamp(min(float(percent), 100.0 - float(judged.get(w["id"], 0.0)) * judged_interval))
     live = [w for w in windows if w["resets"] is None or w["resets"] > now_ms]
     expired = any(w["resets"] is not None and w["resets"] <= now_ms for w in windows)
     fresh = checked is not None and now_ms >= checked and now_ms - checked < interval and not error and not expired
@@ -829,12 +857,10 @@ def _gate_recompute(data, percent, now_ms):
         return "held", w["resets"], "weekly %s%% at its handoff point %s%%" % (fmt_pct(w["used"]), fmt_pct(weekly_point(w)))
     five = next((w for w in windows if w["id"] == "five_hour"), None)
     if five is not None and five["used"] >= act_point(five) and five["resets"] is not None and five["resets"] > now_ms:
-        left = five["resets"] - now_ms
-        if left < RESET_EXEMPTION_MS and (speed(five) == 0.0 or five["used"] + speed(five) * float(left) < 100.0):
-            return "ready", None, "five-hour %s%% at its %d%% pause, but its reset is under 20 minutes away" % (
-                fmt_pct(five["used"]), percent)
-        return "held", five["resets"], "five-hour %s%% at its %d%% pause point %s%%" % (
-            fmt_pct(five["used"]), percent, fmt_pct(act_point(five)))
+        why = "five-hour %s%% at its %d%% pause point %s%%" % (fmt_pct(five["used"]), percent, fmt_pct(act_point(five)))
+        if five["resets"] - now_ms < RESET_EXEMPTION_MS:
+            why += "; its reset is under 20 minutes away, where held work is let out one call at a time and a review waits for the reset"
+        return "held", five["resets"], why
     if five is not None and fresh and five["resets"] is not None and five["resets"] > now_ms:
         return "ready", None, "ready"
     return ("noReading" if answered_empty else "unknown"), None, "no current reading (the gate admits work without one)"

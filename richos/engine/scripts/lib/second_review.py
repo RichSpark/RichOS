@@ -847,8 +847,8 @@ def quota_hold(engine_root, accounts=""):
     """(held, reading). His 93% rule.
 
     In the app (`accounts`, the app's account list, --accounts): THE GATE'S OWN ADMISSION, read
-    from the file the app publishes beside that list (<app>/engine-state/claude-quota.json, whose
-    top level is the account in use) by quota_watch.gate_admission, and nothing else. The app's
+    from the file the app publishes beside that list (<app>/engine-state/claude-quota.json) for
+    the account the review runs on, by quota_watch.gate_admission, and nothing else. The app's
     watcher starts with a cleared environment (review_watch.rs `environment`: no RICHOS_ENTITY_ROOT,
     no CLAUDE_PROJECT_DIR), so quota-watch.sh found no QUOTA_PAUSE_PERCENT there, answered UNKNOWN,
     and every app review started during a hold, on main as on the first version of this fix, which
@@ -860,7 +860,11 @@ def quota_hold(engine_root, accounts=""):
     if accounts:
         import quota_watch  # sibling in scripts/lib: the app's published reading, read one way
         state = os.path.join(os.path.dirname(os.path.abspath(accounts)), "engine-state")
-        gate = quota_watch.gate_admission(state, time.time())
+        # Judged on the account the review will run on (account_in_use, read again when it
+        # starts), as the gate judges every call on its own account: during a move the file's top
+        # level is still the account being left.
+        account = account_in_use(accounts)
+        gate = quota_watch.gate_admission(state, time.time(), (account or {}).get("id"))
         return gate["held"], gate["line"]
     cmd = (os.environ.get("SECOND_REVIEW_QUOTA_CMD") or "").strip()
     argv = [cmd] if cmd else ["bash", os.path.join(engine_root, "scripts", "quota-watch.sh"), "--once"]

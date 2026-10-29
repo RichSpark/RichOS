@@ -215,9 +215,18 @@ fn figures_of(view: &View, account: &str) -> (Option<String>, Option<f64>, Optio
     }
 }
 
-/// The account the published file's figures describe, for a refusal: "Work (account 2)".
-fn in_use_named(state: &Path) -> String {
-    match read_json::<View>(&state.join("claude-quota.json")).ok().and_then(|v| v.in_use) {
+/// The account a hold on `account` was judged on, for a refusal: "Work (account 2)". The same
+/// choice [`decide`] makes: `account`'s own row with two or more accounts, else the top level,
+/// which names its account in `in_use`. During a move a call can run on another account than the
+/// top level's (`View::moving`), so the top level's name alone would name the wrong one.
+pub(super) fn held_named(state: &Path, account: &str) -> String {
+    let Ok(view) = read_json::<View>(&state.join("claude-quota.json")) else {
+        return "the account in use".into();
+    };
+    if let Some(row) = view.accounts.iter().find(|a| a.id == account) {
+        return format!("{} (account {})", row.label, row.id);
+    }
+    match view.in_use {
         Some(a) => format!("{} (account {})", a.label, a.id),
         None => "the account in use".into(),
     }
@@ -382,11 +391,11 @@ fn wait(
             }
         }
         if started.elapsed() >= budget {
-            // Named (follow-ups 7fed0bef item 3): the hold is the account in use's, and a reader
+            // Named (follow-ups 7fed0bef item 3): the hold is this call's account's, and a reader
             // of this refusal must not take it for another account's.
             return Err(io::Error::other(format!(
                 "Still waiting for a current allowance reading on {}. No tool action was run.",
-                in_use_named(state),
+                held_named(state, account),
             )));
         }
         std::thread::sleep(tick);

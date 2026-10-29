@@ -703,8 +703,12 @@ def publish(in_use, label, five, other, other_five):
             "policy": {"enabled": True, "pausePercent": 93},
             "admission": {"state": "held", "resetsAt": (now + 4740) * 1000} if held else {"state": "ready"},
             "inUse": {"id": in_use, "label": label}, "heldUntil": None,
-            "accounts": [{"id": in_use, "label": label, "inUse": True, "windows": windows(five, now + 4740)},
-                         {"id": other[0], "label": other[1], "inUse": False, "windows": windows(other_five, now + 900)}]}
+            # Each row with its own check time, as the app publishes them: the gate judges a call
+            # on its own account's row (gate::decide), and so does the review.
+            "accounts": [{"id": in_use, "label": label, "inUse": True, "windows": windows(five, now + 4740),
+                          "checkedAt": (now - 30) * 1000},
+                         {"id": other[0], "label": other[1], "inUse": False, "windows": windows(other_five, now + 900),
+                          "checkedAt": (now - 30) * 1000}]}
     with open(os.path.join(app, "engine-state", "claude-quota.json"), "w") as f:
         json.dump(view, f)
     with open(os.path.join(app, "claude-quota-policy.json"), "w") as f:

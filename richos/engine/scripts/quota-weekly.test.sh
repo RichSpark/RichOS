@@ -252,6 +252,10 @@ class GateAdmission(unittest.TestCase):
         if setting is not None:
             with open(self.app+'/claude-quota-policy.json','w') as f: json.dump(setting,f)
     def gate(self): return watcher.gate_admission(self.state,NOW)
+    def pre_hold(self, speed):
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        view['preHold']={'five_hour':speed}
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
     def test_the_account_in_use_at_its_line_holds_until_its_reset(self):
         self.publish()
         g=self.gate()
@@ -269,12 +273,44 @@ class GateAdmission(unittest.TestCase):
         self.publish(five=10,week=95,speeds={'seven_day':1/60000},admission={'state':'ready'})
         g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+300000),g)
         self.assertIn('handoff point 94%',g['line'])
-        # Inside the last 20 minutes the gate's exemption admits a published hold.
-        self.publish(five=95,five_reset=NOW+19*60,admission={'state':'held','resetsAt':(NOW+19*60)*1000})
-        self.assertFalse(self.gate()['held'])
+        # Inside the last 20 minutes the gate still holds (main's staggered release, 2026-10-29): it
+        # lets held tool calls out one at a time on a permit, which a review never takes, so a
+        # review waits for the reset, even with the published admission `ready`.
+        self.publish(five=95,five_reset=NOW+19*60,admission={'state':'ready'})
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+19*60),g)
+        self.assertIn('under 20 minutes away',g['line'])
         # A weekly hold that has reset leaves a five-hour hold still in force, until ITS reset.
         self.publish(five=96,five_reset=NOW+3600,week=99,week_reset=NOW-1,admission={'state':'held','resetsAt':(NOW-1)*1000})
         g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+3600),g)
+    def test_the_speed_before_the_hold_sets_the_point_as_in_the_gate(self):
+        # 92% with the held team's flat reading (speed 0) is under the 93% line: admitted. The gate
+        # judges the point on the larger of that 0 and the speed before the hold (`preHold`):
+        # 0.5 points a minute (8.3e-6/ms) is not fast, 100 - 2.5 = 97.5 leaves the point at 93%,
+        # admitted; 12 a minute (2e-4/ms) is fast, checked every minute, 100 - 12 = 88%: held.
+        self.publish(five=92,speeds={'five_hour':0})
+        self.assertFalse(self.gate()['held'])
+        self.publish(five=92,speeds={'five_hour':0}); self.pre_hold(0.5/60000)
+        self.assertFalse(self.gate()['held'])
+        self.publish(five=92,speeds={'five_hour':0}); self.pre_hold(2e-4)
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+4740),g)
+        self.assertIn('pause point 88%',g['line'])
+    def test_a_review_is_judged_on_its_own_accounts_row(self):
+        # During a move the top level is the account being left (Work, 99%), while the review
+        # starts on the account in use. With Home's row at 20% the review on Home runs; asked
+        # for Work it holds on Work's row; an id with no row is the top level.
+        self.publish()
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        win=lambda i,used,reset,d: {'id':i,'label':i,'usedPercent':used,'resetsAt':reset*1000,'durationMs':d}
+        view['accounts'][0].update(windows=[win('five_hour',20,NOW+4740,18000000)],checkedAt=(NOW-30)*1000,speeds={})
+        view['accounts'][1].update(windows=[win('five_hour',99,NOW+4740,18000000)],checkedAt=(NOW-30)*1000,speeds={})
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        g=watcher.gate_admission(self.state,NOW,'1')
+        self.assertEqual((g['held'],g['account']),(False,{'id':'1','label':'Home'}),g)
+        self.assertIn('Home (account 1)',g['line'])
+        g=watcher.gate_admission(self.state,NOW,'2')
+        self.assertEqual((g['held'],g['until'],g['account']['id']),(True,NOW+4740,'2'),g)
+        g=watcher.gate_admission(self.state,NOW,'9')
+        self.assertEqual((g['held'],g['account']['id']),(True,'2'),g)
     def test_no_reading_or_an_old_one_below_the_line_admits(self):
         self.publish(checked=None,admission={'state':'held','resetsAt':(NOW+4740)*1000})
         self.assertFalse(self.gate()['held'])
