@@ -207,6 +207,36 @@ fn past_the_cap_the_least_recently_spoken_front_desk_is_the_one_retired() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// **A BUSY SESSION IS NOT RETIRED** — the regression guard for idle retirement, written against
+/// the one retirement main already had (the cap), so it passes before and after that change.
+/// The least recently spoken desk has a turn running; the cap passes over it and retires the
+/// next oldest instead. `idle_front_desk_retirement_tests.rs` holds the timed retirement's own
+/// busy test, which cannot compile on a tree without it.
+#[test]
+fn past_the_cap_a_busy_front_desk_is_passed_over() {
+    let root = std::env::temp_dir().join(format!("richos-resident-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut spine = support::spine(Ledger::open(root.join("ledger.jsonl")).unwrap());
+    let control = TurnControl::open(root.join("intake.jsonl")).unwrap();
+    spine.set_turn_control(control.clone());
+    let log = Log::default();
+    spine.set_lease_factory(Box::new(Desks { log: log.clone(), next: Arc::new(Mutex::new(0)) }));
+
+    let threads: Vec<String> = (0..MAX_RESIDENT_FRONT_DESKS + 1)
+        .map(|n| spine.create_thread(&format!("Conversation {n}"), &femcboost()).unwrap())
+        .collect();
+    spine.submit_prompt_to(&threads[0], "hello", Source::Text).unwrap();
+    control.for_thread(&threads[0]).begin_turn(richos_core::steering::ActiveTurn {
+        turn_id: "still-running".into(), thread_id: threads[0].clone(), entity_id: Some(femcboost()), started_at: None });
+    for thread in &threads[1..] {
+        spine.submit_prompt_to(thread, "hello", Source::Text).unwrap();
+    }
+    assert!(spine.front_desk_is_resident(&threads[0]), "a desk with a running turn was retired");
+    assert!(!log.dropped().contains(&"desk-1".to_string()), "the busy desk's child was ended");
+    assert_eq!(log.dropped(), vec!["desk-2"], "the cap did not retire the next oldest idle desk instead");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// **The thing that would have gone wrong quietly.** Several facts un-prime a front desk
 /// because they are facts about the whole app, not about one lease — the central folder
 /// moving, the memory wiring being torn down. Before residency, un-priming the chair was

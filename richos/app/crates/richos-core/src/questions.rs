@@ -890,15 +890,24 @@ impl Store {
     /// Window-exit callbacks must answer immediately, including during answer handoff.
     /// Missing history is idle; unreadable history remains an error, never an idle claim.
     pub fn pending_for_residency(&self) -> Result<bool> {
+        self.pending_where(|_, _| true)
+    }
+    /// The same reading for ONE conversation: a question in it is open, or answered and not yet
+    /// delivered. Its Rich must keep running until it is (idle retirement, `spine.rs`).
+    pub fn pending_for_thread(&self, entity: &str, thread: &str) -> Result<bool> {
+        self.pending_where(|e, t| e == entity && t == thread)
+    }
+    fn pending_where(&self, of: impl Fn(&str, &str) -> bool) -> Result<bool> {
         let bytes = match std::fs::read(self.directory.join("store.json")) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(error.to_string()),
         };
         let data: Data = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-        Ok(data.questions.iter().any(|q| q.state == State::Open
-            || q.state == State::Answered && !q.delivered)
-            || data.deliveries.iter().any(|delivery| delivery.receipt.is_none()))
+        Ok(data.questions.iter().any(|q| of(&q.entity_id, &q.thread_id)
+            && (q.state == State::Open || q.state == State::Answered && !q.delivered))
+            || data.deliveries.iter().any(|delivery| of(&delivery.entity_id, &delivery.thread_id)
+                && delivery.receipt.is_none()))
     }
     pub fn all(&self) -> Result<Vec<Question>> {
         self.transaction(false, |d| Ok(d.questions.clone()))
