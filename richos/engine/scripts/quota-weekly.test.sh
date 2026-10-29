@@ -231,41 +231,62 @@ class AppReading(unittest.TestCase):
 class GateAdmission(unittest.TestCase):
     """Second review of d37b1f0de (rv-20261028T184535Z-d37b1f0d-e0d9), blocking finding: an app review
     takes the desktop gate's own decision from the published file and the pause setting beside it
-    (quota/gate.rs `admission`), with no terminal entity config. Only a hold holds."""
+    (quota/gate.rs `admission`), with no terminal entity config. Only a hold holds. The decision is
+    the gate's recompute from the published figures, never the published `admission`, which every
+    case below sets to the opposite of the gate's answer (second review of 2097df51c)."""
     def setUp(self):
         import tempfile, os
         self.dir=tempfile.TemporaryDirectory(); self.app=self.dir.name
         self.state=os.path.join(self.app,'engine-state'); os.makedirs(self.state)
     def tearDown(self): self.dir.cleanup()
-    def publish(self, admission, held_until=None, policy=None, setting=None):
-        view={'windows':[{'id':'five_hour','label':'Five-hour','usedPercent':99,'resetsAt':(NOW+4740)*1000,'durationMs':18000000}],
-              'checkedAt':(NOW-30)*1000,'policy':policy or {'enabled':True,'pausePercent':93},'admission':admission,
+    def publish(self, five=99, five_reset=NOW+4740, week=20, week_reset=NOW+300000, speeds=None, admission=None,
+                held_until=None, policy=None, setting=None, checked=NOW-30):
+        win=lambda i,used,reset,d: {'id':i,'label':i,'usedPercent':used,'resetsAt':reset*1000,'durationMs':d}
+        view={'state':'fresh','refreshIntervalMs':300000,
+              'windows':[win('five_hour',five,five_reset,18000000),win('seven_day',week,week_reset,604800000)],
+              'checkedAt':None if checked is None else checked*1000,'speeds':speeds or {},
+              'policy':policy or {'enabled':True,'pausePercent':93},'admission':admission or {'state':'ready'},
               'heldUntil':held_until,'inUse':{'id':'2','label':'Work'},
               'accounts':[{'id':'1','label':'Home','inUse':False,'windows':[]},{'id':'2','label':'Work','inUse':True,'windows':[]}]}
         with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
         if setting is not None:
             with open(self.app+'/claude-quota-policy.json','w') as f: json.dump(setting,f)
     def gate(self): return watcher.gate_admission(self.state,NOW)
-    def test_the_account_in_use_published_held_holds_until_its_reset(self):
-        self.publish({'state':'held','resetsAt':(NOW+4740)*1000})
+    def test_the_account_in_use_at_its_line_holds_until_its_reset(self):
+        self.publish()
         g=self.gate()
         self.assertEqual((g['held'],g['until'],g['account']['id']),(True,NOW+4740,'2'),g)
         self.assertIn('HOLDS work on Work (account 2)',g['line'])
     def test_a_hold_whose_window_has_reset_admits(self):
-        self.publish({'state':'held','resetsAt':(NOW-1)*1000})
+        self.publish(five_reset=NOW-1,admission={'state':'held','resetsAt':(NOW+4740)*1000})
         self.assertFalse(self.gate()['held'])
     def test_every_account_exhausted_holds_even_with_the_pause_off(self):
-        self.publish({'state':'disabled'},held_until=(NOW+600)*1000,policy={'enabled':False,'pausePercent':93})
+        self.publish(five=10,held_until=(NOW+600)*1000,policy={'enabled':False,'pausePercent':93})
         g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+600),g)
-    def test_only_a_hold_holds(self):
-        for kind in ('ready','unknown','noReading','disabled'):
-            self.publish({'state':kind})
-            self.assertFalse(self.gate()['held'],kind)
-    def test_the_setting_beside_the_file_wins_as_in_the_gate(self):
-        self.publish({'state':'held','resetsAt':(NOW+4740)*1000},setting={'enabled':False,'pausePercent':93})
+    def test_the_published_admission_is_never_the_answer(self):
+        # The review's case: weekly 95% at one point a minute. The service published `ready` with a
+        # measured 3-minute handoff (its point 96%); the gate, with the 5-minute default, has 94%.
+        self.publish(five=10,week=95,speeds={'seven_day':1/60000},admission={'state':'ready'})
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+300000),g)
+        self.assertIn('handoff point 94%',g['line'])
+        # Inside the last 20 minutes the gate's exemption admits a published hold.
+        self.publish(five=95,five_reset=NOW+19*60,admission={'state':'held','resetsAt':(NOW+19*60)*1000})
         self.assertFalse(self.gate()['held'])
-        self.publish({'state':'held','resetsAt':(NOW+4740)*1000},setting={'enabled':True,'pausePercent':80})
-        g=self.gate(); self.assertFalse(g['held']); self.assertIn('newer than its published reading',g['line'])
+        # A weekly hold that has reset leaves a five-hour hold still in force, until ITS reset.
+        self.publish(five=96,five_reset=NOW+3600,week=99,week_reset=NOW-1,admission={'state':'held','resetsAt':(NOW-1)*1000})
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+3600),g)
+    def test_no_reading_or_an_old_one_below_the_line_admits(self):
+        self.publish(checked=None,admission={'state':'held','resetsAt':(NOW+4740)*1000})
+        self.assertFalse(self.gate()['held'])
+        self.publish(five=50,checked=NOW-3600,admission={'state':'held','resetsAt':(NOW+4740)*1000})
+        self.assertFalse(self.gate()['held'])
+    def test_the_setting_beside_the_file_wins_as_in_the_gate(self):
+        self.publish(setting={'enabled':False,'pausePercent':93})
+        self.assertFalse(self.gate()['held'])
+        self.publish(five=85,setting={'enabled':True,'pausePercent':80})
+        self.assertTrue(self.gate()['held'])
+        self.publish(five=85,setting={'enabled':'yes'})   # not a Policy: the published one (93) decides
+        self.assertFalse(self.gate()['held'])
     def test_no_file_or_a_broken_one_is_the_gates_unknown_and_admits(self):
         g=self.gate(); self.assertFalse(g['held']); self.assertIn('no usage reading',g['line'])
         with open(self.state+'/claude-quota.json','w') as f: f.write('{not json')

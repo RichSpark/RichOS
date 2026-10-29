@@ -14,4 +14,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR/.."
 # The test builds its own app state and environment; nothing here may point it at the live one.
 unset RICHOS_APP_STATE RICHOS_WORKSPACES_DIR CLAUDE_CONFIG_DIR
-cargo test --quiet -p richos-core --lib -- --exact quota::tests::every_usage_consumer_follows_the_account_in_use
+# And the second review's hold is the desktop gate's own decision over 600 published files
+# (quota::tests::the_review_hold_is_the_gates_own_decision; second review of 2097df51c).
+cargo test --quiet -p richos-core --lib -- --exact quota::tests::every_usage_consumer_follows_the_account_in_use \
+    quota::tests::the_review_hold_is_the_gates_own_decision

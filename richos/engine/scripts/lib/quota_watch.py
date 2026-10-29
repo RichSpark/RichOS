@@ -730,39 +730,114 @@ def gate_admission(state, now):
         out["line"] = ("quota: the app's gate HOLDS work until %s: every account is exhausted (in use: %s)"
                        % (hhmm(until // 1000), named))
         return out
-    published = data.get("policy") if isinstance(data.get("policy"), dict) else {}
-    policy = published
+    policy = _policy(data.get("policy"))
+    if policy is None:
+        return admitted("%s does not parse as the app's reading: no pause setting (the gate's Unknown)" % path)
     try:
         with open(os.path.join(os.path.dirname(os.path.abspath(state)), "claude-quota-policy.json"), "rb") as fh:
-            setting = json.loads(fh.read(262145).decode("utf-8"))
-        if isinstance(setting, dict):
-            policy = setting
+            policy = _policy(json.loads(fh.read(262145).decode("utf-8"))) or policy
     except (OSError, ValueError, UnicodeDecodeError):
         pass
-    if policy.get("enabled") is not True:
+    enabled, percent = policy
+    if not enabled:
         return admitted("its automatic pause is off (%s)" % named)
-    percent = policy.get("pausePercent")
-    if isinstance(percent, bool) or not isinstance(percent, int) or not 1 <= percent <= 99:
-        return admitted("UNKNOWN: its pause setting %r is not 1-99%% (the gate's Unknown; %s)" % (percent, named))
+    if not 1 <= percent <= 99:
+        return admitted("UNKNOWN: its pause setting %d%% is not 1-99%% (the gate's Unknown; %s)" % (percent, named))
     checked = _ms(data.get("checkedAt"))
     if checked is not None and checked > now_ms:
         return admitted("UNKNOWN: its reading is dated in the future (the gate's Unknown; %s)" % named)
-    if (published.get("enabled"), published.get("pausePercent")) != (True, percent):
-        return admitted("UNKNOWN: its pause setting (on, %d%%) is newer than its published reading of %s; "
-                        "admitted until the app publishes again" % (percent, named))
-    admission = data.get("admission") if isinstance(data.get("admission"), dict) else {}
-    kind = admission.get("state") if isinstance(admission.get("state"), str) else "missing"
+    decided = _gate_recompute(data, percent, now_ms)
+    if decided is None:
+        return admitted("%s does not parse as the app's reading (the gate's Unknown)" % path)
+    kind, resets, why = decided
     if kind == "held":
-        resets = _ms(admission.get("resetsAt"))
-        if resets is None:
-            return admitted("UNKNOWN: its published hold of %s carries no reset time" % named)
-        if resets <= now_ms:
-            return admitted("the hold of %s ended at its window's reset, %s%s" % (named, hhmm(resets // 1000), figure))
         out.update(held=True, until=resets // 1000)
-        out["line"] = "quota: the app's gate HOLDS work on %s until %s (its %d%% pause%s)" % (
-            named, hhmm(resets // 1000), percent, figure)
+        out["line"] = "quota: the app's gate HOLDS work on %s until %s (%s)" % (named, hhmm(resets // 1000), why)
         return out
-    return admitted("%s, published admission %s%s" % (named, kind, figure))
+    return admitted("%s, %s%s" % (named, why, figure))
+
+
+def _policy(value):
+    """(enabled, pausePercent) as the gate's serde reads a Policy, or None when it would not parse."""
+    if not isinstance(value, dict):
+        return None
+    enabled, percent = value.get("enabled"), value.get("pausePercent")
+    if not isinstance(enabled, bool) or isinstance(percent, bool) or not isinstance(percent, int) or not 0 <= percent <= 255:
+        return None
+    return enabled, percent
+
+
+# quota.rs constants the gate's decision uses.
+REFRESH_INTERVAL_MS = 5 * 60_000
+FAST_REFRESH_INTERVAL_MS = 60_000
+FAST_POINTS_PER_CHECK = 5.0
+HANDOFF_DEFAULT_MS = 5 * 60_000
+WEEKLY_THRESHOLD = 99.0
+RESET_EXEMPTION_MS = 20 * 60_000
+
+
+def _gate_recompute(data, percent, now_ms):
+    """("held" | another admission, resets_at ms or None, why), or None when the file would not parse.
+
+    THE GATE'S OWN RECOMPUTE, rule for rule (second review of 2097df51c: the published admission is
+    the service's, computed with the account's measured handoff, token speed and expected rise; the
+    gate builds a fresh Snapshot from the published windows, checkedAt, message, speeds and emptyAt
+    alone and decides again, quota/gate.rs `admission` -> quota.rs `Snapshot::view_with`). So: no
+    token speed, no since-reading points, no expected rise, no cut-off, and the 5-minute default
+    handoff with no points. quota::tests::the_review_hold_is_the_gates_own_decision runs this against
+    gate::admission over the same files, so the two cannot drift apart unseen."""
+    if not all(k in data for k in ("state", "windows", "refreshIntervalMs", "admission")):
+        return None
+    windows = []
+    for w in data.get("windows") if isinstance(data.get("windows"), list) else [None]:
+        if not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("label"), str):
+            return None
+        used, reset, duration = w.get("usedPercent"), w.get("resetsAt"), w.get("durationMs")
+        if isinstance(used, bool) or not isinstance(used, (int, float)):
+            return None
+        if reset is not None and (isinstance(reset, bool) or not isinstance(reset, int) or reset < 0):
+            return None
+        if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
+            return None
+        windows.append({"id": w["id"], "used": float(used), "resets": reset})
+    speeds = data.get("speeds") or {}
+    if not isinstance(speeds, dict) or any(isinstance(s, bool) or not isinstance(s, (int, float)) for s in speeds.values()):
+        return None
+    speed = lambda w: float(speeds.get(w["id"], 0.0))
+    checked = data.get("checkedAt")
+    empty_at = data.get("emptyAt")
+    error = data.get("message") is not None
+    # Reading::interval with `expected` false: one minute while any speed is fast, else five.
+    fast = any(float(s) * REFRESH_INTERVAL_MS >= FAST_POINTS_PER_CHECK for s in speeds.values())
+    interval = FAST_REFRESH_INTERVAL_MS if fast else REFRESH_INTERVAL_MS
+    clamp = lambda v: min(max(v, 0.0), 100.0)
+    act_point = lambda w: clamp(min(float(percent), 100.0 - speed(w) * interval))
+    def weekly_point(w):
+        s = speed(w)
+        points = s * interval + max(s * HANDOFF_DEFAULT_MS, 0.0)
+        return clamp(WEEKLY_THRESHOLD - max(math.ceil(points) - 1.0, 0.0))
+    live = [w for w in windows if w["resets"] is None or w["resets"] > now_ms]
+    expired = any(w["resets"] is not None and w["resets"] <= now_ms for w in windows)
+    fresh = checked is not None and now_ms >= checked and now_ms - checked < interval and not error and not expired
+    answered_empty = empty_at is not None and (checked is None or empty_at >= checked)
+    if checked is None:
+        return ("noReading" if answered_empty else "unknown"), None, "no reading yet"
+    weekly = [w for w in live if w["id"] == "seven_day" and w["used"] >= weekly_point(w)
+              and w["resets"] is not None and w["resets"] > now_ms]
+    if weekly:
+        w = max(weekly, key=lambda x: x["resets"])
+        return "held", w["resets"], "weekly %s%% at its handoff point %s%%" % (fmt_pct(w["used"]), fmt_pct(weekly_point(w)))
+    five = next((w for w in windows if w["id"] == "five_hour"), None)
+    if five is not None and five["used"] >= act_point(five) and five["resets"] is not None and five["resets"] > now_ms:
+        left = five["resets"] - now_ms
+        if left < RESET_EXEMPTION_MS and (speed(five) == 0.0 or five["used"] + speed(five) * float(left) < 100.0):
+            return "ready", None, "five-hour %s%% at its %d%% pause, but its reset is under 20 minutes away" % (
+                fmt_pct(five["used"]), percent)
+        return "held", five["resets"], "five-hour %s%% at its %d%% pause point %s%%" % (
+            fmt_pct(five["used"]), percent, fmt_pct(act_point(five)))
+    if five is not None and fresh and five["resets"] is not None and five["resets"] > now_ms:
+        return "ready", None, "ready"
+    return ("noReading" if answered_empty else "unknown"), None, "no current reading (the gate admits work without one)"
 
 
 def read_app(state, now):

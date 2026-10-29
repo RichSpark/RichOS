@@ -3145,6 +3145,96 @@ for line in sys.stdin:
         assert_eq!(held, !gate::admission(&state, crate::util::now_millis()).allows_work(), "{reading}");
     }
 
+    /// **An app review's hold is the gate's own decision, case for case** (second review of
+    /// 2097df51c: the review read the service's published `admission`, which the gate recomputes
+    /// with other inputs, so a review could start during a hold the gate enforced). The engine's
+    /// reader (`quota_watch.gate_admission`, which `second_review.quota_hold` uses in the app) is
+    /// run over 600 published files, each a real `Service::publish` with the fields the gate reads
+    /// varied around its boundaries: five-hour and weekly use near the pause and handoff points,
+    /// resets around the 20-minute exemption and already past, speeds below and above the fast
+    /// check, a reading fresh, old, missing or dated ahead, an empty answer, an error, every
+    /// account exhausted, the published policy and the setting file beside it. It must hold exactly
+    /// when `gate::admission` does not allow work, until the same moment.
+    #[test]
+    fn the_review_hold_is_the_gates_own_decision() {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        service.set_policy(Policy { enabled: true, pause_percent: 93 }).unwrap();
+        service.publish().unwrap();
+        let template: Value = serde_json::from_slice(&fs::read(root.path().join("engine-state/claude-quota.json")).unwrap()).unwrap();
+        let now: u64 = 1_900_000_000_000;
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut pick = |n: usize| { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; (seed % n as u64) as usize };
+        let offsets = |v: &[Option<i64>], i: usize| v[i].map(|d| (now as i64 + d) as u64);
+        let (minute, hour) = (60_000i64, 3_600_000i64);
+        let five_used = [0., 50., 79.9, 80., 92.99, 93., 93.5, 97., 99., 100.];
+        let week_used = [10., 93., 94., 95., 96., 98., 99., 100.];
+        let five_reset = [Some(-minute), Some(0), Some(1), Some(10 * minute), Some(20 * minute - 1), Some(20 * minute), Some(20 * minute + 1), Some(hour), None];
+        let week_reset = [Some(-1), Some(1), Some(24 * hour), Some(80 * hour), None];
+        let speeds = [None, Some(0.), Some(1e-6), Some(1. / 60_000.), Some(2e-5), Some(5e-4)];
+        let checked = [None, Some(-30_000), Some(-299_999), Some(-300_000), Some(-hour), Some(5_000)];
+        let held_until = [None, Some(-1), Some(10 * minute)];
+        let policies = [json!({"enabled": true, "pausePercent": 93}), json!({"enabled": false, "pausePercent": 93}),
+            json!({"enabled": true, "pausePercent": 80}), json!({"enabled": true, "pausePercent": 0})];
+        let settings = [None, Some(json!({"enabled": true, "pausePercent": 93})), Some(json!({"enabled": false, "pausePercent": 93})),
+            Some(json!({"enabled": true, "pausePercent": 80})), Some(json!({"enabled": "yes"}))];
+        let window = |id: &str, used: f64, resets: Option<u64>| json!({"id": id, "label": id, "usedPercent": used,
+            "resetsAt": resets, "durationMs": if id == "five_hour" { 18_000_000u64 } else { 604_800_000u64 }});
+        let mut cases = Vec::new();
+        for i in 0..600 {
+            let app = root.path().join(format!("case-{i}"));
+            let state = app.join("engine-state");
+            fs::create_dir_all(&state).unwrap();
+            let mut view = template.clone();
+            let mut windows = Vec::new();
+            if pick(8) != 0 { windows.push(window("five_hour", five_used[pick(five_used.len())], offsets(&five_reset, pick(five_reset.len())))); }
+            if pick(4) != 0 { windows.push(window("seven_day", week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len())))); }
+            view["windows"] = json!(windows);
+            let mut speed_map = serde_json::Map::new();
+            for id in ["five_hour", "seven_day"] {
+                if let Some(s) = speeds[pick(speeds.len())] { speed_map.insert(id.into(), json!(s)); }
+            }
+            view["speeds"] = Value::Object(speed_map);
+            let checked_at = offsets(&checked, pick(checked.len()));
+            view["checkedAt"] = json!(checked_at);
+            view["emptyAt"] = match pick(4) {
+                0 => json!(checked_at.map(|c| c - 1)), 1 => json!(checked_at.map(|c| c + 1)), 2 => json!(now - 10), _ => Value::Null };
+            view["message"] = if pick(5) == 0 { json!("fixture error") } else { Value::Null };
+            view["heldUntil"] = json!(offsets(&held_until, pick(held_until.len())));
+            view["policy"] = policies[pick(policies.len())].clone();
+            // The published admission is never the answer: here it is a coin toss.
+            view["admission"] = if pick(2) == 0 { json!({"state": "ready"}) } else { json!({"state": "held", "resetsAt": now + 1}) };
+            fs::write(state.join("claude-quota.json"), view.to_string()).unwrap();
+            if let Some(setting) = &settings[pick(settings.len())] {
+                fs::write(app.join("claude-quota-policy.json"), setting.to_string()).unwrap();
+            }
+            let gate = gate::admission(&state, now);
+            cases.push((state, gate, view));
+        }
+        let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
+        let program = "import json, sys\nsys.path.insert(0, sys.argv[1])\nimport quota_watch\n\
+            print(json.dumps([quota_watch.gate_admission(s, n / 1000) for s, n in json.load(sys.stdin)]))";
+        let mut child = std::process::Command::new("python3").arg("-I").arg("-c").arg(program).arg(engine.join("scripts/lib"))
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+        let input = json!(cases.iter().map(|(state, _, _)| json!([state, now])).collect::<Vec<_>>()).to_string();
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        let answers: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
+        let mut differ = Vec::new();
+        let mut held_seen = 0;
+        for ((_, gate, view), answer) in cases.iter().zip(&answers) {
+            let want_until = match gate { Admission::Held { resets_at } => Some(resets_at / 1000), _ => None };
+            held_seen += usize::from(want_until.is_some());
+            if answer["held"].as_bool() != Some(!gate.allows_work()) || answer["until"].as_u64() != want_until {
+                differ.push(format!("gate {gate:?}, review {answer} for {view}"));
+            }
+        }
+        assert!(differ.is_empty(), "{} of 600 differ; first: {}", differ.len(), differ[0]);
+        assert!((30..=570).contains(&held_seen), "the cases must both hold and admit in number: {held_seen} of 600 held");
+    }
+
     /// **A file an older app wrote names no account in use** (the live file of 2026-10-28 17:14Z,
     /// written by the installed app before `inUse` existed). The quota tool then names the
     /// `accounts[]` row marked in use, never Account 1 by default: that named Home beside Work's
