@@ -13,7 +13,9 @@ pub trait WorkNotifier: Send + Sync {
     fn nothing_left_to_do(&self) {}
     /// Stu's work met an overload and waits out the CEO's schedule: `sentence` is
     /// `RetryBudget::ceo_message`, the same "RichOS will try again in N minutes" line his
-    /// conversation shows for Rich, for the conversation `thread_id`.
+    /// conversation shows for Rich, for the conversation `thread_id`. A turn of his that a usage
+    /// limit cut, held until the reset with no account left, is shown here too
+    /// (`usage_limit_hold_sentence`).
     fn overload_retry(&self, _thread_id: &str, _sentence: &str) {}
 }
 pub const ROTATION_WAITS_FOR_COMMANDS: std::time::Duration = std::time::Duration::from_secs(600);
@@ -196,6 +198,35 @@ impl WorkHost {
         let ended = inner.closing || inner.lease_session.as_deref() != Some(session);
         drop(inner);
         ended || self.handoff_stopped(binding, message).unwrap_or(true)
+    }
+
+    /// **A turn of Stu's that a usage limit cut** (`error` is the lease's
+    /// [`crate::claude_accounts::usage_limit_error`]): the backstop Rich's turns already have
+    /// (`spine.rs`, "FILL-FIRST'S BACKSTOP"). The account is marked gone and the next with room
+    /// put in use ([`crate::quota::Service::limit_reached`]). Returns the wait before the one
+    /// retry, with the session the cut turn ran on (for the Stop checks): none when another
+    /// account has room, since his next delivery moves him there; otherwise until the soonest
+    /// reset across the accounts, or this account's own when it is the only one.
+    ///
+    /// `None` (no retry, the turn ends as before) when it is not a usage limit, or there is no
+    /// quota service or no account to mark, as with Rich's.
+    fn usage_limit_hold(&self, backend: &Backend, binding: &ThreadBinding, error: &str) -> Option<(std::time::Duration, String)> {
+        let resets_at = crate::claude_accounts::parse_usage_limit(error)?;
+        let quota = self.quota.lock().unwrap().clone()?;
+        let (account, session) = {
+            let lease = backend.lease.lock().unwrap();
+            let lease = lease.as_ref()?;
+            (lease.account()?.to_string(), lease.session_id().to_string())
+        };
+        if quota.limit_reached(&account, resets_at) == crate::claude_accounts::AfterLimit::Continue {
+            return Some((std::time::Duration::ZERO, session));
+        }
+        let now = crate::util::now_millis();
+        let until = quota.view().held_until.or_else(|| quota.accounts.limited_until(&account)).unwrap_or(now);
+        let wait = std::time::Duration::from_millis(until.saturating_sub(now));
+        // Shown as the overload wait is: RichOS's own retry sentence, never Stu's words.
+        self.notifier.overload_retry(binding.thread_id(), &usage_limit_hold_sentence(wait));
+        Some((wait, session))
     }
 
     fn live_completion(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
@@ -755,7 +786,9 @@ impl WorkHost {
         message: &crate::session_tools::Message,
         turn: &str,
     ) -> Result<String, String> {
-        let result=(|| {
+        // One delivery of `message` as a turn of Stu's. Called once, and a second time only
+        // after a usage limit (below), so it is never a retry loop.
+        let deliver=|| {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
         self.move_to_account_in_use(backend, binding, true);
@@ -859,7 +892,19 @@ impl WorkHost {
             self.reload_team_after_turn(backend, binding, lease.as_mut())?;
             Ok(session)
         }
-        })();
+        };
+        let result = deliver();
+        // A TURN OF STU'S CUT BY A USAGE LIMIT is sent once more, as Rich's is (`spine.rs`,
+        // "FILL-FIRST'S BACKSTOP"): at once on the next account with room, or after the hold
+        // until the reset when none has room. The wait is the existing retry clock's, with the
+        // overload retry's Stop checks. Whatever the second delivery comes to is final.
+        let result = match result.as_ref().err().and_then(|error| self.usage_limit_hold(backend, binding, error)) {
+            Some((wait, session)) => {
+                let clock = self.retry_clock.lock().unwrap().clone();
+                if clock.wait(wait, &|| self.retry_stopped(backend, binding, message, &session)) { deliver() } else { result }
+            }
+            None => result,
+        };
         if result.is_err() {
             let session=backend.inner.lock().unwrap().lease_session.clone().unwrap_or_default();
             self.observe_turn_result(binding,Some(message),Some(turn),&session,&result)?;
@@ -1801,6 +1846,18 @@ impl WorkHost {
             drop(retired);
         }
     }
+}
+
+/// What his conversation shows while a turn of Stu's that a usage limit cut is held until the
+/// reset ([`WorkHost::usage_limit_hold`]), `wait` from now.
+fn usage_limit_hold_sentence(wait: std::time::Duration) -> String {
+    let when = match wait.as_secs().div_ceil(60).max(1) {
+        1 => "1 minute".to_string(),
+        minutes if minutes < 90 => format!("{minutes} minutes"),
+        minutes => format!("about {} hours", (minutes + 30) / 60),
+    };
+    format!("The team's work reached a Claude usage limit and no Claude account has room left. \
+        RichOS will try that step again once, when the limit resets in {when}.")
 }
 
 fn lock_until<T>(
@@ -2968,6 +3025,176 @@ mod tests {
         assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// A Stu lease on the account it was opened under that is refused by a usage limit, as
+    /// `native.rs` reports it, for the first `cut` prompts given to any lease.
+    struct LimitedLease {
+        session: String,
+        account: String,
+        resets_at: u64,
+        cut: Arc<AtomicUsize>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    impl Cognition for LimitedLease {
+        fn session_id(&self)->&str {&self.session}
+        fn account(&self)->Option<&str> {Some(&self.account)}
+        fn refresh_team(&mut self)->Result<bool,CognitionError> {Ok(true)}
+        fn prompt(&mut self,text:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
+            self.prompts.lock().unwrap().push((self.account.clone(),text.to_string()));
+            if self.cut.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|left|left.checked_sub(1)).is_ok() {
+                return Err(CognitionError::Protocol(crate::claude_accounts::usage_limit_error(Some(self.resets_at),
+                    "[\"You've hit your session limit\"]")));
+            }
+            Ok("end_turn".into())
+        }
+    }
+    struct LimitedFactory { quota: Arc<crate::quota::Service>, spawns: Arc<AtomicUsize>, resets_at: u64,
+        cut: Arc<AtomicUsize>, prompts: Arc<Mutex<Vec<(String, String)>>> }
+    impl LeaseFactory for LimitedFactory {
+        fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+        fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
+            let n=self.spawns.fetch_add(1,Ordering::SeqCst);
+            Ok(Box::new(LimitedLease {session:format!("stu-limited-{n}"),account:self.quota.lease_account().id,
+                resets_at:self.resets_at,cut:self.cut.clone(),prompts:self.prompts.clone()}))
+        }
+    }
+    struct Limited {
+        h: Harness,
+        host: Arc<WorkHost>,
+        quota: Arc<crate::quota::Service>,
+        clock: Arc<RecordedRetryClock>,
+        notices: Arc<RecordingNotifier>,
+        cut: Arc<AtomicUsize>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+        resets_at: u64,
+    }
+    /// Stu with the quota service `quota`, whose leases are refused by a usage limit resetting in
+    /// an hour for the first `cut` prompts, on a recorded retry clock.
+    fn stu_with_a_usage_limit(h: Harness, quota: Arc<crate::quota::Service>, cut: usize) -> Limited {
+        let resets_at=crate::util::now_millis()+3_600_000;
+        let (cut,prompts)=(Arc::new(AtomicUsize::new(cut)),Arc::new(Mutex::new(Vec::new())));
+        let notices=Arc::new(RecordingNotifier::default());
+        let host=WorkHost::new(&h.state,Box::new(LimitedFactory {quota:quota.clone(),spawns:Arc::new(AtomicUsize::new(0)),
+            resets_at,cut:cut.clone(),prompts:prompts.clone()}),notices.clone());
+        let clock=Arc::new(RecordedRetryClock::default());
+        host.set_retry_clock(clock.clone());
+        host.set_quota(quota.clone());
+        crate::session_tools::bind(&h.root.join("peer-status.json"),&host.message_scope(&h.binding),"front","rich",None).unwrap();
+        Limited {h,host,quota,clock,notices,cut,prompts,resets_at}
+    }
+    impl Limited {
+        /// Rich hands Stu `text`; returns once the run loop has finished `completed` turns.
+        fn send(&self, text: &str, completed: u64) {
+            crate::session_tools::send(&self.h.root.join("peer-status.json"),&self.host.message_scope(&self.h.binding),
+                serde_json::json!({"text":text})).unwrap();
+            self.host.wake_messages(&self.h.binding);
+            // Hang guard: the clock is recorded, so nothing here waits for real time.
+            assert!(self.host.wait_for_completed(completed,std::time::Duration::from_secs(30)),"Stu's turn did not finish");
+        }
+        /// The account each delivery of `text` reached Stu on, in order.
+        fn deliveries(&self, text: &str) -> Vec<String> {
+            self.prompts.lock().unwrap().iter().filter(|(_,prompt)|prompt.contains(text)).map(|(account,_)|account.clone()).collect()
+        }
+        /// The failure facts Rich was given about Stu's turns.
+        fn failures(&self) -> Vec<serde_json::Value> {
+            let scope=self.host.message_scope(&self.h.binding);
+            let mut facts=Vec::new();
+            while let Some((message,through))=crate::session_tools::pending(&scope,"rich").unwrap() {
+                facts.push(serde_json::from_str::<serde_json::Value>(&message.text).unwrap());
+                crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
+            }
+            facts
+        }
+        fn end(self) {
+            self.host.shutdown();
+            std::fs::remove_dir_all(&self.h.root).unwrap();
+        }
+    }
+
+    /// **A turn of Stu's cut by a usage limit goes on at once on the next account with room**,
+    /// as Rich's does (`spine.rs`, "FILL-FIRST'S BACKSTOP"). Account 1 and Home both have room
+    /// by their readings; Stu's turn on Account 1 is refused by a usage limit. Account 1 is
+    /// marked gone until its reset and Home put in use, and the same input reaches Stu once more,
+    /// on Home, with no wait and naming the cut attempt. Rich is told of no failure.
+    ///
+    /// Before this, the input was given once and the run loop stopped there until someone
+    /// happened to message Stu (2026-10-28).
+    #[test]
+    #[cfg(unix)]
+    fn a_stu_turn_cut_by_a_usage_limit_is_sent_once_more_on_the_next_account_with_room() {
+        let h=harness(0);
+        let root=h.root.join("quota");
+        std::fs::create_dir_all(&root).unwrap();
+        let bin=crate::quota::tests::fake_claude(&root);
+        let quota=Arc::new(crate::quota::Service::open(&root).unwrap());
+        let home=quota.accounts.add("Home").unwrap();
+        crate::quota::tests::usage(&root.join("usage-1.json"),20.,40.,"2099-01-05T00:00:00Z");
+        crate::quota::tests::usage(&home.folder.clone().unwrap().join("usage.json"),10.,20.,"2099-01-06T00:00:00Z");
+        quota.refresh(&bin,true);
+        assert_eq!(quota.accounts.in_use().id,"1","Account 1 has room and is in use");
+        let stu=stu_with_a_usage_limit(h,quota,1);
+
+        stu.send("Input under test",1);
+
+        assert_eq!(stu.deliveries("Input under test"),["1".to_string(),home.id.clone()],
+            "the input was not sent once more on the account with room: {:?}",stu.prompts.lock().unwrap());
+        assert_eq!(stu.quota.accounts.in_use().id,home.id,"Home is in use");
+        assert_eq!(stu.quota.accounts.limited_until("1"),Some(stu.resets_at),"Account 1 is gone until its reset");
+        assert_eq!(*stu.clock.0.lock().unwrap(),[std::time::Duration::ZERO],"another account had room: no hold");
+        let retried=stu.prompts.lock().unwrap().iter().filter(|(_,p)|p.contains("Input under test")).nth(1).cloned().unwrap().1;
+        let retried: serde_json::Value=serde_json::from_str(&retried).unwrap();
+        assert!(retried["previous_delivery_attempt"]["session_id"].as_str()==Some("stu-limited-0"),
+            "the second delivery does not name the attempt the limit cut: {retried}");
+        assert!(stu.failures().is_empty(),"a turn that went on on Home was reported as failed");
+        assert!(stu.notices.0.lock().unwrap().is_empty(),"nothing is held, so no hold is shown");
+        assert_eq!(stu.cut.load(Ordering::SeqCst),0);
+        stu.end();
+    }
+
+    /// **With no account that has room, the turn is held until the reset and sent once more**,
+    /// on the existing retry clock, and never in a loop. One account: Stu's turn is refused by a
+    /// usage limit that resets in an hour. The clock is asked for one wait, to that reset, his
+    /// conversation is shown RichOS's own line about it, and the same input is then sent once.
+    /// A second input refused both times is sent exactly twice and its failure reaches Rich once,
+    /// as any failed turn's does.
+    #[test]
+    fn a_stu_turn_cut_by_a_usage_limit_with_no_account_left_is_held_until_the_reset_and_sent_once_more() {
+        let h=harness(0);
+        let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
+        let stu=stu_with_a_usage_limit(h,quota,1);
+
+        stu.send("Input under test",1);
+
+        assert_eq!(stu.deliveries("Input under test"),["1","1"],"held, then sent once more on the only account");
+        let waits=stu.clock.0.lock().unwrap().clone();
+        let (hour,minute)=(std::time::Duration::from_secs(3600),std::time::Duration::from_secs(60));
+        assert!(waits.len()==1 && waits[0]<=hour && waits[0]>hour-minute,"not one wait until the reset an hour away: {waits:?}");
+        assert!(stu.failures().is_empty(),"the retry after the reset succeeded, yet a failure was reported");
+        let shown=stu.notices.0.lock().unwrap().clone();
+        assert_eq!(shown.len(),1,"{shown:?}");
+        assert_eq!(shown[0].0,"thread-one");
+        assert!(shown[0].1.contains("Claude usage limit") && shown[0].1.contains("try that step again once"),"{shown:?}");
+
+        // Refused both times: two deliveries, never a third, and one failure for Rich.
+        stu.cut.store(2,Ordering::SeqCst);
+        stu.send("Second input",2);
+        assert_eq!(stu.deliveries("Second input"),["1","1"],"a usage limit after the retry was retried again");
+        assert_eq!(stu.clock.0.lock().unwrap().len(),2,"one hold per input, never a loop");
+        let failures=stu.failures();
+        assert_eq!(failures.len(),1,"{failures:?}");
+        assert!(failures[0].to_string().contains(crate::claude_accounts::USAGE_LIMIT),"{failures:?}");
+        stu.end();
+    }
+
+    #[test]
+    fn the_usage_limit_hold_is_said_in_minutes_then_hours() {
+        let said=|seconds| usage_limit_hold_sentence(std::time::Duration::from_secs(seconds));
+        assert!(said(0).ends_with("resets in 1 minute."));
+        assert!(said(61).ends_with("resets in 2 minutes."));
+        assert!(said(3600).ends_with("resets in 60 minutes."));
+        assert!(said(90*60).ends_with("resets in about 2 hours."));
+        assert!(said(5*3600).ends_with("resets in about 5 hours."));
     }
 
     /// The `worker_overload` (and `turn_overload`) facts Stu has been sent, in order.
