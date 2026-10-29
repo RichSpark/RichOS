@@ -919,6 +919,11 @@ def read_app(state, now):
         return r
     r["state"], r["used"], r["resets_at"] = "ok", five["used"], five["resets_at"]
     r["ended"] = five["resets_at"] <= now
+    # The app's own measured five-hour speed (`speeds`, points per ms; quota.rs `View::speeds`),
+    # as points per second: the poll loop's speed is never lower than the app's.
+    speed = (data.get("speeds") or {}).get("five_hour") if isinstance(data.get("speeds"), dict) else None
+    if not isinstance(speed, bool) and isinstance(speed, (int, float)) and math.isfinite(speed) and speed >= 0:
+        r["speed"] = speed * 1000.0
     return r
 
 
@@ -1667,6 +1672,7 @@ def _poll_loop(a, out, alive, health=None):
     # window_end, so Work, paused at 99%, was released on Home's reset timer while Work's own reset
     # was still 4,740 s away.
     bound = None                 # {"id", "label"} of that account
+    app_window = None            # the five-hour reset of the last app reading in `history`
     left_held = None             # the account just left while its hold may still hold workers
     first = True
     print("quota-watch: polling every %d s; threshold %s%%%s" % (
@@ -1690,12 +1696,27 @@ def _poll_loop(a, out, alive, health=None):
                   % (bound["label"], who["label"]), flush=True)
             if window_end is not None:
                 left_held = bound
-            window_end = released = reset_done = fast_alerted = refreshed_for = None
+            window_end = released = reset_done = fast_alerted = refreshed_for = app_window = None
             threshold_named, weekly_seen, history, last_gu, outage = {}, set(), [], None, None
             blind_since, blind_woken = None, False
         if who is not None:
             bound = who
-        if r.get("source") == "get_usage":
+        # **An app reading is a measured reading** (second review of 2320ca5ad, P2): the app's
+        # reading of the account in use is its own get_usage, republished (read_app), so it feeds
+        # the speed exactly as get_usage does. Treated as a fallback, every app watcher lost
+        # QUOTA-FAST and the early pause during a fast rise (60% -> 92% in 300 s: no wake at all).
+        app_ok = isinstance(r.get("account"), dict) and r["state"] == "ok"
+        if app_ok:
+            # Measured when the app checked, not when this poll read the file: the same reading
+            # read twice is one point of history, never a flat stretch.
+            taken = now - int(r["age"] or 0)
+            if app_window is not None and not same_window(app_window, r["resets_at"]):
+                history = []
+            app_window = r["resets_at"]
+            if not history or history[-1][0] != taken:
+                history = (history + [(taken, r["used"])])[-24:]
+            outage = None
+        elif r.get("source") == "get_usage":
             if last_gu is not None and not same_window(last_gu["resets_at"], r["resets_at"]):
                 history = []
             history = (history + [(now, r["used"])])[-24:]
@@ -1721,7 +1742,9 @@ def _poll_loop(a, out, alive, health=None):
                                  "source": "get_usage at %s" % _hms(last_gu["taken"])})
                     r = kept
         # RULING §108: the speed, measured from this window's get_usage readings.
-        speed = recent_speed(history, a.poll, a.fast_poll) if r.get("source") == "get_usage" else None
+        speed = recent_speed(history, a.poll, a.fast_poll) if r.get("source") == "get_usage" or app_ok else None
+        if app_ok and r.get("speed") is not None:
+            speed = max(speed or 0.0, r["speed"])
         fast = speed is not None and speed >= fast_speed(a)
         # ... and a big rise EXPECTED (many teammates just started) checks
         # every minute before any rise is measured. Back at normal speed with

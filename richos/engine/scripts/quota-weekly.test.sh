@@ -223,6 +223,13 @@ class AppReading(unittest.TestCase):
         self.assertEqual(self.read()['state'],'malformed')
         self.publish(0)
         self.assertEqual(self.read()['state'],'missing')
+    def test_the_apps_measured_speed_is_read_in_points_per_second(self):
+        self.publish(NOW-30)
+        self.assertNotIn('speed',self.read())
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        view['speeds']={'five_hour':32/300000,'seven_day':1e-6}
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        self.assertAlmostEqual(self.read()['speed'],32/300)
     def test_the_app_never_ticks_the_shared_reset_record(self):
         with patch.dict(weekly.os.environ,{'RICHOS_APP_STATE':self.state}), \
              patch.object(weekly.subprocess,'run',side_effect=AssertionError('ticked from the app')):
@@ -354,6 +361,27 @@ class AccountSwitch(unittest.TestCase):
         self.assertEqual([(k,t) for k,t in out.woken if k in('THRESHOLD','RELEASE')],
                          [('THRESHOLD',NOW),('RELEASE',NOW+600)],out.woken)
         self.assertIn('changed from Home to Work',out.events.getvalue())
+    def test_an_app_reading_measures_the_speed_as_get_usage_does(self):
+        # Second review of 2320ca5ad (P2): 60% -> 92% in 300 s woke FAST and the early pause from
+        # get_usage readings and nothing at all from the app's. 32 points per 5 minutes is fast
+        # (93% gives 5.8), and 92 + 32/300 x (60 + 60) = 104.8 >= 100: the pause is due now.
+        for source in ('get_usage','app'):
+            rs=[]
+            for five in (60,92):
+                r=reading(10,five,NOW+7200)
+                if source=='app': r.update(account=dict(self.WORK),source='the app (account Work)')
+                else: r['source']='get_usage'
+                rs.append(r)
+            out=run_polls(rs,[workers(['worker'])]*2,2,out_cls=Recorder)
+            self.assertEqual(out.woken,[('FAST',NOW+300),('THRESHOLD',NOW+300)],(source,out.woken))
+    def test_the_same_app_reading_read_twice_is_one_point_and_the_apps_speed_counts(self):
+        # The app republishes one check until its next: read at two polls it is not a flat stretch.
+        r=self.on(self.WORK,60,NOW+7200); r2=dict(r,age=300)
+        out=run_polls([r,r2],[workers(['worker'])]*2,2,out_cls=Recorder)
+        self.assertEqual(out.woken,[],out.woken)
+        # The app measured the rise itself: its speed alone is enough, from the first poll.
+        out=run_polls([dict(self.on(self.WORK,92,NOW+7200),speed=32/300)],[workers(['worker'])],1,out_cls=Recorder)
+        self.assertEqual(out.woken,[('FAST',NOW),('THRESHOLD',NOW)],out.woken)
     def test_a_switch_to_an_account_at_the_line_keeps_the_hold_and_tells_its_threshold(self):
         out=run_polls([self.on(self.HOME,95,NOW+7200)]+[self.on(self.WORK,96,NOW+9000)]*3,
                       [workers(['worker'])]*4,4,out_cls=Recorder)
