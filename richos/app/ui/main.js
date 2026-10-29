@@ -9793,6 +9793,8 @@ const POPUP_CLOSERS = {
   // never took.
   "techy-scope": closeTechyScope,
   "set-menu": () => window.RichSettings && window.RichSettings.close(true),
+  // The resources square's view menu (round 47): closes and hands focus back to the square.
+  "res-menu": () => window.RichResources && window.RichResources.closeMenu(),
   // One level at a time (output side-panel PRD §6.8): a file back to the list, the list to
   // closed. `RichOutput.escape` reads the panel's own state, so the step is the panel's.
   outpanel: () => window.RichOutput && window.RichOutput.escape(),
@@ -10271,6 +10273,11 @@ async function init() {
   // ONE CALL, NOT AWAITED. `yieldNow` starts a fade on an inert, click-through layer and
   // returns; nothing in this boot path ever waits on the splash.
   if (window.RichSplash) window.RichSplash.yieldNow("app-ready");
+  // The Mac resources square starts reading the sampler only now (round 47, `resources.js`),
+  // so that read is never on the launch path. A square whose script has not run yet starts
+  // itself when it does.
+  if (window.RichResources) window.RichResources.start();
+  else window.__richosResourcesReady = true;
   // The correction badge, read at launch and LAST. A proposal the CEO has not answered
   // survives a crash, a rotation and a relaunch by design (`correction.rs`'s fsync'd log),
   // so the count is re-read on the way up rather than inferred from this session's events —

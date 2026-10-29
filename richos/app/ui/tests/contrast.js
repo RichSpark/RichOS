@@ -1913,6 +1913,7 @@ async function main() {
     canvasInHome: 0,
     canvasInPhone: 0,
     canvasSpeckle: 0,
+    canvasResources: 0,
     svgText: 0,
     /// Which of the shell's DECLARED panels any walk actually put on screen — see check 10c.
     panelsReached: new Map(),
@@ -2287,6 +2288,7 @@ async function main() {
         seen.canvasInHome += out.canvasInHome || 0;
         seen.canvasInPhone += out.canvasInPhone || 0;
         seen.canvasSpeckle += out.canvasSpeckle || 0;
+        seen.canvasResources += out.canvasResources || 0;
         seen.svgText += out.svgTextCount;
         seen.totals.considered += out.nodesConsidered;
         seen.totals.checked += out.nodesChecked;
@@ -2951,6 +2953,9 @@ async function main() {
       seen.canvasSpeckle + " speckled-ground <canvas> element(s) (`body > canvas.speckle`) were EXCLUDED and ARE " +
       "covered, elsewhere: it carries no text, it sits behind the shell, and `tests/speckled-ground.js` proves every " +
       "text node drawn over it keeps 4.5:1 against the strongest point the engine can paint.\n          " +
+      seen.canvasResources + " <canvas> element(s) of the Mac resources square and its card (`#res-square`, " +
+      "`#res-card`) were EXCLUDED and ARE covered, elsewhere: `tests/resources.js` reads both back with " +
+      "`getImageData` and holds every paint to 3:1 against the ground it is drawn on, in both themes.\n          " +
       seen.canvasInHome + " <canvas> element(s) inside #home were EXCLUDED and are not covered here: the " +
       "home screen is round-11.1/v1 \"Constellation\", a canvas composition the CEO chose, and it is " +
       "measured from the pixels by tests/home.js instead — 16 elements, worst 4.23:1, on the rendered " +

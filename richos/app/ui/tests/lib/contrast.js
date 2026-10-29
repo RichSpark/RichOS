@@ -279,12 +279,17 @@ function probeBody(options) {
     // 4.5:1 against the strongest point the engine can paint under it. Because it is
     // `pointer-events: none` it never enters `elementsFromPoint`, so this walk still resolves
     // those nodes against the ruled ground on `html` — the unlit half of the same proof.
+    // A FIFTH BUCKET, the Mac resources square and its card (round 47), excluded BY NAME for
+    // the same reason: `tests/resources.js` reads both canvases back with `getImageData` and
+    // holds every paint to 3:1 against the ground it is drawn on, in both themes.
     canvasCount: document.querySelectorAll(
-      "canvas:not(#home canvas):not(#phone-sheet canvas):not(body > canvas.speckle)"
+      "canvas:not(#home canvas):not(#phone-sheet canvas):not(body > canvas.speckle)" +
+        ":not(#res-square canvas):not(#res-card canvas)"
     ).length,
     canvasInHome: document.querySelectorAll("#home canvas").length,
     canvasInPhone: document.querySelectorAll("#phone-sheet canvas").length,
     canvasSpeckle: document.querySelectorAll("body > canvas.speckle").length,
+    canvasResources: document.querySelectorAll("#res-square canvas, #res-card canvas").length,
     svgTextCount: document.querySelectorAll("svg text, svg tspan").length,
     failures: {},
     unresolvable: {},

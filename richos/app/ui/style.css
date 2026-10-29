@@ -556,6 +556,365 @@ button {
   color: var(--ink-faint);
 }
 
+/* THE LIVE MAC RESOURCES SQUARE (round 47, `resources.js`): opposite the name on the footer's
+   row, 34px like the initials disc. Ink by default, Readout by the CEO's right-click choice.
+   The paints are round 47's, measured from rendered pixels against the ground they sit on by
+   `tests/resources.js` (floor 3:1), and every text pair by the same suite (floor 4.5:1).
+
+   DECLARED BELOW 3:1, ON PURPOSE (round 47's README): the held history under Not current and
+   Unavailable is grayed by the ground laid over it at 62%, so it cannot be read as current —
+   the state is carried by the glyph over it, the card's status and its sentence, which clear
+   their floors; the hatch of a gap and the card graph's quarter lines are texture, the gap's
+   meaning is carried by "Asleep" and the card's sentence; the card's outline is decorative. */
+:root {
+  --res-ground: #141e34;
+  --res-user: #5fcf8b;
+  --res-system: #f2766a;
+  --res-ram: #c3cde0;
+  --res-track: #222d47;
+  --res-edge: #6b7ea8;
+  --res-warn: #e09a55;
+  --res-crit: #f2766a;
+  --res-hatch: rgba(223, 228, 238, 0.16);
+  --res-glyph: #dfe4ee;
+  --res-card-bg: #141e34;
+}
+:root[data-theme="light"] {
+  --res-ground: #fdfcf8;
+  --res-user: #23824a;
+  --res-system: #c23a2b;
+  --res-ram: #3b4660;
+  --res-track: #e6e2d6;
+  --res-edge: #767c8d;
+  --res-warn: #a5571d;
+  --res-crit: #c23a2b;
+  --res-hatch: rgba(12, 19, 34, 0.14);
+  --res-glyph: #0c1322;
+  --res-card-bg: #fdfcf8;
+}
+
+.res {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--font);
+  color: inherit;
+  cursor: default;
+  border-radius: 9px;
+}
+.res:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.res-tile {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid var(--res-edge);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root[data-theme="light"] .res-tile {
+  box-shadow: 0 1px 2px rgba(46, 40, 22, 0.14);
+}
+.res-tile canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.res:hover .res-tile,
+.res[aria-expanded="true"] .res-tile {
+  transform: translateY(-1px);
+}
+
+/* Readout: the two numbers beside the square, text meant to be read, so 16px. No words: at the
+   default 300px rail "CPU" and "RAM" cut the name (round 47's walk measured it); each number
+   carries a key in the square's own paints instead, and the card names both. */
+.res-readout {
+  display: none;
+  flex-direction: column;
+  align-items: stretch;
+  font-size: 1rem;
+  line-height: 17px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  text-align: right;
+  white-space: nowrap;
+}
+.res[data-view="readout"] .res-readout {
+  display: flex;
+}
+.res-num {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+}
+.res-num b {
+  font-weight: 500;
+  color: var(--ink);
+  min-width: 3em;
+  text-align: right;
+}
+.res-key {
+  display: flex;
+  flex-direction: column;
+  width: 4px;
+  height: 12px;
+  border-radius: 1.5px;
+  overflow: hidden;
+  flex: 0 0 4px;
+}
+.res-key i {
+  display: block;
+}
+.res-key.cpu i:first-child {
+  flex: 3;
+  background: var(--res-user);
+}
+.res-key.cpu i:last-child {
+  flex: 2;
+  background: var(--res-system);
+}
+.res-key.ram i {
+  flex: 1;
+  background: var(--res-ram);
+}
+.res-key.ram.is-warn i {
+  background: var(--res-warn);
+}
+.res-key.ram.is-crit i {
+  background: var(--res-crit);
+}
+
+/* The card: hover, keyboard focus, or a click to pin. Not focusable inside, so opening it never
+   moves focus. Hidden from the accessibility tree's walk while closed; the square's
+   `aria-describedby` still reads it. */
+.res-card {
+  position: fixed;
+  z-index: 85;
+  width: 300px;
+  box-sizing: border-box;
+  padding: 14px 16px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-control);
+  background: var(--res-card-bg);
+  color: var(--ink);
+  font: 400 1rem/1.4 var(--font);
+  box-shadow: 0 18px 40px -16px var(--shadow-strong), 0 2px 6px -2px var(--shadow-weak);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px) scale(0.985);
+  transform-origin: calc(100% - 24px) 100%;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 180ms;
+}
+.res-card.is-open {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
+}
+.res-card::after {
+  content: "";
+  position: absolute;
+  bottom: -7px;
+  right: var(--res-arrow, 24px);
+  width: 12px;
+  height: 12px;
+  background: inherit;
+  border-right: 1px solid var(--line-control);
+  border-bottom: 1px solid var(--line-control);
+  transform: rotate(45deg);
+  border-bottom-right-radius: 3px;
+}
+.res-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.res-card-title {
+  font-weight: 600;
+  color: var(--ink);
+}
+.res-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+.res-chip::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.res-chip[data-tone="live"] {
+  color: var(--success);
+}
+.res-chip[data-tone="live"]::before {
+  animation: res-beat 1s ease-out infinite;
+}
+.res-chip[data-tone="wait"] {
+  color: var(--ink-soft);
+}
+.res-chip[data-tone="wait"]::before {
+  animation: res-beat 1s ease-in-out infinite;
+}
+.res-chip[data-tone="stale"] {
+  color: var(--attention);
+}
+.res-chip[data-tone="down"] {
+  color: var(--danger);
+}
+@keyframes res-beat {
+  0% { opacity: 1; }
+  70% { opacity: 0.35; }
+  100% { opacity: 1; }
+}
+.res-graph {
+  display: block;
+  width: 266px;
+  height: 72px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px var(--res-edge);
+}
+/* The axis captions, the age and the footnote are the 14px secondary tier, skippable by design. */
+.res-axis {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 1px 8px;
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}
+.res-rows {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  row-gap: 3px;
+}
+.res-rows dt {
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.res-rows dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.res-rows .res-lead {
+  font-weight: 600;
+  color: var(--ink);
+}
+.res-rows .res-lead + dd {
+  font-weight: 600;
+}
+.res-rows .res-gap {
+  grid-column: 1 / -1;
+  height: 6px;
+}
+.res-sw {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 12px;
+}
+.res-sw.u { background: var(--res-user); }
+.res-sw.s { background: var(--res-system); }
+.res-sw.m { background: var(--res-ram); }
+.res-sw.m.is-warn { background: var(--res-warn); }
+.res-sw.m.is-crit { background: var(--res-crit); }
+.res-membar {
+  grid-column: 1 / -1;
+  height: 8px;
+  border-radius: 4px;
+  margin: 2px 0 3px;
+  position: relative;
+  overflow: hidden;
+  background: var(--res-track);
+  box-shadow: 0 0 0 1px var(--res-edge);
+}
+.res-membar i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  background: var(--res-ram);
+  transition: width 600ms cubic-bezier(0.2, 0.8, 0.2, 1), background 300ms;
+}
+.res-membar i.is-warn { background: var(--res-warn); }
+.res-membar i.is-crit { background: var(--res-crit); }
+.res-note {
+  margin: 10px 0 0;
+  font-size: 1rem;
+  color: var(--ink-soft);
+}
+.res-foot {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}
+
+/* The view menu (right-click, the context-menu key, Shift+F10): the app's own menu, with the
+   current view checked. */
+.res-menu {
+  z-index: 90;
+  min-width: 150px;
+}
+.res-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.res-check {
+  width: 1em;
+  visibility: hidden;
+}
+.res-menu-item[aria-checked="true"] {
+  color: var(--ink);
+}
+.res-menu-item[aria-checked="true"] .res-check {
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .res-card,
+  .res-card.is-open,
+  .res-tile,
+  .res-membar i {
+    transition: none;
+  }
+  .res-chip::before {
+    animation: none !important;
+  }
+}
+
 /* THE WORDMARK in the rail header, inked per theme (§15). Height in rem so the font
    control scales it with the rest of the interface; the viewBox is 3299.1x754.5, so a
    1.375rem height is ~96px wide at 100% and fits the 300px rail with room to spare. */
