@@ -8,6 +8,8 @@
 # scripts/lib/review_watch.py's app mode (AppWorld) over this fixture's registry.
 # A connected repository's own CLAUDE.md or AGENTS.md in a worker's and a reviewer's brief:
 # app.test.py drives scripts/lib/instruction_files.py through prepare.
+# A closed grant's cause, which work, who closed it and when (P1-A, 2026-10-29): app.test.py
+# drives scripts/lib/scope_closure.py through read_scope and scripts/app-engine-hook.py's turn gate.
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

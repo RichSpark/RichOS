@@ -1,0 +1,29 @@
+## /Users/admin/testvm/walk-dce72601de77/engine/runtime/bin
+-- /Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/ffmpeg
+/Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/ffmpeg: Mach-O 64-bit executable arm64
+         317 372                                                        
+
+-- /Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/ffprobe
+/Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/ffprobe: Mach-O 64-bit executable arm64
+         317 372                                                        
+
+-- /Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/git
+/Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/git: Mach-O 64-bit executable arm64
+         317 372                                                        
+
+-- /Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/jq
+/Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/jq: Mach-O 64-bit executable arm64
+         317 372                                                        
+
+-- /Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/node
+/Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/node: Mach-O 64-bit executable arm64
+         317 372                                                        
+
+-- /Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/python3
+/Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/python3: Mach-O 64-bit executable arm64
+         317 372                                                        
+
+-- /Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/whisper-cli
+/Users/admin/testvm/walk-dce72601de77/engine/runtime/bin/whisper-cli: Mach-O 64-bit executable arm64
+         317 372                                                        
+

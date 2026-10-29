@@ -102,10 +102,11 @@
     return list().filter(a => !a.inUse && read(a) && !resting(a)).sort((a, b) => resetOf(a) - resetOf(b))[0] || null;
   }
   // Compared by id: with one account `list()` builds its card's object afresh on every call.
-  // While a move is under way, the account still being left comes right after the one in use.
+  // While a move is under way, the account being switched to comes right after the one the work
+  // still runs on, which stays first.
   function ordered() {
-    const nx = nextAcct(), cur = inUse(), held = stillOn();
-    const first = [cur, ...held, ...(nx && !held.some(a => a.id === nx.id) ? [nx] : [])].filter(Boolean);
+    const nx = nextAcct(), cur = inUse(), to = moving() ? target() : null;
+    const first = [cur, ...(to ? [to] : []), ...(nx && !(to && to.id === nx.id) ? [nx] : [])].filter(Boolean);
     const rest = list().filter(a => !first.some(f => f.id === a.id))
       .sort((a, b) => resting(a) - resting(b) || resetOf(a) - resetOf(b));
     return [...first, ...rest];
@@ -116,19 +117,25 @@
   };
   const labelOf = id => (list().find(a => a.id === id) || {}).label || "";
   // WHO IS REALLY ON EACH ACCOUNT (claude_accounts.rs `working`): "rich" when a reply of his, in
-  // any conversation, is running on it, "team" when Stu's session runs on it. The account in use is where the next
-  // session starts; while someone is still on another account the move is under way, and the cards
-  // say so instead of calling the new one "In use now" (review rv-20261019T005929Z-e3d9ad03-3e7b,
-  // finding 3: the panel said Home was in use while the team still ran on Work).
+  // any conversation, is running on it, "team" when Stu's session runs on it. The account marked in
+  // use is the one the work actually runs on (quota.rs `view_at`, `Accounts::running_on`); while a
+  // switch is decided and the work has not moved yet, `view.moving` names the account being switched
+  // to. So the account still in use stays first and marked, the new one says "Switching to this
+  // one", and nothing shows a switch that has not happened (the CEO, 2026-10-29: "I saw "switching
+  // to home" and the Home account was listed first in the list. But apparently it didn't actually
+  // switch."; review rv-20261019T005929Z-e3d9ad03-3e7b, finding 3, before it).
   const workingOn = a => (a && a.working) || [];
-  const stillOn = () => multi() ? list().filter(a => !a.inUse && workingOn(a).length) : [];
-  const moving = () => stillOn().length > 0;
+  const target = () => { const m = view && view.moving; return m && multi() ? list().find(a => a.id === m.to) || null : null; };
+  const moving = () => !!target() && !!inUse() && target().id !== inUse().id;
+  // The move waits for work still running on the account being left (Renewal::Waits).
+  const blocked = () => moving() && !!view.moving.blocked;
   function movingNote(a) {
-    const cur = inUse(), here = workingOn(a), away = stillOn().flatMap(workingOn);
-    if (!a.inUse) {
-      const to = esc(cur ? cur.label : "the next account"), said = [];
-      if (here.includes("team")) said.push(`The team is finishing the step it is on here, then moves to ${to}.`);
-      if (here.includes("rich")) said.push(`Rich moves to ${to} with his next reply.`);
+    const to = target(), here = workingOn(a), away = list().filter(b => b.id !== to.id).flatMap(workingOn);
+    if (a.id !== to.id) {
+      const name = esc(to.label), said = [];
+      if (blocked()) said.push(`Can't move yet: work is still running on ${esc(a.label)}.`);
+      if (here.includes("team")) said.push(`The team is finishing the step it is on here, then moves to ${name}.`);
+      if (here.includes("rich")) said.push(`Rich moves to ${name} with his next reply.`);
       return said.join(" ");
     }
     const said = [];
@@ -153,7 +160,8 @@
     // it says something: 85% of the week, or a second account.
     let line = "", time = "", attention = false;
     if (multi()) {
-      line = moving() ? `Switching to ${cur.label}` : sw ? `Using ${cur.label}, switched ` : `Using ${cur.label}`;
+      line = blocked() ? `Can't move yet: work is still running on ${cur.label}` : moving() ? `Switching to ${target().label}`
+        : sw ? `Using ${cur.label}, switched ` : `Using ${cur.label}`;
       time = sw && !moving() ? clock(sw.at) : "";
       attention = !!sw || moving();
     } else if (cur && cur.signedIn === false) {
@@ -216,8 +224,11 @@
   }
   function card(a) {
     const nx = nextAcct(), n = view.agentsWorking || 0;
-    const leaving = !a.inUse && workingOn(a).length > 0 && multi();
-    const kind = leaving ? "leaving" : a.inUse ? (moving() ? "arriving" : "inuse") : !read(a) ? "unread" : resting(a) ? "resting" : nx && nx.id === a.id ? "next" : "ready";
+    // While a move is under way the account marked in use is the one being left, still really in
+    // use (the gold card), and the account being switched to is drawn as Next is.
+    const leaving = moving() && a.inUse;
+    const arriving = moving() && a.id === target().id;
+    const kind = leaving ? "leaving" : arriving ? "arriving" : a.inUse ? "inuse" : !read(a) ? "unread" : resting(a) ? "resting" : nx && nx.id === a.id ? "next" : "ready";
     const team = n ? `: <b>${n} ${n === 1 ? "agent" : "agents"}</b>` : "";
     let pill = "", note;
     // The account being left is still really in use (the gold card); the one being moved to is
@@ -579,17 +590,36 @@
   }
 
   // ---- the sheet's actions ----------------------------------------------------------------
+  // WHAT "USE THIS ONE NOW" SAYS FOLLOWS THE MOVE ITSELF (review rv-20261029T150133Z-2f57a3fd-6d74,
+  // finding 2; item 3 of the CEO's 2026-10-29: "It never shows a switch that didn't happen"). The
+  // command decides the move; the work moves once what runs on the account being left lets it
+  // (`view.moving`). So the line is read from the view each time it is drawn: "Switching to Work."
+  // while the move is under way, "Can't move yet: work is still running on Home." while it is
+  // blocked, and "Rich now uses Work." only once Work is the account the work runs on (`inUse`).
+  // Before, "Rich now uses Work." came the moment the command answered, even when its own answer
+  // said the move was blocked.
+  function moveSaid(id) {
+    const to = list().find(a => a.id === id), cur = inUse();
+    if (!to || !cur) return "";
+    if (cur.id !== to.id) {
+      if (moving() && target().id === to.id) return blocked()
+        ? `Can't move yet: work is still running on <b>${esc(cur.label)}</b>.`
+        : `Switching to <b>${esc(to.label)}</b>.`;
+      return `Rich still uses <b>${esc(cur.label)}</b>.`;
+    }
+    const week = weekOf(to), nx = nextAcct();
+    const then = week && week.usedPercent >= NEAR
+      ? ` ${esc(to.label)} has already used ${Math.floor(week.usedPercent)}% of its week, so Rich will switch again when it reaches 99%.`
+      : nx ? ` ${esc(nx.label)} is next.` : "";
+    return `Rich now uses <b>${esc(to.label)}</b>.${then}`;
+  }
   async function useNow(id, undoing) {
     const from = inUse(), to = list().find(a => a.id === id);
     if (!to) return;
     const result = await call("claude_account_use_first", { id });
     if (!result.ok) return;
     if (undoing) { feedback = null; render(); return; }
-    const week = weekOf(to), nx = nextAcct();
-    const then = week && week.usedPercent >= NEAR
-      ? ` ${esc(to.label)} has already used ${Math.floor(week.usedPercent)}% of its week, so Rich will switch again when it reaches 99%.`
-      : nx ? ` ${esc(nx.label)} is next.` : "";
-    feedback = { html: `Rich now uses <b>${esc(to.label)}</b>.${then}`, undo: from ? from.id : null };
+    feedback = { get html() { return moveSaid(id); }, undo: from ? from.id : null };
     render();
   }
   async function setFive(value) {
