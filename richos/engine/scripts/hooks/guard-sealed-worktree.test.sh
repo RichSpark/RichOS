@@ -237,9 +237,12 @@ STOP_SH="$(cd "$SCRIPT_DIR/.." && pwd)/stop.sh"
 payload_cmd() { # <command> <session>
     python3 -c 'import json,sys; print(json.dumps({"session_id": sys.argv[2], "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": sys.argv[1]}, "tool_use_id": "toolu_c"}))' "$1" "$2"
 }
-run "$(payload_cmd "$STOP_SH dev-opus-x --ceo-word 'stop it'" "$SID4")"
+# The path is quoted as a lead would type it: the engine under test may live
+# under a folder with a space ("Application Support"), and an unquoted path
+# would be two words, not this engine's stop.sh.
+run "$(payload_cmd "'$STOP_SH' dev-opus-x --ceo-word 'stop it'" "$SID4")"
 G15D_STOP="$RC"
-run "$(payload_cmd "$STOP_SH dev-opus-x --ceo-word 'stop it'; touch $SANDBOX/rode-along" "$SID4")"
+run "$(payload_cmd "'$STOP_SH' dev-opus-x --ceo-word 'stop it'; touch '$SANDBOX/rode-along'" "$SID4")"
 [ "$G15D_STOP" -eq 0 ] && [ "$RC" -eq 2 ] && ok "G15d the engine's stop.sh passes as one plain command; nothing may ride along with it" || bad "G15d stop.sh=$G15D_STOP chained=$RC"
 run "$(payload SendMessage "" dev "$SID4")"
 [ "$RC" -eq 2 ] && ok "G15e CONTROL: that session's SendMessage is still refused (point 3 stands)" || bad "G15e SendMessage rc=$RC"

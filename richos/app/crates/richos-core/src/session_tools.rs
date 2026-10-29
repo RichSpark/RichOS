@@ -424,6 +424,37 @@ pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<
     }
 }
 
+/// **Saved input this role has not yet been given** (P0, 2026-10-28): a record past the cursor
+/// that no delivery has accepted, other than a handoff whose job has already ended. An
+/// accepted handoff whose job is still open is NOT here: it was given, and its job stays open
+/// on its own record (`pending_after` still hands it back after a restart, as a reconciliation).
+/// A pure read: unlike `pending_after`, it never acknowledges anything.
+pub(crate) fn undelivered(scope:&StatusToolScope,role:&str)->Result<bool,String> {
+    let path=inbox(scope,role)?;let cursor=cursor_state(&path)?;
+    let mut file=match std::fs::File::open(&path){Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(false),Err(e)=>return Err(e.to_string())};
+    let mut through=cursor["through"].as_u64().unwrap();
+    if through>file.metadata().map_err(|e|e.to_string())?.len(){return Err("Message input is shorter than its saved cursor".into())}
+    file.seek(SeekFrom::Start(through)).map_err(|e|e.to_string())?;let mut reader=BufReader::new(file);
+    loop {
+        let mut line=String::new();let count=(&mut reader).take(256*1024+1).read_line(&mut line).map_err(|e|e.to_string())?;
+        if count>256*1024{return Err("Saved peer input exceeds its frame limit".into())}
+        if count==0 || !line.ends_with('\n'){return Ok(false)}through+=count as u64;
+        if cursor["accepted"].get(through.to_string()).is_some(){continue}
+        let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
+        if role=="stu" && message.handoff && handoff_finished(scope,&message)?{continue}
+        return Ok(true)
+    }
+}
+
+/// **Was the saved handoff for this request given to Stu?** Accepted by his cursor, which
+/// happens only once a delivery reached a turn of his (`acknowledge`, `accept_live_handoff`).
+/// `false` when no handoff for it is saved at all.
+pub(crate) fn handoff_given(scope:&StatusToolScope,instruction:&crate::ecs::UserInstruction)->Result<bool,String> {
+    let Some((_,through))=saved_handoff(scope,instruction)? else {return Ok(false)};
+    let cursor=cursor_state(&inbox(scope,"stu")?)?;
+    Ok(through<=cursor["through"].as_u64().unwrap() || cursor["accepted"].get(through.to_string()).is_some())
+}
+
 pub fn acknowledge(scope:&StatusToolScope,role:&str,through:u64)->Result<(),String> {
     let finished=role!="stu" || handoff_finished(scope,&input_at(&inbox(scope,role)?,through)?)?;
     accept_input(scope,role,through,finished)

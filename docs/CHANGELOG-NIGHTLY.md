@@ -2,6 +2,23 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.5-nightly.20261029.80
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261029.80)
+
+- Fixed a finished job staying open because a teammate Stu had lined up for it never started; such a teammate is now cleared away and any work in its folder is kept
+- Fixed Stu being unable to start a teammate he had lined up before his last reply
+- Fixed Stu being told a teammate had gone quiet when that teammate had never started
+- [technical] Added a way for Stu to clear a teammate he lined up and will not start and to set aside a stray record left by a test run, which had stopped the cleanup of leftover teammate folders in that conversation
+- [technical] Fixed every open Stu conversation being told about the same problem with the scheduled cleanup run by a RichOS engine installed from Terminal and told again after Stu had acknowledged it; now one conversation is told and again only when the problem changes
+
+## 1.2.5-nightly.20261028.79
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261028.79)
+
+- Fixed your team being unable to check or save work in a folder where a file or folder name has an accent or other non-English letter, such as café.txt
+- [technical] Fixed a Claude Code session in Terminal that uses RichOS's engine stopping and deleting work your team had in progress in the app on the same Mac
+
 ## 1.2.5-nightly.20261028.78
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261028.78)

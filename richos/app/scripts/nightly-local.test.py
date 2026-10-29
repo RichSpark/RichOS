@@ -3640,7 +3640,12 @@ class PublishedReportTests(unittest.TestCase):
         self.assertIn("newt-opus-", stable["question"])
         self.assertIn("--type newt --model opus", stable["question"])
         for row, model in ((nightly, "opus"), (stable, "opus")):
-            name = re.search(r"spawn\.sh (\S+)", row["question"]).group(1)
+            # The question quotes the command so it runs from a checkout path containing
+            # a space; parse it as a shell would instead of matching raw text.
+            command = re.search(r"exact command: `([^`]+)`", row["question"]).group(1)
+            argv = shlex.split(command)
+            self.assertEqual(Path(argv[0]).name, "spawn.sh")
+            name = argv[1]
             self.assertRegex(name, r"^[a-z][a-z0-9]{1,15}-%s-[a-z0-9]{1,12}$" % model)
         for identity, tag in (("b", self.TAG), ("c", "v1.2.1")):
             brief = self.root / "state/changelogs" / (identity * 40) / "brief.md"

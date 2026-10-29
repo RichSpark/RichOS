@@ -143,5 +143,37 @@ class Changed(unittest.TestCase):
         self.assertIn("nothing this lint scans changed", out)
 
 
+class NoBaselineFile(unittest.TestCase):
+    """lint.sh pins its Python from baselines/custom.json, and a lookup must never fail the lint."""
+
+    def run_lint_sh(self, baseline_text):
+        with tempfile.TemporaryDirectory(prefix="lint-nobaseline-") as tmp:
+            scripts = Path(tmp) / APP / "scripts"
+            (scripts / "lib").mkdir(parents=True)
+            (scripts / "lint").mkdir()
+            shutil.copytree(LINT.parent / "bin", scripts / "bin")
+            (Path(tmp) / "richos/engine").symlink_to(REAL_ROOT / "richos/engine")  # cargo-cache-env.sh finds both
+            shutil.copy(LINT.parent / "lint.sh", scripts / "lint.sh")
+            for name in ("cargo-cache-env.sh", "cargo_identity.py"):
+                shutil.copy(LINT.parent / "lib" / name, scripts / "lib" / name)
+            (scripts / "lint" / "driver.py").write_text('import sys\nprint("driver ran", sys.argv[1:])\n')
+            if baseline_text is not None:
+                (scripts / "lint" / "baselines").mkdir()
+                (scripts / "lint" / "baselines" / "custom.json").write_text(baseline_text)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            return subprocess.run(["bash", str(scripts / "lint.sh"), "--changed"], cwd=tmp, env=env,
+                                  capture_output=True, text=True, timeout=HANG_GUARD)
+
+    def test_with_no_baseline_file_the_driver_still_runs(self):
+        result = self.run_lint_sh(None)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("driver ran ['--changed']", result.stdout)
+
+    def test_a_baseline_naming_no_version_still_runs_the_driver(self):
+        result = self.run_lint_sh('{"versions": {}}\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("driver ran ['--changed']", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
