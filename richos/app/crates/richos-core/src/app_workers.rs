@@ -187,6 +187,36 @@ pub fn run_ends(state: &Path, session: &str) -> Option<usize> {
     Some(ends)
 }
 
+/// **Whether this session's own journal shows the session itself ENDED**: `Some(true)` when its
+/// last row, other than a helper's `SubagentStop`, is the provider's `SessionEnd`. A provider
+/// that ends on a lost connection or a restart need not deliver its helpers' `SubagentStop`
+/// rows (second review rv-20261029T004310Z-6c4c304f-d238 of `6c4c304f4`), so [`status`] can
+/// still show a helper of an ended session open. Any other row after the end (a resumed
+/// session's `SessionStart`, a new prompt, a tool call) means the session ran again:
+/// `Some(false)`, as for a journal with no end. `None` when the journal cannot be read.
+pub fn session_ended(state: &Path, session: &str) -> Option<bool> {
+    if session.is_empty() || session.len()>128 || !session.bytes().all(|b|b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return None;
+    }
+    let folder = state.join("evidence").join(session);
+    let _lock = evidence_lock(&folder, EVIDENCE_LOCK_PATIENCE)?;
+    let file = std::fs::File::open(folder.join("callbacks.jsonl")).ok()?;
+    let mut ended = false;
+    for line in BufReader::new(file).lines() {
+        let row: serde_json::Value = serde_json::from_str(&line.ok()?).ok()?;
+        let callback = &row["callback"];
+        if row["schema"] != 1 || callback["session_id"].as_str() != Some(session) {
+            return None;
+        }
+        match callback["hook_event_name"].as_str() {
+            Some("SessionEnd") => ended = true,
+            Some("SubagentStop") => {}
+            _ => ended = false,
+        }
+    }
+    Some(ended)
+}
+
 #[cfg(test)] mod tests {
     use super::*;
     #[test] fn observations_are_scoped_and_a_run_end_never_means_task_completion() {

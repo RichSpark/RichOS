@@ -928,6 +928,32 @@ class DesktopWork(unittest.TestCase):
             self.call("settle",{"request_id":"prepare-one","reason":"It must not be settled here."})
         self.assertEqual(self.receipt_of(worker)["status"],"running")
 
+    def test_completion_never_settles_a_parallel_worker_prepared_in_this_turn(self):
+        """Tom's review of the c2ad4fb8c merge (2026-10-28): `never_started` counted a `prepared`
+        receipt of THIS turn that nothing refused as never-run, so `complete` settled it and
+        withdrew the worktree of a parallel worker that was about to be dispatched. It is
+        unresolved work: completion refuses, nothing is settled or removed, and it can still
+        run. The same receipt from an earlier turn is still settled and cleaned up."""
+        args=self.reviewed_pair("landed")
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        parallel=self.call("prepare",{**self.args,"request_id":"parallel","title":"Create the second result",
+                                      "brief":"Create second.txt with FICTIONAL in the assigned target worktree. Commit only that file."})
+        branch=self.registered_branch(parallel)
+        with self.assertRaisesRegex(ValueError,"unresolved execution"):
+            self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
+        self.assertEqual(self.receipt_of(parallel)["status"],"prepared")
+        self.assertNotIn("settled",self.receipt_of(parallel))
+        self.assertTrue(self.target_of(parallel).is_dir(),"a parallel worker's worktree was withdrawn before it ran")
+        self.assertTrue(self.branch_exists(branch))
+        # CONTROL: in a later turn the same preparation can no longer be admitted as it stands,
+        # so completion settles it and removes what it created, as before.
+        self.next_turn(2)
+        done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
+        self.assertTrue(done["obligation_closed"])
+        self.assertEqual(self.receipt_of(parallel)["status"],"blocked")
+        self.assertFalse(self.target_of(parallel).exists())
+        self.assertFalse(self.branch_exists(branch))
+
     def test_a_stray_fixture_record_is_moved_out_of_the_registry_and_a_record_that_may_own_work_is_not(self):
         """2026-10-28: record-canary.test.sh wrote agents/wait-regression.json into the live
         registry; it switched the orphan sweep off and nothing in the app could remove it."""
@@ -1945,9 +1971,10 @@ class DesktopWork(unittest.TestCase):
     def test_completion_refuses_prepared_and_unreviewed_work(self):
         worker=self.call("prepare",self.args)
         args={"obligation_id":"fixture-task","worker_ids":[worker["id"]]}
-        # A preparation that never ran did no work, so it is no final worker (2026-10-28);
-        # the refused completion settles nothing, and it can still be dispatched.
-        with self.assertRaisesRegex(ValueError,"every final worker"):self.call("complete",args)
+        # A preparation of this turn that nothing refused may be dispatched next, so it is
+        # unresolved work (Tom's review of c2ad4fb8c); the refused completion settles nothing,
+        # and it can still be dispatched.
+        with self.assertRaisesRegex(ValueError,"unresolved execution"):self.call("complete",args)
         self.assertEqual(self.call("inspect")["records"][0]["status"],"prepared")
         self.start_fixture_worker(worker,"unfinished")
         self.finish_fixture_worker("unfinished")
