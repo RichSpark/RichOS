@@ -2163,11 +2163,11 @@ pub(crate) mod tests {
     /// `claude-token-points.json` keeps them: Fable is in three of them, 8,760,602 tokens in all,
     /// under the cheapest whole point (the fourth episode, 17,869,132). Then a Fable burst through
     /// a lease: 20 requests of 1M tokens in the last minute. 1ff534f44 left Fable out of the fit
-    /// and read it as nothing (the week's point stayed 99, so Work at 93% was not left). The fit
-    /// measures Fable at about 7.98M tokens a point, as main does, far above the cards' bound
-    /// (0.2M): 20M is 2.51 points a minute, fast (2.51 x 5 >= 5), so I = 1
-    /// minute and H the default 5: 99 - (ceil(2.51 x 6 = 15.06) - 1) = 84, at or under 93.
-    /// (Work's 12-episode figure, 16.5M, gives 1.21 a minute and 92.)
+    /// and read it as nothing (the week's point stayed 99, so Work at 93% was not left). Main's
+    /// fit alone gives Fable about 7.98M tokens a point (20M: 2.51 a minute, point 84); its card
+    /// at Work's dearest point is 21.9M (0.91 a minute, not fast, so I = 5 minutes:
+    /// 99 - (ceil(0.91 x 10 = 9.1) - 1) = 90). It is read between the two, so the point is at or
+    /// under 93 either way. (Work's 12-episode figure, 16.5M, gives 1.21 a minute and 92.)
     #[test]
     fn a_minority_models_burst_still_hands_off() {
         let root = Scratch::new();
@@ -2189,6 +2189,63 @@ pub(crate) mod tests {
         let point = published.act_at["seven_day"];
         assert!(point <= 93., "a Fable burst left the week's point at {point} (weekly speed {} points a minute)",
             published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 93% during a Fable burst is not being left: {:?}", published.leaving);
+    }
+
+    /// **A late Fable `result` does not hand off an account with room** (the third review of the
+    /// late-frame fix, rv-20261029T115538Z, finding 1, its fixture through the service). Work's
+    /// first two episodes with Fable 5.1 in Haiku's place (1,029 and 3,151 tokens), then a lease
+    /// whose `result` reports 3M Fable tokens no frame showed. At Fable's list price (16M a point
+    /// against Opus 5.5's 40M) that is 0.1875 a minute, not fast, so I = 5 minutes and H 5:
+    /// 99 - (ceil(0.1875 x 10 = 1.875) - 1) = 98, and Work at 3% is not left. Main fitted Fable
+    /// at a few thousand tokens a point (point 0); d22fc43f8 held it at its worst-case bound,
+    /// 147,761 (20.3 a minute, point 0). Read at its card from Work's dearest point (19.89M):
+    /// 0.151 a minute, ceil(1.51) - 1 = 1, point 98.
+    #[test]
+    fn a_late_minority_result_does_not_hand_off_an_account_with_room() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 3.);
+        let now = crate::util::now_millis();
+        let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+            "claude-fable-5-1": {"inputTokens": 3_000_000, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+        lease_frames(&service, &work, &[(result, now - 1_000)]);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point >= 98., "a late 3M-token Fable result moved the week's point to {point} (weekly speed {} points a minute); \
+            at Fable's list price it is 98", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert_eq!(published.leaving, vec!["1".to_string()], "only Home, at 99%, is being left; Work at 3% is not");
+    }
+
+    /// **A dear minority's burst hands off when its spend requires it** (the third review,
+    /// finding 2, its fixture through the service). Four one-point mixes of Opus 5.5, Sonnet 5.5,
+    /// Fable 5.1 and Haiku 5.5 at their list ratios (40M, 80M, 16M, 1,600M tokens a point), then
+    /// 20 Fable requests of 1M tokens in the last minute: at 16M a point, 1.25 a minute, fast, so
+    /// I = 1 minute: 99 - (ceil(1.25 x 6 = 7.5) - 1) = 92. Main's fit gives Fable 9.34M (87);
+    /// d22fc43f8 read Fable with Opus at 111.8M (0.18 a minute, point 98: Work at 93% kept
+    /// running). Any figure under 33.3M is more than 0.6 a minute, at or under 93.
+    #[test]
+    fn a_dear_minoritys_burst_hands_off_when_its_spend_requires() {
+        let root = Scratch::new();
+        let mix = |o: u64, s: u64, f: u64, h: u64| json!({"points": 1.0, "tokens": {"claude-opus-5-5": o,
+            "claude-sonnet-5-5": s, "claude-fable-5-1": f, "claude-haiku-5-5": h}});
+        let episodes = json!([mix(34_000_000, 14_500_000, 700_000, 100_000), mix(40_000_000, 21_500_000, 2_200_000, 90_000),
+            mix(18_000_000, 19_500_000, 1_900_000, 110_000), mix(18_500_000, 22_500_000, 1_000_000, 160_000)]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 93.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..20u64)
+            .map(|i| (model_frame("claude-fable-5-1", &format!("msg_{i}"), 1_000_000 - 3), now - 57_000 + i * 3_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 93., "a 20M-token Fable burst left the week's point at {point} (weekly speed {} points a minute); \
+            at Fable's list price it is 92", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
         assert!(published.leaving.contains(&work), "Work at 93% during a Fable burst is not being left: {:?}", published.leaving);
     }
 
