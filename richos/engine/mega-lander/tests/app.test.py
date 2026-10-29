@@ -946,6 +946,84 @@ class DesktopWork(unittest.TestCase):
             self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"y","tool_input":dict(ready["agent_payload"])})
         self.assertEqual(self.receipt_file(ready)["status"],"prepared")
 
+    def test_p1a_an_assignment_closed_in_the_turn_that_prepared_its_work_never_dispatches_it(self):
+        """Second review of 6e9a03c3, finding 1: the open-assignment check ran only for a receipt
+        rebound from an earlier turn, so a job superseded through the checkpoint tool in the SAME
+        turn was dispatched ("SUPERSEDED_SAME_TURN: assignment=superseded; receipt=dispatching").
+        On 6e9a03c3 the first assertRaises fails: nothing is raised."""
+        ready=self.call("prepare",self.args)
+        accepted=self.app.ecs(self.scope,{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],
+            "request_id":"replace-request","checkpoint":{"statements":[
+                {"verb":"commitment","fields":{"id":"replacement","title":"The revised job"}},
+                {"verb":"supersede","fields":{"id":"fixture-task","replacement":"replacement",
+                    "evidence":"The user replaced the original request with this revised job."}}]}})
+        self.assertTrue(accepted["accepted"],accepted)
+        call={"session_id":self.session,"tool_use_id":"superseded-job-call","tool_input":dict(ready["agent_payload"])}
+        with self.assertRaisesRegex(ValueError,"its assignment fixture-task is superseded, not open"):
+            self.app.dispatch_intent(self.scope,{**call,"tool_input":dict(call["tool_input"])})
+        with self.assertRaisesRegex(ValueError,"is superseded, not open"):
+            self.app.dispatch_intent(self.scope,{**call,"tool_input":dict(call["tool_input"])},inspect_only=True)
+        record=self.receipt_file(ready)
+        self.assertEqual(record["status"],"prepared","obsolete work was marked dispatching")
+        self.assertFalse(record.get("tool_use_id"))
+
+    def test_p1a_a_reused_work_seat_never_dispatches_another_assignments_receipt(self):
+        """Second review of 6e9a03c3, finding 3 (follow-up): a rebind compared company, thread and
+        provider session but never the assignment the work seat carries, so a lease reused for a
+        second assignment dispatched the first one's receipt ("OTHER_JOB: scope_job=second-job;
+        receipt_job=fixture-task; receipt=dispatching"). On 6e9a03c3 nothing is raised."""
+        self.app.ecs(self.scope,{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],
+            "request_id":"open-second-job","checkpoint":{"statements":[
+                {"verb":"commitment","fields":{"id":"second-job","title":"Other work"}}]}})
+        self.scope["seat"]="work-seat:reused"
+        self.scope["binding"]=self.bind_seat(self.scope["seat"],"fixture-task",session=self.session)
+        self.scope_path.write_text(json.dumps(self.scope))
+        ready=self.call("prepare",self.args)
+        self.scope["binding"]=self.bind_seat(self.scope["seat"],"second-job",session=self.session,revision=1)
+        self.scope_path.write_text(json.dumps(self.scope))
+        with self.assertRaisesRegex(ValueError,"prepared for assignment fixture-task, and this work carries assignment second-job"):
+            self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"other-job-call",
+                                                 "tool_input":dict(ready["agent_payload"])})
+        self.assertEqual(self.receipt_file(ready)["status"],"prepared")
+
+    def test_p1a_a_notice_bound_while_prepare_runs_never_fails_that_prepare(self):
+        """Second review of 6e9a03c3, finding 2: the host bound Stu's seat for his next notice while
+        a prepare was creating its workspace, and that prepare's final projection was refused with
+        "stale app binding" and its receipt marked unknown. The host now binds a queued input when
+        its turn starts (native.rs a_notice_queued_while_stu_is_in_a_turn_keeps_the_running_turns_binding);
+        this is the app's half, for a binding that moves in that window anyway. On 6e9a03c3 the
+        prepare raises "stale app binding"."""
+        seat="stu-thread:thread-a"
+        self.scope.update(seat=seat,background_work_allowed=True)
+        self.scope["binding"]=self.bind_seat(seat,"peer:1",audience="rich",session=self.session)
+        self.scope_path.write_text(json.dumps(self.scope))
+        original=self.app.run
+        def notice_bound_meanwhile(*args,**kwargs):
+            result=original(*args,**kwargs)
+            self.scope["binding"]=self.bind_seat(seat,"peer:2",audience="rich",session=self.session,revision=1)
+            self.scope_path.write_text(json.dumps(self.scope))
+            return result
+        with patch.object(self.app,"run",notice_bound_meanwhile):
+            ready=self.call("prepare",self.args)
+        self.assertEqual(ready["status"],"prepared")
+        record=self.receipt_file(ready)
+        self.assertEqual(record["binding"],self.scope["binding"],"the receipt kept the binding ECS refuses")
+        self.assertEqual(record["rebound"]["from_turn"],"peer:1")
+        self.assertEqual(record["rebound"]["by"],"prepare")
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"after-notice",
+                                             "tool_input":dict(ready["agent_payload"])})
+        self.assertEqual(self.receipt_file(ready)["status"],"dispatching")
+        # Another provider session is never adopted: that prepare still fails, as before.
+        other={**self.args,"request_id":"second","brief":"A second, separate part."}
+        def other_session_meanwhile(*args,**kwargs):
+            result=original(*args,**kwargs)
+            self.scope["binding"]=self.bind_seat(seat,"peer:3",audience="rich",session="the-next-session",revision=2)
+            self.scope_path.write_text(json.dumps(self.scope))
+            return result
+        with patch.object(self.app,"run",other_session_meanwhile):
+            with self.assertRaises(Exception):
+                self.call("prepare",other)
+
     def test_p1a_a_dispatch_refused_in_a_notification_turn_stays_retryable(self):
         """Done-when 2 (2026-10-28 18:27Z, 2026-10-29 08:05Z). A dispatch is refused in a
         notification turn whose grant closed while Pierce reviewed it. Pierce's findings are its

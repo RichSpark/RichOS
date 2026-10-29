@@ -1571,7 +1571,19 @@ def prepare(scope_path, scope, args):
                     outcome = None
                 preparation_refused = outcome == {"ready": False, "phase": "preflight", "created": []}
                 raise
-            read_scope(scope_path)  # Stop cannot turn preparation into permission to dispatch.
+            current = read_scope(scope_path)  # Stop cannot turn preparation into permission to dispatch.
+            # THE SESSION'S BINDING AS IT IS NOW, NOT AS IT WAS WHEN THIS CALL BEGAN (second review
+            # of 6e9a03c3, finding 2). The workspace takes a while to create; if the host bound this
+            # session's next input meanwhile, the binding this call started with is stale to ECS and
+            # its final projection was refused ("stale app binding"), marking a created workspace
+            # unknown. The same company, thread and provider session is the very check `prepare`'s
+            # own rebind and `dispatch_intent` make; anything else is still refused below.
+            moved = (current["binding"] != scope["binding"]
+                     and carried_obligation(current) == carried_obligation(scope)
+                     and all(current["binding"].get(key) == scope["binding"].get(key)
+                             for key in ("entity_id", "thread_id", "session_id")))
+            if moved:
+                scope = {**scope, "binding": current["binding"]}
             if ready.get("ready") is not True or any(g.get("verdict") != "ok" for g in ready.get("guards",[])):
                 # THE APP'S OWN WORDS, because this sentence can reach a person.
                 # A guard that REFUSES exits nonzero and never gets here — the
@@ -1610,6 +1622,9 @@ def prepare(scope_path, scope, args):
                 record = bounded(path)
                 require_not_stopped(scope, obligation)
                 record.pop("preparing_by", None)
+                if moved:
+                    record["rebound"] = {"at": W.iso(), "from_turn": record["binding"].get("turn_id"), "by": "prepare"}
+                    record["binding"] = scope["binding"]
                 record.update(status="prepared",payload={**ready["payload"],"run_in_background":True},
                     workspace_ref=W.named_key(scope["binding"]["session_id"],name))
                 save(path,record);project(scope,path,record)
@@ -1686,21 +1701,32 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
         # admitted on exactly the checks `prepare`'s own rebind makes: the same company, thread and
         # provider session, never admitted before, and its assignment still open and not stopped.
         rebind = (record["status"] == "prepared" and record["binding"] != scope["binding"] and not admitted(record))
+        obligation = record["request"]["obligation_id"]
         if rebind:
             if any(record["binding"].get(key) != scope["binding"].get(key) for key in ("entity_id", "thread_id", "session_id")):
                 raise ValueError("receipt %s (request %s) was prepared in an earlier provider session (%s), which "
                                  "no dispatch can reach; prepare it again under a new request_id"
                                  % (record["name"], record.get("request_id"), record["binding"].get("session_id")))
-            item = ecs(scope, {"protocol":1,"command":"inspect","binding":scope["binding"],
-                               "query":{"item_id":record["request"]["obligation_id"]}})["item"]
-            if item["status"] not in ("accepted","active","pending","blocked"):
-                raise ValueError("receipt %s cannot be dispatched: its assignment %s is %s, not open"
-                                 % (record["name"], record["request"]["obligation_id"], item["status"]))
         elif record["binding"] != scope["binding"] or record["status"] != "prepared":
             raise ValueError("receipt %s (request %s) was already attempted, so it is not dispatched again: its "
                              "status is %s%s. Inspect it; a new attempt is prepared under a new request_id"
                              % (record["name"], record.get("request_id"), record["status"],
                                 ", Agent call %s" % record["tool_use_id"] if record.get("tool_use_id") else ""))
+        # A WORK SEAT DISPATCHES ONLY ITS OWN ASSIGNMENT'S RECEIPT (second review of 6e9a03c3,
+        # finding 3): a lease reused for another assignment carries that one, read off its scope.
+        carried = carried_obligation(scope)
+        if carried is not None and carried != obligation:
+            raise ValueError("receipt %s cannot be dispatched here: it was prepared for assignment %s, and this "
+                             "work carries assignment %s" % (record["name"], obligation, carried))
+        # EVERY DISPATCH, NOT ONLY A REBOUND ONE (second review of 6e9a03c3, finding 1): an assignment
+        # completed, cancelled or superseded after its work was prepared never starts that work, in
+        # the turn that prepared it as in any later one. Measured: a job superseded through the
+        # checkpoint tool in the same turn was dispatched ("assignment=superseded; receipt=dispatching").
+        item = ecs(scope, {"protocol":1,"command":"inspect","binding":scope["binding"],
+                           "query":{"item_id":obligation}})["item"]
+        if item["status"] not in ("accepted","active","pending","blocked"):
+            raise ValueError("receipt %s cannot be dispatched: its assignment %s is %s, not open"
+                             % (record["name"], obligation, item["status"]))
         ti = {"name": record["name"], **ti}
         payload["tool_input"] = ti
         if ti != record["payload"]: raise ValueError("Agent input differs from its prepared scoped receipt")
