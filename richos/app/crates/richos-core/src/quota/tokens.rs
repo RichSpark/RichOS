@@ -24,7 +24,8 @@
 //!   carded model is read at its own price. A model with no card that the episodes cannot tell
 //!   apart from another has no figure yet.
 //! - **The speed** (`Track::speed`): over the last minute, each measured model's tokens divided
-//!   by its tokens per point, summed. The quota service takes the larger of it and the
+//!   by its tokens per point, summed; what only a lease's `result` frame showed counts at most
+//!   `LATE_POINTS_MAX` a message. The quota service takes the larger of it and the
 //!   percentage speed (`Snapshot::reading_with`), so a model with no figure yet, or use this Mac
 //!   cannot see (claude.ai, another computer), never makes the speed lower than the percentage
 //!   speed.
@@ -40,6 +41,24 @@ use std::{
 
 /// The live window: tokens stamped in the last minute are the live tokens per minute.
 pub const LIVE_MS: u64 = 60_000;
+/// **What only a lease's `result` frame showed counts at most one weekly point in the live
+/// minute** (2026-10-28 13:05Z: Work at 3% of its week was left, Ray and Zach ordered to hand
+/// off). A `result` frame's remainder ([`Tally`], [`Use::late`]) is what the lease spent over
+/// its whole turn, its helpers' unstreamed output included, all of it stamped at one moment. It
+/// is a lump, not a rate. With only two episodes learned the fit gave Haiku 3,953 tokens a
+/// point, so one lease's 83,446 late Haiku tokens read as 83,446 / 3,953 = 21.1 points in the
+/// live minute: 21.1 points a minute is fast, so I = 1 minute, H the default 5, and the handoff
+/// point was 99 - (ceil(21.1 x (1 + 5)) - 1) = 99 - 126, clamped to 0.
+///
+/// One point a minute is the app's own line for fast use (`FAST_POINTS_PER_CHECK`, 5 points a
+/// 5-minute check). So one late remainder alone can at most make the week read as fast, checked
+/// every minute: with nothing else in the minute and the default 5-minute handoff it moves the
+/// point from 99 to about 94 (99 - (ceil(1 x 6) - 1)), for the one minute it stays in the live
+/// window. Tokens the frames streamed are never capped, so a sustained burst (many messages)
+/// reads exactly as before, and every model keeps its figure: the cap is in points, after it.
+/// The late tokens are still counted in full everywhere else (`points_since`, the episodes, a
+/// handoff's points, the spend).
+pub const LATE_POINTS_MAX: f64 = 1.0;
 /// Episodes kept per account (newest last). 50 weekly points is half a week of steady use.
 pub const KEEP_EPISODES: usize = 50;
 /// The most models fitted at once; any others have no figure (2^6 subsets at most).
@@ -59,8 +78,9 @@ pub struct Track {
     /// Each transcript's read position: the end of its last complete line.
     offsets: HashMap<PathBuf, u64>,
     scanned: bool,
-    /// Message id -> (stamped at, model, tokens, output tokens). The largest copy wins.
-    events: HashMap<String, (u64, String, u64, u64)>,
+    /// Message id -> (stamped at, model, tokens, output tokens, late tokens). The largest copy
+    /// wins. Late tokens: those only a `result` frame showed ([`Use::late`]).
+    events: HashMap<String, (u64, String, u64, u64, u64)>,
     /// The weekly value being watched: (used, its start if its rise was seen, its reset time).
     current: Option<(f64, Option<u64>, Option<u64>)>,
     last_reading: Option<u64>,
@@ -136,13 +156,17 @@ impl Track {
 
     /// One message's usage, from a transcript or from a lease's stream ([`Sink`]).
     pub fn add_use(&mut self, found: &Use) {
-        self.add(&found.id, found.at, &found.model, found.tokens, found.output);
+        self.put(&found.id, found.at, &found.model, found.tokens, found.output, found.late);
     }
 
     /// One assistant message's usage. A later, larger copy of the same message replaces it.
     pub fn add(&mut self, id: &str, at: u64, model: &str, tokens: u64, output: u64) {
+        self.put(id, at, model, tokens, output, 0);
+    }
+
+    fn put(&mut self, id: &str, at: u64, model: &str, tokens: u64, output: u64, late: u64) {
         if self.events.get(id).is_some_and(|old| old.3 > output) { return; }
-        self.events.insert(id.to_string(), (at, model.to_string(), tokens, output));
+        self.events.insert(id.to_string(), (at, model.to_string(), tokens, output, late.min(tokens)));
     }
 
     /// A reading of the weekly window, taken at `at`. Returns true when it closed an episode
@@ -162,7 +186,7 @@ impl Track {
                     if used > value {
                         if let Some(start) = start {
                             let mut tokens = BTreeMap::new();
-                            for (stamped, model, count, _) in self.events.values() {
+                            for (stamped, model, count, ..) in self.events.values() {
                                 if start < *stamped && *stamped <= at { *tokens.entry(model.clone()).or_insert(0) += count; }
                             }
                             self.episodes.push(Episode { points: used - value, tokens });
@@ -200,12 +224,13 @@ impl Track {
     }
 
     /// Weekly points per millisecond from the last minute's tokens (`LIVE_MS`), each model's
-    /// tokens divided by its tokens per point. A model with no figure adds nothing.
+    /// tokens divided by its tokens per point. A model with no figure adds nothing. What only a
+    /// `result` frame showed adds at most [`LATE_POINTS_MAX`] per message.
     pub fn speed(&self, now: u64) -> f64 {
         let per_point = figures(&self.episodes);
         let points: f64 = self.events.values()
             .filter(|e| e.0 + LIVE_MS > now && e.0 <= now)
-            .filter_map(|e| per_point.get(&e.1).map(|p| e.2 as f64 / p))
+            .filter_map(|e| per_point.get(&e.1).map(|p| (e.2 - e.4) as f64 / p + (e.4 as f64 / p).min(LATE_POINTS_MAX)))
             .sum();
         points / LIVE_MS as f64
     }
@@ -214,9 +239,11 @@ impl Track {
 /// One assistant message's usage: input + output + cache write + cache read, by model, as
 /// `token-track.py` counts it, and when it was stamped. `request` keeps what that sum throws
 /// away and pricing needs (the API-equivalent spend, §118, `crate::spend`): the five buckets,
-/// the two cache writes apart, the effort, fast mode and US-only inference.
+/// the two cache writes apart, the effort, fast mode and US-only inference. `late`: how many of
+/// `tokens` only a lease's `result` frame showed ([`Tally`]; 0 for anything a frame or a
+/// transcript row showed), which the live speed counts at most [`LATE_POINTS_MAX`] of.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Use { pub id: String, pub at: u64, pub model: String, pub tokens: u64, pub output: u64, pub request: crate::spend::Request }
+pub struct Use { pub id: String, pub at: u64, pub model: String, pub tokens: u64, pub output: u64, pub request: crate::spend::Request, pub late: u64 }
 
 /// The usage of one assistant `message` (a transcript row's or a stream frame's), stamped
 /// `at`; `row` is the frame or transcript row around it (its `effort`). `None` without usage,
@@ -230,7 +257,7 @@ pub fn message_use(message: &Value, row: &Value, at: u64) -> Option<Use> {
     let id = message["id"].as_str().or(row["uuid"].as_str())?.to_string();
     let model = message["model"].as_str().unwrap_or("unknown").to_string();
     let request = crate::spend::Request::of_message(message, row, at)?;
-    Some(Use { id, at, model, tokens, output, request })
+    Some(Use { id, at, model, tokens, output, request, late: 0 })
 }
 
 /// The most messages a sink holds before the quota service takes them (it takes them every
@@ -350,7 +377,7 @@ impl Tally {
             if !open.contains(&kept.id) { open.push(kept.id.clone()); }
         }
         Some(Use { id: kept.id.clone(), at: kept.at, model: kept.model.clone(), tokens: kept.buckets.total(),
-            output: kept.buckets.output, request: kept })
+            output: kept.buckets.output, request: kept, late: 0 })
     }
 
     fn finalize(&mut self, base: &str, id: &str) {
@@ -406,9 +433,10 @@ impl Tally {
                     if rest.total() > 0 {
                         if let [only] = open.as_slice() {
                             // The one message it can belong to: that message, at its final size.
+                            // What the frames streamed of it stays live; the rest is late.
                             let mut request = only.clone();
                             request.buckets.add(&rest);
-                            out.extend(self.count(request, true));
+                            out.extend(self.count(request, true).map(|found| Use { late: rest.total(), ..found }));
                         } else {
                             out.push(self.correction(&lease, model, &rest, &open, at));
                         }
@@ -454,7 +482,7 @@ impl Tally {
             correction: true,
             unmatched: cards.len() > 1,
         };
-        Use { id, at: request.at, model: model.to_string(), tokens: rest.total(), output: 0, request }
+        Use { id, at: request.at, model: model.to_string(), tokens: rest.total(), output: 0, request, late: rest.total() }
     }
 }
 
@@ -964,6 +992,21 @@ mod tests {
         assert_eq!(all.requests, 2);
     }
 
+    /// **A late lump counts at most `LATE_POINTS_MAX` in the live minute** (main's late-frame
+    /// step bound, where the card prior does not make it moot). Opus alone at 30M tokens a point;
+    /// in the live minute one streamed message of 30M (1 point) and one `result` remainder of
+    /// 90M Opus tokens no frame showed (3 points by its figure): 1 + min(3, 1) = 2 points a minute.
+    #[test]
+    fn a_late_lump_counts_at_most_late_points_max_in_the_live_minute() {
+        let mut t = Track::with_episodes(vec![episode(1., &[("claude-opus-5-5", 30_000_000)]), episode(1., &[("claude-opus-5-5", 30_000_000)])]);
+        let now = 1_000_000;
+        let use_of = |id: &str, tokens: u64, late: u64| Use { id: id.into(), at: now - 10_000, model: "claude-opus-5-5".into(),
+            tokens, output: 0, request: crate::spend::Request::default(), late };
+        t.add_use(&use_of("streamed", 30_000_000, 0));
+        t.add_use(&use_of("lease:result-1:claude-opus-5-5", 90_000_000, 90_000_000));
+        let per_minute = t.speed(now) * LIVE_MS as f64;
+        assert!((per_minute - (1. + LATE_POINTS_MAX)).abs() < 1e-9, "{per_minute} points a minute");
+    }
     #[test]
     fn a_streamed_message_counts_once_at_its_largest_copy() {
         let mut t = Track::default();

@@ -32,6 +32,7 @@ def load(name, path):
 ECS = load("richos_ecs_app", ENGINE / "ecs/adapters/app.py")
 W = load("richos_app_workspaces", ENGINE / "mega-lander/workspaces.py")
 INSTRUCTIONS = load("richos_instruction_files", ENGINE / "scripts/lib/instruction_files.py")
+CLOSURE = load("richos_scope_closure", ENGINE / "scripts/lib/scope_closure.py")
 
 
 def bounded(path, limit=1024 * 1024):
@@ -63,9 +64,12 @@ SCOPE_LIMIT = 256 * 1024
 
 def read_scope(path, require_action=True, allow_read_only=False):
     value = bounded(Path(path), SCOPE_LIMIT)
-    if value.get("version") != 1 or (require_action and value.get("actions_allowed") is not True
+    if value.get("version") != 1:
+        raise ValueError("work tools require a current visible app turn: the scope file is not a version 1 app scope")
+    if (require_action and value.get("actions_allowed") is not True
             and not (allow_read_only and value.get("read_only_tools"))):
-        raise ValueError("work tools require a current visible app turn")
+        # Its cause and scope, never the bare sentence (2026-10-28: read as a Stop nobody made).
+        raise ValueError("work tools require a current visible app turn. " + CLOSURE.describe(value))
     if require_action:
         if any(value["binding"][key] != os.environ.get(env) for key, env in (("entity_id", "RICHOS_APP_ENTITY"), ("thread_id", "RICHOS_APP_THREAD"))):
             raise ValueError("work tools cannot cross their host-issued company/thread partition")
@@ -1289,6 +1293,37 @@ def save_words(path, words):
         temporary.unlink(missing_ok=True)
 
 
+def handover_proof_incomplete(worker, commits):
+    """The refusal for a review of a handover whose own proof run FAILED, or None.
+
+    2026-10-28 15:22Z (nightly 78): three reviewer preparations for a handover were refused with
+    "I could not give this work its own separate copy of your project", while the handover's own
+    proof report, recorded at its end, said "NOT complete" (54 planned, 41 passed, 12 failed). A
+    lead could not act on the right thing without forensic work. The report is the one
+    `workspaces.attach_proof_reports` saved on the worker's workspace when it handed in, read for
+    exactly the commit under review; a report of another commit, or none, refuses nothing. Only
+    failed checks (or a crashed run) refuse: a check that could not run is named by the report and
+    judged by the reviewer, as before."""
+    canonical = W.load_agent(worker["workspace_ref"]) if worker.get("workspace_ref") else None
+    if not canonical:
+        return None
+    for workspace in W.live_workspaces(canonical):
+        report = workspace.get("proof_report") or {}
+        if not report.get("head") or report["head"] not in commits.values():
+            continue
+        failed = (report.get("outcomes") or {}).get("failed", 0)
+        if not failed and not report.get("crashed"):
+            continue
+        names = [u.get("check") for u in report.get("unresolved") or [] if u.get("result") == "failed"]
+        return ("this handover's proof run is not complete: %d failed%s (%s%s; run %s, commit %s). Continue the "
+                "worker (prepare a worker with continue_of %s) to fix it, then review the commit it hands in"
+                % (failed, ", and the run crashed" if report.get("crashed") else "",
+                   ", ".join(str(n) for n in names[:10]) or report.get("line") or "no check named",
+                   " and %d more" % (len(names) - 10) if len(names) > 10 else "",
+                   report.get("run"), report["head"][:12], worker["id"]))
+    return None
+
+
 def prepare(scope_path, scope, args):
     if set(args) - {"request_id","obligation_id","repo","repos","title","brief","role","teammate","model","integration","base","review_of","continue_of"}:
         raise ValueError("unsupported preparation fields")
@@ -1343,7 +1378,11 @@ def prepare(scope_path, scope, args):
         path = root / (identity + ".json")
         if path.exists():
             old = bounded(path)
-            if old["request"] != normalized: raise ValueError("request_id was already used for different work")
+            if old["request"] != normalized:
+                differs = sorted(k for k in set(old["request"]) | set(normalized) if old["request"].get(k) != normalized.get(k))
+                raise ValueError("request_id was already used for different work: %s is receipt %s (status %s), "
+                                 "prepared with another %s. Use a new request_id for this request"
+                                 % (request_id, old["name"], old["status"], ", ".join(differs)))
             if preparing_elsewhere(old): return view(old)   # still being prepared: nothing to settle or project yet
             refresh(old)
             if old["status"] == "prepared" and old["binding"] != scope["binding"] and never_started(old):
@@ -1379,7 +1418,12 @@ def prepare(scope_path, scope, args):
                 # An assignment may have several independent workers, reviewers or consults.
                 # Reject an exact duplicate under another id, not every request sharing a duty.
                 if old["request"] == normalized and old["status"] in ("preparing","prepared","dispatching","running","unknown"):
-                    raise ValueError("this request already has unresolved work; inspect its receipt before retrying")
+                    # Which receipt it collides with (2026-10-28: two prepares under fresh ids were
+                    # refused with no name, and cleared only when the title was changed).
+                    raise ValueError("this request already has unresolved work: receipt %s (request %s, status %s, "
+                                     "prepared in turn %s) has the same assignment, role and brief. Dispatch or "
+                                     "inspect that receipt, or settle it, before preparing it again"
+                                     % (old["name"], old.get("request_id"), old["status"], old["binding"].get("turn_id")))
         name = f"{teammate}-{model}-{identity[:12]}"
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
@@ -1436,6 +1480,9 @@ def prepare(scope_path, scope, args):
                     raise ValueError("commit or reconcile the worker's uncommitted changes before review")
                 commits[target_repo] = git(target["path"], "rev-parse", "HEAD")
             commit = commits[str(repo)]
+            incomplete = handover_proof_incomplete(worker, commits)
+            if incomplete:
+                raise ValueError(incomplete)
             if args.get("base") not in (None, commit): raise ValueError("review base must be the actual worker commit")
             record["review_target"] = review_identity(worker["id"], commits, str(repo))
             if len(commits) == 1:
@@ -1524,7 +1571,19 @@ def prepare(scope_path, scope, args):
                     outcome = None
                 preparation_refused = outcome == {"ready": False, "phase": "preflight", "created": []}
                 raise
-            read_scope(scope_path)  # Stop cannot turn preparation into permission to dispatch.
+            current = read_scope(scope_path)  # Stop cannot turn preparation into permission to dispatch.
+            # THE SESSION'S BINDING AS IT IS NOW, NOT AS IT WAS WHEN THIS CALL BEGAN (second review
+            # of 6e9a03c3, finding 2). The workspace takes a while to create; if the host bound this
+            # session's next input meanwhile, the binding this call started with is stale to ECS and
+            # its final projection was refused ("stale app binding"), marking a created workspace
+            # unknown. The same company, thread and provider session is the very check `prepare`'s
+            # own rebind and `dispatch_intent` make; anything else is still refused below.
+            moved = (current["binding"] != scope["binding"]
+                     and carried_obligation(current) == carried_obligation(scope)
+                     and all(current["binding"].get(key) == scope["binding"].get(key)
+                             for key in ("entity_id", "thread_id", "session_id")))
+            if moved:
+                scope = {**scope, "binding": current["binding"]}
             if ready.get("ready") is not True or any(g.get("verdict") != "ok" for g in ready.get("guards",[])):
                 # THE APP'S OWN WORDS, because this sentence can reach a person.
                 # A guard that REFUSES exits nonzero and never gets here — the
@@ -1563,6 +1622,9 @@ def prepare(scope_path, scope, args):
                 record = bounded(path)
                 require_not_stopped(scope, obligation)
                 record.pop("preparing_by", None)
+                if moved:
+                    record["rebound"] = {"at": W.iso(), "from_turn": record["binding"].get("turn_id"), "by": "prepare"}
+                    record["binding"] = scope["binding"]
                 record.update(status="prepared",payload={**ready["payload"],"run_in_background":True},
                     workspace_ref=W.named_key(scope["binding"]["session_id"],name))
                 save(path,record);project(scope,path,record)
@@ -1630,16 +1692,54 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
         if len(matches) != 1: raise ValueError("Agent input is absent from or differs from its prepared scoped receipt; prepare this assignment with the app work tool before calling Agent")
         path,record = matches[0]
         require_not_stopped(scope, record["request"]["obligation_id"])
-        if record["status"] == "prepared" and record["binding"] != scope["binding"] and not admitted(record):
-            raise ValueError("this was prepared in an earlier turn: call prepare again with the same request_id "
-                             "to dispatch it in this turn, or prepare a replacement under a new request_id")
-        if record["binding"] != scope["binding"] or record["status"] != "prepared":
-            raise ValueError("this dispatch is stale or already attempted; reconcile before retrying")
+        # A PREPARE FROM AN EARLIER TURN OF THIS SESSION DISPATCHES AS IT STANDS (P1-A, 2026-10-29).
+        # Stu is woken by his own job's notification, which writes no new scope; the receipt he
+        # prepared in an earlier turn, or one whose dispatch was refused there, carries that turn's
+        # binding. This used to refuse it ("prepared in an earlier turn: call prepare again", and
+        # before f0a399b8 "stale or already attempted"), so a notification turn could not dispatch
+        # its own job's prepared work and a refused dispatch was not retryable as sent. It is
+        # admitted on exactly the checks `prepare`'s own rebind makes: the same company, thread and
+        # provider session, never admitted before, and its assignment still open and not stopped.
+        rebind = (record["status"] == "prepared" and record["binding"] != scope["binding"] and not admitted(record))
+        obligation = record["request"]["obligation_id"]
+        if rebind:
+            if any(record["binding"].get(key) != scope["binding"].get(key) for key in ("entity_id", "thread_id", "session_id")):
+                raise ValueError("receipt %s (request %s) was prepared in an earlier provider session (%s), which "
+                                 "no dispatch can reach; prepare it again under a new request_id"
+                                 % (record["name"], record.get("request_id"), record["binding"].get("session_id")))
+        elif record["binding"] != scope["binding"] or record["status"] != "prepared":
+            raise ValueError("receipt %s (request %s) was already attempted, so it is not dispatched again: its "
+                             "status is %s%s. Inspect it; a new attempt is prepared under a new request_id"
+                             % (record["name"], record.get("request_id"), record["status"],
+                                ", Agent call %s" % record["tool_use_id"] if record.get("tool_use_id") else ""))
+        # A WORK SEAT DISPATCHES ONLY ITS OWN ASSIGNMENT'S RECEIPT (second review of 6e9a03c3,
+        # finding 3): a lease reused for another assignment carries that one, read off its scope.
+        carried = carried_obligation(scope)
+        if carried is not None and carried != obligation:
+            raise ValueError("receipt %s cannot be dispatched here: it was prepared for assignment %s, and this "
+                             "work carries assignment %s" % (record["name"], obligation, carried))
+        # EVERY DISPATCH, NOT ONLY A REBOUND ONE (second review of 6e9a03c3, finding 1): an assignment
+        # completed, cancelled or superseded after its work was prepared never starts that work, in
+        # the turn that prepared it as in any later one. Measured: a job superseded through the
+        # checkpoint tool in the same turn was dispatched ("assignment=superseded; receipt=dispatching").
+        item = ecs(scope, {"protocol":1,"command":"inspect","binding":scope["binding"],
+                           "query":{"item_id":obligation}})["item"]
+        if item["status"] not in ("accepted","active","pending","blocked"):
+            raise ValueError("receipt %s cannot be dispatched: its assignment %s is %s, not open"
+                             % (record["name"], obligation, item["status"]))
         ti = {"name": record["name"], **ti}
         payload["tool_input"] = ti
         if ti != record["payload"]: raise ValueError("Agent input differs from its prepared scoped receipt")
         if payload.get("session_id") != scope["binding"]["session_id"] or not payload.get("tool_use_id"):
             raise ValueError("dispatch has no matching native call identity")
+        if review_refused:
+            # Recorded whatever state the turn's grant is in now: Pierce's findings are the cause of
+            # this refusal, and a grant that closed while the review ran must not replace them with
+            # "work tools require a current visible app turn" (2026-10-29 08:05Z) or leave the
+            # receipt unmarked. The receipt stays `prepared`, so the same call can be sent again.
+            record["pierce_refused"] = True
+            save(path,record)
+            return
         read_scope(os.environ["RICHOS_APP_SCOPE"])
         if inspect_only:
             request = record["request"]
@@ -1649,10 +1749,6 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
                     "acceptance": record.get("recovery_acceptance") or instruction.get("sha256") or hashlib.sha256(
                         json.dumps(instruction["ledger_ref"], sort_keys=True).encode()).hexdigest(),
                     "authority": instruction["ledger_ref"], "instruction": instruction}
-        if review_refused:
-            record["pierce_refused"] = True
-            save(path,record)
-            return
         # The repository's own instruction file joins the prompt here, and only here: the
         # admitted call's input is what the hook hands Agent as `updatedInput`, so the worker
         # gets the file in full and Stu, who prepared and submitted the call, never read it.
@@ -1662,6 +1758,9 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
                 raise ValueError("the prepared brief has lost the place for the repository's own instructions")
             ti = {**ti, "prompt": ti["prompt"].replace(INSTRUCTIONS.PLACEHOLDER, kept.read_text(encoding="utf-8"), 1)}
         record.pop("pierce_refused", None)
+        if rebind:
+            record["rebound"] = {"at": W.iso(), "from_turn": record["binding"].get("turn_id"), "by": "dispatch"}
+            record["binding"] = scope["binding"]
         record.update(status="dispatching",tool_use_id=payload["tool_use_id"])
         save(path,record)
         payload["tool_input"] = ti
