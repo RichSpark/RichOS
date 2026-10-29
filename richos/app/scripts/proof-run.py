@@ -759,6 +759,33 @@ def canonical_path(value):
     return os.pathsep.join(out)
 
 
+# THE APP'S SESSION IS NEVER A CHECK'S ENVIRONMENT (2026-10-28). A worker shell the RichOS app
+# starts carries the app's session: the installed engine, its live registry and hold records,
+# its conversation and its coordination checkout. The engine units already run without it
+# (ci-shard.sh through record-canary.sh rc_sandbox), but every other check (a run-tests.sh suite,
+# a script, a UI suite) was handed the caller's whole environment, so a check that touches the
+# registry or the hold records through its default wrote the app's live ones: record-canary.test.sh
+# left agents/wait-regression.json in the live registry from a proof run in an app shell, and a
+# unit in the same run failed only there. CI and the nightly start under `env -i` and have none of
+# these names, so removing them is CI's shape; a check that tests app behaviour sets the names it
+# needs itself. The list is record-canary.sh's _rc_roads_back (a test keeps the two equal) MINUS
+# THE HOLD'S TWO TAGS: agent_hold.py finds an agent's running commands by RICHOS_AGENT_OWNER and
+# RICHOS_AGENT_SESSION in their environment, so a check that lost them could not be frozen by a
+# pause. Neither is a road to a live record: they name which agent a process belongs to.
+HOLD_TAGS = frozenset(("RICHOS_AGENT_OWNER", "RICHOS_AGENT_SESSION"))
+APP_SESSION_NAMES = frozenset((
+    "RICHOS_ENGINE_ROOT", "RICHOS_ENGINE_DIR", "RICHOS_ENTITY_ROOT", "RICHOS_SA_ENTITY_ROOT",
+    "RICHOS_SA_TEAMS_DIR", "RICHOS_WORKSPACES_DIR", "RICHOS_AGENT_HOLD_DIR", "STALL_WATCH_STATE_DIR",
+    "RICHOS_SESSION_ID", "RICHOS_SESSION_PID",
+    "RICHOS_SPAWN_HOOK_SOURCES", "RICHOS_CLAUDE_ACCOUNT", "CLAUDE_PROJECT_DIR",
+))
+APP_SESSION_PREFIX = "RICHOS_APP_"
+
+
+def without_app_session(environment):
+    return {k: v for k, v in environment.items() if k not in APP_SESSION_NAMES and not k.startswith(APP_SESSION_PREFIX)}
+
+
 def execution_environment(item, caller=None):
     """The environment `item` runs in, from this runner's caller environment, or from `caller`
     (another run's, recorded_environment) to read the check as that run started it."""
@@ -766,8 +793,8 @@ def execution_environment(item, caller=None):
         return {**item.private_environment, **item.env}
     # Verification must not rewrite bytecode inside its own declared inputs. The nightly's
     # conditions sit between the caller's environment and the check's own values.
-    env = {**(os.environ if caller is None else caller), **nightly_conditions(item, caller), **item.env,
-           "PYTHONDONTWRITEBYTECODE": "1"}
+    env = {**without_app_session(os.environ if caller is None else caller), **nightly_conditions(item, caller),
+           **item.env, "PYTHONDONTWRITEBYTECODE": "1"}
     env["PATH"] = canonical_path(env.get("PATH", ""))
     if item.argv[:1] == ["cargo"]:
         import cargo_identity
