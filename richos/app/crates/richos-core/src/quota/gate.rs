@@ -276,8 +276,8 @@ fn wait(
         // on only when the staggered release lets it (`stagger::admit`). A ledger that cannot
         // be read or written releases nobody: the call waits for the reset, as it would have.
         if let Some(release) = release {
-            let held = |released: &[String]| held_on(state, account, released);
-            if super::stagger::admit(state, account, &key, &release, &held, now).unwrap_or(false) {
+            let team = |released: &[String]| measured_team(state, account, released);
+            if super::stagger::admit(state, account, &key, &release, &team, now).unwrap_or(false) {
                 if let Some(guard) = observation.take() { guard.release(); }
                 return Ok(());
             }
@@ -312,20 +312,24 @@ fn release_key(payload: &Value) -> String {
     }
 }
 
-/// How many calls on `account` are waiting now and are not in `released`: the rest of the held
-/// team (`stagger::admit`), one per permit, from the pause records (`holds`). A record written
-/// before records carried their account, or their permit, counts too.
-fn held_on(state: &Path, account: &str, released: &[String]) -> usize {
-    let Ok(held) = super::holds::held_calls(state) else { return 0 };
-    let mut team: Vec<String> = held.iter()
+/// **The team whose pace the speed before the hold measured** (`stagger::admit`): the helpers on
+/// `account` released in this window, and those still waiting that are not in `released`, one
+/// per permit, from the pause records (`holds`). A new agent's dispatch (`dispatch:` permits)
+/// never ran before the hold, so it is not counted (second review of 2026-10-29, finding 1:
+/// counting nine queued dispatches cut one measured worker's share to a tenth). A record
+/// written before records carried their account, or their permit, counts as before.
+fn measured_team(state: &Path, account: &str, released: &[String]) -> usize {
+    let helper = |key: &String| !key.starts_with("dispatch:");
+    let waiting = super::holds::held_calls(state).unwrap_or_default();
+    let mut team: Vec<String> = waiting.iter()
         .filter(|row| row.account.as_deref().is_none_or(|a| a == account))
         .map(|row| row.key.clone().unwrap_or_else(||
             if row.kind == "agent" { row.id.clone() } else { format!("dispatch:{}", row.session_id) }))
-        .filter(|key| !released.contains(key))
+        .filter(|key| helper(key) && !released.contains(key))
         .collect();
     team.sort();
     team.dedup();
-    team.len()
+    team.len() + released.iter().filter(|key| helper(key)).count()
 }
 
 /// Hand the callback to the canonical hook, unchanged, and pass its answer on.
@@ -498,7 +502,9 @@ mod tests {
         service.publish().unwrap();
         let (held, release) = decide(&state, None, now);
         assert_eq!(held, Admission::Held { resets_at: five_reset });
-        assert!(release.is_some_and(|r| r.allows(1, 1)), "94%, no speed measured: the first may go");
+        // 94% and no speed measured before the hold or since: no measurement, so nobody goes
+        // before the reset (second review of 2026-10-29, finding 2).
+        assert!(release.is_some_and(|r| !r.allows(1, 1)), "94%, no speed measured: it waits for the reset");
         service.snapshot.lock().unwrap().windows[0].resets_at = Some(now + 3_600_000);
         service.publish().unwrap();
         assert!(matches!(admission(&state, now), Admission::Held { .. }));
@@ -530,6 +536,11 @@ mod tests {
             "worker must stay pending"
         );
         publish(&service, 19 * 60_000);
+        // The climb into the hold measured at 0.1 points a minute: 94 + 0.1 x 19 = 95.9, under
+        // 100, so the one worker goes. With no measurement nobody would (finding 2 of the second
+        // review of 2026-10-29).
+        service.snapshot.lock().unwrap().rise_log.insert("five_hour".into(), vec![(90., 0.1 / 60_000.)]);
+        service.publish().unwrap();
         rx.recv_timeout(HANG_GUARD)
             .expect("the worker never resumed after the reset came near")
             .expect("the worker was refused instead of resuming");
@@ -839,10 +850,12 @@ mod tests {
         service.publish().unwrap();
         let calls: Vec<Value> = (0..10)
             .map(|i| json!({"tool_name": "Agent", "session_id": "stu", "tool_use_id": format!("toolu_{i}")})).collect();
-        // The ten waiting dispatches' own pause records, each on its own permit.
+        // The ten waiting dispatches' own pause records, each on its own permit, behind the ten
+        // held helpers whose pace the 1.4 points a minute measured.
         let _waiting: Vec<_> = (0..10).map(|i| super::super::holds::Guard::begin(&state, serde_json::from_value(json!({
             "kind": "dispatch", "id": "dispatch", "entityId": "", "threadId": "", "sessionId": "", "name": "New agent",
             "task": null, "sinceAt": now, "releasedAt": null, "account": "1", "key": format!("dispatch:stu:toolu_{i}")})).unwrap()).unwrap()).collect();
+        let _helpers = held_helpers(&state, now, 10);
         let went = calls.iter().filter(|call| wait(call, &state, &scope, "1", Duration::ZERO, Duration::ZERO).is_ok()).count();
         assert_eq!(went, 1, "one new agent, not ten in the same instant");
         assert_eq!(release_key(&calls[3]), "dispatch:stu:toolu_3");
@@ -850,6 +863,42 @@ mod tests {
         assert_ne!(release_key(&bare), release_key(&bare), "no tool_use_id: still one permit per call");
         let helper = json!({"tool_name": "Bash", "agent_id": "worker-1", "session_id": "w"});
         assert_eq!(release_key(&helper), release_key(&helper), "a helper's calls share its one permit");
+    }
+
+    /// `count` held helpers' pause records on account 1, `worker-0` onwards, as each held call
+    /// keeps one (`holds`).
+    fn held_helpers(state: &Path, now: u64, count: usize) -> Vec<super::super::holds::Guard> {
+        (0..count).map(|i| super::super::holds::Guard::begin(state, serde_json::from_value(json!({
+            "kind": "agent", "id": format!("worker-{i}"), "entityId": "", "threadId": "", "sessionId": "",
+            "name": "Helper", "task": null, "sinceAt": now, "releasedAt": null, "account": "1",
+            "key": format!("worker-{i}")})).unwrap()).unwrap()).collect()
+    }
+
+    /// **Second review of 2026-10-29, finding 1.** One helper held at 95%, 19 minutes before the
+    /// reset, measured at 1.4 points a minute before the hold, with nine Agent dispatches queued
+    /// behind it. Its pace is the whole measured pace: 95 + 1.4 x 19 = 121.6, so it waits.
+    /// Before, the nine never-started dispatches counted in the team and cut its share to a
+    /// tenth (97.66): it went, and spent the account past 100%.
+    #[test]
+    fn queued_dispatches_never_dilute_the_pace_a_working_helper_is_judged_on() {
+        let (_root, service, state, scope) = setup();
+        let (now, minute) = (crate::util::now_millis(), 60_000);
+        let reset = now + 19 * minute;
+        let five = |used: f64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: used,
+            resets_at: Some(reset), duration_ms: 18_000_000 }];
+        let mut reading = Snapshot::default();
+        reading.accept(five(80.), now - 15 * minute);
+        reading.accept(five(95.), now - 5 * minute);
+        reading.accept(five(95.), now);
+        *service.snapshot.lock().unwrap() = reading;
+        service.publish().unwrap();
+        let _queued: Vec<_> = (0..9).map(|i| super::super::holds::Guard::begin(&state, serde_json::from_value(json!({
+            "kind": "dispatch", "id": "dispatch", "entityId": "", "threadId": "", "sessionId": "", "name": "New agent",
+            "task": null, "sinceAt": now, "releasedAt": null, "account": "1", "key": format!("dispatch:stu:toolu_{i}")})).unwrap()).unwrap()).collect();
+        let _helper = held_helpers(&state, now, 1);
+        assert_eq!(measured_team(&state, "1", &[]), 1, "the nine dispatches are not in the measured team");
+        assert!(wait(&json!({"agent_id": "worker-0", "tool_name": "Bash"}), &state, &scope, "1",
+            Duration::ZERO, Duration::ZERO).is_err(), "121.6% projected: the helper waits for the reset");
     }
 
     #[test]

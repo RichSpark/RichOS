@@ -11,9 +11,12 @@
 //!
 //! **How a release is judged.** The account's reading says `used`% at `checked_at`, and the
 //! window resets at `resets_at`. The speed before the hold (`pre_hold`, points per ms) is the
-//! whole held team's pace, so one released call is judged at `pre_hold / team`. With `n`
-//! released, the rate is the larger of their share, `pre_hold x n / team`, and what the
-//! readings since have actually measured (`speed`, scaled up by the one more being released).
+//! pace of the helpers that were working, the `team` (released since or still held; a new
+//! agent's dispatch never ran, so it is not one of them), so one released call is judged at
+//! `pre_hold / team`. With `n` released, dispatches included, the rate is the larger of their
+//! share, `pre_hold x n / team`, and what the readings since have actually measured (`speed`,
+//! scaled up by the one more being released). No speed before the hold and none since is no
+//! measurement: nobody is released early.
 //! The projection at the reset is `used + rate x (resets_at - checked_at)`: counted from the
 //! reading, so what the released calls spent since it is counted too. One more is released only
 //! while that stays under 100, and never sooner than [`STAGGER_MS`] after the previous one.
@@ -52,9 +55,13 @@ pub struct Release {
 }
 
 impl Release {
-    /// Points per ms with `n` calls released out of a held team of `team`.
+    /// Points per ms with `n` calls released, `team` being the helpers whose pace `pre_hold`
+    /// measured. Each release adds one helper's share, `pre_hold / team`; a new agent's dispatch
+    /// never ran before the hold, so it is not in `team`, and it adds a share all the same
+    /// (second review of 2026-10-29, finding 1: counting queued dispatches in `team` made one
+    /// measured worker's share a tenth of its real pace).
     pub fn rate(&self, n: usize, team: usize) -> f64 {
-        let whole = team.max(n).max(1) as f64;
+        let whole = team.max(1) as f64;
         let share = self.pre_hold * n as f64 / whole;
         // What the readings measure now: with nobody released it is only what was never held
         // (Stu's own turns), and the first release adds one share to it; with `n - 1` released
@@ -70,9 +77,12 @@ impl Release {
     pub fn projected(&self, n: usize, team: usize) -> f64 {
         self.used + self.rate(n, team) * self.resets_at.saturating_sub(self.checked_at) as f64
     }
-    /// May the `n`th call be released? Only while the account stays under 100% at the reset.
+    /// May the `n`th call be released? Only while the account stays under 100% at the reset,
+    /// and only on a measurement: with no speed before the hold and none since (the climb was
+    /// not seen, as after a restart in the middle of a hold), a rate of 0 is no measurement, and
+    /// everyone waits for the reset (second review of 2026-10-29, finding 2).
     pub fn allows(&self, n: usize, team: usize) -> bool {
-        self.projected(n, team) < 100.
+        (self.pre_hold > 0. || self.speed > 0.) && self.projected(n, team) < 100.
     }
 }
 
@@ -112,14 +122,14 @@ fn lock(state: &Path) -> io::Result<Locked> {
 
 /// **May the held call `key` on `account` go on now?** `true` when it was released earlier in
 /// this window, or when it is released now: at least [`STAGGER_MS`] after the previous release
-/// and only while [`Release::allows`] the one more. `held` counts the calls still waiting on
-/// `account` that are not in the released set it is given; the team is those plus the released.
+/// and only while [`Release::allows`] the one more. `team` gives, for the released set, the
+/// helpers whose pace the speed before the hold measured (released or still waiting).
 pub fn admit(
     state: &Path,
     account: &str,
     key: &str,
     release: &Release,
-    held: &dyn Fn(&[String]) -> usize,
+    team: &dyn Fn(&[String]) -> usize,
     now: u64,
 ) -> io::Result<bool> {
     let _locked = lock(state)?;
@@ -138,8 +148,7 @@ pub fn admit(
         return Ok(false);
     }
     let n = ledger.released.len() + 1;
-    let team = ledger.released.len() + held(&ledger.released).max(1);
-    if !release.allows(n, team) {
+    if !release.allows(n, team(&ledger.released)) {
         return Ok(false);
     }
     ledger.released.push(key.into());
@@ -186,6 +195,25 @@ mod tests {
         assert_eq!(fits, vec![1, 2, 3, 4]);
     }
 
+    /// **Second review of 2026-10-29.** Finding 1: one worker measured at 1.4 points a minute,
+    /// with nine Agent dispatches queued behind it. The team whose pace was measured is that one
+    /// worker, so it is judged at its whole pace: 95 + 1.4 x 19 = 121.6, it waits. Counting the
+    /// nine dispatches in the team made it 95 + 0.14 x 19 = 97.66 and let it go. A dispatch
+    /// released adds one share like anyone: ten measured, the eleventh release is
+    /// 95 + 1.54 x 19 = 124.26. Finding 2: no speed before the hold and none since is no
+    /// measurement, so nobody goes early; a speed measured since is one.
+    #[test]
+    fn only_the_measured_team_divides_the_pace_and_no_measurement_releases_nobody() {
+        let now = 1_000_000_000;
+        let held = Release { used: 95., checked_at: now, resets_at: now + 19 * MINUTE, speed: 0., pre_hold: per_minute(1.4) };
+        assert!((held.projected(1, 1) - 121.6).abs() < 1e-9, "{}", held.projected(1, 1));
+        assert!(!held.allows(1, 1), "one measured worker at its whole pace passes 100%");
+        assert!((held.projected(11, 10) - 124.26).abs() < 1e-9, "{}", held.projected(11, 10));
+        let unseen = Release { pre_hold: 0., ..held };
+        assert!(!unseen.allows(1, 10), "a rate of 0 while everyone is held is no measurement");
+        assert!(Release { speed: per_minute(0.1), ..unseen }.allows(1, 10), "a speed measured since is one: 96.9");
+    }
+
     /// **The ledger: one at a time, no faster than one a minute, never past the projection, and
     /// a released call stays released.** Ten held on account 2. At the first moment one goes;
     /// the next nine are refused by the gap; a minute later the second is refused by the
@@ -198,8 +226,9 @@ mod tests {
         let now = 1_000_000_000;
         let reading = Release { used: 95., checked_at: now, resets_at: now + 19 * MINUTE, speed: 0., pre_hold: per_minute(1.4) };
         let ten: Vec<String> = (0..10).map(|i| format!("worker-{i}")).collect();
-        let held = |released: &[String]| ten.iter().filter(|k| !released.contains(k)).count();
-        let go = |key: &str, reading: &Release, at: u64| admit(&state, "2", key, reading, &held, at).unwrap();
+        // The ten whose pace was measured, released or still waiting.
+        let team = |_: &[String]| ten.len();
+        let go = |key: &str, reading: &Release, at: u64| admit(&state, "2", key, reading, &team, at).unwrap();
 
         let first: Vec<&String> = ten.iter().filter(|k| go(k, &reading, now)).collect();
         assert_eq!(first, vec![&ten[0]], "one at a time, not all at once");
@@ -234,8 +263,8 @@ mod tests {
         let now = 1_000_000_000;
         let probe = Release { used: 95., checked_at: now, resets_at: now + 19 * MINUTE, speed: 0., pre_hold: per_minute(1.4) };
         let stream = Release { resets_at: probe.resets_at + 500, ..probe };
-        let held = |released: &[String]| 10 - released.len();
-        let go = |key: &str, reading: &Release, at: u64| admit(&state, "2", key, reading, &held, at).unwrap();
+        let team = |_: &[String]| 10;
+        let go = |key: &str, reading: &Release, at: u64| admit(&state, "2", key, reading, &team, at).unwrap();
         assert!(go("worker-0", &probe, now));
         assert!(!go("worker-1", &stream, now), "the same instant: the gap holds");
         assert!(!go("worker-1", &stream, now + MINUTE), "a minute on: 100.32% projected holds");
@@ -253,8 +282,8 @@ mod tests {
         let state = root.path().join("engine-state");
         let now = 1_000_000_000;
         let reading = Release { used: 95., checked_at: now, resets_at: now + 19 * MINUTE, speed: 0., pre_hold: per_minute(1.4) };
-        let held = |released: &[String]| 10 - released.len();
-        let go = |account: &str, key: &str| admit(&state, account, key, &reading, &held, now).unwrap();
+        let team = |_: &[String]| 10;
+        let go = |account: &str, key: &str| admit(&state, account, key, &reading, &team, now).unwrap();
         let went = [("1", "home-0"), ("2", "work-0"), ("1", "home-1"), ("2", "work-1")]
             .iter().filter(|&&(account, key)| go(account, key)).count();
         assert_eq!(went, 2, "one on each account, not two on each");

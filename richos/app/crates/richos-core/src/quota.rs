@@ -186,8 +186,6 @@ impl Reading {
 /// hold holds.
 pub const RESET_EXEMPTION_MS: u64 = 20 * 60_000;
 
-/// How many rises of one window are kept for the speed before a hold (`Snapshot::rise_log`).
-const RISES_KEPT: usize = 8;
 
 /// **One window read two ways is one window**: reset times that agree within a minute. The
 /// probe reports an ISO time and the stream whole seconds, so exact equality would make one
@@ -668,10 +666,14 @@ impl Snapshot {
                         self.speeds.insert(window.id.clone(), speed);
                         self.rises.insert(window.id.clone(), rise);
                         if speed > 0. {
+                            // One rise per whole point it started from, the latest: a window's
+                            // climb from 0 to 100% keeps at most 101, so the last rise that began
+                            // under the pause line is never pushed out by the rises above it
+                            // (second review of 2026-10-29, finding 2: eight kept, and the rise
+                            // into the hold was evicted by eight readings above the line).
                             let log = self.rise_log.entry(window.id.clone()).or_default();
+                            log.retain(|(from, _)| from.floor() != base.used.floor());
                             log.push((base.used, speed));
-                            let extra = log.len().saturating_sub(RISES_KEPT);
-                            log.drain(..extra);
                         }
                         if window.used_percent != base.used {
                             self.bases.insert(window.id.clone(), SpeedBase { rose: gained > 0., ..fresh });
@@ -2300,7 +2302,18 @@ pub(crate) mod tests {
         // Inside the window: still held, released staggered by the gate (`stagger`).
         let near = s.view(policy(), NOW + 2_400_001);
         assert_eq!(near.admission, Admission::Held { resets_at: NOW + 3_600_000 });
-        assert!(near.release.is_some_and(|r| r.allows(1, 1)), "94% with no speed measured: one may go");
+        // No speed measured before the hold or since: no measurement, so nobody goes before the
+        // reset (second review of 2026-10-29, finding 2).
+        assert!(near.release.is_some_and(|r| !r.allows(1, 1)), "94% with no speed measured: it waits");
+        // The climb into the hold measured: projected from the stale reading itself (taken an
+        // hour before the reset), 0.1 points a minute reaches 94 + 0.1 x 60 = 100 and waits,
+        // 0.05 reaches 94 + 0.05 x 60 = 97 and one may go.
+        s.rise_log.insert("five_hour".into(), vec![(90., 0.1 / 60_000.)]);
+        let measured = s.view(policy(), NOW + 2_400_001);
+        assert!(measured.release.is_some_and(|r| !r.allows(1, 1)), "94% at 0.1 a minute for 60: 100%");
+        s.rise_log.insert("five_hour".into(), vec![(90., 0.05 / 60_000.)]);
+        let measured = s.view(policy(), NOW + 2_400_001);
+        assert!(measured.release.is_some_and(|r| r.allows(1, 1)), "94% at 0.05 a minute: one may go");
         assert_eq!(
             s.view(policy(), NOW + 3_600_000).admission,
             Admission::Unknown
@@ -2431,6 +2444,25 @@ pub(crate) mod tests {
         next[0].resets_at = next[0].resets_at.map(|t| t + 3_600_000);
         s.observe(&next, NOW + 120_000);
         assert!(s.speeds.is_empty());
+    }
+
+    /// **The rise into the hold outlives the rises above the line** (second review of
+    /// 2026-10-29, finding 2). With the pause line at 85%: 80% to 86% in five minutes is the
+    /// rise into the hold, 1 point a minute (whole points, the first unseen: 5 / 5). Twelve
+    /// readings above the line follow, 0.7 points a minute. Eight rises were kept, so the twelve
+    /// evicted the one from 80% and the speed before the hold read 0. Now one rise per whole
+    /// point is kept, and the speed before the hold is still the 1 point a minute.
+    #[test]
+    fn the_speed_before_the_hold_survives_many_rises_above_the_line() {
+        let mut s = Snapshot::default();
+        s.accept(five_hour_at(80.), NOW);
+        s.accept(five_hour_at(86.), NOW + 5 * 60_000);
+        for k in 1..=12u64 {
+            s.accept(five_hour_at(86. + 0.7 * k as f64), NOW + (5 + k) * 60_000);
+        }
+        assert!(s.rise_log["five_hour"].len() <= 101, "bounded: one rise per whole point");
+        let per_minute = s.pre_hold("five_hour", 85.) * 60_000.;
+        assert!((per_minute - 1.).abs() < 1e-9, "the rise from 80%: {per_minute} points a minute");
     }
 
     /// **Plan §15 answer 10, point 3: a measured jump moves BOTH check points at once**, and the
