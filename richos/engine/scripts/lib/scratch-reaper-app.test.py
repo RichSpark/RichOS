@@ -620,6 +620,43 @@ class AppSweep(unittest.TestCase):
         rc, out, err = self.sweep_with()
         self.assertFalse(scratch.exists(), out + err)
 
+    # 2026-10-28 (esc-20261028T164945Z-3139e42e): the SCHEDULED sweep (no --app) read only the
+    # default session registry. The app's leads run under an added account's folder and register
+    # there, so each was an unattributed process: the LIVE coordination session's folder came out
+    # undecided, put to a lead to decide, and a resumed live session's older scratch was planned
+    # DELETE. A live session's own folder is never offered; an ended one's still goes.
+    def test_the_scheduled_sweep_never_offers_a_live_app_sessions_folder(self):
+        import importlib.util
+        from unittest import mock
+        sys.path.insert(0, str(HERE))
+        spec = importlib.util.spec_from_file_location("reaper_scheduled", HERE / "scratch-reaper.py")
+        reaper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reaper)
+        registry = self.data / "claude-accounts/2/sessions"
+        resumed = str(uuid.uuid4())
+        self.live(resumed, registry)
+        _s, older = self.hosted(resumed)
+        self.resumed_earlier(older)          # written before its process started, past the floor
+        busy = str(uuid.uuid4())
+        self.live(busy, registry)
+        _s, fresh = self.hosted(busy)        # written while its process runs
+        _s, ended = self.hosted()
+        self.resumed_earlier(ended)          # no process: an ended session's, past the floor
+        env = {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.config_dir), "TMPDIR": str(self.tmp),
+               "RICHOS_SESSIONS_DIR": str(self.config_dir / "sessions"),
+               "RICHOS_WORKSPACES_DIR": str(self.root / "workspaces"),
+               "SCRATCH_SESSION_PROCESS_NAMES": self.name}
+        with mock.patch.dict(os.environ, env):
+            r = reaper.Reaper({"age_floor_minutes": 60, "claude_roots": [str(self.claude_root)],
+                               "app_registry_relpath": "Library/Application Support/com.richos.app/entities.json"},
+                              reaper.load_workspaces())
+            r.scan_claude_roots(reaper.Walls([str(self.claude_root)]))
+        plan = {e.path: (e.action, e.why) for e in r.entries}
+        for live in (older, fresh):
+            self.assertEqual(plan.get(str(live), ("not planned",))[0], reaper.KEEP,
+                             "a live app session's folder was offered: %s" % (plan.get(str(live)),))
+        self.assertEqual(plan.get(str(ended), ("not planned",))[0], reaper.DELETE, plan)
+
     def test_a_missing_data_folder_refuses_and_deletes_nothing(self):
         _session, scratch = self.hosted()
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.home),

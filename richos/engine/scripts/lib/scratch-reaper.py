@@ -1095,7 +1095,15 @@ class Reaper(object):
     def __init__(self, cfg, ws):
         self.cfg = cfg
         self.ws = ws
-        self.live = Liveness(ws)
+        # EVERY SESSION REGISTRY ON THIS MACHINE, the app's accounts' too, for EVERY sweep
+        # (2026-10-28). The RichOS app runs its leads under CLAUDE_CONFIG_DIR=<app data>/
+        # claude-accounts/<id>, and they register there. The scheduled sweep read only
+        # ~/.claude/sessions, so each live app session was "a running claude process named by
+        # no session file": the app's own LIVE coordination session folder was reported as an
+        # undecided entry for a lead to decide (esc-20261028T164945Z-3139e42e), and one whose
+        # scratch predated its resumed process was planned DELETE. scan_app already read them.
+        self.live = Liveness(ws, [d for data in self.app_data_folders()
+                                  for d in self.app_account_session_dirs(data)])
         self.entries = []
         self.roots = []
         self.floor = cfg["age_floor_minutes"] * 60
@@ -3062,6 +3070,14 @@ class Reaper(object):
             if UUID_RE.match(name) and os.path.isfile(os.path.join(state, "evidence", name, "binding.json")):
                 found.add(name)
         return found
+
+    def app_data_folders(self):
+        """The operator's app data folder: the folder of the app's entity registry under this
+        HOME (SCRATCH_APP_REGISTRY_RELPATH), when it exists. Read-only; [] when there is none."""
+        rel = (self.cfg or {}).get("app_registry_relpath") or ""
+        home = os.path.expanduser("~")
+        data = os.path.dirname(os.path.join(home, rel)) if rel and home else ""
+        return [data] if data and os.path.isdir(data) else []
 
     def app_account_session_dirs(self, data):
         """<folder>/sessions for every added account: each folder <data>/claude-accounts.json
