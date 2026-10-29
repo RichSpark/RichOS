@@ -9602,7 +9602,7 @@
     },
     "scripts/hooks/operator-leads.test.sh": {
       "source": "scripts/hooks/operator-leads.test.sh",
-      "sha256": "9097e525483d7c88c0aade29c3f18f5266c0b590709195d8bd2abd0f3310ba35",
+      "sha256": "c1209aeaed06b4b2e14b58fde89dce58259fc922f5da4dff13e18279a1b69910",
       "evidence": "Full suite reviewed: private literal entity config, claims, memory and named records; captured shell servers run finite hook/lease/Git commands. Exercises the real dispatcher and fixed Python readers. No model agents launch.",
       "keys": [],
       "edges": [
@@ -17845,7 +17845,7 @@
         "scripts/hooks/guard-shared-writes.sh"
       ],
       "sources": {
-        "scripts/hooks/operator-leads.test.sh": "9097e525483d7c88c0aade29c3f18f5266c0b590709195d8bd2abd0f3310ba35",
+        "scripts/hooks/operator-leads.test.sh": "c1209aeaed06b4b2e14b58fde89dce58259fc922f5da4dff13e18279a1b69910",
         "scripts/lib/operator-fences-fixture.sh": "cb872b1fb06d8d090feb2b06dc9895147e88efff741d6d3187b2a44e7a6c60af",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
