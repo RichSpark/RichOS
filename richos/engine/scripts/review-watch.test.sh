@@ -702,12 +702,12 @@ with patch.object(world, "integration_tip", return_value=("b" * 40, "")), \
      patch.object(rw.stall_watch, "_transcript", return_value=""):
     seen = {}
     items, _problems = world.registry_items(now, seen)
-    due = rw.due(items, rw.Book([], {}, []), now, seen, 3600, handover=False)
+    due = rw.due(items, rw.Book([], {}, []), now, seen, 3600)
 picked = [(i.name, t) for i, t, _ in due]
 print("picked for a mid-job review:", picked)
 sys.exit(0 if picked == [("mark-sonnet-w", "long-job")] else 1)
 PY
-check "W14 the app's watcher reviews mid-job only receipts with request.role worker, never a handover reviewer" $? "see above"
+check "W14 the app's watcher reviews worker receipts, never a reviewer" $? "see above"
 
 # --- W15 ---------------------------------------------------------------------
 # Second review of cc/echo-opus-review4b at f14155545, finding 1 (fixtures/shutdown_descendant.py):

@@ -1779,12 +1779,12 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(told({**call,"agent_id":"someone"}),"")
         self.assertEqual(told({**call,"agent_id":None}),"")
 
-    def test_the_apps_review_watch_starts_mid_job_reviews_only_with_the_users_words(self):
+    def test_the_apps_review_watch_starts_mid_job_and_one_handover_with_the_users_words(self):
         """Second review, slice 4: the app's own review-watch (scripts/lib/review_watch.py
         --app-state, the host's child) reads every conversation's partition of the registry and
         starts a long-job review of a running worker after 60 minutes: Claude, the CLI the app
-        ships, and the user's own turn as the original words. A worker that has ended gets none
-        from it: the app's handover reviewer reviews that. Stopping the watcher stops the reviews
+        ships, and the user's own turn as the original words. A worker that has ended gets one
+        automatic handover review. Stopping the watcher stops the reviews
         it started and does not count them as lost."""
         self.attest(self.USER_TURN)
         rw=self.app.load("review_watch_app_test",ENGINE/"scripts/lib/review_watch.py")
@@ -1844,9 +1844,21 @@ class DesktopWork(unittest.TestCase):
         self.assertFalse(_alive(pid),"the review outlived the watcher's quit")
         attempts=[json.loads(l) for l in (Path(rw.app_paths(state)["watch"])/"attempts.jsonl").read_text().splitlines()]
         self.assertEqual([x["outcome"] for x in attempts],["stopped"])
-        # A worker that has ended is the app's handover reviewer's: nothing more starts here.
+        # Finishing the job starts one automatic handover review, on the selected backend.
         self.finish_fixture_worker("watched-worker")
-        self.assertEqual(len(look(200)),1)
+        setting=state.parent/"codex-reviews.json";setting.write_text('{"on":true}')
+        a.codex_reviews=str(setting)
+        handed=look(200)
+        self.assertEqual(len(handed),2)
+        new=written(next(name for name in handed if name!=started[0].name))
+        args=(new/"args").read_text().split("\n")
+        self.assertEqual(args[args.index("--trigger")+1],"handover")
+        self.assertEqual(args[args.index("--reviewer")+1],"auto")
+        self.assertEqual(len(look(201)),2,"another handover review started for the same tip")
+        pid=json.loads(lock.read_text())["pid"]
+        watcher.children[pid]=type("Child",(),{"poll":lambda self:None if _alive(pid) else 0})()
+        watcher.stop_own(_t.time())
+        self.assertFalse(_alive(pid),"the handover review outlived its watcher")
 
     def test_review_exact_commit_integration_recovery_and_dirty_checkout_preservation(self):
         worker=self.call("prepare",self.args)
@@ -2424,6 +2436,79 @@ class DesktopWork(unittest.TestCase):
         except (BrokenPipeError,ValueError):
             holder.kill()
         holder.wait(timeout=30)
+
+    def automatic_worker(self, tag):
+        self.app.git(self.repo,"config","user.name","Fixture")
+        self.app.git(self.repo,"config","user.email","fixture@example.invalid")
+        worker=self.call("prepare",{**self.args,"request_id":tag})
+        target=self.start_fixture_worker(worker,tag)
+        (target/"result.txt").write_text("FICTIONAL "+tag)
+        self.app.git(target,"add","result.txt")
+        self.app.git(target,"-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-qm",tag)
+        self.finish_fixture_worker(tag)
+        return worker,target,self.app.git(target,"rev-parse","HEAD")
+
+    def automatic_verdict(self, worker, commit, reviewer="codex", **overrides):
+        fences=self.app.load("automatic_review_fences",ENGINE/"scripts/lib/operator_fences.py")
+        work=self.app.W.recovery_work_key(self.app.W.load_agent(worker["workspace_ref"]))
+        home=self.root/"engine-state/second-review";home.mkdir(exist_ok=True)
+        record=home/("review-"+reviewer);record.mkdir(exist_ok=True)
+        row={"id":record.name,"repo":str(self.repo),"repo_id":fences.review_repo_identity(str(self.repo)),
+             "tip":commit,"work":work,"trigger":"handover","verdict":"passed",
+             "reviewer":reviewer,"record":str(record),**overrides}
+        (record/"verdict.json").write_text(json.dumps({"row":row,"answer":{"findings":[]}}))
+        (home/"reviews.jsonl").write_text(json.dumps(row)+"\n")
+        return row
+
+    def test_one_automatic_review_integrates_and_completes_without_a_reviewer_agent(self):
+        self.assert_automatic_integration("codex")
+
+    def test_automatic_claude_review_uses_the_same_integration_path(self):
+        self.assert_automatic_integration("claude")
+
+    def assert_automatic_integration(self, backend):
+        worker,target,commit=self.automatic_worker("automatic-"+backend)
+        self.automatic_verdict(worker,commit,backend)
+        fences=self.app.load("automatic_gate",ENGINE/"scripts/lib/operator_fences.py")
+        self.assertEqual(fences.review_gaps(str(self.root/"operator-reviews.jsonl"),[commit],str(self.repo)),{},
+                         "the repository gate requested another review instead of consuming the app verdict")
+        checker=self.root/"repository review check.py"
+        checker.write_text("import importlib.util,sys\n"
+            "s=importlib.util.spec_from_file_location('fences',%r)\n" % str(ENGINE/"scripts/lib/operator_fences.py")+
+            "f=importlib.util.module_from_spec(s);s.loader.exec_module(f)\n"+
+            "sys.exit(bool(f.review_gaps(%r,[%r],%r)))\n" % (str(self.root/"operator-reviews.jsonl"),commit,str(self.repo)))
+        self.repository_hook("pre-merge-commit",shlex.quote(sys.executable)+" "+shlex.quote(str(checker))+"\n")
+        due=self.app.W.due_set(self.session,self.app.W.pending(self.session,auto=False,dry=True))
+        self.assertTrue(any(d["source"]=="automatic-review" and d["review"] for d in due),
+                        "the existing watcher cannot tell the lead that the automatic review is ready: "+repr(due))
+        args={"worker_id":worker["id"]}
+        result=self.call("integrate",args)
+        self.assertTrue(result["work_integrated"])
+        self.assertEqual(result["commit"],commit)
+        self.assertFalse(result["cleanup_pending"])
+        # A retry consumes the same verdict, with no new reviewer preparation.
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        self.assertFalse(any(r["request"]["role"]=="reviewer" for _,r in self.app.receipts(self.app.folder(self.scope))))
+        self.assertTrue(self.call("complete",{"obligation_id":"fixture-task","worker_ids":[worker["id"]]})["obligation_closed"])
+
+    def test_automatic_review_must_cover_the_exact_work_repository_and_handover(self):
+        worker,target,commit=self.automatic_worker("automatic-refusals")
+        before=self.app.git(self.repo,"rev-parse","HEAD")
+        for bad in ({"tip":"0"*40},{"repo_id":"another-repository"},{"work":"another-assignment"},
+                    {"trigger":"long-job"},{"verdict":"changes-requested"}):
+            with self.subTest(bad=bad):
+                self.automatic_verdict(worker,commit,**bad)
+                with self.assertRaisesRegex(ValueError,"automatic independent review"):
+                    self.call("integrate",{"worker_id":worker["id"]})
+                self.assertEqual(self.app.git(self.repo,"rev-parse","HEAD"),before)
+        self.automatic_verdict(worker,commit,verdict="changes-requested")
+        due=self.app.W.due_set(self.session,self.app.W.pending(self.session,auto=False,dry=True))
+        self.assertTrue(any(d["source"]=="review" for d in due),"changes requested never reached the existing watcher")
+        row=self.automatic_verdict(worker,commit)
+        (Path(row["record"])/"verdict.json").unlink()
+        with self.assertRaisesRegex(ValueError,"automatic independent review"):
+            self.call("integrate",{"worker_id":worker["id"]})
+        self.assertEqual(self.app.git(self.repo,"rev-parse","HEAD"),before)
 
     def reviewed_pair(self,tag,repo=None,file="result.txt"):
         """A worker and a passing reviewer, both run-ended: the exact state

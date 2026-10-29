@@ -32,6 +32,8 @@ def load(name, path):
 ECS = load("richos_ecs_app", ENGINE / "ecs/adapters/app.py")
 W = load("richos_app_workspaces", ENGINE / "mega-lander/workspaces.py")
 INSTRUCTIONS = load("richos_instruction_files", ENGINE / "scripts/lib/instruction_files.py")
+REVIEWS = load("richos_app_reviews", ENGINE / "scripts/lib/app_review.py")
+FENCES = load("richos_app_review_fences", ENGINE / "scripts/lib/operator_fences.py")
 
 
 def bounded(path, limit=1024 * 1024):
@@ -1857,6 +1859,28 @@ def observe(scope, payload=None):
     # not write through a turn binding which has already been closed or superseded.
 
 
+def automatic_reviews(worker, commits):
+    """Consume the watcher's exact handover verdicts, using the land gate's finding rules."""
+    ledger=REVIEWS.app_paths(state())["ledger"]
+    canonical=W.load_agent(worker["workspace_ref"])
+    work=W.recovery_work_key(canonical) if canonical else ""
+    rows=[row for row in FENCES.read_reviews(ledger) if work and row.get("work")==work]
+    deferred=FENCES.read_deferrals(ledger)
+    refs={}
+    for repo,commit in commits.items():
+        row,_mid=FENCES.review_of(rows,commit,repo,deferred)
+        record=FENCES.review_record(row) if row else {}
+        saved=record.get("row") or {}
+        if (not row or row.get("verdict")!="passed" or not isinstance(record.get("answer"),dict)
+                or FENCES.review_gaps(ledger,[commit],repo)
+                or any(saved.get(k)!=row.get(k) for k in ("id","tip","work","repo_id","trigger"))):
+            raise ValueError("The automatic independent review of %s in %s has not passed or its record is unavailable. "
+                             "Wait for its review notice or address its findings; do not prepare another reviewer."
+                             % (commit[:12],repo))
+        refs[repo]=row["id"]
+    return refs
+
+
 def verification_evidence(scope, identity):
     """Read durable host receipts and Git again, including after interrupted cleanup."""
     root=folder(scope)
@@ -1872,6 +1896,18 @@ def verification_evidence(scope, identity):
             raise ValueError("review completion requires the actual independent reviewer's observed report")
         return f"review:{worker['id']}:{report['commit']}:{report['verdict']}:{observed['message_sha256']}"
     integration=worker.get("integration",{})
+    if integration.get("automatic_reviews"):
+        repo=worker["request"]["repo"]
+        landed=[(repo,integration)]+sorted((integration.get("repos") or {}).items())
+        commits={r:entry.get("commit") for r,entry in landed}
+        if (not integration.get("verified") or set(commits)!=set(request_repos(worker))
+                or any(not re.fullmatch(r"[a-f0-9]{40,64}",c or "") for c in commits.values())):
+            raise ValueError("verified integration requires the automatic independent review of every commit")
+        refs=automatic_reviews(worker,commits)
+        for r,entry in landed:
+            if r not in repositories(scope): raise ValueError("the repository is no longer connected to this company")
+            git(r,"merge-base","--is-ancestor",entry["commit"],"refs/heads/"+entry["branch"])
+        return "+".join("git:%s:%s:%s:review:%s" % (r,entry["branch"],entry["commit"],refs[r]) for r,entry in landed)
     reviewer=read_record(root,integration.get("reviewer_id"))
     observed=reviewer.get("review_observation",{})
     commit=integration.get("commit")
@@ -2259,7 +2295,8 @@ def require_current_assignment(scope, record):
 
 
 def integrate(scope_path,scope,args):
-    if set(args)!={"worker_id","reviewer_id"}: raise ValueError("integration needs the worker and reviewer receipts")
+    if "worker_id" not in args or set(args)-{"worker_id","reviewer_id"}:
+        raise ValueError("integration needs the worker receipt")
     # The repository is read under this conversation's own receipt lock, which
     # is then RELEASED before the repository land lock is taken: see land_lock()
     # for why a wait that belongs to another conversation must not be held
@@ -2268,7 +2305,8 @@ def integrate(scope_path,scope,args):
     with locked(scope) as root:
         worker=read_record(root,args["worker_id"])
         require_current_assignment(scope,worker)
-        require_current_assignment(scope,read_record(root,args["reviewer_id"]))
+        if args.get("reviewer_id"):
+            require_current_assignment(scope,read_record(root,args["reviewer_id"]))
         if worker["request"]["role"]!="worker":
             raise ValueError("integration lands a worker's receipt; a %s has nothing to land" % worker["request"]["role"])
         repository=worker["request"]["repo"]
@@ -2286,30 +2324,35 @@ def integrate(scope_path,scope,args):
             # here would mean landing one repository under another's lock.
             if worker["request"]["repo"]!=repository or request_repos(worker)!=repositories_to_land:
                 raise ValueError("this receipt named another repository between being read and being locked")
-            reviewer=refresh(read_record(root,args["reviewer_id"]))
-            require_current_assignment(scope,reviewer)
             path=root/(worker["id"]+".json")
             existing=worker.get("integration")
-            if existing and existing["reviewer_id"] != reviewer["id"]:
+            reviewer_id=args.get("reviewer_id") or (existing or {}).get("reviewer_id")
+            reviewer=refresh(read_record(root,reviewer_id)) if reviewer_id else None
+            if reviewer: require_current_assignment(scope,reviewer)
+            if existing and existing.get("reviewer_id") != reviewer_id:
                 raise ValueError("integration already has a different reviewer; reconcile its receipt")
             if existing and existing.get("verified"):
                 verification_evidence(scope,worker["id"])
             else:
-                if worker["status"]!="run-ended" or reviewer["status"]!="run-ended":
+                if worker["status"]!="run-ended" or (reviewer and reviewer["status"]!="run-ended"):
                     raise ValueError("both provider runs must have an observed end before integration")
-                if not same_repos(request_repos(reviewer),repositories_to_land):
+                if reviewer and not same_repos(request_repos(reviewer),repositories_to_land):
                     raise ValueError("this reviewer did not review every repository of this work; "
                                      "a fresh independent review of all of them is required")
                 targets=target_workspaces(worker)
-                review_targets=target_workspaces(reviewer)
                 commits={r:git(targets[r]["path"],"rev-parse","HEAD") for r in repositories_to_land}
-                if reviewer.get("review_target")!=review_identity(worker["id"],commits,repository):
-                    raise ValueError("worker commit changed or this reviewer reviewed another assignment")
-                report=reviewer.get("review_observation",{})
-                if not report.get("valid") or report.get("report",{}).get("verdict")!="passed":
-                    raise ValueError("the actual reviewer has not returned a passing review")
-                if any(git(review_targets[r]["path"],"rev-parse","HEAD")!=commits[r] for r in repositories_to_land):
-                    raise ValueError("reviewer changed its commit; a fresh independent review is required")
+                refs={}
+                if reviewer:
+                    review_targets=target_workspaces(reviewer)
+                    if reviewer.get("review_target")!=review_identity(worker["id"],commits,repository):
+                        raise ValueError("worker commit changed or this reviewer reviewed another assignment")
+                    report=reviewer.get("review_observation",{})
+                    if not report.get("valid") or report.get("report",{}).get("verdict")!="passed":
+                        raise ValueError("the actual reviewer has not returned a passing review")
+                    if any(git(review_targets[r]["path"],"rev-parse","HEAD")!=commits[r] for r in repositories_to_land):
+                        raise ValueError("reviewer changed its commit; a fresh independent review is required")
+                else:
+                    refs=automatic_reviews(worker,commits)
                 canonical=W.load_agent(worker["workspace_ref"])
                 plan={}
                 for repo in repositories_to_land:
@@ -2319,7 +2362,8 @@ def integrate(scope_path,scope,args):
                     if problem: raise ValueError(problem)
                     if git(repo,"symbolic-ref","--short","HEAD")!=branch:
                         raise ValueError("select the recorded integration branch before integrating")
-                    for tree in (repo,targets[repo]["path"],review_targets[repo]["path"]):
+                    trees=[repo,targets[repo]["path"]]+([review_targets[repo]["path"]] if reviewer else [])
+                    for tree in trees:
                         if git(tree,"status","--porcelain","--untracked-files=all"):
                             raise ValueError("integration preserves local edits; reconcile the dirty checkout first")
                         for marker in ("MERGE_HEAD","CHERRY_PICK_HEAD","REVERT_HEAD","rebase-merge","rebase-apply"):
@@ -2343,9 +2387,10 @@ def integrate(scope_path,scope,args):
                         merge_tree(repo,tip,commit,branch)   # refuses a conflict before any intent is written
                     plan[repo]={"commit":commit,"branch":branch,"tip":tip,"already":already}
                 if not existing:
-                    worker["integration"]={"reviewer_id":reviewer["id"],"commit":plan[repository]["commit"],
+                    worker["integration"]={"reviewer_id":reviewer_id,"commit":plan[repository]["commit"],
                         "branch":plan[repository]["branch"],"before":plan[repository]["tip"],
                         "instruction_ref":worker["instruction_ref"],"verified":False}
+                    if refs: worker["integration"]["automatic_reviews"]=refs
                     if len(repositories_to_land)>1:
                         worker["integration"]["repos"]={r:{"commit":plan[r]["commit"],"branch":plan[r]["branch"],
                             "before":plan[r]["tip"]} for r in repositories_to_land[1:]}
@@ -2380,7 +2425,7 @@ def integrate(scope_path,scope,args):
                     commit,branch,tip=plan[repo]["commit"],plan[repo]["branch"],plan[repo]["tip"]
                     if not plan[repo]["already"]:
                         try:
-                            landed=plan[repo]["landed"]=land_merge(repo,tip,commit,branch,reviewer["id"],
+                            landed=plan[repo]["landed"]=land_merge(repo,tip,commit,branch,reviewer_id or refs[repo],
                                                                    W._author_runs(chain,commit))
                         except ValueError as error:
                             if landed_now:
@@ -2898,7 +2943,7 @@ TOOLS = [
     {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
     {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused, or it was prepared in an earlier turn; what it created is withdrawn only when it holds no commit and no uncommitted file, and anything else is kept and reported. A preparation from an earlier turn is dispatched by preparing it again with the same request_id. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
-    {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
+    {"name":"integrate","description":"When the automatic independent handover review passes, integrate with worker_id alone. Do not prepare a routine reviewer agent: the watcher uses Codex when enabled and available, otherwise Claude automatically. reviewer_id is accepted for an existing explicit reviewer. Merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers; RichOS then sends a team_reloaded message: carry on there with the work that waited for them. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
     {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a later turn prepares a replacement for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded. With registry_record instead of request_id, it removes one record the workspace registry reports as unreadable, only when no workspace lifecycle wrote it (a stray test fixture); it is moved aside, never deleted, and a record that could own a workspace is refused.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"registry_record":{"type":"string"},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["reason"],"additionalProperties":False}},

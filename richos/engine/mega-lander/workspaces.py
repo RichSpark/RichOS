@@ -3575,11 +3575,42 @@ def due_set(me="", items=None, at=None, cache=None):
             continue
         rec, stopped = _stopped_record(it["key"])
         since = ((rec.get("end") or {}).get("at")) or now()
-        out.append({"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
+        item={"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
                     "since": float(since), "end": "", "state": "none", "detail": "finished, not landed or discarded",
                     "source": "finished", "key": it["key"], "review": "",
-                    "command": _stopped_command(it["name"]) if stopped else _finished_command(it["name"])})
+                    "command": _stopped_command(it["name"]) if stopped else _finished_command(it["name"])}
+        if this_conversation() and not stopped:
+            ready=_automatic_review_due(rec)
+            if ready:
+                item.update(source="automatic-review",review=ready,
+                            detail="automatic independent review passed; ready to integrate")
+        out.append(item)
     return out
+
+
+def _automatic_review_due(rec):
+    """The existing stall watcher wakes the lead when the automatic review becomes ready.
+
+    Its announce key changes with the verdict; no extra mailbox or polling loop is needed.
+    Only this worker's exact tips in every repository count, as at integration.
+    """
+    app=os.environ.get("RICHOS_APP_STATE")
+    if not app: return ""
+    F=_fence_program()
+    ledger=os.path.join(app,"second-review","reviews.jsonl")
+    work=recovery_work_key(rec)
+    rows=[r for r in F.read_reviews(ledger) if r.get("work")==work]
+    refs=[]
+    targets={(w["repo"],w["branch"]) for w in live_workspaces(rec)
+             if w.get("kind")=="cc" and w.get("repo") and w.get("branch")}
+    for repo,branch in sorted(targets):
+        tip=branch_tip(repo,branch)
+        row,_mid=F.review_of(rows,tip,repo,F.read_deferrals(ledger))
+        if (not row or row.get("verdict")!="passed" or not F.review_record(row).get("answer")
+                or F.review_gaps(ledger,[tip],repo)):
+            return ""
+        refs.append(row["id"])
+    return ":".join(refs)
 
 
 # THE APP NAMES ITS OWN TOOLS (CEO §138). A due notice is an instruction to act, so it
@@ -3591,10 +3622,9 @@ APP_WORK = "mcp__richos_work__"
 
 def _finished_command(name):
     if this_conversation():
-        return ("integrate it after a passing review (%sprepare a reviewer with review_of its worker receipt, "
+        return ("integrate it after its automatic independent review passes (no separate reviewer preparation; "
                 "then %sintegrate) or continue it (%sprepare with continue_of that receipt); %sinspect lists "
-                "the receipt named %s. The app has no tool that discards it" % (APP_WORK, APP_WORK, APP_WORK,
-                                                                             APP_WORK, name))
+                "the receipt named %s. The app has no tool that discards it" % (APP_WORK, APP_WORK, APP_WORK, name))
     return "land it (workspaces.sh land %s), discard it, or spawn its continuation" % name
 
 
@@ -3637,19 +3667,11 @@ def _reviews_by_tip():
         (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
         "state")
     out = {}
-    try:
-        with open(os.path.join(base, "reviews.jsonl"), encoding="utf-8") as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(r, dict) and r.get("tip") and r.get("verdict"):
-                    prev = out.get(r["tip"])
-                    if prev is None or str(r.get("finished_at") or "") >= str(prev.get("finished_at") or ""):
-                        out[r["tip"]] = r
-    except OSError:
-        pass
+    for r in _fence_program().read_reviews(os.path.join(base,"reviews.jsonl")):
+        if r.get("tip") and r.get("verdict"):
+            prev=out.get(r["tip"])
+            if prev is None or str(r.get("finished_at") or "")>=str(prev.get("finished_at") or ""):
+                out[r["tip"]]=r
     return out
 
 
