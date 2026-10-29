@@ -3895,6 +3895,22 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert_eq!(published.windows.iter().find(|w| w.id == "five_hour").map(|w| w.used_percent), Some(95.));
         assert_eq!(gate::held_named(&state, "1"), "Home (account 1)");
         assert_eq!(gate::held_named(&state, &work.id), format!("Work (account {})", work.id));
+        // **A review in the move starts on Work and is judged on Work** (second review of
+        // 0cdf39aee, P2: second_review.quota_hold judged the top level, Home at 95%, and held a
+        // review that runs on Work at 10%). Run in review-watch's own environment, on the account
+        // list the app writes, exactly as an app review reads it.
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
+        let program = "import json, sys\nsys.path.insert(0, sys.argv[1])\nimport second_review\n\
+            print(json.dumps(second_review.quota_hold(sys.argv[2], sys.argv[3])))";
+        let environment = crate::review_watch::app_environment(&std::env::var("PATH").unwrap_or_default(), "");
+        let out = std::process::Command::new("python3").env_clear().current_dir(_root.path()).envs(&environment)
+            .env("HOME", _root.path()).env("PYTHONDONTWRITEBYTECODE", "1").arg("-I").arg("-c").arg(program)
+            .arg(engine.join("scripts/lib")).arg(&engine).arg(_root.path().join(crate::claude_accounts::LIST_FILE))
+            .output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let (held, line): (bool, String) = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(!held, "a review on Work at 10% was held on Home's 95%: {line}");
+        assert!(line.contains(&format!("Work (account {})", work.id)), "the review names Work's reading: {line}");
 
         service.accounts.back_end_on("thread-stu", Some(&work.id));
         let view = service.view();
