@@ -19,41 +19,60 @@ pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Resu
     serde_json::from_slice(&bytes).map_err(io::Error::other)
 }
 
+/// The admission on the top-level reading alone, for the tests that read it.
+#[cfg(test)]
 pub(super) fn admission(state: &Path, now: u64) -> Admission {
+    decide(state, None, now).0
+}
+
+/// **The admission of a call on `account`, on that account's own windows** (2026-10-29: the
+/// gate built its reading from the account marked in use, so it watched Home at 0% while the
+/// workers spent Work to its limit). The published view carries one row per account while
+/// there are two or more; a call is judged on its own account's row, and on the top-level
+/// reading only when there is no row for it (one account, or `None`). With the admission comes
+/// what a release inside the twenty-minute window is judged on (`stagger::Release`).
+pub(super) fn decide(state: &Path, account: Option<&str>, now: u64) -> (Admission, Option<super::stagger::Release>) {
     let Ok(view) = read_json::<View>(&state.join("claude-quota.json")) else {
-        return Admission::Unknown;
+        return (Admission::Unknown, None);
     };
     // Read the persisted switch separately: a publication failure must not leave
     // an old disabled snapshot admitting work after the policy was enabled.
     let policy = state
         .parent()
         .and_then(|p| read_json::<Policy>(&p.join("claude-quota-policy.json")).ok())
-        .unwrap_or(view.policy);
+        .unwrap_or(view.policy.clone());
     // **Every account exhausted** (fill-first, Frank's finding 2): held until the soonest
     // reset among them, whatever the pause switch says, because there is no account left for
     // the work to run on. Never set with one account.
     if let Some(until) = view.held_until.filter(|t| *t > now) {
-        return Admission::Held { resets_at: until };
+        return (Admission::Held { resets_at: until }, None);
     }
     if !policy.enabled {
-        return Admission::Disabled;
+        return (Admission::Disabled, None);
     }
-    if policy.validate().is_err() || view.checked_at.is_some_and(|t| t > now) {
-        return Admission::Unknown;
+    let row = account.and_then(|id| view.accounts.iter().find(|a| a.id == id));
+    let (windows, checked_at, message, speeds, pre_hold, empty_at) = match row {
+        Some(a) => (a.windows.clone(), a.checked_at, a.message.clone(), a.speeds.clone(), a.pre_hold.clone(), a.empty_at),
+        None => (view.windows, view.checked_at, view.message, view.speeds, view.pre_hold, view.empty_at),
+    };
+    if policy.validate().is_err() || checked_at.is_some_and(|t| t > now) {
+        return (Admission::Unknown, None);
     }
-    Snapshot {
-        windows: view.windows,
-        checked_at: view.checked_at,
+    let decided = Snapshot {
+        windows,
+        checked_at,
         retry_at: view.retry_at,
-        error: view.message.map(|_| ReadError::Failed),
-        speeds: view.speeds,
+        error: message.map(|_| ReadError::Failed),
+        speeds,
         // A check that came back with no figures lets work run (`Admission::NoReading`); the
         // gate decides from the same fact the service does.
-        empty_at: view.empty_at,
+        empty_at,
+        // The speed before the hold, as published: one rise from 0%, which is under every line.
+        rise_log: pre_hold.into_iter().map(|(id, speed)| (id, vec![(0., speed)])).collect(),
         ..Default::default()
     }
-    .view(policy, now)
-    .admission
+    .view(policy, now);
+    (decided.admission, decided.release)
 }
 
 fn authorized(scope: &Path, worker: bool) -> bool {
@@ -297,18 +316,33 @@ fn wait(
     }
     let started = Instant::now();
     let mut observation: Option<super::holds::Guard> = None;
+    // Once per held call, so its own retries below keep the one permit (`release_key`).
+    let key = release_key(payload);
     loop {
         if !authorized(scope, worker) {
             return Err(work_ended(scope));
         }
-        if admission(state, crate::util::now_millis()).allows_work() {
+        let now = crate::util::now_millis();
+        let (admission, release) = decide(state, Some(account), now);
+        if admission.allows_work() {
             if let Some(guard) = observation.take() { guard.release(); }
             return Ok(());
         }
         if observation.is_none() {
             // Observation failure must not let a paused tool through the gate.
             observation = super::holds::from_hook(state, scope, payload)
+                .map(|row| super::holds::Hold { account: Some(account.to_string()), key: Some(key.clone()), ..row })
                 .and_then(|row| super::holds::Guard::begin(state, row)).ok();
+        }
+        // **Inside the twenty-minute window, one at a time** (Rich, 2026-10-29): this call goes
+        // on only when the staggered release lets it (`stagger::admit`). A ledger that cannot
+        // be read or written releases nobody: the call waits for the reset, as it would have.
+        if let Some(release) = release {
+            let team = |released: &[String]| measured_team(state, account, released);
+            if super::stagger::admit(state, account, &key, &release, &team, now).unwrap_or(false) {
+                if let Some(guard) = observation.take() { guard.release(); }
+                return Ok(());
+            }
         }
         if started.elapsed() >= budget {
             return Err(io::Error::other(
@@ -317,6 +351,47 @@ fn wait(
         }
         std::thread::sleep(tick);
     }
+}
+
+/// **The permit a held call is released on** (`stagger::admit`). An Agent call starts a new
+/// agent, so each one has its own permit: the call's `tool_use_id`, or failing that one made
+/// unique in this process (review of 2026-10-29, finding 1: every dispatch of one session
+/// shared `dispatch:<session>`, so once the first was released ten went in the same instant).
+/// Every other call of a helper is that helper carrying on, on the helper's one permit.
+fn release_key(payload: &Value) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    let field = |name: &str| payload.get(name).and_then(Value::as_str).filter(|v| !v.is_empty());
+    if payload["tool_name"] == "Agent" {
+        let call = field("tool_use_id").map(str::to_string).unwrap_or_else(|| {
+            format!("{}-{}-{}", std::process::id(), crate::util::now_millis(), CALLS.fetch_add(1, Ordering::Relaxed))
+        });
+        return format!("dispatch:{}:{call}", field("session_id").unwrap_or_default());
+    }
+    match field("agent_id") {
+        Some(agent) => agent.to_string(),
+        None => format!("dispatch:{}", field("session_id").unwrap_or_default()),
+    }
+}
+
+/// **The team whose pace the speed before the hold measured** (`stagger::admit`): the helpers on
+/// `account` released in this window, and those still waiting that are not in `released`, one
+/// per permit, from the pause records (`holds`). A new agent's dispatch (`dispatch:` permits)
+/// never ran before the hold, so it is not counted (second review of 2026-10-29, finding 1:
+/// counting nine queued dispatches cut one measured worker's share to a tenth). A record
+/// written before records carried their account, or their permit, counts as before.
+fn measured_team(state: &Path, account: &str, released: &[String]) -> usize {
+    let helper = |key: &String| !key.starts_with("dispatch:");
+    let waiting = super::holds::held_calls(state).unwrap_or_default();
+    let mut team: Vec<String> = waiting.iter()
+        .filter(|row| row.account.as_deref().is_none_or(|a| a == account))
+        .map(|row| row.key.clone().unwrap_or_else(||
+            if row.kind == "agent" { row.id.clone() } else { format!("dispatch:{}", row.session_id) }))
+        .filter(|key| helper(key) && !released.contains(key))
+        .collect();
+    team.sort();
+    team.dedup();
+    team.len() + released.iter().filter(|key| helper(key)).count()
 }
 
 /// Hand the callback to the canonical hook, unchanged, and pass its answer on.
@@ -478,10 +553,20 @@ mod tests {
         }
         service.publish().unwrap();
         assert!(matches!(admission(&state, now), Admission::Held { .. }));
-        assert!(admission(&state, now + 60_001).allows_work());
+        assert_eq!(decide(&state, None, now).1, None, "a weekly hold is never released early");
+        // Past the weekly reset only the five-hour window holds, 10 minutes before its reset:
+        // released staggered (`stagger`), not all at once.
+        let five_reset = service.snapshot.lock().unwrap().windows[0].resets_at.unwrap();
+        let after = decide(&state, None, now + 60_001);
+        assert_eq!(after.0, Admission::Held { resets_at: five_reset });
+        assert!(after.1.is_some());
         service.snapshot.lock().unwrap().windows[1].used_percent = 0.;
         service.publish().unwrap();
-        assert_eq!(admission(&state, now), Admission::Ready);
+        let (held, release) = decide(&state, None, now);
+        assert_eq!(held, Admission::Held { resets_at: five_reset });
+        // 94% and no speed measured before the hold or since: no measurement, so nobody goes
+        // before the reset (second review of 2026-10-29, finding 2).
+        assert!(release.is_some_and(|r| !r.allows(1, 0, 1)), "94%, no speed measured: it waits for the reset");
         service.snapshot.lock().unwrap().windows[0].resets_at = Some(now + 3_600_000);
         service.publish().unwrap();
         assert!(matches!(admission(&state, now), Admission::Held { .. }));
@@ -513,6 +598,11 @@ mod tests {
             "worker must stay pending"
         );
         publish(&service, 19 * 60_000);
+        // The climb into the hold measured at 0.1 points a minute: 94 + 0.1 x 19 = 95.9, under
+        // 100, so the one worker goes. With no measurement nobody would (finding 2 of the second
+        // review of 2026-10-29).
+        service.snapshot.lock().unwrap().rise_log.insert("five_hour".into(), vec![(90., 0.1 / 60_000.)]);
+        service.publish().unwrap();
         rx.recv_timeout(HANG_GUARD)
             .expect("the worker never resumed after the reset came near")
             .expect("the worker was refused instead of resuming");
@@ -766,6 +856,158 @@ mod tests {
         assert!((view.act_at["seven_day"] - 94.).abs() < 1e-9, "{:?}", view.act_at);
         assert!(read_json::<Value>(&path).unwrap()["points"].as_f64().is_some_and(|p| (p - 3.).abs() < 1e-9),
             "the handoff's points are kept on its marker");
+    }
+
+    /// **Item 1 of 2026-10-29 (Work's 09:50Z limit).** Ten workers held at 95%, 19 minutes before
+    /// the five-hour reset. The team's speed before the hold: 80% -> 95% in 10 minutes, its first
+    /// point unseen, 14 / 10 = 1.4 points a minute; held, the readings say 0. On main the window
+    /// read that 0 as room and released all ten at once (they spent the rest in about 8 s). Now
+    /// one goes: 95 + (1.4 / 10) x 19 = 97.66, under 100. A second at this reading would be
+    /// 95 + (2.8 / 10) x 19 = 100.32, so none passes the projected 100%; the others wait for a
+    /// later reading or the reset. The one released carries on with its next call.
+    #[test]
+    fn inside_the_window_ten_held_workers_are_released_staggered_never_past_the_projected_100() {
+        let (_root, service, state, scope) = setup();
+        let (now, minute) = (crate::util::now_millis(), 60_000);
+        let reset = now + 19 * minute;
+        let five = |used: f64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: used,
+            resets_at: Some(reset), duration_ms: 18_000_000 }];
+        let mut reading = Snapshot::default();
+        reading.accept(five(80.), now - 15 * minute);
+        reading.accept(five(95.), now - 5 * minute);
+        reading.accept(five(95.), now);
+        *service.snapshot.lock().unwrap() = reading;
+        service.publish().unwrap();
+        let workers: Vec<String> = (0..10).map(|i| format!("worker-{i}")).collect();
+        // The ten waiters' own pause records, as each held call keeps one (`holds`).
+        let _waiting: Vec<_> = workers.iter().map(|id| super::super::holds::Guard::begin(&state, serde_json::from_value(json!({
+            "kind": "agent", "id": id, "entityId": "", "threadId": "", "sessionId": "", "name": id,
+            "task": null, "sinceAt": now, "releasedAt": null})).unwrap()).unwrap()).collect();
+        let call = |id: &str| wait(&json!({"agent_id": id, "tool_name": "Bash"}), &state, &scope, "1",
+            Duration::ZERO, Duration::ZERO).is_ok();
+        let released: Vec<&String> = workers.iter().filter(|id| call(id)).collect();
+        assert_eq!(released.len(), 1, "not all at once, and none past the projected 100%: {released:?}");
+        assert!(call(released[0]), "the released worker carries on with its next call");
+        assert_eq!(workers.iter().filter(|id| call(id)).count(), 1, "the other nine still wait");
+        // **Third review of 2026-10-29, P1: the permit is judged again on a fresh reading.**
+        // 97% -> 99% in a minute, still 19 minutes from the reset: at whole points with the
+        // first unseen that is 1 point a minute, and the released worker carrying on projects
+        // 99 + max(0.14, 1) x 19 = 118. It waits; before, its permit let it straight through.
+        let mut fresh = Snapshot::default();
+        fresh.accept(five(97.), now - minute);
+        fresh.accept(five(99.), now);
+        *service.snapshot.lock().unwrap() = fresh;
+        service.publish().unwrap();
+        assert!(decide(&state, Some("1"), crate::util::now_millis()).1.is_some(), "still inside the window: the stagger decides");
+        assert!(!call(released[0]), "a fresh reading past 100% pauses the released worker too");
+        assert_eq!(workers.iter().filter(|id| call(id)).count(), 0, "and nobody goes");
+        assert!(admission(&state, reset + 1).allows_work(), "the rest wait for the reset itself");
+    }
+
+    /// **Item 2 of 2026-10-29.** Work (account 2) at 95% of its five hours, Home (account 1) at
+    /// 0% and marked in use. A worker whose provider runs on Work (`ACCOUNT_ENV` = 2) is held on
+    /// Work's own windows; on main the gate read the top-level reading, Home's 0%, and admitted
+    /// it while it spent Work. A worker on Home goes on.
+    #[test]
+    fn a_worker_call_is_judged_on_the_account_it_runs_on_not_the_one_marked_in_use() {
+        struct Unread;
+        impl super::super::Source for Unread {
+            fn read(&mut self, _bin: &Path, _cwd: &Path) -> Result<Vec<Window>, ReadError> { Err(ReadError::Failed) }
+        }
+        let (_root, service, state, scope) = setup();
+        service.accounts.rename("1", "Home").unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let now = crate::util::now_millis();
+        let at = |used: f64| Snapshot { checked_at: Some(now), windows: vec![Window { id: "five_hour".into(),
+            label: "Five-hour".into(), used_percent: used, resets_at: Some(now + 3 * 3_600_000), duration_ms: 18_000_000 }],
+            ..Default::default() };
+        *service.snapshot.lock().unwrap() = at(0.);
+        service.extra.lock().unwrap().insert(work.id.clone(),
+            (std::sync::Arc::new(std::sync::Mutex::new(Box::new(Unread) as Box<dyn super::super::Source>)), at(95.)));
+        service.publish().unwrap();
+        assert_eq!(service.accounts.in_use().id, "1", "Home is marked in use");
+        let view: View = read_json(&state.join("claude-quota.json")).unwrap();
+        assert!(view.accounts.iter().any(|a| a.id == "1" && a.in_use));
+        let on_work = wait(&json!({"agent_id": "worker-on-work", "tool_name": "Bash"}), &state, &scope, &work.id,
+            Duration::ZERO, Duration::ZERO).expect_err("a worker on Work at 95% is held");
+        assert!(refusal(&on_work).starts_with("RichOS desktop quota: Still waiting"), "{}", refusal(&on_work));
+        wait(&json!({"agent_id": "worker-on-home", "tool_name": "Bash"}), &state, &scope, "1",
+            Duration::ZERO, Duration::ZERO).expect("a worker on Home, at 0%, goes on");
+    }
+
+    /// **Review of 2026-10-29, finding 1: every Agent call starts a new agent.** Ten Agent calls
+    /// of one session wait at 95%, 19 minutes before the five-hour reset, the team measured at
+    /// 1.4 points a minute before the hold (the frame math of the test above: one is 97.66, two
+    /// are 100.32). Before, all ten shared the permit `dispatch:<session>`, and once the first
+    /// was released the other nine went in the same instant. Each is now its own release: one
+    /// goes. Two Agent calls with no `tool_use_id` still get two permits; a helper's own calls
+    /// keep its one.
+    #[test]
+    fn each_agent_dispatch_is_released_on_its_own_permit() {
+        let (_root, service, state, scope) = setup();
+        // A session that may act, so its Agent calls reach the gate (`authorized`).
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":true})).unwrap();
+        let (now, minute) = (crate::util::now_millis(), 60_000);
+        let reset = now + 19 * minute;
+        let five = |used: f64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: used,
+            resets_at: Some(reset), duration_ms: 18_000_000 }];
+        let mut reading = Snapshot::default();
+        reading.accept(five(80.), now - 15 * minute);
+        reading.accept(five(95.), now - 5 * minute);
+        reading.accept(five(95.), now);
+        *service.snapshot.lock().unwrap() = reading;
+        service.publish().unwrap();
+        let calls: Vec<Value> = (0..10)
+            .map(|i| json!({"tool_name": "Agent", "session_id": "stu", "tool_use_id": format!("toolu_{i}")})).collect();
+        // The ten waiting dispatches' own pause records, each on its own permit, behind the ten
+        // held helpers whose pace the 1.4 points a minute measured.
+        let _waiting: Vec<_> = (0..10).map(|i| super::super::holds::Guard::begin(&state, serde_json::from_value(json!({
+            "kind": "dispatch", "id": "dispatch", "entityId": "", "threadId": "", "sessionId": "", "name": "New agent",
+            "task": null, "sinceAt": now, "releasedAt": null, "account": "1", "key": format!("dispatch:stu:toolu_{i}")})).unwrap()).unwrap()).collect();
+        let _helpers = held_helpers(&state, now, 10);
+        let went = calls.iter().filter(|call| wait(call, &state, &scope, "1", Duration::ZERO, Duration::ZERO).is_ok()).count();
+        assert_eq!(went, 1, "one new agent, not ten in the same instant");
+        assert_eq!(release_key(&calls[3]), "dispatch:stu:toolu_3");
+        let bare = json!({"tool_name": "Agent", "session_id": "stu"});
+        assert_ne!(release_key(&bare), release_key(&bare), "no tool_use_id: still one permit per call");
+        let helper = json!({"tool_name": "Bash", "agent_id": "worker-1", "session_id": "w"});
+        assert_eq!(release_key(&helper), release_key(&helper), "a helper's calls share its one permit");
+    }
+
+    /// `count` held helpers' pause records on account 1, `worker-0` onwards, as each held call
+    /// keeps one (`holds`).
+    fn held_helpers(state: &Path, now: u64, count: usize) -> Vec<super::super::holds::Guard> {
+        (0..count).map(|i| super::super::holds::Guard::begin(state, serde_json::from_value(json!({
+            "kind": "agent", "id": format!("worker-{i}"), "entityId": "", "threadId": "", "sessionId": "",
+            "name": "Helper", "task": null, "sinceAt": now, "releasedAt": null, "account": "1",
+            "key": format!("worker-{i}")})).unwrap()).unwrap()).collect()
+    }
+
+    /// **Second review of 2026-10-29, finding 1.** One helper held at 95%, 19 minutes before the
+    /// reset, measured at 1.4 points a minute before the hold, with nine Agent dispatches queued
+    /// behind it. Its pace is the whole measured pace: 95 + 1.4 x 19 = 121.6, so it waits.
+    /// Before, the nine never-started dispatches counted in the team and cut its share to a
+    /// tenth (97.66): it went, and spent the account past 100%.
+    #[test]
+    fn queued_dispatches_never_dilute_the_pace_a_working_helper_is_judged_on() {
+        let (_root, service, state, scope) = setup();
+        let (now, minute) = (crate::util::now_millis(), 60_000);
+        let reset = now + 19 * minute;
+        let five = |used: f64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: used,
+            resets_at: Some(reset), duration_ms: 18_000_000 }];
+        let mut reading = Snapshot::default();
+        reading.accept(five(80.), now - 15 * minute);
+        reading.accept(five(95.), now - 5 * minute);
+        reading.accept(five(95.), now);
+        *service.snapshot.lock().unwrap() = reading;
+        service.publish().unwrap();
+        let _queued: Vec<_> = (0..9).map(|i| super::super::holds::Guard::begin(&state, serde_json::from_value(json!({
+            "kind": "dispatch", "id": "dispatch", "entityId": "", "threadId": "", "sessionId": "", "name": "New agent",
+            "task": null, "sinceAt": now, "releasedAt": null, "account": "1", "key": format!("dispatch:stu:toolu_{i}")})).unwrap()).unwrap()).collect();
+        let _helper = held_helpers(&state, now, 1);
+        assert_eq!(measured_team(&state, "1", &[]), 1, "the nine dispatches are not in the measured team");
+        assert!(wait(&json!({"agent_id": "worker-0", "tool_name": "Bash"}), &state, &scope, "1",
+            Duration::ZERO, Duration::ZERO).is_err(), "121.6% projected: the helper waits for the reset");
     }
 
     #[test]

@@ -1545,6 +1545,8 @@ impl WorkHost {
         let label = |id: &Option<String>| id.as_deref().and_then(|id| quota.accounts.list().into_iter().find(|a| a.id == id)).map(|a| a.label);
         let fact = match outcome {
             Renewal::Waits { from } => {
+                // The accounts screen says the move cannot happen yet, until he moves.
+                quota.accounts.move_waits(binding.thread_id());
                 let to = quota.accounts.in_use();
                 {
                     let mut inner = backend.inner.lock().unwrap();
@@ -3266,7 +3268,11 @@ mod tests {
     /// **The panel shows the account each session is really on** (review
     /// rv-20261019T005929Z-e3d9ad03-3e7b, finding 3: Home was "In use now" while Stu still ran on
     /// Work). The switch to Home is decided and Rich's next turn runs on Home; Stu's session is
-    /// still on Account 1 with a command running. The published view says so per account.
+    /// still on Account 1 with a command running. The published view says so per account, and
+    /// since Rich's decision of 2026-10-29 (the CEO: "I saw "switching to home" and the Home
+    /// account was listed first in the list. But apparently it didn't actually switch.") the
+    /// account marked in use is the one the work still runs on, Account 1, with the move to
+    /// Home under way (`moving`) until Stu's session is on Home too.
     #[test]
     fn the_accounts_view_shows_where_rich_and_the_team_really_are_during_a_switch() {
         let m=stu_on_account_one_then_a_switch();
@@ -3274,9 +3280,11 @@ mod tests {
         let view=serde_json::to_value(m.quota.view()).unwrap();
         let account=|id:&str|view["accounts"].as_array().unwrap().iter().find(|a|a["id"]==id).cloned().unwrap();
         assert_eq!((account(&m.home.id)["inUse"].clone(),account(&m.home.id)["working"].clone()),
-            (serde_json::json!(true),serde_json::json!(["rich"])),"Home: in use, and Rich is on it");
+            (serde_json::json!(false),serde_json::json!(["rich"])),"Home: switched to, not yet in use, and Rich is on it");
         assert_eq!((account("1")["inUse"].clone(),account("1")["working"].clone()),
-            (serde_json::json!(false),serde_json::json!(["team"])),"Account 1: the team is still on it");
+            (serde_json::json!(true),serde_json::json!(["team"])),"Account 1: still in use, the team is still on it");
+        assert_eq!((view["moving"]["from"].clone(),view["moving"]["to"].clone()),
+            (serde_json::json!("1"),serde_json::json!(m.home.id)),"the move to Home is under way");
         m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
     }
 

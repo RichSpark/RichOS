@@ -17,6 +17,7 @@ pub mod terminal;
 pub mod tokens;
 pub mod reset_transport;
 pub mod reset_tools;
+pub mod stagger;
 
 pub const REFRESH_INTERVAL_MS: u64 = 5 * 60_000;
 
@@ -179,7 +180,21 @@ impl Reading {
             && w.resets_at.is_none_or(|t| t > now))
     }
 }
+/// **The 93% rule's window before a five-hour reset** (his §87/§108). Inside it a held team is
+/// released staggered, judged on the speed measured before the hold, and only while the account
+/// stays under 100% at the reset (`stagger`, Rich's decision of 2026-10-29); before it, the
+/// hold holds.
 pub const RESET_EXEMPTION_MS: u64 = 20 * 60_000;
+
+
+/// **One window read two ways is one window**: reset times that agree within a minute. The
+/// probe reports an ISO time and the stream whole seconds, so exact equality would make one
+/// window two (`Snapshot::measure`), and would start the staggered release's count over in
+/// the middle of a window (`stagger::admit`, review of 2026-10-29, finding 2). Two five-hour
+/// windows are five hours apart.
+fn same_reset(a: u64, b: u64) -> bool {
+    a.abs_diff(b) < 60_000
+}
 
 /// A span as Rich says it: "41 min", "1 h 41 min", "2 d 3 h" (round 16's way of writing one).
 pub fn words(ms: u64) -> String {
@@ -385,6 +400,20 @@ pub struct View {
     /// running on one of these accounts to commit, hand off and end (`gate.rs`).
     #[serde(default)]
     pub leaving: Vec<String>,
+    /// **The speed measured before the hold**, points per ms, by window: the last rise that
+    /// started under the pause line (`Snapshot::pre_hold`). Published so the separate-process
+    /// gate judges a release inside the window on it, never on the 0 a held team reads.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pre_hold: BTreeMap<String, f64>,
+    /// **Held by the five-hour window with its reset less than 20 minutes away**: what the
+    /// staggered release is judged on (`stagger`). `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<stagger::Release>,
+    /// **A move to the account in use that has not happened yet** (Rich, 2026-10-29): work
+    /// still runs on `from`, so `accounts` marks `from` in use and `to` as the one being
+    /// switched to. `None` once everything runs on the account in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moving: Option<crate::claude_accounts::Moving>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -566,6 +595,11 @@ struct Snapshot {
     /// and `SignedInNoLimits` (`Some(true)`); every other outcome leaves it as it was. A
     /// changed account connection starts a new `Snapshot` and so forgets it (`disconnect`).
     signed_in: Option<bool>,
+    /// Each window's last measured rises in this window (same reset), oldest first: the used
+    /// percent each started from and the speed measured over it. A reading that gained nothing
+    /// adds none, so a held team's flat readings never replace the speed before the hold
+    /// (`pre_hold`).
+    rise_log: BTreeMap<String, Vec<(f64, f64)>>,
 }
 
 /// **An account with no reading yet is asked again soon after a null answer** (handoff round
@@ -609,11 +643,9 @@ impl Snapshot {
     fn measure(&mut self, windows: &[Window], observed: u64) {
         for window in windows {
             let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed, last: observed, rose: false };
-            // The SAME window when the reset times agree within a minute: the probe reports
-            // an ISO time and the stream whole seconds, so exact equality would treat one
-            // window read two ways as two windows and never measure a speed across them.
+            // The SAME window when the reset times agree within a minute (`same_reset`).
             let same = |a: Option<u64>, b: Option<u64>| match (a, b) {
-                (Some(a), Some(b)) => a.abs_diff(b) < 60_000,
+                (Some(a), Some(b)) => same_reset(a, b),
                 (a, b) => a == b,
             };
             match self.bases.get(&window.id).copied() {
@@ -633,6 +665,16 @@ impl Snapshot {
                         }
                         self.speeds.insert(window.id.clone(), speed);
                         self.rises.insert(window.id.clone(), rise);
+                        if speed > 0. {
+                            // One rise per whole point it started from, the latest: a window's
+                            // climb from 0 to 100% keeps at most 101, so the last rise that began
+                            // under the pause line is never pushed out by the rises above it
+                            // (second review of 2026-10-29, finding 2: eight kept, and the rise
+                            // into the hold was evicted by eight readings above the line).
+                            let log = self.rise_log.entry(window.id.clone()).or_default();
+                            log.retain(|(from, _)| from.floor() != base.used.floor());
+                            log.push((base.used, speed));
+                        }
                         if window.used_percent != base.used {
                             self.bases.insert(window.id.clone(), SpeedBase { rose: gained > 0., ..fresh });
                         }
@@ -644,6 +686,7 @@ impl Snapshot {
                 _ => {
                     self.speeds.remove(&window.id);
                     self.rises.remove(&window.id);
+                    self.rise_log.remove(&window.id);
                     self.bases.insert(window.id.clone(), fresh);
                 }
             }
@@ -695,10 +738,11 @@ impl Snapshot {
         let speeds = std::mem::take(&mut self.speeds);
         let bases = std::mem::take(&mut self.bases);
         let rises = std::mem::take(&mut self.rises);
+        let rise_log = std::mem::take(&mut self.rise_log);
         let (rise_until, token_speed, handoff) = (self.rise_until, self.token_speed, self.handoff);
         // Only a signed-in account reports a reading.
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
-            since_reading: 0., handoff, empties: 0, signed_in: Some(true) };
+            since_reading: 0., handoff, empties: 0, signed_in: Some(true), rise_log };
     }
     /// **A check that came back with no figures.** Every kind records when, so the pause stops
     /// waiting on it (`Admission::NoReading`). A null answer (`ReadError::NoReading`) is not a
@@ -755,6 +799,32 @@ impl Snapshot {
     fn view(&self, policy: Policy, now: u64) -> View {
         self.view_with(policy, None, now)
     }
+    /// **The speed measured before the hold** (Rich, 2026-10-29: *"a rate of 0 while everyone
+    /// is held is no measurement"*): the speed of the last rise of window `id` that started
+    /// under `line`, the pause line. Rises from the hold onwards started at or over it, and a
+    /// held team's flat readings add no rise at all, so neither replaces it. 0 when no rise into
+    /// the hold was seen in this window.
+    ///
+    /// **A hold the speed brought on early is held at its own point** (review
+    /// rv-20261029T150133Z-2f57a3fd-6d74, finding 1): 80% -> 92% in a minute holds at 92%,
+    /// under 93%, because at 11 points a minute the point is 100 - 11 = 89%. A rise that
+    /// starts at or over the point in force when it starts (Stu's own turns, a released
+    /// worker) is a rise during that hold, so it never replaces the rise into it. The rises
+    /// are read in the order they came (`measure` appends), each moving the point by its
+    /// speed exactly as [`Reading::act_point`] does: `line` at a speed under 1 point a minute
+    /// (5 points or less per five-minute check), `100 - speed x 1 minute` above it.
+    fn pre_hold(&self, id: &str, line: f64) -> f64 {
+        let point = |speed: f64| {
+            let interval = if speed * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK {
+                FAST_REFRESH_INTERVAL_MS
+            } else {
+                REFRESH_INTERVAL_MS
+            };
+            line.min(100. - speed * interval as f64).clamp(0., 100.)
+        };
+        self.rise_log.get(id).map_or(0., |log| log.iter()
+            .fold(0., |found, &(from, speed)| if from < point(found) { speed } else { found }))
+    }
     /// [`View::signed_in`]: what the last answer about the sign-in established, and nothing
     /// more; a check that said nothing about it leaves it standing (`Snapshot::signed_in`).
     fn signed_in(&self) -> Option<bool> {
@@ -791,6 +861,10 @@ impl Snapshot {
         // Unknown and missing readings remain visible as such, but do not hold work.
         // An observed above-threshold window still holds until its actual reset.
         let answered_empty = self.empty_at.is_some_and(|e| self.checked_at.is_none_or(|c| e >= c));
+        let line = f64::from(policy.pause_percent);
+        let pre_hold: BTreeMap<String, f64> = [("five_hour", self.pre_hold("five_hour", line))].into_iter()
+            .filter(|(_, s)| *s > 0.).map(|(id, s)| (id.to_string(), s)).collect();
+        let mut release = None;
         let admission = if !policy.enabled {
             Admission::Disabled
         } else if self.checked_at.is_some_and(|t| t > now) {
@@ -805,28 +879,43 @@ impl Snapshot {
             Admission::Held { resets_at: until }
         } else {
             // §108: at normal speed the 93% rule exactly as before; at a measured fast speed
-            // the pause comes EARLIER, when the next check would already find 100%. The
-            // 20-minute exception still lets work continue near a reset, but only when the
-            // measured speed would not carry the window to 100% before that reset.
+            // the pause comes EARLIER, when the next check would already find 100%.
+            //
+            // **Inside the 20-minute window the hold is released staggered** (Rich, 2026-10-29),
+            // never all at once: the view still says Held, and carries what each release is
+            // judged on (`release`). The separate-process gate releases one held call at a time
+            // while the speed before the hold projects the account under 100% at the reset
+            // (`stagger::admit`); the rest wait for the reset. Before, the window admitted every
+            // call whenever the measured speed was 0, and with the whole team held it always was.
             let speed = |w: &Window| reading.speeds.get(&w.id).copied().unwrap_or(0.);
+            // **The hold is judged on the speed before it too** (review
+            // rv-20261029T150133Z-2f57a3fd-6d74, finding 1; Rich: *"a rate of 0 while everyone
+            // is held is no measurement"*): 80% -> 92% in a minute holds at 92% (point 89%), and
+            // the held team's next, flat reading measures 0. Judged on that 0 alone the point was
+            // 93% again, 92% was under it, and all ten went at once past the stagger. The point
+            // is set by the larger of the speed measured now and the one before the hold.
+            let mut judged = reading.clone();
+            if let Some(&before) = pre_hold.get("five_hour") {
+                let now_speed = judged.speeds.entry("five_hour".to_string()).or_insert(0.);
+                *now_speed = now_speed.max(before);
+            }
             match self.windows.iter().find(|w| w.id == "five_hour") {
-                Some(w)
-                    if reading.reaches(w, f64::from(policy.pause_percent))
-                        && w.resets_at
-                            .is_some_and(|t| t > now && t - now < RESET_EXEMPTION_MS
-                                && (speed(w) == 0.
-                                    || w.used_percent + speed(w) * ((t - now) as f64) < 100.)) =>
-                {
-                    Admission::Ready
-                }
                 // Within the same window, a stale above-threshold value still proves a hold.
                 Some(w)
-                    if reading.reaches(w, f64::from(policy.pause_percent))
+                    if judged.reaches(w, line)
                         && w.resets_at.is_some_and(|t| t > now) =>
                 {
-                    Admission::Held {
-                        resets_at: w.resets_at.unwrap(),
+                    let resets_at = w.resets_at.unwrap();
+                    if resets_at - now < RESET_EXEMPTION_MS {
+                        release = Some(stagger::Release {
+                            used: w.used_percent,
+                            checked_at: self.checked_at.map_or(now, |c| c.min(now)),
+                            resets_at,
+                            speed: speed(w),
+                            pre_hold: pre_hold.get("five_hour").copied().unwrap_or(0.),
+                        });
                     }
+                    Admission::Held { resets_at }
                 }
                 Some(w) if fresh && w.resets_at.is_some_and(|t| t > now) => Admission::Ready,
                 _ if answered_empty => Admission::NoReading,
@@ -875,6 +964,9 @@ impl Snapshot {
             notes: Vec::new(),
             first_label: None,
             leaving: Vec::new(),
+            pre_hold,
+            release,
+            moving: None,
         }
     }
 }
@@ -1067,13 +1159,20 @@ impl Service {
     pub(crate) fn view_at(&self, now: u64) -> View {
         let policy = self.policy.lock().unwrap().clone();
         let in_use = self.accounts.in_use();
-        let cutoff = self.cutoff(&in_use.id);
-        // The top-level reading is the account IN USE, so the pause gate and every existing
-        // reader keep describing the subscription the work is actually running on.
-        let mut view = if in_use.id == crate::claude_accounts::ACCOUNT_ONE {
+        // **The account the work actually runs on** (Rich, 2026-10-29): the account in use
+        // once everything has moved to it, and until then the account the work is still on
+        // (`Accounts::running_on`). The CEO saw "Switching to Home" with Home listed first
+        // while every worker still spent Work, and switched by hand.
+        let moving = self.accounts.moving();
+        let shown = self.accounts.running_on();
+        let cutoff = self.cutoff(&shown.id);
+        // The top-level reading is that account, so every existing reader keeps describing the
+        // subscription the work is actually running on. The gate judges each call on its own
+        // account's row (`gate::decide`), never on this one alone.
+        let mut view = if shown.id == crate::claude_accounts::ACCOUNT_ONE {
             self.snapshot.lock().unwrap().view_with(policy.clone(), cutoff, now)
         } else {
-            match self.extra.lock().unwrap().get(&in_use.id) {
+            match self.extra.lock().unwrap().get(&shown.id) {
                 Some((_, snapshot)) => snapshot.view_with(policy.clone(), cutoff, now),
                 None => Snapshot::default().view(policy.clone(), now),
             }
@@ -1102,7 +1201,7 @@ impl Service {
                     readings.get(&account.id).unwrap_or(&Reading::default()), view.at_threshold,
                     policy.line(), self.accounts.limited_until(&account.id), now);
                 crate::claude_accounts::AccountView {
-                    in_use: account.id == in_use.id,
+                    in_use: account.id == shown.id,
                     working: self.accounts.working_on(&account.id),
                     id: account.id,
                     label: account.label,
@@ -1111,8 +1210,12 @@ impl Service {
                     exhausted_until: exhausted.map(|(_, until)| until),
                     message: account_view.message,
                     signed_in: account_view.signed_in,
+                    speeds: account_view.speeds,
+                    pre_hold: account_view.pre_hold,
+                    empty_at: account_view.empty_at,
                 }
             }).collect();
+            view.moving = moving;
             view.held_until = self.accounts.held_until(&readings, policy.line(), now);
             // The card after a switch, only once the switch has happened for every session
             // (`Accounts::switch_pending`): nightly 65 showed "Rich switched to Home ... the
@@ -1121,6 +1224,8 @@ impl Service {
             view.last_switch = self.accounts.last_switch().filter(|_| !pending);
             if let Some(until) = view.held_until {
                 view.admission = Admission::Held { resets_at: until };
+                // Every account used up: nothing is released before the soonest reset.
+                view.release = None;
             }
         }
         view.agents_working = self.agents_working.load(std::sync::atomic::Ordering::SeqCst);
@@ -2301,9 +2406,15 @@ pub(crate) mod tests {
         assert_eq!(state.view(policy(), NOW).admission, Admission::Held { resets_at: NOW + 600_000 });
         // An old high reading also holds; time passing alone cannot invent allowance.
         assert!(matches!(state.view(policy(), NOW + 300_000).admission, Admission::Held { .. }));
-        assert!(state.view(policy(), NOW + 600_000).admission.allows_work());
+        // Past the weekly reset only the five-hour window holds, inside its 20 minutes. Until
+        // 2026-10-29 that admitted work at once; now it is the staggered release, and at 100%
+        // nothing is released: it waits for the five-hour reset.
+        let five_hour_only = |view: View| (view.admission, view.release.map(|r| r.allows(1, 0, 1)));
+        assert_eq!(five_hour_only(state.view(policy(), NOW + 600_000)),
+            (Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 }, Some(false)));
         state.windows[1].resets_at = None;
-        assert!(state.view(policy(), NOW).admission.allows_work());
+        assert_eq!(five_hour_only(state.view(policy(), NOW)),
+            (Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 }, Some(false)));
         let fresh_five = snapshot(10., 3_600_000).windows;
         state.accept(fresh_five, NOW);
         assert!(state.view(policy(), NOW).admission.allows_work());
@@ -2313,7 +2424,11 @@ pub(crate) mod tests {
         state.windows[0] = snapshot(100., RESET_EXEMPTION_MS - 1).windows.remove(0);
         state.error = None;
         state.windows[1].used_percent = 98.99;
-        assert_eq!(state.view(policy(), NOW).admission, Admission::Ready);
+        // Inside the 20-minute window the five-hour hold is released staggered, by the gate
+        // (`stagger`), never all at once: the view holds and carries what a release is judged on.
+        let view = state.view(policy(), NOW);
+        assert_eq!(view.admission, Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 });
+        assert!(view.release.is_some(), "the weekly window does not hold, so the window's release applies");
         state.windows[0].resets_at = Some(NOW + 3_600_000);
         assert!(matches!(state.view(policy(), NOW).admission, Admission::Held { .. }));
     }
@@ -2332,12 +2447,14 @@ pub(crate) mod tests {
                 .admission,
             Admission::Held { .. }
         ));
-        assert_eq!(
-            snapshot(100., RESET_EXEMPTION_MS - 1)
-                .view(policy(), NOW)
-                .admission,
-            Admission::Ready
-        );
+        // **Changed 2026-10-29 (Rich's decision after Work's 09:50Z limit).** This read Ready:
+        // 100% with 19:59 left released every held call at once. Inside the window the view now
+        // holds, with the release the gate staggers (`stagger::admit`); outside it, none.
+        let near = snapshot(100., RESET_EXEMPTION_MS - 1).view(policy(), NOW);
+        assert_eq!(near.admission, Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 });
+        assert_eq!(near.release.map(|r| (r.used, r.resets_at)), Some((100., NOW + RESET_EXEMPTION_MS - 1)));
+        assert!(!near.release.unwrap().allows(1, 0, 1), "at 100% nothing is released: it waits for the reset");
+        assert_eq!(snapshot(93., RESET_EXEMPTION_MS).view(policy(), NOW).release, None, "the window has not begun");
         assert_eq!(
             snapshot(93., 0).view(policy(), NOW).admission,
             Admission::Unknown
@@ -2376,10 +2493,21 @@ pub(crate) mod tests {
             s.view(policy(), NOW).admission,
             Admission::Held { .. }
         ));
-        assert_eq!(
-            s.view(policy(), NOW + 2_400_001).admission,
-            Admission::Ready
-        );
+        // Inside the window: still held, released staggered by the gate (`stagger`).
+        let near = s.view(policy(), NOW + 2_400_001);
+        assert_eq!(near.admission, Admission::Held { resets_at: NOW + 3_600_000 });
+        // No speed measured before the hold or since: no measurement, so nobody goes before the
+        // reset (second review of 2026-10-29, finding 2).
+        assert!(near.release.is_some_and(|r| !r.allows(1, 0, 1)), "94% with no speed measured: it waits");
+        // The climb into the hold measured: projected from the stale reading itself (taken an
+        // hour before the reset), 0.1 points a minute reaches 94 + 0.1 x 60 = 100 and waits,
+        // 0.05 reaches 94 + 0.05 x 60 = 97 and one may go.
+        s.rise_log.insert("five_hour".into(), vec![(90., 0.1 / 60_000.)]);
+        let measured = s.view(policy(), NOW + 2_400_001);
+        assert!(measured.release.is_some_and(|r| !r.allows(1, 0, 1)), "94% at 0.1 a minute for 60: 100%");
+        s.rise_log.insert("five_hour".into(), vec![(90., 0.05 / 60_000.)]);
+        let measured = s.view(policy(), NOW + 2_400_001);
+        assert!(measured.release.is_some_and(|r| r.allows(1, 0, 1)), "94% at 0.05 a minute: one may go");
         assert_eq!(
             s.view(policy(), NOW + 3_600_000).admission,
             Admission::Unknown
@@ -2510,6 +2638,69 @@ pub(crate) mod tests {
         next[0].resets_at = next[0].resets_at.map(|t| t + 3_600_000);
         s.observe(&next, NOW + 120_000);
         assert!(s.speeds.is_empty());
+    }
+
+    /// **The rise into the hold outlives the rises above the line** (second review of
+    /// 2026-10-29, finding 2). With the pause line at 85%: 80% to 86% in five minutes is the
+    /// rise into the hold, 1 point a minute (whole points, the first unseen: 5 / 5). Twelve
+    /// readings above the line follow, 0.7 points a minute. Eight rises were kept, so the twelve
+    /// evicted the one from 80% and the speed before the hold read 0. Now one rise per whole
+    /// point is kept, and the speed before the hold is still the 1 point a minute.
+    #[test]
+    fn the_speed_before_the_hold_survives_many_rises_above_the_line() {
+        let mut s = Snapshot::default();
+        s.accept(five_hour_at(80.), NOW);
+        s.accept(five_hour_at(86.), NOW + 5 * 60_000);
+        for k in 1..=12u64 {
+            s.accept(five_hour_at(86. + 0.7 * k as f64), NOW + (5 + k) * 60_000);
+        }
+        assert!(s.rise_log["five_hour"].len() <= 101, "bounded: one rise per whole point");
+        let per_minute = s.pre_hold("five_hour", 85.) * 60_000.;
+        assert!((per_minute - 1.).abs() < 1e-9, "the rise from 80%: {per_minute} points a minute");
+    }
+
+    /// **A hold the speed brought on under 93% outlives the held team's flat reading** (review
+    /// rv-20261029T150133Z-2f57a3fd-6d74, finding 1, its probe `early-hold.py`). 80% -> 92% in
+    /// one minute, 19 minutes before the reset: whole points, the first unseen, so 11 points a
+    /// minute; checked every minute, the point is 100 - 11 = 89%, and 92% holds. One of ten is
+    /// judged at 92 + 1.1 x 19 = 112.9: nobody goes. The held team's next reading is 92% again,
+    /// a speed of 0. Before, the point went back to 93%, 92% was under it, the view said Ready
+    /// and all ten went at once. Now it holds at 89% on the speed before the hold, in the
+    /// service's view and in the gate's own recomputation. Then Stu's own turn (never held)
+    /// moves it to 92.4% a minute on, at least 0.4 points a minute: that rise started at 92%,
+    /// over the 89% point, so it is a rise during the hold and never replaces the one into it.
+    #[test]
+    fn a_speed_hold_under_93_holds_through_the_held_teams_flat_and_slow_readings() {
+        const MINUTE: u64 = 60_000;
+        let at = |used: f64| snapshot(used, 19 * MINUTE).windows;
+        let mut s = Snapshot::default();
+        s.accept(at(80.), NOW - MINUTE);
+        s.accept(at(92.), NOW);
+        let pre = s.pre_hold("five_hour", 93.) * MINUTE as f64;
+        assert!((pre - 11.).abs() < 1e-9, "{pre} points a minute");
+        let held = s.view(policy(), NOW);
+        assert_eq!(held.admission, Admission::Held { resets_at: NOW + 19 * MINUTE });
+        assert!(held.release.is_some_and(|r| !r.allows(1, 0, 10)), "92 + 1.1 x 19 = 112.9");
+
+        let dir = Scratch::new();
+        let state = dir.path().join("engine-state");
+        atomic_write(&dir.path().join("claude-quota-policy.json"), &policy()).unwrap();
+        let check = |s: &Snapshot, at: u64, what: &str| {
+            let view = s.view(policy(), at);
+            assert_eq!(view.admission, Admission::Held { resets_at: NOW + 19 * MINUTE }, "{what}: the service");
+            assert!(view.release.is_some_and(|r| !r.allows(1, 0, 10)), "{what}: nobody is released early");
+            atomic_write(&state.join("claude-quota.json"), &view).unwrap();
+            let (gate, release) = gate::decide(&state, None, at);
+            assert!(matches!(gate, Admission::Held { .. }), "{what}: the gate, {gate:?}");
+            assert!(release.is_some_and(|r| !r.allows(1, 0, 10)), "{what}: the gate releases nobody early");
+        };
+        s.accept(at(92.), NOW + MINUTE);
+        assert_eq!(s.speeds["five_hour"], 0., "the held team's flat reading measures 0");
+        check(&s, NOW + MINUTE, "flat at 92%");
+        s.accept(at(92.4), NOW + 2 * MINUTE);
+        assert!(s.speeds["five_hour"] > 0., "Stu's own turn is measured");
+        assert!((s.pre_hold("five_hour", 93.) * MINUTE as f64 - 11.).abs() < 1e-9, "the rise into the hold is kept");
+        check(&s, NOW + 2 * MINUTE, "92.4% after Stu's turn");
     }
 
     /// **Plan §15 answer 10, point 3: a measured jump moves BOTH check points at once**, and the
@@ -3223,6 +3414,98 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
             self.result.clone()
         }
     }
+    /// Two accounts, Account 1 named Home and an added Work, each read at `home` and `work`
+    /// percent of its five hours (its week at 20%), automatic pause on.
+    fn home_and_work(home: f64, work: f64) -> (Scratch, Service, crate::claude_accounts::Account) {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        service.set_policy(policy()).unwrap();
+        service.accounts.rename("1", "Home").unwrap();
+        let account = service.accounts.add("Work").unwrap();
+        let now = crate::util::now_millis();
+        let at = |used: f64| Snapshot { checked_at: Some(now), windows: vec![
+            Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: used,
+                resets_at: Some(now + 3 * 3_600_000), duration_ms: 18_000_000 },
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: 20.,
+                resets_at: Some(now + 48 * 3_600_000), duration_ms: 168 * 3_600_000 }], ..Default::default() };
+        *service.snapshot.lock().unwrap() = at(home);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        service.extra.lock().unwrap().insert(account.id.clone(), (
+            std::sync::Arc::new(Mutex::new(Box::new(FakeSource { calls, result: Err(ReadError::Failed) }) as Box<dyn Source>)),
+            at(work)));
+        (root, service, account)
+    }
+
+    /// **Item 3 of 2026-10-29: nothing marks or announces the new account until Stu has really
+    /// moved.** The CEO: *"I saw "switching to home" and the Home account was listed first in
+    /// the list. But apparently it didn't actually switch."* Work is in use and Stu's session
+    /// runs on it; Work reaches 95% of its five hours and the switch to Home is decided. New
+    /// sessions start on Home from now on, but Stu's still runs on Work, so the screen keeps
+    /// Work marked in use, the top-level reading stays Work's, no switch card and no "I switched
+    /// the team" line. Once his session is on Home (`Renewal::Moved` reports it through
+    /// `back_end_on`), Home is marked in use and its reading is the one shown; the card and the
+    /// line follow once a reply of Rich's ran on Home too, as before. On main the switch marked
+    /// Home in use and published Home's reading the moment it was decided.
+    #[test]
+    fn the_new_account_is_marked_in_use_only_once_stus_session_has_moved() {
+        let (_root, service, work) = home_and_work(10., 95.);
+        service.accounts.use_first(&work.id).unwrap();
+        service.accounts.back_end_on("thread-stu", Some(&work.id));
+        let view = service.set_at_threshold(crate::claude_accounts::AtThreshold::Switch).unwrap();
+        assert_eq!(service.accounts.in_use().id, "1", "the switch to Home is decided");
+        assert_eq!(service.lease_account().id, "1", "every new session starts on Home");
+        let marked = |view: &View| view.accounts.iter().filter(|a| a.in_use).map(|a| a.label.clone()).collect::<Vec<_>>();
+        let five = |view: &View| view.windows.iter().find(|w| w.id == "five_hour").unwrap().used_percent;
+        assert_eq!(marked(&view), vec!["Work".to_string()], "Stu still runs on Work: Work stays marked in use");
+        assert_eq!(five(&view), 95., "the reading shown is Work's, where the work runs");
+        assert_eq!(view.last_switch, None, "no switch card before the move");
+        assert_eq!(service.accounts.take_notice(), None, "no \"I switched the team\" before the move");
+
+        service.accounts.back_end_on("thread-stu", Some("1"));
+        let view = service.view();
+        assert_eq!(marked(&view), vec!["Home".to_string()], "Stu is on Home: Home is in use now");
+        assert_eq!(five(&view), 10.);
+        service.accounts.ran_on("reply-on-home", "1");
+        assert!(service.accounts.take_notice().is_some_and(|line| line.starts_with("I switched the team to your **Home** account.")));
+        assert_eq!(service.view().last_switch.map(|s| (s.from, s.to)), Some((work.id.clone(), "1".to_string())));
+    }
+
+    /// **Item 3, the rest: a move that cannot happen yet says so, and new work already uses
+    /// the new account's configuration.** Home is in use with Stu on it; Home reaches 95% and
+    /// the switch to Work is decided. Every new session (Rich's next turn, Stu's next session
+    /// and so every helper inside it) is opened on `lease_account`, now Work with Work's own
+    /// folder: `CLAUDE_CONFIG_DIR` and `RICHOS_CLAUDE_ACCOUNT` come from it
+    /// (`EngineProfile::configure`). Stu's session still runs a helper, so the work host reports
+    /// `Renewal::Waits` (`move_waits`): the view says the move is blocked, from Home to Work. The
+    /// gate judges a helper still in Stu's old session on Home (95%: held) and one in a new
+    /// session on Work (10%: goes on). When Stu moves, the move is over.
+    #[test]
+    fn a_move_that_cannot_happen_yet_says_so_and_new_work_uses_the_new_account() {
+        let (_root, service, work) = home_and_work(95., 10.);
+        service.accounts.back_end_on("thread-stu", Some("1"));
+        service.set_at_threshold(crate::claude_accounts::AtThreshold::Switch).unwrap();
+        let next = service.lease_account();
+        assert_eq!((next.id.as_str(), next.folder.as_ref()), (work.id.as_str(), work.folder.as_ref()),
+            "new turns and workers are opened under Work's own folder");
+        let moving = crate::claude_accounts::Moving { from: "1".into(), to: work.id.clone(), blocked: false };
+        assert_eq!(service.view().moving, Some(moving.clone()));
+        service.accounts.move_waits("thread-stu");
+        assert_eq!(service.view().moving, Some(crate::claude_accounts::Moving { blocked: true, ..moving }),
+            "Stu's session still runs something: the move cannot happen yet");
+        assert!(service.view().accounts.iter().any(|a| a.id == "1" && a.in_use));
+
+        service.publish().unwrap();
+        let state = _root.path().join("engine-state");
+        let now = crate::util::now_millis();
+        assert!(matches!(gate::decide(&state, Some("1"), now).0, Admission::Held { .. }), "a helper still on Home is held");
+        assert!(gate::decide(&state, Some(&work.id), now).0.allows_work(), "a helper on Work goes on");
+
+        service.accounts.back_end_on("thread-stu", Some(&work.id));
+        let view = service.view();
+        assert_eq!(view.moving, None, "the move is over");
+        assert!(view.accounts.iter().any(|a| a.id == work.id && a.in_use));
+    }
+
     #[test]
     fn startup_and_session_signals_refresh_without_waiting_for_the_interval() {
         use std::time::Duration;
