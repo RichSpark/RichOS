@@ -16761,7 +16761,7 @@
     },
     "scripts/lib/wait-cpu.test.py": {
       "source": "scripts/lib/wait-cpu.test.py",
-      "sha256": "e43df35b48dc7ddd4eb54331ca39494ea34d3a8470a97e5e7ffabb96d7e76d92",
+      "sha256": "af060e9b8242f775c17185845801ae75d4d38daa890d61ebae4f9fb5d81abb88",
       "evidence": "Fixed Python fixture: each case runs one bound waiter (agent_hold.py wait, gate, watch; and, from the sweep, stop-at-line.py, proc_tree.py run, provider-supervisor.py, worker_tokens.py run and lease, quota_watch.mode_watch) for 60 s in a private temporary state directory, HOME, config and CPU-guard state in explicit fixture mode, and reads its CPU time from RUSAGE_CHILDREN of a literal measuring parent. The watchdog's registry is a literal stand-in script. setUpModule refuses to run with the app's live state variables set. No configuration key is read.",
       "keys": [],
       "edges": [

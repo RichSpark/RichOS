@@ -30,6 +30,7 @@ to run with them set, because they would point waiters at live state.
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import subprocess
@@ -263,7 +264,9 @@ class WaitCpu(unittest.TestCase):
         path = cls.held(state, env)
         payload = {"tool_name": "Bash", "session_id": env["RICHOS_AGENT_SESSION"],
                    "agent_id": env["RICHOS_AGENT_OWNER"], "tool_use_id": "toolu_gate",
-                   "tool_input": {"command": "python3 %s wait" % AGENT_HOLD}}
+                   # Quoted as the hook writes it: a checkout path with a space ("Application Support")
+                   # is one word, or is_wait_call() does not see a wait and the gate lets it run at once.
+                   "tool_input": {"command": "python3 %s wait" % shlex.quote(str(AGENT_HOLD))}}
         code = ("import json, sys; sys.path.insert(0, %r); import agent_hold; "
                 "sys.exit(agent_hold.gate(json.load(sys.stdin)))" % str(HERE))
         cls.after.append((CASE_SECONDS, lambda: os.unlink(path)))   # the release
