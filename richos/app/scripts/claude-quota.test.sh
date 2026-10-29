@@ -11,6 +11,7 @@ python3 - <<'PY'
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -36,8 +37,13 @@ with tempfile.TemporaryDirectory(prefix="claude-quota-proof-") as temporary:
     runs = root / "runs"
     runs.mkdir()
     log = root / "requests"
+    # The fixture is a shell launcher for its Python body: a "#!" line cannot name an
+    # interpreter whose path has a space in it (the engine's own Python lives under
+    # "Application Support"), and the kernel then answers ENOENT for the fixture itself.
     fixture = root / "claude-fixture"
-    fixture.write_text("#!" + sys.executable + "\n" + '''import json, os, sys
+    body = root / "claude-fixture.py"
+    fixture.write_text("#!/bin/sh\nexec %s %s \"$@\"\n" % (shlex.quote(sys.executable), shlex.quote(str(body))))
+    body.write_text('''import json, os, sys
 from pathlib import Path
 if os.environ.get("QUOTA_PROOF_EOF") == "1":
     sys.exit(0)
