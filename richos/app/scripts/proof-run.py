@@ -446,12 +446,16 @@ def supply_runtime(items):
     except OSError as error:
         return "RICHOS_RUNTIME_DIR is unset and %s cannot be read (%s); suites that need it will refuse" % (
             recipe, error.strerror or error)
+    # The one command that builds it, printed with the refusal (what gui-proof-in-vm.sh prints too).
+    build = "python3 %s %s" % (shlex.quote(os.path.join(HERE, "build-runtimes.py")), shlex.quote(path))
     if not os.path.isdir(path):
-        return "RICHOS_RUNTIME_DIR is unset and %s does not exist; suites that need it will refuse" % path
+        return "RICHOS_RUNTIME_DIR is unset and %s does not exist; suites that need it will refuse. Build it with: %s" % (
+            path, build)
     r = subprocess.run([sys.executable, os.path.join(HERE, "verify-runtime.py"), path,
                         os.path.join(HERE, "runtime-sources.json")], capture_output=True, text=True)
     if r.returncode != 0:
-        return "RICHOS_RUNTIME_DIR is unset and %s did not verify; suites that need it will refuse" % path
+        return "RICHOS_RUNTIME_DIR is unset and %s did not verify; suites that need it will refuse. Rebuild it with: %s" % (
+            path, build)
     for it in items:
         it.env["RICHOS_RUNTIME_DIR"] = path
     return "RICHOS_RUNTIME_DIR=%s (the nightly's runtime, verified against runtime-sources.json)" % path
