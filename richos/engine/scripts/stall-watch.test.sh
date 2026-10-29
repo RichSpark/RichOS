@@ -26,6 +26,8 @@
 #        RICHOS_AGENT_OWNER), through the registry to the teammate's name,
 #        though the two records carry different waiter names
 #   X06  a holder that is the waiter's own ancestor is a DEADLOCK
+#   R01  two chats (registry partitions and lead sessions), one stalled agent of the
+#        first: its SELF-WAIT is told in that chat and nothing at all in the other
 #   W01  a test VM wait and a device wait over 10 min: one block, two stalls,
 #        who holds each ("no holder recorded" / "not recorded by the waiter")
 #   H01  a teammate the lead holds (agent_hold.py): its wait is no stall
@@ -38,6 +40,8 @@
 #   T03  it writes its transcript: cleared after two looks, once
 #   L01-L03  slow steps: three agent_hold.py wait steps 4.5 min apart are told once (name,
 #        median, slowest command, since); 10-min run-tests.sh steps are exempt; clears once
+#   T11  an app worker whose transcript is under the account folder its session started
+#        in (not the watcher's CLAUDE_CONFIG_DIR), written a minute ago, is not SILENT
 #   T05  a silent teammate whose end the registry deferred because its own endless
 #        loop still runs: the notice says so and names the one command that ends
 #        its own commands (agent_hold.py end), not a pid to look up
@@ -156,10 +160,10 @@ mkdir -p "$RICHOS_ENTITY_ROOT" "$RICHOS_SESSIONS_DIR" "$RICHOS_PROJECTS_DIR" "$R
 printf 'PROTECTED_PATHS=""\n' >"$RICHOS_ENTITY_ROOT/orchestration.config"
 printf '1\n' >"$RICHOS_PROOF_RUN_SLOTS_DIR/limit"
 
-new_registry() { # <name>: an empty registry holding this suite's session
+new_registry() { # <name> [session]: an empty registry holding this suite's session (or the one named)
     export RICHOS_WORKSPACES_DIR="$SB/ws-$1"
     mkdir -p "$RICHOS_WORKSPACES_DIR/sessions" "$RICHOS_WORKSPACES_DIR/agents"
-    python3 - "$ENGINE" "$RICHOS_WORKSPACES_DIR" "$SID" "${RICHOS_SESSION_PID}" <<'PY'
+    python3 - "$ENGINE" "$RICHOS_WORKSPACES_DIR" "${2:-$SID}" "${RICHOS_SESSION_PID}" <<'PY'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
 import workspaces
@@ -244,11 +248,12 @@ if child:
 time.sleep(sleep_s)
 PY
 SPID=""
-start_slot() { # <waiter-name> <marker> [nested-child-marker|-] [owner-tag]; its pid lands in SPID
+start_slot() { # <waiter-name> <marker> [nested-child-marker|-] [owner-tag] [session-tag]; its pid lands in SPID
     # Called in THIS shell, never inside $(...): a pid recorded in a command
     # substitution's subshell never reaches the cleanup.
     local child="${3:-}"; [ "$child" = "-" ] && child=""
     ( cd "$SB" && if [ -n "${4:-}" ]; then export RICHOS_AGENT_OWNER="$4"; fi \
+        && if [ -n "${5:-}" ]; then export RICHOS_AGENT_SESSION="$5"; fi \
         && exec env RICHOS_WAITER="$1" python3 "$SB/slotproc.py" "$APP_LIB" "$2" 600 ${child:+"$child"} \
         >/dev/null 2>&1 ) &
     SPID=$!
@@ -516,7 +521,9 @@ check "X04  two different teammates at 3 min: nothing is said" "$( [ -z "$OUT" ]
 stop_slots
 
 new_registry x5; new_state x5
-add_agent hotel-opus-t1 a0000000000fix5 "other-session" 60 30 10
+# Its record is this session's: an owner tag is the agent's own, and the agent belongs to the
+# session that registered it (R01 below: another session's agent is told only there).
+add_agent hotel-opus-t1 a0000000000fix5 "$SID" 60 30 10
 start_slot foxtrot-a "$SB/x5-held" - a0000000000fix5; H="$SPID"
 wait_for 10 test -f "$SB/x5-held"
 start_slot golf-b "$SB/x5-w-held" - a0000000000fix5; W="$SPID"
@@ -535,6 +542,29 @@ check "X06  a holder that is the waiter's own ancestor is a DEADLOCK" \
     "$( has "$OUT" "[SELF-WAIT] india-opus-n1" && has "$OUT" "DEADLOCK" && has "$OUT" "held by: pid $H"; echo $?)" "out=$OUT"
 # The nested child is this suite's too: it wrote its own pid at start.
 [ -f "$SB/x6-child-held.pid" ] && kill "$(cat "$SB/x6-child-held.pid")" 2>/dev/null
+stop_slots
+
+# --- R: a finding goes only to the chat whose work it is (2026-10-28) -----------
+# In the app each conversation runs its own watcher, over its own registry partition and
+# its own lead session. At 13:01Z a SELF-WAIT of a nightly walk (another chat's agent)
+# was told in the RichSpark avatar chat (thr_acf7522df3f64765b9c046eac726889e).
+# Two chats, one stalled agent of chat A: exactly one chat is told.
+SID_B="beadfeed-0000-4000-8000-00000000s0b2"
+new_registry rb "$SID_B"; REG_B="$RICHOS_WORKSPACES_DIR"
+new_registry ra; new_state ra
+add_agent romeo-opus-c1 a0000000000fixca "$SID" 60 30 10
+start_slot sierra-a "$SB/ra-held" - a0000000000fixca "$SID"; H="$SPID"
+wait_for 10 test -f "$SB/ra-held"
+start_slot tango-b "$SB/ra-w-held" - a0000000000fixca "$SID"; W="$SPID"
+wait_for 10 has_waiter
+RNOW=$(( $(date +%s) + 180 ))
+OUT_A="$(STALL_WATCH_NOW=$RNOW bash "$SW" --tick 2>&1)"
+OUT_B="$(RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" STALL_WATCH_STATE_DIR="$SB/state-rb" \
+         STALL_WATCH_NOW=$RNOW bash "$SW" --tick 2>&1)"
+check "R01  two chats, one stalled agent: only the chat whose work it is is told" \
+    "$( has "$OUT_A" "[SELF-WAIT] romeo-opus-c1" && ! has "$OUT_B" "SELF-WAIT" \
+        && ! has "$OUT_B" "a0000000000fixca" && ! has "$OUT_B" "STALL-WATCH"; echo $?)" \
+    "chat A=$OUT_A | chat B=$OUT_B"
 stop_slots
 
 # --- W: other recorded waits ---------------------------------------------------
@@ -620,6 +650,30 @@ check "T04  a long honest run, a paused teammate and a finished one are not SILE
     "out=$T01OUT"
 check "T04b a preparation and a refused pre-start call never become silent workers" \
     "$( ! has "$T01OUT" "pending-opus-p1" && ! has "$T01OUT" "refused-opus-p1"; echo $?)" "out=$T01OUT"
+
+# --- T11: an app worker's transcript is found in the account its session started under ----
+# 2026-10-29 08:28Z: three live app workers were called SILENT, "no transcript found for it".
+# Their lead's session had started under the default account and writes ~/.claude/projects;
+# the watcher, after the switch to an added account, ran with CLAUDE_CONFIG_DIR=<app data>/
+# claude-accounts/2 and looked only there. One worker wrote its transcript a minute ago; the
+# other (the control, proving the look found the folder at all) 25 minutes ago.
+new_registry t11; new_state t11
+add_agent sierra-opus-a1 a0000000000fixa1 "$SID" 3600 3000 1500
+add_agent tango-opus-a2 a0000000000fixa2 "$SID" 3600 3000 1500
+AHOME="$SB/app-home"; ADATA="$SB/app-data"
+mkdir -p "$AHOME/.claude/projects/-coordination/$SID/subagents" "$ADATA/claude-accounts/2/projects"
+python3 - "$AHOME/.claude/projects/-coordination/$SID/subagents" <<'PY'
+import os, sys, time
+for aid, ago in (("a0000000000fixa1", 60), ("a0000000000fixa2", 1500)):
+    p = os.path.join(sys.argv[1], "agent-%s.jsonl" % aid)
+    open(p, "a").close()
+    os.utime(p, (time.time() - ago, time.time() - ago))
+PY
+OUT="$(env -u RICHOS_PROJECTS_DIR HOME="$AHOME" CLAUDE_CONFIG_DIR="$ADATA/claude-accounts/2" \
+       STALL_WATCH_NOW="$(date +%s)" bash "$SW" --tick 2>&1)"
+check "T11  an app worker whose transcript is in its session's account folder, written a minute ago, is not SILENT" \
+    "$( ! has "$OUT" "sierra-opus-a1" && has "$OUT" "[SILENT] tango-opus-a2" \
+        && has "$OUT" "last transcript write" && ! has "$OUT" "no transcript found"; echo $?)" "out=$OUT"
 
 # --- T05: an end deferred by its own endless loop (2026-10-11, echo-opus-walk49fix1) ----
 new_registry t5; new_state t5
