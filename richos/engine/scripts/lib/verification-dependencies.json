@@ -1256,7 +1256,7 @@
     },
     "scripts/lib/foreign_app_data.py#source-scan": {
       "source": "scripts/lib/foreign_app_data.py",
-      "sha256": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
+      "sha256": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
       "evidence": "The scan CLI reads source text and directory inventories, including every line of the real orchestration.config. Self-test uses literal source strings and path normalization. Other Bash guard operations are not called.",
       "keys": [],
       "edges": [],
@@ -4234,14 +4234,14 @@
     },
     "scripts/lib/foreign_app_data.py": {
       "source": "scripts/lib/foreign_app_data.py",
-      "sha256": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
-      "evidence": "Fixed path boundaries and regex classifiers over supplied strings and HOME. Source scan reads file contents as data; the watchdog only calls entering. No orchestration.config execution, subprocess or engine import.",
+      "sha256": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
+      "evidence": "Fixed path boundaries and regex classifiers over supplied strings and HOME. Source scan reads file contents as data; the watchdog only calls entering. No orchestration.config execution, subprocess or engine import. Renewed 2026-10-29: entering also refuses the user's protected folders (Desktop, Documents, Downloads, Movies, Music, Pictures, Library except RichOS's own folders one level inside a Library area), /, /Users and the per-user /private/var/folders T and C folders, and protects the account's home from the password database (pwd.getpwuid) as well as HOME. Still string classification over supplied paths; no walk, no orchestration value.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/disk-watchdog.py#alert": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "d884865c067b38ab3962342b54df560e246d7e56314e365d93fe2e4d9c44e306",
+      "sha256": "3b16bf461a522667931f47735c3286bec65418e35a8e61836b53792c5631df35",
       "evidence": "Reviewed alert path through main and env/env_num/expand/state_base/read_volume/measurable/read_state/human/_age_of/_short_age. Reads live statvfs, saved JSON states, plist presence and the listed literal config variables. Alert does not invoke scheduled device collection, status-only reaper, du/consumer walks, notifications or writes. Fixed foreign_app_data import only classifies candidate paths. Renewed 2026-10-23 (cleanup PRD R4/R5): cleanup health is read from the same SCRATCH_REAPER_STATE file and the reaper's plist presence under the same LaunchAgents directory; no new config key. Renewed 2026-10-25: cleanup_health also reads the launchd-pending-<label>.gave-up and .pid files in the state directory; for a recorded waiter pid it calls operator_fences.proc (libproc) and operator_fences.proc_argv (ps -o command=). No configuration key.",
       "keys": [
         "APP_INSTANCE_FAILURES_STATE",
@@ -4592,8 +4592,8 @@
     },
     "scripts/lib/disk-watchdog.py#check": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "d884865c067b38ab3962342b54df560e246d7e56314e365d93fe2e4d9c44e306",
-      "evidence": "Reviewed check entry, complete main and all reached helpers. Adds scheduled device collection (run as the testdevices.py collect --apply CLI in a child process killed at a hard limit; RICHOS_DEVICE_COLLECT_SECONDS is a test-only environment override, not a config key) and condition-triggered du measurements, notification and state/log writes to the alert readers. Status-only run_reaper is unreachable. Fixed device collector reads registry ownership through the existing workspace-barrier closure; candidate paths and notification text are data. Renewed 2026-10-23 (cleanup PRD R5): the scheduled check (DISK_WATCHDOG_SCHEDULED=1, set by disk-watchdog.sh from launchd's XPC_SERVICE_NAME) reads the escalation ledger through escalations.py and raises or acknowledges ONE cleanup escalation through escalate.sh, keeping its id in this job's own state file. Renewed 2026-10-23 (review rv-20261023T222724Z-e6524552-e592 #2): the cleanup action keeps the union of every failed root across ticks and into a replacement; no new input.",
+      "sha256": "3b16bf461a522667931f47735c3286bec65418e35a8e61836b53792c5631df35",
+      "evidence": "Reviewed check entry, complete main and all reached helpers. Adds scheduled device collection (run as the testdevices.py collect --apply CLI in a child process killed at a hard limit; RICHOS_DEVICE_COLLECT_SECONDS is a test-only environment override, not a config key) and condition-triggered du measurements, notification and state/log writes to the alert readers. Status-only run_reaper is unreachable. Fixed device collector reads registry ownership through the existing workspace-barrier closure; candidate paths and notification text are data. Renewed 2026-10-23 (cleanup PRD R5): the scheduled check (DISK_WATCHDOG_SCHEDULED=1, set by disk-watchdog.sh from launchd's XPC_SERVICE_NAME) reads the escalation ledger through escalations.py and raises or acknowledges ONE cleanup escalation through escalate.sh, keeping its id in this job's own state file. Renewed 2026-10-23 (review rv-20261023T222724Z-e6524552-e592 #2): the cleanup action keeps the union of every failed root across ticks and into a replacement; no new input. Renewed 2026-10-29: attribution measures only RichOS's own folders (effective storage roots, <TMPDIR>/SCRATCH_ROOT_NAME, ~/.claude, ~/.richos-nightly, the app's and the engine's Application Support folders, SCRATCH_CLAUDE_ROOTS), all through one du_kb that refuses any path foreign_app_data.entering refuses. SCRATCH_ROOT_NAME and SCRATCH_CLAUDE_ROOTS were already read by richos_garbage_bytes; no new config key.",
       "keys": [
         "SCRATCH_ROOT_NAME",
         "SCRATCH_CLAUDE_ROOTS"
@@ -8206,7 +8206,7 @@
     },
     "scripts/lib/disk-watchdog.py#suite-fixtures": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "d884865c067b38ab3962342b54df560e246d7e56314e365d93fe2e4d9c44e306",
+      "sha256": "3b16bf461a522667931f47735c3286bec65418e35a8e61836b53792c5631df35",
       "evidence": "Adds json/status rendering and reviewed run_reaper to the existing check closure. Every status fixture sets SCRATCH_REAPER_CMD to a literal JSON stub or absent path, so no production reaper executes. Scheduled device collection and fixed foreign-data classifier remain bound. Real disk capacity/free space and time are runtime inputs.",
       "keys": [
         "SCRATCH_REAPER_CMD"
@@ -8239,7 +8239,7 @@
     },
     "scripts/disk-watchdog.test.sh": {
       "source": "scripts/disk-watchdog.test.sh",
-      "sha256": "85e29ab11e4fd403435e603f673dfcdb1cba163d6dbc065565b7e5ec2a0f27a4",
+      "sha256": "9e67ade4d5e9006eaba836cd48b77582d48020c8aff085353822d3207a6decdb",
       "evidence": "Private settings control measured directories. W22 exercises foreign-app refusal through real component settings. W22d calls the production candidate function with defaults and a resolved empty snapshot. The retired consumer/volume lists are not read. Existing threshold config remains an input through the wrapper.",
       "keys": [],
       "edges": [
@@ -17083,8 +17083,8 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "d884865c067b38ab3962342b54df560e246d7e56314e365d93fe2e4d9c44e306",
-        "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
+        "scripts/lib/disk-watchdog.py": "3b16bf461a522667931f47735c3286bec65418e35a8e61836b53792c5631df35",
+        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
         "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
@@ -17160,8 +17160,8 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "d884865c067b38ab3962342b54df560e246d7e56314e365d93fe2e4d9c44e306",
-        "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
+        "scripts/lib/disk-watchdog.py": "3b16bf461a522667931f47735c3286bec65418e35a8e61836b53792c5631df35",
+        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
         "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
@@ -17385,8 +17385,8 @@
         "scripts/hooks/notice-claim-capability.sh": "f918e14199d059e57f306ee1202fe0edb3ab27711deb0003358ad36bcae3a1c5",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "d884865c067b38ab3962342b54df560e246d7e56314e365d93fe2e4d9c44e306",
-        "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
+        "scripts/lib/disk-watchdog.py": "3b16bf461a522667931f47735c3286bec65418e35a8e61836b53792c5631df35",
+        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
         "scripts/hooks/notice-protected-ref-moves.sh": "15ea383b87181c6924a00f8b5f656f72f2319e9680947674f68972fbcd6c2c43",
@@ -17693,8 +17693,8 @@
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "d884865c067b38ab3962342b54df560e246d7e56314e365d93fe2e4d9c44e306",
-        "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
+        "scripts/lib/disk-watchdog.py": "3b16bf461a522667931f47735c3286bec65418e35a8e61836b53792c5631df35",
+        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
@@ -18051,8 +18051,8 @@
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "d884865c067b38ab3962342b54df560e246d7e56314e365d93fe2e4d9c44e306",
-        "scripts/lib/foreign_app_data.py": "637bf70d16b4282880b9a0747f0f63c6af3f600b3aa9e450f0ce0216f9a52ac7",
+        "scripts/lib/disk-watchdog.py": "3b16bf461a522667931f47735c3286bec65418e35a8e61836b53792c5631df35",
+        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
         "scripts/hooks/notice-inflight-acks.sh": "d3a2aab57e8018e96dd5f97f1669f4e762a8b3bb3f34c41e243ccd4b29bbde84",
