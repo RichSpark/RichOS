@@ -3342,33 +3342,30 @@ mod tests {
 
     /// **Not spent on an account its readings show used up** (second review
     /// rv-20261029T111217Z-71fb5f11-8f6b, P2). While Stu's turn runs on Account 1, another
-    /// conversation is refused on Account 1 and Home is put in use; then Home's own reading
-    /// comes back at 100% of its week, with no refusal on it. When Stu's turn is cut, `Continue`
-    /// names Home, which has no refusal mark. The one retry is not sent to Home at once: it is
-    /// held, to the soonest reset (Account 1's, an hour away), with RichOS's line that no
-    /// account has room, and it goes on Home once Home's reading shows room again.
+    /// conversation is refused on Account 1 and Home is put in use; then Home's lease streams a
+    /// reading of 100% of its week, with no refusal on Home. When Stu's turn is cut, `Continue`
+    /// names Home, which has no refusal mark. The one retry is not sent to Home: it is held, to
+    /// the soonest reset (Account 1's, an hour away), with RichOS's line that no account has
+    /// room, and it goes once the hold is lifted (a reset used on Account 1), never on Home.
     #[test]
     #[cfg(unix)]
     fn a_stu_turn_cut_by_a_usage_limit_is_held_when_the_account_in_use_is_used_up_by_its_readings() {
         let h=harness(0);
         let (quota,home)=account_one_and_home_with_room(&h);
-        let bin=h.root.join("quota").join("claude-fixture");
-        let home_usage=home.folder.clone().unwrap().join("usage.json");
         let stu=stu_with_a_usage_limit(h,quota.clone(),1);
-        let elsewhere=(quota.clone(),home.id.clone(),bin.clone(),home_usage.clone());
+        let elsewhere=(quota.clone(),home.id.clone());
         *stu.before_cut.lock().unwrap()=Some(Box::new(move || {
-            let (quota,home,bin,home_usage)=elsewhere;
-            assert_eq!(quota.limit_reached("1",Some(crate::util::now_millis()+3_600_000)),crate::claude_accounts::AfterLimit::Continue);
-            crate::quota::tests::usage(&home_usage,10.,100.,"2099-01-06T00:00:00Z");
-            quota.refresh(&bin,true);
-            assert_eq!(quota.accounts.in_use().id,home,"Home stays in use: no account has room to go to");
+            let (quota,home)=elsewhere;
+            let now=crate::util::now_millis();
+            assert_eq!(quota.limit_reached("1",Some(now+3_600_000)),crate::claude_accounts::AfterLimit::Continue);
+            // What a lease on Home streams (`native::streamed_windows`): its week is used up.
+            let week=crate::quota::Window {id:"seven_day".into(),label:"Weekly".into(),used_percent:100.,
+                resets_at:Some(now+72*3_600_000),duration_ms:168*3_600_000};
+            assert_eq!(quota.before_turn(&home,Some((vec![week],now+1))),home,"Home stays in use: no account has room to go to");
             assert_eq!(quota.accounts.limited_until(&home),None,"Home was never refused");
         }));
-        let lifting=(quota.clone(),bin,home_usage);
-        let clock=Arc::new(LiftOnWait {waits:Mutex::new(Vec::new()),lift:Box::new(move || {
-            crate::quota::tests::usage(&lifting.2,10.,20.,"2099-01-06T00:00:00Z");
-            lifting.0.refresh(&lifting.1,true);
-        })});
+        let lifting=quota.clone();
+        let clock=Arc::new(LiftOnWait {waits:Mutex::new(Vec::new()),lift:Box::new(move || lifting.accounts.reset_used("1").unwrap())});
         stu.host.set_retry_clock(clock.clone());
 
         stu.send("Input under test",1);
@@ -3379,8 +3376,8 @@ mod tests {
             "the one retry was not held while Home was used up by its readings: {waits:?}");
         let shown=stu.notices.0.lock().unwrap().clone();
         assert!(shown.len()==1 && shown[0].1.contains("no Claude account has room"),"{shown:?}");
-        assert_eq!(stu.deliveries("Input under test"),["1".to_string(),home.id.clone()],
-            "not sent once more on Home once its reading had room: {:?}",stu.prompts.lock().unwrap());
+        assert_eq!(stu.deliveries("Input under test"),["1","1"],
+            "the one retry went to Home, used up by its readings: {:?}",stu.prompts.lock().unwrap());
         assert!(stu.failures().is_empty());
         stu.end();
     }
