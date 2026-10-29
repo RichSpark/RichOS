@@ -230,6 +230,31 @@ impl WorkHost {
         ended || message.is_some_and(|message| self.handoff_stopped(binding, message).unwrap_or(true))
     }
 
+    /// **A turn that ended with `reason` ran the input it was given**, so that input is in the
+    /// session's transcript and a later `end_turn` there means Stu had it ([`Inner::cut`]). Not a
+    /// Stop (`STOP_REASON_CANCELLED`, which is also what input canceled before it ran says, or
+    /// its unacknowledged form) and not input the child threw away before any turn ran it: those
+    /// keep the reconciliation a restart gives them, as before.
+    fn reason_ran(reason: &str) -> bool {
+        use crate::native::{STOP_REASON_CANCELLED, STOP_REASON_CANCEL_UNACKNOWLEDGED, STOP_REASON_DISCARDED, STOP_REASON_REFUSED};
+        !matches!(reason, STOP_REASON_CANCELLED | STOP_REASON_CANCEL_UNACKNOWLEDGED | STOP_REASON_DISCARDED | STOP_REASON_REFUSED)
+    }
+
+    /// [`Self::reason_ran`] for live input's outcome, whose error is the native turn's
+    /// (`native.rs`, `PendingTurn::finish`): a child that went away mid-turn
+    /// (`NativeError::Exited`, `Closed`) may never have read the input, as `run_message`'s lost
+    /// connection may not, so it is not taken as run.
+    fn live_turn_ran(result: &Result<String, String>) -> bool {
+        use crate::native::NativeError;
+        match result {
+            Ok(reason) => Self::reason_ran(reason),
+            Err(error) => {
+                let exited = NativeError::Exited { said: String::new() }.to_string();
+                !error.starts_with(exited.trim_end()) && *error != NativeError::Closed.to_string()
+            }
+        }
+    }
+
     /// `input` was given to a turn of `session` that ended without `end_turn`, and nothing sends
     /// it again ([`Inner::cut`]).
     fn note_cut(&self, backend: &Backend, session: Option<&str>, input: InputReceipt) {
@@ -563,8 +588,8 @@ impl WorkHost {
                     eprintln!("[richos] native input status: {error}");
                 }
             }
-            // Given to a turn that did not end normally, and nothing sends it again.
-            if !succeeded { host.note_cut(&backend, session.as_deref(), input); }
+            // Given to a turn that ran and did not end normally, and nothing sends it again.
+            if !succeeded && Self::live_turn_ran(&outcome.result) { host.note_cut(&backend, session.as_deref(), input); }
             backend.wake.notify_all();
         })
     }
@@ -1176,7 +1201,8 @@ impl WorkHost {
                 self.note_back_end(binding, None);
                 backend.inner.lock().unwrap().peer_active_through=None;
             }
-            if !matches!(&result, Err(CognitionError::Io(_))) {
+            // Not a lost connection, a Stop or input thrown away before it ran (`reason_ran`).
+            if match &result { Ok(reason) => Self::reason_ran(reason), Err(error) => !matches!(error, CognitionError::Io(_)) } {
                 *ran.borrow_mut() = Some(session.clone());
             }
             let reason = result.map_err(|e| e.to_string())?;
@@ -4032,6 +4058,49 @@ mod tests {
         assert!(crate::session_tools::previous_attempt(&fresh_scope,"stu",&format!("peer:{b}")).unwrap().is_none());
         fresh.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// **Input no turn ran is still handed back after a restart**, though a later turn of the
+    /// same session ended normally: the child threw it away before it ran (`discarded`,
+    /// `refused`), a Stop ended it, or the child went away mid-turn and may never have read it.
+    /// Stu may not have it, so the restart's reconciliation stays ([`WorkHost::reason_ran`]).
+    #[test]
+    fn input_no_turn_ran_is_handed_back_after_a_restart_though_a_later_turn_ended_normally() {
+        for outcome in [Ok(crate::native::STOP_REASON_DISCARDED.to_string()), Ok(crate::native::STOP_REASON_REFUSED.to_string()),
+            Ok(crate::native::STOP_REASON_CANCELLED.to_string()),
+            Err(crate::native::NativeError::Exited {said:"it wrote nothing on stderr".into()}.to_string()),
+            Err(crate::native::NativeError::Closed.to_string())] {
+            let h=harness(0);
+            let scope=h.host.message_scope(&h.binding);
+            let path=h.root.join("peer-status.json");
+            crate::session_tools::bind(&path,&scope,"front","rich",None).unwrap();
+            let backend=Backend::new();
+            let session="stu-live".to_string();
+            backend.inner.lock().unwrap().lease_session=Some(session.clone());
+            let live=|text: &str, after: u64| {
+                crate::session_tools::send(&path,&scope,serde_json::json!({"text":text})).unwrap();
+                let (message,through)=crate::session_tools::pending_after(&scope,"stu",after).unwrap().unwrap();
+                crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),&session).unwrap();
+                let completed=h.host.live_completion(&backend,&h.binding,message,(InputReceipt::Peer(through),Some(session.clone())),text.into());
+                (completed,through)
+            };
+
+            let (never,a)=live("Message A",0);
+            never(crate::steering::InputOutcome {result:outcome.clone(),report_failure:true});
+            let (next,_)=live("Message B",a);
+            next(crate::steering::InputOutcome {result:Ok("end_turn".into()),report_failure:true});
+            h.host.shutdown();
+
+            let fresh=WorkHost::new(&h.state,Box::new(Factory {spawns:Arc::new(AtomicUsize::new(0)),prompts:Arc::new(Mutex::new(vec![])),
+                commands:Arc::new(Mutex::new(None)),team:Arc::new(Mutex::new(TeamScript::default())),gate:StartGate::open_now()}),
+                Arc::new(RecordingNotifier::default()));
+            let fresh_scope=fresh.message_scope(&h.binding);
+            let left=crate::session_tools::pending_after(&fresh_scope,"stu",0).unwrap();
+            assert_eq!(left.map(|(message,through)| (message.text.contains("Message A"),through)),Some((true,a)),
+                "{outcome:?}: input no turn ran was not handed back after a restart");
+            fresh.shutdown();
+            std::fs::remove_dir_all(h.root).unwrap();
+        }
     }
 
     /// The `worker_overload` (and `turn_overload`) facts Stu has been sent, in order.
