@@ -60,8 +60,26 @@ case "$HOOK" in
     post-*) REFUSE=0 ;;
     *) REFUSE=1 ;;
 esac
-mkdir -p "${TMPDIR:-${HOME}/.cache/richos/tmp}" || exit "$REFUSE"
-TMP=$(mktemp -d "${TMPDIR:-${HOME}/.cache/richos/tmp}/richos-autocheck.XXXXXX") || {
+# THE HOOK RESOLVES ITS OWN TEMPORARY DIRECTORY. The caller's TMPDIR is used when it names a
+# directory this process can write; one that does not exist, is not a directory or is read-only
+# (an app's per-session folder that is gone, a sandbox path) used to refuse every commit here
+# before any check ran. Then the user's cache, then /tmp. The checks the hook runs get the
+# directory autocheck.py resolves for them (Repo.__init__), not whatever the caller exported.
+HOOK_TMPDIR=
+for candidate in "${TMPDIR:-}" "${HOME}/.cache/richos/tmp" /tmp; do
+    [ -n "$candidate" ] || continue
+    if mkdir -p "$candidate" 2>/dev/null && [ -d "$candidate" ] && [ -w "$candidate" ]; then
+        HOOK_TMPDIR=$candidate
+        break
+    fi
+done
+if [ -z "$HOOK_TMPDIR" ]; then
+    echo "autocheck: $HOOK found no writable temporary directory; the check did not run" >&2
+    exit "$REFUSE"
+fi
+TMPDIR=$HOOK_TMPDIR
+export TMPDIR
+TMP=$(mktemp -d "$HOOK_TMPDIR/richos-autocheck.XXXXXX") || {
     echo "autocheck: $HOOK could not make a scratch file; the check did not run" >&2
     exit "$REFUSE"
 }
