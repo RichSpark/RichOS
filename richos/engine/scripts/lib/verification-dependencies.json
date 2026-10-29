@@ -5146,9 +5146,6 @@
           "to": "scripts/lib/operator_fences.py#runtime"
         },
         {
-          "to": "scripts/lib/operator_fences.py#admin-status"
-        },
-        {
           "to": "scripts/lib/operator_fences_admin.py#holders-notice"
         },
         {
