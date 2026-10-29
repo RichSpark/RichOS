@@ -951,14 +951,36 @@ def settle_undispatched(scope, path, record, reason=NEVER_DISPATCHED):
 COMPLETED_UNRUN = "the assignment was completed and this receipt never ran"
 
 
+def abandoned(record, binding):
+    """True when a receipt that never started (`never_started`) can no longer start either, so
+    completion need not wait for it: its preparation failed or is uncertain (`preparing` with
+    its owner gone, `unknown`), its dispatch was refused (Pierce, or a later control after the
+    spawn guard registered it), it is already settled (`blocked`), or it was prepared in an
+    earlier turn, whose Agent call can no longer be admitted as it stands.
+
+    A preparation of THIS turn that nothing refused is NOT abandoned (Tom's review of the
+    c2ad4fb8c merge, 2026-10-28): an assignment may have several independent workers, prepared
+    one after the other and then dispatched, and `complete` settled such a parallel worker and
+    withdrew its worktree just before it was to start. It is unresolved, and completion is
+    refused until it runs or is settled on request."""
+    if not never_started(record):
+        return False
+    if record.get("status") != "prepared" or record.get("pierce_refused") or record.get("binding") != binding:
+        return True
+    canonical = canonical_of(record)
+    return bool(canonical and any(canonical.get(field) for field in ("tool_use_id", "spawned_at")))
+
+
 def settle_never_run(scope, root, obligation, reason):
-    """Settle every receipt of `obligation` that never started a run. Returns what was
-    settled now, each with what it withdrew and what it kept."""
+    """Settle every receipt of `obligation` that never started a run and can no longer start
+    (`abandoned`). Returns what was settled now, each with what it withdrew and what it kept."""
     out = []
     for path, record in receipts(root):
         if record["request"]["obligation_id"] != obligation or record.get("settled"):
             continue
         refresh(record)
+        if not abandoned(record, scope["binding"]):
+            continue
         settled = settle_undispatched(scope, path, record, reason)
         if settled:
             out.append({"id": record["id"], "name": record["name"], "request_id": record.get("request_id"),
@@ -2604,12 +2626,13 @@ def completion_path(scope, identity):
 UNRESOLVED = ("preparing", "prepared", "dispatching", "running", "unknown")
 
 
-def unresolved(rows):
+def unresolved(rows, binding):
     """The receipts that still have, or may have, a run in flight. A receipt that provably
-    never started one is not among them: it did no work, so nothing waits on it
-    (2026-10-28, work-709b35ac: a review prepared and never admitted held a reviewed,
-    integrated job open)."""
-    return [record for record in rows if record["status"] in UNRESOLVED and not never_started(record)]
+    never started one and can no longer start (`abandoned`) is not among them: it did no
+    work, so nothing waits on it (2026-10-28, work-709b35ac: a review prepared and never
+    admitted held a reviewed, integrated job open). One prepared in this turn that nothing
+    refused is: it may be dispatched next."""
+    return [record for record in rows if record["status"] in UNRESOLVED and not abandoned(record, binding)]
 
 
 def completion_evidence(scope, obligation, worker_ids):
@@ -2617,7 +2640,7 @@ def completion_evidence(scope, obligation, worker_ids):
     completion (`verify_completion`). Settling happens in `complete`, never here."""
     rows = [refresh(record) for _, record in receipts(folder(scope))
             if record["request"]["obligation_id"] == obligation]
-    if unresolved(rows):
+    if unresolved(rows, scope["binding"]):
         raise ValueError("this assignment still has unresolved execution; reconcile it before completion")
     # A worker receipt refused, settled or otherwise never started did no work, so it
     # is not a final worker: counting it would make the assignment uncompletable
@@ -2664,7 +2687,7 @@ def complete(scope_path, scope, args):
             require_not_stopped(scope, obligation)
             rows = [refresh(record) for _, record in receipts(folder(scope))
                     if record["request"]["obligation_id"] == obligation]
-            if unresolved(rows):
+            if unresolved(rows, scope["binding"]):
                 raise ValueError("this assignment still has unresolved execution")
             if any(record["request"]["role"] != "consult" and not never_dispatched(record) and not never_started(record)
                    for record in rows):
