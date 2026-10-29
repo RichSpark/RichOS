@@ -19,9 +19,10 @@
 //!   the non-negative weighted least-squares fit of `points = sum(tokens_m / per_point_m)` over
 //!   the kept episodes, each weighted by 1 / its tokens. With one model that is exactly
 //!   `token-track.py`'s total tokens / total points. A model the episodes cannot tell apart from
-//!   another has no figure yet, and neither has a model the episodes barely saw: besides the
-//!   model that spent the most, one that spent fewer tokens over them than the cheapest whole
-//!   point the account was measured at (its own few thousand tokens fit any points at all).
+//!   another has no figure yet. A model the episodes barely saw is not fitted (its own few
+//!   thousand tokens fit any points at all): besides the model that spent the most, one that
+//!   spent fewer tokens over them than the cheapest whole point the account was measured at.
+//!   It is priced at that cheapest point instead, so it is still read.
 //! - **The speed** (`Track::speed`): over the last minute, each measured model's tokens divided
 //!   by its tokens per point, summed. The quota service takes the larger of it and the
 //!   percentage speed (`Snapshot::reading_with`), so a model with no figure yet, or use this Mac
@@ -457,7 +458,8 @@ impl Tally {
     }
 }
 
-/// Tokens per weekly point for each model the episodes measure (see the module comment).
+/// Tokens per weekly point for each model the episodes measure, and the cheapest whole point for
+/// each one they saw too little of (see the module comment).
 pub fn figures(episodes: &[Episode]) -> BTreeMap<String, f64> {
     let mut totals: BTreeMap<&str, u64> = BTreeMap::new();
     for episode in episodes {
@@ -473,12 +475,20 @@ pub fn figures(episodes: &[Episode]) -> BTreeMap<String, f64> {
     // week's handoff point fell to 0. So besides the model that spent the most, only a model
     // that spent at least as many tokens, over the kept episodes, as the cheapest whole point the
     // account was ever measured at is fitted: the percentage only says whole points, and fewer
-    // tokens than any measured point have never been seen to move it. The rest add nothing, like
-    // any model with no figure, so the percentage speed stays the floor for them.
+    // tokens than any measured point have never been seen to move it.
+    //
+    // **But a model left out of the fit is still read** (Tom's review of 1ff534f44: on Work's
+    // own history Fable, 1.7M to 5.2M tokens in 6 of its episodes, stayed under that line from
+    // its 4th episode to its 9th, and a Fable burst then added nothing to the speed). A model the
+    // episodes saw too little of to measure is priced at that same cheapest whole point: the
+    // most points per token the account was ever measured to spend. Haiku's 83,446 are then
+    // 0.004 points, not 21, and a Fable burst moves the handoff point.
     let cheapest = episodes.iter().filter(|e| e.points > 0.)
         .map(|e| e.tokens.values().sum::<u64>() as f64 / e.points).filter(|t| *t > 0.).fold(f64::INFINITY, f64::min);
     let most = models.first().map(|m| m.0);
-    models.retain(|(model, tokens)| Some(*model) == most || *tokens as f64 >= cheapest);
+    let (mut models, unmeasured): (Vec<_>, Vec<_>) = models.into_iter()
+        .partition(|(model, tokens)| Some(*model) == most || *tokens as f64 >= cheapest);
+    let unmeasured = unmeasured.into_iter().filter(|_| cheapest.is_finite()).map(|(m, _)| (m.to_string(), cheapest));
     models.truncate(MAX_MODELS);
     // One row per episode with tokens: each model's tokens in millions, the points, the weight.
     let rows: Vec<(Vec<f64>, f64, f64)> = episodes.iter().filter_map(|e| {
@@ -508,8 +518,11 @@ pub fn figures(episodes: &[Episode]) -> BTreeMap<String, f64> {
         }).sum();
         if best.as_ref().is_none_or(|(r, ..)| residual < *r) { best = Some((residual, pick, per_million)); }
     }
-    let Some((_, pick, per_million)) = best else { return BTreeMap::new() };
-    pick.into_iter().zip(per_million).map(|(i, c)| (models[i].0.to_string(), 1e6 / c)).collect()
+    let mut figures: BTreeMap<String, f64> = unmeasured.collect();
+    if let Some((_, pick, per_million)) = best {
+        figures.extend(pick.into_iter().zip(per_million).map(|(i, c)| (models[i].0.to_string(), 1e6 / c)));
+    }
+    figures
 }
 
 /// Gaussian elimination with partial pivoting on an augmented `k x (k + 1)` system. `None` when
@@ -572,8 +585,9 @@ mod tests {
     /// 83,446 Haiku tokens a lease's result reported in the 13:00 slot (Claude Code's own Haiku
     /// calls, in no assistant frame) became 21 weekly points in one minute. The cheapest point
     /// Work was measured at is its second episode, 22,385,074 tokens; Haiku's 4,180 in all are
-    /// far from it, so Haiku is not fitted. Sonnet (23,134,948) is, and the best positive fit is
-    /// then Opus alone: 1 / the weighted least-squares fit of both points, 28.3M a point.
+    /// far from it, so Haiku is not fitted but priced at that point (83,446 tokens: 0.004
+    /// points). Sonnet (23,134,948) is fitted, and the best positive fit is then Opus alone: 1 /
+    /// the weighted least-squares fit of both points, 28.3M a point.
     #[test]
     fn a_model_the_episodes_barely_saw_gets_no_figure_from_their_noise() {
         for haiku in [3_151, 1_500] {
@@ -581,27 +595,52 @@ mod tests {
                 episode(1., &[("claude-haiku-5-5", 1_029), ("claude-opus-5-5", 40_634_401), ("claude-sonnet-5-5", 18_154_910)]),
                 episode(1., &[("claude-haiku-5-5", haiku), ("claude-opus-5-5", 17_401_885), ("claude-sonnet-5-5", 4_980_038)]),
             ];
+            let cheapest = (17_401_885 + 4_980_038 + haiku) as f64;
             let f = figures(&work);
-            assert!(!f.contains_key("claude-haiku-5-5"), "Haiku, 0.005% of the tokens, was given a figure: {f:?}");
-            assert_eq!(f.keys().collect::<Vec<_>>(), ["claude-opus-5-5"], "{f:?}");
+            assert_eq!(f.keys().collect::<Vec<_>>(), ["claude-haiku-5-5", "claude-opus-5-5"], "{f:?}");
+            assert_eq!(f["claude-haiku-5-5"], cheapest, "Haiku, 0.005% of the tokens, was given a figure from their noise: {f:?}");
             assert!((f["claude-opus-5-5"] / 28_336_202. - 1.).abs() < 1e-3, "{f:?}");
             // The same two episodes with Opus and Haiku alone (Haiku is in every lease's result).
             let alone: Vec<Episode> = work.iter().map(|e| Episode { points: e.points,
                 tokens: e.tokens.iter().filter(|(m, _)| !m.contains("sonnet")).map(|(m, t)| (m.clone(), *t)).collect() }).collect();
             let f = figures(&alone);
-            assert_eq!(f.keys().collect::<Vec<_>>(), ["claude-opus-5-5"], "{f:?}");
+            assert_eq!(f.keys().collect::<Vec<_>>(), ["claude-haiku-5-5", "claude-opus-5-5"], "{f:?}");
+            assert_eq!(f["claude-haiku-5-5"], (17_401_885 + haiku) as f64, "{f:?}");
         }
+    }
+    /// **A model the account used only a little is still read** (Tom's review of 1ff534f44).
+    /// Work's first six episodes: Fable is in three, 8,760,602 tokens in all, under the cheapest
+    /// point (the fourth episode, 17,869,132), so it is not fitted; it is priced at that point,
+    /// as Haiku is. (1ff534f44 gave neither a figure, so a Fable burst read as nothing.)
+    #[test]
+    fn a_model_left_out_of_the_fit_is_priced_at_the_cheapest_point() {
+        let work = [
+            episode(1., &[("claude-haiku-5-5", 1_029), ("claude-opus-5-5", 40_634_401), ("claude-sonnet-5-5", 18_154_910)]),
+            episode(1., &[("claude-haiku-5-5", 3_151), ("claude-opus-5-5", 17_401_885), ("claude-sonnet-5-5", 4_980_038)]),
+            episode(1., &[("claude-fable-5-1", 2_939_271), ("claude-haiku-5-5", 83_446), ("claude-opus-5-5", 27_210_374), ("claude-sonnet-5-5", 3_477_888)]),
+            episode(1., &[("claude-fable-5-1", 1_667_801), ("claude-opus-5-5", 13_890_036), ("claude-sonnet-5-5", 2_311_295)]),
+            episode(1., &[("claude-fable-5-1", 4_153_530), ("claude-opus-5-5", 36_103_747), ("claude-sonnet-5-5", 5_854_694)]),
+            episode(1., &[("claude-opus-5-5", 54_593_932), ("claude-sonnet-5-5", 291_147)]),
+        ];
+        let f = figures(&work);
+        assert_eq!(f.get("claude-fable-5-1"), Some(&17_869_132.), "{f:?}");
+        assert_eq!(f.get("claude-haiku-5-5"), Some(&17_869_132.), "{f:?}");
+        assert!(f.contains_key("claude-opus-5-5"), "{f:?}");
+        // No episode at all: nothing to price anything at.
+        assert!(figures(&[]).is_empty());
     }
     /// **Every model the episodes did measure keeps its figure.** Two episodes on one model each
     /// (Opus 30M = 1 point, Sonnet 60M = 1 point): each spent a whole point by itself, so both are
     /// exact. And one episode of a mix (Work's first): the model that spent the most is measured,
-    /// as before, at its tokens for the point, 40,634,401.
+    /// as before, at its tokens for the point, 40,634,401; the two it saw less of are priced at
+    /// the episode's whole point, 58,790,340.
     #[test]
     fn every_model_the_episodes_measured_keeps_its_figure() {
         let f = figures(&[episode(1., &[("opus", 30_000_000)]), episode(1., &[("sonnet", 60_000_000)])]);
         assert!((f["opus"] - 3e7).abs() < 1. && (f["sonnet"] - 6e7).abs() < 1., "{f:?}");
         let f = figures(&[episode(1., &[("claude-haiku-5-5", 1_029), ("claude-opus-5-5", 40_634_401), ("claude-sonnet-5-5", 18_154_910)])]);
-        assert_eq!(f.keys().collect::<Vec<_>>(), ["claude-opus-5-5"], "{f:?}");
+        assert_eq!(f.keys().collect::<Vec<_>>(), ["claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5-5"], "{f:?}");
+        assert_eq!((f["claude-haiku-5-5"], f["claude-sonnet-5-5"]), (58_790_340., 58_790_340.), "{f:?}");
         assert!((f["claude-opus-5-5"] - 40_634_401.).abs() < 1., "{f:?}");
     }
     /// **The spend of a lease, its unseen output included** (§118). The frames and `result` the

@@ -2088,7 +2088,11 @@ pub(crate) mod tests {
     }
 
     fn opus_frame(id: &str, read: u64) -> Value {
-        json!({"type": "assistant", "parent_tool_use_id": null, "message": {"id": id, "model": "claude-opus-5-5",
+        model_frame("claude-opus-5-5", id, read)
+    }
+
+    fn model_frame(model: &str, id: &str, read: u64) -> Value {
+        json!({"type": "assistant", "parent_tool_use_id": null, "message": {"id": id, "model": model,
             "usage": {"input_tokens": 2, "output_tokens": 1, "cache_read_input_tokens": read, "cache_creation_input_tokens": 0,
                 "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}}}})
     }
@@ -2152,6 +2156,40 @@ pub(crate) mod tests {
             assert_eq!(published.act_at["seven_day"], 89., "{:?}", published.speeds);
             assert_eq!(published.leaving.contains(&work), leaving, "Work at {weekly}%: {:?}", published.leaving);
         }
+    }
+
+    /// **A model the account used only a little is still read, and its burst still hands off**
+    /// (Tom's review of 1ff534f44). Work's first six learned episodes exactly as
+    /// `claude-token-points.json` keeps them: Fable is in three of them, 8,760,602 tokens in all,
+    /// under the cheapest whole point (the fourth episode, 17,869,132), so the fit leaves it
+    /// out. Then a Fable burst through a lease: 20 requests of 1M tokens in the last minute.
+    /// 1ff534f44 read it as nothing (the week's point stayed 99, so Work at 93% was not left).
+    /// Priced at the cheapest point it is 20M / 17,869,132 = 1.119 points a minute, fast
+    /// (1.119 x 5 >= 5), so I = 1 minute and H the default 5:
+    /// 99 - (ceil(1.119 x 6 = 6.72) - 1) = 93. (Main's fit gave Fable about 7.97M tokens a point:
+    /// 2.51 a minute, 99 - (ceil(15.06) - 1) = 84. Work's 12-episode figure, 16.5M, gives 92.)
+    #[test]
+    fn a_minority_models_burst_still_hands_off() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 2939271, "claude-haiku-5-5": 83446, "claude-opus-5-5": 27210374, "claude-sonnet-5-5": 3477888}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 1667801, "claude-opus-5-5": 13890036, "claude-sonnet-5-5": 2311295}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 4153530, "claude-opus-5-5": 36103747, "claude-sonnet-5-5": 5854694}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 54593932, "claude-sonnet-5-5": 291147}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 93.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..20u64)
+            .map(|i| (model_frame("claude-fable-5-1", &format!("msg_{i}"), 1_000_000 - 3), now - 57_000 + i * 3_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 93., "a Fable burst left the week's point at {point} (weekly speed {} points a minute)",
+            published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 93% during a Fable burst is not being left: {:?}", published.leaving);
     }
 
     /// **An account the app has never read is asked again soon** (handoff round 2, runs 2-4
