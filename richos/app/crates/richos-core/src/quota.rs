@@ -2164,8 +2164,8 @@ pub(crate) mod tests {
     /// under the cheapest whole point (the fourth episode, 17,869,132). Then a Fable burst through
     /// a lease: 20 requests of 1M tokens in the last minute. 1ff534f44 left Fable out of the fit
     /// and read it as nothing (the week's point stayed 99, so Work at 93% was not left). The fit
-    /// measures Fable at about 7.97M tokens a point, as main does, above its card floor
-    /// (13,890,036 / 2.75 = 5.05M): 20M is 2.51 points a minute, fast (2.51 x 5 >= 5), so I = 1
+    /// measures Fable at about 7.98M tokens a point, as main does, far above the cards' bound
+    /// (0.2M): 20M is 2.51 points a minute, fast (2.51 x 5 >= 5), so I = 1
     /// minute and H the default 5: 99 - (ceil(2.51 x 6 = 15.06) - 1) = 84, at or under 93.
     /// (Work's 12-episode figure, 16.5M, gives 1.21 a minute and 92.)
     #[test]
