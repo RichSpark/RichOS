@@ -82,6 +82,68 @@ fn authorized(scope: &Path, worker: bool) -> bool {
     })
 }
 
+/// **The refusal for a closed grant, with its cause and scope** (2026-10-28, nightly 78: Agent
+/// dispatches refused with "This app work has ended or was stopped" while nobody had stopped
+/// anything; the cause was a message being queued, and nothing said so). It names which work
+/// (the scope's thread, turn and seat), who closed it and when, from the record `ecs.rs` writes
+/// with every close ([`crate::ecs::GrantClosed`]). The first sentence stays [`WORK_ENDED`], so
+/// [`refusal`] still tells it from an allowance refusal.
+fn work_ended(scope: &Path) -> io::Error {
+    io::Error::other(format!("{WORK_ENDED} {}", closed_detail(scope)))
+}
+
+pub(crate) fn closed_detail(scope: &Path) -> String {
+    let Ok(v) = read_json::<Value>(scope) else {
+        return format!("Its scope file {} could not be read.", scope.display());
+    };
+    let binding = &v["binding"];
+    let mut work = match (binding["thread_id"].as_str(), binding["turn_id"].as_str()) {
+        (Some(thread), Some(turn)) => format!("the work of thread {thread}, turn {turn}"),
+        _ => "this work".to_string(),
+    };
+    if let Some(seat) = v["seat"].as_str() {
+        work.push_str(&format!(" (seat {seat})"));
+    }
+    let Some(by) = v["closed"]["by"].as_str() else {
+        return format!("Cause: {work} has no open grant and no reason for closing it was recorded \
+                        (a scope an older app wrote or one written by hand).");
+    };
+    let when = v["closed"]["at_ms"].as_u64().map_or_else(|| "at an unrecorded time".to_string(), |ms| format!("at {}", utc(ms)));
+    format!("Cause: {work} was closed by {} {when}.", closed_sentence(by))
+}
+
+/// The words for a [`crate::ecs::closed_by`] code. Keep in step with
+/// `engine/scripts/lib/scope_closure.py`.
+fn closed_sentence(by: &str) -> String {
+    use crate::ecs::closed_by::*;
+    match by {
+        STOP => "a Stop (the user's, or the app ending this connection)".into(),
+        ASSIGNMENT_END => "the end of the assignment this work carried".into(),
+        CRASH_RECOVERY => "the app's start-up sweep after it last quit unexpectedly".into(),
+        TURN_END => "the end of the turn".into(),
+        TURN_START_FAILED => "a turn that could not start".into(),
+        NOT_STARTED => "the app, which has written it for an input whose turn has not started yet".into(),
+        other => format!("an unrecognized cause ({other})"),
+    }
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` for Unix milliseconds (proleptic Gregorian, UTC).
+fn utc(ms: u64) -> String {
+    let secs = ms / 1000;
+    let (days, rest) = ((secs / 86_400) as i64, secs % 86_400);
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rest / 3600, (rest / 60) % 60, rest % 60)
+}
+
 /// The variable `configure` sets to the id of the Claude account a provider runs on
 /// (`engine_profile.rs`). Hooks run in the provider's environment, so every helper's tool call
 /// carries it.
@@ -191,7 +253,7 @@ fn handoff(payload: &Value, state: &Path, scope: &Path, account: &str) -> Option
         return None;
     }
     if !authorized(scope, true) {
-        return Some(Err(io::Error::other(WORK_ENDED)));
+        return Some(Err(work_ended(scope)));
     }
     let path = marker_path(state, agent)?;
     fs::create_dir_all(path.parent()?).ok()?;
@@ -258,7 +320,7 @@ fn wait(
     let key = release_key(payload);
     loop {
         if !authorized(scope, worker) {
-            return Err(io::Error::other(WORK_ENDED));
+            return Err(work_ended(scope));
         }
         let now = crate::util::now_millis();
         let (admission, release) = decide(state, Some(account), now);
@@ -434,7 +496,7 @@ fn refusal(error: &io::Error) -> String {
     if text == HANDOFF_ORDER {
         return text;
     }
-    if text == WORK_ENDED {
+    if text.starts_with(WORK_ENDED) {
         format!("RichOS desktop: {text}")
     } else {
         format!("RichOS desktop quota: {text}")
@@ -566,7 +628,42 @@ mod tests {
         assert!(service.view().leaving.is_empty(),"an expired weekly window ordered an account handoff");
         assert!(wait(&dispatch,&state,&scope,"1",Duration::ZERO,Duration::ZERO).is_err());
         atomic_write(&scope,&json!({"version":1,"actions_allowed":false})).unwrap();
-        assert_eq!(wait(&dispatch,&state,&scope,"1",Duration::ZERO,Duration::ZERO).unwrap_err().to_string(),WORK_ENDED);
+        assert!(wait(&dispatch,&state,&scope,"1",Duration::ZERO,Duration::ZERO).unwrap_err().to_string().starts_with(WORK_ENDED));
+    }
+
+    /// **Every closed-grant refusal names which work, who closed it and when** (follow-up
+    /// "app work tools refused dispatches for unexplained reasons", 2026-10-28 12:50Z: Stu's
+    /// dispatches were refused with "This app work has ended or was stopped" while nobody had
+    /// stopped anything and the job showed running). On main this said only the first sentence.
+    #[test]
+    fn a_closed_grant_refusal_names_the_work_who_closed_it_and_when() {
+        let (_root, _service, state, scope) = setup();
+        let dispatch = json!({"tool_name":"Agent","session_id":"stu"});
+        let closed = |by: &str| json!({"version":1,"actions_allowed":false,"background_work_allowed":true,
+            "binding":{"entity_id":"co","thread_id":"thr_one","session_id":"stu","turn_id":"peer:42","audience":"rich","revision":3},
+            "seat":"stu-thread:thr_one","closed":{"by":by,"at_ms":1_793_261_100_000_u64}});
+        for (by, words) in [(crate::ecs::closed_by::STOP, "a Stop"),
+                            (crate::ecs::closed_by::ASSIGNMENT_END, "the end of the assignment"),
+                            (crate::ecs::closed_by::NOT_STARTED, "has not started yet")] {
+            atomic_write(&scope, &closed(by)).unwrap();
+            let said = refusal(&wait(&dispatch, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+            assert!(said.starts_with("RichOS desktop: This app work has ended or was stopped."), "{said}");
+            assert!(said.contains("thread thr_one, turn peer:42 (seat stu-thread:thr_one)"), "which work: {said}");
+            assert!(said.contains(words), "by whom: {said}");
+            assert!(said.contains("at 2026-10-29T08:05:00Z"), "when: {said}");
+            assert!(!said.to_lowercase().contains("quota"), "{said}");
+        }
+        // A scope an older app wrote says so rather than guessing a cause.
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":false})).unwrap();
+        let said = refusal(&wait(&dispatch, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(said.contains("no reason for closing it was recorded"), "{said}");
+    }
+
+    #[test]
+    fn utc_formats_unix_milliseconds() {
+        assert_eq!(utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(utc(951_782_400_000), "2000-02-29T00:00:00Z");
+        assert_eq!(utc(1_793_261_100_999), "2026-10-29T08:05:00Z");
     }
 
     #[test]
