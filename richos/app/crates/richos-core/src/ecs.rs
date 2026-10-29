@@ -283,10 +283,12 @@ pub fn set_actions_allowed(path: &Path, allowed: bool) -> Result<(), EcsError> {
 /// closed (a Stop, the end of an assignment, a crash sweep) stays closed, with its reason,
 /// until the new turn opens it. A file that is missing or unreadable, or one written for
 /// another session, is written closed, as before.
+///
+/// It reads the file and writes it back, so its caller holds the lock a Stop revokes under
+/// (`NativeCognition::agent_message_binding`); otherwise a Stop landing between the two is
+/// written open again.
 pub fn write_next_scope(path: &Path, mut next: ToolScope) -> Result<(), EcsError> {
-    let current = std::fs::read(path).ok()
-        .and_then(|bytes| serde_json::from_slice::<ToolScope>(&bytes).ok())
-        .filter(|current| current.binding.session_id == next.binding.session_id);
+    let current = scope_of_session(path, &next.binding.session_id);
     match current {
         Some(current) if current.actions_allowed => {
             next.actions_allowed = true;
@@ -302,6 +304,21 @@ pub fn write_next_scope(path: &Path, mut next: ToolScope) -> Result<(), EcsError
         }
     }
     write_scope(path, &next)
+}
+
+/// The scope on `path` when it is one written for `session_id`; `None` when it is missing,
+/// unreadable or another session's.
+fn scope_of_session(path: &Path, session_id: &str) -> Option<ToolScope> {
+    std::fs::read(path).ok()
+        .and_then(|bytes| serde_json::from_slice::<ToolScope>(&bytes).ok())
+        .filter(|current| current.binding.session_id == session_id)
+}
+
+/// **Is a turn of `session_id` possibly running under this scope?** Its grant is open on the
+/// file, for that session. A queued input is not bound while it is (second review of 6e9a03c3,
+/// finding 2): binding it would make every operation of the running turn stale to ECS.
+pub fn grant_open_for(path: &Path, session_id: &str) -> bool {
+    scope_of_session(path, session_id).is_some_and(|scope| scope.actions_allowed)
 }
 
 /// **EVERYTHING this scope grants, withdrawn in one write** — the turn's actions and the

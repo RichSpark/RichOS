@@ -4214,15 +4214,86 @@ impl NativeCognition {
 
 
     fn prepare_question_scope(&self,entity:&str,thread:&str,turn:&str,asker:&str,method:&str)->Result<(),CognitionError> {
-        let Some(path)=self.client.reader_state.lock().unwrap().question_scope.clone() else {return Ok(());};
+        let Some((path,scope))=self.question_scope_for(entity,thread,turn,asker,method) else {return Ok(());};
+        crate::question_tools::write_scope(&path,&scope).map_err(CognitionError::Io)
+    }
+
+    /// The question scope [`Self::prepare_question_scope`] writes, and where, without writing it.
+    fn question_scope_for(&self,entity:&str,thread:&str,turn:&str,asker:&str,method:&str)
+        -> Option<(std::path::PathBuf,crate::question_tools::Scope)> {
+        let path=self.client.reader_state.lock().unwrap().question_scope.clone()?;
         let root=self.engine_profile.as_ref().map(|p|p.state.clone())
             .unwrap_or_else(||path.parent().and_then(Path::parent).unwrap_or(Path::new(".")).join("engine-state"));
         let declared=self.engine_profile.as_ref().filter(|p|p.coordination.join("orchestration.config").is_file());
-        crate::question_tools::write_scope(&path,&crate::question_tools::Scope {
+        let scope=crate::question_tools::Scope {
             context:crate::questions::AskScope { obligation_id:None,root,entity_id:entity.into(),thread_id:thread.into(),turn_id:turn.into(),asker:asker.into(),session_id:self.session_id.clone(),
                 engine:declared.map(|p|p.engine.clone()),entity_root:declared.map(|p|p.coordination.clone()),app_run:None},
             actions_allowed:false,answer_method:method.into(),surface:"mac".into()
-        }).map_err(CognitionError::Io)
+        };
+        Some((path,scope))
+    }
+
+    /// **Everything [`Cognition::prepare_agent_message`] does for one input, as one closure**,
+    /// so it can run now or when that input's turn starts: bind Stu's seat for it, write its
+    /// scope, register older pending handoffs on that binding, and write its question scope.
+    fn agent_message_binding(&self, binding:&crate::entity::ThreadBinding, turn:&str,
+        message:&crate::session_tools::Message) -> impl FnOnce()->Result<(),CognitionError> + Send + 'static {
+        let continuity=self.continuity.clone();
+        let (entity,thread)=(binding.entity_id().to_string(),binding.thread_id().to_string());
+        let (turn,message,session)=(turn.to_string(),message.clone(),self.session_id.clone());
+        let status=self.engine_profile.as_ref().map(|p|p.state.clone()).zip(self.status_scope.clone());
+        let assignments=self.assignments_scope.clone();
+        let question=self.question_scope_for(&entity,&thread,&turn,"stu","typed");
+        let operation=self.client.operation_cancel.clone();
+        move || {
+            let Some((bridge,path))=continuity else {return Err(CognitionError::Protocol("Missing operator scope".into()))};
+            let seat=format!("stu-thread:{thread}");
+            let bound=bridge.bind(&entity,&thread,&session,&turn,Some(&seat),"rich")
+                .map_err(|e|CognitionError::Io(e.to_string()))?;
+            {
+                // **The message's scope, without closing the turn already running on this
+                // session** (`ecs::write_next_scope`; 2026-10-28 17:54Z and 18:27Z, 2026-10-29
+                // 08:05Z). It reads the grant and writes it back, so it holds the lock a Stop
+                // revokes under (the cancel handle's `cancel`): a Stop between the read and the
+                // write is never reopened (Tom's review of 6e9a03c3).
+                let _stop=operation.lock().unwrap();
+                crate::ecs::write_next_scope(&path,crate::ecs::ToolScope {version:1,actions_allowed:false,
+                    bridge:bridge.clone(),binding:bound.clone(),user_instruction:None,
+                    seat:Some(seat.clone()),background_work_allowed:true,closed:None}).map_err(|e|CognitionError::Io(e.to_string()))?;
+            }
+            if let Some((state,status))=&status {
+                let scope=crate::status_tools::StatusToolScope {version:1,state_root:state.clone(),
+                    entity_id:entity.clone(),thread_id:thread.clone()};
+                crate::status_tools::write_scope(status,&scope).map_err(CognitionError::Io)?;
+                crate::session_tools::bind(status,&scope,&session,"stu",None).map_err(CognitionError::Io)?;
+                // Older inbox records predate registration at handoff save. Reconcile
+                // them before opening live input, through the existing register only.
+                let mut pending=vec![message];
+                let mut after=0;
+                while let Some((queued,through))=crate::session_tools::pending_after(&scope,"stu",after).map_err(CognitionError::Io)? {
+                    pending.push(queued);after=through;
+                }
+                for mut queued in pending.into_iter().filter(|m|m.handoff) {
+                    let existing=crate::session_tools::work_reference(&scope,&queued).map_err(CognitionError::Io)?;
+                    if existing.is_none() {
+                        let instruction=queued.instruction.as_ref().ok_or_else(||CognitionError::Protocol("Handoff has no original request".into()))?;
+                        let assignments=assignments.as_ref().ok_or_else(||CognitionError::Protocol("Missing assignment register".into()))?;
+                        crate::assignment_tools::write_scope(assignments,&crate::assignment_tools::AssignmentToolScope {
+                            version:1,actions_allowed:true,state_root:state.clone(),entity_id:scope.entity_id.clone(),
+                            thread_id:scope.thread_id.clone(),instruction_ledger_ref:instruction.ledger_ref.clone(),
+                            instruction_sha256:instruction.sha256.clone(),obligation_desk:Some(crate::assignment_tools::ObligationDesk {
+                                bridge:bridge.clone(),binding:bound.clone(),seat:Some(seat.clone())})}).map_err(CognitionError::Io)?;
+                        let recorded=crate::session_tools::record_pending_handoff(&scope,&mut queued,assignments);
+                        let removed=std::fs::remove_file(assignments).map_err(|e|e.to_string());
+                        recorded.and(removed).map_err(CognitionError::Io)?;
+                    } else {queued.work=existing;}
+                }
+            }
+            if let Some((path,scope))=question {
+                crate::question_tools::write_scope(&path,&scope).map_err(CognitionError::Io)?;
+            }
+            Ok(())
+        }
     }
 
 
@@ -4364,49 +4435,29 @@ impl Cognition for NativeCognition {
 
     fn prepare_agent_message(&mut self, binding:&crate::entity::ThreadBinding, turn:&str,
         message:&crate::session_tools::Message) -> Result<(),CognitionError> {
-        let Some((bridge,path))=&self.continuity else {return Err(CognitionError::Protocol("Missing operator scope".into()))};
-        let seat=format!("stu-thread:{}",binding.thread_id());
-        let bound=bridge.bind(binding.entity_id().as_str(),binding.thread_id(),&self.session_id,turn,Some(&seat),"rich")
-            .map_err(|e|CognitionError::Io(e.to_string()))?;
-        // **The message's scope, without closing the turn already running on this session**
-        // (`ecs::write_next_scope`): this is called the moment the host takes the message from
-        // the inbox, which can be while Stu is still in a turn of his own (a task notification's,
-        // or one the host already counted as ended), and writing the grant closed here refused
-        // that turn's prepare and dispatch until this message's own turn began (2026-10-28
-        // 17:54Z and 18:27Z, 2026-10-29 08:05Z). This message's turn opens it as before.
-        crate::ecs::write_next_scope(path,crate::ecs::ToolScope {version:1,actions_allowed:false,
-            bridge:bridge.clone(),binding:bound.clone(),user_instruction:None,
-            seat:Some(seat.clone()),background_work_allowed:true,closed:None}).map_err(|e|CognitionError::Io(e.to_string()))?;
-        if let (Some(profile),Some(status))=(&self.engine_profile,&self.status_scope) {
-            let scope=crate::status_tools::StatusToolScope {version:1,state_root:profile.state.clone(),
-                entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
-            crate::status_tools::write_scope(status,&scope).map_err(CognitionError::Io)?;
-            crate::session_tools::bind(status,&scope,&self.session_id,"stu",None).map_err(CognitionError::Io)?;
-            // Older inbox records predate registration at handoff save. Reconcile
-            // them before opening live input, through the existing register only.
-            let mut pending=vec![message.clone()];
-            let mut after=0;
-            while let Some((queued,through))=crate::session_tools::pending_after(&scope,"stu",after).map_err(CognitionError::Io)? {
-                pending.push(queued);after=through;
-            }
-            for mut queued in pending.into_iter().filter(|m|m.handoff) {
-                let existing=crate::session_tools::work_reference(&scope,&queued).map_err(CognitionError::Io)?;
-                if existing.is_none() {
-                    let instruction=queued.instruction.as_ref().ok_or_else(||CognitionError::Protocol("Handoff has no original request".into()))?;
-                    let assignments=self.assignments_scope.as_ref().ok_or_else(||CognitionError::Protocol("Missing assignment register".into()))?;
-                    crate::assignment_tools::write_scope(assignments,&crate::assignment_tools::AssignmentToolScope {
-                        version:1,actions_allowed:true,state_root:profile.state.clone(),entity_id:scope.entity_id.clone(),
-                        thread_id:scope.thread_id.clone(),instruction_ledger_ref:instruction.ledger_ref.clone(),
-                        instruction_sha256:instruction.sha256.clone(),obligation_desk:Some(crate::assignment_tools::ObligationDesk {
-                            bridge:bridge.clone(),binding:bound.clone(),seat:Some(seat.clone())})}).map_err(CognitionError::Io)?;
-                    let recorded=crate::session_tools::record_pending_handoff(&scope,&mut queued,assignments);
-                    let removed=std::fs::remove_file(assignments).map_err(|e|e.to_string());
-                    recorded.and(removed).map_err(CognitionError::Io)?;
-                } else {queued.work=existing;}
-            }
+        let Some((_,path))=&self.continuity else {return Err(CognitionError::Protocol("Missing operator scope".into()))};
+        // **A NOTICE QUEUED WHILE STU IS IN A TURN IS BOUND WHEN ITS OWN TURN STARTS** (second
+        // review of 6e9a03c3, finding 2). Binding Stu's seat for the next input replaces the
+        // binding every operation of the running turn already holds, and ECS refuses each of
+        // them from then on as "stale app binding": a prepare creating its workspace when the
+        // notice was taken had its final projection refused and its receipt marked unknown.
+        // While this session's grant is open a turn may be running, so the bind, its scope and
+        // everything that reads them wait for this input's own `UserPromptSubmit`, which the
+        // provider sends when it takes the input in (the preparation `enqueue_prompt` runs
+        // before it opens the turn's grants). An operation that still straddles that moment is
+        // the app's to carry: `mega-lander/app.py`'s `prepare` finishes on the session's current
+        // binding. Otherwise nothing is running on this session and the message is bound now.
+        if crate::ecs::grant_open_for(path,&self.session_id) {
+            let earlier=self.prepared_scope.take();
+            let apply=self.agent_message_binding(binding,turn,message);
+            self.prepared_scope=Some(Box::new(move || {
+                let context=match earlier {Some(prepare)=>prepare()?,None=>None};
+                apply()?;
+                Ok(context)
+            }));
+            return Ok(());
         }
-        self.prepare_question_scope(binding.entity_id().as_str(),binding.thread_id(),turn,"stu","typed")?;
-        Ok(())
+        self.agent_message_binding(binding,turn,message)()
     }
 
     fn refresh_team(&mut self)->Result<bool,CognitionError> {
@@ -4783,6 +4834,55 @@ read -r prompt
         let stopped=read();
         assert!(!stopped.actions_allowed,"a message reopened a grant the user's Stop had closed");
         assert_eq!(stopped.closed.map(|c|c.by),Some(crate::ecs::closed_by::STOP.to_string()));
+    }
+
+    /// **A NOTICE QUEUED WHILE STU IS IN A TURN LEAVES THAT TURN'S BINDING CURRENT UNTIL THE
+    /// NOTICE'S OWN TURN STARTS** (second review of 6e9a03c3, finding 2). Queueing it bound his
+    /// seat for it at once, so ECS refused every operation of the running turn as "stale app
+    /// binding": a prepare creating its workspace then had its final projection refused and its
+    /// receipt marked unknown. On 6e9a03c3 the first ECS request below fails with that refusal.
+    #[test]
+    fn a_notice_queued_while_stu_is_in_a_turn_keeps_the_running_turns_binding() {
+        use crate::ledger::Ledger;
+        let script=write_script("stu-queued-keeps-binding",SILENT_AFTER_HANDSHAKE);
+        let root=script.parent().unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine"),&root.join("ecs")).unwrap();
+        let mut cognition=NativeCognition::start_with_continuity(&script,root,root,&skills_fixture(),&script,bridge.clone(),None).unwrap();
+        let mut ledger=Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
+        let entity=crate::entity::EntityId::parse("company").unwrap();
+        let thread=ledger.create_thread("work",&entity).unwrap();let binding=ledger.thread_binding(&thread).unwrap();
+        bridge.bind(entity.as_str(),&thread,"fixture-rich","opening",crate::ecs::ceo_seat(&thread).as_deref(),"ceo").unwrap();
+        let path=cognition.continuity.as_ref().unwrap().1.clone();
+        let read=|| -> crate::ecs::ToolScope {serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()};
+        let notice=|text:&str| crate::session_tools::Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None};
+        let seat=format!("stu-thread:{thread}");
+        let operate=|held:&crate::ecs::Binding| bridge.request("inspect",crate::ecs::seated_request(Some(&seat),
+            json!({"binding":serde_json::to_value(held).unwrap()})));
+
+        // Nothing is running: his first message is bound at once, its grant written closed.
+        cognition.prepare_agent_message(&binding,"peer:1",&notice("Rich: dispatch Tom's review")).unwrap();
+        assert!(cognition.prepared_scope.is_none(),"an input with no turn running waited to be bound");
+        assert_eq!(read().binding.turn_id,"peer:1");
+        crate::ecs::set_actions_allowed(&path,true).unwrap();
+        let running=read().binding;
+
+        // A prepare of that turn is creating its workspace when the stall-watch notice is taken.
+        cognition.prepare_agent_message(&binding,"peer:2",&notice("STALL-WATCH 18:27Z: 1 stall")).unwrap();
+        operate(&running).expect("queueing a notice made the running turn's binding stale to ECS");
+        let queued=read();
+        assert_eq!((queued.binding.turn_id.as_str(),queued.binding.revision),(running.turn_id.as_str(),running.revision),
+            "the scope moved to the notice's binding before its turn started");
+        assert!(queued.actions_allowed);
+
+        // The notice's own turn starts: its preparation binds it, and the grant is still open.
+        cognition.prepared_scope.take().expect("the notice's binding was not deferred to its turn")().unwrap();
+        let started=read();
+        assert_eq!(started.binding.turn_id,"peer:2");
+        assert!(started.actions_allowed);
+        assert!(operate(&running).is_err(),"the notice's turn did not take the seat");
+        operate(&started.binding).unwrap();
     }
     #[test]
     fn a_rejected_rate_limit_event_is_a_usage_limit() {
