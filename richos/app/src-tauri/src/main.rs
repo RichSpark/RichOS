@@ -3915,6 +3915,8 @@ fn main() {
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,
+            get_resources_view,
+            set_resources_view,
             // --- improved Rich and Stu instructions reach every user (CEO 2026-10-22) — appended ---
             instructions_update_question,
             decline_instructions_update,
@@ -9095,6 +9097,18 @@ fn set_oxford_comma(app: AppHandle, state: State<AppState>, keep: bool) -> Resul
         phone.announce_oxford_comma(keep);
     }
     Ok(())
+}
+
+/// How the Mac resources square is drawn, `"ink"` (the default) or `"readout"` (round 47).
+#[richos_command::command]
+fn get_resources_view(state: State<AppState>) -> String {
+    state.config.lock().unwrap().resources_view().to_string()
+}
+
+/// Save the view chosen from the square's right-click menu. Any other word is refused.
+#[richos_command::command]
+fn set_resources_view(state: State<AppState>, view: String) -> Result<(), String> {
+    state.config.lock().unwrap().set_resources_view(&view).map_err(|e| e.to_string())
 }
 
 /// Persist the CEO's lighting. An unparseable string is REFUSED rather than coerced to the
