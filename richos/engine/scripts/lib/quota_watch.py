@@ -894,11 +894,24 @@ def read_app(state, now):
     if not isinstance(data, dict):
         r["state"], r["why"] = "malformed", "%s is not the app's usage reading" % path
         return r
-    r["account"] = app_account(data)
+    # **The session's own account** (second review of fd0e8f9d9, P2): the app starts every work
+    # session with RICHOS_CLAUDE_ACCOUNT naming the account it runs on (quota/gate.rs ACCOUNT_ENV).
+    # During a move the file's top level is still the account being left (Home at 95%) while a new
+    # session runs on the account in use (Work at 10%); read from the top level, a watcher of the
+    # Work session told the lead to freeze work on Work. Its own row of `accounts`, as the gate
+    # judges its calls (gate::decide); the top level only when there is no row for it.
+    want = (os.environ.get("RICHOS_CLAUDE_ACCOUNT") or "").strip()
+    row = next((x for x in data.get("accounts") or [] if isinstance(x, dict) and want
+                and str(x.get("id")) == want), None) if want else None
+    src = row if row is not None else data
+    if row is not None:
+        r["account"] = {"id": want, "label": "".join(c for c in str(row.get("label") or "not named")[:80] if c.isprintable())}
+    else:
+        r["account"] = app_account(data)
     label = r["account"]["label"]
     r["source"] = "the app (account %s)" % label
     windows = []
-    for w in data.get("windows") or []:
+    for w in src.get("windows") or []:
         if not isinstance(w, dict) or not isinstance(w.get("id"), str):
             continue
         used, reset = w.get("usedPercent"), w.get("resetsAt")
@@ -908,7 +921,7 @@ def read_app(state, now):
         windows.append({"id": w["id"], "label": "".join(c for c in str(w.get("label") or w["id"])[:80] if c.isprintable()),
                         "used": used, "resets_at": reset})
     r["windows"] = windows
-    checked = data.get("checkedAt")
+    checked = src.get("checkedAt")
     if isinstance(checked, bool) or not isinstance(checked, (int, float)) or checked <= 0:
         r["state"], r["why"] = "missing", "the app has no reading of account %s yet" % label
         return r
@@ -921,7 +934,7 @@ def read_app(state, now):
     r["ended"] = five["resets_at"] <= now
     # The app's own measured five-hour speed (`speeds`, points per ms; quota.rs `View::speeds`),
     # as points per second: the poll loop's speed is never lower than the app's.
-    speed = (data.get("speeds") or {}).get("five_hour") if isinstance(data.get("speeds"), dict) else None
+    speed = (src.get("speeds") or {}).get("five_hour") if isinstance(src.get("speeds"), dict) else None
     if not isinstance(speed, bool) and isinstance(speed, (int, float)) and math.isfinite(speed) and speed >= 0:
         r["speed"] = speed * 1000.0
     return r

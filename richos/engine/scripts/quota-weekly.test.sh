@@ -6,6 +6,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # The app's state is never read from a test unless a case sets it (a test must not read the
 # LIVE claude-quota.json; richos-hq follow-ups.md 7fed0bef, R3).
 unset RICHOS_APP_STATE
+# Nor the account of the session running the test (a work session of the app sets it).
+unset RICHOS_CLAUDE_ACCOUNT
 PYTHONPATH="$HERE/lib${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
 import contextlib, io, json, types, unittest
 from unittest.mock import patch
@@ -190,9 +192,11 @@ class AppReading(unittest.TestCase):
               'accounts':[{'id':'1','label':'Home','inUse':False,'windows':[{'id':'seven_day','usedPercent':99}]}]}
         if in_use: view['inUse']=in_use
         with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
-    def read(self):
+    def read(self,session=None):
         a=types.SimpleNamespace(payload='/nonexistent/statusline-payload.json',engine_root='fixture')
-        with patch.dict(watcher.os.environ,{'RICHOS_APP_STATE':self.state}), \
+        env={'RICHOS_APP_STATE':self.state}
+        if session: env['RICHOS_CLAUDE_ACCOUNT']=session
+        with patch.dict(watcher.os.environ,env), \
              patch.object(watcher,'read_get_usage',side_effect=AssertionError('probed in the app')), \
              patch.object(watcher,'read_reading',side_effect=AssertionError('read the status line in the app')):
             return watcher.read_source(a,NOW)
@@ -223,6 +227,26 @@ class AppReading(unittest.TestCase):
         self.assertEqual(self.read()['state'],'malformed')
         self.publish(0)
         self.assertEqual(self.read()['state'],'missing')
+    def test_a_session_reads_its_own_accounts_row_during_a_move(self):
+        # Second review of fd0e8f9d9 (P2): a blocked Home -> Work move. Home, where Stu's session
+        # still runs, is the top level at 95%; a new session runs on Work at 10% and its watcher
+        # told the lead to freeze work on Work. Each session reads its own account's row.
+        self.publish(NOW-30,five=95,in_use={'id':'1','label':'Home'})
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        win=lambda i,used,reset: {'id':i,'label':i,'usedPercent':used,'resetsAt':reset*1000,'durationMs':18000000}
+        view['accounts']=[{'id':'1','label':'Home','inUse':True,'windows':view['windows'],'checkedAt':(NOW-30)*1000},
+                          {'id':'2','label':'Work','inUse':False,'windows':[win('five_hour',10,NOW+5000),win('seven_day',3,NOW+86400)],
+                           'checkedAt':(NOW-60)*1000,'speeds':{'five_hour':1e-6}}]
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        r=self.read('2')
+        self.assertEqual((r['state'],r['used'],r['resets_at'],r['source'],r['account']),
+                         ('ok',10,NOW+5000,'the app (account Work)',{'id':'2','label':'Work'}))
+        self.assertEqual((r['age'],weekly.weekly(r)['used']),(60,3)); self.assertAlmostEqual(r['speed'],1e-3)
+        self.assertEqual(watcher.classify(r,93,300)[0],'below')
+        r=self.read('1'); self.assertEqual((r['used'],r['source']),(95,'the app (account Home)'))
+        # No session account, or one with no row: the top level, the account the work runs on.
+        for session in (None,'9'):
+            r=self.read(session); self.assertEqual((r['used'],r['account']['id']),(95,'1'),session)
     def test_the_apps_measured_speed_is_read_in_points_per_second(self):
         self.publish(NOW-30)
         self.assertNotIn('speed',self.read())
