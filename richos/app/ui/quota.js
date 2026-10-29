@@ -496,7 +496,11 @@
         // Round 16's `holding` (one account) and `two-holding`.
         head = `Holding ${agents} ${agents === 1 ? "agent" : "agents"} since ${clock(Math.min(...held.map(r => r.sinceAt)))}.`;
         body = `${whose} window is at <b>${pct(five.usedPercent)} used</b>, past your ${fiveLine()}% line. ${many ? "" : agents === 1 ? "It has kept its place. " : "Each has kept its place. "}`
-          + `${agents === 1 ? "It resumes" : "They resume"} at <b>${esc(clock(activity.resumesAt))}</b>, 20 minutes before the reset${many ? "." : ", or sooner if a fresh reading is back under the line."}`;
+          // Inside the last 20 minutes they go one at a time, and only while the speed before the
+          // pause keeps the account under 100% at the reset (quota/stagger.rs, Rich 2026-10-29).
+          + (agents === 1 ? `It resumes at <b>${esc(clock(activity.resumesAt))}</b>, 20 minutes before the reset, if the speed before the pause keeps the account under 100%; otherwise at the reset`
+            : `They resume one at a time from <b>${esc(clock(activity.resumesAt))}</b>, 20 minutes before the reset, while the speed before the pause keeps the account under 100%; the rest at the reset`)
+          + (many ? "." : " or sooner if a fresh reading is back under the line.");
       } else {
         head = admitted ? "Releasing the pause…" : agents ? `${agents} ${agents === 1 ? "agent is" : "agents are"} paused` : assignments ? `${assignments} ${assignments === 1 ? "assignment is" : "assignments are"} paused` : "Waiting to start an agent";
         body = esc(admitted ? "The allowance permits work. Waiting for each pause to clear." : weeklyHeld ? "Weekly usage reached 99%. Waiting for a confirmed reset and available allowance." : activity.resumesAt ? `Can continue just after ${clock(activity.resumesAt)} when the reset is under 20 minutes away.` : "Waiting for a current five-hour reading. Their work is saved.");
