@@ -16,7 +16,12 @@ fi
 # three baselines agree. With no interpreter of that version found, python3 runs and the driver
 # refuses with its usual message.
 lint_python=python3
-want="$(sed -n 's/^ *"python": *"\([0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' "$DIR/lint/baselines/custom.json" | head -n 1)"
+want=""
+# The lookup never fails the lint: a checkout or fixture tree without the baseline file (or one that
+# names no version) just runs python3, and the driver does its own refusing of a real mismatch.
+if [ -r "$DIR/lint/baselines/custom.json" ]; then
+    want="$(sed -n 's/^ *"python": *"\([0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' "$DIR/lint/baselines/custom.json" 2>/dev/null | head -n 1 || true)"
+fi
 if [ -n "$want" ]; then
     py_version() { "$1" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true; }
     if [ "$(py_version python3)" != "$want" ]; then
