@@ -431,7 +431,7 @@
     "scripts/ceo-asks-status.sh": {
       "source": "scripts/ceo-asks-status.sh",
       "sha256": "bd01c8ce9d195b5c77cc0011b08b8ac983865d08c3a8f0e8feb31d103fb2a650",
-      "evidence": "Uses the supplied entity-root argument, delegates config access to ca_resolve and reads that root’s ask ledger.",
+      "evidence": "Uses the supplied entity-root argument, delegates config access to ca_resolve and reads that root\u2019s ask ledger.",
       "keys": [],
       "edges": [
         {
@@ -491,7 +491,7 @@
     "scripts/lib/proc_tree.py": {
       "source": "scripts/lib/proc_tree.py",
       "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-      "evidence": "Supervises the caller’s command and samples owned processes. Its own inputs are the caller’s arguments, environment, process identity and controller state, never orchestration settings. Since 1421cf76 the arguments include --guard-role, restricted to the literal choices session and release-build (anything else refuses before registration); it only names the role cpu_guard.register records for this supervisor.",
+      "evidence": "Supervises the caller\u2019s command and samples owned processes. Its own inputs are the caller\u2019s arguments, environment, process identity and controller state, never orchestration settings. Since 1421cf76 the arguments include --guard-role, restricted to the literal choices session and release-build (anything else refuses before registration); it only names the role cpu_guard.register records for this supervisor.",
       "keys": [],
       "edges": [
         {
@@ -522,7 +522,7 @@
     "scripts/lib/worker_tokens.py": {
       "source": "scripts/lib/worker_tokens.py",
       "sha256": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-      "evidence": "Worker leases read their budget files, bind held inodes to native process generations and invoke the caller’s separately declared command through process supervision and admission policy. Borrow validation follows a finite native ancestry and permit chain, never orchestration settings. Named native/compiler and simulator locks use the same kernel locks but do not grant worker capacity; their canonical paths remain governed.",
+      "evidence": "Worker leases read their budget files, bind held inodes to native process generations and invoke the caller\u2019s separately declared command through process supervision and admission policy. Borrow validation follows a finite native ancestry and permit chain, never orchestration settings. Named native/compiler and simulator locks use the same kernel locks but do not grant worker capacity; their canonical paths remain governed.",
       "keys": [],
       "edges": [
         {
@@ -2287,7 +2287,7 @@
     },
     "scripts/lib/agent-liveness.py": {
       "source": "scripts/lib/agent-liveness.py",
-      "sha256": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+      "sha256": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
       "evidence": "Reads Git worktree lock records, supplied transcript/roster/worker JSON and native PID liveness. The only engine import is the finite read-only workspace-registry closure.",
       "keys": [],
       "edges": [
@@ -2805,7 +2805,7 @@
     "scripts/lib/scratch-reaper.py": {
       "source": "scripts/lib/scratch-reaper.py",
       "sha256": "b4f898fbd54dde0717a233f24f65d41d55e8060a9b9caf78248e4a0577498f8b",
-      "evidence": "config_from_env uses finite literal need/number/opt/opt_number callers; process names, system flags and state paths are the other environment reads. The shell exports these values from its selected config. Reviewed local scan/apply closure imports only fixed workspace liveness, appinstances and testdevices/alert modules. Docker/ps/lsof are external executables, not engine readers. All imported settings readers honor the same SCRATCH_REAPER_CONFIG fixture path. Renewed 2026-10-01 (a land sweeps only the landed agent's scratch): --agent runs scan_agent instead of scan: it reads the ledger's new cwd field, the declared SCRATCH_AGENT_ROOTS and, by glob, the agent's own session scratchpad under SCRATCH_CLAUDE_ROOTS, and checks holders with the existing per-path lsof. In that mode apply() skips test devices and Docker and the state file is not written. No new execution edge. Renewed 2026-10-04 (what an automatic land kept): scan() adds scan_kept, which lists the declared SCRATCH_KEPT_DIR and deletes each child older than SCRATCH_KEPT_RETENTION_DAYS by its own mtime, through the same walls; it reads no other file. No new execution edge. Renewed 2026-10-08 (build caches on the external drive): scan() adds scan_build_caches, which reads the five declared SCRATCH_BUILD_CACHE_*/SCRATCH_CARGO_TARGET_ROOTS keys through config_from_env and plans through the fixed-path module lib/build_caches.py; apply() deletes cargo-units rows through that module under Cargo's lock. No other new reader. Renewed 2026-10-13: settings-based cache and Cargo root validation now runs within config_from_env's existing controlled Fatal refusal, before workspace discovery or any cleanup; no new reader, setting or execution edge. Renewed 2026-10-13: config_from_env now uses the already-declared build_caches.roots reader so scheduled cleanup includes a selected RICHOS_BUILD_CACHE; controlled storage refusal remains before discovery. No new edge or key. Renewed 2026-10-23: _ps_env appends /usr/sbin and /sbin to the child PATH when missing, so the launchd job (whose plist PATH lacks /usr/sbin) finds the same external lsof; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the allocator arm reads the .git pointer files and worktrees/*/gitdir files inside an ended, ledger-recorded allocation to prove its repositories are wholly inside it; those are files under the candidate itself, not settings. No new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the legacy, deny-by-default and standing-failure arms run the same containment read over a candidate's .git pointer files before narrowing wall 2. Files under the candidate itself; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD coverage): config_from_env reads the new declared key SCRATCH_BULK_TMP_ROOTS (paths relative to RICHOS_BULK_ROOT, read through the existing machine_settings reader and validate refusal) and adds those producer temp roots to the shared temp roots; scan_scratch_root then also sweeps the allocator root under each. No new execution edge. Renewed 2026-10-23 (cleanup PRD R4): the full --apply publishes source/outcome/unresolved/roots only when SCRATCH_REAPER_SCHEDULED=1, which scratch-reaper.sh sets from launchd's XPC_SERVICE_NAME and clears otherwise; a refused scheduled run publishes its refusal; the deletion log keeps one rotated file. No new config key or execution edge. Renewed 2026-10-23 (cleanup PRD R1, review rv-20261023T212629Z-3dc330ca-a2b9): config_from_env reads the new declared key SCRATCH_FIXTURE_REPO_LABELS; the allocator arm narrows wall 2 only for those ledger labels, and the deny-by-default arm only for declared harness families inside the producer temp roots. No new reader or execution edge. Renewed 2026-10-23 (cleanup PRD A6): scan_codex_worktrees reads SCRATCH_CODEX_WORKTREE_ROOTS (absolute or relative to the bulk root) and SCRATCH_CODEX_HOME, adds those roots to the walls, and hands each checkout to codex_worktrees.py; apply() closes codex-worktree rows only through codex_worktrees.close(); --notice skips the arm. Renewed 2026-10-24 (review rv-20261023T232303Z-ba744b07-d444 #2): scan() adds scan_named_scratch, which lists the already-declared named-agent root (machine_settings.agent_root) and reads the agent registry through the fixed workspace liveness module it already loads (damaged_records, all_agents, finished_state); it plans KEEP or INDETERMINATE only, never DELETE; --notice skips it. No new config key, reader or execution edge. Renewed 2026-10-25 (CEO §54 addendum 2, the app's own sweep): --app runs scan_app instead of scan: it lists <data>/engine-state/evidence/*/binding.json (the app's own record, under a folder given on the command line, not a setting) and the hosted sessions' directories under the declared SCRATCH_CLAUDE_ROOTS, decided by the existing liveness, per-path lsof and walls; in that mode apply() skips test devices and Docker, writes no state file and logs a planned path that vanished as GONE. No new config key or execution edge. Renewed 2026-10-25 (the app's own sweep, two more classes): scan_app also lists <data>/engine-profiles and reads each lease folder's .richos-owner.json (written by richos-core app_cleanup.rs; pid and start, compared through the existing workspaces process_start), reads every process's command line once with ps -axww (an external executable, like lsof), and lists ~/Library/Caches/claude-cli-nodejs/<slug of <data>/coordination>/mcp-logs-*, decided by the existing claude-orphan rule; --app-exiting <pid> names the quitting app. Files under the app's folder or Claude Code's cache, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T000521Z-2fe81615-e0f2 #1): in --app, Liveness also reads <folder>/sessions for every added Claude account (<data>/claude-accounts/*/ and each folder <data>/claude-accounts.json names), and an ENDED app session is kept while any running process's command line (the ps -axww read above) carries its id. Files under the app's folder, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T010610Z-2cc154e7-1d03 #2): --app-budget (default APP_BUDGET_SECONDS, 8 s, inside the app's 10 s bound) stops weighing new app candidates at half the budget and starting new deletions at all of it; the rest is counted as deferred= for the app's next sweep. Reads the clock only. No new config key, file read or execution edge. Renewed 2026-10-25 (review rv-20261025T021219Z-91f589b0-af71 #1): scan_app_profiles reads a folder's own .richos-owner.json before its base's (the app now writes one into both). A file under the app's folder, not a setting. Renewed 2026-10-25 (review rv-20261025T020709Z-8339d95d-d408 #1): scan_app adds scan_app_voice, which lists <data>/voice-scratch for utt-<pid>.wav and $TMPDIR (the same TMPDIR environment read --process-only already makes) for richos-speech-warm-<pid>-<n>, and decides each through the existing workspaces process_start, the per-path lsof and the walls; a folder of the app's that exists and cannot be listed is planned INDETERMINATE instead of skipped. No new config key or execution edge. Renewed 2026-10-25 (the app's cleanup reports a failure as one): scan_app_profiles lists <data>/engine-profiles through the same app_listing, so an unreadable profiles folder is planned INDETERMINATE instead of skipped. No new reader, setting or execution edge. Renewed 2026-10-25 (a killed dictation tool's scratch): scan_app adds scan_app_dictation, which lists <data>/dictation-scratch through the same app_listing and reads each folder's .richos-owner.json (written by the tool's dictation/scratch.rs through richos-core app_cleanup.rs), decided through the existing workspaces process_start, the per-path lsof, the age floor and the walls. Files under the app's folder, not settings. No new config key, reader or execution edge. Renewed 2026-10-25 (Codex's read of 0dac9ba80): only a missing owner record takes the age-floor fallback; a record that exists and cannot be read or parsed is planned INDETERMINATE. No new reader, setting or execution edge. Renewed 2026-10-25: a record holding JSON null is a record that is there, not a missing one, and is planned INDETERMINATE with the rest. No new reader, setting or execution edge. Renewed 2026-10-29: every sweep (not only --app) also reads the session registries of the app's added Claude accounts, <HOME>/<dirname of SCRATCH_APP_REGISTRY_RELPATH>/claude-accounts/*/sessions/*.json and the folders claude-accounts.json there names, through the existing app_account_session_dirs; read only, an existing config key, no new execution edge.",
+      "evidence": "config_from_env uses finite literal need/number/opt/opt_number callers; process names, system flags and state paths are the other environment reads. The shell exports these values from its selected config. Reviewed local scan/apply closure imports only fixed workspace liveness, appinstances and testdevices/alert modules. Docker/ps/lsof are external executables, not engine readers. All imported settings readers honor the same SCRATCH_REAPER_CONFIG fixture path. Renewed 2026-10-01 (a land sweeps only the landed agent's scratch): --agent runs scan_agent instead of scan: it reads the ledger's new cwd field, the declared SCRATCH_AGENT_ROOTS and, by glob, the agent's own session scratchpad under SCRATCH_CLAUDE_ROOTS, and checks holders with the existing per-path lsof. In that mode apply() skips test devices and Docker and the state file is not written. No new execution edge. Renewed 2026-10-04 (what an automatic land kept): scan() adds scan_kept, which lists the declared SCRATCH_KEPT_DIR and deletes each child older than SCRATCH_KEPT_RETENTION_DAYS by its own mtime, through the same walls; it reads no other file. No new execution edge. Renewed 2026-10-08 (build caches on the external drive): scan() adds scan_build_caches, which reads the five declared SCRATCH_BUILD_CACHE_*/SCRATCH_CARGO_TARGET_ROOTS keys through config_from_env and plans through the fixed-path module lib/build_caches.py; apply() deletes cargo-units rows through that module under Cargo's lock. No other new reader. Renewed 2026-10-13: settings-based cache and Cargo root validation now runs within config_from_env's existing controlled Fatal refusal, before workspace discovery or any cleanup; no new reader, setting or execution edge. Renewed 2026-10-13: config_from_env now uses the already-declared build_caches.roots reader so scheduled cleanup includes a selected RICHOS_BUILD_CACHE; controlled storage refusal remains before discovery. No new edge or key. Renewed 2026-10-23: _ps_env appends /usr/sbin and /sbin to the child PATH when missing, so the launchd job (whose plist PATH lacks /usr/sbin) finds the same external lsof; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the allocator arm reads the .git pointer files and worktrees/*/gitdir files inside an ended, ledger-recorded allocation to prove its repositories are wholly inside it; those are files under the candidate itself, not settings. No new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the legacy, deny-by-default and standing-failure arms run the same containment read over a candidate's .git pointer files before narrowing wall 2. Files under the candidate itself; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD coverage): config_from_env reads the new declared key SCRATCH_BULK_TMP_ROOTS (paths relative to RICHOS_BULK_ROOT, read through the existing machine_settings reader and validate refusal) and adds those producer temp roots to the shared temp roots; scan_scratch_root then also sweeps the allocator root under each. No new execution edge. Renewed 2026-10-23 (cleanup PRD R4): the full --apply publishes source/outcome/unresolved/roots only when SCRATCH_REAPER_SCHEDULED=1, which scratch-reaper.sh sets from launchd's XPC_SERVICE_NAME and clears otherwise; a refused scheduled run publishes its refusal; the deletion log keeps one rotated file. No new config key or execution edge. Renewed 2026-10-23 (cleanup PRD R1, review rv-20261023T212629Z-3dc330ca-a2b9): config_from_env reads the new declared key SCRATCH_FIXTURE_REPO_LABELS; the allocator arm narrows wall 2 only for those ledger labels, and the deny-by-default arm only for declared harness families inside the producer temp roots. No new reader or execution edge. Renewed 2026-10-23 (cleanup PRD A6): scan_codex_worktrees reads SCRATCH_CODEX_WORKTREE_ROOTS (absolute or relative to the bulk root) and SCRATCH_CODEX_HOME, adds those roots to the walls, and hands each checkout to codex_worktrees.py; apply() closes codex-worktree rows only through codex_worktrees.close(); --notice skips the arm. Renewed 2026-10-24 (review rv-20261023T232303Z-ba744b07-d444 #2): scan() adds scan_named_scratch, which lists the already-declared named-agent root (machine_settings.agent_root) and reads the agent registry through the fixed workspace liveness module it already loads (damaged_records, all_agents, finished_state); it plans KEEP or INDETERMINATE only, never DELETE; --notice skips it. No new config key, reader or execution edge. Renewed 2026-10-25 (CEO \u00a754 addendum 2, the app's own sweep): --app runs scan_app instead of scan: it lists <data>/engine-state/evidence/*/binding.json (the app's own record, under a folder given on the command line, not a setting) and the hosted sessions' directories under the declared SCRATCH_CLAUDE_ROOTS, decided by the existing liveness, per-path lsof and walls; in that mode apply() skips test devices and Docker, writes no state file and logs a planned path that vanished as GONE. No new config key or execution edge. Renewed 2026-10-25 (the app's own sweep, two more classes): scan_app also lists <data>/engine-profiles and reads each lease folder's .richos-owner.json (written by richos-core app_cleanup.rs; pid and start, compared through the existing workspaces process_start), reads every process's command line once with ps -axww (an external executable, like lsof), and lists ~/Library/Caches/claude-cli-nodejs/<slug of <data>/coordination>/mcp-logs-*, decided by the existing claude-orphan rule; --app-exiting <pid> names the quitting app. Files under the app's folder or Claude Code's cache, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T000521Z-2fe81615-e0f2 #1): in --app, Liveness also reads <folder>/sessions for every added Claude account (<data>/claude-accounts/*/ and each folder <data>/claude-accounts.json names), and an ENDED app session is kept while any running process's command line (the ps -axww read above) carries its id. Files under the app's folder, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T010610Z-2cc154e7-1d03 #2): --app-budget (default APP_BUDGET_SECONDS, 8 s, inside the app's 10 s bound) stops weighing new app candidates at half the budget and starting new deletions at all of it; the rest is counted as deferred= for the app's next sweep. Reads the clock only. No new config key, file read or execution edge. Renewed 2026-10-25 (review rv-20261025T021219Z-91f589b0-af71 #1): scan_app_profiles reads a folder's own .richos-owner.json before its base's (the app now writes one into both). A file under the app's folder, not a setting. Renewed 2026-10-25 (review rv-20261025T020709Z-8339d95d-d408 #1): scan_app adds scan_app_voice, which lists <data>/voice-scratch for utt-<pid>.wav and $TMPDIR (the same TMPDIR environment read --process-only already makes) for richos-speech-warm-<pid>-<n>, and decides each through the existing workspaces process_start, the per-path lsof and the walls; a folder of the app's that exists and cannot be listed is planned INDETERMINATE instead of skipped. No new config key or execution edge. Renewed 2026-10-25 (the app's cleanup reports a failure as one): scan_app_profiles lists <data>/engine-profiles through the same app_listing, so an unreadable profiles folder is planned INDETERMINATE instead of skipped. No new reader, setting or execution edge. Renewed 2026-10-25 (a killed dictation tool's scratch): scan_app adds scan_app_dictation, which lists <data>/dictation-scratch through the same app_listing and reads each folder's .richos-owner.json (written by the tool's dictation/scratch.rs through richos-core app_cleanup.rs), decided through the existing workspaces process_start, the per-path lsof, the age floor and the walls. Files under the app's folder, not settings. No new config key, reader or execution edge. Renewed 2026-10-25 (Codex's read of 0dac9ba80): only a missing owner record takes the age-floor fallback; a record that exists and cannot be read or parsed is planned INDETERMINATE. No new reader, setting or execution edge. Renewed 2026-10-25: a record holding JSON null is a record that is there, not a missing one, and is planned INDETERMINATE with the rest. No new reader, setting or execution edge. Renewed 2026-10-29: every sweep (not only --app) also reads the session registries of the app's added Claude accounts, <HOME>/<dirname of SCRATCH_APP_REGISTRY_RELPATH>/claude-accounts/*/sessions/*.json and the folders claude-accounts.json there names, through the existing app_account_session_dirs; read only, an existing config key, no new execution edge.",
       "keys": [
         "SCRATCH_AGE_FLOOR_MINUTES",
         "SCRATCH_APP_REGISTRY_RELPATH",
@@ -4912,7 +4912,7 @@
       ],
       "region": [
         "if _section CL; then",
-        "fi  # _section — CL"
+        "fi  # _section \u2014 CL"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#RI": {
@@ -4939,7 +4939,7 @@
       ],
       "region": [
         "if _section RI; then",
-        "fi  # _section — RI"
+        "fi  # _section \u2014 RI"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#WTR": {
@@ -4957,7 +4957,7 @@
       ],
       "region": [
         "if _section WTR; then",
-        "fi  # _section — WTR"
+        "fi  # _section \u2014 WTR"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#MC6": {
@@ -4975,7 +4975,7 @@
       ],
       "region": [
         "if _section MC6; then",
-        "fi  # _section — MC6"
+        "fi  # _section \u2014 MC6"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#SCR": {
@@ -5007,7 +5007,7 @@
       ],
       "region": [
         "if _section SCR; then",
-        "fi  # _section — SCR"
+        "fi  # _section \u2014 SCR"
       ],
       "presence": "SCR2 directly opens the real config to check required assignment names."
     },
@@ -5280,7 +5280,7 @@
       ],
       "region": [
         "if _section M; then",
-        "fi  # _section — M\n"
+        "fi  # _section \u2014 M\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#shim": {
@@ -5303,7 +5303,7 @@
       ],
       "region": [
         "if _section shim; then",
-        "fi  # _section — shim\n"
+        "fi  # _section \u2014 shim\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#manifest": {
@@ -5326,7 +5326,7 @@
       ],
       "region": [
         "if _section manifest; then",
-        "fi  # _section — manifest\n"
+        "fi  # _section \u2014 manifest\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#worktree": {
@@ -5349,7 +5349,7 @@
       ],
       "region": [
         "if _section worktree; then",
-        "fi  # _section — worktree\n"
+        "fi  # _section \u2014 worktree\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#N": {
@@ -5372,7 +5372,7 @@
       ],
       "region": [
         "if _section N; then",
-        "fi  # _section — N\n"
+        "fi  # _section \u2014 N\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#python3": {
@@ -5395,7 +5395,7 @@
       ],
       "region": [
         "if _section python3; then",
-        "fi  # _section — python3\n"
+        "fi  # _section \u2014 python3\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#config": {
@@ -5418,7 +5418,7 @@
       ],
       "region": [
         "if _section config; then",
-        "fi  # _section — config\n"
+        "fi  # _section \u2014 config\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#K": {
@@ -5441,7 +5441,7 @@
       ],
       "region": [
         "if _section K; then",
-        "fi  # _section — K\n"
+        "fi  # _section \u2014 K\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#P": {
@@ -5470,7 +5470,7 @@
       ],
       "region": [
         "if _section P; then",
-        "fi  # _section — P\n"
+        "fi  # _section \u2014 P\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#S": {
@@ -5493,7 +5493,7 @@
       ],
       "region": [
         "if _section S; then",
-        "fi  # _section — S\n"
+        "fi  # _section \u2014 S\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#MT": {
@@ -5516,7 +5516,7 @@
       ],
       "region": [
         "if _section MT; then",
-        "fi  # _section — MT\n"
+        "fi  # _section \u2014 MT\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#MC": {
@@ -5539,7 +5539,7 @@
       ],
       "region": [
         "if _section MC; then",
-        "fi  # _section — MC\n"
+        "fi  # _section \u2014 MC\n"
       ]
     },
     "scripts/hooks/interactive-prompt.mutation.sh": {
@@ -5592,7 +5592,7 @@
       ],
       "region": [
         "if _section IP; then",
-        "fi  # _section — IP\n"
+        "fi  # _section \u2014 IP\n"
       ]
     },
     "scripts/lib/row-currency.py#fixture-records": {
@@ -5778,7 +5778,7 @@
       ],
       "region": [
         "if _section MF; then",
-        "fi  # _section — MF\n"
+        "fi  # _section \u2014 MF\n"
       ]
     },
     "scripts/hooks/notice-unstarted-rows.sh#fixture-records": {
@@ -5875,7 +5875,7 @@
       ],
       "region": [
         "if _section SA; then",
-        "fi  # _section — SA\n"
+        "fi  # _section \u2014 SA\n"
       ]
     },
     "scripts/hooks/guard-idle-land.test.sh": {
@@ -5939,7 +5939,7 @@
       ],
       "region": [
         "if _section IL; then",
-        "fi  # _section — IL\n"
+        "fi  # _section \u2014 IL\n"
       ]
     },
     "scripts/hooks/guard-worktree-isolation.mutation.sh": {
@@ -5994,7 +5994,7 @@
       ],
       "region": [
         "if _section WTI; then",
-        "fi  # _section — WTI\n"
+        "fi  # _section \u2014 WTI\n"
       ]
     },
     "scripts/hooks/guard-row-currency-commits.sh#fixture-records": {
@@ -8805,7 +8805,7 @@
       ],
       "region": [
         "if _section Q; then",
-        "fi  # _section — Q\n"
+        "fi  # _section \u2014 Q\n"
       ]
     },
     "scripts/hooks/contract-integrity.test.sh#Qscope": {
@@ -8830,7 +8830,7 @@
       ],
       "region": [
         "if _section Qscope; then",
-        "fi  # _section — Qscope\n"
+        "fi  # _section \u2014 Qscope\n"
       ]
     },
     "scripts/lib/publication-boundary.py": {
@@ -10113,7 +10113,7 @@
     "scripts/lib/pierce.py": {
       "source": "scripts/lib/pierce.py",
       "sha256": "4c0ea551da5687cb0570f30ed3bb5b5f7d02cd580d75e2cb95645cca1d66226e",
-      "evidence": "Full program reviewed 2026-10-07: reads actual assignment, original human transcript and inherited instruction files as data; terminal sessions resolve explicitly cited existing repository/evidence paths using metadata. Desktop sessions use only host-selected RICHOS_APP_READ_ROOTS (connected company folders, current thread workspaces/attachments) and the current session evidence directory; brief paths never grant app access. Reads/writes exact-input review state and diffs revisions; runs one restricted Read/Glob/Grep subprocess, with a single variadic add-dir list, and imports the registered strip-ack-lines transformer. Notes are nonblocking and excluded from the preceding material-findings report. No cited text/command is executed and no configuration keys are read. Renewed 2026-10-10 (zach-opus-pierce3, the Pierce Haiku parallel track): the inspector command is built by claude_command (byte-identical for Opus, asserted by pierce.test.py) and the CLI's cost/time fields ride beside the verdict. In terminal sessions only, it reads PIERCE_SHADOW_MODEL from the GOVERNED repository's orchestration.config (the project directory, never the engine's own config, so no engine key), writes job/pair/revision files under <state>/pierce-shadow/ and starts scripts/lib/pierce_shadow.py detached (own session, standard streams closed, never waited on) beside an initial review; --dismiss appends to that folder's dismissals.jsonl. Every track step is guarded and only logs; the Opus verdict, hook output and exit code are unchanged. Reviewed 2026-10-11: terminal continuation reads only same-project predecessor transcripts located by native successful Read of restart metadata, requiring a native successful Write/Edit of that note in the predecessor before the handoff. Note prose is never authority; only original human rows are collected chronologically, excluding later source activity. Desktop continuation reads original text/Jam PromptReceived events from the durable conversation-ledger.jsonl, filtered by host scope company/thread and native session binding, with optional original-instruction hash verification. Partial ledger appends are excluded. Missing, ambiguous, cyclic or invalid continuation remains unavailable, never a pass. These data reads add no orchestration config key. Recovery-enabled native dispatch reuses the existing inspection to classify job kind and semantic correction relationships against immutable candidate briefs and full original human sources. Declared mode reads entity-local recovery.json. Its fixed imports use recovery state, the workspace metadata reader closure and source freezing; no advisor consultation is run from the dispatch hook. Reviewed 2026-10-20: terminal quoted command arguments are tokenized with shlex only to find explicitly cited existing paths, including paths containing spaces. No command is executed, no missing path grants an ancestor and home/root remain excluded. The desktop host-selected read-root branch returns before terminal discovery and is unchanged. Reviewed 2026-10-20: material-review instructions are consequence-first and shorter, with unchanged schema, model, effort, file tools, subprocess count, revision lane and read restrictions. There are no new file readers or configuration keys. Native private-state records retain the exact initial/revision request, loaded inspector/profile/rules hashes and available provider metrics, including unavailable results, independent of the optional shadow. Missing usage stays absent. The existing state-file permissions and single inspector invocation are unchanged; no new configuration reader or subprocess is added. Reviewed 2026-10-24: optional PIERCE_SHADOW_PERIOD is read only from the governed repository alongside PIERCE_SHADOW_MODEL, never the engine configuration. A validated id selects an independent private periods/<id> root; its atomic manifest pins loaded source, profile, rules, helper, model and effort. Jobs return their frozen path so Opus writes cannot move when configuration changes; native shadow_period metadata routes revision and dismissal records. Detached workers bind all progress, skips, pending judgments and completion to the queued job directory and reject changed loaded inputs before any model call. Invalid ids never fall back to legacy. Opus invocation, classification, report/exit behavior, desktop opt-out and quota/resource controls are unchanged. Reviewed 2026-10-24 follow-up: revision collection uses the preceding native report’s explicit shadow_period rather than current configuration, verifies its loaded inspector/profile/rules and the existing named-period manifest against the shared initial-review fingerprint, and never creates a revision-only manifest. A missing ownership tag cannot append a dismissal into legacy state. These are existing collection metadata/state readers, with no new configuration, environment or provider input. Reviewed 2026-10-24: terminal predecessor discovery also reads the native host instructions/AutoMem MEMORY.md snapshot leading restart pointer and a successful final literal Bash cat of an existing same-project memory note. Shell text is tokenized only, never executed; transformed/redirected reads and source escapes are rejected. The existing native source Write/Edit witness and chronological cutoff remain mandatory. Earlier broken links preserve only witnessed originals, explicitly mark authority incomplete and expose those same-project native transcript directories to the restricted reviewer. Desktop host scopes, model invocation and period isolation are unchanged; no new config or environment input. Reviewed 2026-10-24 handover follow-up: a successful explicit Read/cat receipt outranks the fallback index. Index-note disk reads are deferred until no explicit read was witnessed, preserving receipt-based authority after note deletion. AutoMem index paths are canonicalized before the same-project comparison, including symlinked config prefixes. No new input, config, environment or subprocess reader. Renewed 2026-10-24 (private evidence coverage): terminal project configuration PIERCE_READ_ROOTS is parsed as a literal quoted JSON list without shell evaluation, canonicalized and restricted to existing directories excluding the filesystem and whole home. Desktop roots still come only from the host company registry and its session evidence. The canonical configured grants are access_sha256 in native inspection, pair manifest and queued twin qualification; changing a grant requires a new period. Successful native Bash-cat receipts now carry restart metadata after the disk note is deleted, retaining same-project source-write and cutoff requirements. Review rules interpret whole-brief constraints and narrow worker ownership before alleging a material contradiction. Review follow-up rv-20261024T172059Z-873ec818-6e2b resolved: newly queued legacy jobs also create and enforce the same source/access manifest; only already-queued pre-manifest historical jobs keep their legacy compatibility. Named periods remain independent. No provider command, profile, rules, permissions or live verdict changed in this correction. Native-data correction 2026-10-24: a combined Bash result may contain several note headers; bind the unique restart header to the final literal cat filename, normalizing the memory system project prefix and hyphen/underscore spelling. Ordinary feedback notes cannot claim an earlier cat header. Source write, same-project and time checks remain. Verified complete 14-session authority against actual native transcript; only metadata/report pointers are stored privately.",
+      "evidence": "Full program reviewed 2026-10-07: reads actual assignment, original human transcript and inherited instruction files as data; terminal sessions resolve explicitly cited existing repository/evidence paths using metadata. Desktop sessions use only host-selected RICHOS_APP_READ_ROOTS (connected company folders, current thread workspaces/attachments) and the current session evidence directory; brief paths never grant app access. Reads/writes exact-input review state and diffs revisions; runs one restricted Read/Glob/Grep subprocess, with a single variadic add-dir list, and imports the registered strip-ack-lines transformer. Notes are nonblocking and excluded from the preceding material-findings report. No cited text/command is executed and no configuration keys are read. Renewed 2026-10-10 (zach-opus-pierce3, the Pierce Haiku parallel track): the inspector command is built by claude_command (byte-identical for Opus, asserted by pierce.test.py) and the CLI's cost/time fields ride beside the verdict. In terminal sessions only, it reads PIERCE_SHADOW_MODEL from the GOVERNED repository's orchestration.config (the project directory, never the engine's own config, so no engine key), writes job/pair/revision files under <state>/pierce-shadow/ and starts scripts/lib/pierce_shadow.py detached (own session, standard streams closed, never waited on) beside an initial review; --dismiss appends to that folder's dismissals.jsonl. Every track step is guarded and only logs; the Opus verdict, hook output and exit code are unchanged. Reviewed 2026-10-11: terminal continuation reads only same-project predecessor transcripts located by native successful Read of restart metadata, requiring a native successful Write/Edit of that note in the predecessor before the handoff. Note prose is never authority; only original human rows are collected chronologically, excluding later source activity. Desktop continuation reads original text/Jam PromptReceived events from the durable conversation-ledger.jsonl, filtered by host scope company/thread and native session binding, with optional original-instruction hash verification. Partial ledger appends are excluded. Missing, ambiguous, cyclic or invalid continuation remains unavailable, never a pass. These data reads add no orchestration config key. Recovery-enabled native dispatch reuses the existing inspection to classify job kind and semantic correction relationships against immutable candidate briefs and full original human sources. Declared mode reads entity-local recovery.json. Its fixed imports use recovery state, the workspace metadata reader closure and source freezing; no advisor consultation is run from the dispatch hook. Reviewed 2026-10-20: terminal quoted command arguments are tokenized with shlex only to find explicitly cited existing paths, including paths containing spaces. No command is executed, no missing path grants an ancestor and home/root remain excluded. The desktop host-selected read-root branch returns before terminal discovery and is unchanged. Reviewed 2026-10-20: material-review instructions are consequence-first and shorter, with unchanged schema, model, effort, file tools, subprocess count, revision lane and read restrictions. There are no new file readers or configuration keys. Native private-state records retain the exact initial/revision request, loaded inspector/profile/rules hashes and available provider metrics, including unavailable results, independent of the optional shadow. Missing usage stays absent. The existing state-file permissions and single inspector invocation are unchanged; no new configuration reader or subprocess is added. Reviewed 2026-10-24: optional PIERCE_SHADOW_PERIOD is read only from the governed repository alongside PIERCE_SHADOW_MODEL, never the engine configuration. A validated id selects an independent private periods/<id> root; its atomic manifest pins loaded source, profile, rules, helper, model and effort. Jobs return their frozen path so Opus writes cannot move when configuration changes; native shadow_period metadata routes revision and dismissal records. Detached workers bind all progress, skips, pending judgments and completion to the queued job directory and reject changed loaded inputs before any model call. Invalid ids never fall back to legacy. Opus invocation, classification, report/exit behavior, desktop opt-out and quota/resource controls are unchanged. Reviewed 2026-10-24 follow-up: revision collection uses the preceding native report\u2019s explicit shadow_period rather than current configuration, verifies its loaded inspector/profile/rules and the existing named-period manifest against the shared initial-review fingerprint, and never creates a revision-only manifest. A missing ownership tag cannot append a dismissal into legacy state. These are existing collection metadata/state readers, with no new configuration, environment or provider input. Reviewed 2026-10-24: terminal predecessor discovery also reads the native host instructions/AutoMem MEMORY.md snapshot leading restart pointer and a successful final literal Bash cat of an existing same-project memory note. Shell text is tokenized only, never executed; transformed/redirected reads and source escapes are rejected. The existing native source Write/Edit witness and chronological cutoff remain mandatory. Earlier broken links preserve only witnessed originals, explicitly mark authority incomplete and expose those same-project native transcript directories to the restricted reviewer. Desktop host scopes, model invocation and period isolation are unchanged; no new config or environment input. Reviewed 2026-10-24 handover follow-up: a successful explicit Read/cat receipt outranks the fallback index. Index-note disk reads are deferred until no explicit read was witnessed, preserving receipt-based authority after note deletion. AutoMem index paths are canonicalized before the same-project comparison, including symlinked config prefixes. No new input, config, environment or subprocess reader. Renewed 2026-10-24 (private evidence coverage): terminal project configuration PIERCE_READ_ROOTS is parsed as a literal quoted JSON list without shell evaluation, canonicalized and restricted to existing directories excluding the filesystem and whole home. Desktop roots still come only from the host company registry and its session evidence. The canonical configured grants are access_sha256 in native inspection, pair manifest and queued twin qualification; changing a grant requires a new period. Successful native Bash-cat receipts now carry restart metadata after the disk note is deleted, retaining same-project source-write and cutoff requirements. Review rules interpret whole-brief constraints and narrow worker ownership before alleging a material contradiction. Review follow-up rv-20261024T172059Z-873ec818-6e2b resolved: newly queued legacy jobs also create and enforce the same source/access manifest; only already-queued pre-manifest historical jobs keep their legacy compatibility. Named periods remain independent. No provider command, profile, rules, permissions or live verdict changed in this correction. Native-data correction 2026-10-24: a combined Bash result may contain several note headers; bind the unique restart header to the final literal cat filename, normalizing the memory system project prefix and hyphen/underscore spelling. Ordinary feedback notes cannot claim an earlier cat header. Source write, same-project and time checks remain. Verified complete 14-session authority against actual native transcript; only metadata/report pointers are stored privately.",
       "keys": [],
       "edges": [
         {
@@ -11264,7 +11264,7 @@
       ],
       "region": [
         "if _section base; then",
-        "fi  # _section — base\n"
+        "fi  # _section \u2014 base\n"
       ]
     },
     "scripts/hooks/contract-integrity-probe.sh#by-reference-fixtures": {
@@ -15727,7 +15727,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "scripts/lib/agent-liveness.py",
-          "sha256": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+          "sha256": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
@@ -16513,7 +16513,7 @@
     "scripts/lib/instruction_files.py": {
       "source": "scripts/lib/instruction_files.py",
       "sha256": "0031d575c2b56e6fb3e6c9fe3f07c4526dbcebbe92dab25399e083cd17fec367",
-      "evidence": "Added 2026-10-21 (zach-opus-folderfiles1, folder-instruction-files plan §5.3): chooses a connected repository's own CLAUDE.md/.claude/CLAUDE.md/CLAUDE.local.md or AGENTS.md by Claude Code's rule. Reads those fixed names only: committed files through ls-tree and cat-file at a given commit (core.hooksPath=/dev/null), the connected folder's file on disk. No configuration key, environment variable or other file is read.",
+      "evidence": "Added 2026-10-21 (zach-opus-folderfiles1, folder-instruction-files plan \u00a75.3): chooses a connected repository's own CLAUDE.md/.claude/CLAUDE.md/CLAUDE.local.md or AGENTS.md by Claude Code's rule. Reads those fixed names only: committed files through ls-tree and cat-file at a given commit (core.hooksPath=/dev/null), the connected folder's file on disk. No configuration key, environment variable or other file is read.",
       "keys": [],
       "edges": []
     },
@@ -17250,7 +17250,7 @@
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
         "scripts/inflight-ack.sh": "5ccbb53c17bc12d2bbea8780ea1f710a3391cf72d60f34f21f8327dc10f4378b",
         "scripts/inflight-notify.sh": "d7c37362a9293ee929e934684b42843cc940c19c4f138ce2e11bdd604de64ba4",
-        "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+        "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
@@ -17963,7 +17963,7 @@
         "scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
         "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "scripts/hooks/guard-agent-state-claims.py": "341d0223962f9ccfa6298b3d6982dc55b5f3ea19ec5ea4ba1deb162380811ab5",
-        "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+        "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "scripts/hooks/guard-brief-scope.sh": "d62b66830b5f8665bb7492b2278ad7261f3279401142b41296ab1d2ada78c9e3",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",
         "scripts/lib/ceo-asks.sh": "ab105fa8aa606262613b1f8113f3d137e26d8e4802d5e008f017d59b123807f6",
@@ -18128,7 +18128,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
-        "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+        "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "scripts/hooks/guard-model-ceiling.sh": "88b1802d9021e8fbcb2fc16881c70f6fbdc7c5313b0c61e1535f20a4d8e2e26f",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
@@ -18375,7 +18375,7 @@
         "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
         "scripts/hooks/guard-resume-isolation.test.sh": "2fc190fc539a183b423ac8ba7a22a23c56d6f8cd289aa341a67a7d6fd8f39a1d",
-        "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+        "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
@@ -18411,7 +18411,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
-        "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+        "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "scripts/hooks/guard-model-ceiling.sh": "88b1802d9021e8fbcb2fc16881c70f6fbdc7c5313b0c61e1535f20a4d8e2e26f",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
@@ -18469,7 +18469,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
-        "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+        "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "scripts/hooks/guard-model-ceiling.sh": "88b1802d9021e8fbcb2fc16881c70f6fbdc7c5313b0c61e1535f20a4d8e2e26f",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
@@ -18527,7 +18527,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
-        "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
+        "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "scripts/hooks/guard-model-ceiling.sh": "88b1802d9021e8fbcb2fc16881c70f6fbdc7c5313b0c61e1535f20a4d8e2e26f",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
