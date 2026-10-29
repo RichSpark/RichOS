@@ -201,14 +201,130 @@ def ffmpeg_source_directions(source):
     return "\n".join(lines) + "\n"
 
 
-def write_launcher(runtime, name, target, setup="", flags=""):
-    # The packaged probe allows exec but forbids fork. Shell parameter expansion
-    # locates the sibling runtime without spawning dirname or a subshell.
-    wrapper = runtime / "bin" / name
-    wrapper.write_text('#!/bin/sh\ncase "$0" in\n  */*) runtime_bin=${0%/*} ;;\n'
-                       '  *) runtime_bin=. ;;\nesac\n' + setup +
-                       'exec "$runtime_bin/../' + target + '" ' + flags + '"$@"\n')
-    wrapper.chmod(0o755)
+# EVERY ENTRY IN runtime/bin IS A MACH-O EXECUTABLE (or a symlink to one), NEVER A `#!` SCRIPT.
+# macOS leaks about 1 KiB of wired kernel memory (zone data.kalloc.1024, freed only by reboot)
+# for each `#!` script exec'd from a process that was itself started from a script, and the
+# runtime's bin is first on every session's PATH (runtime-launcher.c has the measurement).
+# python3, git and node therefore get runtime-launcher.c compiled per entry: it sets what the
+# old `#!/bin/sh` wrappers set and execs the real binary, with no fork (the packaged probe allows
+# exec only). build() refuses a runtime with any other kind of bin entry (script_entries).
+LAUNCHER_SOURCE = Path(__file__).with_name("runtime-launcher.c")
+MACHO_MAGICS = (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xfe\xed\xfa\xcf")
+
+
+def is_macho(path):
+    with Path(path).open("rb") as handle:
+        return handle.read(4) in MACHO_MAGICS
+
+
+def script_entries(bin_dir):
+    """The names in bin_dir that are neither a Mach-O executable nor a symlink to one inside
+    the runtime (bin_dir's parent). Empty for a runtime whose bin execs no `#!` script."""
+    root = Path(bin_dir).parent.resolve()
+    refused = []
+    for entry in sorted(Path(bin_dir).iterdir()):
+        resolved = entry.resolve()
+        if not resolved.is_relative_to(root) or not resolved.is_file() or not is_macho(resolved):
+            refused.append(entry.name)
+    return refused
+
+
+def write_launcher(runtime, name, target, *, set_variable=None, default_path=None, flag=None):
+    """Compile runtime-launcher.c to runtime/bin/<name>, execing runtime/<target>.
+    set_variable (name, value) is always set; default_path (name, path under the runtime) is
+    set only when the caller's value is unset or empty; flag precedes the caller's arguments."""
+    def string(value):
+        if '"' in value or "\\" in value or "\n" in value:
+            raise ValueError(f"launcher definition must be a plain string: {value!r}")
+        return '"' + value + '"'
+    definitions = ["-DLAUNCH_TARGET=" + string(target)]
+    if set_variable:
+        definitions += ["-DLAUNCH_SET_NAME=" + string(set_variable[0]), "-DLAUNCH_SET_VALUE=" + string(set_variable[1])]
+    if default_path:
+        definitions += ["-DLAUNCH_DEFAULT_NAME=" + string(default_path[0]), "-DLAUNCH_DEFAULT_PATH=" + string(default_path[1])]
+    if flag:
+        definitions.append("-DLAUNCH_FLAG=" + string(flag))
+    launcher = runtime / "bin" / name
+    # Build-time tooling only, like git's make: Xcode's clang, a clean PATH, the SDK named.
+    # -Wl,-S -Wl,-x: no debug map or local symbols, so no build path is carried in the bytes.
+    clean_env = {**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                 "SDKROOT": subprocess.check_output(["/usr/bin/xcrun", "--show-sdk-path"], text=True).strip()}
+    subprocess.run(["/usr/bin/xcrun", "clang", "-std=c11", "-Os", "-Wall", "-Wextra", "-Werror",
+                    "-arch", "arm64", "-mmacosx-version-min=13.0", "-Wl,-S", "-Wl,-x", *definitions,
+                    "-o", str(launcher), str(LAUNCHER_SOURCE)], env=clean_env, check=True)
+    launcher.chmod(0o755)
+
+
+def check_launched_entries(runtime):
+    """What the old wrappers did, proven through runtime/bin with NONE of their variables in
+    the caller's environment: git finds its own exec-path and templates and runs its libexec
+    helpers, Python writes no bytecode (nor does a Python it starts through sys.executable),
+    and node gets the runtime's OpenSSL module directory. Returns one line per entry; raises
+    RuntimeError naming the first that fails. Isolated from the caller's Git config and home."""
+    runtime = Path(runtime).resolve()
+    scripts = script_entries(runtime / "bin")
+    if scripts:
+        raise RuntimeError("runtime/bin entries that are not Mach-O: " + ", ".join(scripts))
+    lines = []
+    with tempfile.TemporaryDirectory(prefix="richos-launched-entries-") as temporary:
+        root = Path(temporary).resolve()
+        (root / "home").mkdir()
+        env = {"PATH": str(runtime / "bin") + ":/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(root / "home"),
+               "TMPDIR": str(root), "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+               "GIT_AUTHOR_NAME": "Fictional", "GIT_AUTHOR_EMAIL": "fictional@example.invalid",
+               "GIT_COMMITTER_NAME": "Fictional", "GIT_COMMITTER_EMAIL": "fictional@example.invalid"}
+
+        def run(*arguments, cwd=None, environment=None):
+            result = subprocess.run([str(a) for a in arguments], cwd=cwd, env=environment or env,
+                                    capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"{' '.join(map(str, arguments))} exited {result.returncode}: "
+                                   + (result.stderr or result.stdout).strip())
+            return result
+
+        git = runtime / "bin/git"
+        exec_path = Path(run(git, "--exec-path").stdout.strip()).resolve()
+        if exec_path != runtime / "git/libexec/git-core":
+            raise RuntimeError(f"git --exec-path is {exec_path}, not the runtime's git/libexec/git-core")
+        repo = root / "repo"
+        initialized = run(git, "init", "-q", repo)
+        if "templates not found" in initialized.stderr or not (repo / ".git/description").is_file():
+            raise RuntimeError("git init found no templates: " + initialized.stderr.strip())
+        run(git, "-C", repo, "commit", "-q", "--allow-empty", "-m", "fictional")
+        # A local ls-remote runs git-upload-pack, which lives only in the exec-path.
+        advertised = run(git, "ls-remote", repo).stdout
+        if "\tHEAD\n" not in advertised:
+            raise RuntimeError(f"git ls-remote through git-upload-pack advertised no HEAD: {advertised!r}")
+        lines.append(f"git: exec-path {exec_path}, templates copied, git-upload-pack ran; "
+                     f"precomposed {check_git_precompose(git, env)!r}")
+
+        modules = root / "modules"
+        modules.mkdir()
+        (modules / "parent_probe.py").write_text("VALUE = 1\n")
+        (modules / "child_probe.py").write_text("VALUE = 2\n")
+        child = f"import sys; sys.path.insert(0, {str(modules)!r}); import child_probe; print(sys.dont_write_bytecode)"
+        flags = run(runtime / "bin/python3", "-c",
+                    f"import subprocess, sys; sys.path.insert(0, {str(modules)!r}); import parent_probe; "
+                    f"print(sys.dont_write_bytecode); subprocess.run([sys.executable, '-c', {child!r}], check=True)").stdout.split()
+        written = sorted(str(p.relative_to(modules)) for p in modules.rglob("*") if p.suffix == ".pyc" or p.name == "__pycache__")
+        if flags != ["True", "True"] or written:
+            raise RuntimeError(f"python3 wrote bytecode or did not disable it: dont_write_bytecode {flags}, written {written}")
+        lines.append("python3: no .pyc written by it or by a Python started through sys.executable")
+
+        node = runtime / "bin/node"
+        modules_dir = run(node, "-p", "process.env.OPENSSL_MODULES").stdout.strip()
+        if Path(modules_dir).resolve() != runtime / "node/lib/ossl-modules" or not Path(modules_dir).is_dir():
+            raise RuntimeError(f"node's OPENSSL_MODULES is {modules_dir!r}, not the runtime's node/lib/ossl-modules")
+        explicit = run(node, "-p", "process.env.OPENSSL_MODULES",
+                       environment={**env, "OPENSSL_MODULES": str(root / "explicit")}).stdout.strip()
+        if explicit != str(root / "explicit"):
+            raise RuntimeError(f"an explicit OPENSSL_MODULES was replaced: {explicit!r}")
+        md4 = run(node, "--openssl-legacy-provider", "-p",
+                  "require('crypto').createHash('md4').update('x').digest('hex')").stdout.strip()
+        if md4 != "51b834b7c1ef0b59ea50888fcb39ace2":
+            raise RuntimeError(f"node's OpenSSL legacy provider did not load: md4 {md4!r}")
+        lines.append(f"node: OPENSSL_MODULES {modules_dir}, an explicit value kept, legacy provider loaded")
+    return lines
 
 
 def prepare_portable_node(runtime, recipe):
@@ -219,16 +335,18 @@ def prepare_portable_node(runtime, recipe):
         subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(binary)], check=True)
         subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(binary)], check=True)
     (runtime / "node/lib/ossl-modules").mkdir()
-    write_launcher(runtime, "node", "node/bin/node",
-                   ': "${OPENSSL_MODULES:=$runtime_bin/../node/lib/ossl-modules}"\nexport OPENSSL_MODULES\n')
+    # node's compiled-in MODULESDIR is the upstream build machine's; an explicit value wins.
+    write_launcher(runtime, "node", "node/bin/node", default_path=("OPENSSL_MODULES", "node/lib/ossl-modules"))
 
 
 def prepare_runtime_launchers(runtime, recipe):
     prepare_portable_node(runtime, recipe)
-    # Relocation can invalidate upstream bytecode. Do not rewrite the delivery.
+    # Relocation can invalidate upstream bytecode. Do not rewrite the delivery: -B for this
+    # interpreter, and the variable for any Python it starts through sys.executable.
     write_launcher(runtime, "python3", "python/bin/python3",
-                   'export PYTHONDONTWRITEBYTECODE=1\n', flags="-B ")
-    # Git resolves its helper prefix from the real installed entry point.
+                   set_variable=("PYTHONDONTWRITEBYTECODE", "1"), flag="-B")
+    # Not a symlink: git takes its exec-path and templates from the path it was executed by,
+    # and the launcher executes the real git/bin/git (runtime-launcher.c).
     write_launcher(runtime, "git", "git/bin/git")
 
 
@@ -304,9 +422,14 @@ def build(destination):
                 raise
             shutil.copyfile(git_source / "COPYING", runtime / "sources/GIT-COPYING")
         prepare_runtime_launchers(runtime, manifest)
+        scripts = script_entries(runtime / "bin")
+        if scripts:
+            raise RuntimeError("runtime/bin must hold only Mach-O executables (a #! script there leaks "
+                               "kernel memory on every exec): " + ", ".join(scripts))
         # License files from binary upstream distributions are retained in full.
         (runtime / "sources/README.txt").write_text("Pinned upstream distributions are listed in runtime-sources.json. Git's exact corresponding source and COPYING are included. Python and Node license notices remain in their distributions. jq is distributed under the MIT license; see https://github.com/jqlang/jq/blob/jq-1.8.2/COPYING. whisper-cli is built from the pinned whisper.cpp source and is distributed under the MIT license in WHISPER-CPP-LICENSE. ffmpeg and ffprobe are an unmodified upstream static build distributed under GPLv3 or later in FFMPEG-COPYING.GPLv3; FFMPEG-SOURCE.txt says where their exact corresponding source is. macOS supplies bash and system libraries.\n")
         shutil.copyfile(__file__, runtime / "sources/RICHOS-RUNTIME-BUILDER.py")
+        shutil.copyfile(LAUNCHER_SOURCE, runtime / "sources/RICHOS-RUNTIME-LAUNCHER.c")
         shutil.copyfile(Path(__file__).parent / "runtime-sources.json", runtime / "sources/runtime-sources.json")
         (runtime / "runtime-sources.json").write_text(json.dumps(manifest, indent=2) + "\n")
         env = {**os.environ, "PATH": str(runtime / "bin") + ":/usr/bin:/bin:/usr/sbin:/sbin",
@@ -321,6 +444,8 @@ def build(destination):
         if SYSTEM_ICONV not in subprocess.check_output(["otool", "-L", str(runtime / "git/bin/git")], text=True):
             raise RuntimeError(f"git/bin/git does not link {SYSTEM_ICONV}, the iconv that has UTF-8-MAC")
         print("git precomposed unicode OK: " + check_git_precompose(runtime / "bin/git", env), flush=True)
+        for line in check_launched_entries(runtime):
+            print("launched entry OK: " + line, flush=True)
         # Reject any dynamic dependency on Homebrew or the developer's home.
         for path in runtime.rglob("*"):
             if path.is_file() and not path.is_symlink():

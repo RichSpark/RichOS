@@ -68,7 +68,7 @@ mod tests {
         crate::assignment::register(&scope.state_root,&crate::assignment::Registration {
             entity_id:scope.entity_id.clone(),thread_id:scope.thread_id.clone(),obligation_id:"work-fixture".into(),
             instruction_ledger_ref:i.ledger_ref.clone(),instruction_sha256:i.sha256.clone(),title:text.into(),repositories:vec![],needs_screen:false}).unwrap();
-        let active=ToolScope {version:1,actions_allowed:true,background_work_allowed:false,user_instruction:Some(i),seat:None,
+        let active=ToolScope {version:1,actions_allowed:true,background_work_allowed:false,closed:None,user_instruction:Some(i),seat:None,
             bridge:EcsBridge {python:root.join("python"),component:root.join("ecs"),state_root:root.join("state")},
             binding:Binding {entity_id:entity.to_string(),thread_id:thread,session_id:"native-rich".into(),turn_id:turn,audience:"rich".into(),revision:1}};
         (path,scope,active,ledger,b)

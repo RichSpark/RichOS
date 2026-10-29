@@ -27,7 +27,8 @@ function two(home, work, opts = {}) {
   const workAcct = { id: "2", label: "Work", inUse: opts.inUse === "2", working: working["2"] || [], windows: win(work[0], work[1], now + 3 * HOUR, now + 3 * DAY), checkedAt: now, exhaustedUntil: null, message: null };
   const used = opts.inUse === "2" ? workAcct : homeAcct;
   return { state: "fresh", checkedAt: now, retryAt: null, message: null, windows: used.windows, accounts: [homeAcct, workAcct],
-    changes: opts.changes || [{ at: now - DAY - 2 * HOUR, kind: "added", id: "2", label: "Work" }], lastSwitch: opts.lastSwitch || null };
+    changes: opts.changes || [{ at: now - DAY - 2 * HOUR, kind: "added", id: "2", label: "Work" }], lastSwitch: opts.lastSwitch || null,
+    ...(opts.moving ? { moving: opts.moving } : {}) };
 }
 // Two accounts, `idle` not in use, signed in without limits: no reading, `signedIn: true`.
 function idleSignedIn(inUse, idle) {
@@ -47,12 +48,12 @@ async function main() {
     if (opts.clock) await page.clock.install();
     page.setDefaultTimeout(30000); // load-bound: a hang guard only; every wait below waits for a fact
     page.on("pageerror", e => errors.push(String(e)));
-    await page.addInitScript(({ theme, quota, signIn, policy, emails }) => {
+    await page.addInitScript(({ theme, quota, signIn, policy, emails, moveWaits }) => {
       localStorage.setItem("richos-theme", theme);
       localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100 }));
       localStorage.setItem("richos-mock-quota-policy", JSON.stringify(policy || { enabled: false, pausePercent: 93 }));
-      window.__RICHOS_MOCK_PRESET__ = { quota, signIn, emails };
-    }, { theme, quota, signIn: opts.signIn || [], policy: opts.policy, emails: opts.emails || {} });
+      window.__RICHOS_MOCK_PRESET__ = { quota, signIn, emails, moveWaits };
+    }, { theme, quota, signIn: opts.signIn || [], policy: opts.policy, emails: opts.emails || {}, moveWaits: opts.moveWaits || null });
     await page.goto("file://" + path.join(UI_DIR, "index.html"));
     await page.waitForSelector("#set-btn");
     await page.evaluate(() => window.RichSplash.yieldNow("accounts-test"));
@@ -252,6 +253,38 @@ async function main() {
     return "Work first, then Home; the 93% account says the 99% switch";
   });
 
+  // Review rv-20261029T150133Z-2f57a3fd-6d74, finding 2: with work still running on Home, Use this
+  // one now only decides the move (`view.moving`), and the line said "Rich now uses Work." the
+  // moment the command answered, even when that answer said the move was blocked. Item 3 of the
+  // CEO's 2026-10-29: "It never shows a switch that didn't happen". The line follows the move: a
+  // blocked move says it cannot move yet, a move under way says Switching, and "Rich now uses Work."
+  // comes only once the work runs on Work. In both themes.
+  await run.check("Use this one now with work still on the account in use: Can't move yet, or Switching, and Rich now uses Work only once the work has moved", async () => {
+    const said = [];
+    for (const theme of ["light", "dark"]) {
+      let page = await open(theme, two([58, 72], [0, 12], { working: { "1": ["team"] } }), { moveWaits: "blocked" });
+      await sheet(page);
+      await page.click('[aria-label="Use Work now"]');
+      await page.waitForSelector(".acc-feedback");
+      assertEqual(await text(page, ".acc-feedback"), "Can't move yet: work is still running on Home. Undo", theme + ": a blocked move");
+      assertEqual(await texts(page, ".acc-name"), ["Home", "Work"], theme + ": the work still runs on Home");
+      said.push(theme + ": " + await text(page, ".acc-feedback"));
+      await page.close();
+      page = await open(theme, two([58, 72], [0, 12], { working: { "1": ["team"] } }), { moveWaits: "pending" });
+      await sheet(page);
+      await page.click('[aria-label="Use Work now"]');
+      await page.waitForSelector(".acc-feedback");
+      assertEqual(await text(page, ".acc-feedback"), "Switching to Work. Undo", theme + ": a move under way");
+      await page.evaluate(() => window.__RICHOS_MOCK__.finishAccountMove());
+      await page.evaluate(() => window.RichAccounts.refresh());
+      await page.waitForFunction(() => document.querySelector(".acc-card").dataset.id === "2");
+      assertEqual(await text(page, ".acc-feedback"), "Rich now uses Work. Home is next. Undo", theme + ": once the work has moved");
+      said.push(theme + ": Switching to Work, then Rich now uses Work");
+      await page.close();
+    }
+    return said.join(" / ");
+  });
+
   // ---- 3. adding a second account in two steps ----------------------------------------------
   await run.check("adding a second account in two steps: name both, then the browser sign-in; the new card arrives ready", async () => {
     const page = await open("dark", one(86, 47));
@@ -341,36 +374,52 @@ async function main() {
   });
 
   // ---- 4b. a switch still under way ----------------------------------------------------------
-  // Review rv-20261019T005929Z-e3d9ad03-3e7b, finding 3: the switch to Work is decided, Rich's
-  // reply already ran on Work, and the team (Stu) is still on Home finishing its step. The panel
-  // said Work was "In use now" and "Rich and the team are working on this one" while the team's
-  // job still ran on Home. Each account says who is really on it until the move is done.
-  await run.check("a switch under way: the account being left says who is still on it, the new one says Switching to this one", async () => {
-    let page = await open("dark", two([64, 99], [6, 4], { inUse: "2", working: { "1": ["team"], "2": ["rich"] } }));
+  // Review rv-20261019T005929Z-e3d9ad03-3e7b, finding 3: the panel said Work was "In use now" while
+  // the team's job still ran on Home. Then the CEO, 2026-10-29: "When I had checked the accounts
+  // (after seeing the errors), I saw "switching to home" and the Home account was listed first in
+  // the list. But apparently it didn't actually switch." The account marked in use and listed first
+  // is the one the work actually runs on (quota.rs publishes it as `inUse`); the account a decided
+  // switch goes to is `moving.to` and says "Switching to this one" until the move really happens;
+  // a move that cannot happen yet says so. On main the account switched to was listed first and the
+  // row said "Switching to" it whatever was still running on the other.
+  await run.check("a switch under way: the account still in use stays first and marked; the one switched to says so; a blocked move says it cannot move yet", async () => {
+    const underWay = blocked => two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"], "2": ["rich"] },
+      moving: { from: "1", to: "2", blocked } });
+    let page = await open("dark", underWay(false));
     await menu(page);
     await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent === "Switching to Work");
     await page.click("#set-accounts-open");
     await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
-    assertEqual(await texts(page, ".acc-name"), ["Work", "Home"], "the account being left comes right after the one in use");
-    assertEqual(await texts(page, ".acc-pill"), ["Switching to this one", "Still in use"]);
+    assertEqual(await texts(page, ".acc-name"), ["Home", "Work"], "the account the work still runs on comes first");
+    assertEqual(await texts(page, ".acc-pill"), ["Still in use", "Switching to this one"]);
     assertEqual(await text(page, '.acc-card[data-id="2"] .acc-note'), "Rich is working on this one now. The team moves here once it finishes the step it is on.");
     assertEqual(await text(page, '.acc-card[data-id="1"] .acc-note'), "The team is finishing the step it is on here, then moves to Work.");
     assertEqual(await page.locator(".acc-handover").count(), 0, "no Then line while the move is under way");
     await page.close();
-    page = await open("dark", two([64, 99], [6, 4], { inUse: "2", working: { "1": ["rich"], "2": ["team"] } }));
+    // Stu's session cannot move yet (Renewal::Waits): it says so, in plain words, on the row and the card.
+    page = await open("dark", underWay(true));
+    await menu(page);
+    await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent === "Can't move yet: work is still running on Home");
+    await page.click("#set-accounts-open");
+    await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    assertEqual(await texts(page, ".acc-name"), ["Home", "Work"]);
+    assertEqual(await text(page, '.acc-card[data-id="1"] .acc-note'), "Can't move yet: work is still running on Home. The team is finishing the step it is on here, then moves to Work.");
+    await page.close();
+    page = await open("dark", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["rich"], "2": ["team"] }, moving: { from: "1", to: "2", blocked: false } }));
     await sheet(page);
     assertEqual(await text(page, '.acc-card[data-id="1"] .acc-note'), "Rich moves to Work with his next reply.");
     assertEqual(await text(page, '.acc-card[data-id="2"] .acc-note'), "The team is working on this one now. Rich moves here with his next reply.");
     await page.close();
-    // Once everyone is on Work, it is simply In use now.
+    // Once everything runs on Work, Work is the one marked in use, first, and simply In use now.
     page = await open("dark", two([64, 99], [6, 4], { inUse: "2", working: { "2": ["rich", "team"] } }));
     await menu(page);
     await page.waitForFunction(() => document.getElementById("set-accounts-state").textContent === "Using Work");
     await page.click("#set-accounts-open");
     await page.waitForSelector("#accounts-sheet:not([hidden]) .acc-card");
+    assertEqual(await texts(page, ".acc-name"), ["Work", "Home"]);
     assertEqual((await texts(page, ".acc-pill"))[0], "In use now");
     await page.close();
-    return "Switching to Work / Still in use, who is where; then In use now";
+    return "Home first and Still in use / Switching to Work; Can't move yet; then Work In use now";
   });
 
   // ---- 5. Rich's one-time suggestion -------------------------------------------------------
@@ -616,12 +665,15 @@ async function main() {
       await p.click("#acc-open-signin"); await p.waitForSelector(".acc-waiting"); }],
     ["add-same", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.fill("#acc-nu", "Work"); await p.click("#acc-continue"); await p.click("#acc-open-signin"); await p.waitForSelector("#acc-try-again"); }, { signIn: ["same-account"] }],
     ["two", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click('[aria-label="Use Work now"]'); await p.waitForSelector(".acc-feedback"); }],
+    ["use-blocked", two([58, 72], [0, 12], { working: { "1": ["team"] } }), async p => { await sheet(p); await p.click('[aria-label="Use Work now"]'); await p.waitForSelector(".acc-feedback"); }, { moveWaits: "blocked" }],
     ["remove", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click('[aria-label="Remove Work"]'); }],
     ["idle-signed-in", idleSignedIn("1", "2"), sheet],
     ["switched", two([64, 99], [6, 4], { inUse: "2", homeGone: now + 2 * DAY, lastSwitch: { from: "1", to: "2", at: now - 3 * 60000, why: "weekly", used: 99 } }), sheet],
     ["both-near", two([71, 96], [18, 93]), sheet],
-    ["moving", two([64, 99], [6, 4], { inUse: "2", working: { "1": ["team"], "2": ["rich"] } }), sheet],
-    ["menu-moving", two([64, 99], [6, 4], { inUse: "2", working: { "1": ["team"], "2": ["rich"] } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
+    ["moving", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"], "2": ["rich"] }, moving: { from: "1", to: "2", blocked: false } }), sheet],
+    ["menu-moving", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"], "2": ["rich"] }, moving: { from: "1", to: "2", blocked: false } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
+    ["blocked", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"] }, moving: { from: "1", to: "2", blocked: true } }), sheet],
+    ["menu-blocked", two([64, 99], [6, 4], { inUse: "1", working: { "1": ["team"] }, moving: { from: "1", to: "2", blocked: true } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["choice-saved", two([58, 72], [0, 12]), async p => { await sheet(p); await p.click("#acc-five-pause"); await p.waitForSelector(".acc-saved"); }],
     ["menu-switched", two([64, 99], [6, 4], { inUse: "2", lastSwitch: { from: "1", to: "2", at: now - 3 * 60000, why: "weekly", used: 99 } }), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["chat-nudge", one(86, 47), async p => { await onThread(p); await say(p, "nudge", "Your Claude account has used **86%** of this week's limit.");

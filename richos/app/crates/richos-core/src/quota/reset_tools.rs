@@ -53,7 +53,9 @@ pub(super) fn status(app: &Path, resets: &Service, now: u64, declared: Option<&s
         "checkedAt": view.checked_at,
         "state": view.state,
         "heldUntil": view.held_until,
-        "admission": super::gate::admission(&state, now),
+        // The gate's decision on the top-level reading, the account named above (main's gate
+        // keeps `admission` for tests only; `decide` with no account is the same decision).
+        "admission": super::gate::decide(&state, None, now).0,
         "resets": {
             "state": r.state,
             "offers": r.offers,

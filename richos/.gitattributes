@@ -1,0 +1,25 @@
+# Report language usage with standalone tests and their support files excluded.
+# Apply the same policy across languages; tests remain tracked and run normally.
+# Test code embedded in implementation files still counts with those files.
+**/test/** -linguist-detectable
+**/tests/** -linguist-detectable
+**/__tests__/** -linguist-detectable
+**/Tests/** -linguist-detectable
+**/UITests/** -linguist-detectable
+**/UnitTests/** -linguist-detectable
+**/PlatformTests/** -linguist-detectable
+**/TestSupport/** -linguist-detectable
+**/testDebug/** -linguist-detectable
+**/androidTest/** -linguist-detectable
+**/RichOSCompanionCore.Tests/** -linguist-detectable
+*.test.* -linguist-detectable
+*.spec.* -linguist-detectable
+*.mutation.* -linguist-detectable
+*_test.* -linguist-detectable
+*_tests.* -linguist-detectable
+
+# Python's test_ prefix also appears on production helpers. Scope it to suites.
+app/scripts/lint/test_*.py -linguist-detectable
+mobile/perf/bench/test_*.py -linguist-detectable
+mobile/perf/test_recheck.py -linguist-detectable
+mobile/perf/test_verdict.py -linguist-detectable

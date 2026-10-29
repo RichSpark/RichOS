@@ -232,6 +232,27 @@ pub struct AccountView {
     /// 7fed0bef item 3). `None` until the account has a weekly reading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekly_point: Option<f64>,
+    /// This account's own measured speeds, its speed before a hold and its last empty check
+    /// (`crate::quota::View`'s fields of the same names), so the separate-process gate judges a
+    /// call on the account it actually runs on (`quota::gate::decide`), not on the one in use.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speeds: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pre_hold: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_at: Option<u64>,
+}
+
+/// **A move between accounts that has not happened yet** (Rich, 2026-10-29): the account in
+/// use is `to`, where every new session starts, but work still runs on `from`. `blocked` when
+/// Stu's session was found with work running on `from` that ending it would end
+/// ([`Accounts::move_waits`]): the move waits for that work to finish.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Moving {
+    pub from: String,
+    pub to: String,
+    pub blocked: bool,
 }
 
 /// Why an account is being left, for the one-line notice, with the figure it was read at.
@@ -361,6 +382,9 @@ pub struct Accounts {
     /// says nothing about another's still running on the old one (review
     /// rv-20261019T030516Z-0a1a8728-e798, finding 2).
     replies: Mutex<BTreeMap<String, String>>,
+    /// **The conversations whose back end could not move yet** ([`Accounts::move_waits`]):
+    /// something of Stu's still runs on his old session. Cleared when that back end moves or ends.
+    waiting: Mutex<std::collections::BTreeSet<String>>,
     notice: Mutex<Option<String>>,
     /// The webview's offset from UTC (`quota::Service::set_utc_offset`), so the switch line
     /// can say as a clock time when the account it left is fresh again.
@@ -385,7 +409,7 @@ impl Accounts {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Stored::default(),
             Err(e) => return Err(e),
         };
-        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), replies: Mutex::new(BTreeMap::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
+        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), replies: Mutex::new(BTreeMap::new()), waiting: Mutex::new(std::collections::BTreeSet::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
     }
 
     fn save(&self, state: &Stored) -> io::Result<()> {
@@ -620,6 +644,8 @@ impl Accounts {
     /// **The back end of conversation `thread` runs on `account` now** (`None`: it has no live
     /// lease). Reported by the work host whenever it opens or ends Stu's lease.
     pub fn back_end_on(&self, thread: &str, account: Option<&str>) {
+        // A back end that ended or opened a session is no longer waiting to move.
+        self.waiting.lock().unwrap().remove(thread);
         {
             let mut back_ends = self.back_ends.lock().unwrap();
             match account {
@@ -628,6 +654,40 @@ impl Accounts {
             }
         }
         self.release();
+    }
+
+    /// **The back end of conversation `thread` could not move to the account in use yet**:
+    /// something of Stu's still runs on his session (a turn, a command or a helper), and ending
+    /// it would end that work. Reported by the work host at `Renewal::Waits`. The accounts
+    /// screen says so in plain words until it moves ([`Moving::blocked`]).
+    pub fn move_waits(&self, thread: &str) {
+        self.waiting.lock().unwrap().insert(thread.into());
+    }
+
+    /// **The account the work actually runs on** (Rich, 2026-10-29): the account in use once
+    /// every live back end (Stu's session, where his helpers run) and every running reply of
+    /// Rich's is on it; until then, the account a back end is still on, or failing that the one
+    /// a reply is still on. Nothing running anywhere: the account in use, where the next work
+    /// starts. The screen marks and lists this one first, and the top-level reading describes
+    /// it, so nothing shows a switch that has not happened.
+    pub fn running_on(&self) -> Account {
+        let in_use = self.in_use();
+        // One lock at a time: `release` holds `replies` while it takes `back_ends`.
+        let away = |on: &Mutex<BTreeMap<String, String>>| on.lock().unwrap().values().find(|a| **a != in_use.id).cloned();
+        let elsewhere = away(&self.back_ends).or_else(|| away(&self.replies));
+        elsewhere.and_then(|id| self.list().into_iter().find(|a| a.id == id)).unwrap_or(in_use)
+    }
+
+    /// **The move under way**, while work still runs on another account than the one in use.
+    pub fn moving(&self) -> Option<Moving> {
+        let (to, from) = (self.in_use().id, self.running_on().id);
+        if from == to { return None; }
+        let waiting: Vec<String> = self.waiting.lock().unwrap().iter().cloned().collect();
+        let blocked = {
+            let back_ends = self.back_ends.lock().unwrap();
+            waiting.iter().any(|thread| back_ends.get(thread).is_some_and(|on| *on != to))
+        };
+        Some(Moving { from, to, blocked })
     }
 
     /// **Who is working on `account` right now**, for the panel ([`AccountView::working`]):
