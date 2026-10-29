@@ -108,6 +108,12 @@ struct Inner {
     move_check: Option<bool>,
     /// The account Stu was told he is being moved to (`account_switch`), until he has moved.
     switch_told: Option<String>,
+    /// **Recoveries of a cut automatic turn of Stu's now running**
+    /// ([`WorkHost::recover_automatic_turn`]). An `account_moved` sent meanwhile is the one
+    /// message that carries the cut turn on (the recovery reads any move off the refused
+    /// account as such), so it is marked as having had the one retry
+    /// ([`WorkHost::usage_limit_retry_spent`]). Every other `account_moved` is not.
+    automatic_recoveries: u32,
     /// Inbox offsets of handoffs whose screen wait ended with the screen back (§56,
     /// [`WorkHost::held_for_screen`]). Later input may have been delivered past them meanwhile,
     /// so they are delivered from here rather than found again by reading forward.
@@ -386,9 +392,19 @@ impl WorkHost {
     /// rv-20261029T140028Z-3e883526-10b9, finding 1: it was given a fresh one, so a second
     /// refusal was held and sent a third time). Read on both ways it reaches Stu: the run loop's
     /// (`run_message`) and live (`wake_messages`).
+    ///
+    /// Moved off the refused account, that one message is the `account_moved` he was told on
+    /// arrival, marked `after_usage_limit` by the move ([`Inner::automatic_recoveries`]; review
+    /// rv-20261029T150350Z-fc3e4c65-03ea: unmarked, it had a retry of its own). An ordinary
+    /// `account_moved` carries no mark and keeps its one retry.
     fn usage_limit_retry_spent(message: &crate::session_tools::Message) -> bool {
-        message.from == "overload-retry" && !message.handoff
-            && serde_json::from_str::<serde_json::Value>(&message.text).is_ok_and(|fact| fact["event"] == "turn_usage_limit")
+        if message.handoff { return false; }
+        let Ok(fact) = serde_json::from_str::<serde_json::Value>(&message.text) else { return false };
+        match message.from.as_str() {
+            "overload-retry" => fact["event"] == "turn_usage_limit",
+            "account-switch" => fact["event"] == "account_moved" && fact["after_usage_limit"] == true,
+            _ => false,
+        }
     }
 
     /// A usage limit cut this turn and there is a quota service to answer it with
@@ -472,13 +488,22 @@ impl WorkHost {
     /// is marked gone and Stu is moved to one with room, where `account_moved` tells him to carry
     /// on; or the hold lasts until the refusal is lifted and he is told once, through his own
     /// inbox, to carry on (`turn_usage_limit`, stu.md). Never more than that one message, and
-    /// the turn it starts has no retry of its own ([`Self::usage_limit_retry_spent`]).
+    /// the turn it starts has no retry of its own ([`Self::usage_limit_retry_spent`]): the
+    /// `account_moved` sent while this runs is marked so ([`Inner::automatic_recoveries`]).
     fn recover_automatic_turn(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
         session: &str, result: &Result<String, String>) -> std::io::Result<()> {
         let (host, receiving, binding) = (Arc::downgrade(self), Arc::downgrade(backend), binding.clone());
         let (session, result) = (session.to_string(), result.clone());
+        /// Counts this recovery in [`Inner::automatic_recoveries`] until it ends, however it ends.
+        struct Recovering(Arc<Backend>);
+        impl Drop for Recovering {
+            fn drop(&mut self) { self.0.inner.lock().unwrap().automatic_recoveries -= 1; }
+        }
         std::thread::Builder::new().name("richos-stu-usage-limit".into()).spawn(move || {
             let (Some(host), Some(backend)) = (host.upgrade(), receiving.upgrade()) else { return };
+            // From here on, a move off the refused account is this recovery's one message.
+            backend.inner.lock().unwrap().automatic_recoveries += 1;
+            let recovering = Recovering(Arc::clone(&backend));
             let error = result.as_ref().err().cloned().unwrap_or_default();
             let Some(hold) = host.usage_limit_hold(&backend, &binding, &error) else {
                 if let Err(error) = host.observe_turn_result(&binding, None, None, &session, &result) {
@@ -499,6 +524,8 @@ impl WorkHost {
                     return;
                 }
             }
+            // Its one message is written: a move from here on is an ordinary one.
+            drop(recovering);
             host.wake_messages(&binding);
         }).map(|_| ())
     }
@@ -1529,8 +1556,16 @@ impl WorkHost {
             // Told or not, his new session has nothing else telling it to carry on (review
             // rv-20261019T030516Z-0a1a8728-e798, finding 1).
             Renewal::Moved { from, to } => {
-                backend.inner.lock().unwrap().switch_told = None;
-                serde_json::json!({"event":"account_moved","from":label(&from),"to":label(&to)})
+                let carries_on = {
+                    let mut inner = backend.inner.lock().unwrap();
+                    inner.switch_told = None;
+                    inner.automatic_recoveries > 0
+                };
+                let mut fact = serde_json::json!({"event":"account_moved","from":label(&from),"to":label(&to)});
+                // The one message that carries a cut automatic turn on: it has had the retry
+                // (`usage_limit_retry_spent`).
+                if carries_on { fact["after_usage_limit"] = true.into(); }
+                fact
             }
             Renewal::NotDue | Renewal::Failed => return,
         };
@@ -4125,6 +4160,70 @@ mod tests {
         let failures=stu.failures();
         assert_eq!(failures.len(),1,"{failures:?}");
         assert!(failures[0].to_string().contains(crate::claude_accounts::USAGE_LIMIT),"{failures:?}");
+        stu.end();
+    }
+
+    /// **The `account_moved` that carries a cut automatic turn on has had the one retry too**
+    /// (review rv-20261029T150350Z-fc3e4c65-03ea: moved to an account with room, the recovery's
+    /// one message is `account_moved`, which `usage_limit_retry_spent` did not read, so its own
+    /// refusal was held and it went a third time). Account 1 and Home both have room by their
+    /// readings. A helper hands back and the automatic turn on Account 1 is refused: Stu is moved
+    /// to Home and told so there once. The turn that message starts is refused too. It is not
+    /// held or sent again: its failure reaches Rich, once.
+    #[test]
+    #[cfg(unix)]
+    fn the_account_moved_that_carries_a_cut_automatic_turn_on_is_not_retried_after_its_own_usage_limit() {
+        let h=harness(0);
+        let (quota,home)=account_one_and_home_with_room(&h);
+        let stu=native_stu(h,quota);
+        stu.prompted.lock().unwrap().push_back(session_limit(crate::util::now_millis()+3_600_000));
+
+        stu.automatic_turn_cut(crate::util::now_millis()+3_600_000);
+        until("the refused continuation was neither reported nor sent again",
+            ||stu.rich_told()||stu.reached("account_moved").len()>1);
+
+        assert_eq!(stu.accounts("account_moved"),std::slice::from_ref(&home.id),
+            "the continuation was held and sent again after its own refusal: {:?}",stu.reached("account_moved"));
+        assert_eq!(*stu.clock.0.lock().unwrap(),[std::time::Duration::ZERO],"not one hold, the automatic turn's");
+        let failures=stu.failures();
+        assert_eq!(failures.len(),1,"{failures:?}");
+        assert!(failures[0].to_string().contains(crate::claude_accounts::USAGE_LIMIT),"{failures:?}");
+        stu.end();
+    }
+
+    /// **An ordinary `account_moved` still has its one retry** (the same review: only the one
+    /// the usage-limit recovery sends has had it). Account 1 and Home both have room by their
+    /// readings; Account 1 is then refused with no turn of Stu's involved, so Home is put in use
+    /// and he moves there on the ordinary path, told so once. The turn that message starts is
+    /// refused on Home, with Account 1 still gone: it is held, once, and the same message goes
+    /// once more. Nothing reaches Rich.
+    #[test]
+    #[cfg(unix)]
+    fn an_ordinary_account_moved_still_has_its_one_usage_limit_retry() {
+        let h=harness(0);
+        let (quota,home)=account_one_and_home_with_room(&h);
+        let stu=native_stu(h,quota);
+        // Both refusals reset at the same whole second, an hour away: one wait reaches both.
+        let reset=crate::util::now_millis()/1000*1000+3_600_000;
+        stu.quota.limit_reached("1",Some(reset));
+        assert_eq!(stu.quota.accounts.in_use().id,home.id,"Home is in use");
+        stu.prompted.lock().unwrap().push_back(session_limit(reset));
+
+        // The run loop's idle check (`ACCOUNT_CHECK_EVERY`), brought forward.
+        let backend=stu.backend();
+        backend.inner.lock().unwrap().move_check=Some(false);
+        backend.wake.notify_all();
+        until("the ordinary move was neither sent once more nor reported",
+            ||stu.rich_told()||stu.reached("account_moved").len()>1);
+
+        let moved=stu.reached("account_moved");
+        assert_eq!(moved.len(),2,"the ordinary account_moved was not sent once more after its refusal: {moved:?}");
+        assert_eq!(moved[0].0,home.id,"not told on Home: {moved:?}");
+        let fact=|said: &str| serde_json::from_str::<serde_json::Value>(said).ok()
+            .and_then(|said| said["text"].as_str().map(str::to_string)).unwrap_or_else(|| said.to_string());
+        assert_eq!(fact(&moved[1].1),fact(&moved[0].1),"the second delivery is not the same message: {moved:?}");
+        assert!(about_an_hour(&stu.clock.0.lock().unwrap()),"not one hold to the reset: {:?}",stu.clock.0.lock().unwrap());
+        assert!(stu.failures().is_empty(),"an ordinary move sent once more was reported as failed");
         stu.end();
     }
 
