@@ -1015,7 +1015,7 @@ class DesktopWork(unittest.TestCase):
         with self.assertRaises(ValueError) as reused:
             self.call("prepare",{**self.args,"brief":"A different brief under the same request_id."})
         said=str(reused.exception)
-        self.assertIn("request_id prepare-one was already used for different work: receipt %s"%first["name"],said)
+        self.assertIn("request_id was already used for different work: prepare-one is receipt %s"%first["name"],said)
         self.assertIn("prepared with another brief",said)
 
     def test_p1a_a_review_of_a_handover_whose_proof_run_failed_says_so(self):

@@ -1380,7 +1380,7 @@ def prepare(scope_path, scope, args):
             old = bounded(path)
             if old["request"] != normalized:
                 differs = sorted(k for k in set(old["request"]) | set(normalized) if old["request"].get(k) != normalized.get(k))
-                raise ValueError("request_id %s was already used for different work: receipt %s (status %s) was "
+                raise ValueError("request_id was already used for different work: %s is receipt %s (status %s), "
                                  "prepared with another %s. Use a new request_id for this request"
                                  % (request_id, old["name"], old["status"], ", ".join(differs)))
             if preparing_elsewhere(old): return view(old)   # still being prepared: nothing to settle or project yet
