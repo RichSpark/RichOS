@@ -3936,7 +3936,7 @@
     },
     "scripts/hooks/guard-publication-commits.sh#undeclared-target": {
       "source": "scripts/hooks/guard-publication-commits.sh",
-      "sha256": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+      "sha256": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
       "evidence": "Git-jurisdiction fixture supplies a new target repository with no publication declaration. Module setup, payload classifier and seat/Git resolution run; pb_load_declaration returns absent before the checker or corpus path. Broken-library copies exit still earlier. Full source hash binds both the early return and excluded continuation.",
       "keys": [],
       "edges": [
@@ -6389,7 +6389,7 @@
     },
     "scripts/hooks/guard-publication-commits.sh#benign-bash": {
       "source": "scripts/hooks/guard-publication-commits.sh",
-      "sha256": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+      "sha256": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
       "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached.",
       "keys": [],
       "edges": [
@@ -8857,6 +8857,24 @@
       "keys": [],
       "edges": []
     },
+    "scripts/lib/machine-figures.py": {
+      "source": "scripts/lib/machine-figures.py",
+      "sha256": "90ce288fecb98b6c5966fb10d881ffe481ff85a6b182394b3c7b0661f9599ae4",
+      "evidence": "Full file reviewed (2026-10-29). Environment reads: RICHOS_LIMITS_FILE (an operator-scope path override for the private limits file) and RICHOS_MACHINE_FIGURES_MEMSIZE (a test stand-in for the host's RAM size), never an orchestration.config key; HOME via expanduser. Subprocesses: /usr/sbin/sysctl -n hw.memsize (read-only) and the external git executable (show HEAD:<path> on the repository the caller names). Manifest rows and blobs are supplied data; no engine imports, no config reads, no writes.",
+      "keys": [],
+      "edges": []
+    },
+    "scripts/lib/machine-figures.test.sh": {
+      "source": "scripts/lib/machine-figures.test.sh",
+      "sha256": "4b40abd151fcfbb120582dc43b757a8a591f9623e68e8786632cc1913d216167",
+      "evidence": "Builds a private git repository and a synthetic limits file in mktemp; reads this host's RAM size with sysctl (or /proc/meminfo) and feeds manifests to machine-figures.py. Writes nothing outside its temporary folder.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/machine-figures.py"
+        }
+      ]
+    },
     "scripts/lib/publication-boundary.sh#scan": {
       "source": "scripts/lib/publication-boundary.sh",
       "sha256": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
@@ -8899,7 +8917,7 @@
     },
     "scripts/hooks/guard-publication-commits.sh#scan": {
       "source": "scripts/hooks/guard-publication-commits.sh",
-      "sha256": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+      "sha256": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
       "evidence": "Complete executable hook reviewed. Payload shell commands are parsed as text; only fixed Git queries, inline JSON conversion and the bound publication scanner run. No orchestration config is sourced.",
       "keys": [],
       "edges": [
@@ -8917,12 +8935,15 @@
         },
         {
           "to": "scripts/lib/git-jurisdiction.sh"
+        },
+        {
+          "to": "scripts/lib/machine-figures.py"
         }
       ]
     },
     "scripts/hooks/publication-boundary.test.sh": {
       "source": "scripts/hooks/publication-boundary.test.sh",
-      "sha256": "f003bfefd48ead5696670c3eca76cac1e759b09050e909feb0a3bb6495ba5299",
+      "sha256": "987fdda426369b64bfbdb0c5ffbe837cc2857badeec15e3ce046071b8d0f80a8",
       "evidence": "Harness and executable call inventory reviewed. All publication declarations, corpus content and Git histories are generated fixtures. Real engine root remains the adoption seat. PUBLICATION_DECLARATION uses its unsourced environment/default value, not orchestration.config. Three literal source replacements mutate only the publication predicate and published-copy field; installer/probe reads are text assertions.",
       "keys": [],
       "edges": [
@@ -8946,6 +8967,9 @@
         },
         {
           "to": "scripts/lib/device-identifiers.py"
+        },
+        {
+          "to": "scripts/lib/machine-figures.py"
         },
         {
           "to": "scripts/lib/publication-boundary-cache.test.py"
@@ -9216,7 +9240,7 @@
     },
     "scripts/hooks/guard-publication-commits.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-publication-commits.sh",
-      "sha256": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+      "sha256": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
       "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config.",
       "keys": [],
       "edges": [
@@ -10777,7 +10801,7 @@
     },
     "scripts/hooks/guard-publication-commits.sh#inventory-write": {
       "source": "scripts/hooks/guard-publication-commits.sh",
-      "sha256": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+      "sha256": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
       "evidence": "The inventory parser expands dispatcher modules, while matcher_of finds no direct registration and chooses Write. This module sees a private Write payload or malformed JSON; its reviewed classifier prefix returns before Bash-only operations. Bootstrap helpers remain bound.",
       "keys": [],
       "edges": [
@@ -14564,7 +14588,7 @@
     },
     "scripts/hooks/guard-publication-commits.sh#find-payload": {
       "source": "scripts/hooks/guard-publication-commits.sh",
-      "sha256": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+      "sha256": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
       "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary.",
       "keys": [],
       "edges": [
@@ -17093,7 +17117,8 @@
     "scripts/lib/inflight-gaps.test.sh": "scripts/lib/inflight-gaps.test.sh",
     "scripts/hooks/guard-host-sleep.test.sh": "scripts/hooks/guard-host-sleep.test.sh",
     "scripts/hooks/guard-headed-browser.test.sh": "scripts/hooks/guard-headed-browser.test.sh",
-    "scripts/lib/app-management-watch.test.sh": "scripts/lib/app-management-watch.test.sh"
+    "scripts/lib/app-management-watch.test.sh": "scripts/lib/app-management-watch.test.sh",
+    "scripts/lib/machine-figures.test.sh": "scripts/lib/machine-figures.test.sh"
   },
   "hook_readers": {
     "scripts/hooks/ceo-asks.test.sh": {
@@ -17540,7 +17565,7 @@
         "scripts/unlanded-branches-lint.sh": "c65f6be6da126b18127b28f36860c213c9649e843831ae4c0ee1f393cc52971f",
         "scripts/owned-state-checks/registered-executables.py": "cc79f6eed01ccc73a862f201bfae2257d7f36e305c183a6d3095a3a2b6202421",
         "scripts/hooks/guard-public-record-repo.sh": "49a6e6c29e59a604b4d91e847e1e6d6060035f41f703bc95ffc8275778fec3d7",
-        "scripts/hooks/guard-publication-commits.sh": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+        "scripts/hooks/guard-publication-commits.sh": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
         "scripts/hooks/guard-reference-ledger.sh": "d80ab9294a7ff64b244285f5467ecf728b692701b6a5d526152909335b750874",
         "scripts/hooks/guard-row-currency-commits.sh": "c89e57c587fff7f1da193268eb472218c844e32994bd1266cb1d5428cd02ef9e",
         "scripts/hooks/guard-shared-writes.sh": "8c93495c7a2fd02ef98b701af51fff16859fa0e11295eb9706d639a62148784a",
@@ -17824,7 +17849,7 @@
         "scripts/hooks/guard-operator-claim.sh": "06ded03dc7f1dc6825df5e952619dcaae26c24f0bcda7ba017c935ed20c5663b",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/hooks/guard-public-record-repo.sh": "49a6e6c29e59a604b4d91e847e1e6d6060035f41f703bc95ffc8275778fec3d7",
-        "scripts/hooks/guard-publication-commits.sh": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+        "scripts/hooks/guard-publication-commits.sh": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
         "scripts/hooks/guard-publication-writes.sh": "8d05dfb59a29be16bdcbd19aee71b0a402f58d928c82397f0a98da96f6f2531d",
         "scripts/hooks/guard-row-currency-commits.sh": "c89e57c587fff7f1da193268eb472218c844e32994bd1266cb1d5428cd02ef9e",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
@@ -17962,7 +17987,7 @@
         "scripts/hooks/guard-publication-writes.sh"
       ],
       "sources": {
-        "scripts/hooks/publication-boundary.test.sh": "f003bfefd48ead5696670c3eca76cac1e759b09050e909feb0a3bb6495ba5299",
+        "scripts/hooks/publication-boundary.test.sh": "987fdda426369b64bfbdb0c5ffbe837cc2857badeec15e3ce046071b8d0f80a8",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/guard-publication-writes.sh": "8d05dfb59a29be16bdcbd19aee71b0a402f58d928c82397f0a98da96f6f2531d",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
@@ -17972,7 +17997,7 @@
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/lib/publication-boundary.py": "4d9678e686a9470c7c44888ec677dd45b8f3944cd004c4868f52b592c5d3ee26",
-        "scripts/hooks/guard-publication-commits.sh": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+        "scripts/hooks/guard-publication-commits.sh": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/hooks/dispatch-pretooluse.manifest": "6eaf12dec5bd4846cf265dc2d3d3ca58a27fc4ea82d6a81490aa908c338c89b2",
         "scripts/lib/publication-boundary-cache.test.py": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
@@ -18031,7 +18056,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
-        "scripts/hooks/guard-publication-commits.sh": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+        "scripts/hooks/guard-publication-commits.sh": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/hooks/guard-named-persons-commands.sh": "c0f07f9202cfbfb09018b69a379c98b2e4420cf6dedb81c163b9a92a7c86404a",
@@ -18271,7 +18296,7 @@
         "scripts/lib/named-persons.sh": "2c28d15414eed56676bd2c5588d66fe88f30c03dfb78e5e2752ffc5de17fffc3",
         "scripts/hooks/guard-named-persons-writes.sh": "95095c3eee1ac1f3f7f156dfc2fcb0b039868c63c1d10d45d043fdd7d86ad3ce",
         "scripts/lib/named-persons.py": "3392076d89530f9a120fea16eaba9fa6053f577ae836023c691b5f0eb011c871",
-        "scripts/hooks/guard-publication-commits.sh": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+        "scripts/hooks/guard-publication-commits.sh": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
         "scripts/hooks/guard-row-currency-commits.sh": "c89e57c587fff7f1da193268eb472218c844e32994bd1266cb1d5428cd02ef9e",
         "scripts/hooks/guard-shared-writes.sh": "8c93495c7a2fd02ef98b701af51fff16859fa0e11295eb9706d639a62148784a",
         "scripts/hooks/guard-vendoring-commits.sh": "2f7d9f2973134d1d25bf9c8f8b83e803389d02c64e28bfe15acc6b2ce2c19f32",

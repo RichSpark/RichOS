@@ -49,9 +49,11 @@ SELF = {"machine-figures.py", "machine-figures.test.sh"}
 DOC_EXT = {".md", ".markdown", ".txt", ".log", ".rst", ".csv"}
 MEMORY_WORD = re.compile(r"mb|mib|gb|gib|ram|mem|total|free|floor|wired|avail|limit", re.I)
 MEASUREMENT = re.compile(r"\b\d+(?:\.\d+)?\s?(?:[KMGT]i?B|[KMGT]\b|%|ms\b|GHz|cores?\b)", re.I)
-NIGHTLY = re.compile(r"\bnightly[\s_-]?\d{2,}\b", re.I)
-THIS_MAC = re.compile(r"\bthis[\s]+mac\b", re.I)
-THIS_MAC_NAME = re.compile(r"\bthis[_-]mac\b", re.I)
+# Alphanumeric lookarounds, not \b: an underscore is a word character, so \b never fires inside
+# the identifiers these are for (test_nightly_80_..., floor_for_this_mac).
+NIGHTLY = re.compile(r"(?<![A-Za-z0-9])nightly[\s_-]?\d{2,}(?!\d)", re.I)
+THIS_MAC = re.compile(r"(?<![A-Za-z0-9])this\s+mac(?![A-Za-z0-9])", re.I)
+THIS_MAC_NAME = re.compile(r"(?<![A-Za-z0-9])this[_-]mac(?![A-Za-z0-9])", re.I)
 TEST_PATH = re.compile(r"(?:^|/)(?:tests?|fixtures?|testdata)/|\.test\.|_test\.|(?:^|/)test_|\.spec\.", re.I)
 COMMENT = re.compile(r"(?:^|\s)(?:#|//|--|/\*|\*)\s?(.*)$")
 
@@ -203,7 +205,8 @@ def scan_manifest(manifest, repo):
         with open(manifest, encoding="utf-8") as fh:
             for row in fh:
                 parts = row.rstrip("\n").split("\t")
-                if len(parts) >= 2 and parts[0]:
+                # The guard's third column is "identity" for a binary blob: no text lines to judge.
+                if len(parts) >= 2 and parts[0] and not (len(parts) > 2 and parts[2] == "identity"):
                     rows.append((parts[0], parts[1]))
     except OSError as err:
         print("BROKEN\tthe manifest could not be read (%s)" % err)

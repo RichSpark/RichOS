@@ -372,7 +372,7 @@
         "richos/engine/scripts/hooks/guard-completeness-commits.sh": "4007e4965f75482abcf959c05e2edf302407f875f2a384727e4bab4e136e308b",
         "richos/engine/mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "richos/engine/scripts/hooks/guard-ceo-todos-commits.sh": "d4ce06b9d6d3e6bcc741657e738bcbe3d227f0d5f370fc57121cd325cd808625",
-        "richos/engine/scripts/hooks/guard-publication-commits.sh": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
+        "richos/engine/scripts/hooks/guard-publication-commits.sh": "610bbac9719f3f19a8487ccdc71442b12754ee55c6e762d5bb619fd145178cff",
         "richos/engine/scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "richos/engine/scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "richos/engine/scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
