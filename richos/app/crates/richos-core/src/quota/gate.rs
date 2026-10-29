@@ -254,6 +254,8 @@ fn wait(
     }
     let started = Instant::now();
     let mut observation: Option<super::holds::Guard> = None;
+    // Once per held call, so its own retries below keep the one permit (`release_key`).
+    let key = release_key(payload);
     loop {
         if !authorized(scope, worker) {
             return Err(io::Error::other(WORK_ENDED));
@@ -267,14 +269,13 @@ fn wait(
         if observation.is_none() {
             // Observation failure must not let a paused tool through the gate.
             observation = super::holds::from_hook(state, scope, payload)
-                .map(|row| super::holds::Hold { account: Some(account.to_string()), ..row })
+                .map(|row| super::holds::Hold { account: Some(account.to_string()), key: Some(key.clone()), ..row })
                 .and_then(|row| super::holds::Guard::begin(state, row)).ok();
         }
         // **Inside the twenty-minute window, one at a time** (Rich, 2026-10-29): this call goes
         // on only when the staggered release lets it (`stagger::admit`). A ledger that cannot
         // be read or written releases nobody: the call waits for the reset, as it would have.
         if let Some(release) = release {
-            let key = release_key(payload);
             let held = |released: &[String]| held_on(state, account, released);
             if super::stagger::admit(state, account, &key, &release, &held, now).unwrap_or(false) {
                 if let Some(guard) = observation.take() { guard.release(); }
@@ -290,23 +291,36 @@ fn wait(
     }
 }
 
-/// Who a held call is, for the staggered release: the helper, or the session dispatching a new
-/// one. Every later call of a released helper is the same helper carrying on.
+/// **The permit a held call is released on** (`stagger::admit`). An Agent call starts a new
+/// agent, so each one has its own permit: the call's `tool_use_id`, or failing that one made
+/// unique in this process (review of 2026-10-29, finding 1: every dispatch of one session
+/// shared `dispatch:<session>`, so once the first was released ten went in the same instant).
+/// Every other call of a helper is that helper carrying on, on the helper's one permit.
 fn release_key(payload: &Value) -> String {
-    match payload.get("agent_id").and_then(Value::as_str).filter(|id| !id.is_empty()) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    let field = |name: &str| payload.get(name).and_then(Value::as_str).filter(|v| !v.is_empty());
+    if payload["tool_name"] == "Agent" {
+        let call = field("tool_use_id").map(str::to_string).unwrap_or_else(|| {
+            format!("{}-{}-{}", std::process::id(), crate::util::now_millis(), CALLS.fetch_add(1, Ordering::Relaxed))
+        });
+        return format!("dispatch:{}:{call}", field("session_id").unwrap_or_default());
+    }
+    match field("agent_id") {
         Some(agent) => agent.to_string(),
-        None => format!("dispatch:{}", payload.get("session_id").and_then(Value::as_str).unwrap_or_default()),
+        None => format!("dispatch:{}", field("session_id").unwrap_or_default()),
     }
 }
 
 /// How many calls on `account` are waiting now and are not in `released`: the rest of the held
-/// team (`stagger::admit`), counted once per helper from the pause records (`holds`). A record
-/// written before records carried their account counts too.
+/// team (`stagger::admit`), one per permit, from the pause records (`holds`). A record written
+/// before records carried their account, or their permit, counts too.
 fn held_on(state: &Path, account: &str, released: &[String]) -> usize {
-    let Ok(activity) = super::holds::read(state, None) else { return 0 };
-    let mut team: Vec<String> = activity.held.iter()
+    let Ok(held) = super::holds::held_calls(state) else { return 0 };
+    let mut team: Vec<String> = held.iter()
         .filter(|row| row.account.as_deref().is_none_or(|a| a == account))
-        .map(|row| if row.kind == "agent" { row.id.clone() } else { format!("dispatch:{}", row.session_id) })
+        .map(|row| row.key.clone().unwrap_or_else(||
+            if row.kind == "agent" { row.id.clone() } else { format!("dispatch:{}", row.session_id) }))
         .filter(|key| !released.contains(key))
         .collect();
     team.sort();
@@ -799,6 +813,43 @@ mod tests {
         assert!(refusal(&on_work).starts_with("RichOS desktop quota: Still waiting"), "{}", refusal(&on_work));
         wait(&json!({"agent_id": "worker-on-home", "tool_name": "Bash"}), &state, &scope, "1",
             Duration::ZERO, Duration::ZERO).expect("a worker on Home, at 0%, goes on");
+    }
+
+    /// **Review of 2026-10-29, finding 1: every Agent call starts a new agent.** Ten Agent calls
+    /// of one session wait at 95%, 19 minutes before the five-hour reset, the team measured at
+    /// 1.4 points a minute before the hold (the frame math of the test above: one is 97.66, two
+    /// are 100.32). Before, all ten shared the permit `dispatch:<session>`, and once the first
+    /// was released the other nine went in the same instant. Each is now its own release: one
+    /// goes. Two Agent calls with no `tool_use_id` still get two permits; a helper's own calls
+    /// keep its one.
+    #[test]
+    fn each_agent_dispatch_is_released_on_its_own_permit() {
+        let (_root, service, state, scope) = setup();
+        // A session that may act, so its Agent calls reach the gate (`authorized`).
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":true})).unwrap();
+        let (now, minute) = (crate::util::now_millis(), 60_000);
+        let reset = now + 19 * minute;
+        let five = |used: f64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: used,
+            resets_at: Some(reset), duration_ms: 18_000_000 }];
+        let mut reading = Snapshot::default();
+        reading.accept(five(80.), now - 15 * minute);
+        reading.accept(five(95.), now - 5 * minute);
+        reading.accept(five(95.), now);
+        *service.snapshot.lock().unwrap() = reading;
+        service.publish().unwrap();
+        let calls: Vec<Value> = (0..10)
+            .map(|i| json!({"tool_name": "Agent", "session_id": "stu", "tool_use_id": format!("toolu_{i}")})).collect();
+        // The ten waiting dispatches' own pause records, each on its own permit.
+        let _waiting: Vec<_> = (0..10).map(|i| super::super::holds::Guard::begin(&state, serde_json::from_value(json!({
+            "kind": "dispatch", "id": "dispatch", "entityId": "", "threadId": "", "sessionId": "", "name": "New agent",
+            "task": null, "sinceAt": now, "releasedAt": null, "account": "1", "key": format!("dispatch:stu:toolu_{i}")})).unwrap()).unwrap()).collect();
+        let went = calls.iter().filter(|call| wait(call, &state, &scope, "1", Duration::ZERO, Duration::ZERO).is_ok()).count();
+        assert_eq!(went, 1, "one new agent, not ten in the same instant");
+        assert_eq!(release_key(&calls[3]), "dispatch:stu:toolu_3");
+        let bare = json!({"tool_name": "Agent", "session_id": "stu"});
+        assert_ne!(release_key(&bare), release_key(&bare), "no tool_use_id: still one permit per call");
+        let helper = json!({"tool_name": "Bash", "agent_id": "worker-1", "session_id": "w"});
+        assert_eq!(release_key(&helper), release_key(&helper), "a helper's calls share its one permit");
     }
 
     #[test]

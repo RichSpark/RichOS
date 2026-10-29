@@ -26,6 +26,11 @@ pub struct Hold {
     /// release counts the held team of that account only. Absent in records written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// The staggered-release permit the held call waits for (`gate::release_key`): one per
+    /// helper, and one per Agent call, so the held team is counted the way permits are given.
+    /// Absent in records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Default, Serialize)]
@@ -182,9 +187,9 @@ fn key(row: &Hold) -> (&str, &str, &str, &str, &str) {
     )
 }
 
-pub fn read(state: &Path, scope: Option<(&str, &str)>) -> io::Result<Activity> {
-    let mut view = Activity::default();
-    let now = crate::util::now_millis();
+/// Every pause record, with whether its waiter still holds it: uncounted and unfiltered.
+fn records(state: &Path) -> io::Result<Vec<(bool, Hold)>> {
+    let mut rows = Vec::new();
     for path in paths(state)? {
         let file = match open(&path, false) {
             Ok(file) => file,
@@ -192,12 +197,30 @@ pub fn read(state: &Path, scope: Option<(&str, &str)>) -> io::Result<Activity> {
             Err(e) => return Err(e),
         };
         let inactive = lock(&file, false)?;
-        let row = decode(&file)?;
+        rows.push((!inactive, decode(&file)?));
+    }
+    Ok(rows)
+}
+
+/// **Every call waiting now, one per held call**: what the staggered release counts the held
+/// team from (`gate::held_on`, one per permit). `read` counts each agent once for the panel,
+/// and so every new-agent dispatch of a session as one: the stagger must not.
+pub(super) fn held_calls(state: &Path) -> io::Result<Vec<Hold>> {
+    Ok(records(state)?.into_iter()
+        .filter(|(waiting, row)| *waiting && row.released_at.is_none())
+        .map(|(_, row)| row)
+        .collect())
+}
+
+pub fn read(state: &Path, scope: Option<(&str, &str)>) -> io::Result<Activity> {
+    let mut view = Activity::default();
+    let now = crate::util::now_millis();
+    for (waiting, row) in records(state)? {
         if scope.is_some_and(|(entity, thread)| row.entity_id != entity || row.thread_id != thread)
         {
             continue;
         }
-        if !inactive && row.released_at.is_none() {
+        if waiting && row.released_at.is_none() {
             view.held.push(row);
         } else if row
             .released_at
@@ -248,6 +271,7 @@ pub(super) fn from_hook(state: &Path, scope: &Path, payload: &Value) -> io::Resu
         since_at: crate::util::now_millis(),
         released_at: None,
         account: None,
+        key: None,
     };
     if agent.is_none() {
         return Ok(record);
@@ -313,6 +337,7 @@ mod tests {
             since_at: crate::util::now_millis(),
             released_at: None,
             account: None,
+            key: None,
         }
     }
     #[test]
