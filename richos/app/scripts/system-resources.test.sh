@@ -18,7 +18,10 @@ app, scratch = map(pathlib.Path, sys.argv[1:])
 rows = [json.loads(line) for line in (scratch / 'build.jsonl').read_text().splitlines()]
 probe = next(row['executable'] for row in rows if row.get('executable') and row.get('target',{}).get('name')=='system_resources_probe')
 # The test scratch's own native socket is removed by the bounded child on exit.
-state = scratch / 'state'
+# A real installation can exceed Darwin's 104-byte sockaddr_un limit. The
+# sampler and its separate-process consumers must share a short endpoint anyway.
+state = scratch / 'Users/christophermontgomery/Library/Application Support/com.richos.app/engine-state'
+assert len(os.fsencode(state / 'system-resources.sock')) >= 104
 if sys.platform == 'darwin':
     server = subprocess.Popen([probe,'serve',str(state),'3'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     try:

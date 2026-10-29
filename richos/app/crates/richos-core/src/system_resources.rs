@@ -285,7 +285,40 @@ mod platform {
 }
 
 pub fn endpoint(state: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::ffi::OsStrExt;
+        // Darwin's sockaddr_un path holds only 104 bytes. Neither a home path nor
+        // TMPDIR has a bounded length. Match the app's private dictation runtime
+        // folder and key the name by the full state path to isolate installations.
+        #[cfg(target_os = "macos")]
+        let base = "/private/tmp";
+        #[cfg(not(target_os = "macos"))]
+        let base = "/tmp";
+        let uid = unsafe { libc::geteuid() };
+        let key = format!("{:x}", Sha256::digest(state.as_os_str().as_bytes()));
+        PathBuf::from(format!("{base}/richos-{uid}/resources-{}.sock", &key[..32]))
+    }
+    #[cfg(not(unix))]
     state.join("system-resources.sock")
+}
+
+#[cfg(unix)]
+fn prepare_socket_dir(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| e.to_string())?;
+    if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+        return Err(
+            "Resource runtime folder must be a private directory owned by this user.".into(),
+        );
+    }
+    Ok(())
 }
 
 /// A separate process uses this same bounded read as IPC. No probing or sampling fallback.
@@ -349,8 +382,12 @@ impl Monitor {
                     net::{UnixListener, UnixStream},
                 },
             };
+            if !state.is_absolute() {
+                return Err("An absolute app state directory is required.".into());
+            }
             std::fs::create_dir_all(state).map_err(|e| e.to_string())?;
             let socket = endpoint(state);
+            prepare_socket_dir(socket.parent().unwrap())?;
             if let Ok(meta) = std::fs::symlink_metadata(&socket) {
                 if !meta.file_type().is_socket() {
                     return Err("Resource endpoint is occupied by a non-socket file.".into());
@@ -651,6 +688,7 @@ mod tests {
             &uuid::Uuid::new_v4().simple().to_string()[..8]
         ));
         std::fs::create_dir_all(&root).unwrap();
+        prepare_socket_dir(endpoint(&root).parent().unwrap()).unwrap();
         let listener = UnixListener::bind(endpoint(&root)).unwrap();
         let responder = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
@@ -660,6 +698,63 @@ mod tests {
         assert_eq!(answer.status, "unavailable");
         assert!(answer.current.is_none());
         responder.join().unwrap();
+        std::fs::remove_file(endpoint(&root)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn runtime_folder_refuses_links_and_shared_permissions() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = std::env::temp_dir().join(format!("rr-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = root.join("private");
+        prepare_socket_dir(&dir).unwrap();
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let link = root.join("link");
+        symlink(&dir, &link).unwrap();
+        assert!(prepare_socket_dir(&link).is_err());
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(prepare_socket_dir(&dir).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn long_app_state_paths_keep_a_short_isolated_endpoint() {
+        use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+        let root = std::env::temp_dir().join(format!("rr-{}", uuid::Uuid::new_v4()));
+        let state = root.join(
+            "Users/christophermontgomery/Library/Application Support/com.richos.app/engine-state",
+        );
+        assert!(
+            state
+                .join("system-resources.sock")
+                .as_os_str()
+                .as_bytes()
+                .len()
+                >= 104
+        );
+        let monitor = Monitor::start(&state).unwrap();
+        let address = endpoint(&state);
+        assert!(address.as_os_str().as_bytes().len() < 104);
+        assert_eq!(
+            std::fs::metadata(&address).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let first = read(&state);
+        assert!(!first.instance_id.is_empty(), "{:?}", first.detail);
+        let other_state = root.join("another-install/engine-state");
+        let other = Monitor::start(&other_state).unwrap();
+        let second = read(&other_state);
+        assert_ne!(address, endpoint(&other_state));
+        assert_ne!(first.instance_id, second.instance_id);
+        drop(monitor);
+        assert!(!address.exists());
+        assert_eq!(read(&state).status, "unavailable");
+        assert_eq!(read(&other_state).instance_id, second.instance_id);
+        drop(other);
         std::fs::remove_dir_all(root).unwrap();
     }
     #[cfg(unix)]
