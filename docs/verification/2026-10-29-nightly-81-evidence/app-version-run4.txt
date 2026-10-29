@@ -1,0 +1,3 @@
+/Users/admin/testvm/walk-74f3c8894c41/RichOS.app/Contents/Info.plist
+1.2.5-nightly.20261029.81
+1.2.5-nightly.20261029.81

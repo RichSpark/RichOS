@@ -1,0 +1,36 @@
+[walk] 20:08:55Z 0 Settings with Technical view off: the row is there, with its plain line
+[walk] 20:09:05Z read: Claude accounts
+[walk] 20:09:08Z read: 86% of this week used
+[walk] 20:09:10Z read: RichOS 1.2.5-nightly.20261029.81
+[walk] 20:09:18Z 1 Rich suggests a second account, in the conversation
+[walk] 20:09:32Z read: If you have a second Claude account
+[walk] 20:09:33Z read: Not now
+[walk] 20:09:35Z 2 adding, step 1 of 2: the two names (from Rich's button)
+[walk] 20:09:41Z read: Step 1 of 2
+[walk] 20:09:49Z read: Sign in to Work
+[walk] 20:09:50Z 4 the same account signed in again
+[walk] 20:09:54Z read: You signed in as
+[walk] 20:09:55Z read: Try again
+[walk] 20:09:57Z 5 the right account: Work is ready
+[walk] 20:09:57Z app data: /Users/admin/testvm/walk-a6815156a9c1/home/Library/Application Support/com.richos.app
+[walk] 20:10:05Z read: is ready. Rich switches to it when Home is nearly full
+[walk] 20:10:07Z read: You added
+[walk] 20:10:49Z I identity: the app on disk, read in the guest
+[walk] 20:10:49Z S smoke: a message and its reply, then Settings and the update check
+[walk] 20:11:01Z read: Smoke reply for nightly 81
+[walk] 20:11:31Z R runtime/bin: every launcher of the installed engine is a Mach-O executable, not a #! script
+[walk] 20:11:33Z M1 pending, dark: a turn is running on Home; Use this one now on Work
+[walk] 20:12:07Z M1 Use Work now offered: yes
+[walk] 20:12:13Z M1 line after the press: Switching to
+[walk] 20:12:18Z M1 in use right after the press: 2 (1 = Home)
+[walk] 20:12:32Z M1 line 12 s later, turn still running: Switching to
+[walk] 20:12:32Z M1 the turn ends
+[walk] 20:12:40Z M1 line right after the turn ended: Switching to
+[walk] 20:12:42Z M1 the move needs Rich's next reply: sending one
+[walk] 20:12:57Z M1 line at the end: Rich now uses; in use: 2 (2 = Work)
+[walk] 20:13:00Z M2 blocked, light: helpers are working on Work; Use this one now on Home
+[walk] 20:13:50Z M2 line after the press: Switching to
+[walk] 20:13:54Z M2 in use right after the press: 1 (2 = Work)
+[walk] 20:13:59Z H hold card: the account in use at 95% of its five hours, 15 minutes to its reset; the helpers on it are refused and held
+[walk] 20:14:03Z H the account in use: 1
+[walk] 20:16:09Z FAILED: H the hold card says held work resumes one at a time (dark) (not on screen: one at a time)
