@@ -264,7 +264,9 @@ try:
     # token (found by the branch's own proof run, 2026-09-23).
     d12 = os.path.join(tmp, "p12")
     os.makedirs(d12)
-    wt = os.path.join(pr.ROOT, "richos/engine/scripts/lib/worker_tokens.py")
+    # Quoted: a worktree the app makes lives under "Application Support", and the bare path split
+    # at the space, so P12 and P13 failed in every app worktree and passed everywhere else.
+    wt = __import__("shlex").quote(os.path.join(pr.ROOT, "richos/engine/scripts/lib/worker_tokens.py"))
     work = ("touch %s/w.$$; ls %s/w.* | wc -l >> %s/conc; sleep 0.6; rm -f %s/w.$$" % (d12, d12, d12, d12))
     nested = ("for i in 1 2 3; do python3 %s run \"$RICHOS_WORKER_TOKENS\" --free %s/free.$$ -- bash -c '%s' & done; wait"
               % (wt, d12, work.replace("'", "")))
@@ -1214,6 +1216,49 @@ try:
     left = sorted(os.listdir(parent))
     check(left == ["20260923T000002Z", "20260923T000003Z", "20260923T000004Z", "not-a-run"],
           "P9 rotation keeps the last 3 runs and touches nothing it did not name", left)
+
+    # P19 — the app's session is never a check's environment (2026-10-28: a unit's fixture wait
+    # record was left in the app's LIVE registry by a proof run in an app shell). A worker shell
+    # the app starts carries the live registry, the hold records, the installed engine and the
+    # conversation; a check that touches the registry through its default would write them. CI
+    # starts under `env -i`: none of these names exist there.
+    app_shell = {"RICHOS_WORKSPACES_DIR": "/live/app-state/workspaces/thr", "RICHOS_AGENT_HOLD_DIR": "/live/agent-hold",
+                 "STALL_WATCH_STATE_DIR": "/live/stall", "RICHOS_APP_STATE": "/live/app-state",
+                 "RICHOS_APP_THREAD": "thr_fixture", "RICHOS_APP_ENTITY": "entity", "RICHOS_ENGINE_ROOT": "/installed/engine",
+                 "RICHOS_ENGINE_DIR": "/installed/engine", "RICHOS_ENTITY_ROOT": "/live/coordination",
+                 "CLAUDE_PROJECT_DIR": "/live/coordination", "RICHOS_SESSION_ID": "app-session",
+                 "RICHOS_SPAWN_HOOK_SOURCES": "app=/live/profile/spawn-preflight.json",
+                 "RICHOS_AGENT_OWNER": "worker-1", "RICHOS_AGENT_SESSION": "session-1",
+                 "KEEP_ME": "yes", "RICHOS_CLAUDE_BIN_PATH": "/some/claude"}
+    saved_env = dict(os.environ)
+    os.environ.update(app_shell)
+    try:
+        suite = items_from(["cd richos/app && scripts/run-tests.sh --only front-door.test.sh"], tmp)[0]
+        script = items_from(["cd richos/app && python3 scripts/thing-check.py"], tmp)[0]
+        for it in (suite, script):
+            env = pr.execution_environment(it)
+            leaked = sorted(k for k in env if k in pr.APP_SESSION_NAMES or k.startswith("RICHOS_APP_"))
+            check(not leaked, "P19a %s: no variable of the app's session reaches the check" % it.label, leaked)
+            check(env.get("RICHOS_AGENT_OWNER") == "worker-1" and env.get("RICHOS_AGENT_SESSION") == "session-1",
+                  "P19b %s: the hold's two tags stay, so a pause can still freeze the check" % it.label)
+            check(env.get("RICHOS_CLAUDE_BIN_PATH") == "/some/claude" and env.get("KEEP_ME") == "yes",
+                  "P19c %s: the rest of the caller's environment still pass" % it.label)
+        # The recorded copy of a run read back (as_caller) is stripped the same way.
+        again = pr.execution_environment(suite, caller=dict(app_shell, PATH="/usr/bin"))
+        check("RICHOS_WORKSPACES_DIR" not in again and "RICHOS_APP_THREAD" not in again,
+              "P19d a recorded caller environment is read back without the app's session too", sorted(again))
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_env)
+    # P19e: this list is record-canary.sh's (_rc_roads_back) less the hold's two tags: the engine
+    # units and every other check lose the same names, so the two cannot drift apart.
+    with open(os.path.join(HERE, "../../engine/scripts/lib/record-canary.sh")) as fh:
+        canary = fh.read()
+    block = canary.split("APP_SESSION_NAMES = {", 1)[1].split("}", 1)[0]
+    in_canary = set(__import__("re").findall(r'"([A-Z0-9_]+)"', block))
+    mine = set(pr.APP_SESSION_NAMES) | set(pr.HOLD_TAGS)
+    check(in_canary == mine, "P19e the proof runner strips the names record-canary.sh strips, less the hold's tags",
+          sorted(in_canary ^ mine))
 finally:
     subprocess.run(["rm", "-rf", tmp])
 

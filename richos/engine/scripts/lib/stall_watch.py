@@ -806,6 +806,8 @@ def _silent(src, reg, now, session_id, th, waits):
     for rec in reg.recs:
         if rec.get("session_id") != session_id or rec.get("disposition"):
             continue
+        if not (rec.get("agent_id") or rec.get("started_at")):
+            continue                       # preparation or a refused call is not a silent worker
         try:
             fin, paused, _why = src.ws.finished_state(rec, cache)
         except Exception:  # noqa: BLE001
@@ -1224,7 +1226,8 @@ def announce(state, stalls, problems, now, th, keep=""):
 #     - it is not owned by ANOTHER live session (twin Rich): suppressed only on
 #       exactly one registry record with the row's worktree and teammate name
 #       whose session is positively running. Zero matches, several, a dead or
-#       unknown owner: told (Sage 4). It is better to wake twice than to miss.
+#       unknown owner: told (Sage 4). Host cleanup instead selects one live app
+#       lead from the host's existing lead files and recorded process identities.
 #   TOLD AGAIN while unacknowledged, once it has reached this session's model
 #   (by this monitor or by the Stop hook):
 #     - needs=ceo-hands: every 10 min (STALL_WATCH_CEO_HANDS_REPEAT_MINUTES).
@@ -1321,12 +1324,42 @@ def session_started(src, sid):
 
 
 def _esc_owner(src, reg, e, sid, cache):
-    """'ours', 'other' or 'unknown' (Sage 4): another session's only on exactly
-    one live registry record with this worktree AND this teammate name whose
-    session is positively running."""
+    """'ours', 'other' or 'unknown': one live app lead handles host cleanup;
+    teammates otherwise belong to an exactly matching live registration."""
     wt, name = e.get("worktree") or "", e.get("teammate") or ""
     if not wt or not name or src.ws is None:
         return "unknown"
+    lead = os.environ.get(host_child.LEAD_ENV, "")
+    if name == "scratch-reaper" and lead:
+        # Host cleanup has no teammate registration. Reuse the host's lead
+        # records to select one live handler, with takeover when that lead ends.
+        candidates = []
+        try:
+            for filename in os.listdir(os.path.dirname(lead)):
+                if not filename.endswith(".json"):
+                    continue
+                row = _read_json(os.path.join(os.path.dirname(lead), filename))
+                owner, started = row.get("session"), row.get("started")
+                if (isinstance(owner, str) and owner and os.sep not in owner
+                        and isinstance(started, (int, float)) and not isinstance(started, bool) and started > 0):
+                    status = src.ws.session_state(owner, None, cache)[0]
+                    if status == "unknown":
+                        # A peer belongs to another conversation registry, and
+                        # may use another Claude account. Its recorded pid AND
+                        # start identity still prove liveness on this machine.
+                        registries = os.path.join(os.path.dirname(os.path.dirname(lead)), "workspaces")
+                        for partition in os.listdir(registries):
+                            identity = _read_json(os.path.join(registries, partition, "sessions", owner + ".json"))
+                            if identity:
+                                status = "ended" if identity.get("ended_at") else src.ws.session_state(owner, identity)[0]
+                                if status != "unknown":
+                                    break
+                    if status == "running":
+                        candidates.append((started, owner))
+        except Exception:  # ownership unreadable: report rather than silently lose it
+            return "unknown"
+        if candidates and any(owner == sid for _, owner in candidates):
+            return "ours" if min(candidates)[1] == sid else "other"
     real = os.path.realpath(wt)
     matches = []
     for r in reg.recs:
@@ -1466,6 +1499,11 @@ def escalation_watch(src, now, sid, prev, th):
     cache = {}
     first, again = [], []
     for k, e in by_key.items():
+        if e.get("teammate") == "scratch-reaper":
+            if reg is None:
+                reg = Registry(src)
+            if _esc_owner(src, reg, e, sid, cache) == "other":
+                continue                   # applies to old duplicate reminders as well as new issues
         w = woken.get(k)
         if w is None:
             since = _esc_since(e)
@@ -1477,7 +1515,7 @@ def escalation_watch(src, now, sid, prev, th):
                 continue
             if reg is None:
                 reg = Registry(src)
-            if _esc_owner(src, reg, e, sid, cache) == "other":
+            if e.get("teammate") != "scratch-reaper" and _esc_owner(src, reg, e, sid, cache) == "other":
                 continue                   # that session's own monitor tells it
             first.append(e)
             continue

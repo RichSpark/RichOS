@@ -290,6 +290,7 @@ SUITE = """#!/usr/bin/env bash
 cd "$(dirname "$0")/.."
 printf 'suite-env RICHOS_MUTATION_PASSES=%s RICHOS_FOURTEEN_MUTANTS=%s\\n' \\
     "${RICHOS_MUTATION_PASSES:-unset}" "${RICHOS_FOURTEEN_MUTANTS:-unset}" >> "$AUTOCHECK_FIXTURE_LOG"
+printf 'suite-tmp %s\\n' "${TMPDIR-unset}" >> "$AUTOCHECK_FIXTURE_LOG"
 if grep -q BROKEN src/thing.txt; then
     echo "suite: FAIL src/thing.txt is broken" >&2
     exit 1
@@ -442,6 +443,16 @@ class Fixture(unittest.TestCase):
         self.git("commit", "-q", "-m", message, *(["--no-verify"] if no_verify else []))
         self.git("checkout", "-q", "main")
         self.log.unlink(missing_ok=True)
+
+    def record_duration(self, label, seconds):
+        """The merge gate's recorded duration of a check (proof-run.py record_weights), where the
+        commit check reads it: <proof-runs>/<sha256(main checkout)[:12]>/weights.tsv."""
+        import hashlib
+        base = self.base / "proof-history"
+        wid = hashlib.sha256(str(self.repo.resolve()).encode()).hexdigest()[:12]
+        (base / wid).mkdir(parents=True, exist_ok=True)
+        (base / wid / "weights.tsv").write_text(f"{label}\t{seconds}\t{seconds}\n")
+        self.env["RICHOS_PROOF_RUN_DIR"] = str(base)
 
     def authorize_root(self, *names):
         """The CEO authorized `names` at the root: his authorization lands on main by itself, as
@@ -733,16 +744,6 @@ class Commit(Fixture):
         self.assertIn("node quick.js", self.tools())
         self.assertNotIn("node heavy.js", self.tools())
         self.assertEqual(self.recorded(), "")
-
-    def record_duration(self, label, seconds):
-        """The merge gate's recorded duration of a check (proof-run.py record_weights), where the
-        commit check reads it: <proof-runs>/<sha256(main checkout)[:12]>/weights.tsv."""
-        import hashlib
-        base = self.base / "proof-history"
-        wid = hashlib.sha256(str(self.repo.resolve()).encode()).hexdigest()[:12]
-        (base / wid).mkdir(parents=True, exist_ok=True)
-        (base / wid / "weights.tsv").write_text(f"{label}\t{seconds}\t{seconds}\n")
-        self.env["RICHOS_PROOF_RUN_DIR"] = str(base)
 
     def test_a_selected_check_that_is_fast_by_its_recorded_duration_refuses_the_commit(self):
         # 2026-10-09: a merge was refused at the end of a 25-minute gate by two checks of 3 and 4
@@ -1088,6 +1089,76 @@ class Commit(Fixture):
         out = self.git("commit", "-m", "bad")
         self.assertEqual(out.stderr, "")
         self.assertEqual(self.tools(), "")
+
+
+class WorkerShell(Fixture):
+    """A plain `git commit` from a worker's shell passes the hook (2026-10-28). The hook resolves
+    its own interpreter and its own temporary directory; the caller's PATH and TMPDIR decide neither."""
+
+    def test_a_caller_tmpdir_the_hook_cannot_write_does_not_refuse_the_commit(self):
+        self.make()
+        # The app's per-session folder was gone, or a sandbox path: under a regular file, so no
+        # mkdir can ever make it. The shim used to exit 1 before any check ran.
+        blocker = self.base / "not-a-directory"
+        blocker.write_text("a file\n")
+        home = self.base / "home"
+        home.mkdir()
+        self.env.update(TMPDIR=str(blocker / "tmp"), HOME=str(home))
+        self.git("checkout", "-q", "-b", "feature")
+        self.write("richos/app/src/thing.txt", "fine, again\n")
+        self.git("add", "-A")
+        out = self.git("commit", "-m", "from a worker shell")
+        self.assertIn("autocheck: commit: passed", out.stderr)
+        self.assertNotIn("scratch file", out.stdout + out.stderr)
+
+    def test_the_checks_get_the_hooks_own_scratch_not_the_callers_tmpdir(self):
+        # The extension's privacy fixture runs only with TMPDIR on a mounted volume and says NOT RUN
+        # from the app's /var/folders, which refused the commit. The hook names the directory.
+        self.make()
+        bulk = self.base / "bulk"
+        bulk.mkdir()
+        callers = self.base / "callers-tmp"
+        callers.mkdir()
+        self.record_duration("suite", 2.5)
+        self.env.update(RICHOS_BULK_ROOT=str(bulk), TMPDIR=str(callers))
+        self.git("checkout", "-q", "-b", "feature")
+        self.write("richos/app/src/thing.txt", "fine, better\n")
+        self.git("add", "-A")
+        self.git("commit", "-m", "keeps the owning suite green")
+        seen = [line for line in self.tools().splitlines() if line.startswith("suite-tmp ")]
+        self.assertEqual(seen, ["suite-tmp " + str((bulk / "tmp/claude/autocheck-hook").resolve())])
+
+    def test_the_lint_runs_under_the_python_its_baselines_record_whatever_python3_is_first(self):
+        # A worker's PATH has the engine runtime's python3 first; the ratchet refuses a lint run
+        # under another major.minor than baselines/*.json ("lint versions do not match"). lint.sh
+        # now finds the recorded interpreter itself. The stand-ins answer the version query and
+        # record who was asked to run the driver; a plain python3 that runs it is the failure.
+        pinned = set()
+        for name in ("custom", "rust-fast", "tauri"):
+            pinned.add(json.loads((HERE / "lint/baselines" / f"{name}.json").read_text())["versions"]["python"])
+        self.assertEqual(len(pinned), 1, f"the three baselines disagree on the lint's python: {pinned}")
+        want = pinned.pop()
+        bin_dir = self.base / "worker-bin"
+        bin_dir.mkdir()
+        record = self.base / "who-ran-the-driver"
+        # Each stand-in answers the version query (two arguments: -c and the program), records a run
+        # of the lint driver, and hands anything else (the machine-settings reader lint.sh sources)
+        # to the real interpreter.
+        for name, version, status in (("python3", "3.0", 9), (f"python{want}", want, 0)):
+            stub = bin_dir / name
+            stub.write_text('#!/bin/bash\nif [ "$#" = 2 ]; then echo %s; exit 0; fi\n'
+                            'case "$1" in */lint/driver.py) echo "%s $*" >> "%s"; exit %d ;; esac\n'
+                            'exec "%s" "$@"\n' % (version, name, record, status, sys.executable))
+            stub.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("RICHOS_", "CARGO"))}
+        env["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+        env["HOME"] = str(self.base / "home")
+        result = self.run_(["bash", str(HERE / "lint.sh"), "--changed", "--strict"], cwd=HERE, env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        ran = record.read_text().splitlines()
+        self.assertEqual(len(ran), 1, ran)
+        self.assertTrue(ran[0].startswith(f"python{want} "), ran)
+        self.assertIn("lint/driver.py --changed --strict", ran[0])
 
 
 class OxfordComma(Fixture):

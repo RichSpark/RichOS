@@ -96,6 +96,24 @@ struct Inner {
     /// [`WorkHost::held_for_screen`]). Later input may have been delivered past them meanwhile,
     /// so they are delivered from here rather than found again by reading forward.
     screen_released: Vec<u64>,
+    /// **Inbox offsets each provider session was given in this process**, by session id. A
+    /// handoff stays in Stu's inbox until its job closes (`session_tools::pending_after`), and
+    /// [`Inner::peer_active_through`] is cleared whenever his lease is renewed or its
+    /// connection fails, which read every open handoff out to the SAME resumed session again
+    /// (2026-10-28 ~23:00Z: Stu was handed the nightly-78 handoff three times within minutes,
+    /// two of them with no `previous_delivery_attempt`). What a session was given here is never
+    /// given to it again here; the next process hands it back once, as a reconciliation that
+    /// names the earlier attempt.
+    delivered: std::collections::HashMap<String, std::collections::HashSet<u64>>,
+}
+impl Inner {
+    /// What `session` was already given in this process, for [`WorkHost::next_for_stu`].
+    fn given_to(&self, session: Option<&str>) -> std::collections::HashSet<u64> {
+        session.and_then(|session| self.delivered.get(session)).cloned().unwrap_or_default()
+    }
+    fn note_given(&mut self, session: &str, through: u64) {
+        self.delivered.entry(session.to_string()).or_default().insert(through);
+    }
 }
 struct Backend {
     live_delivery: Mutex<()>,
@@ -496,8 +514,10 @@ impl WorkHost {
     /// back end's [`Inner::screen_released`]), then the inbox in order from `after`, passing
     /// over every handoff still waiting for the screen. Never locks the back end itself: the
     /// run loop calls it holding that lock.
+    /// `given` is what the live session was already given in this process ([`Inner::delivered`]):
+    /// passed over, never handed to it twice.
     fn next_for_stu(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, mut after: u64,
-        released: &mut Vec<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
+        released: &mut Vec<u64>, given: &std::collections::HashSet<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
         let scope = self.message_scope(binding);
         while let Some(through) = released.pop() {
             let message = crate::session_tools::saved_input(&scope, "stu", through)
@@ -510,6 +530,10 @@ impl WorkHost {
             let Some((message, through)) = crate::session_tools::pending_after(&scope, "stu", after)? else {
                 return Ok(None);
             };
+            if given.contains(&through) {
+                after = through;
+                continue;
+            }
             if !self.held_for_screen(backend, binding, &message, through) {
                 released.retain(|offset| *offset != through);
                 return Ok(Some((message, through)));
@@ -576,9 +600,12 @@ impl WorkHost {
             // already gone past it (§56; review rv-20261025T001333Z-ed81e5e8-29df, finding 1).
             // Taken out of the back end for the selection and put back unless it was delivered.
             let (mut message, through, released_now) = loop {
-                let mut released = std::mem::take(&mut backend.inner.lock().unwrap().screen_released);
+                let (mut released, given) = {
+                    let mut inner = backend.inner.lock().unwrap();
+                    (std::mem::take(&mut inner.screen_released), inner.given_to(session.as_deref()))
+                };
                 let taken = released.clone();
-                let next = self.next_for_stu(&backend, binding, after, &mut released);
+                let next = self.next_for_stu(&backend, binding, after, &mut released, &given);
                 backend.inner.lock().unwrap().screen_released.extend(released);
                 let Some((message, through)) = next? else {
                     return Ok::<_, String>(());
@@ -631,6 +658,9 @@ impl WorkHost {
                 let mut inner = backend.inner.lock().unwrap();
                 if inner.lease_session == session {
                     inner.peer_active_through=Some(inner.peer_active_through.unwrap_or(0).max(through));
+                }
+                if let Some(session) = session.as_deref() {
+                    inner.note_given(session, through);
                 }
             }
             // A released handoff sits behind input already delivered: never read back over that.
@@ -730,7 +760,18 @@ impl WorkHost {
         let stopped = || self.handoff_stopped(binding, message);
         self.move_to_account_in_use(backend, binding, true);
         let _ = self.renew_for_user_settings(backend, binding);
-        let input = serde_json::to_string(message).map_err(|e| e.to_string())?;
+        // **Every delivery of saved input names its earlier attempt, on this path as on the
+        // live one** (P0, 2026-10-28: two of the three copies of the nightly-78 handoff Stu was
+        // given after a restart came this way and carried none, so they read as fresh orders).
+        // Read before `begin_attempt` below replaces it with this one; `null` on a first one.
+        let mut payload = serde_json::to_value(message).map_err(|e| e.to_string())?;
+        if turn.starts_with("peer:") {
+            payload["previous_delivery_attempt"] = serde_json::to_value(
+                crate::session_tools::previous_attempt(&self.message_scope(binding), "stu", turn)?,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        let input = payload.to_string();
         {
             self.ensure_lease(backend, binding)?;
             let mut guard = backend.lease.lock().unwrap();
@@ -796,6 +837,11 @@ impl WorkHost {
                 // Input of ours sent during an automatic turn is folded into it, and that turn's
                 // result is then ours: it has ended with this one.
                 inner.automatic_turn=false;
+                // The turn ran to a result, so this session has the input whatever that result
+                // was: it is not given to it again in this process ([`Inner::delivered`]).
+                if let (Ok(_), Some(through)) = (&result, turn.strip_prefix("peer:").and_then(|n| n.parse::<u64>().ok())) {
+                    inner.note_given(&session, through);
+                }
             }
             if matches!(&result, Err(CognitionError::Io(_))) {
                 drop(guard.take());
@@ -1175,8 +1221,13 @@ impl WorkHost {
     /// At the end of a turn of Stu's, a message's or an automatic one: when nothing is open his
     /// jobs have settled, and what the app left behind goes now (§54 addendum 2), on its own
     /// thread, so the next input never waits for it. True when nothing is open.
+    ///
+    /// "Settled" is [`Self::background_work`]'s answer, the same one the update gate and the
+    /// quit question read: nothing running and nothing waiting for him. An open record whose
+    /// work has all ended does not hold this back; the reaper proves liveness for itself.
     fn sweep_if_settled(&self) -> bool {
-        if !self.open_assignments().is_ok_and(|open| open.is_empty()) {
+        let work = self.background_work();
+        if !work.readable || work.running > 0 || work.awaiting_you > 0 {
             return false;
         }
         if let Some(cleanup) = self.cleanup.lock().unwrap().clone() {
@@ -1185,20 +1236,21 @@ impl WorkHost {
         true
     }
 
+    /// A back end is in a turn, or has saved input it has not been given. **A handoff Stu was
+    /// already given is not pending input** (P0, 2026-10-28): its job stays open on its own
+    /// record until his report, which [`Self::background_work`] reads, and counting it here too
+    /// held the quit question and the windowless close for as long as any job record stayed open.
     pub fn peer_work_pending(&self) -> bool {
         let backends: Vec<_> = self.backends.lock().unwrap().values().cloned().collect();
         backends.into_iter().any(|backend| {
             let inner = backend.inner.lock().unwrap();
-            if inner.processing {
+            if inner.processing || inner.automatic_turn {
                 return true;
             }
             inner.binding.as_ref().is_some_and(|binding| {
                 let scope = self.message_scope(binding);
-                ["rich", "stu"].iter().any(|role| {
-                    crate::session_tools::pending(&scope, role)
-                        .map(|m| m.is_some())
-                        .unwrap_or(true)
-                })
+                crate::session_tools::pending(&scope, "rich").map(|m| m.is_some()).unwrap_or(true)
+                    || crate::session_tools::undelivered(&scope, "stu").unwrap_or(true)
             })
         })
     }
@@ -1207,13 +1259,36 @@ impl WorkHost {
         self.backends.lock().unwrap().get(thread).map(Arc::clone)
     }
 
+    /// **The provider sessions this host holds open now**, one per back end: a lease that exists
+    /// and has not reached provider EOF ([`Cognition::is_closed`]). Read off the lease itself,
+    /// never off the remembered [`Inner::lease_session`], which outlives the lease: after provider
+    /// EOF or shutdown it keeps naming the session until another input opens a replacement
+    /// (second review rv-20261029T062537Z-21f7f26e-d081 of `21f7f26e5`: that remembered id kept
+    /// "1 assignment is still running in the background." after Stu's provider exited, where a
+    /// fresh host over the same disk read clear). A lease whose mutex is held is in use (a turn,
+    /// an opening, a renewal) and counts by its remembered session: never blocked on, because a
+    /// turn holds it for its whole length, and in use is open (fail toward waiting).
     pub fn lease_sessions(&self) -> Vec<String> {
-        self.backends
-            .lock()
-            .unwrap()
-            .values()
-            .filter_map(|backend| backend.inner.lock().unwrap().lease_session.clone())
+        let backends: Vec<_> = self.backends.lock().unwrap().values().cloned().collect();
+        backends
+            .iter()
+            .filter_map(|backend| match backend.lease.try_lock() {
+                Ok(lease) => Self::open_session(&lease),
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                    Self::open_session(&poisoned.into_inner())
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    backend.inner.lock().unwrap().lease_session.clone()
+                }
+            })
             .collect()
+    }
+
+    fn open_session(lease: &Option<Box<dyn Cognition>>) -> Option<String> {
+        lease
+            .as_ref()
+            .filter(|lease| !lease.is_closed())
+            .map(|lease| lease.session_id().to_string())
     }
 
     pub fn wait_for_completed(&self, count: u64, limit: std::time::Duration) -> bool {
@@ -1279,7 +1354,11 @@ impl WorkHost {
                             break Next::Answer(binding, answer);
                         }
                         let after = inner.peer_active_through.unwrap_or(0);
-                        match self.next_for_stu(&backend, &binding, after, &mut inner.screen_released) {
+                        // Keyed by the OPEN lease: a renewed lease resumes the same session and
+                        // is passed over; after a lost connection there is no open lease, and
+                        // the next one is handed unfinished input once, naming the attempt.
+                        let given = inner.given_to(live_session.as_deref());
+                        match self.next_for_stu(&backend, &binding, after, &mut inner.screen_released, &given) {
                             Ok(Some((message, through))) => {
                                 inner.processing = true;
                                 break Next::Message(binding, message, through);
@@ -1308,12 +1387,14 @@ impl WorkHost {
                             }
                         }
                         drop(lease);
-                        // A job's last steps run as automatic turns (a teammate's hand-back), so
-                        // its end is where his jobs settle too (the 2026-10-25 garbage walk).
+                    }
+                    backend.inner.lock().unwrap().processing = false;
+                    // A job's last steps run as automatic turns (a teammate's hand-back), so
+                    // its end is where his jobs settle too (the 2026-10-25 garbage walk). Read
+                    // once this check is no longer processing, or it would count itself as work.
+                    if at_turn_end {
                         self.sweep_if_settled();
                     }
-                    let mut inner = backend.inner.lock().unwrap();
-                    inner.processing = false;
                     backend.wake.notify_all();
                     continue;
                 }
@@ -1399,17 +1480,27 @@ impl WorkHost {
         Ok(format!("work-input:{}", delivery.id))
     }
 
-    /// Job execution status is read from Stu's existing reports, never maintained here.
+    /// **Is there background work, and is any of it running NOW?** The one answer the update
+    /// gate, the quit question and the settled sweep all read (`lifecycle.rs`: "is there work"
+    /// must not have two answers in one process).
+    ///
+    /// **An open record is not, by itself, running work** (P0, 2026-10-28 23:00Z: the update
+    /// panel said "6 assignments still running in the background" with no worker, turn or
+    /// command of any of them alive, because every open record that was not waiting for him was
+    /// counted as running). A job record closes only on Stu's own report or his Stop, so one
+    /// whose work all ended without that report stayed "running" for ever. Such a record stays
+    /// open and is handed back to Stu at the next start (`pending_after`), so installing or
+    /// quitting over it loses nothing. It counts here only while something of it is live
+    /// ([`Self::live_assignments`]). Waiting for his approval is read exactly as before.
     pub fn background_work(&self) -> crate::work_gate::BackgroundWork {
         match self.open_assignments() {
             Ok(open) => {
-                let awaiting_you = open
-                    .iter()
-                    .filter(|row| row.reported_state() == Some(AssignmentState::Blocked))
-                    .count();
+                let (awaiting, others): (Vec<_>, Vec<_>) = open
+                    .into_iter()
+                    .partition(|row| row.reported_state() == Some(AssignmentState::Blocked));
                 crate::work_gate::BackgroundWork {
-                    running: open.len() - awaiting_you,
-                    awaiting_you,
+                    running: self.live_assignments(&others),
+                    awaiting_you: awaiting.len(),
                     readable: true,
                 }
             }
@@ -1419,6 +1510,109 @@ impl WorkHost {
                 readable: false,
             },
         }
+    }
+
+    /// **How many of these open records have work live now.** A record is live when any of
+    /// these holds, and every reading that cannot be taken counts as live (fail toward waiting):
+    /// - it waits for the screen or for an allowance, which end by themselves and start it;
+    /// - no work of it has been witnessed yet: its handoff has not been given to a turn of
+    ///   Stu's and no helper of it was dispatched. That is an assignment between its
+    ///   registration and its first worker (`work_gate.rs`, §6.4), which still blocks;
+    /// - one of its receipts may still have a run in flight, that session's own worker reading
+    ///   is not an observed clear (`app_workers::status`), and the session itself has not
+    ///   demonstrably ended ([`Self::provider_ended`]).
+    ///
+    /// Stu's back end is per conversation, not per job: while it is in a turn (ours or an
+    /// automatic one) or has saved input it has not been given, that conversation counts at
+    /// least one live assignment even when each of its records alone reads idle.
+    fn live_assignments(&self, open: &[Assignment]) -> usize {
+        let mut threads: std::collections::BTreeMap<(&str, &str), Vec<&Assignment>> = Default::default();
+        for record in open {
+            threads.entry((record.entity_id.as_str(), record.thread_id.as_str())).or_default().push(record);
+        }
+        let hosted = self.lease_sessions();
+        let mut sessions: std::collections::HashMap<String, bool> = Default::default();
+        let mut live = 0;
+        for ((entity, thread), records) in threads {
+            let scope = crate::status_tools::StatusToolScope {
+                version: 1,
+                state_root: self.state.clone(),
+                entity_id: entity.to_string(),
+                thread_id: thread.to_string(),
+            };
+            let launches = crate::work_status::launches(&self.state, entity, thread);
+            let mut session_live = |session: &str| {
+                // A receipt naming no session has no worker reading that could clear it.
+                *sessions.entry(session.to_string()).or_insert_with(|| {
+                    session.is_empty() || (crate::work_gate::workers(&crate::app_workers::status(&self.state, Some(session))).0
+                        != crate::work_gate::Liveness::Clear
+                        && !self.provider_ended(entity, thread, session, &hosted))
+                })
+            };
+            let own = records.iter().filter(|record| {
+                if record.reported_state().is_some_and(AssignmentState::waits_for_the_world) {
+                    return true;
+                }
+                let Ok(launches) = launches.as_ref() else { return true };
+                let launched = launches.get(&record.obligation_id).cloned().unwrap_or_default();
+                let instruction = crate::ecs::UserInstruction {
+                    ledger_ref: record.instruction_ledger_ref.clone(),
+                    sha256: record.instruction_sha256.clone(),
+                    text: None,
+                };
+                let given = match crate::session_tools::handoff_given(&scope, &instruction) {
+                    Ok(given) => given,
+                    Err(_) => return true,
+                };
+                if !given && !launched.dispatched {
+                    return true;
+                }
+                launched.unresolved.iter().any(|session| session_live(session))
+            }).count();
+            live += own.max(usize::from(self.stu_busy(&scope)));
+        }
+        live
+    }
+
+    /// **This provider session has demonstrably ended, and no process of it still runs.** A
+    /// provider that ends on a lost connection or a restart need not deliver its helpers'
+    /// `SubagentStop` (second review rv-20261029T004310Z-6c4c304f-d238 of `6c4c304f4`: a
+    /// receipt of such a session kept the update gate busy for as long as it stayed). The
+    /// terminal evidence is the engine's own (`workspaces.py` `session_state`): its journal's
+    /// last session row is `SessionEnd` (`app_workers::session_ended`), its canonical record
+    /// carries `ended_at`, or the process recorded running it is gone or is now another
+    /// process. Never ended while this host holds it as an open lease ([`Self::lease_sessions`]:
+    /// the lease itself, not the session id remembered after it closed), while its recorded
+    /// process still runs, or when either of those cannot be read (fail toward waiting).
+    fn provider_ended(&self, entity: &str, thread: &str, session: &str, hosted: &[String]) -> bool {
+        if hosted.iter().any(|live| live == session) {
+            return false;
+        }
+        let Ok(record) = crate::work_status::session_record(&self.state, entity, thread, session) else {
+            return false;
+        };
+        let record = record.unwrap_or_default();
+        let process_gone = match &record.process {
+            None => false,
+            Some((pid, start)) => match crate::app_cleanup::process_start(*pid) {
+                crate::app_cleanup::ProcessStart::Running(now) if now == *start => return false,
+                crate::app_cleanup::ProcessStart::Running(_) | crate::app_cleanup::ProcessStart::Gone => true,
+                crate::app_cleanup::ProcessStart::Unreadable => return false,
+            },
+        };
+        process_gone || record.ended || crate::app_workers::session_ended(&self.state, session) == Some(true)
+    }
+
+    /// Stu's back end for this conversation is in a turn (ours or an automatic one), or has
+    /// saved input it has not yet been given. An inbox that cannot be read counts as busy.
+    fn stu_busy(&self, scope: &crate::status_tools::StatusToolScope) -> bool {
+        if let Some(backend) = self.backend(&scope.thread_id) {
+            let inner = backend.inner.lock().unwrap();
+            if inner.processing || inner.automatic_turn {
+                return true;
+            }
+        }
+        crate::session_tools::undelivered(scope, "stu").unwrap_or(true)
     }
 
     /// Stop one user's job. Persist its provenance before waiting for dispatch or provider I/O.
@@ -1854,6 +2048,12 @@ mod tests {
         settings: Option<String>,
         in_turn: VecDeque<Option<String>>,
         turn_results: VecDeque<&'static str>,
+        /// Every lease opens the first session again, as `claude --resume` does in the app: a
+        /// renewed or restarted Stu is the same provider session (`renew_lease`).
+        resume_same_session: bool,
+        /// Every lease reports provider EOF ([`Cognition::is_closed`]), as Stu's does once his
+        /// provider exits on a lost connection.
+        closed: bool,
     }
     struct Lease {
         session: String,
@@ -1863,6 +2063,9 @@ mod tests {
         settings: Option<String>,
     }
     impl Cognition for Lease {
+        fn is_closed(&self) -> bool {
+            self.team.lock().unwrap().closed
+        }
         fn session_id(&self) -> &str {
             &self.session
         }
@@ -1937,7 +2140,7 @@ mod tests {
             self.gate.wait_until_open();
             let n = self.spawns.fetch_add(1, Ordering::SeqCst);
             Ok(Box::new(Lease {
-                session: if n == 0 {
+                session: if n == 0 || self.team.lock().unwrap().resume_same_session {
                     "work-session-one".into()
                 } else {
                     format!("work-session-rotated-{n}")
@@ -4501,6 +4704,311 @@ read -r keep_alive
         assignment::record_user_stop(&h.state, "depot", "thread-one", &other.id).unwrap();
         assert_eq!(job_commands(&all(), &job.id, &later), vec!["names-no-job".to_string()]);
         h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    // ---- P0, 2026-10-28: open records whose work has all ended -------------------------------
+
+    /// A job of his handed to Stu exactly as a conversation does it, with nothing delivered yet.
+    fn handed_job(h: &Harness) -> (crate::assignment::Receipt, crate::status_tools::StatusToolScope, PathBuf) {
+        let record = assignment::register(&h.state, &registration(h)).unwrap();
+        let scope = h.host.message_scope(&h.binding);
+        let path = h.root.join("peer-status.json");
+        crate::session_tools::bind(&path, &scope, "front-session", "rich", Some(crate::ecs::UserInstruction {
+            ledger_ref: registration(h).instruction_ledger_ref, sha256: registration(h).instruction_sha256, text: None,
+        })).unwrap();
+        crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Land the three branches"})).unwrap();
+        (record, scope, path)
+    }
+
+    /// One of the job's helpers, as the engine's receipt records it.
+    fn helper_receipt(h: &Harness, status: &str) {
+        use sha2::Digest;
+        let folder = h.state.join("work-receipts").join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]")));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("helper.json"), serde_json::json!({"schema":1,"id":"helper",
+            "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"work-session-one"},
+            "request":{"obligation_id":registration(h).obligation_id,"role":"worker","title":"Fictional","repo":"/fictional/project"},
+            "status":status,"agent_id":"agent-one","tool_use_id":"call-one"}).to_string()).unwrap();
+    }
+
+    fn gate(h: &Harness) -> (crate::work_gate::Liveness, Option<String>) {
+        crate::work_gate::background(&h.host.background_work(), &[])
+    }
+
+    /// **(a) The update panel's "6 assignments still running in the background" at 23:00Z.** A
+    /// job whose handoff Stu was given, whose turn ended and whose helper has ended is open on its
+    /// own record and is NOT running: nothing of it is live, the record survives a relaunch and is
+    /// handed back to Stu then. The same record reads running again the moment something of it is
+    /// live: a helper whose session cannot be shown to have ended, or input Stu has not yet had.
+    #[test]
+    fn an_open_job_whose_work_has_all_ended_is_not_running_and_one_with_live_work_is() {
+        let h = harness(0);
+        let (record, scope, path) = handed_job(&h);
+        assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::Running, "Worker start observed").unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "Stu was never given the job");
+        // A helper ran and its session's own reading shows every run ended.
+        helper_receipt(&h, "running");
+        every_worker_observed_ending(&h);
+        assert!(assignment::open(&h.state).unwrap().iter().any(|open| open.id == record.id), "the record must stay open");
+        let work = h.host.background_work();
+        assert_eq!((work.running, work.awaiting_you, work.readable), (0, 0, true),
+            "an open record whose every turn and helper has ended was counted as running");
+        assert_eq!(gate(&h), (crate::work_gate::Liveness::Clear, None));
+        assert!(!h.host.peer_work_pending(), "a handoff Stu was given read as input still waiting for him");
+        // The SAME record, with a helper whose end cannot be shown: running.
+        std::fs::remove_dir_all(h.state.join("evidence/work-session-one")).unwrap();
+        assert_eq!(h.host.background_work().running, 1, "a helper not witnessed ending was read as ended");
+        every_worker_observed_ending(&h);
+        // The SAME record, with input for Stu he has not been given yet: running.
+        h.host.shutdown();
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Keep the original release date"})).unwrap();
+        let restarted = WorkHost::new(&h.state, Box::new(Factory {
+            spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
+            team: h.team.clone(), gate: h.start_gate.clone(),
+        }), Arc::new(SilentNotifier));
+        assert_eq!(restarted.background_work().running, 1, "input Stu has not had yet was read as nothing to do");
+        assert_eq!(crate::work_gate::background(&restarted.background_work(), &[]).1.as_deref(),
+            Some("1 assignment is still running in the background."));
+        restarted.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **(b) Between its registration and its first worker it still blocks** (`work_gate.rs`,
+    /// §6.4; the CEO's "ALL WORK"). Registered with no handoff yet, and handed over but not yet
+    /// given to Stu, are both running.
+    #[test]
+    fn a_job_registered_with_no_worker_yet_still_blocks() {
+        let h = harness(0);
+        assignment::register(&h.state, &registration(&h)).unwrap();
+        assert_eq!(h.host.background_work().running, 1, "a registered job with nothing started yet read as idle");
+        assert_eq!(gate(&h).0, crate::work_gate::Liveness::Busy);
+        assert_eq!(gate(&h).1.as_deref(), Some("1 assignment is still running in the background."));
+        std::fs::remove_dir_all(&h.root).unwrap();
+        let h = harness(0);
+        let (_, _, _) = handed_job(&h);
+        assert_eq!(h.host.background_work().running, 1, "a handoff not yet given to Stu read as idle");
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **(c) Waiting for his approval blocks, with its own sentence** (§6.5), exactly as before.
+    #[test]
+    fn a_job_awaiting_his_approval_still_blocks_with_its_own_sentence() {
+        let h = harness(0);
+        let record = assignment::register(&h.state, &registration(&h)).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::Blocked, "Waiting for approval").unwrap();
+        let work = h.host.background_work();
+        assert_eq!((work.running, work.awaiting_you), (0, 1));
+        assert_eq!(gate(&h), (crate::work_gate::Liveness::Busy, Some("An assignment is waiting for you to approve it.".into())));
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **(d) A helper's session that has demonstrably ended is not running** (second review
+    /// rv-20261029T004310Z-6c4c304f-d238 of `6c4c304f4`, from its fixture `ended-session.rs`).
+    /// A provider that ends on a lost connection or a restart need not deliver its helper's
+    /// `SubagentStop`; it leaves `SessionEnd` in the session's callback journal and `ended_at`
+    /// on its canonical session record (`workspaces.py` `record_session_end`), or its recorded
+    /// process is gone. The helper's receipt still says `running`, and that session's worker
+    /// reading still shows the helper launched and not stopped: on `6c4c304f4` the update gate
+    /// read "1 assignment is still running in the background." for as long as the receipt
+    /// stayed. It does not run now. A session with no terminal evidence, one that started
+    /// again, one this host has live, and one whose recorded process still runs keep counting.
+    #[test]
+    fn a_helper_whose_provider_session_has_ended_is_not_running_and_a_live_session_still_is() {
+        use sha2::Digest;
+        let h = harness(0);
+        assignment::register(&h.state, &registration(&h)).unwrap();
+        helper_receipt(&h, "running");
+        let partition = format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"));
+        let sessions = h.state.join("workspaces").join(&partition).join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let record = sessions.join("work-session-one.json");
+        let evidence = h.state.join("evidence/work-session-one");
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join(".lock"), "").unwrap();
+        let row = |event: &str, more: serde_json::Value| {
+            let mut callback = serde_json::json!({"session_id": "work-session-one", "hook_event_name": event});
+            for (key, value) in more.as_object().unwrap() { callback[key] = value.clone(); }
+            serde_json::json!({"schema": 1, "callback": callback}).to_string() + "\n"
+        };
+        let launched = row("SubagentStart", serde_json::json!({"agent_id": "agent-one"}))
+            + &row("PostToolUse", serde_json::json!({"tool_name": "Agent",
+                "tool_response": {"status": "async_launched", "agentId": "agent-one"}}));
+        let ended = launched.clone() + &row("SessionEnd", serde_json::json!({"reason": "other"}));
+        let journal = |text: &str| std::fs::write(evidence.join("callbacks.jsonl"), text).unwrap();
+        let canonical = |value: serde_json::Value| std::fs::write(&record, value.to_string()).unwrap();
+        let end_record = serde_json::json!({"session_id": "work-session-one",
+            "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"});
+        let busy = (crate::work_gate::Liveness::Busy, Some("1 assignment is still running in the background.".to_string()));
+        let clear = (crate::work_gate::Liveness::Clear, None);
+
+        // Control: the session is live by every reading there is. Running.
+        journal(&launched);
+        assert_eq!((h.host.background_work().running, gate(&h)), (1, busy.clone()),
+            "a helper of a session with no terminal evidence was read as ended");
+        // The reviewer's case: SessionEnd and the canonical end, no provider running. Not running.
+        journal(&ended);
+        canonical(end_record.clone());
+        assert_eq!((h.host.background_work().running, gate(&h)), (0, clear.clone()),
+            "a helper of a provider session that has ended still blocked the update");
+        // Either witness alone is terminal evidence.
+        std::fs::remove_file(&record).unwrap();
+        assert_eq!(h.host.background_work().running, 0, "SessionEnd in the journal was not read as the session's end");
+        journal(&launched);
+        canonical(end_record.clone());
+        assert_eq!(h.host.background_work().running, 0, "the canonical ended_at record was not read as the session's end");
+        // Its recorded process is gone: an identity that is no longer that process.
+        let own = std::process::id();
+        canonical(serde_json::json!({"session_id": "work-session-one", "pid": own, "pid_start": "Thu Jan  1 00:00:00 1970"}));
+        assert_eq!(h.host.background_work().running, 0, "a session whose recorded process is gone was read as live");
+
+        // Controls: each live session keeps counting.
+        // It started again after its end (resumed): SessionStart follows, and the record drops ended_at.
+        journal(&(ended.clone() + &row("SessionStart", serde_json::json!({"source": "resume"}))));
+        std::fs::remove_file(&record).unwrap();
+        assert_eq!(h.host.background_work().running, 1, "a session that started again after its end was read as ended");
+        // Its recorded provider process still runs (this process, with its own start).
+        journal(&ended);
+        let start = crate::app_cleanup::own_start().expect("this process's start");
+        canonical(serde_json::json!({"session_id": "work-session-one", "pid": own, "pid_start": start,
+            "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"}));
+        assert_eq!((h.host.background_work().running, gate(&h)), (1, busy.clone()),
+            "a session whose provider process still runs was read as ended");
+        // This host holds it open as Stu's lease: the lease itself exists and is not closed.
+        canonical(end_record);
+        let backend = Backend::new();
+        backend.inner.lock().unwrap().lease_session = Some("work-session-one".into());
+        *backend.lease.lock().unwrap() = Some(Box::new(Lease { session: "work-session-one".into(),
+            prompts: h.work_prompts.clone(), commands: h.commands.clone(), team: h.team.clone(), settings: None }));
+        h.host.backends.lock().unwrap().insert("thread-one".into(), backend.clone());
+        assert_eq!((h.host.background_work().running, gate(&h)), (1, busy.clone()),
+            "a session this host has open was read as ended");
+        // In use (a turn holds the lease for its whole length): open, by its remembered session.
+        let in_use = backend.lease.lock().unwrap();
+        assert_eq!((h.host.background_work().running, gate(&h)), (1, busy),
+            "a lease in use was read as ended");
+        drop(in_use);
+        h.host.backends.lock().unwrap().clear();
+        assert_eq!(gate(&h), clear);
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A session whose lease has closed, or been removed, has no veto** (second review
+    /// rv-20261029T062537Z-21f7f26e-d081 of `21f7f26e5`, from its fixture `closed-lease.rs`).
+    /// Stu is handed his job the normal way and his turn ends; his helper's receipt still says
+    /// `running`. While his provider is open, even `SessionEnd` and `ended_at` do not end it.
+    /// Then his provider exits (a lost connection: provider EOF), with no input waiting: on
+    /// `21f7f26e5` the remembered session id kept "1 assignment is still running in the
+    /// background." until another input opened a replacement, and still did after shutdown removed
+    /// the lease, where a fresh host over the same disk read clear. The gate is read as
+    /// `updates.rs` reads it, with every lease's own worker view.
+    #[test]
+    fn a_session_whose_lease_closed_or_was_removed_has_no_veto_and_an_open_lease_keeps_one() {
+        use sha2::Digest;
+        let h = harness(0);
+        let _ = handed_job(&h);
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "Stu was never given the job");
+        assert!(!h.host.peer_work_pending());
+        helper_receipt(&h, "running");
+        let evidence = h.state.join("evidence/work-session-one");
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join(".lock"), "").unwrap();
+        let row = |event: &str, more: serde_json::Value| {
+            let mut callback = serde_json::json!({"session_id": "work-session-one", "hook_event_name": event});
+            for (key, value) in more.as_object().unwrap() { callback[key] = value.clone(); }
+            serde_json::json!({"schema": 1, "callback": callback}).to_string() + "\n"
+        };
+        let launched = row("SubagentStart", serde_json::json!({"agent_id": "agent-one"}))
+            + &row("PostToolUse", serde_json::json!({"tool_name": "Agent",
+                "tool_response": {"status": "async_launched", "agentId": "agent-one"}}));
+        let read = |host: &WorkHost| {
+            let work = host.background_work();
+            let views: Vec<_> = host.lease_sessions().iter()
+                .map(|session| crate::app_workers::status(&h.state, Some(session))).collect();
+            (work.running, crate::work_gate::background(&work, &views))
+        };
+        let busy = (1, (crate::work_gate::Liveness::Busy, Some("1 assignment is still running in the background.".to_string())));
+        let clear = (0, (crate::work_gate::Liveness::Clear, None));
+
+        // Control: his provider is open and his helper launched. Running.
+        std::fs::write(evidence.join("callbacks.jsonl"), &launched).unwrap();
+        assert_eq!(read(&h.host), busy, "a helper of Stu's open session was read as ended");
+        // Both terminal witnesses, his provider still open: the open lease keeps its veto.
+        std::fs::write(evidence.join("callbacks.jsonl"), launched + &row("SessionEnd", serde_json::json!({"reason": "other"}))).unwrap();
+        let sessions = h.state.join("workspaces")
+            .join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"))).join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("work-session-one.json"), serde_json::json!({"session_id": "work-session-one",
+            "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"}).to_string()).unwrap();
+        assert_eq!(crate::app_workers::session_ended(&h.state, "work-session-one"), Some(true));
+        assert_eq!(h.host.lease_sessions(), vec!["work-session-one".to_string()]);
+        assert_eq!(read(&h.host), busy, "a session this host holds open lost its veto");
+
+        // The reviewer's case: provider EOF, nothing waiting for Stu. The ended session decides.
+        h.team.lock().unwrap().closed = true;
+        assert!(!h.host.peer_work_pending());
+        assert_eq!(read(&h.host), clear, "a closed lease's remembered session kept the update blocked");
+        assert_eq!(h.host.lease_sessions(), Vec::<String>::new(), "a closed lease was counted as open");
+        // Shutdown removes the lease itself: still clear.
+        h.host.shutdown();
+        assert_eq!(read(&h.host), clear, "a removed lease's remembered session kept the update blocked");
+        // The same disk state in a fresh host reads the same.
+        let restarted = WorkHost::new(&h.state, Box::new(Factory {
+            spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
+            team: h.team.clone(), gate: h.start_gate.clone(),
+        }), Arc::new(SilentNotifier));
+        assert_eq!(read(&restarted), clear);
+        restarted.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **A handoff the session already has is not handed to it again as new work** (2026-10-28
+    /// ~23:00Z: after a restart Stu was given the nightly-78 handoff three times within minutes,
+    /// two of them carrying no `previous_delivery_attempt`). His lease is renewed onto the same
+    /// session, which clears the live cursor; the open handoff is not given to that session again
+    /// in this process. After a restart it is given once more, naming the earlier attempt.
+    #[test]
+    fn a_handoff_stu_already_has_is_never_given_again_as_new_work() {
+        let h = harness(0);
+        h.team.lock().unwrap().resume_same_session = true;
+        let (record, scope, path) = handed_job(&h);
+        assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::Running, "Worker start observed").unwrap();
+        h.host.wake_messages(&h.binding);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)));
+        let backend = h.host.backend("thread-one").unwrap();
+        assert!(matches!(h.host.renew_lease(&backend, &h.binding), Renewal::Moved { .. }));
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Keep the original release date"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        until("later input must reach Stu", || handed_over(&h, "Keep the original release date") == 1);
+        assert!(h.host.wait_for_completed(2, std::time::Duration::from_secs(30)));
+        h.host.shutdown();
+        let handed = |h: &Harness| -> Vec<serde_json::Value> {
+            h.work_prompts.lock().unwrap().iter().filter(|p| p.contains("Land the three branches"))
+                .map(|p| serde_json::from_str(p).unwrap()).collect()
+        };
+        assert_eq!(handed(&h).len(), 1, "the same session was given the same handoff again: {:?}", h.work_prompts.lock().unwrap());
+        assert!(handed(&h)[0].get("previous_delivery_attempt").is_some_and(serde_json::Value::is_null),
+            "a first delivery must say it is a first one: {:?}", handed(&h)[0]);
+        // Restart: the open handoff comes back once, as a reconciliation naming the attempt.
+        let restarted = WorkHost::new(&h.state, Box::new(Factory {
+            spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
+            team: h.team.clone(), gate: h.start_gate.clone(),
+        }), Arc::new(SilentNotifier));
+        restarted.wake_messages(&h.binding);
+        assert!(restarted.wait_for_completed(1, std::time::Duration::from_secs(30)));
+        let backend = restarted.backend("thread-one").unwrap();
+        assert!(matches!(restarted.renew_lease(&backend, &h.binding), Renewal::Moved { .. }));
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Use the connected repository"})).unwrap();
+        restarted.wake_messages(&h.binding);
+        until("later input must reach Stu", || handed_over(&h, "Use the connected repository") == 1);
+        restarted.shutdown();
+        let all = handed(&h);
+        assert_eq!(all.len(), 2, "after a restart the open handoff must come back exactly once: {all:?}");
+        assert_eq!(all[1]["previous_delivery_attempt"]["session_id"], "work-session-one",
+            "a redelivery read as a fresh order: {:?}", all[1]);
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 }

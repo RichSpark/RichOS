@@ -54,12 +54,15 @@ RESUME_MARKER = "richos-resume-control: "
 RECIPIENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]Z\Z")
 # A routing check for declared control messages, not a classifier of user intent.
-# The quota watcher always renders a declared control. Rich's manual command does
-# the same. Legacy pause-until messages and imperative pause requests are refused
-# unless they equal the template, so the incident's handwritten message fails.
-# Reserve pause wording and imperative holds in outbound worker messages. This
-# deliberately also refuses prose about pausing rather than guessing its intent.
-INTENT = re.compile(r"\b(?:pause|pausing|paused)\b|\bhold(?:\s+(?:now|your|all|the|this|until|without|on|position|fire)\b|\s*[:.!?]|\s*$)", re.I)
+# A message is a control message only when it carries one of the control lines the
+# generator writes: the pause or resume marker, or the legacy `pause-until:` line.
+# The quota watcher always renders those lines, and so does Rich's manual command.
+# A control line that does not equal the template is refused, so the incident's
+# handwritten message (which carries `pause-until:`) still fails. Ordinary prose is
+# never a control message: on 2026-10-28 a word match on "pause" or "hold" refused
+# plain messages, and it never protected anything, because the hold itself is made
+# by the registry before any message (see the docstring above), not by the text.
+CONTROL_LINE = re.compile(r"(?im)^\s*(?:pause-until|richos-pause-control|richos-resume-control)\s*:")
 
 
 def until_text(reason, reset=None):
@@ -142,8 +145,7 @@ def is_resume(text):
 
 
 def declared(text):
-    return isinstance(text, str) and (bool(INTENT.search(text)) or
-        bool(re.search(r"(?im)^\s*(?:pause-until|richos-pause-control|richos-resume-control)\s*:", text)))
+    return isinstance(text, str) and bool(CONTROL_LINE.search(text))
 
 
 def validate_text(text):

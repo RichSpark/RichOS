@@ -1207,7 +1207,7 @@ else
 fi
 healthy_reaper_state "$W_DIR/state/scratch-reaper-state.json" '"outcome": "unresolved", "last_apply_epoch": int(time.time()) - 13 * 3600, "unresolved": ['"$KEPT_ROWS"']'
 OUT="$(run_wd --alert)"; RC=$?
-if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: the last completed scheduled run was .* past the 12 h window'; then
+if [ "$RC" = "1" ] && printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: the last completed scheduled run at .* is past the 12 h window'; then
     ok "W18h a stale scheduled run with kept leftovers is still an alarm"
 else
     bad "W18h a stale run hid behind its kept leftovers (rc=$RC)"
@@ -1386,7 +1386,7 @@ else
 fi
 # AND A SCHEDULED RESULT PAST THE WINDOW IS A CLEANUP ALARM (cleanup PRD R4): a
 # job that stopped publishing looks exactly like a machine with nothing to clean.
-if printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: the last completed scheduled run was 6 h ago, past the 1 h window'; then
+if printf '%s' "$OUT" | grep -q 'CLEANUP HAS NOT RECOVERED: the last completed scheduled run at .* is past the 1 h window'; then
     ok "W20c past the window the stale scheduled result is also a cleanup alarm"
 else
     bad "W20c a stale scheduled result did not alarm"
@@ -1565,7 +1565,7 @@ echo ""
 # the scheduled result alone decides cleanup health; missing, manual, stale,
 # uninstalled or unresolved is an alarm; and the installed job (launchd's service
 # name) keeps ONE escalation for the lead in the existing ledger: raised once,
-# replaced after a permanent acknowledgement, left alone under a timed one,
+# unchanged after acknowledgement, reopened for a changed failure, left alone under a timed one,
 # acknowledged by the job itself when a scheduled run covering the failed scope
 # is healthy again.
 world cleanup
@@ -1664,12 +1664,22 @@ else
 fi
 esc ack "$ID1" --disposition "acknowledged permanently before any repair, for the test"
 run_wd_scheduled >/dev/null 2>&1
+run_wd_scheduled >/dev/null 2>&1
+if [ "$(wd_assoc)" = "$ID1" ] \
+   && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "1" ]; then
+    ok "W23h acknowledgement suppresses new escalations for the unchanged failed result"
+else
+    bad "W23h an unchanged acknowledged failure woke the lead again"
+fi
+# A different failure still reaches the lead. Acknowledgement is not health.
+healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["/x/root"], "unresolved": [{"scope": "/x/root", "cause": "permission denied"}]'
+run_wd_scheduled >/dev/null 2>&1
 ID2="$(wd_assoc)"
 if [ -n "$ID2" ] && [ "$ID2" != "$ID1" ] \
    && [ "$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')" = "2" ]; then
-    ok "W23h a premature PERMANENT acknowledgement gets one replacement at the next tick"
+    ok "W23h2 a materially changed failure gets a new escalation after acknowledgement"
 else
-    bad "W23h a permanently acknowledged failure was not replaced (id1=$ID1 id2=$ID2)"
+    bad "W23h2 a new failure was hidden by the old acknowledgement (id1=$ID1 id2=$ID2)"
 fi
 esc ack "$ID2" --disposition "deferred for an hour while the cause is diagnosed" --until "$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)"
 run_wd_scheduled >/dev/null 2>&1

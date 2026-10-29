@@ -42,3 +42,34 @@ def gui_speech_models():
     if all(model.is_file() for model in GUI_SPEECH_MODELS):
         return ":".join(str(model) for model in GUI_SPEECH_MODELS)
     return None
+
+
+def main(argv):
+    """The same two answers for a shell script, so gui-proof-in-vm.sh names the nightly's runtime
+    and models without a second copy of the rule (2026-10-28: a boot-proof retake from a worker's
+    worktree had to be given both by hand).
+
+        runtime_cache.py path <state> <recipe>   print cache_path(state, recipe); 2 when the recipe is unreadable
+        runtime_cache.py models                  print gui_speech_models(); 1 when a model is absent
+    """
+    import sys
+    if len(argv) == 3 and argv[0] == "path":
+        try:
+            print(cache_path(argv[1], argv[2]))
+        except OSError as error:
+            print("runtime_cache.py: cannot read %s: %s" % (argv[2], error.strerror or error), file=sys.stderr)
+            return 2
+        return 0
+    if argv == ["models"]:
+        models = gui_speech_models()
+        if models is None:
+            return 1
+        print(models)
+        return 0
+    print("usage: runtime_cache.py path <state> <recipe> | models", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(sys.argv[1:]))
