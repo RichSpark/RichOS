@@ -129,17 +129,29 @@ def top_consumers(candidates, limit=3):
         path = expand(path)
         if not path or not os.path.isdir(path):
             continue
-        try:
-            r = subprocess.run(["du", "-sk", path], capture_output=True,
-                               text=True, timeout=120)
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        first = (r.stdout or "").split("\n")[0].split("\t")
-        if not first or not first[0].strip().isdigit():
-            continue
-        out.append((int(first[0].strip()) * 1024, path))
+        kb = du_kb(path)
+        if kb is not None:
+            out.append((kb * 1024, path))
     out.sort(reverse=True)
     return out[:limit]
+
+
+def du_kb(path):
+    """`du -sk path` in kilobytes, or None. THE ONLY PLACE THIS PROGRAM RUNS `du`.
+
+    It refuses, here and not only in the callers, any path that is or holds data macOS
+    protects (lib/foreign_app_data.py): 2026-10-29, `du -sk ~/Library/Caches` reached
+    Apple Music's cache and the CEO was asked whether RichOS may access Apple Music."""
+    if foreign_app_data.entering(path):
+        return None
+    try:
+        r = subprocess.run(["du", "-sk", path], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    first = (r.stdout or "").split("\n")[0].split("\t")
+    if not first or not first[0].strip().isdigit():
+        return None
+    return int(first[0].strip())
 
 
 def richos_garbage_bytes():
@@ -166,17 +178,12 @@ def richos_garbage_bytes():
     seen = set()
     for root in roots:
         real = os.path.realpath(root)
-        if real in seen or not os.path.isdir(real) or foreign_app_data.entering(real):
+        if real in seen or not os.path.isdir(real):
             continue
         seen.add(real)
-        try:
-            r = subprocess.run(["du", "-sk", real], capture_output=True,
-                               text=True, timeout=120)
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        first = (r.stdout or "").split("\n")[0].split("\t")
-        if first and first[0].strip().isdigit():
-            total += int(first[0].strip()) * 1024
+        kb = du_kb(real)
+        if kb is not None:
+            total += kb * 1024
     return total
 
 
@@ -608,7 +615,15 @@ def collect_devices_for_scheduled_check():
 
 
 def storage_candidates():
-    """Effective working directories and their volumes, not the entire bulk disk."""
+    """RichOS's OWN folders and their volumes, never the entire bulk disk.
+
+    ONLY OURS (2026-10-29). The list used to end with $TMPDIR, /private/tmp, ~/.cargo,
+    ~/.npm, ~/Library/Caches and ~/Library/Developer. On an alerting run `du -sk
+    ~/Library/Caches` reached Apple Music's cache and macOS asked the CEO whether
+    "RichOS.app" may access Apple Music; `du` of $TMPDIR was refused at every other app's
+    TemporaryItems. Free space is read by statvfs, which needs no permission. Size is
+    measured only for what RichOS owns: the effective storage roots, the app's and the
+    engine's own folders, the scratch allocator and the agents' scratch roots."""
     settings = M.environment()  # Malformed settings still fail before monitoring.
     effective = []
     # An unplugged working drive must not stop monitoring the primary disk.
@@ -627,10 +642,14 @@ def storage_candidates():
     effective = list(dict.fromkeys(effective))
     extras = sorted({str(Path(*path.parts[:3])) for path in effective
                      if path.parts[:2] == ('/', 'Volumes') and len(path.parts) >= 3})
-    candidates = [str(path) for path in effective] + [os.environ.get("TMPDIR") or "/tmp",
-                  "/private/tmp", os.path.expanduser("~/.claude"), os.path.expanduser("~/.richos-nightly"),
-                  os.path.expanduser("~/Library/Caches"), os.path.expanduser("~/Library/Developer"),
-                  os.path.expanduser("~/.cargo"), os.path.expanduser("~/.npm")]
+    tmp = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
+    uid = str(os.getuid())
+    candidates = [str(path) for path in effective] + [
+        os.path.join(tmp, env("SCRATCH_ROOT_NAME", "richos-scratch")),
+        os.path.expanduser("~/.claude"), os.path.expanduser("~/.richos-nightly"),
+        os.path.expanduser("~/Library/Application Support/com.richos.app"),
+        os.path.expanduser("~/Library/Application Support/RichOS")]
+    candidates += [r.replace("%u", uid) for r in env("SCRATCH_CLAUDE_ROOTS", "").split()]
     return list(dict.fromkeys(candidates)), extras
 
 
