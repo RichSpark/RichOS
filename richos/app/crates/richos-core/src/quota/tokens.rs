@@ -473,9 +473,14 @@ const UNMEASURED_NOISE: f64 = 0.25;
 /// The least variance taken from the episodes' own residuals: precise episodes are trusted
 /// almost entirely, but two models always spent in the same mix still read at their cards.
 const LEAST_NOISE: f64 = 1e-6;
-/// How far from its card a model's price is expected to be, relative: one standard deviation is
-/// its card again (a model twice its card is as unlikely as one costing nothing).
-const CARD_SPREAD: f64 = 1.;
+/// How far from its card a model's price a token is expected to be, relative: one standard
+/// deviation is ten times its card. The card is one bucket's price, and a token's price depends on
+/// its bucket: Opus 5.5's cache read is $0.20 a million, its output $20, a span of 100 and ten
+/// its geometric middle. So episodes that measure a model well move it off its card (the second
+/// review of d22fc43f8: Sonnet measured at 4M a point beside an Opus-and-Fable pair the episodes
+/// cannot separate, where its card at the dearest point says 18M), while a model with a few
+/// thousand tokens still cannot move.
+const CARD_SPREAD: f64 = 10.;
 
 /// The non-negative weighted least-squares fit of `points = sum(tokens_g x per_million_g)` over
 /// `rows` (each column's tokens in millions, the points, the weight), by trying every subset of
@@ -509,9 +514,12 @@ fn fit(rows: &[(Vec<f64>, f64, f64)], columns: usize) -> Option<(Vec<usize>, Vec
 /// (the third review of the late-frame fix, rv-20261029T115538Z: a worst-case bound is not a
 /// price, and a model read with another is read at the other's price).
 ///
-/// - **The card, at the account's dearest point.** Every carded model's tokens are priced at its
-///   card (`card_price`), and the episode that spent the most card dollars for its points sets
-///   the scale: a model the episodes cannot measure is read at its card from there. The dearest
+/// - **The card, at the scale the episodes measured for the model's own spend.** Every carded
+///   model's tokens are priced at its card (`card_price`). For the share of the episodes' card
+///   dollars that is the model's own, the scale is the one the episodes measure all together (a
+///   model that is the whole spend is read exactly as main reads it, total tokens over total
+///   points: the second review of dc6918a1d, Opus alone at 10M and 50M a point is 30M, not the
+///   dearest 50M). For the rest, a model the episodes barely saw, the scale is the dearest whole
 ///   point, not the average: a model read too dear hands an account off with room left and
 ///   nothing corrects it, while one read too cheap is caught by the percentage speed, the floor
 ///   of the speed, within a point. Work, 2026-10-28 13:05Z (Ray and Zach ordered to hand off at
@@ -538,13 +546,27 @@ pub fn figures(episodes: &[Episode]) -> BTreeMap<String, f64> {
     }
     let mut models: Vec<(&str, u64)> = totals.into_iter().filter(|(_, t)| *t > 0).collect();
     models.sort_by_key(|m| std::cmp::Reverse(m.1));
+    // Each episode's spend in card dollars.
+    let dollars = |e: &Episode| e.tokens.iter().filter_map(|(m, t)| card_price(m).map(|p| *t as f64 / 1e6 * p)).sum::<f64>();
     // Card dollars a point at the dearest whole point (an episode under half a point is a
     // reading's rounding, not a rise).
-    let dearest = episodes.iter().filter(|e| e.points >= 0.5)
-        .map(|e| e.tokens.iter().filter_map(|(m, t)| card_price(m).map(|p| *t as f64 / 1e6 * p)).sum::<f64>() / e.points)
-        .fold(0., f64::max);
-    // Points per million tokens at the card.
-    let card = |model: &str| card_price(model).filter(|_| dearest > 0.).map(|p| p / dearest);
+    let dearest = episodes.iter().filter(|e| e.points >= 0.5).map(|e| dollars(e) / e.points).fold(0., f64::max);
+    // Card dollars a point as the episodes measure them all together: the fit below with one
+    // column, the card dollars (with one model, its total tokens over total points exactly).
+    let (gained, spent) = episodes.iter().filter(|e| e.points > 0.).fold((0., 0.), |(gained, spent), e| {
+        let all = e.tokens.values().sum::<u64>() as f64 / 1e6;
+        let x = dollars(e);
+        if all > 0. { (gained + e.points * x / all, spent + x * x / all) } else { (gained, spent) }
+    });
+    let scale = if gained > 0. { spent / gained } else { dearest };
+    let total: f64 = episodes.iter().filter(|e| e.points > 0.).map(dollars).sum();
+    // Points per million tokens at the card, at the scale the episodes measured for as much of the
+    // spend as the model's own and at the dearest point for the rest.
+    let card = |model: &str| card_price(model).filter(|_| dearest > 0. && total > 0.).map(|p| {
+        let own = episodes.iter().filter(|e| e.points > 0.)
+            .map(|e| e.tokens.get(model).map_or(0., |t| *t as f64 / 1e6 * p)).sum::<f64>() / total;
+        p / (scale * own + dearest * (1. - own))
+    });
     let (fitted, past) = models.split_at(models.len().min(MAX_MODELS));
     let mut figures: BTreeMap<String, f64> = past.iter()
         .filter_map(|(m, _)| card(m).map(|c| (m.to_string(), 1e6 / c))).collect();
@@ -618,6 +640,15 @@ mod tests {
         let f = figures(&[episode(1., &[("opus", 3_000_000)]), episode(2., &[("opus", 5_000_000)])]);
         assert!((f["opus"] - 8_000_000. / 3.).abs() < 1.);
     }
+    /// **A carded model alone is total tokens over total points too** (the second review of
+    /// dc6918a1d, its own fixture): Opus 5.5 alone, 10M tokens for one point and 50M for the next
+    /// (whole-point readings of a true 30M a point). The card at the dearest point (50M) pulled
+    /// it to 41.4M; it is the whole spend, so it is read at the scale the episodes measure: 30M.
+    #[test]
+    fn a_carded_model_alone_is_total_tokens_over_total_points_too() {
+        let f = figures(&[episode(1., &[("claude-opus-5-5", 10_000_000)]), episode(1., &[("claude-opus-5-5", 50_000_000)])]);
+        assert!((f["claude-opus-5-5"] / 30e6 - 1.).abs() < 1e-9, "{f:?}");
+    }
     #[test]
     fn mixed_episodes_separate_the_models() {
         // Opus 2M tokens a point, Sonnet 10M a point, in changing mixes.
@@ -684,7 +715,7 @@ mod tests {
             eps.push(episode(1., &extra));
             let f = figures(&eps);
             let at_card = card_dollars(&eps[0]) / 0.10 * 1e6;
-            assert!((f["claude-haiku-5-5"] / at_card - 1.).abs() < 1e-3, "{f:?}");
+            assert!((f["claude-haiku-5-5"] / at_card - 1.).abs() < 0.05, "{f:?}");
             assert!(83_446. / f["claude-haiku-5-5"] < 1e-4, "{f:?}");
         }
     }
@@ -693,15 +724,31 @@ mod tests {
     /// two episodes with Fable 5.1 in Haiku's place. d22fc43f8 held Fable at its worst-case bound,
     /// 40,634,401 / 275 = 147,761 tokens a point (its dearest bucket on its dearest card over Opus
     /// 5.5's cache reads), so a late 3M-token Fable `result` was 20.3 points a minute. At $10 a
-    /// million against the dearest point's $198.85, Fable is 19.89M tokens a point (its list ratio
-    /// to Opus, 2.5, puts it at 16M at a true 40M Opus point): the 3M are 0.151 points.
+    /// million against the dearest point's $198.85, its card is 19.89M tokens a point (its list
+    /// ratio to Opus, 2.5, puts it at 16M at a true 40M Opus point), and the two episodes move it
+    /// only a little (19.30M): the 3M are 0.155 points, under the 0.2 of the true point 98.
     #[test]
     fn a_model_the_episodes_barely_saw_is_read_at_its_card_not_its_worst_case() {
         let eps = work_first_two_with("claude-fable-5-1", 3_151);
         let f = figures(&eps);
         let at_card = card_dollars(&eps[0]) / 10. * 1e6;
-        assert!((f["claude-fable-5-1"] / at_card - 1.).abs() < 1e-3, "Fable is not at its card {at_card}: {f:?}");
+        assert!((f["claude-fable-5-1"] / at_card - 1.).abs() < 0.05, "Fable is far from its card {at_card}: {f:?}");
         assert!(3e6 / f["claude-fable-5-1"] < 0.2, "{f:?}");
+    }
+    /// **A model the episodes measure keeps its figure beside a pair they cannot separate** (the
+    /// second review of d22fc43f8, its own fixture). Opus and Fable always in the same ratio (100
+    /// to 1), Sonnet apart: (800,000, 8,000, 3,720,000) and (8,400,000, 84,000, 1,060,000), one
+    /// point each, Sonnet at 4M a point. d22fc43f8 put the Opus it could not fit with Sonnet and
+    /// read all three at 7.04M; at a card spread of 1 the card at the dearest point (18.28M) pulled
+    /// Sonnet to 11.3M. Here Sonnet stays within 5% of 4M, as main measures it.
+    #[test]
+    fn a_model_the_episodes_measure_keeps_its_figure_beside_a_pair_they_cannot_separate() {
+        let f = figures(&[
+            episode(1., &[("claude-opus-5-5", 800_000), ("claude-fable-5-1", 8_000), ("claude-sonnet-5-5", 3_720_000)]),
+            episode(1., &[("claude-opus-5-5", 8_400_000), ("claude-fable-5-1", 84_000), ("claude-sonnet-5-5", 1_060_000)]),
+        ]);
+        assert!((f["claude-sonnet-5-5"] / 4e6 - 1.).abs() < 0.05, "{f:?}");
+        assert_eq!(f.len(), 3, "{f:?}");
     }
     /// **A dear minority is read at its own price, never at a cheaper model's** (the third review,
     /// finding 2, its own fixture): four one-point mixes of Opus 5.5, Sonnet 5.5, Fable 5.1 and
