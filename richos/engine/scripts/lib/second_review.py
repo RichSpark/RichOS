@@ -485,17 +485,20 @@ def earlier_findings(work_key, tip, repo, repo_id=""):
     already filed as a follow-up carries "filed": true, so a later pass never
     files it twice.
 
-    Only reviews of `tip` or a commit it was built on count, as at the land
-    fence (operator_fences.review_of): a review of an unrelated tip on the same
-    work key that withdrew a finding kept the reviewers of 5611a7964 from being
-    asked about rv-20261029T140028Z-3e883526-10b9#1, while the fence, which never
-    reads that review, still held on it (2026-10-29)."""
+    The reviews read are the ones the land fence reads for `tip`
+    (operator_fences.review_history), plus this work key's: only reviews of
+    `tip` or a commit it was built on count, so a review of an unrelated tip on
+    the same work key that withdrew a finding no longer hides it (it kept the
+    reviewers of 5611a7964 from being asked about
+    rv-20261029T140028Z-3e883526-10b9#1, 2026-10-29); and every work key with a
+    land review of `tip` counts, so a manual --recheck on its own range key is
+    handed the findings held under the app's key."""
     import operator_fences as fences
-    rows = [r for r in read_ledger() if r.get("work") == work_key and r.get("verdict")
-            and same_repo(r, repo, repo_id) and fences._own_history(repo, r.get("tip"), tip)]
+    rows = fences.review_history([r for r in read_ledger() if r.get("verdict") and same_repo(r, repo, repo_id)],
+                                 tip, repo, [work_key])
     # The gate and the next reviewer see the same unresolved findings, including
     # conflicting duplicate reviews. Never carry only the last writer's subset.
-    return list(fences.open_review_findings(rows, tip).items())
+    return list(fences.open_review_findings(rows, tip, repo).items())
 
 
 def is_ancestor(repo, older, newer):

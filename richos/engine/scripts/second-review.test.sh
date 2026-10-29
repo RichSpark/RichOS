@@ -79,6 +79,16 @@
 #        reviewer is handed every finding still open in its own tip's history, never one a
 #        review of an unrelated tip withdrew. A "still-open" ruling, or a "fixed" ruling at
 #        another tip, still blocks
+#   C27  a "fixed" ruling counts only from a review of the exact tip being decided, handed the
+#        finding or not: one at T1 leaves the finding open at T, and T's next reviewer is handed it
+#   C28  a "fixed" ruling at the finding's own tip counts through a chain of rechecks back to the
+#        review that raised it, even when the review between them omitted it; a fresh review of
+#        that tip still cannot clear it
+#   C29  the next reviewer of a tip is handed every finding the fence holds on at that tip, from
+#        every work key with a land review there, not only its own (a manual --recheck's range key)
+#   C30  C27's exact-tip rule holds only for findings raised in the land's own range: a branch that
+#        merged main, carrying a landed work's finding ruled fixed only at the landed commit, is
+#        admitted without re-ruling it
 #
 
 # Exit 0 = every case passed; exit 1 = at least one failed.
@@ -1025,6 +1035,131 @@ check "C26 guard: a still-open ruling at T, not handed it, still blocks T" $? "o
 OUT6="$(c26 other-tip)"
 has "${OUT6#*|}" "Blocking finding id(s): rv-c26a#1"
 check "C26 guard: a fixed ruling at another tip (T1, built on by T), not handed it, does not clear it at T" $? "out=$OUT6"
+
+# --- C27, C28, C29 ------------------------------------------------------------
+# Review rv-20261029T164027Z-d147e6e5-6f22 of the C26 fix, same fixture repository (base -> A ->
+# T1 -> T). Each scenario writes a ledger; c27 prints "<ids handed to a new review of T on
+# <handin-key>>|<the fence's refusal of T>". A finding is raised as rv-x#1.
+c27() { # <scenario>
+    python3 - "$SCRIPT_DIR/lib" "$SB/c27-$1" "$1" "$REPO6" "$TIP6A" "$TIP6T1" "$TIP6T" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+state, scenario, repo, a, t1, t = sys.argv[2:8]
+os.makedirs(state)
+os.environ["SECOND_REVIEW_STATE_DIR"] = state
+import operator_fences as f
+import second_review as sr
+ident, app, rng = f.review_repo_identity(repo), "work-app", "range:%s:base" % repo
+finding = {"priority": 2, "title": "Retry budget lost on continuation", "files": ["x.rs"], "evidence": "e",
+           "fixture": "", "blocks": True}
+handed = [dict(finding, id="rv-x#1")]
+note = "x.rs:505 keeps the marking through continuation creation; the probe confirms it."
+def rule(status):
+    return [{"id": "rv-x#1", "status": status, "blocks": status == "still-open", "note": note}]
+# (id, tip, work, recheck_of, findings, rulings, handed in)
+raise_at = lambda tip: ("rv-x", tip, app, "", [finding], [], [])
+handin_key = app
+if scenario == "other-tip-handed":      # finding 1: a handed FIXED at T1; T's own review never mentions it
+    reviews = [raise_at(a), ("rv-d", t1, app, "", [], rule("fixed"), handed), ("rv-c", t, app, "", [], [], [])]
+elif scenario == "same-tip-omitted":    # finding 2: raised at T; recheck c of it omits it; recheck d of c fixes it
+    reviews = [raise_at(t), ("rv-c", t, app, "rv-x", [], [], []), ("rv-d", t, app, "rv-c", [], rule("fixed"), handed)]
+elif scenario == "same-tip-unlinked":   # guard: d is a fresh review of T, not a recheck of x's line
+    reviews = [raise_at(t), ("rv-c", t, app, "rv-x", [], [], []), ("rv-d", t, app, "", [], rule("fixed"), handed)]
+elif scenario == "range-key":           # finding 3: app key holds it at T; a manual recheck uses its range key
+    reviews = [raise_at(a), ("rv-c", t, app, "", [], rule("still-open"), handed),
+               ("rv-d", t, rng, "rv-c", [], [], [])]
+    handin_key = rng
+elif scenario == "range-key-fixed":     # control: the range-key reviewer, handed it, rules it fixed at T
+    reviews = [raise_at(a), ("rv-c", t, app, "", [], rule("still-open"), handed),
+               ("rv-d", t, rng, "rv-c", [], [], []), ("rv-e", t, rng, "rv-d", [], rule("fixed"), handed)]
+    handin_key = rng
+with open(os.path.join(state, "reviews.jsonl"), "w") as ledger:
+    for rid, tip, work, recheck, findings, rulings, given in reviews:
+        os.makedirs(os.path.join(state, rid))
+        verdict = "changes-requested" if findings or any(r["blocks"] for r in rulings) else "passed"
+        answer = {"reviewed_commit": tip, "verdict": verdict, "findings": findings, "earlier_findings": rulings}
+        json.dump({"answer": answer, "earlier_findings_in": given},
+                  open(os.path.join(state, rid, "verdict.json"), "w"))
+        ledger.write(json.dumps({"id": rid, "tip": tip, "repo": repo, "repo_id": ident, "work": work,
+                                 "trigger": "manual", "verdict": verdict, "recheck_of": recheck,
+                                 "record": os.path.join(state, rid)}) + "\n")
+handin = ",".join(fid for fid, _ in sr.earlier_findings(handin_key, t, repo, ident))
+print("%s|%s" % (handin, " ".join(f.review_gaps(os.path.join(state, "reviews.jsonl"), [t], repo).get(t, []))))
+PY
+}
+OUT7="$(c27 other-tip-handed)"
+has "${OUT7#*|}" "Blocking finding id(s): rv-x#1"
+check "C27 a handed fixed ruling at T1 does not clear rv-x#1 at T, whose own review never mentioned it: the fence refuses T" $? "out=$OUT7"
+has "${OUT7%%|*}" "rv-x#1"
+check "C27 the next reviewer of T is handed rv-x#1, as the fence still holds on it" $? "out=$OUT7"
+OUT8="$(c27 same-tip-omitted)"
+[ -z "${OUT8#*|}" ]
+check "C28 a fixed ruling at T by a recheck of a recheck of the review of T that raised rv-x#1 clears it, though the review between omitted it" $? "out=$OUT8"
+OUT8="$(c27 same-tip-unlinked)"
+has "${OUT8#*|}" "Blocking finding id(s): rv-x#1"
+check "C28 guard: a fixed ruling at T by a fresh review of T, not a recheck of the review that raised it, still blocks" $? "out=$OUT8"
+OUT9="$(c27 range-key)"
+has "${OUT9%%|*}" "rv-x#1"
+check "C29 a review of T on a range key is handed rv-x#1, held at T under the app's work key" $? "out=$OUT9"
+has "${OUT9#*|}" "Blocking finding id(s): rv-x#1"
+check "C29 the fence still refuses T on rv-x#1 until a reviewer rules on it" $? "out=$OUT9"
+OUT9="$(c27 range-key-fixed)"
+[ -z "${OUT9#*|}" ]
+check "C29 control: the range-key reviewer, handed rv-x#1, rules it fixed at T and the fence admits T" $? "out=$OUT9"
+
+# --- C30 ---------------------------------------------------------------------
+# The lead's ruling on esc-20261029T165526Z-fb650d7b (2026-10-29): the exact-tip rule of C27 holds
+# only for findings raised in the land's own range. 6e9a03c3-f0d4#1 and #2 were raised and ruled
+# fixed by an earlier work that landed (main c69f65d76); 5611a7964 carries them only through its
+# merge of main. Fixture: base -> L1 -> L2 landed on main (review x at L1 raises #1, review f at L2,
+# handed it, rules it fixed); branch N cut from base merges main as M, on the same work key. Review
+# m of M never mentions #1, and the fence admits M.
+REPO10="$SB/repo-landed-fixed"
+G10() { git -C "$REPO10" -c core.hooksPath=/dev/null -c user.name=Author -c user.email=author@example.invalid -c commit.gpgsign=false "$@"; }
+mkdir -p "$REPO10"
+G10 init -q -b main
+printf 'base\n' >"$REPO10/a.txt"; G10 add -A; G10 commit -qm "base"
+BASE10="$(G10 rev-parse HEAD)"
+G10 checkout -qb cc/landed; printf 'base\nl1\n' >"$REPO10/a.txt"; G10 commit -qam "L1"
+TIP10L1="$(G10 rev-parse HEAD)"
+printf 'base\nl1\nl2\n' >"$REPO10/a.txt"; G10 commit -qam "L2"
+TIP10L2="$(G10 rev-parse HEAD)"
+G10 checkout -q main; G10 merge -q --ff-only cc/landed
+G10 checkout -qb cc/new "$BASE10"; printf 'n\n' >"$REPO10/n.txt"; G10 add -A; G10 commit -qm "N1"
+G10 merge -q --no-edit main
+TIP10M="$(G10 rev-parse HEAD)"
+G10 checkout -q main
+OUT10="$(python3 - "$SCRIPT_DIR/lib" "$SB/c30" "$REPO10" "$TIP10L1" "$TIP10L2" "$TIP10M" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+state, repo, l1, l2, m = sys.argv[2:7]
+os.makedirs(state)
+os.environ["SECOND_REVIEW_STATE_DIR"] = state
+import operator_fences as f
+import second_review as sr
+ident, work = f.review_repo_identity(repo), "work-app"
+finding = {"priority": 2, "title": "Retry budget lost on continuation", "files": ["x.rs"], "evidence": "e",
+           "fixture": "", "blocks": True}
+fixed = [{"id": "rv-x#1", "status": "fixed", "blocks": False, "note": "x.rs:505 keeps the marking; probe confirms."}]
+reviews = [("rv-x", l1, [finding], [], []), ("rv-f", l2, [], fixed, [dict(finding, id="rv-x#1")]),
+           ("rv-m", m, [], [], [])]
+with open(os.path.join(state, "reviews.jsonl"), "w") as ledger:
+    for rid, tip, findings, rulings, given in reviews:
+        os.makedirs(os.path.join(state, rid))
+        verdict = "changes-requested" if findings else "passed"
+        answer = {"reviewed_commit": tip, "verdict": verdict, "findings": findings, "earlier_findings": rulings}
+        json.dump({"answer": answer, "earlier_findings_in": given}, open(os.path.join(state, rid, "verdict.json"), "w"))
+        ledger.write(json.dumps({"id": rid, "tip": tip, "repo": repo, "repo_id": ident, "work": work,
+                                 "trigger": "manual", "verdict": verdict, "recheck_of": "",
+                                 "record": os.path.join(state, rid)}) + "\n")
+handin = ",".join(fid for fid, _ in sr.earlier_findings(work, m, repo, ident))
+print("%s|%s" % (handin, " ".join(f.review_gaps(os.path.join(state, "reviews.jsonl"), [m], repo).get(m, []))))
+PY
+)"
+[ -z "${OUT10#*|}" ]
+check "C30 a merge of main carrying a landed work's finding, ruled fixed only at the landed commit L2, is admitted" $? "out=$OUT10"
+[ -z "${OUT10%%|*}" ]
+check "C30 and the reviewer of the merge is not handed that landed finding" $? "out=$OUT10"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"
