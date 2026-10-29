@@ -343,6 +343,11 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// already reasons about.
 pub const STOP_REASON_CANCELLED: &str = "cancelled";
 
+/// The stop reasons of input the child positively says it threw away before any turn ran it
+/// (`command_lifecycle` states `discarded` and `refused`): the model never read it.
+pub const STOP_REASON_DISCARDED: &str = "discarded_before_it_ran";
+pub const STOP_REASON_REFUSED: &str = "refused_before_it_ran";
+
 /// **Which of the two leases this is** — the background-work spec §2.1's second connection,
 /// made a type rather than a boolean so every place that has to care says which one it
 /// means.
@@ -2587,8 +2592,8 @@ impl NativeClient {
                             // the one way this correlation could be worse than the defect
                             // it replaces. Three states, one sentence each.
                             "cancelled" => terminal = Some(STOP_REASON_CANCELLED), // dialect-exempt: the vendor's own `command_lifecycle` state value, matched verbatim off the wire
-                            "discarded" => terminal = Some("discarded_before_it_ran"),
-                            "refused" => terminal = Some("refused_before_it_ran"),
+                            "discarded" => terminal = Some(STOP_REASON_DISCARDED),
+                            "refused" => terminal = Some(STOP_REASON_REFUSED),
                             _ => {}
                         }
                 }
