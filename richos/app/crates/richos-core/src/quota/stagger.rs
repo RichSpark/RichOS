@@ -43,6 +43,17 @@
 //! `running` counts the permits whose run the reading saw (`Ledger::measured`), not every permit
 //! released this window. One waiting or finished spends nothing, and one picked up again is
 //! counted at the measured pace, never below it.
+//!
+//! **A speed no helper seen running accounts for resumes nobody** (fifth review of 2026-10-29,
+//! rv-20261029T172038Z-eb39280f-2916, P1). A helper whose last call was more than a minute
+//! before a reading, one long tool or model step, is not measured though its work is in the
+//! speed. With nobody measured, that speed was read as someone else's and each helper picking
+//! up again added only its share before the hold, so which ones went on hung on the order they
+//! retried in: "order=[2, 1, 0]; permits=[true, true, true]; actual projection=102.90%" against
+//! 98.97% for [0, 1, 2]. Now, on a reading that measures a speed and nobody running, no permit
+//! that waited picks up again and nobody new is released: they wait for a reading that measures
+//! a helper, or for the reset, as Rich's rule has it. A helper still going (its run not
+//! stopped) is judged as before.
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 
@@ -80,9 +91,10 @@ impl Release {
     ///
     /// **Only the helpers the reading measured divide what it measures** (fourth review of
     /// 2026-10-29, rv-20261029T165127Z-b54baa2c-6070, P1). With none of them measured, what the
-    /// reading says is someone else's (Stu's own turns), kept whole, and each of the `n` adds its
-    /// share. With `running` measured, each of the `n` is judged at the larger of its share and
-    /// `speed / running`, the pace each measured helper is going at: a helper picking up again
+    /// reading says is kept whole and each of the `n` adds its share; `admit` uses that only
+    /// for a helper still going, or on a speed of 0 (fifth review: a measured speed nobody
+    /// running accounts for resumes and releases nobody). With `running` measured, each of the
+    /// `n` is judged at the larger of its share and `speed / running`, the pace each measured helper is going at: a helper picking up again
     /// after a wait, or released anew, is counted at that pace too, never below it. Before, the
     /// whole released set divided it: three released at 1.2 a minute, two waiting, the one
     /// still going measured at 0.4 a minute was read as 0.13 each and all three went on, 101.2%
@@ -163,6 +175,11 @@ impl Ledger {
             .filter(|run| run.until.is_none_or(|until| until >= checked_at))
             .count()
     }
+    /// Is `key`'s run still going: let through and not stopped to wait since (fifth review of
+    /// 2026-10-29, P1)? A permit with no run kept (a ledger written before runs were) is not.
+    fn going(&self, key: &str) -> bool {
+        self.runs.get(key).is_some_and(|run| run.until.is_none())
+    }
     /// A call on `key` was let through at `now`: its run goes on, or a new one begins.
     fn went(&mut self, key: &str, now: u64) {
         match self.runs.get_mut(key) {
@@ -235,8 +252,12 @@ pub fn admit(
     // Only the helpers this reading measured divide its speed: not one waiting, finished, or
     // picked up again since (fourth review of 2026-10-29, P1; `Ledger::measured`).
     let running = ledger.measured(release.checked_at);
+    // A speed with no helper seen running behind it may be one in a long step: nobody picks up
+    // again or is released on it (fifth review of 2026-10-29, P1; module docs).
+    let unattributed = running == 0 && release.speed > 0.;
     if let Some(place) = ledger.released.iter().position(|k| k == key) {
-        let goes = release.keeps(place + 1, running, team(&ledger.released));
+        let resumes = !ledger.going(key);
+        let goes = !(unattributed && resumes) && release.keeps(place + 1, running, team(&ledger.released));
         if goes {
             ledger.went(key, now);
         } else if !ledger.waited(key, now) {
@@ -249,7 +270,7 @@ pub fn admit(
         return Ok(false);
     }
     let n = ledger.released.len() + 1;
-    if !release.allows(n, running, team(&ledger.released)) {
+    if unattributed || !release.allows(n, running, team(&ledger.released)) {
         return Ok(false);
     }
     ledger.released.push(key.into());
@@ -491,9 +512,11 @@ mod tests {
     /// 96% five minutes before the reset measures it at 1.2 a minute: going on alone makes it
     /// 96 + 1.2 x 5 = 102, so it waits. Before, the three permits divided the 1.2 and it went on
     /// at 98% projected: "remaining first permit admitted=true; actual one-worker
-    /// projection=102.00%". A minute later, 96.2% and nobody going (the reading measures what
-    /// was never held, 0.2 a minute) projects 96.2 + (0.2 + 0.06) x 4 = 97.24, and it picks up
-    /// again on its first permit.
+    /// projection=102.00%". A minute later, 96.2% measures 0.2 a minute with nobody seen
+    /// running: whose that is cannot be told (a helper in a long step looks the same), so it
+    /// does not pick up again on it and waits for a reading that measures a helper, or for the
+    /// reset (fifth review of 2026-10-29, P1). Before that review it went on here, judged at
+    /// 96.2 + (0.2 + 0.06) x 4 = 97.24.
     #[test]
     fn finished_helpers_do_not_divide_the_speed_of_the_one_still_running() {
         let root = Scratch::new();
@@ -512,6 +535,45 @@ mod tests {
         assert!(!go("worker-0", &fast, now + 14 * MINUTE + 1_000), "102% projected alone: it waits");
 
         let calm = Release { used: 96.2, checked_at: now + 15 * MINUTE, speed: per_minute(0.2), ..fast };
-        assert!(go("worker-0", &calm, now + 15 * MINUTE + 1_000), "97.24% projected: it picks up again");
+        assert!(!go("worker-0", &calm, now + 15 * MINUTE + 1_000), "a speed nobody running accounts for: it keeps waiting");
+    }
+
+    /// **Fifth review of 2026-10-29 (rv-20261029T172038Z-eb39280f-2916), P1: a speed no helper
+    /// seen running accounts for resumes nobody.** Three released from 95% with 19 minutes left
+    /// (0.06 a minute each before the hold), all at work at 15.5. At 16, 96% measures the three
+    /// at 3 a minute, 1 each: the first goes on at 96 + 1 x 3 = 99, the other two wait (102,
+    /// 105). The first then spends 61 s in one tool step, so the next reading, 97% at 17:02
+    /// with 1.9667 minutes left, measures it at 1 a minute but sees nobody running (its last
+    /// call was 61 s before). Before, that speed was read as nobody's and each picking up again
+    /// added only its 0.06 share: retried first-to-last only the first went on, but retried
+    /// last-to-first all three did, "order=[2, 1, 0]; permits=[true, true, true]; actual
+    /// projection=102.90%" (97 + 3 x 1.9667). Now those waiting keep waiting on it; the one
+    /// still going is judged as before, 97 + (1 + 0.06) x 1.9667 = 99.08, and goes on. In
+    /// either order: 97 + 1 x 1.9667 = 98.97.
+    #[test]
+    fn a_speed_no_running_helper_accounts_for_resumes_nobody_in_any_order() {
+        let now = 1_000_000_000;
+        let reset = now + 19 * MINUTE;
+        let start = Release { used: 95., checked_at: now, resets_at: reset, speed: 0., pre_hold: per_minute(0.6) };
+        for order in [[0, 1, 2], [2, 1, 0], [1, 2, 0], [2, 0, 1]] {
+            let root = Scratch::new();
+            let state = root.path().join("engine-state");
+            let team = |_: &[String]| 10;
+            let go = |key: &str, reading: &Release, at: u64| admit(&state, "2", key, reading, &team, at).unwrap();
+            let three = three_released(&state, &start, now);
+            for key in three { assert!(go(key, &start, now + 15 * MINUTE + 30_000), "{key} at work"); }
+
+            let fast = Release { used: 96., checked_at: now + 16 * MINUTE, speed: per_minute(3.), ..start };
+            let before: Vec<bool> = three.iter().map(|key| go(key, &fast, now + 16 * MINUTE + 1_000)).collect();
+            assert_eq!(before, vec![true, false, false], "99, 102, 105: the latest two wait");
+
+            let later = Release { used: 97., checked_at: now + 17 * MINUTE + 2_000, speed: per_minute(1.), ..start };
+            let mut after = [false; 3];
+            for i in order { after[i] = go(three[i], &later, now + 17 * MINUTE + 3_000); }
+            assert_eq!(after, [true, false, false], "order {order:?}: only the one still going goes on");
+            let going = after.iter().filter(|g| **g).count() as f64;
+            let projected = later.used + later.speed * going * (reset - later.checked_at) as f64;
+            assert!(projected < 100., "order {order:?}: {projected}");
+        }
     }
 }
