@@ -804,9 +804,26 @@ impl Snapshot {
     /// under `line`, the pause line. Rises from the hold onwards started at or over it, and a
     /// held team's flat readings add no rise at all, so neither replaces it. 0 when no rise into
     /// the hold was seen in this window.
+    ///
+    /// **A hold the speed brought on early is held at its own point** (review
+    /// rv-20261029T150133Z-2f57a3fd-6d74, finding 1): 80% -> 92% in a minute holds at 92%,
+    /// under 93%, because at 11 points a minute the point is 100 - 11 = 89%. A rise that
+    /// starts at or over the point in force when it starts (Stu's own turns, a released
+    /// worker) is a rise during that hold, so it never replaces the rise into it. The rises
+    /// are read in the order they came (`measure` appends), each moving the point by its
+    /// speed exactly as [`Reading::act_point`] does: `line` at a speed under 1 point a minute
+    /// (5 points or less per five-minute check), `100 - speed x 1 minute` above it.
     fn pre_hold(&self, id: &str, line: f64) -> f64 {
-        self.rise_log.get(id).and_then(|log| log.iter().rev().find(|(from, _)| *from < line))
-            .map_or(0., |(_, speed)| *speed)
+        let point = |speed: f64| {
+            let interval = if speed * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK {
+                FAST_REFRESH_INTERVAL_MS
+            } else {
+                REFRESH_INTERVAL_MS
+            };
+            line.min(100. - speed * interval as f64).clamp(0., 100.)
+        };
+        self.rise_log.get(id).map_or(0., |log| log.iter()
+            .fold(0., |found, &(from, speed)| if from < point(found) { speed } else { found }))
     }
     /// [`View::signed_in`]: what the last answer about the sign-in established, and nothing
     /// more; a check that said nothing about it leaves it standing (`Snapshot::signed_in`).
@@ -871,10 +888,21 @@ impl Snapshot {
             // (`stagger::admit`); the rest wait for the reset. Before, the window admitted every
             // call whenever the measured speed was 0, and with the whole team held it always was.
             let speed = |w: &Window| reading.speeds.get(&w.id).copied().unwrap_or(0.);
+            // **The hold is judged on the speed before it too** (review
+            // rv-20261029T150133Z-2f57a3fd-6d74, finding 1; Rich: *"a rate of 0 while everyone
+            // is held is no measurement"*): 80% -> 92% in a minute holds at 92% (point 89%), and
+            // the held team's next, flat reading measures 0. Judged on that 0 alone the point was
+            // 93% again, 92% was under it, and all ten went at once past the stagger. The point
+            // is set by the larger of the speed measured now and the one before the hold.
+            let mut judged = reading.clone();
+            if let Some(&before) = pre_hold.get("five_hour") {
+                let now_speed = judged.speeds.entry("five_hour".to_string()).or_insert(0.);
+                *now_speed = now_speed.max(before);
+            }
             match self.windows.iter().find(|w| w.id == "five_hour") {
                 // Within the same window, a stale above-threshold value still proves a hold.
                 Some(w)
-                    if reading.reaches(w, line)
+                    if judged.reaches(w, line)
                         && w.resets_at.is_some_and(|t| t > now) =>
                 {
                     let resets_at = w.resets_at.unwrap();
@@ -2463,6 +2491,50 @@ pub(crate) mod tests {
         assert!(s.rise_log["five_hour"].len() <= 101, "bounded: one rise per whole point");
         let per_minute = s.pre_hold("five_hour", 85.) * 60_000.;
         assert!((per_minute - 1.).abs() < 1e-9, "the rise from 80%: {per_minute} points a minute");
+    }
+
+    /// **A hold the speed brought on under 93% outlives the held team's flat reading** (review
+    /// rv-20261029T150133Z-2f57a3fd-6d74, finding 1, its probe `early-hold.py`). 80% -> 92% in
+    /// one minute, 19 minutes before the reset: whole points, the first unseen, so 11 points a
+    /// minute; checked every minute, the point is 100 - 11 = 89%, and 92% holds. One of ten is
+    /// judged at 92 + 1.1 x 19 = 112.9: nobody goes. The held team's next reading is 92% again,
+    /// a speed of 0. Before, the point went back to 93%, 92% was under it, the view said Ready
+    /// and all ten went at once. Now it holds at 89% on the speed before the hold, in the
+    /// service's view and in the gate's own recomputation. Then Stu's own turn (never held)
+    /// moves it to 92.4% a minute on, at least 0.4 points a minute: that rise started at 92%,
+    /// over the 89% point, so it is a rise during the hold and never replaces the one into it.
+    #[test]
+    fn a_speed_hold_under_93_holds_through_the_held_teams_flat_and_slow_readings() {
+        const MINUTE: u64 = 60_000;
+        let at = |used: f64| snapshot(used, 19 * MINUTE).windows;
+        let mut s = Snapshot::default();
+        s.accept(at(80.), NOW - MINUTE);
+        s.accept(at(92.), NOW);
+        let pre = s.pre_hold("five_hour", 93.) * MINUTE as f64;
+        assert!((pre - 11.).abs() < 1e-9, "{pre} points a minute");
+        let held = s.view(policy(), NOW);
+        assert_eq!(held.admission, Admission::Held { resets_at: NOW + 19 * MINUTE });
+        assert!(held.release.is_some_and(|r| !r.allows(1, 10)), "92 + 1.1 x 19 = 112.9");
+
+        let dir = Scratch::new();
+        let state = dir.path().join("engine-state");
+        atomic_write(&dir.path().join("claude-quota-policy.json"), &policy()).unwrap();
+        let check = |s: &Snapshot, at: u64, what: &str| {
+            let view = s.view(policy(), at);
+            assert_eq!(view.admission, Admission::Held { resets_at: NOW + 19 * MINUTE }, "{what}: the service");
+            assert!(view.release.is_some_and(|r| !r.allows(1, 10)), "{what}: nobody is released early");
+            atomic_write(&state.join("claude-quota.json"), &view).unwrap();
+            let (gate, release) = gate::decide(&state, None, at);
+            assert!(matches!(gate, Admission::Held { .. }), "{what}: the gate, {gate:?}");
+            assert!(release.is_some_and(|r| !r.allows(1, 10)), "{what}: the gate releases nobody early");
+        };
+        s.accept(at(92.), NOW + MINUTE);
+        assert_eq!(s.speeds["five_hour"], 0., "the held team's flat reading measures 0");
+        check(&s, NOW + MINUTE, "flat at 92%");
+        s.accept(at(92.4), NOW + 2 * MINUTE);
+        assert!(s.speeds["five_hour"] > 0., "Stu's own turn is measured");
+        assert!((s.pre_hold("five_hour", 93.) * MINUTE as f64 - 11.).abs() < 1e-9, "the rise into the hold is kept");
+        check(&s, NOW + 2 * MINUTE, "92.4% after Stu's turn");
     }
 
     /// **Plan §15 answer 10, point 3: a measured jump moves BOTH check points at once**, and the
