@@ -1739,7 +1739,7 @@ def release(session_id, agent_id):
     since = float(rec.get("at") or 0) - BIRTH_SLACK
     for scan in range(RELEASE_SCANS):
         if scan:
-            time.sleep(RELEASE_SCAN_GAP)
+            time.sleep(RELEASE_SCAN_GAP)   # bounded: RELEASE_SCANS (4) looks, 0.75 s in all, never a wait
             table = snapshot()
         for pid, _ppid, at in owned_shells(rec["session_id"], rec["agent_id"], table):
             if at >= since and pid not in continued and table[pid]["stat"].startswith("T"):
@@ -1958,12 +1958,12 @@ def end_owned(session_id, agent_id, name="", why="", spare_foreign=False):
                 pass
             except PermissionError:
                 signaled.pop(pid, None)
-        time.sleep(0.05)
+        time.sleep(0.05)   # bounded: STOP_ROUNDS (10) rounds, 0.5 s in all; a fork has no event to block on
         table = snapshot()
     deadline = time.monotonic() + END_GRACE
     remaining = [p for p, b in signaled.items() if not _gone(p, b, table)]
     while remaining and time.monotonic() < deadline:
-        time.sleep(0.05)
+        time.sleep(0.05)   # bounded: END_GRACE (2 s) between SIGTERM and SIGKILL, never a long wait
         table = snapshot()
         remaining = [p for p, b in signaled.items() if not _gone(p, b, table)]
     killed = []
