@@ -104,6 +104,21 @@
 #        (the positive probe). W22d is the declaration itself: no entry of the
 #        REAL orchestration.config may enter that data.
 #
+# --- added 2026-10-29, after "RichOS.app would like to access Apple Music, your music
+# and video activity, and your media library" appeared on the CEO's screen ------------
+#   W26  THE WATCHDOG MEASURES ONLY RICHOS'S OWN FOLDERS. At 08:34:10 THIS SUITE, run
+#        by an agent inside the app, forced an alert with the REAL home folder, and the
+#        program ran `du -sk ~/Library/Caches`, which reached Apple Music's cache. W26
+#        reproduces that call with a FIXTURE home holding every protected folder
+#        (Library/Caches/com.apple.Music, Music, Movies, Pictures, Desktop, Documents,
+#        Downloads) and records every path `du` is actually handed: none of them may be
+#        protected, RichOS's own folders must still be measured, and a machine setting
+#        that points into a protected folder is refused and reported (W26a-W26c).
+#   W27  NOTHING IN THIS SUITE WALKS THE REAL MACHINE. Every world's `du` is a recorder
+#        that reaches the real one only for a path inside this suite's sandbox, every
+#        run gets the fixture home and a sandbox TMPDIR, and W27 fails on any `du` the
+#        program tried outside the sandbox.
+#
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
 set -uo pipefail
@@ -122,6 +137,27 @@ SANDBOX="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/disk-watchdog-test.XXXXXX")" && pwd 
 trap 'rm -rf "$SANDBOX"' EXIT
 
 echo "=== disk-watchdog tests ==="
+
+# THE FIXTURE HOME AND TMPDIR EVERY RUN GETS (W26/W27). The program measures folders
+# under the home folder and the temporary folder; with the real ones it walked the
+# CEO's ~/Library/Caches and every app's temporary files. This home holds each folder
+# macOS protects, so a regression is a recorded path here and never a prompt there.
+FIX_HOME="$SANDBOX/home"
+FIX_TMP="$SANDBOX/tmp"
+mkdir -p "$FIX_TMP" \
+    "$FIX_HOME/Library/Caches/com.apple.Music" "$FIX_HOME/Library/Developer/Xcode" \
+    "$FIX_HOME/Library/Caches/RichOS" \
+    "$FIX_HOME/Library/Application Support/com.richos.app/engine-state" \
+    "$FIX_HOME/Music/Music" "$FIX_HOME/Movies" "$FIX_HOME/Pictures" \
+    "$FIX_HOME/Desktop" "$FIX_HOME/Documents" "$FIX_HOME/Downloads" "$FIX_HOME/.claude"
+# A STORAGE SETTING INHERITED FROM THE CALLER IS NOT THIS WORLD'S: an exported
+# SCCACHE_DIR made the program measure the machine's real cache (found by W27).
+for _key in $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import machine_settings as M; print(" ".join(M.KEYS))' "$SCRIPT_DIR/lib"); do
+    unset "$_key"
+done
+DU_ALL="$SANDBOX/du-all.txt"            # every path any world's du was handed
+DU_OUTSIDE="$SANDBOX/du-outside.txt"    # those outside the sandbox, never measured
+: >"$DU_ALL"; : >"$DU_OUTSIDE"
 
 # ---------------------------------------------------------------------------
 # A world: its own config, its own state file, its own log, its own
@@ -151,6 +187,15 @@ printf '%s\n' "\$*" >>"$W_NOTIFY"
 exit 0
 STUB
     chmod +x "$W_BIN/osascript"
+    # THE du RECORDER (W27). Every path is recorded; only one inside this suite's
+    # sandbox reaches the real du, so no world can walk the real machine.
+    cat >"$W_BIN/du" <<STUB
+#!/bin/sh
+for a in "\$@"; do case "\$a" in -*) ;; *) printf '%s\n' "\$a" >>"$DU_ALL" ;; esac; done
+for a in "\$@"; do case "\$a" in -*) ;; "$SANDBOX"/*) ;; *) printf '%s\n' "\$a" >>"$DU_OUTSIDE"; exit 1 ;; esac; done
+exec /usr/bin/du "\$@"
+STUB
+    chmod +x "$W_BIN/du"
     # EVERY WORLD STARTS WITH A HEALTHY SCHEDULED CLEANUP: the reaper's plist is
     # installed and its job published a healthy result just now. Cleanup health is
     # an alarm of its own (cleanup PRD R4/R5), and a case about something else must
@@ -224,6 +269,8 @@ run_wd() {                 # <mode-flags...>
     RICHOS_NATIVE_IOS_CACHE="${W_IOS_ROOT:-$W_DIR/ios}" \
     RICHOS_CARGO_CACHE_ROOT="${W_CARGO_ROOT:-$W_DIR/cargo}" \
     CARGO_TARGET_DIR="$W_DIR/cargo" \
+    HOME="${WD_HOME:-$FIX_HOME}" \
+    TMPDIR="${WD_TMPDIR:-$FIX_TMP}" \
     PATH="$W_BIN:$PATH" \
     DISK_WATCHDOG_CONFIG="$W_CFG" \
     DISK_WATCHDOG_LOG="$W_LOG" \
@@ -251,6 +298,7 @@ run_wd_scheduled() {
         RICHOS_NATIVE_IOS_CACHE="${W_IOS_ROOT:-$W_DIR/ios}" \
         RICHOS_CARGO_CACHE_ROOT="${W_CARGO_ROOT:-$W_DIR/cargo}" \
         CARGO_TARGET_DIR="$W_DIR/cargo" \
+        HOME="$FIX_HOME" TMPDIR="$FIX_TMP" \
         PATH="$W_BIN:$PATH" \
         RICHOS_LAUNCH_AGENTS_DIR="$W_LA" \
         MODE=check STATE="$W_STATE" LOG="$W_LOG" \
@@ -1474,7 +1522,7 @@ W_PROOF_ROOT="$C_APPS"
 W_IOS_ROOT="$FAKE_HOME/Library"
 W_CARGO_ROOT="$FAKE_HOME"
 mkdir -p "$SANDBOX/appdata-process-tmp"
-OUT="$(TMPDIR="$SANDBOX/appdata-process-tmp" HOME="$FAKE_HOME" run_wd --check)"
+OUT="$(WD_TMPDIR="$SANDBOX/appdata-process-tmp" WD_HOME="$FAKE_HOME" run_wd --check)"
 if grep -qx "$W_DIR/measured" "$DU_LOG" 2>/dev/null; then
     ok "W22  POSITIVE PROBE: an ordinary candidate is still measured by du"
 else
@@ -1554,6 +1602,80 @@ then
     ok "W22e primary disk monitoring survives an unplugged working drive"
 else
     bad "W22e missing working storage stopped primary disk monitoring"
+fi
+
+# ===========================================================================
+# W26 — ONLY RICHOS'S OWN FOLDERS ARE MEASURED (2026-10-29, the Apple Music prompt)
+# ===========================================================================
+# The 08:34:10 call, reproduced: a forced alert, `--check`, attribution runs, and the
+# home folder holds every folder macOS protects. The judge is this suite's own list
+# of protected paths, NOT lib/foreign_app_data.py: the rule under test does not mark
+# its own work. Every path below is one `du` was actually handed.
+w26_protected() {           # <file of du paths> -> the protected ones, one per line
+    python3 - "$1" "$FIX_HOME" "$FIX_TMP" <<'PY'
+import os, sys
+paths, home, tmp = sys.argv[1], sys.argv[2].rstrip("/"), sys.argv[3].rstrip("/")
+guarded = [os.path.join(home, d) for d in
+           ("Library", "Music", "Movies", "Pictures", "Desktop", "Documents", "Downloads")]
+for raw in open(paths).read().splitlines():
+    p = os.path.realpath(raw).rstrip("/")
+    lib = home + "/Library/"
+    own = p.startswith(lib) and len(p[len(lib):].split("/")) >= 2 \
+        and p[len(lib):].split("/")[1].startswith(("RichOS", "com.richos."))
+    if p == home or home.startswith(p + "/") or p == tmp:
+        print(raw)
+    elif any(p == g or p.startswith(g + "/") for g in guarded) and not own:
+        print(raw)
+PY
+}
+world tcc
+write_cfg 999999 999999 0 0            # force an alert, so attribution runs
+touch "$W_LA/com.richos.disk-watchdog.plist"
+W26_FROM="$(wc -l <"$DU_ALL" | tr -d ' ')"
+OUT="$(run_wd --check)"
+tail -n "+$((W26_FROM + 1))" "$DU_ALL" >"$W_DIR/du-handed.txt"
+W26_BAD="$(w26_protected "$W_DIR/du-handed.txt")"
+if [ -s "$W_DIR/du-handed.txt" ] && [ -z "$W26_BAD" ]; then
+    ok "W26  an alerting --check hands du no protected folder (~/Library/Caches, Music, Desktop...)"
+else
+    bad "W26  du was handed a folder macOS protects (the 08:34:10 call), or nothing at all"
+    printf '%s\n' "$W26_BAD" | sed 's/^/        /' | head -8
+fi
+if grep -qx "$W_DIR/measured" "$W_DIR/du-handed.txt" \
+   && grep -qx "$FIX_HOME/Library/Application Support/com.richos.app" "$W_DIR/du-handed.txt"; then
+    ok "W26a POSITIVE PROBE: RichOS's own folders (a storage root, the app's folder) are still measured"
+else
+    bad "W26a RichOS's own folders were not measured — the guard refuses too much"
+    sed 's/^/        /' "$W_DIR/du-handed.txt" | head -12
+fi
+# A MACHINE SETTING THAT POINTS INTO A PROTECTED FOLDER is refused and reported, never walked.
+mkdir -p "$FIX_HOME/Music/build-cache"
+W_MEASURED_ROOT="$FIX_HOME/Music/build-cache"
+W26_FROM="$(wc -l <"$DU_ALL" | tr -d ' ')"
+run_wd --check >/dev/null 2>&1
+tail -n "+$((W26_FROM + 1))" "$DU_ALL" >"$W_DIR/du-handed-b.txt"
+W26B_REFUSED="$(python3 -c 'import json,sys; print(" ".join(r.get("path","") for r in json.load(open(sys.argv[1])).get("consumers_refused") or []))' "$W_STATE" 2>/dev/null)"
+if ! grep -q "/Music" "$W_DIR/du-handed-b.txt" \
+   && printf '%s' "$W26B_REFUSED" | grep -q "Music/build-cache"; then
+    ok "W26b a storage setting inside ~/Music is refused and reported, never walked"
+else
+    bad "W26b a storage setting inside ~/Music was walked or not reported (refused: $W26B_REFUSED)"
+fi
+unset W_MEASURED_ROOT
+# A FIXTURE HOME DOES NOT UNPROTECT THE REAL ONE: the account's own home, from the
+# password database, stays refused whatever HOME says. A string comparison; nothing walks.
+if python3 - "$SCRIPT_DIR/lib" "$FIX_HOME" <<'PY'
+import os, pwd, sys
+sys.path.insert(0, sys.argv[1])
+import foreign_app_data as F
+real = pwd.getpwuid(os.getuid()).pw_dir
+for p in (os.path.join(real, "Library", "Caches"), os.path.join(real, "Music"), real):
+    assert F.entering(p, home=sys.argv[2]), p
+PY
+then
+    ok "W26c with HOME at a fixture, the real ~/Library/Caches, ~/Music and home stay refused"
+else
+    bad "W26c a fixture HOME made the real home folder walkable"
 fi
 
 echo ""
@@ -1813,6 +1935,7 @@ else
     bad "W24b recovery of all failed roots did not close $ID4 (rc=$RC assoc=$(wd_assoc))"
 fi
 
+# ===========================================================================
 # W25 — ONE FINDING, ONE ID, HOWEVER ITS COUNT MOVES (2026-10-28/29)
 # ===========================================================================
 # "/private/tmp/claude-501: N undecided claude-session entries (S), e.g. <path>: <why>"
@@ -1838,6 +1961,16 @@ if [ -n "$ID5" ] && [ "$(wd_assoc)" = "$ID5" ] && [ "$N5" = "1" ]; then
     ok "W25  an acknowledged finding whose count, size and example change keeps its one id (no new escalation)"
 else
     bad "W25  the same finding was raised again under a new id (first=$ID5 now=$(wd_assoc) raised=$N5)"
+fi
+
+# ===========================================================================
+# W27 — NOTHING IN THIS SUITE WALKED THE REAL MACHINE
+# ===========================================================================
+if [ -s "$DU_ALL" ] && [ ! -s "$DU_OUTSIDE" ]; then
+    ok "W27  every du this suite's runs asked for was inside its sandbox ($(wc -l <"$DU_ALL" | tr -d ' ') calls)"
+else
+    bad "W27  the program asked du for paths outside this suite's sandbox (refused by the recorder)"
+    sort -u "$DU_OUTSIDE" | sed 's/^/        /' | head -10
 fi
 
 echo "  $PASS passed, $FAIL failed"
