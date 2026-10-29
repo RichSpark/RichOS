@@ -1326,7 +1326,7 @@
     },
     "scripts/lib/worker-priority.test.py": {
       "source": "scripts/lib/worker-priority.test.py",
-      "sha256": "8f0361232137a495bb47b4e63161351d039dfabeed18a872999a969d965de1af",
+      "sha256": "61f329518428ae5417778c2943e7bfd731ea9f698bbcd76c24f380fb2bdb6075",
       "evidence": "Generated Git checkouts and private worker/slot records drive actual lease and supervision APIs. Machine-command cleanup cases substitute testdevices. The shell keeper runs only the worker lease helper and generated checker. No test sources config.",
       "keys": [],
       "edges": [
