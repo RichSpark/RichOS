@@ -11,6 +11,7 @@ python3 - <<'PY'
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,8 @@ with tempfile.TemporaryDirectory(prefix="claude-quota-proof-") as temporary:
     runs.mkdir()
     log = root / "requests"
     fixture = root / "claude-fixture"
-    fixture.write_text("#!" + sys.executable + "\n" + '''import json, os, sys
+    program = root / "claude-fixture.py"
+    program.write_text('''import json, os, sys
 from pathlib import Path
 if os.environ.get("QUOTA_PROOF_EOF") == "1":
     sys.exit(0)
@@ -60,6 +62,10 @@ for line in sys.stdin:
         "subtype": "success", "request_id": request["request_id"], "response": response
     }}), flush=True)
 ''')
+    # A launcher, not a "#!<python>" line: a shebang cannot carry a path with a space, and the
+    # app's own runtime python3 lives under "Application Support" (2026-10-29: every run from the
+    # app's shell failed here with "usage reader could not start: No such file or directory").
+    fixture.write_text("#!/bin/sh\nexec %s %s \"$@\"\n" % (shlex.quote(sys.executable), shlex.quote(str(program))))
     fixture.chmod(0o700)
     env = {**os.environ, "TMPDIR": str(runs), "QUOTA_PROOF_LOG": str(log)}
 
