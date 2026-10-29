@@ -272,8 +272,8 @@ expect_says   "A4  the refusal carries his words, not a pointer to them" \
               "killing the Mac with the power button" "$(payload Bash "" "$TESTVM_503")"
 expect_says   "A5  the refusal carries the REPLACEMENT, so it is not just a no" \
               "kill -TERM <pid>" "$(payload Bash "" "$TESTVM_503")"
-expect_says   "A6  ... including the safe caffeinate form" \
-              "caffeinate -is <cmd>" "$(payload Bash "" "$TESTVM_503")"
+expect_says   "A6  ... and a long job is told to run with no caffeinate at all" \
+              "with no caffeinate at all" "$(payload Bash "" "$TESTVM_503")"
 expect_says   "A7  the refusal gives the citation line" \
               "ceo-ruled-host-power:" "$(payload Bash "" "$TESTVM_503")"
 

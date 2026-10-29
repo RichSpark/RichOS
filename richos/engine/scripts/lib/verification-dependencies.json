@@ -170,7 +170,7 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#workspace-copy": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
+      "sha256": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
       "evidence": "Q copies the governed config into Q_ENT before q_env executes the workspace guards. The enclosing Q consumer must follow those executed guards. Later changes add registration inventory literals outside the Q copy region only (guard-record-owner-memory.sh, 2026-09-28). Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added.",
       "keys": [],
       "edges": [
@@ -1621,7 +1621,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+      "sha256": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
       "evidence": "Sources the resolved entity config for the guard switch. Root/adoption, seat-jurisdiction and unevaluated-payload helpers run; citation resolution uses ceo-ruled. Embedded Python classifies payload strings and never executes their commands.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -1668,7 +1668,7 @@
     },
     "scripts/hooks/guard-host-display-power.test.sh": {
       "source": "scripts/hooks/guard-host-display-power.test.sh",
-      "sha256": "15b13c02ee6837d31cd7fa184974abedc889477510f9e8f31f231dfe266d11de",
+      "sha256": "ae33d615d340f140660b357ce1b6de61480b33ed69ce6ad08dac080b38e2d9c1",
       "evidence": "Creates a private entity orchestration.config and a private ruling repository. Every hook invocation resolves that entity, its off-switch variant or an explicitly unadopted directory. Missing-resolver fixture refuses before config. Nested mutations recreate the same private settings; literal historical commands remain payload data.",
       "keys": [],
       "edges": [
@@ -2763,7 +2763,7 @@
     },
     "scripts/hooks/engine-status.test.sh": {
       "source": "scripts/hooks/engine-status.test.sh",
-      "sha256": "e13da6e707c55c2b370862b05dbf0fe3b4fc1bde40fc4f90af7ebe6aa1e9905c",
+      "sha256": "9b78fccc268ab85a1377ce20a7aac486b5a9c6c4b28a4ce27d8c3d8a77f09ec3",
       "evidence": "Copied engine settings are transport only: engine-status consumes adoption presence, not values. The entity has a literal config. Inline mutations edit registration/inventory or the rendered instruction. A missing-Python path enumerates command links but executes only the banner and its fixed libraries. The inventory adds the two failure-type hook basenames as data; those hooks are never executed by this suite. The resource-waits hook basename is another inventory datum, never executed. The guard-record-owner-memory.sh basename (2026-09-28) is another inventory datum, never executed. Renewed 2026-09-28 (stall watcher): one ACKNOWLEDGED_SCRIPTS name (session-start-stall.sh) and its comment; no case changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here.",
       "keys": [],
       "edges": [
@@ -5172,7 +5172,7 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#seated-fixture": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
+      "sha256": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
       "evidence": "Reviewed seated route and its shared R/AL/MT/MC/OF functions. The contract template keeps engine and entity in the same repository, including its linked-worktree case; the by-reference branch is unreachable. Parsed registration commands and sidecar inventories are data except the fixed canonical canary guards listed here. The test only replaces the write guard with literal inert shims or another copy of that same guard. q_hook has four fixed hook names; registry calls are integration/lifecycle. Q transports the fixture config. OF status and EP remain dependencies even when absent or undeclared in the generated fixture. The engine-status edge conservatively retains the literal execute floor outside this seated route. Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added.",
       "keys": [
         "PROTECTED_PATHS",
@@ -6719,7 +6719,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#benign-bash": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+      "sha256": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
       "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -6857,7 +6857,7 @@
     },
     "scripts/hooks/dispatch-pretooluse.manifest": {
       "source": "scripts/hooks/dispatch-pretooluse.manifest",
-      "sha256": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
+      "sha256": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
       "evidence": "Finite shipped module inventory read by the dispatcher test; all modules are bound by the suite edges below. Renewed 2026-09-28: the Write chain gained guard-record-owner-memory.sh, bound below and on every fixture that dispatches the Write chain. Renewed 2026-10-01: the Bash chain gained guard-shared-scratchpad.sh, bound below and on every fixture that dispatches the Bash chain. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the Bash chain also gained guard-unguarded-rm.sh, bound by its own suite edge.",
       "keys": [],
       "edges": []
@@ -6966,6 +6966,9 @@
         },
         {
           "to": "scripts/hooks/guard-unguarded-rm.sh"
+        },
+        {
+          "to": "scripts/hooks/guard-host-sleep.sh"
         },
         {
           "to": "scripts/hooks/guard-no-shell-c.sh"
@@ -9417,7 +9420,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+      "sha256": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
       "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -9580,6 +9583,9 @@
         },
         {
           "to": "scripts/hooks/guard-unguarded-rm.sh"
+        },
+        {
+          "to": "scripts/hooks/guard-host-sleep.sh"
         },
         {
           "to": "scripts/hooks/guard-no-shell-c.sh"
@@ -9891,7 +9897,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#fenced-commit": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+      "sha256": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
       "evidence": "The fixed fenced-commit dispatcher fixture supplies git -C <private repo> commit -m x. Reviewed prefix/classifier returns before push/merge-only, host-power or foreign-data paths. Settings read before classification remain bound.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -10019,6 +10025,9 @@
         },
         {
           "to": "scripts/hooks/guard-unguarded-rm.sh"
+        },
+        {
+          "to": "scripts/hooks/guard-host-sleep.sh"
         },
         {
           "to": "scripts/hooks/guard-no-shell-c.sh"
@@ -10558,6 +10567,10 @@
         },
         {
           "to": "scripts/hooks/guard-unguarded-rm.sh",
+          "fixture": true
+        },
+        {
+          "to": "scripts/hooks/guard-host-sleep.sh",
           "fixture": true
         },
         {
@@ -11233,6 +11246,9 @@
           "to": "scripts/hooks/guard-unguarded-rm.sh"
         },
         {
+          "to": "scripts/hooks/guard-host-sleep.sh"
+        },
+        {
           "to": "scripts/hooks/guard-no-shell-c.sh"
         }
       ]
@@ -11272,7 +11288,7 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#by-reference-fixtures": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
+      "sha256": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
       "evidence": "Entire by-reference branch and shared R/AL/MT/MC functions reviewed. Plugin/role/marketplace/registration rows are inspected as data. Actual execution is engine-status, the fixed BR9 worktree-isolation canary and the shared model/liveness canaries. Literal fixture shims introduce no additional reader. The shared whole-source contract retains the seated helper floor, but the branch returns before seated runtime checks. Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added.",
       "keys": [
         "PROTECTED_PATHS",
@@ -14739,7 +14755,7 @@
     },
     "scripts/hooks/guard-host-display-power.sh#find-payload": {
       "source": "scripts/hooks/guard-host-display-power.sh",
-      "sha256": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+      "sha256": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
       "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary.",
       "keys": [
         "HOST_DISPLAY_POWER_GUARD"
@@ -14874,6 +14890,9 @@
         },
         {
           "to": "scripts/hooks/guard-unguarded-rm.sh"
+        },
+        {
+          "to": "scripts/hooks/guard-host-sleep.sh"
         },
         {
           "to": "scripts/hooks/guard-no-shell-c.sh"
@@ -16750,6 +16769,48 @@
       "evidence": "Added 2026-10-29 (zach-opus-d459fd6091fe, P1-A): turns an app scope's `closed` record (richos-core ecs.rs GrantClosed) and binding into one sentence naming which work, who closed its grant and when. Standard-library imports only (time); reads nothing but the dict it is given. No configuration key, environment variable, file or subprocess.",
       "keys": [],
       "edges": []
+    },
+    "scripts/hooks/guard-host-sleep.sh": {
+      "source": "scripts/hooks/guard-host-sleep.sh",
+      "sha256": "f3ad52b475c31c5bec3f09f4de6c94af37a58e9517a1bc20759aee3f97848fce",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/unevaluated-notice.sh"
+        },
+        {
+          "to": "scripts/lib/host_sleep.py"
+        }
+      ],
+      "evidence": "Bash-chain module added 2026-10-29 (lane Z3). Sources the unevaluated notice; exits 0 before any interpreter unless the payload text names caffeinate, pmset, systemsetup, PowerManagement, IOPMAssertion or a keep-awake app. Otherwise passes the payload on stdin to the fixed host_sleep.py check and returns its refusal (exit 2) or a pass. Reads no orchestration value."
+    },
+    "scripts/lib/host_sleep.py": {
+      "source": "scripts/lib/host_sleep.py",
+      "sha256": "b820f8bec36ea1eb7bf5b219ee8276829cd9c031d11fd017f7250d2e33a9fc9c",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/unguarded_rm.py"
+        }
+      ],
+      "evidence": "Classifies the supplied command text with unguarded_rm.py's tokenizer (json, os, re, sys only): caffeinate in any form, pmset other than -g, systemsetup -set...sleep, defaults write of PowerManagement, open of a keep-awake app, inline interpreter code naming caffeinate or an IOKit assertion. Segments sent over ssh or to a testvm/ script pass. No orchestration key, no subprocess, no writes."
+    },
+    "scripts/hooks/guard-host-sleep.test.sh": {
+      "source": "scripts/hooks/guard-host-sleep.test.sh",
+      "sha256": "2e0b9477e97f67b28ffdd2f682703e396228abf235f6e09d8e2bb88bd0b0d00e",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/hooks/guard-host-sleep.sh"
+        },
+        {
+          "to": "scripts/hooks/guard-no-shell-c.sh"
+        },
+        {
+          "to": "scripts/hooks/dispatch-pretooluse.sh#find-payload"
+        }
+      ],
+      "evidence": "Feeds PreToolUse[Bash] payloads to the hook; no command under test is executed (nothing runs caffeinate or pmset). D1 sends non-commit Bash payloads through the real Bash dispatcher, whole chain and this rule named alone, on the same non-commit route as the find-payload fragment."
     }
   },
   "units": {
@@ -16936,7 +16997,8 @@
     "scripts/operator-fences-second-git.test.sh": "scripts/operator-fences-second-git.test.sh",
     "scripts/lib/merge-verification-pins.test.sh": "scripts/lib/merge-verification-pins.test.sh",
     "scripts/verification-pins.test.sh": "scripts/verification-pins.test.sh",
-    "scripts/lib/inflight-gaps.test.sh": "scripts/lib/inflight-gaps.test.sh"
+    "scripts/lib/inflight-gaps.test.sh": "scripts/lib/inflight-gaps.test.sh",
+    "scripts/hooks/guard-host-sleep.test.sh": "scripts/hooks/guard-host-sleep.test.sh"
   },
   "hook_readers": {
     "scripts/hooks/ceo-asks.test.sh": {
@@ -17218,7 +17280,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/claim-roles.mutation.sh": "73f0f9a1974cd17863539183827f795c5d343ff418b6acca7e98ca7242b811b2",
         "scripts/hooks/contract-integrity-layer-ep.sh": "07e3050ff624370ff1c25f7a763667de2249206ce99261333b91260645cf2fa2",
-        "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
+        "scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
         "scripts/hooks/contract-integrity.test.sh": "0f68abbe588960a3efa8d353a94cf2f90d9d29f1e20a37ae2bdedc64a07127f9",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/guard-agent-state-claims.sh": "b7a14acc4ff57cdec91821f6fd74b3c745deb18a0bd256ac7d60a3e7dd35dd7e",
@@ -17329,7 +17391,7 @@
         "scripts/scratch-reaper.test.sh": "63074109d11d69640585f056592b91d9a7f499b8c7f1d7d93b1a1398264c4056",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105",
         "scripts/unstarted-rows-lint.sh": "4b654eefa4fb775ba218fbee15595b415684c7a90e2168eedf864c07f142e58e",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
         "hooks/hooks.json": "32d45992ab2a5daaf0b0993c1636f26ddea6f8a2990b5f12bd531af7deb06ab9",
         "scripts/hooks/commit-ceo-inputs.sh": "9e4a0af9cd1ea89110261baacdae395dc40543061a4f17740467c5a492598962",
         "scripts/hooks/commit-ceo-inputs.py": "23341c30830399611efc4d9979df6bcdfc5b5d06f05c71d53da2755452aa6134",
@@ -17360,7 +17422,7 @@
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
         "scripts/hooks/guard-hook-registration-commits.sh": "1cd21067e498e70a5606f61546796c900e0175cf95f9be279abad455d0763356",
         "scripts/hook-registration-completeness.sh": "025ddda2c7449dbe3df8b5ef516adf4ad134582f96e9668bdab74dd53f585cfc",
-        "scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+        "scripts/hooks/guard-host-display-power.sh": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
         "scripts/hooks/guard-land-lease-commands.sh": "4e06aa09e29d22e8b2486e78b893e86c4ef428e492c5efe05bd9de3b99a7f956",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
         "scripts/hooks/guard-live-names.sh": "f836427a7eff9c4785a22318725e87826b6890bb20c44511cb6ae9b86fe88d30",
@@ -17515,7 +17577,7 @@
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7"
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
       },
       "evidence": "Full outer registration assertions resolve the row guard through real plugin and seated surfaces using registered-hooks. Inner mutation groups now omit registration and retain the same guard call surface. Probe and installer checks remain source-data scans in the outer suite, not dynamic inventory execution. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
@@ -17547,7 +17609,7 @@
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/publication-completeness.sh": "49a7df0809304e4e62de627d04fdcd1cb5840760df4b490057895a9ba2feaf99",
         "scripts/publication-completeness.py": "e559d239523982b91b0ddcbaed5e7ff5d79d059931fcead3bffea458c48c5045",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
         "scripts/lib/machine_paths.py": "c6c84b3946aa4f1f4be46d9f6176f9149b07a75c57163ad6f649aec5d396142a"
       },
       "evidence": "Only the fixed guard registration is resolved through both real surfaces. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
@@ -17599,7 +17661,7 @@
         "scripts/hooks/guard-named-persons-commands.sh": "c0f07f9202cfbfb09018b69a379c98b2e4420cf6dedb81c163b9a92a7c86404a",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/named-persons.sh": "0e219dffeb78a8d7d9593475d2c9efdba010597c08af1dd1b9846e411bd2a2be",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7"
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
       },
       "evidence": "Only these two registrations are resolved against plugin and seated surfaces; source oracle/bootstrap checks do not execute the probe or any other hook. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
@@ -17626,7 +17688,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
         "scripts/hooks/install.sh": "4969540a16589d916ec696f4135a7815cb5975a3d5e3535df84e8d915a33678c",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/dispatch-pretooluse.mutation.sh": "249f06e849fd11700957be15475e937ff4b222452bdc48c045ba7409ef5efd84",
@@ -17653,7 +17715,7 @@
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a",
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
         "scripts/hooks/guard-hook-registration-commits.sh": "1cd21067e498e70a5606f61546796c900e0175cf95f9be279abad455d0763356",
-        "scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+        "scripts/hooks/guard-host-display-power.sh": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
         "scripts/hooks/guard-inflight-notify.sh": "8661a00bea2a75b24d4519fd396489ae5d27e857b515a4f9aa625e9e39db968d",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/hooks/guard-interactive-prompt.sh": "bab78bf4726313eb3c258f308f9b821391e582de500781a856cbabb9213a9179",
@@ -17784,7 +17846,7 @@
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7"
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
       },
       "evidence": "Only this guard registration is resolved on plugin and seated surfaces. Probe, installer and declaration-resolver source assertions are text data; no other hook registration is executed. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
@@ -17817,7 +17879,7 @@
         "scripts/lib/publication-boundary.py": "4d9678e686a9470c7c44888ec677dd45b8f3944cd004c4868f52b592c5d3ee26",
         "scripts/hooks/guard-publication-commits.sh": "9652c70c9254d51826ff2e0b7fc494a4f11fd9593a3ab701fdba0df4e3d852b5",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
         "scripts/lib/publication-boundary-cache.test.py": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
         "scripts/lib/machine_settings.py": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e"
       },
@@ -17865,7 +17927,7 @@
         "scripts/hooks/release-shared-writes.sh": "da06d8fbe6b3438a0bb1c33cea6e6b4789aeb041f9aef246ec3eea24d0f4ed80",
         "scripts/hooks/guard-live-names.sh": "f836427a7eff9c4785a22318725e87826b6890bb20c44511cb6ae9b86fe88d30",
         "scripts/hooks/dispatch-pretooluse.sh": "7d0626f2db78d585521e5c25fdda0b5e9e722adc3817a379a6cdfd0ecafc2134",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
         "scripts/hooks/guard-interactive-prompt.sh": "bab78bf4726313eb3c258f308f9b821391e582de500781a856cbabb9213a9179",
         "scripts/lib/interactive-prompt.py": "fd95664d486aa1cde400a9c216e1d2fda2eeb5f21a202a8ccce2b2d1a7b11af8",
         "scripts/hooks/guard-bash-main-writes.sh": "86d87ebcda5e74dc0e0e728bbe5b3c1a198f13946714c326d8c0fe2ae7573884",
@@ -17888,7 +17950,7 @@
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
         "scripts/hooks/guard-hook-registration-commits.sh": "1cd21067e498e70a5606f61546796c900e0175cf95f9be279abad455d0763356",
         "scripts/hooks/guard-ci-red-lands.sh": "ec331c05c494b5ba3931084ae1f5c82e593695805204f59e0f475681ca2e1de4",
-        "scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+        "scripts/hooks/guard-host-display-power.sh": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
         "scripts/hooks/guard-public-record-repo.sh": "49a6e6c29e59a604b4d91e847e1e6d6060035f41f703bc95ffc8275778fec3d7",
         "scripts/hooks/guard-land-lease-commands.sh": "4e06aa09e29d22e8b2486e78b893e86c4ef428e492c5efe05bd9de3b99a7f956",
         "scripts/hooks/guard-foreign-app-data.sh": "4360ace16a692e3cf5c7dd100dc206c496f0960b4584d66f76ff240bda3ee42c",
@@ -18015,7 +18077,7 @@
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
         "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
-        "scripts/hooks/guard-host-display-power.sh": "8a8f30efb6734ac10c6fb3ae82f7c95d719499dd33b8c02a4e2e22490c94a4f9",
+        "scripts/hooks/guard-host-display-power.sh": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "scripts/hooks/guard-idle-land.sh": "c65ff6beb940c15ff20cf5a7e54e2f8453c4f6594d2ed2a8d32cda662dc3efae",
         "scripts/hooks/guard-idle-land.py": "ea764cf458a3e64f661ee9a789a79afe6c32c53ee94b218239b863c3522a8ec3",
@@ -18119,7 +18181,7 @@
         "scripts/hooks/guard-shared-writes.sh": "8c93495c7a2fd02ef98b701af51fff16859fa0e11295eb9706d639a62148784a",
         "scripts/hooks/guard-vendoring-commits.sh": "2f7d9f2973134d1d25bf9c8f8b83e803389d02c64e28bfe15acc6b2ce2c19f32",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d",
         "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
@@ -18143,7 +18205,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "4969540a16589d916ec696f4135a7815cb5975a3d5e3535df84e8d915a33678c",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
+        "scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -18374,7 +18436,7 @@
         "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
         "scripts/cold-open.sh": "8e6022432b0520e9027bcf328552baa555e8d27d4fc23f48ce2250e0c0f38c84",
         "scripts/ceo-todos-lint.sh": "cec21eee8a4d92b52d91d67df77ca120cc42fd33c686e3a3d79775c76ee91619",
-        "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7"
+        "scripts/hooks/dispatch-pretooluse.manifest": "cd2010ac0d6618b5e246e813d777f81a25b9d14f25b06b57483e66d99f2ec35d"
       },
       "evidence": "Outer registration assertions query only the named guard through hook_enforced_on_surface. Nested behavior fixtures do not execute a hook inventory or the probe. Every existing reviewed helper is bound. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
@@ -18426,7 +18488,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "4969540a16589d916ec696f4135a7815cb5975a3d5e3535df84e8d915a33678c",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
+        "scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -18484,7 +18546,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "4969540a16589d916ec696f4135a7815cb5975a3d5e3535df84e8d915a33678c",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
+        "scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -18542,7 +18604,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "4969540a16589d916ec696f4135a7815cb5975a3d5e3535df84e8d915a33678c",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "scripts/hooks/contract-integrity-probe.sh": "bd444456ca3aec69f0e2c3f293953776cdd7b55feb8057690ec23e42950b76f3",
+        "scripts/hooks/contract-integrity-probe.sh": "3dffa2d3cb9c9e112651a5c43b9a6be87aa8240d21aea9a71d5e4a8bead23ec8",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",

@@ -862,6 +862,10 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # an rm or rmdir (or find -delete) whose path starts with an unguarded variable, or names a critical
 # path, which is Claude Code's own circuit breaker: it asked the CEO a Yes/No even with bypass
 # permissions on. The refusal carries the exact rewrite. Suite: guard-unguarded-rm.test.sh.
+# guard-host-sleep.sh, ADDED 2026-10-29 — BLOCKING, a module of the Bash chain's manifest. It refuses
+# every caffeinate, every pmset write and the other sleep-assertion changes on the host (§65; an agent
+# held caffeinate -i -w for seven minutes on 2026-10-29), and says what to do instead. Suite:
+# guard-host-sleep.test.sh.
 # guard-no-shell-c.sh, ADDED 2026-10-09 — BLOCKING, a module of the Bash chain's manifest. It refuses
 # a command that wraps an inline script in bash -c, sh -c or zsh -c, which Claude Code cannot check and
 # so asks the user ("This shell -c script ... could not be checked"). The refusal names the rewrite:
@@ -925,6 +929,7 @@ guard-failure-type-answer.sh
 guard-foreign-app-data.sh
 guard-shared-scratchpad.sh
 guard-unguarded-rm.sh
+guard-host-sleep.sh
 guard-no-shell-c.sh
 operator-claim.sh
 guard-operator-claim.sh
