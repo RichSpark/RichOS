@@ -78,11 +78,19 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trap 'touch "$FOCUS_PROBE/trap-ran.$$"' EXIT
 printf '%s\n' "$*" > "$FOCUS_PROBE/seq-args.$$"
 red=0
-if [ "${RULE_A:-0}" = 1 ]; then echo "      ok   X1.1 rule A holds"; else echo "      FAIL  X1.1 rule A holds"; red=1; fi
 sleep "${FOCUS_TAIL:-15}" &
 echo $! > "$FOCUS_PROBE/sleeper.$$"
 # A grandchild in a session of its own whose parent waits on it: the shape of reserve.py.
-python3 -c 'import subprocess, sys; p = subprocess.Popen(["sleep", sys.argv[1]], start_new_session=True); open(sys.argv[2], "w").write(str(p.pid)); p.wait()' "${FOCUS_TAIL:-15}" "$FOCUS_PROBE/own-session.$$" &
+python3 -c 'import os, subprocess, sys; p = subprocess.Popen(["sleep", sys.argv[1]], start_new_session=True); open(sys.argv[2] + ".tmp", "w").write(str(p.pid)); os.replace(sys.argv[2] + ".tmp", sys.argv[2]); p.wait()' "${FOCUS_TAIL:-15}" "$FOCUS_PROBE/own-session.$$" &
+# The whole tree exists before the named line, so F1e tests the stop and not a start race:
+# stop-at-line stops as soon as the line is written (it no longer looks only every 0.1 s),
+# and on a busy Mac python can take longer than that to start (2026-10-29 proof run, F1e).
+looks=0
+while [ ! -s "$FOCUS_PROBE/own-session.$$" ] && [ "$looks" -lt 10 ]; do
+    python3 "$HERE/../../scripts/lib/quiet_wait.py" --until-exists "$FOCUS_PROBE/own-session.$$" --seconds 3
+    looks=$((looks + 1))
+done
+if [ "${RULE_A:-0}" = 1 ]; then echo "      ok   X1.1 rule A holds"; else echo "      FAIL  X1.1 rule A holds"; red=1; fi
 wait
 echo "      ok   X2.1 the tail"
 touch "$FOCUS_PROBE/tail-reached.$$"

@@ -2113,7 +2113,7 @@
     },
     "scripts/lib/mutation-focus.test.sh": {
       "source": "scripts/lib/mutation-focus.test.sh",
-      "sha256": "15211b95f6805f906c0b892d3bd20f1329a47a492ff701f0ccc1a3683d4346b0",
+      "sha256": "cb902e151718b1f7f0fb4c3c00e4aa672218248aa822cb0b3b5f0b02fe847090",
       "evidence": "Creates a tiny engine with literal PROTECTED_PATHS and feature variables, then executes generated sequential/named/parallel suites under the real mutation helper. Its only eval receives fixed RULE_A/RULE_B assertions. Copied helper directories are transport; discovered production scripts are not run. All worker and supervisor helpers are separately declared. Renewal 2026-10-28 (zero-CPU waits): the tiny engine also receives quiet_wait.py, which stop-at-line.py imports; transport only.",
       "keys": [],
       "edges": [
@@ -14216,7 +14216,7 @@
     },
     "scripts/lib/agent_hold.test.py": {
       "source": "scripts/lib/agent_hold.test.py",
-      "sha256": "dee27ea44974041ad5f8bd70a39961c022b6ab46e8bd01f267c2e2c0c076d804",
+      "sha256": "9716a1e51ee945a59cc23500a5f20bb84bde65390e8380957064c2a849816a6a",
       "evidence": "Fixed Python fixture imports only the bound helper and standard library. Subprocess work/registry programs are literal strings in this source; no config-provided command or discovered test executes. Preserve the real helper closure conservatively. Renewed 2026-10-04: HeldAgentMakesNoModelCalls reads hooks/hooks.json for the PreToolUse[Bash] hooks that act on a held agent's call (the rewriter) and runs them, then the command they leave. Renewed 2026-10-04 (holdleak3): the fixture worker takes an optional go file as a literal argument, a path in the test's own temporary directory that the test creates after its hold; no new configuration key, environment variable or outside file is read.",
       "keys": [],
       "edges": [
