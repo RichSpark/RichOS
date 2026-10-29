@@ -62,6 +62,10 @@ struct UsageLimitHold {
     wait: std::time::Duration,
     session: String,
     account: String,
+    /// The hold lasts at least to the refused account's own reset, so when it runs out that
+    /// account has come back. False when it ends at another account's sooner reset
+    /// ([`WorkHost::usage_limit_waited`]).
+    outlasts_refusal: bool,
 }
 
 #[derive(Default)]
@@ -244,7 +248,7 @@ impl WorkHost {
         // The Stop checks follow the session he is on now: a move just made is not his session
         // ending (`retry_stopped`).
         let session = backend.inner.lock().unwrap().lease_session.clone().unwrap_or(session);
-        let hold = UsageLimitHold {wait: std::time::Duration::ZERO, session, account};
+        let hold = UsageLimitHold {wait: std::time::Duration::ZERO, session, account, outlasts_refusal: true};
         if self.usage_limit_lifted(backend, &quota, &hold.account) {
             return Some(hold);
         }
@@ -256,11 +260,41 @@ impl WorkHost {
         let held = (!room).then(|| quota.view().held_until).flatten();
         let until = held.or(soonest).unwrap_or(now);
         let wait = std::time::Duration::from_millis(until.saturating_sub(now));
+        let outlasts_refusal = limited(&hold.account).is_none_or(|refused| until >= refused);
         if !room {
             // Shown as the overload wait is: RichOS's own retry sentence, never Stu's words.
             self.notifier.overload_retry(binding.thread_id(), &usage_limit_hold_sentence(wait));
         }
-        Some(UsageLimitHold {wait, ..hold})
+        Some(UsageLimitHold {wait, outlasts_refusal, ..hold})
+    }
+
+    /// **The hold before the one retry**, on the existing retry clock with the overload retry's
+    /// Stop checks; it ends early once the refusal is lifted ([`Self::usage_limit_lifted`]).
+    /// True when the retry is to go.
+    ///
+    /// A hold that runs out at ANOTHER account's sooner reset (`!outlasts_refusal`) does not
+    /// send the input yet (second review of 71fb5f113: the busy-session defect came back when
+    /// another account reset first). The switch is decided there as before any turn, and Stu
+    /// moves if nothing of his still runs on the refused account; while something does, the
+    /// hold goes on until he can leave it or it resets itself, never sending the input back to
+    /// the account that refused it. One more wait at most, to that account's own reset: still
+    /// one retry, never a loop.
+    fn usage_limit_waited(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
+        message: &crate::session_tools::Message, hold: &UsageLimitHold) -> bool {
+        let quota = self.quota.lock().unwrap().clone();
+        let lifted = || quota.as_deref().is_some_and(|quota| self.usage_limit_lifted(backend, quota, &hold.account));
+        let stopped = || self.retry_stopped(backend, binding, message, &hold.session);
+        let clock = self.retry_clock.lock().unwrap().clone();
+        let ran_out = clock.wait(hold.wait, &|| stopped() || lifted());
+        if stopped() { return false; }
+        if lifted() { return true; }
+        if !ran_out { return false; }
+        if hold.outlasts_refusal { return true; }
+        self.move_to_account_in_use(backend, binding, true);
+        if lifted() { return true; }
+        let Some(until) = quota.as_deref().and_then(|quota| Self::gone_until(quota, &hold.account)) else { return true };
+        let wait = std::time::Duration::from_millis(until.saturating_sub(crate::util::now_millis()));
+        clock.wait(wait, &|| stopped() || lifted()) || (!stopped() && lifted())
     }
 
     /// **Stu's input can go again without meeting the same refusal**: the refused `account` is
@@ -965,13 +999,7 @@ impl WorkHost {
         // clock's, with the overload retry's Stop checks, and it ends early once the refusal is
         // lifted. Whatever the second delivery comes to is final.
         let result = match result.as_ref().err().and_then(|error| self.usage_limit_hold(backend, binding, error)) {
-            Some(hold) => {
-                let quota = self.quota.lock().unwrap().clone();
-                let lifted = || quota.as_deref().is_some_and(|quota| self.usage_limit_lifted(backend, quota, &hold.account));
-                let stopped = || self.retry_stopped(backend, binding, message, &hold.session);
-                let clock = self.retry_clock.lock().unwrap().clone();
-                if clock.wait(hold.wait, &|| stopped() || lifted()) || (!stopped() && lifted()) { deliver() } else { result }
-            }
+            Some(hold) => if self.usage_limit_waited(backend, binding, message, &hold) { deliver() } else { result },
             None => result,
         };
         if result.is_err() {
@@ -3378,6 +3406,67 @@ mod tests {
         assert!(shown.len()==1 && shown[0].1.contains("no Claude account has room"),"{shown:?}");
         assert_eq!(stu.deliveries("Input under test"),["1","1"],
             "the one retry went to Home, used up by its readings: {:?}",stu.prompts.lock().unwrap());
+        assert!(stu.failures().is_empty());
+        stu.end();
+    }
+
+    /// A retry clock that does the next of `steps` at each wait it is asked for, and records the
+    /// wait. A step returns what the wait returns: true for a hold that ran out.
+    /// One step of a [`StepClock`]: given the hold's stop check, what the wait returns.
+    type Step = Box<dyn FnOnce(&dyn Fn() -> bool) -> bool + Send>;
+    struct StepClock { waits: Mutex<Vec<std::time::Duration>>, steps: Mutex<VecDeque<Step>> }
+    impl crate::upstream::RetryClock for StepClock {
+        fn wait(&self, wait: std::time::Duration, stop: &dyn Fn() -> bool) -> bool {
+            self.waits.lock().unwrap().push(wait);
+            let step = self.steps.lock().unwrap().pop_front().expect("a wait the test did not expect");
+            step(stop)
+        }
+    }
+
+    /// **Not sent back to the refused account when another account resets first** (second
+    /// review of 71fb5f113: the busy-session defect of e58c2c825 came back). While Stu's turn
+    /// runs on Account 1 with a command of his running, another conversation is refused on
+    /// Account 1 (Home put in use) and then on Home, whose limit resets in 30 minutes; Stu's own
+    /// refusal on Account 1 resets in an hour. The hold is to Home's reset. When it runs out,
+    /// Home is free but his command still holds his session on Account 1: the input is not sent
+    /// there, the hold goes on (to Account 1's own reset), and it goes on Home once the command
+    /// has ended.
+    #[test]
+    #[cfg(unix)]
+    fn a_stu_turn_held_to_another_accounts_sooner_reset_waits_for_his_command_and_goes_on_that_account() {
+        let h=harness(0);
+        let (quota,home)=account_one_and_home_with_room(&h);
+        let stu=stu_with_a_usage_limit(h,quota.clone(),1);
+        *stu.commands.lock().unwrap()=crate::lease_commands::CommandReading::Running(1);
+        let elsewhere=(quota.clone(),home.id.clone());
+        *stu.before_cut.lock().unwrap()=Some(Box::new(move || {
+            let (quota,home)=elsewhere;
+            let now=crate::util::now_millis();
+            assert_eq!(quota.limit_reached("1",Some(now+3_600_000)),crate::claude_accounts::AfterLimit::Continue);
+            assert_eq!(quota.limit_reached(&home,Some(now+1_800_000)),crate::claude_accounts::AfterLimit::NoRoom);
+        }));
+        let (home_back,commands)=((quota.clone(),home.id.clone()),stu.commands.clone());
+        let clock=Arc::new(StepClock {waits:Mutex::new(Vec::new()),steps:Mutex::new(VecDeque::from([
+            // Home's reset arrives: the hold runs out.
+            Box::new(move |_: &dyn Fn() -> bool| { home_back.0.accounts.reset_used(&home_back.1).unwrap(); true }) as Step,
+            // Held on, his command ends: the hold is over.
+            Box::new(move |stop: &dyn Fn() -> bool| {
+                assert!(!stop(),"the hold was over while his command still held him on the refused account");
+                *commands.lock().unwrap()=crate::lease_commands::CommandReading::Clear;
+                assert!(stop(),"his command's end did not end the hold");
+                false
+            }),
+        ]))});
+        stu.host.set_retry_clock(clock.clone());
+
+        stu.send("Input under test",1);
+
+        assert_eq!(stu.deliveries("Input under test"),["1".to_string(),home.id.clone()],
+            "the retry went back to the refused account: {:?}",stu.prompts.lock().unwrap());
+        let waits=clock.waits.lock().unwrap().clone();
+        let (half,hour,minute)=(std::time::Duration::from_secs(1800),std::time::Duration::from_secs(3600),std::time::Duration::from_secs(60));
+        assert!(waits.len()==2 && waits[0]<=half && waits[0]>half-minute && waits[1]<=hour && waits[1]>hour-2*minute,
+            "not a hold to Home's reset and then one to Account 1's own: {waits:?}");
         assert!(stu.failures().is_empty());
         stu.end();
     }
