@@ -1962,6 +1962,33 @@ if [ -n "$ID5" ] && [ "$(wd_assoc)" = "$ID5" ] && [ "$N5" = "1" ]; then
 else
     bad "W25  the same finding was raised again under a new id (first=$ID5 now=$(wd_assoc) raised=$N5)"
 fi
+# W25b: the numbers dropped are measurements, never the place. Two roots that differ only
+# in a digit (/Volumes/SSD1/cache, /Volumes/SSD2/cache) are two findings; one root whose
+# count and size move is still one.
+if W25B="$(python3 - "$SCRIPT_DIR/lib" <<'PYKEY' 2>&1
+import importlib.util, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+spec = importlib.util.spec_from_file_location('watchdog', Path(sys.argv[1]) / 'disk-watchdog.py')
+w = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(w)
+def p(root, n, size):
+    return "%s: %d undecided claude-session entries (%s), e.g. %s/x: why" % (root, n, size, root)
+k = w.finding_key
+checks = {
+    "different_roots_same_key": k([p("/Volumes/SSD1/cache", 2, "320 B")]) == k([p("/Volumes/SSD2/cache", 2, "320 B")]),
+    "root_with_space_digit_same_key": k([p("/Volumes/SSD 1/cache", 2, "1 KB")]) == k([p("/Volumes/SSD 2/cache", 2, "1 KB")]),
+    "count_move_new_key": k([p("/private/tmp/claude-501", 2, "320 B")]) != k([p("/private/tmp/claude-501", 15, "37.8 MB")]),
+    "path_in_cause_merged": k(["the scheduled cleanup job is not installed (/a/job1.plist)"]) == k(["the scheduled cleanup job is not installed (/a/job2.plist)"]),
+}
+print(checks)
+sys.exit(1 if any(checks.values()) else 0)
+PYKEY
+)"; then
+    ok "W25b a root is kept verbatim: roots differing only in a digit are two findings, a moved count is one"
+else
+    bad "W25b the finding key merged distinct roots or split one finding: $W25B"
+fi
 
 # ===========================================================================
 # W27 — NOTHING IN THIS SUITE WALKED THE REAL MACHINE

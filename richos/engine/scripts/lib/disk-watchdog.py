@@ -505,9 +505,13 @@ def _escalation_status(esc_id, now):
     return "closed" if acks else "unknown"
 
 
-FINDING_KEY_VERSION = 2   # 1 (unwritten): sha256 of the exact problem texts
+FINDING_KEY_VERSION = 3   # 1 (unwritten): sha256 of the exact problem texts;
+#                           2: numbers normalized everywhere, the root's own included
 _EXAMPLE_TAIL = re.compile(r", e\.g\. .*$", re.S)
-_MEASURE = re.compile(r"\d+(?:\.\d+)?(?:\s?[KMGTP]?i?B\b)?")
+_SCOPE = re.compile(r"^(/[^\n]*?): ")
+# A measurement is a number standing on its own: never a digit inside a word or a path
+# component (/Volumes/SSD1, claude-501, 2026/10), which names a place, not an amount.
+_MEASURE = re.compile(r"(?<![\w/.\-])\d+(?:\.\d+)?(?:\s?[KMGTP]?i?B\b)?(?![\w/\-])")
 _ENTRY_WORD = re.compile(r"\bentr(?:y|ies)\b")
 
 
@@ -522,12 +526,15 @@ def finding_key(problems):
     one ages out. The root and the kind of failure do not change, and they are what an
     acknowledgement decides. So the key drops the example and every measured number: a
     changed count is the same finding under the same id; another root or another kind
-    of failure is a new one (W23h2)."""
+    of failure is a new one (W23h2). The root itself is kept verbatim: /Volumes/SSD1/cache
+    and /Volumes/SSD2/cache are two findings, not one (W25b)."""
     norm = set()
     for p in problems:
         text = _EXAMPLE_TAIL.sub("", str(p))
-        text = _ENTRY_WORD.sub("entries", _MEASURE.sub("#", text))
-        norm.add(" ".join(text.split()))
+        m = _SCOPE.match(text)
+        scope, rest = (m.group(1), text[m.end():]) if m else ("", text)
+        rest = _ENTRY_WORD.sub("entries", _MEASURE.sub("#", rest))
+        norm.add(scope + "\0" + " ".join(rest.split()))
     return hashlib.sha256(json.dumps(sorted(norm)).encode("utf-8")).hexdigest()
 
 

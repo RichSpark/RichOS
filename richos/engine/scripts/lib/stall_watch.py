@@ -411,14 +411,17 @@ class Registry(object):
             return name, "the name its slot record carries"
         return "", ""
 
-    def owning_session(self, pid=None, cwd="", waiter="", worktree=""):
+    def owning_session(self, pid=None, cwd="", waiter="", worktree="", session=""):
         """The session (the chat, in the app) whose work a waiting process or a ledger wait
         is: '' when nothing says, OTHER_CHAT for an agent this registry does not hold.
 
         Read in order: the session tag every subagent Bash call carries (agent_hold.py), the
         owner tag through this registry to its record's session, the lead's own session in
         its environment, then the registered workspace its working directory (or the
-        ledger row's worktree) is in, then a waiter name that is exactly one record's."""
+        ledger row's worktree) is in, then the session the ledger row itself was raised in
+        (`session`: another chat's registry holds neither its workspace nor its name, so
+        without it an unrelated chat took the wait as unattributed and was woken by it),
+        then a waiter name that is exactly one record's."""
         tags = self.src.tags(pid) if pid else {}
         if tags.get(SESSION_TAG):
             return tags[SESSION_TAG]
@@ -435,6 +438,8 @@ class Registry(object):
                 for path, rec in self.paths:
                     if real == path or real.startswith(path + os.sep):
                         return str(rec.get("session_id") or "")
+        if session:
+            return str(session)
         name = self.name_for_waiter(waiter)
         named = [r for r in self.recs if name and str(r.get("name") or "") == name]
         if len(named) == 1:
@@ -512,10 +517,10 @@ def look(src, now, session_id, th=None, due=True):
     problems = [reg.problem] if reg.problem else []
     stalls = []
 
-    def ours(pid=None, cwd="", waiter="", worktree=""):
+    def ours(pid=None, cwd="", waiter="", worktree="", session=""):
         """A wait is told only to the session (in the app, the chat) whose work it is
         (Registry.owning_session); one whose owner nothing names is told, never lost."""
-        owner = reg.owning_session(pid, cwd, waiter, worktree)
+        owner = reg.owning_session(pid, cwd, waiter, worktree, session)
         return not owner or not session_id or owner == session_id
     deadline = time.time() + resource_waits.BUDGET_SECONDS
     table = None
@@ -566,7 +571,7 @@ def look(src, now, session_id, th=None, due=True):
     for w in others:
         age = now - w["since"]
         if age < min(th["self"], th["wait"]) or not ours(w.get("pid"), "", w.get("waiter") or "",
-                                                         w.get("worktree") or ""):
+                                                         w.get("worktree") or "", w.get("session") or ""):
             continue
         if w["resource"] == resource_waits.VM and w["source"] == "record":
             if vm_slots is None:
@@ -901,10 +906,12 @@ def _silent(src, reg, now, session_id, th, waits):
             commit_line = "last commit %s %s on %s" % (hhmm(best[0][0]), best[0][1], best[1])
         path = _transcript(src, rec)
         tline = "no transcript found for it"
+        transcript_read = False
         if path:
             try:
                 mt = os.path.getmtime(path)
                 marks.append(mt)
+                transcript_read = True
                 tline = "last transcript write %s (%s)" % (hhmm(mt), path)
             except OSError:
                 pass
@@ -919,12 +926,15 @@ def _silent(src, reg, now, session_id, th, waits):
         running = _running(src, rec, now)
         lines += running
         deferred = _deferred_end(src, rec, running, marks)
-        if running and not deferred:
-            # A worker whose turn has not ended and whose own command still runs is working:
-            # a foreground call returns within 600 s and a background one is waited on in
-            # steps of at most 270 s, so its silence here means its transcript was not read,
-            # never that it stopped (2026-10-29 08:28Z: three live workers, one of them in a
-            # 4-minute `git commit`, called SILENT with "no transcript found").
+        if running and not deferred and not transcript_read:
+            # With NO transcript to read, a worker whose turn has not ended and whose own
+            # command still runs is taken as working (2026-10-29 08:28Z: three live workers,
+            # one of them in a 4-minute `git commit`, called SILENT with "no transcript
+            # found"). A transcript that WAS read is the stronger evidence: a foreground call
+            # returns within 600 s and a background one is waited on in steps of at most
+            # 270 s, so a working agent writes it well inside SILENT_MINUTES, and one
+            # unchanged that long is silent however long a command it left behind (a dev
+            # server, a watcher) keeps running.
             continue
         if deferred:
             # 2026-10-11, echo-opus-walk49fix1: its turn ended with its handover, but its

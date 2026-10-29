@@ -28,6 +28,7 @@
 #   X06  a holder that is the waiter's own ancestor is a DEADLOCK
 #   R01  two chats (registry partitions and lead sessions), one stalled agent of the
 #        first: its SELF-WAIT is told in that chat and nothing at all in the other
+#   R02  a ledger wait raised in chat A (its row's session_id): told in A, never in B
 #   W01  a test VM wait and a device wait over 10 min: one block, two stalls,
 #        who holds each ("no holder recorded" / "not recorded by the waiter")
 #   H01  a teammate the lead holds (agent_hold.py): its wait is no stall
@@ -42,6 +43,9 @@
 #        median, slowest command, since); 10-min run-tests.sh steps are exempt; clears once
 #   T11  an app worker whose transcript is under the account folder its session started
 #        in (not the watcher's CLAUDE_CONFIG_DIR), written a minute ago, is not SILENT
+#   T12  a worker whose transcript was read and is 25 min old is SILENT though a command
+#        it left running (a dev server) still runs; one with no transcript to read and
+#        its own command running is not
 #   T05  a silent teammate whose end the registry deferred because its own endless
 #        loop still runs: the notice says so and names the one command that ends
 #        its own commands (agent_hold.py end), not a pid to look up
@@ -566,6 +570,29 @@ check "R01  two chats, one stalled agent: only the chat whose work it is is told
         && ! has "$OUT_B" "a0000000000fixca" && ! has "$OUT_B" "STALL-WATCH"; echo $?)" \
     "chat A=$OUT_A | chat B=$OUT_B"
 stop_slots
+# R02: a wait read from the escalation LEDGER carries the session that raised it. Chat B's
+# registry holds neither the worktree nor the name, which once made the wait unattributed,
+# so chat B was woken by chat A's teammate (second review of fe81a88236c6).
+new_registry r2a; new_state r2a
+add_agent echo-opus-wait a0000000000fixr2 "$SID" 3600 60 60
+R2_LEDGER="$SB/esc-r2.jsonl"
+python3 - "$R2_LEDGER" "$SB/repos/echo-opus-wait" "$SID" <<'PY'
+import json, os, sys, time
+t = time.gmtime(int(time.time()) - 1500)
+row = {"event": "Escalation", "id": "esc-fixture-r2", "raised": time.strftime("%Y-%m-%dT%H:%M:%SZ", t),
+       "teammate": "echo-opus-wait", "worktree": os.path.realpath(sys.argv[2]), "branch": "cc/echo-opus-wait",
+       "repo": "fixture", "head": "", "state": "proceeding", "for": "lead",
+       "title": "Waiting for the test VM", "question": "the test VM is held; when is it free",
+       "tried": "", "meanwhile": "", "record": "", "session_id": sys.argv[3], "actor": "fixture"}
+open(sys.argv[1], "w").write(json.dumps(row) + "\n")
+PY
+R2NOW="$(date +%s)"
+OUT_A="$(RICHOS_ESCALATION_LEDGER="$R2_LEDGER" STALL_WATCH_NOW=$R2NOW bash "$SW" --tick 2>&1)"
+OUT_B="$(RICHOS_ESCALATION_LEDGER="$R2_LEDGER" RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" \
+         STALL_WATCH_STATE_DIR="$SB/state-r2b" STALL_WATCH_NOW=$R2NOW bash "$SW" --tick 2>&1)"
+check "R02  a ledger wait raised in chat A is told in chat A and never in chat B" \
+    "$( has "$OUT_A" "[WAIT] echo-opus-wait" && ! has "$OUT_B" "[WAIT] echo-opus-wait"; echo $?)" \
+    "chat A=$OUT_A | chat B=$OUT_B"
 
 # --- W: other recorded waits ---------------------------------------------------
 new_registry w; new_state w
@@ -843,6 +870,23 @@ check "T10  another agent's tagged process inside the tree is left running; the 
     "seen=$FOREIGN_SEEN out=$FOUT loop_gone=$FGONE other_alive=$OTHER_ALIVE shell_alive=$FSHELL_ALIVE"
 alive "$FLOOP" && kill "$FLOOP" 2>/dev/null
 kill "$OTHER" "$FSHELL" 2>/dev/null; rm -f "$SB/t10-other.pid"
+
+# --- T12: a command left running never hides a transcript that proves silence ----
+# Second review of fe81a88236c6: a worker that left a development server running and then
+# stalled was never SILENT, though its transcript was found and unchanged for an hour. A
+# command still running excuses only a worker whose transcript could not be read (T11's
+# 2026-10-29 08:28Z incident); the control below keeps that.
+new_registry t12; new_state t12
+add_agent uniform-opus-s1 a0000000000fixs1 "$SID" 3600 3000 1500
+add_agent victor-opus-s2 a0000000000fixs2 "$SID" 3600 3000 1500
+rm -f "$RICHOS_PROJECTS_DIR/fixture-project/$SID/subagents/agent-a0000000000fixs2.jsonl"
+start_own_call a0000000000fixs1 toolu_server1 'while :; do sleep 1; done'; S1CALL="$OWNPID"
+start_own_call a0000000000fixs2 toolu_build2 'while :; do sleep 1; done'; S2CALL="$OWNPID"
+tick 0
+check "T12  a transcript unchanged 25 min is SILENT despite a command it left running; no transcript plus its own running command is not" \
+    "$( has "$OUT" "[SILENT] uniform-opus-s1" && has "$OUT" "last transcript write" \
+        && ! has "$OUT" "victor-opus-s2"; echo $?)" "out=$OUT"
+kill "$S1CALL" "$S2CALL" 2>/dev/null
 
 # --- L: slow steps (2026-10-04, isaac-opus-logo1: every step cost ~4.5 minutes) ----
 write_steps() { # <agent-id> <command> <result-text> <step-seconds> <count>: steps ending now-60, spaced 5 min

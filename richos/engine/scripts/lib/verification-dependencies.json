@@ -4241,7 +4241,7 @@
     },
     "scripts/lib/disk-watchdog.py#alert": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "63791ba019c28ccece6a4926ae84f4cfd0e28bb11536320bf01bc6af959150e7",
+      "sha256": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
       "evidence": "Reviewed alert path through main and env/env_num/expand/state_base/read_volume/measurable/read_state/human/_age_of/_short_age. Reads live statvfs, saved JSON states, plist presence and the listed literal config variables. Alert does not invoke scheduled device collection, status-only reaper, du/consumer walks, notifications or writes. Fixed foreign_app_data import only classifies candidate paths. Renewed 2026-10-23 (cleanup PRD R4/R5): cleanup health is read from the same SCRATCH_REAPER_STATE file and the reaper's plist presence under the same LaunchAgents directory; no new config key. Renewed 2026-10-25: cleanup_health also reads the launchd-pending-<label>.gave-up and .pid files in the state directory; for a recorded waiter pid it calls operator_fences.proc (libproc) and operator_fences.proc_argv (ps -o command=). No configuration key.",
       "keys": [
         "APP_INSTANCE_FAILURES_STATE",
@@ -4592,7 +4592,7 @@
     },
     "scripts/lib/disk-watchdog.py#check": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "63791ba019c28ccece6a4926ae84f4cfd0e28bb11536320bf01bc6af959150e7",
+      "sha256": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
       "evidence": "Reviewed check entry, complete main and all reached helpers. Adds scheduled device collection (run as the testdevices.py collect --apply CLI in a child process killed at a hard limit; RICHOS_DEVICE_COLLECT_SECONDS is a test-only environment override, not a config key) and condition-triggered du measurements, notification and state/log writes to the alert readers. Status-only run_reaper is unreachable. Fixed device collector reads registry ownership through the existing workspace-barrier closure; candidate paths and notification text are data. Renewed 2026-10-23 (cleanup PRD R5): the scheduled check (DISK_WATCHDOG_SCHEDULED=1, set by disk-watchdog.sh from launchd's XPC_SERVICE_NAME) reads the escalation ledger through escalations.py and raises or acknowledges ONE cleanup escalation through escalate.sh, keeping its id in this job's own state file. Renewed 2026-10-23 (review rv-20261023T222724Z-e6524552-e592 #2): the cleanup action keeps the union of every failed root across ticks and into a replacement; no new input. Renewed 2026-10-29: attribution measures only RichOS's own folders (effective storage roots, <TMPDIR>/SCRATCH_ROOT_NAME, ~/.claude, ~/.richos-nightly, the app's and the engine's Application Support folders, SCRATCH_CLAUDE_ROOTS), all through one du_kb that refuses any path foreign_app_data.entering refuses. SCRATCH_ROOT_NAME and SCRATCH_CLAUDE_ROOTS were already read by richos_garbage_bytes; no new config key.",
       "keys": [
         "SCRATCH_ROOT_NAME",
@@ -8206,7 +8206,7 @@
     },
     "scripts/lib/disk-watchdog.py#suite-fixtures": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "63791ba019c28ccece6a4926ae84f4cfd0e28bb11536320bf01bc6af959150e7",
+      "sha256": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
       "evidence": "Adds json/status rendering and reviewed run_reaper to the existing check closure. Every status fixture sets SCRATCH_REAPER_CMD to a literal JSON stub or absent path, so no production reaper executes. Scheduled device collection and fixed foreign-data classifier remain bound. Real disk capacity/free space and time are runtime inputs.",
       "keys": [
         "SCRATCH_REAPER_CMD"
@@ -8239,7 +8239,7 @@
     },
     "scripts/disk-watchdog.test.sh": {
       "source": "scripts/disk-watchdog.test.sh",
-      "sha256": "4916e1649590ce1cf208476b139e779d73290deb8edea774ffce81b0dddd5df5",
+      "sha256": "9005bb8a72893eac65e21f32ccebf9b0cfb8fb0690e5a12d1af69bf5bfd71738",
       "evidence": "Private settings control measured directories. W22 exercises foreign-app refusal through real component settings. W22d calls the production candidate function with defaults and a resolved empty snapshot. The retired consumer/volume lists are not read. Existing threshold config remains an input through the wrapper.",
       "keys": [],
       "edges": [
@@ -12532,7 +12532,7 @@
     },
     "scripts/lib/resource_waits.py": {
       "source": "scripts/lib/resource_waits.py",
-      "sha256": "14fb453a8bb49fd9f8d81924d9175805ad48d05e1f5473a4b9a2cc5ec9d5473f",
+      "sha256": "4a23810c610d2fc90659d2144d637504e2ec08522cab95b427f427ff774b9d36",
       "evidence": "Stdlib reads private wait/slot/escalation JSON and native ps output. Only engine import is sibling escalations. Resource command strings are classified as data; wait writer loops over supplied file existence, never invokes a VM or build. Renewed 2026-10-11 (zach-opus-heldwait1, a held agent is not waiting in line): collect() also imports its sibling agent_hold.py and calls only records() and history(), which read the hold records (held/*.json) and hold-history.jsonl in the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold); read only, no signal, no execution and no config value. Narrowed 2026-10-11 (zach-opus-heldwait2): the edge names agent_hold.py#release, the reviewed node for records() and history(), not agent_hold.py's whole program, whose watchdog reaches the workspace recipient CLI that collect() never calls.",
       "keys": [],
       "edges": [
@@ -14129,7 +14129,7 @@
     },
     "scripts/lib/stall_watch.py#review-watch-helpers": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "23f0d151caf214f5b134a95df34b7a8c1aa108e99710adfde0df1f3e588ae6d0",
+      "sha256": "d56884002eebadb8343513641ffe7b5f579586c2a3dbb7b0fee0a4b9e067c41e",
       "evidence": "Added 2026-10-09 (second review slice 4) for review_watch.py, which imports this module and uses its helpers; the --notice path stays bound by scripts/lib/stall_watch.py#notice. Module load: standard-library imports, the sibling imports resource_waits and escalations (neither reads configuration at import), constants. Helpers review_watch.py calls: hhmm, _env_float, _read_json/_write_json (JSON state files it names), _load (a module by fixed path, None when absent), Sources(engine_root) (loads mega-lander/workspaces.py by fixed path, loads richos/app/scripts/lib/proof_slots.py beside the engine without calling it, imports sibling agent_hold.py without calling it; reserve.py is loaded only by cpu_busy, which review_watch never calls), thresholds (environment STALL_WATCH_SILENT_MINUTES, STALL_WATCH_SELF_WAIT_MINUTES, STALL_WATCH_REPEAT_MINUTES and, through resource_waits.wait_minutes, RICHOS_RESOURCE_WAIT_MINUTES), _git_last_commit (git log -1 in the workspace), _transcript (workspaces.platform_agent_transcript), _try_lock/lock_held (flock on a named file), and in the monitor loop only session_alive_check (ps) and _nap. No orchestration.config read and no engine execution. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names).",
       "keys": [],
       "edges": [
@@ -15875,7 +15875,7 @@
     },
     "scripts/lib/stall_watch.py#notice": {
       "source": "scripts/lib/stall_watch.py",
-      "sha256": "23f0d151caf214f5b134a95df34b7a8c1aa108e99710adfde0df1f3e588ae6d0",
+      "sha256": "d56884002eebadb8343513641ffe7b5f579586c2a3dbb7b0fee0a4b9e067c41e",
       "evidence": "--notice parses arguments and prints fixed text; its numbers are this file's constants or the STALL_WATCH_* and RICHOS_RESOURCE_WAIT_MINUTES environment overrides. It returns before the registry, the slot line or the CPU sampler is loaded. The module imports resource_waits.py, which reads no configuration at import. Renewed 2026-10-01: the module also imports escalations.py (the ESCALATION watch), which reads no configuration at import; --notice prints fixed text about it and reads neither the ledger nor any transcript. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names).",
       "keys": [],
       "edges": [
@@ -17083,7 +17083,7 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "63791ba019c28ccece6a4926ae84f4cfd0e28bb11536320bf01bc6af959150e7",
+        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
         "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
@@ -17160,7 +17160,7 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "63791ba019c28ccece6a4926ae84f4cfd0e28bb11536320bf01bc6af959150e7",
+        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
         "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
@@ -17385,7 +17385,7 @@
         "scripts/hooks/notice-claim-capability.sh": "f918e14199d059e57f306ee1202fe0edb3ab27711deb0003358ad36bcae3a1c5",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "63791ba019c28ccece6a4926ae84f4cfd0e28bb11536320bf01bc6af959150e7",
+        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
         "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
@@ -17693,7 +17693,7 @@
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "63791ba019c28ccece6a4926ae84f4cfd0e28bb11536320bf01bc6af959150e7",
+        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
         "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
@@ -18051,7 +18051,7 @@
         "scripts/hooks/notice-ceo-unasked.sh": "7cbc69c528ae9ed250da1758ca0e0f3708ec7e8e97a57e6ca1078edf436d5cfa",
         "scripts/hooks/notice-disk-alert.sh": "f3f6d01c47c81d8b789e94d2b1318a2bd1a88eb73ad875b2efb19f82e60d2e15",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "63791ba019c28ccece6a4926ae84f4cfd0e28bb11536320bf01bc6af959150e7",
+        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
         "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "d22cb1eb33ba6bd7d6c6fb9fc10a714d1e55c198a21a3e75efd7ae5ea4da8b94",
         "scripts/hooks/notice-hook-staleness.sh": "360fd629986741403adc2337a84ae2dd2645b517f275f7cbb3af331cae48460b",
