@@ -11,6 +11,7 @@ python3 - <<'PY'
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,12 @@ with tempfile.TemporaryDirectory(prefix="claude-quota-proof-") as temporary:
     runs.mkdir()
     log = root / "requests"
     fixture = root / "claude-fixture"
-    fixture.write_text("#!" + sys.executable + "\n" + '''import json, os, sys
+    # A shell wrapper, never `#!<python>`: the app's own Python lives under "Application Support",
+    # and a shebang path with a space cannot be executed (ENOENT, "usage reader could not start").
+    fixture_code = root / "claude-fixture.py"
+    fixture.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                       + shlex.quote(str(fixture_code)) + ' "$@"\n')
+    fixture_code.write_text('''import json, os, sys
 from pathlib import Path
 if os.environ.get("QUOTA_PROOF_EOF") == "1":
     sys.exit(0)

@@ -64,6 +64,47 @@ fn relative(name: &str) -> bool {
         .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
+/// **Is this a bytecode cache the delivered Python writes for itself?** `python/…/__pycache__/
+/// <module>.<tag>.pyc`, or the `<that>.<digits>` temporary importlib writes it through.
+///
+/// # WHY THESE ARE NOT PART OF THE DELIVERY — the CEO's startup sheet, 2026-10-29
+///
+/// Until this rule, one Python run of the delivered interpreter without the launcher's `-B` and
+/// `PYTHONDONTWRITEBYTECODE` (any `subprocess.run([sys.executable, …], env={…})` that rebuilds
+/// its environment) made a READY engine unready for good: it wrote `__pycache__/*.pyc` beside
+/// the standard library and recompiled the three delivered `encodings` caches that relocation
+/// invalidates (`build-runtimes.py`, `prepare_runtime_launchers`). The next launch's
+/// [`verify_engine`] then said *"runtime delivery has missing or unexpected files"*,
+/// `setup::find_engine` recorded the engine as *"there but cannot be used"*, and the window
+/// asked him to set up an engine that was installed, pinned and working. MEASURED on his Mac:
+/// `engine.previous.8f630c73…` (installed 06:24:20 UTC from the pinned `9ddce07265cd`) held 36
+/// unexpected caches written at 07:07:09/08:30:52 and 3 recompiled ones; `engine.previous.
+/// 8d0dd53e…` (installed 11:43:50 from the same asset) held 47 written at 18:19:24 and the same
+/// 3. Each was moved aside by a reinstall at the next start (11:43:50, 18:33:38) and replaced by
+/// the same asset. With these caches forgiven, both directories verify clean.
+///
+/// What forgiving them gives up, said plainly: a hand-forged cache in `__pycache__` is no longer
+/// caught here. This check is a delivery check, not a defense against a writer who already has
+/// his files: anyone able to write `runtime/` can equally write the engine's own Python
+/// (`scripts/`, `ecs/`, …), which [`verify_engine`] has never hashed. The `.py` sources a cache
+/// is compiled from are still hashed. Everything else stays exactly as strict: a cache must be a
+/// REGULAR file directly inside a `__pycache__` directory under `python/`, so a symlinked cache,
+/// a `.py` dropped in `__pycache__`, a stray `.pyc` anywhere else, or a changed source is refused.
+fn interpreter_bytecode_cache(name: &str) -> bool {
+    let path = Path::new(name);
+    let parent = path.parent().and_then(Path::file_name);
+    let Some(file) = path.file_name().and_then(|f| f.to_str()) else { return false };
+    if !name.starts_with("python/") || parent != Some(std::ffi::OsStr::new("__pycache__")) {
+        return false;
+    }
+    match file.rsplit_once(".pyc") {
+        Some((stem, "")) => !stem.is_empty(),
+        Some((stem, temporary)) => !stem.is_empty() && temporary.strip_prefix('.')
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
+}
+
 fn inventory(root: &Path, directory: &Path, paths: &mut BTreeSet<String>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(directory)? {
         let entry = entry?;
@@ -71,7 +112,10 @@ fn inventory(root: &Path, directory: &Path, paths: &mut BTreeSet<String>) -> std
         let path = entry.path();
         if kind.is_dir() { inventory(root, &path, paths)?; }
         else if kind.is_file() || kind.is_symlink() {
-            paths.insert(path.strip_prefix(root).unwrap().to_string_lossy().to_string());
+            let name = path.strip_prefix(root).unwrap().to_string_lossy().to_string();
+            // A regular file only: a symlinked "cache" is recorded, and refused as unexpected.
+            if kind.is_file() && interpreter_bytecode_cache(&name) { continue; }
+            paths.insert(name);
         } else { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported runtime file type")); }
     }
     Ok(())
@@ -97,6 +141,9 @@ impl EngineRuntime {
             if !relative(name) || wanted.len() != 64 || !wanted.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(RuntimeError("invalid runtime inventory entry".into()));
             }
+            // Delivered, and the interpreter's to rewrite or drop (see `interpreter_bytecode_cache`):
+            // neither hashed nor required, and left out of the inventory on both sides.
+            if interpreter_bytecode_cache(name) { continue; }
             let path = root.join(name);
             let resolved = std::fs::canonicalize(&path).map_err(|_| RuntimeError(format!("missing runtime file: {name}")))?;
             if !resolved.starts_with(&root) || path.is_symlink() {

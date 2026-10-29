@@ -2,6 +2,24 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.5-nightly.20261029.81
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261029.81)
+
+- Changed how agents held near your five-hour Claude limit come back: instead of all resuming at once 20 minutes before the reset, they now resume one at a time from then and only while the account stays under 100%; the rest wait for the reset
+- Fixed Settings, Updates and the question before Quit saying an assignment was still running in the background after all its work had ended, which could keep an update from installing; such a job now goes back to Stu at the next start
+- Fixed Stu being handed a job he already had again, sometimes several times in a few minutes, as if it were a new order; after a restart he gets it back once, marked as one he was already given
+- Fixed jobs stalling until you sent a message: when a teammate finishing woke Stu or a new message arrived while he was working, he could not start the teammate he had lined up next
+- Fixed a teammate Stu had just lined up for a job being cleared away before it started when he closed that job in the same reply; the job now stays open until that teammate runs or Stu clears it
+- Fixed RichOS moving your team off a Claude account that had most of its week left and holding their work, when one large burst of use was reported all at once
+- Fixed Stu's work stopping when one of his steps hit a Claude usage limit: the step is tried once more, on another account with room or, when none has room, after the limit resets; the conversation says when
+- Fixed a message Stu had already acted on being given to him again after RichOS restarted, when the reply it came in had been cut short
+- Fixed Settings, Claude accounts showing a switch before it had happened: the account the work still runs on stays first and in use, the screen says "Switching to" the new one or "Can't move yet" while work still runs on the old one and says "Rich now uses" the new one only once the move is real
+- [technical] Improved what Stu is told when RichOS refuses to start a teammate: the reason now names the job and its cause, such as who stopped it and when or the earlier request it repeats
+- [technical] Fixed your team's commands slowly taking memory from your Mac that only a restart gave back: the Python, Git and Node that RichOS provides now start directly instead of through small scripts that set off a macOS memory leak
+- [technical] Fixed Stu's ordinary messages to a teammate being refused when they mentioned a pause or holding something, such as "the pause button is misaligned"
+- [technical] Fixed a teammate's work being paused or let through on the readings of the Claude account in use instead of the account it actually runs on, during a switch between accounts
+
 ## 1.2.5-nightly.20261029.80
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261029.80)

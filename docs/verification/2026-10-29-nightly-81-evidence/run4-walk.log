@@ -1,0 +1,34 @@
+[walk] 19:59:58Z 0 Settings with Technical view off: the row is there, with its plain line
+[walk] 20:00:07Z read: Claude accounts
+[walk] 20:00:09Z read: 86% of this week used
+[walk] 20:00:10Z read: RichOS 1.2.5-nightly.20261029.81
+[walk] 20:00:18Z 1 Rich suggests a second account, in the conversation
+[walk] 20:00:31Z read: If you have a second Claude account
+[walk] 20:00:33Z read: Not now
+[walk] 20:00:34Z 2 adding, step 1 of 2: the two names (from Rich's button)
+[walk] 20:00:39Z read: Step 1 of 2
+[walk] 20:00:48Z read: Sign in to Work
+[walk] 20:00:50Z 4 the same account signed in again
+[walk] 20:00:55Z read: You signed in as
+[walk] 20:00:57Z read: Try again
+[walk] 20:00:58Z 5 the right account: Work is ready
+[walk] 20:00:59Z app data: /Users/admin/testvm/walk-74f3c8894c41/home/Library/Application Support/com.richos.app
+[walk] 20:01:04Z read: is ready. Rich switches to it when Home is nearly full
+[walk] 20:01:05Z read: You added
+[walk] 20:01:48Z I identity: the app on disk, read in the guest
+[walk] 20:01:48Z S smoke: a message and its reply, then Settings and the update check
+[walk] 20:01:59Z read: Smoke reply for nightly 81
+[walk] 20:02:29Z R runtime/bin: every launcher of the installed engine is a Mach-O executable, not a #! script
+[walk] 20:02:30Z M1 pending, dark: a turn is running on Home; Use this one now on Work
+[walk] 20:03:03Z M1 Use Work now offered: yes
+[walk] 20:03:09Z M1 line after the press: Switching to
+[walk] 20:03:12Z M1 in use right after the press: 2 (1 = Home)
+[walk] 20:03:25Z M1 line 12 s later, turn still running: Switching to
+[walk] 20:03:25Z M1 the turn ends
+[walk] 20:03:36Z M1 line right after the turn ended: Rich now uses
+[walk] 20:03:40Z M1 line at the end: Rich now uses; in use: 2 (2 = Work)
+[walk] 20:03:44Z M2 blocked, light: helpers are working on Work; Use this one now on Home
+[walk] 20:04:33Z M2 line after the press: Switching to
+[walk] 20:04:36Z M2 in use right after the press: 1 (2 = Work)
+[walk] 20:04:41Z H hold card: Work's five-hour at 95%, 15 minutes to its reset: the helpers are refused and held
+[walk] 20:06:43Z FAILED: H the hold card says held work resumes one at a time (dark) (not on screen: one at a time)
