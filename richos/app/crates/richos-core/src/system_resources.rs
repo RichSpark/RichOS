@@ -306,12 +306,18 @@ pub fn endpoint(state: &Path) -> PathBuf {
 
 #[cfg(unix)]
 fn prepare_socket_dir(dir: &Path) -> Result<(), String> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    use std::os::unix::fs::DirBuilderExt;
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.to_string()),
     }
+    check_socket_dir(dir)
+}
+
+#[cfg(unix)]
+fn check_socket_dir(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
     let meta = std::fs::symlink_metadata(dir).map_err(|e| e.to_string())?;
     if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
         return Err(
@@ -330,8 +336,10 @@ pub fn read(state: &Path) -> Snapshot {
             os::unix::net::UnixStream,
         };
         let answer = (|| -> Result<Snapshot, String> {
-            let mut stream = UnixStream::connect(endpoint(state))
-                .map_err(|_| "The resource sampler is not running.")?;
+            let socket = endpoint(state);
+            check_socket_dir(socket.parent().unwrap())?;
+            let mut stream =
+                UnixStream::connect(socket).map_err(|_| "The resource sampler is not running.")?;
             stream
                 .set_read_timeout(Some(Duration::from_millis(500)))
                 .map_err(|e| format!("Could not bound the resource read: {e}"))?;
