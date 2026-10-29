@@ -1129,6 +1129,11 @@ def _emit_release(a, reset_at, now, w):
           % (hhmm(reset_at), span(reset_at - now)))
     print("  The CEO's rule (%s): %s" % (RULING, HIS_WORDS))
     print("  %s" % RULE_UPDATE)
+    _wake_quota_paused(w, reset_at)
+    print(KEEPS_POLLING + " Inside the last 20 minutes it pauses nobody, and it wakes you at the reset.")
+
+
+def _wake_quota_paused(w, reset_at):
     print("  %s" % worker_line(w))
     if w["known"]:
         print("  Wake each quota-paused agent with this message: %s" % ", ".join(w["quota_paused"]))
@@ -1139,7 +1144,20 @@ def _emit_release(a, reset_at, now, w):
     print("  First, for each agent, run: " + protocol_command("--resume --to <agent> --reason quota"))
     print("  It releases that agent's hold before any message and prints this same message to send.")
     _print_message(release_message(reset_at), pause_protocol.RESUME_SUMMARY)
-    print(KEEPS_POLLING + " Inside the last 20 minutes it pauses nobody, and it wakes you at the reset.")
+
+
+def _emit_switch_release(a, left, r, verdict, now, w):
+    """The hold of the account just left releases: the account in use has room (finding 2 of the
+    second review of d37b1f0de; the hold belongs to the account it was taken on)."""
+    print("QUOTA-RELEASE at %s" % hhmm(now))
+    now_on = r["account"]["label"] if isinstance(r.get("account"), dict) else "another account"
+    state = ("below the threshold" if verdict == "below" else
+             "at or above the threshold, but its reset is less than 20 minutes away")
+    print("  The account in use changed from %s to %s, at %s%% of its five-hour window: %s. The quota hold"
+          " taken on %s releases." % (left["label"], now_on, fmt_pct(r["used"]), state, left["label"]))
+    print("  The CEO's rule (%s): %s" % (RULING, HIS_WORDS))
+    _wake_quota_paused(w, r["resets_at"])
+    print(KEEPS_POLLING + " From here it follows %s's own window and reset." % now_on)
 
 
 def refresh_point(stale_after):
@@ -1542,6 +1560,13 @@ def _poll_loop(a, out, alive, health=None):
     history = []                 # (taken, used) get_usage readings in the current window
     outage = None                # {"at": first failure, "fallback_why"} while get_usage fails
     fast_alerted = None          # the window whose high speed was announced (QUOTA-FAST, once)
+    # The account every per-window value above describes (the app's reading names it; a terminal's
+    # never does, so there it stays None and nothing below changes). Second review of d37b1f0de
+    # (rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): after Home -> Work the loop kept Home's
+    # window_end, so Work, paused at 99%, was released on Home's reset timer while Work's own reset
+    # was still 4,740 s away.
+    bound = None                 # {"id", "label"} of that account
+    left_held = None             # the account just left while its hold may still hold workers
     first = True
     print("quota-watch: polling every %d s; threshold %s%%%s" % (
         a.poll, fmt_pct(a.threshold), "; waking only at the release and the reset" if a.until_reset else ""),
@@ -1556,6 +1581,19 @@ def _poll_loop(a, out, alive, health=None):
         w = workers(a.engine_root)
         retry = False
         asked_refresh = False
+        who = r.get("account") if isinstance(r.get("account"), dict) and r["account"].get("id") else None
+        if who is not None and bound is not None and who["id"] != bound["id"]:
+            # A SWITCH: every timer and dedupe above was the account left's. They are cleared and
+            # bound again from the account in use's own reading below, by window_end's usual rule.
+            print("  the account in use changed: %s -> %s; its own window and notices from here"
+                  % (bound["label"], who["label"]), flush=True)
+            if window_end is not None:
+                left_held = bound
+            window_end = released = reset_done = fast_alerted = refreshed_for = None
+            threshold_named, weekly_seen, history, last_gu, outage = {}, set(), [], None, None
+            blind_since, blind_woken = None, False
+        if who is not None:
+            bound = who
         if r.get("source") == "get_usage":
             if last_gu is not None and not same_window(last_gu["resets_at"], r["resets_at"]):
                 history = []
@@ -1662,6 +1700,18 @@ def _poll_loop(a, out, alive, health=None):
                           flush=True)
                 else:
                     verdict, early = "at-or-above", _early_text(a, r, speed, now)
+        if left_held is not None and r["state"] == "ok" and not r["ended"] and verdict != "unknown":
+            # The hold in place was the account just left's. Once the account in use reads below the
+            # line (or at it with its reset less than 20 minutes away), whoever that hold paused may
+            # work again now, not at the new account's reset. At or above it, the new account's own
+            # hold takes over, and its release follows its own reset.
+            if verdict in ("below", "near-reset"):
+                w = workers(a.engine_root)
+                if not w["known"] or w["quota_paused"]:
+                    out.wake("RELEASE", _capture(_emit_switch_release, a, left_held, r, verdict, now, w), now)
+                    if verdict == "near-reset":
+                        released = window_end  # this window's own release has now been told
+            left_held = None
         # A get_usage OUTAGE: it answered earlier in this window and fails now.
         # Its last reading, or the status-line file when that is fresher, is
         # the reading; the 2026-09-25 status-line rules (wake to refresh before

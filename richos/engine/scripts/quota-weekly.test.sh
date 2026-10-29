@@ -19,9 +19,44 @@ def reading(used=99, five=10, until=NOW + 3600):
     return {'state':'ok','used':five,'resets_at':until,'ended':until <= NOW,'age':0,
             'why':'','windows':[{'id':'seven_day','label':'Weekly','used':used,'resets_at':NOW+86400}]}
 
-def workers(working=None, held=None):
-    return {'known':True,'working':working or [],'quota_paused':[],
+def workers(working=None, held=None, paused=None):
+    return {'known':True,'working':working or [],'quota_paused':paused or [],
             'weekly_paused':held or [],'other_paused':[], 'session':'fixture'}
+
+class Recorder(watcher.Out):
+    """The real Out, also keeping (kind, the poll's clock) of every wake."""
+    def __init__(self,*a,**k):
+        super().__init__(*a,**k); self.woken=[]
+    def wake(self,kind,text,now):
+        self.woken.append((kind,now))
+        return super().wake(kind,text,now)
+
+def run_polls(readings,worker_rows,polls,args=None,out_cls=None):
+    """Run the real poll loop for `polls` polls. The clock advances one poll (300 s) per sleep; a
+    reading that is an Exception is raised from read_source. Returns the Out it wrote to."""
+    out_cls=out_cls or watcher.Out
+    args=args or types.SimpleNamespace(threshold=93,threshold_problem='',config='',until_reset=False,
+        engine_root='fixture',poll=300,stale=300,command='watch')
+    out=out_cls(lines=io.StringIO(),events=io.StringIO())
+    naps=[0]
+    class Done(BaseException): pass
+    def nap(_seconds):
+        naps[0]+=1
+        if naps[0]>=polls: raise Done
+    def read(_a,_now):
+        r=readings[min(naps[0],len(readings)-1)]
+        if isinstance(r,Exception): raise r
+        return dict(r)
+    def who(_engine):
+        return worker_rows[min(naps[0],len(worker_rows)-1)]
+    with patch.object(watcher,'read_source',side_effect=read),patch.object(watcher,'workers',side_effect=who), \
+        patch.object(watcher.time,'time',side_effect=lambda:NOW+300*naps[0]),patch.object(watcher.time,'sleep',side_effect=nap), \
+        patch.object(weekly,'reset_tick',return_value={'error':'no offer'}):
+        try:
+            watcher.poll_loop(args,out)
+        except Done:
+            return out
+    raise AssertionError('the poll loop returned before its polls were done')
 
 class Weekly(unittest.TestCase):
     def test_all_reported_windows_and_provider_names(self):
@@ -100,29 +135,8 @@ class Weekly(unittest.TestCase):
                 message=text.split('WAIT until the orchestrator',1)[1].split('\n  Summary:',1)[0]
                 pause_protocol.validate_text('WAIT until the orchestrator'+message)
     def drive(self,readings,worker_rows,polls,args=None,out_cls=None):
-        """Run the real poll loop for `polls` polls. The clock advances one poll per sleep; a reading
-        that is an Exception is raised from read_source. Returns everything woken to the lead."""
-        out_cls=out_cls or watcher.Out
-        args=args or types.SimpleNamespace(threshold=93,threshold_problem='',config='',until_reset=False,
-            engine_root='fixture',poll=300,stale=300,command='watch')
-        lines,events=io.StringIO(),io.StringIO()
-        naps=[0]
-        class Done(BaseException): pass
-        def nap(_seconds):
-            naps[0]+=1
-            if naps[0]>=polls: raise Done
-        def read(_a,_now):
-            r=readings[min(naps[0],len(readings)-1)]
-            if isinstance(r,Exception): raise r
-            return r
-        def who(_engine):
-            return worker_rows[min(naps[0],len(worker_rows)-1)]
-        with patch.object(watcher,'read_source',side_effect=read),patch.object(watcher,'workers',side_effect=who), \
-            patch.object(watcher.time,'time',side_effect=lambda:NOW+300*naps[0]),patch.object(watcher.time,'sleep',side_effect=nap), \
-            patch.object(weekly,'reset_tick',return_value={'error':'no offer'}):
-            with self.assertRaises(Done):
-                watcher.poll_loop(args,out_cls(lines=lines,events=events))
-        return events.getvalue()
+        """Everything run_polls woke the lead with."""
+        return run_polls(readings,worker_rows,polls,args,out_cls).events.getvalue()
     def second_window(self,used):
         r=reading(used);r['windows'][0]['resets_at']=NOW+86400+604800
         return r
@@ -256,6 +270,37 @@ class GateAdmission(unittest.TestCase):
         g=self.gate(); self.assertFalse(g['held']); self.assertIn('no usage reading',g['line'])
         with open(self.state+'/claude-quota.json','w') as f: f.write('{not json')
         self.assertFalse(self.gate()['held'])
+
+class AccountSwitch(unittest.TestCase):
+    """Second review of d37b1f0de (rv-20261028T184535Z-d37b1f0d-e0d9), finding 2: quota_watch's poll
+    loop kept window_end and the notice state of the account it read first. Read Home, switch to
+    Work, pause Work at 99%: the release came on Home's reset timer while Work's reset was still
+    4,740 s away. Each account's hold follows its own reset."""
+    HOME={'id':'1','label':'Home'}; WORK={'id':'2','label':'Work'}
+    def on(self,account,five,until):
+        r=reading(10,five,until); r['account']=dict(account); r['source']='the app (account %s)'%account['label']
+        return r
+    def test_after_a_switch_the_release_follows_the_new_accounts_reset(self):
+        home_reset=NOW+1800                 # Home's last 20 minutes begin at NOW+600: the poll at NOW+900 is in them
+        work_reset=NOW+900+4740             # 4,740 s past that poll, as in the review's fixture
+        out=run_polls([self.on(self.HOME,40,home_reset)]+[self.on(self.WORK,99,work_reset)]*16,
+                      [workers(['worker']),workers(['worker'])]+[workers(paused=['worker'])]*15,17,out_cls=Recorder)
+        kinds=[k for k,_ in out.woken]
+        self.assertIn('THRESHOLD',kinds,out.woken)
+        releases=[t for k,t in out.woken if k=='RELEASE']
+        self.assertEqual(len(releases),1,'one release, on Work\'s timer: %s'%out.woken)
+        self.assertTrue(0<work_reset-releases[0]<1200,'released %d s before Work\'s reset: %s'%(work_reset-releases[0],out.woken))
+        self.assertNotIn('RESET',kinds,'Home\'s reset is not the end of Work\'s window: %s'%out.woken)
+    def test_a_hold_left_on_the_account_switched_from_releases_once_the_new_one_has_room(self):
+        out=run_polls([self.on(self.HOME,95,NOW+7200)]*2+[self.on(self.WORK,10,NOW+9000)]*3,
+                      [workers(['worker'])]+[workers(paused=['worker'])]*4,5,out_cls=Recorder)
+        self.assertEqual([(k,t) for k,t in out.woken if k in('THRESHOLD','RELEASE')],
+                         [('THRESHOLD',NOW),('RELEASE',NOW+600)],out.woken)
+        self.assertIn('changed from Home to Work',out.events.getvalue())
+    def test_a_switch_to_an_account_at_the_line_keeps_the_hold_and_tells_its_threshold(self):
+        out=run_polls([self.on(self.HOME,95,NOW+7200)]+[self.on(self.WORK,96,NOW+9000)]*3,
+                      [workers(['worker'])]*4,4,out_cls=Recorder)
+        self.assertEqual([k for k,_ in out.woken],['THRESHOLD','THRESHOLD'],out.woken)
 
 unittest.main()
 PY
