@@ -1,0 +1,234 @@
+# app=richos-tauri pid=1288 windows=1 nodes=230 mode=tree matches=230
+AXWindow/AXStandardWindow title='RichOS' desc='standard window' value='' enabled=- pos=140 77 size=1400 864
+  AXGroup title='' desc='group' value='' enabled=yes pos=140 77 size=1400 864
+  AXButton/AXCloseButton title='' desc='close button' value='' enabled=yes pos=146 83 size=16 16
+  AXButton/AXFullScreenButton title='' desc='full screen button' value='' enabled=yes pos=186 83 size=16 16
+  AXButton/AXMinimizeButton title='' desc='minimize button' value='' enabled=yes pos=166 83 size=16 16
+  AXStaticText title='' desc='text' value='RichOS' enabled=yes pos=814 82 size=52 16
+    AXGroup title='' desc='group' value='' enabled=- pos=140 77 size=1400 864
+    AXGroup title='' desc='group' value='' enabled=- pos=187 83 size=14 16
+      AXScrollArea title='' desc='' value='' enabled=yes pos=140 105 size=1400 836
+      AXGroup title='' desc='group' value='' enabled=- pos=187 83 size=14 16
+        AXWebArea title='' desc='RichOS' value='' enabled=yes pos=140 105 size=1400 836
+          AXGroup/AXLandmarkComplementary title='Entities and threads' desc='Entities and threads' value='' enabled=yes pos=140 105 size=300 836
+          AXGroup/AXLandmarkMain title='' desc='' value='' enabled=yes pos=440 105 size=1100 836
+          AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Which company is this copy of Rich for?' desc='Which company is this copy of Rich for?' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title="There's a bit of setting up to do first." desc="There's a bit of setting up to do first." value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Where should I keep what you tell me?' desc='Where should I keep what you tell me?' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Corrections' desc='Corrections' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Feedback' desc='Feedback' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Turn on the technical view' desc='Turn on the technical view' value='' enabled=yes pos=140 105 size=1400 10
+          AXMenu title='New chat or company' desc='New chat or company' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Use Rich from your phone' desc='Use Rich from your phone' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Connected project folders (repositories)' desc='Connected project folders (repositories)' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Claude Code quota' desc='Claude Code quota' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Claude accounts' desc='Claude accounts' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Quit while work is running?' desc='Quit while work is running?' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Terminal setup' desc='Terminal setup' value='' enabled=yes pos=140 105 size=1400 10
+          AXGroup/AXEmptyGroup title='Your name in Git' desc='Your name in Git' value='' enabled=yes pos=140 105 size=1400 10
+          AXPopUpButton title='Settings' desc='Settings' value='' enabled=yes pos=1485 111 size=40 40
+          AXGroup/AXApplicationDialog title='Settings' desc='Settings' value='' enabled=yes pos=455 159 size=1070 764
+            AXButton title='' desc='RichOS: go to the home screen' value='' enabled=yes pos=160 129 size=97 22
+            AXButton title='Close navigation' desc='Close navigation' value='' enabled=yes pos=154 125 size=271 10
+            AXButton title='Search ⌘K' desc='' value='' enabled=yes pos=156 163 size=267 32
+            AXPopUpButton title='+ New chat or company ⌘N' desc='' value='' enabled=yes pos=156 197 size=267 32
+            AXPopUpButton title='Corrections' desc='' value='' enabled=yes pos=156 231 size=267 32
+            AXPopUpButton title='Feedback' desc='' value='' enabled=yes pos=156 265 size=267 32
+            AXButton title='Oldest open question ⌘J' desc='' value='' enabled=yes pos=156 299 size=267 32
+            AXGroup/AXLandmarkNavigation title='Entity areas' desc='Entity areas' value='' enabled=yes pos=154 341 size=271 527
+            AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=140 105 size=300 10
+            AXPopUpButton title='No name is set. Open Settings to add yours.' desc='No name is set. Open Settings to add yours.' value='' enabled=yes pos=160 886 size=156 39
+            AXSplitter title='Left navigation width' desc='Left navigation width' value='300' enabled=yes pos=436 105 size=6 836
+            AXButton title='Hide the sidebar' desc='Hide the sidebar' value='' enabled=yes pos=456 114 size=32 33
+            AXGroup title='' desc='' value='' enabled=yes pos=502 120 size=252 21
+            AXCheckBox/AXToggle title='Output: nothing produced yet in this thread' desc='Output: nothing produced yet in this thread' value='0' enabled=yes pos=1349 112 size=105 37
+            AXGroup/AXApplicationLog title='' desc='' value='' enabled=yes pos=440 157 size=1100 705
+            AXGroup/AXApplicationStatus title='' desc='' value='' enabled=yes pos=439 104 size=1 1
+            AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=440 105 size=1100 10
+            AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=440 105 size=1100 10
+            AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=440 861 size=1100 10
+            AXCheckBox/AXToggle title='Talk to Rich' desc='Talk to Rich' value='0' enabled=yes pos=678 878 size=46 47
+            AXTextArea title='Message to Rich' desc='Message to Rich' value='' enabled=yes pos=735 879 size=398 45
+            AXButton title='Send' desc='Send' value='' enabled=yes pos=1143 878 size=41 47
+            AXCheckBox/AXToggle title='Output: nothing produced yet in this thread' desc='Output: nothing produced yet in this thread' value='0' enabled=yes pos=1193 878 size=109 47
+            AXGroup/AXLandmarkBanner title='' desc='' value='' enabled=yes pos=456 160 size=1053 47
+            AXGroup/AXLandmarkRegion title='HOW IT LOOKS' desc='HOW IT LOOKS' value='' enabled=yes pos=456 207 size=340 697
+            AXGroup/AXLandmarkRegion title='WORKING WITH RICH' desc='WORKING WITH RICH' value='' enabled=yes pos=795 207 size=354 697
+            AXGroup/AXLandmarkRegion title='YOUR COMPANY AND TEAM' desc='YOUR COMPANY AND TEAM' value='' enabled=yes pos=1148 207 size=361 697
+            AXStaticText title='' desc='' value='Your name' enabled=yes pos=478 791 size=296 23
+            AXTextField title='Your name' desc='' value='' enabled=yes pos=478 819 size=296 39
+            AXGroup title='' desc='' value='' enabled=yes pos=478 863 size=296 47
+            AXGroup title='' desc='' value='' enabled=yes pos=818 791 size=309 23
+            AXGroup title='' desc='' value='' enabled=yes pos=818 819 size=233 29
+            AXButton title='Bust a bug!' desc='' value='' enabled=yes pos=1163 791 size=332 41
+            AXButton title='Request a feature' desc='' value='' enabled=yes pos=1163 833 size=332 41
+              AXGroup/AXApplicationGroup title='Northwind Traders overview' desc='Northwind Traders overview' value='' enabled=yes pos=154 341 size=271 70
+              AXStaticText title='' desc='' value='Northwind Traders' enabled=yes pos=502 120 size=144 21
+              AXStaticText title='' desc='' value='Onboarding' enabled=yes pos=665 120 size=89 21
+              AXGroup/AXApplicationStatus title='' desc='' value='' enabled=yes pos=610 -21 size=745 218
+              AXGroup/AXDocumentArticle title='' desc='' value='' enabled=yes pos=594 253 size=761 212
+              AXGroup/AXDocumentArticle title='' desc='' value='' enabled=yes pos=610 495 size=745 69
+              AXGroup/AXDocumentArticle title='' desc='' value='' enabled=yes pos=610 576 size=745 76
+              AXGroup/AXDocumentArticle title='' desc='' value='' enabled=yes pos=610 682 size=745 69
+              AXGroup/AXDocumentArticle title='' desc='' value='' enabled=yes pos=610 763 size=745 76
+              AXGroup/AXEmptyGroup title='Between turns' desc='Between turns' value='' enabled=yes pos=440 157 size=1100 10
+              AXStaticText title='' desc='' value='Rich finished.' enabled=yes pos=439 104 size=101 20
+              AXGroup title='' desc='' value='' enabled=yes pos=749 889 size=370 25
+              AXHeading title='Settings' desc='' value='2' enabled=yes pos=478 170 size=85 28
+              AXGroup title='' desc='' value='' enabled=yes pos=478 219 size=296 17
+              AXStaticText title='' desc='' value='Theme' enabled=yes pos=478 254 size=54 20
+              AXGroup/AXApplicationGroup title='Theme' desc='Theme' value='' enabled=yes pos=679 250 size=95 28
+              AXStaticText title='' desc='' value='Text size' enabled=yes pos=478 294 size=69 20
+              AXGroup/AXApplicationGroup title='Text size' desc='Text size' value='' enabled=yes pos=657 290 size=117 28
+              AXStaticText title='' desc='' value='Oxford comma: OFF' enabled=yes pos=478 355 size=154 20
+              AXCheckBox title='Oxford comma: OFF' desc='Oxford comma: OFF' value='0' enabled=yes pos=735 354 size=39 22
+              AXGroup title='' desc='' value='' enabled=yes pos=478 387 size=296 92
+              AXStaticText title='' desc='' value='Technical view' enabled=yes pos=478 510 size=114 20
+              AXCheckBox title='Technical view' desc='Technical view' value='0' enabled=yes pos=735 509 size=39 22
+              AXGroup title='' desc='' value='' enabled=yes pos=478 542 size=296 23
+              AXButton title='' desc='' value='' enabled=yes pos=456 207 size=340 10
+              AXGroup title='' desc='' value='' enabled=yes pos=478 586 size=296 22
+              AXRadioGroup title='Keep the stored output' desc='Keep the stored output' value='' enabled=yes pos=478 614 size=296 84
+              AXGroup title='' desc='' value='' enabled=yes pos=478 700 size=296 46
+              AXGroup title='' desc='' value='' enabled=yes pos=818 219 size=309 17
+              AXButton title='Your instructions Not written yet' desc='' value='' enabled=yes pos=810 244 size=325 51
+              AXGroup/AXLandmarkRegion title="Rich's model" desc="Rich's model" value='' enabled=yes pos=818 316 size=309 260
+              AXGroup title='' desc='' value='' enabled=yes pos=818 597 size=309 22
+              AXRadioGroup title='How much should Rich interrupt you?' desc='How much should Rich interrupt you?' value='' enabled=yes pos=818 625 size=309 84
+              AXButton title='RichScribe Off' desc='' value='' enabled=yes pos=810 730 size=325 51
+              AXButton title='Use Rich from your phone' desc='' value='' enabled=yes pos=810 781 size=325 40
+              AXButton title='Terminal setup Read at 7:59 PM, when RichOS started' desc='' value='' enabled=yes pos=810 821 size=325 71
+              AXGroup title='' desc='' value='' enabled=yes pos=1171 219 size=316 17
+              AXStaticText title='' desc='' value='Company' enabled=yes pos=1171 254 size=75 20
+              AXPopUpButton title='Company' desc='Company' value='Northwind Traders' enabled=yes pos=1319 249 size=168 30
+              AXStaticText title='' desc='' value='Home screen' enabled=yes pos=1171 294 size=103 20
+              AXPopUpButton title='Home screen' desc='Home screen' value='' enabled=yes pos=1319 289 size=168 30
+              AXMenuItem title='Token spend $0.00 this month' desc='' value='' enabled=yes pos=1163 324 size=332 40
+              AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=1148 207 size=361 10
+              AXButton title='Claude accounts Using Home' desc='' value='' enabled=yes pos=1163 364 size=332 50
+              AXButton title='Connected folders (repositories)' desc='' value='' enabled=yes pos=1163 414 size=332 40
+              AXButton title='Your name in Git Not set yet' desc='' value='' enabled=yes pos=1163 454 size=332 51
+              AXButton title='Memory folder' desc='' value='' enabled=yes pos=1163 505 size=332 40
+              AXGroup title='' desc='' value='' enabled=yes pos=1171 566 size=316 20
+              AXGroup/AXApplicationStatus title='' desc='' value='' enabled=yes pos=1171 590 size=316 44
+              AXGroup title='' desc='' value='' enabled=yes pos=1171 638 size=316 23
+              AXProgressIndicator title='Downloading the update' desc='Downloading the update' value='50' enabled=yes pos=1171 566 size=316 10
+              AXButton title='Check for updates' desc='' value='' enabled=yes pos=1171 671 size=165 33
+              AXButton title='' desc='' value='' enabled=yes pos=1171 671 size=316 10
+              AXButton title='' desc='' value='' enabled=yes pos=1171 671 size=316 10
+              AXLink title='See what’s new (opens in your web browser)' desc='See what’s new (opens in your web browser)' value='' enabled=yes pos=1171 712 size=151 29
+              AXButton title='' desc='' value='' enabled=yes pos=1171 566 size=316 10
+              AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=1171 566 size=316 10
+              AXGroup/AXEmptyGroup title='' desc='' value='' enabled=yes pos=1171 566 size=316 10
+              AXStaticText title='' desc='' value='Your name' enabled=yes pos=478 791 size=296 10
+              AXStaticText title='' desc='' value='Shown at the foot of the rail, with your initials.' enabled=yes pos=478 863 size=296 10
+              AXStaticText title='' desc='' value='Splash screen' enabled=yes pos=818 791 size=309 10
+              AXCheckBox title='Show it when RichOS starts' desc='' value='1' enabled=yes pos=818 819 size=233 29
+              AXStaticText title='' desc='' value=' Show it when RichOS starts' enabled=yes pos=818 819 size=233 10
+                AXButton title='Northwind Traders overview' desc='Northwind Traders overview' value='' enabled=yes pos=154 341 size=251 36
+                AXButton title='Collapse Northwind Traders' desc='Collapse Northwind Traders' value='' enabled=yes pos=363 345 size=28 28
+                AXButton title='New chat in Northwind Traders' desc='New chat in Northwind Traders' value='' enabled=yes pos=393 345 size=28 28
+                AXList/AXContentList title='' desc='' value='' enabled=yes pos=171 379 size=254 32
+                AXGroup title='' desc='' value='' enabled=yes pos=629 -4 size=707 20
+                AXGroup title='' desc='' value='' enabled=yes pos=629 26 size=707 72
+                AXGroup title='' desc='' value='' enabled=yes pos=629 108 size=707 24
+                AXButton title='Start the questions' desc='' value='' enabled=yes pos=629 146 size=168 34
+                AXButton title='Not now' desc='' value='' enabled=yes pos=804 146 size=90 34
+                AXStaticText title='' desc='' value='Rich reached out' enabled=yes pos=609 458 size=128 20
+                AXStaticText title='' desc='' value='Rich' enabled=yes pos=610 253 size=31 17
+                AXStaticText title='' desc='' value='reached out' enabled=yes pos=647 253 size=80 17
+                AXGroup title='' desc='' value='' enabled=yes pos=610 275 size=745 58
+                AXGroup title='' desc='' value='' enabled=yes pos=610 345 size=745 59
+                AXGroup title='' desc='' value='' enabled=yes pos=610 420 size=430 21
+                AXButton title="Copy Rich's message" desc="Copy Rich's message" value='' enabled=yes pos=610 444 size=40 21
+                AXStaticText title='' desc='' value='You said' enabled=yes pos=1354 700 size=65 21
+                AXGroup title='' desc='' value='' enabled=yes pos=1137 506 size=203 26
+                AXStaticText title='' desc='' value='8:00 PM' enabled=yes pos=1240 543 size=66 21
+                AXButton title='Copy your message' desc='Copy your message' value='' enabled=yes pos=1315 543 size=40 21
+                AXStaticText title='' desc='' value='Rich said' enabled=yes pos=609 781 size=69 21
+                AXStaticText title='' desc='' value='Rich' enabled=yes pos=610 576 size=31 18
+                AXGroup title='' desc='' value='' enabled=yes pos=610 598 size=203 30
+                AXButton title="Copy Rich's message" desc="Copy Rich's message" value='' enabled=yes pos=610 631 size=40 21
+                AXStaticText title='' desc='' value='You said' enabled=yes pos=1354 887 size=65 21
+                AXGroup title='' desc='' value='' enabled=yes pos=1010 693 size=330 26
+                AXStaticText title='' desc='' value='8:01 PM' enabled=yes pos=1240 730 size=66 21
+                AXButton title='Copy your message' desc='Copy your message' value='' enabled=yes pos=1315 730 size=40 21
+                AXStaticText title='' desc='' value='Rich said' enabled=yes pos=609 968 size=69 21
+                AXStaticText title='' desc='' value='Rich' enabled=yes pos=610 763 size=31 18
+                AXGroup title='' desc='' value='' enabled=yes pos=610 785 size=455 30
+                AXButton title="Copy Rich's message" desc="Copy Rich's message" value='' enabled=yes pos=610 818 size=40 21
+                AXStaticText title='' desc='' value='Talk to Rich…' enabled=yes pos=749 891 size=100 21
+                AXStaticText title='' desc='' value='Settings' enabled=yes pos=478 171 size=85 26
+                AXStaticText title='' desc='' value='HOW IT LOOKS' enabled=yes pos=478 219 size=117 17
+                AXCheckBox/AXToggle title='Light theme' desc='Light theme' value='0' enabled=yes pos=681 252 size=31 24
+                AXCheckBox/AXToggle title='Follow the system' desc='Follow the system' value='0' enabled=yes pos=711 252 size=31 24
+                AXCheckBox/AXToggle title='Dark theme' desc='Dark theme' value='1' enabled=yes pos=741 252 size=31 24
+                AXButton title='Smaller text' desc='Smaller text' value='' enabled=yes pos=659 292 size=31 24
+                AXGroup/AXApplicationGroup title='' desc='' value='' enabled=yes pos=689 294 size=53 20
+                AXButton title='Larger text' desc='Larger text' value='' enabled=yes pos=741 292 size=31 24
+                AXStaticText title='' desc='' value='Oxford comma AKA serial comma is what some style guides place before "and" and "or". RichOS recommends to keep that nuisance off.' enabled=yes pos=478 387 size=296 10
+                AXStaticText title='' desc='' value='⌘⇧T asks where to show it.' enabled=yes pos=478 542 size=296 10
+                AXStaticText title='' desc='' value='Keep the stored output' enabled=yes pos=478 587 size=172 20
+                AXGroup title='' desc='' value='' enabled=yes pos=478 614 size=134 28
+                AXGroup title='' desc='' value='' enabled=yes pos=478 642 size=153 28
+                AXGroup title='' desc='' value='' enabled=yes pos=478 670 size=82 28
+                AXStaticText title='' desc='' value='Nothing is ever removed. Using 1.9 KB now.' enabled=yes pos=478 701 size=286 43
+                AXStaticText title='' desc='' value='WORKING WITH RICH' enabled=yes pos=818 219 size=168 17
+                AXGroup title='' desc='' value='' enabled=yes pos=818 316 size=309 22
+                AXStaticText title='' desc='' value='When he ' enabled=yes pos=818 345 size=72 20
+                AXStaticText title='' desc='' value='talks with you' enabled=yes pos=889 345 size=107 20
+                AXStaticText title='' desc='' value='default' enabled=yes pos=1074 345 size=53 20
+                AXRadioGroup title="Rich's model When he talks with you default" desc="Rich's model When he talks with you default" value='' enabled=yes pos=818 373 size=309 40
+                AXStaticText title='' desc='' value='When he ' enabled=yes pos=818 426 size=72 20
+                AXStaticText title='' desc='' value='directs your team' enabled=yes pos=889 426 size=135 20
+                AXStaticText title='' desc='' value='default' enabled=yes pos=1074 426 size=53 20
+                AXRadioGroup title="Rich's model When he directs your team default" desc="Rich's model When he directs your team default" value='' enabled=yes pos=818 454 size=309 40
+                AXGroup title='' desc='' value='' enabled=yes pos=818 504 size=309 72
+                AXStaticText title='' desc='' value='How much should Rich interrupt you?' enabled=yes pos=818 598 size=281 20
+                AXGroup title='' desc='' value='' enabled=yes pos=818 625 size=66 28
+                AXGroup title='' desc='' value='' enabled=yes pos=818 653 size=95 28
+                AXGroup title='' desc='' value='' enabled=yes pos=818 681 size=185 28
+                AXStaticText title='' desc='' value='YOUR COMPANY AND TEAM' enabled=yes pos=1171 219 size=220 17
+                AXStaticText title='' desc='' value='Updates' enabled=yes pos=1171 566 size=316 10
+                AXStaticText title='' desc='' value='RichOS 1.2.5-nightly.20261029.81 is up to date.' enabled=yes pos=1171 591 size=311 42
+                AXStaticText title='' desc='' value='Checked just now.' enabled=yes pos=1171 639 size=139 20
+                AXStaticText title='' desc='' value='See what’s new' enabled=yes pos=1177 716 size=119 20
+                  AXGroup title='' desc='' value='' enabled=yes pos=171 379 size=254 32
+                  AXStaticText title='' desc='' value="I don't know your business yet." enabled=yes pos=629 -4 size=253 20
+                  AXStaticText title='' desc='' value="There's nothing on file about what this company does, who it's for or how you want to work. I can ask you about it (about twenty minutes) and write your answers down, so I use them from then on. You can " enabled=yes pos=629 28 size=703 68
+                  AXStaticText title='' desc='' value='"Not now" means I\'ll stop offering. You can start it any time by asking.' enabled=yes pos=629 110 size=523 20
+                  AXStaticText title='' desc='' value='Your Claude account has used ' enabled=yes pos=610 279 size=261 21
+                  AXStaticText title='' desc='' value='86%' enabled=yes pos=870 279 size=41 21
+                  AXStaticText title='' desc='' value=" of this week's limit. It is fresh again in 4 d. If it runs out before then, the team pauses until it is." enabled=yes pos=610 279 size=732 50
+                  AXStaticText title='' desc='' value='If you have a second Claude account, for example one for work, I can switch to it when this one is nearly full, so the team keeps working.' enabled=yes pos=610 349 size=730 51
+                  AXStaticText title='' desc='' value='Work is added. I will switch to it when Home is nearly full.' enabled=yes pos=610 420 size=430 21
+                  AXStaticText title='' desc='' value='What is on my plate today?' enabled=yes pos=1137 508 size=203 21
+                  AXStaticText title='' desc='' value='Answered on Account 1.' enabled=yes pos=610 602 size=203 22
+                  AXStaticText title='' desc='' value='Smoke check: please confirm you are there.' enabled=yes pos=1010 695 size=330 21
+                  AXStaticText title='' desc='' value='Smoke reply for nightly 81: the client report is on track.' enabled=yes pos=610 789 size=455 22
+                  AXStaticText title='' desc='' value='100%' enabled=yes pos=692 294 size=47 20
+                  AXRadioButton title='For two weeks' desc='' value='0' enabled=yes pos=478 614 size=134 28
+                  AXStaticText title='' desc='' value=' For two weeks' enabled=yes pos=478 614 size=134 10
+                  AXRadioButton title='For three months' desc='' value='0' enabled=yes pos=478 642 size=153 28
+                  AXStaticText title='' desc='' value=' For three months' enabled=yes pos=478 642 size=153 10
+                  AXRadioButton title='Forever' desc='' value='1' enabled=yes pos=478 670 size=82 28
+                  AXStaticText title='' desc='' value=' Forever' enabled=yes pos=478 670 size=82 10
+                  AXStaticText title='' desc='' value="Rich's model" enabled=yes pos=818 317 size=97 20
+                  AXRadioButton title='Opus' desc='' value='1' enabled=yes pos=821 376 size=152 34
+                  AXRadioButton title='Fable' desc='' value='0' enabled=yes pos=972 376 size=152 34
+                  AXRadioButton title='Opus · high effort' desc='' value='1' enabled=yes pos=821 457 size=152 34
+                  AXRadioButton title='Fable' desc='' value='0' enabled=yes pos=972 457 size=152 34
+                  AXStaticText title='' desc='' value='Opus is the default for both. Fable is more capable than Opus and uses up your Claude limits faster.' enabled=yes pos=818 506 size=281 68
+                  AXRadioButton title='Quiet' desc='' value='1' enabled=yes pos=818 625 size=66 28
+                  AXStaticText title='' desc='' value=' Quiet' enabled=yes pos=818 625 size=66 10
+                  AXRadioButton title='Balanced' desc='' value='0' enabled=yes pos=818 653 size=95 28
+                  AXStaticText title='' desc='' value=' Balanced' enabled=yes pos=818 653 size=95 10
+                  AXRadioButton title="Only when it's urgent" desc='' value='0' enabled=yes pos=818 681 size=185 28
+                  AXStaticText title='' desc='' value=" Only when it's urgent" enabled=yes pos=818 681 size=185 10
+                    AXButton title='Onboarding' desc='Onboarding' value='' enabled=yes pos=173 379 size=230 32
+                    AXPopUpButton title='Actions for Onboarding' desc='Actions for Onboarding' value='' enabled=yes pos=403 384 size=22 22
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.1825}
+{"ax_timing": true, "total_seconds": 1.0218, "preflight_seconds": 0.6325, "transport_seconds": 0.3431, "render_seconds": 0.0465, "guest_seconds": 0.1825, "transport_overhead_seconds": 0.1606}
