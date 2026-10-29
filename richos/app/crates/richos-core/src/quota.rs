@@ -1063,7 +1063,8 @@ impl Service {
     fn cutoff(&self, account: &str) -> Option<f64> {
         self.weekly_cutoff.as_ref().filter(|(id, _)| id == account).map(|(_, percent)| *percent)
     }
-    fn view_at(&self, now: u64) -> View {
+    /// [`Self::view`] as at `now`, which may be later than the clock: what ends by then has ended.
+    pub(crate) fn view_at(&self, now: u64) -> View {
         let policy = self.policy.lock().unwrap().clone();
         let in_use = self.accounts.in_use();
         let cutoff = self.cutoff(&in_use.id);
