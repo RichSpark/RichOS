@@ -652,6 +652,119 @@ def app_state():
     return (os.environ.get("RICHOS_APP_STATE") or "").strip()
 
 
+def app_account(data):
+    """{"id", "label"}: the account the published file's top level describes. `inUse`; for an app
+    older than the field, its accounts row in use; with no list, the one account, Account 1, by its
+    name when it has one. A list with no row in use names nobody (id None): never guessed as
+    Account 1, which named Home beside Work's figures in the live file of 2026-10-28 17:14Z."""
+    who = data.get("inUse") if isinstance(data.get("inUse"), dict) else None
+    listed = [x for x in data.get("accounts") or [] if isinstance(x, dict)]
+    if who is None:
+        who = next((x for x in listed if x.get("inUse")), None)
+    if who is None and not listed:
+        who = {"id": "1", "label": data.get("firstLabel") or "Account 1"}
+    label = "".join(c for c in str((who or {}).get("label") or "not named")[:80] if c.isprintable())
+    return {"id": str(who["id"]) if who and who.get("id") else None, "label": label}
+
+
+def _ms(value):
+    """A published moment (milliseconds) as an int, or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        return None
+    return int(value)
+
+
+def gate_admission(state, now):
+    """THE APP'S OWN HOLD, AS ITS GATE DECIDES IT (richos-hq follow-ups.md, "app-launched reviews
+    never apply the usage hold"). Never raises. {"held", "until" (epoch s or None), "account",
+    "line"}.
+
+    In the app the hold is the desktop gate's (quota/gate.rs `admission`), read from the file the
+    quota service publishes (<state>/claude-quota.json, whose top level is the account in use) and
+    the pause setting beside it. It needs no terminal entity config: the app's watcher starts with
+    a cleared environment (review_watch.rs `environment`), so quota-watch's QUOTA_PAUSE_PERCENT was
+    never found there and every app review answered UNKNOWN and started during a hold.
+
+    The gate's own order, rule for rule:
+      1. heldUntil in the future: every account is exhausted; held until then.
+      2. the pause setting (claude-quota-policy.json beside engine-state, else the published one)
+         off: admitted.
+      3. a setting out of 1..99, or a check dated in the future: Unknown, admitted.
+      4. the published admission. Only `held` holds (quota.rs `Admission::allows_work`), and only
+         until its resetsAt: with the figures unchanged, time can only end a hold at its window's
+         reset (quota.rs `view_with`), and a new reading is republished by the service.
+    No file, or one that cannot be read, is the gate's Unknown: admitted, and said so.
+
+    One case is not decided here as the gate decides it: a pause setting newer than the published
+    reading (the publication after a settings change failed). The gate recomputes the figures under
+    the new setting; this reports UNKNOWN and admits until the service publishes again."""
+    path = os.path.join(state, "claude-quota.json")
+    now_ms = int(now * 1000)
+    out = {"held": False, "until": None, "account": None, "line": ""}
+
+    def admitted(why):
+        out["line"] = "quota: the app's gate admits work: %s" % why
+        return out
+
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(262145)
+        if len(raw) > 262144:
+            raise ValueError("oversized")
+        data = json.loads(raw.decode("utf-8"))
+    except FileNotFoundError:
+        return admitted("the app has published no usage reading at %s (the gate's Unknown)" % path)
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        return admitted("its usage reading at %s cannot be read (%s; the gate's Unknown)" % (path, e.__class__.__name__))
+    if not isinstance(data, dict):
+        return admitted("%s is not the app's usage reading (the gate's Unknown)" % path)
+    who = out["account"] = app_account(data)
+    named = "%s (account %s)" % (who["label"], who["id"]) if who["id"] else "the account in use (%s)" % who["label"]
+    five = next((w for w in data.get("windows") or [] if isinstance(w, dict) and w.get("id") == "five_hour"), None)
+    figure = "; five-hour %s%%" % fmt_pct(five["usedPercent"]) if five and isinstance(
+        five.get("usedPercent"), (int, float)) and not isinstance(five.get("usedPercent"), bool) else ""
+
+    until = _ms(data.get("heldUntil"))
+    if until is not None and until > now_ms:
+        out.update(held=True, until=until // 1000)
+        out["line"] = ("quota: the app's gate HOLDS work until %s: every account is exhausted (in use: %s)"
+                       % (hhmm(until // 1000), named))
+        return out
+    published = data.get("policy") if isinstance(data.get("policy"), dict) else {}
+    policy = published
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(state)), "claude-quota-policy.json"), "rb") as fh:
+            setting = json.loads(fh.read(262145).decode("utf-8"))
+        if isinstance(setting, dict):
+            policy = setting
+    except (OSError, ValueError, UnicodeDecodeError):
+        pass
+    if policy.get("enabled") is not True:
+        return admitted("its automatic pause is off (%s)" % named)
+    percent = policy.get("pausePercent")
+    if isinstance(percent, bool) or not isinstance(percent, int) or not 1 <= percent <= 99:
+        return admitted("UNKNOWN: its pause setting %r is not 1-99%% (the gate's Unknown; %s)" % (percent, named))
+    checked = _ms(data.get("checkedAt"))
+    if checked is not None and checked > now_ms:
+        return admitted("UNKNOWN: its reading is dated in the future (the gate's Unknown; %s)" % named)
+    if (published.get("enabled"), published.get("pausePercent")) != (True, percent):
+        return admitted("UNKNOWN: its pause setting (on, %d%%) is newer than its published reading of %s; "
+                        "admitted until the app publishes again" % (percent, named))
+    admission = data.get("admission") if isinstance(data.get("admission"), dict) else {}
+    kind = admission.get("state") if isinstance(admission.get("state"), str) else "missing"
+    if kind == "held":
+        resets = _ms(admission.get("resetsAt"))
+        if resets is None:
+            return admitted("UNKNOWN: its published hold of %s carries no reset time" % named)
+        if resets <= now_ms:
+            return admitted("the hold of %s ended at its window's reset, %s%s" % (named, hhmm(resets // 1000), figure))
+        out.update(held=True, until=resets // 1000)
+        out["line"] = "quota: the app's gate HOLDS work on %s until %s (its %d%% pause%s)" % (
+            named, hhmm(resets // 1000), percent, figure)
+        return out
+    return admitted("%s, published admission %s%s" % (named, kind, figure))
+
+
 def read_app(state, now):
     """THE ACCOUNT IN USE, FROM THE APP ITSELF (richos-hq follow-ups.md, 7fed0bef). Never raises.
 
@@ -680,16 +793,8 @@ def read_app(state, now):
     if not isinstance(data, dict):
         r["state"], r["why"] = "malformed", "%s is not the app's usage reading" % path
         return r
-    who = data.get("inUse") if isinstance(data.get("inUse"), dict) else None
-    listed = [x for x in data.get("accounts") or [] if isinstance(x, dict)]
-    if who is None:  # an app older than the field: its accounts row in use
-        who = next((x for x in listed if x.get("inUse")), None)
-    if who is None and not listed:  # one account: Account 1, by its name when it has one
-        who = {"id": "1", "label": data.get("firstLabel") or "Account 1"}
-    # A list with no row in use names nobody: never guessed as Account 1 (that named Home beside
-    # Work's figures in the live file of 2026-10-28 17:14Z).
-    label = "".join(c for c in str((who or {}).get("label") or "not named")[:80] if c.isprintable())
-    r["account"] = {"id": str(who["id"]) if who and who.get("id") else None, "label": label}
+    r["account"] = app_account(data)
+    label = r["account"]["label"]
     r["source"] = "the app (account %s)" % label
     windows = []
     for w in data.get("windows") or []:

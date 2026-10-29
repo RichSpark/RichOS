@@ -3045,10 +3045,22 @@ for line in sys.stdin:
             let out = engine_child("bash", app_state).arg(engine.join("scripts/quota-watch.sh")).arg("--once").output().unwrap();
             (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr))
         };
+        // **The review's hold runs in review-watch's OWN environment** (review_watch.rs
+        // `app_environment`, exactly what the app's watcher and so every app review gets), never in
+        // `engine_child`'s: the second review of d37b1f0de (rv-20261028T184535Z-d37b1f0d-e0d9) found
+        // this step passing only because `engine_child` handed it RICHOS_ENTITY_ROOT and its
+        // QUOTA_PAUSE_PERCENT=93, which the app's watcher never has; there quota-watch answered
+        // UNKNOWN and a Claude review started during a hold. HOME is the trap's (its status line
+        // says 99), and the working directory holds no orchestration.config.
         let review_hold = || {
             let program = "import json, sys\nsys.path.insert(0, sys.argv[1])\nimport second_review\n\
                 print(json.dumps(second_review.quota_hold(sys.argv[2], sys.argv[3])))";
-            let out = engine_child("python3", None).arg("-I").arg("-c").arg(program)
+            let environment = crate::review_watch::app_environment(&std::env::var("PATH").unwrap_or_default(), "");
+            for key in ["RICHOS_ENTITY_ROOT", "CLAUDE_PROJECT_DIR", "RICHOS_APP_STATE", "QUOTA_CLAUDE_BIN"] {
+                assert!(!environment.contains_key(key), "review-watch's environment now carries {key}: re-read this test");
+            }
+            let out = Command::new("python3").env_clear().current_dir(root.path()).envs(&environment)
+                .env("HOME", &home).arg("-I").arg("-c").arg(program)
                 .arg(engine.join("scripts/lib")).arg(&engine).arg(&accounts_list).output().unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
             serde_json::from_slice::<(bool, String)>(&out.stdout).unwrap()
@@ -3106,9 +3118,11 @@ for line in sys.stdin:
         assert_eq!(code, Some(0), "{said}");
         assert!(said.contains("account Work") && !said.contains("status-line"), "{said}");
 
-        // 5. Second review's quota hold, in App mode (review-watch's environment: no app state of its own).
+        // 5. Second review's quota hold, in App mode, in review-watch's own environment: the gate's
+        // own decision on the published file, naming the account in use.
         let (held, reading) = review_hold();
-        assert!(!held && reading.contains("account Work"), "{reading}");
+        assert!(!held && reading.contains("app's gate") && reading.contains("Work (account 2)"), "{reading}");
+        assert_eq!(held, !gate::admission(&state, crate::util::now_millis()).allows_work(), "{reading}");
 
         // Back on Home, the app's own way: its week is fresh, its five hours still at 99, and Rich
         // picks Home first. Every consumer flips to Home and holds.
@@ -3127,7 +3141,8 @@ for line in sys.stdin:
         assert_eq!(code, Some(1), "{said}");
         assert!(said.contains("account Home"), "{said}");
         let (held, reading) = review_hold();
-        assert!(held && reading.contains("account Home"), "{reading}");
+        assert!(held && reading.contains("HOLDS") && reading.contains("Home (account 1)"), "{reading}");
+        assert_eq!(held, !gate::admission(&state, crate::util::now_millis()).allows_work(), "{reading}");
     }
 
     /// **A file an older app wrote names no account in use** (the live file of 2026-10-28 17:14Z,

@@ -835,21 +835,28 @@ def admit(wait_seconds, say):
 
 
 def quota_hold(engine_root, accounts=""):
-    """(held, reading). His 93% rule, read through quota-watch's own --once.
+    """(held, reading). His 93% rule.
 
-    `accounts` is the app's account list (--accounts, App mode): its folder is the app's data
-    folder, whose engine-state/claude-quota.json is the app's reading of the account in use.
-    review-watch's environment names neither CLAUDE_CONFIG_DIR nor RICHOS_APP_STATE, so without
-    this the child read Account 1's figures whichever account was in use and deferred reviews on
-    them (richos-hq follow-ups.md, 7fed0bef)."""
+    In the app (`accounts`, the app's account list, --accounts): THE GATE'S OWN ADMISSION, read
+    from the file the app publishes beside that list (<app>/engine-state/claude-quota.json, whose
+    top level is the account in use) by quota_watch.gate_admission, and nothing else. The app's
+    watcher starts with a cleared environment (review_watch.rs `environment`: no RICHOS_ENTITY_ROOT,
+    no CLAUDE_PROJECT_DIR), so quota-watch.sh found no QUOTA_PAUSE_PERCENT there, answered UNKNOWN,
+    and every app review started during a hold, on main as on the first version of this fix, which
+    only pointed quota-watch at the app's reading (richos-hq follow-ups.md, "app-launched reviews
+    never apply the usage hold"; rv-20261028T184535Z-d37b1f0d-e0d9). The app's pause setting, not a
+    terminal's config, decides an app review, as it decides every tool call of the app's work.
+
+    In a terminal: quota-watch's own --once (SECOND_REVIEW_QUOTA_CMD replaces it in tests)."""
+    if accounts:
+        import quota_watch  # sibling in scripts/lib: the app's published reading, read one way
+        state = os.path.join(os.path.dirname(os.path.abspath(accounts)), "engine-state")
+        gate = quota_watch.gate_admission(state, time.time())
+        return gate["held"], gate["line"]
     cmd = (os.environ.get("SECOND_REVIEW_QUOTA_CMD") or "").strip()
     argv = [cmd] if cmd else ["bash", os.path.join(engine_root, "scripts", "quota-watch.sh"), "--once"]
-    env = None
-    if accounts:
-        env = dict(os.environ)
-        env["RICHOS_APP_STATE"] = os.path.join(os.path.dirname(os.path.abspath(accounts)), "engine-state")
     try:
-        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90, env=env)
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, "quota reading unavailable (%s)" % exc.__class__.__name__
     text = p.stdout.decode("utf-8", "replace").strip().splitlines()

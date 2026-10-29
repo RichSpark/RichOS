@@ -214,5 +214,48 @@ class AppReading(unittest.TestCase):
              patch.object(weekly.subprocess,'run',side_effect=AssertionError('ticked from the app')):
             self.assertEqual(weekly.reset_tick('/engine'),{'status':weekly.APP_RUNS_RESET})
 
+class GateAdmission(unittest.TestCase):
+    """Second review of d37b1f0de (rv-20261028T184535Z-d37b1f0d-e0d9), blocking finding: an app review
+    takes the desktop gate's own decision from the published file and the pause setting beside it
+    (quota/gate.rs `admission`), with no terminal entity config. Only a hold holds."""
+    def setUp(self):
+        import tempfile, os
+        self.dir=tempfile.TemporaryDirectory(); self.app=self.dir.name
+        self.state=os.path.join(self.app,'engine-state'); os.makedirs(self.state)
+    def tearDown(self): self.dir.cleanup()
+    def publish(self, admission, held_until=None, policy=None, setting=None):
+        view={'windows':[{'id':'five_hour','label':'Five-hour','usedPercent':99,'resetsAt':(NOW+4740)*1000,'durationMs':18000000}],
+              'checkedAt':(NOW-30)*1000,'policy':policy or {'enabled':True,'pausePercent':93},'admission':admission,
+              'heldUntil':held_until,'inUse':{'id':'2','label':'Work'},
+              'accounts':[{'id':'1','label':'Home','inUse':False,'windows':[]},{'id':'2','label':'Work','inUse':True,'windows':[]}]}
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        if setting is not None:
+            with open(self.app+'/claude-quota-policy.json','w') as f: json.dump(setting,f)
+    def gate(self): return watcher.gate_admission(self.state,NOW)
+    def test_the_account_in_use_published_held_holds_until_its_reset(self):
+        self.publish({'state':'held','resetsAt':(NOW+4740)*1000})
+        g=self.gate()
+        self.assertEqual((g['held'],g['until'],g['account']['id']),(True,NOW+4740,'2'),g)
+        self.assertIn('HOLDS work on Work (account 2)',g['line'])
+    def test_a_hold_whose_window_has_reset_admits(self):
+        self.publish({'state':'held','resetsAt':(NOW-1)*1000})
+        self.assertFalse(self.gate()['held'])
+    def test_every_account_exhausted_holds_even_with_the_pause_off(self):
+        self.publish({'state':'disabled'},held_until=(NOW+600)*1000,policy={'enabled':False,'pausePercent':93})
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+600),g)
+    def test_only_a_hold_holds(self):
+        for kind in ('ready','unknown','noReading','disabled'):
+            self.publish({'state':kind})
+            self.assertFalse(self.gate()['held'],kind)
+    def test_the_setting_beside_the_file_wins_as_in_the_gate(self):
+        self.publish({'state':'held','resetsAt':(NOW+4740)*1000},setting={'enabled':False,'pausePercent':93})
+        self.assertFalse(self.gate()['held'])
+        self.publish({'state':'held','resetsAt':(NOW+4740)*1000},setting={'enabled':True,'pausePercent':80})
+        g=self.gate(); self.assertFalse(g['held']); self.assertIn('newer than its published reading',g['line'])
+    def test_no_file_or_a_broken_one_is_the_gates_unknown_and_admits(self):
+        g=self.gate(); self.assertFalse(g['held']); self.assertIn('no usage reading',g['line'])
+        with open(self.state+'/claude-quota.json','w') as f: f.write('{not json')
+        self.assertFalse(self.gate()['held'])
+
 unittest.main()
 PY
