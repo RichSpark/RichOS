@@ -38,6 +38,29 @@ export function removablePaths(paths) {
   return [...new Set(paths.filter(Boolean).map(real))].filter((p) => p.startsWith('/Volumes/'));
 }
 
+/**
+ * Put what Chrome and the host it launches read OFF the removable volume, so no privacy permission
+ * is asked for or needed (a nightly started from the app cannot read the TCC database, and Full Disk
+ * Access is not something a user is asked to give). `dirs` maps a name to a directory; a directory
+ * already off a removable volume comes back as it is, and one on a removable volume is copied under
+ * `into` (without node_modules and .git) and the copy's path comes back. `into` must itself be off a
+ * removable volume or this throws: staging onto the volume would move nothing.
+ */
+export function stageOffRemovable({ dirs, into }) {
+  fs.mkdirSync(into, { recursive: true });
+  if (removablePaths([into]).length) {
+    throw new Error(`cannot stage off a removable volume into ${real(into)}: it is on one too (set TMPDIR to a folder on the internal disk)`);
+  }
+  const staged = {};
+  for (const [name, dir] of Object.entries(dirs)) {
+    if (!removablePaths([dir]).length) { staged[name] = dir; continue; }
+    const copy = path.join(into, path.basename(dir));
+    fs.cpSync(dir, copy, { recursive: true, filter: (source) => !/(^|\/)(node_modules|\.git)$/.test(source) });
+    staged[name] = copy;
+  }
+  return staged;
+}
+
 /** 'allowed' | 'not allowed' | 'unknown (<why>)' for one path-identified subject. */
 export function removableGrant(subject, home = os.homedir()) {
   const db = path.join(home, 'Library', 'Application Support', 'com.apple.TCC', 'TCC.db');
