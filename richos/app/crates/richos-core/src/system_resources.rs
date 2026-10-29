@@ -378,13 +378,34 @@ pub struct Monitor {
     workers: Vec<std::thread::JoinHandle<()>>,
     #[cfg(unix)]
     socket: PathBuf,
+    #[cfg(unix)]
+    wake: Option<std::os::unix::net::UnixStream>,
 }
 impl Monitor {
     pub fn start(state: &Path) -> Result<Self, String> {
         #[cfg(unix)]
         {
+            Self::start_accepting(state, |listener| {
+                listener.accept().map(|(stream, _)| stream)
+            })
+        }
+        #[cfg(not(unix))]
+        Err("Live host resources are supported on macOS.".into())
+    }
+
+    #[cfg(unix)]
+    fn start_accepting(
+        state: &Path,
+        mut accept: impl FnMut(
+                &std::os::unix::net::UnixListener,
+            ) -> std::io::Result<std::os::unix::net::UnixStream>
+            + Send
+            + 'static,
+    ) -> Result<Self, String> {
+        {
             use std::{
                 io::{Read, Write},
+                os::fd::AsRawFd,
                 os::unix::{
                     fs::{FileTypeExt, PermissionsExt},
                     net::{UnixListener, UnixStream},
@@ -412,9 +433,15 @@ impl Monitor {
                 stop: stop.clone(),
                 workers: Vec::new(),
                 socket,
+                wake: None,
             };
             std::fs::set_permissions(&monitor.socket, std::fs::Permissions::from_mode(0o600))
                 .map_err(|e| e.to_string())?;
+            // Closing the connected wake endpoint interrupts poll even when the
+            // listener's path is missing or its connection backlog is full.
+            let (wake, wake_reader) = UnixStream::pair().map_err(|e| e.to_string())?;
+            monitor.wake = Some(wake);
+            listener.set_nonblocking(true).map_err(|e| e.to_string())?;
             let mut initial = Snapshot::unavailable("Waiting for the first CPU interval.");
             initial.instance_id = uuid::Uuid::new_v4().to_string();
             initial.status = "warming_up".into();
@@ -486,13 +513,46 @@ impl Monitor {
             let server = std::thread::Builder::new()
                 .name("resource-reads".into())
                 .spawn(move || {
-                    for connection in listener.incoming() {
+                    let mut descriptors = [
+                        libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 },
+                        libc::pollfd { fd: wake_reader.as_raw_fd(), events: libc::POLLIN, revents: 0 },
+                    ];
+                    let mut logged_error = false;
+                    loop {
                         if *serve_stop.0.lock().unwrap_or_else(|e| e.into_inner()) {
                             break;
                         }
-                        let Ok(mut stream) = connection else { break };
+                        // Both descriptors remain owned by this thread throughout poll.
+                        let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, -1) };
+                        if *serve_stop.0.lock().unwrap_or_else(|e| e.into_inner()) {
+                            break;
+                        }
+                        let connection = if ready < 0 {
+                            Err(std::io::Error::last_os_error())
+                        } else if descriptors[0].revents != 0 {
+                            accept(&listener)
+                        } else {
+                            continue;
+                        };
+                        let mut stream = match connection {
+                            Ok(stream) => { logged_error = false; stream }
+                            Err(e) if matches!(e.kind(), std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock) => continue,
+                            Err(e) => {
+                                if !logged_error {
+                                    eprintln!("[richos] resource endpoint will retry after an I/O error: {e}");
+                                    logged_error = true;
+                                }
+                                let stopped = serve_stop.0.lock().unwrap_or_else(|e| e.into_inner());
+                                drop(serve_stop.1.wait_timeout_while(stopped, Duration::from_millis(100), |stop| !*stop)
+                                    .unwrap_or_else(|e| e.into_inner()));
+                                continue;
+                            }
+                        };
                         let mut request = [0u8; 1];
-                        if stream
+                        // Accepted sockets may inherit the listener's nonblocking
+                        // flag on BSD. The request uses bounded blocking I/O.
+                        if stream.set_nonblocking(false).is_err()
+                            || stream
                             .set_read_timeout(Some(Duration::from_millis(100)))
                             .is_err()
                             || stream.read_exact(&mut request).is_err()
@@ -526,8 +586,6 @@ impl Monitor {
             monitor.workers.push(server);
             Ok(monitor)
         }
-        #[cfg(not(unix))]
-        Err("Live host resources are supported on macOS.".into())
     }
 }
 impl Drop for Monitor {
@@ -536,9 +594,7 @@ impl Drop for Monitor {
         self.stop.1.notify_all();
         #[cfg(unix)]
         {
-            if let Ok(wake) = std::os::unix::net::UnixStream::connect(&self.socket) {
-                drop(wake);
-            }
+            drop(self.wake.take());
         }
         for worker in self.workers.drain(..) {
             if worker.join().is_err() {
@@ -726,6 +782,43 @@ mod tests {
         assert!(prepare_socket_dir(&link).is_err());
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(prepare_socket_dir(&dir).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn transient_accept_failure_retries_without_losing_the_sampler() {
+        let root = std::env::temp_dir().join(format!("rr-{}", uuid::Uuid::new_v4()));
+        let mut fail_once = true;
+        let monitor = Monitor::start_accepting(&root, move |listener| {
+            if fail_once {
+                fail_once = false;
+                Err(std::io::Error::from_raw_os_error(libc::EMFILE))
+            } else {
+                listener.accept().map(|(stream, _)| stream)
+            }
+        })
+        .unwrap();
+        let first = read(&root);
+        assert!(!first.instance_id.is_empty(), "{:?}", first.detail);
+        assert_eq!(read(&root).instance_id, first.instance_id);
+        drop(monitor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_does_not_need_the_listener_path() {
+        // Completion is the verdict. The owning test command supplies the hang
+        // guard if shutdown regresses; no elapsed-time threshold is asserted.
+        let root = std::env::temp_dir().join(format!("rr-{}", uuid::Uuid::new_v4()));
+        let monitor = Monitor::start(&root).unwrap();
+        let first = read(&root);
+        assert!(!first.instance_id.is_empty());
+        std::fs::remove_file(endpoint(&root)).unwrap();
+        drop(monitor);
+        assert_eq!(read(&root).status, "unavailable");
+        let next = Monitor::start(&root).unwrap();
+        assert_ne!(read(&root).instance_id, first.instance_id);
+        drop(next);
         std::fs::remove_dir_all(root).unwrap();
     }
     #[cfg(unix)]
