@@ -366,6 +366,17 @@ impl WorkHost {
         clock.wait(wait, &|| stopped() || lifted()) || (!stopped() && lifted())
     }
 
+    /// **`message` carries on an automatic turn a usage limit cut, after its hold**
+    /// ([`Self::recover_automatic_turn`]'s `turn_usage_limit`): that hold was the one retry, so
+    /// the turn it starts gets none of its own and whatever it comes to is final (review
+    /// rv-20261029T140028Z-3e883526-10b9, finding 1: it was given a fresh one, so a second
+    /// refusal was held and sent a third time). Read on both ways it reaches Stu: the run loop's
+    /// (`run_message`) and live (`wake_messages`).
+    fn usage_limit_retry_spent(message: &crate::session_tools::Message) -> bool {
+        message.from == "overload-retry" && !message.handoff
+            && serde_json::from_str::<serde_json::Value>(&message.text).is_ok_and(|fact| fact["event"] == "turn_usage_limit")
+    }
+
     /// A usage limit cut this turn and there is a quota service to answer it with
     /// ([`Self::usage_limit_hold`]). Reads no lease, so the native reader may ask it.
     fn usage_limit_answerable(&self, result: &Result<String, String>) -> bool {
@@ -446,7 +457,8 @@ impl WorkHost {
     /// normal Stu paths). Claude Code started it, so no input of ours can go again: the account
     /// is marked gone and Stu is moved to one with room, where `account_moved` tells him to carry
     /// on; or the hold lasts until the refusal is lifted and he is told once, through his own
-    /// inbox, to carry on (`turn_usage_limit`, stu.md). Never more than that one message.
+    /// inbox, to carry on (`turn_usage_limit`, stu.md). Never more than that one message, and
+    /// the turn it starts has no retry of its own ([`Self::usage_limit_retry_spent`]).
     fn recover_automatic_turn(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
         session: &str, result: &Result<String, String>) -> std::io::Result<()> {
         let (host, receiving, binding) = (Arc::downgrade(self), Arc::downgrade(backend), binding.clone());
@@ -985,8 +997,8 @@ impl WorkHost {
             if let Some(session) = &session {
                 crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),session)?;
             }
-            let completed = self.live_completion(&backend, binding, message.clone(),
-                (InputReceipt::Peer(through), session.clone()), text.clone());
+            let completed = self.live_completion_with(&backend, binding, message.clone(),
+                (InputReceipt::Peer(through), session.clone()), text.clone(), !Self::usage_limit_retry_spent(&message));
             match input.send_input(&id, &text, completed) {
                 Ok(delivered)=>Ok(delivered),
                 Err(error)=>{
@@ -1223,8 +1235,10 @@ impl WorkHost {
         // "FILL-FIRST'S BACKSTOP"): at once on the next account with room, or after the hold
         // until the refusal is lifted when it cannot go there yet. The wait is the existing retry
         // clock's, with the overload retry's Stop checks, and it ends early once the refusal is
-        // lifted. Whatever the second delivery comes to is final.
-        let result = match result.as_ref().err().and_then(|error| self.usage_limit_hold(backend, binding, error)) {
+        // lifted. Whatever the second delivery comes to is final, and so is the first of a
+        // message that carries on after such a hold (`usage_limit_retry_spent`).
+        let retry = !Self::usage_limit_retry_spent(message);
+        let result = match result.as_ref().err().filter(|_| retry).and_then(|error| self.usage_limit_hold(backend, binding, error)) {
             Some(hold) => if self.usage_limit_waited(backend, binding, Some(message), &hold) { deliver() } else { result },
             None => result,
         };
@@ -3795,7 +3809,9 @@ mod tests {
     type Reached = Arc<Mutex<Vec<(String, String)>>>;
     type Answers = Arc<Mutex<VecDeque<Result<String, String>>>>;
     type SinkSlot = Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>;
-    struct NativeLease { account: String, sink: SinkSlot, reached: Reached, answers: Answers }
+    /// `prompted`: the next scripted result of a turn the run loop gives him (`prompt`),
+    /// `end_turn` when none is left.
+    struct NativeLease { account: String, sink: SinkSlot, reached: Reached, answers: Answers, prompted: Answers }
     impl Cognition for NativeLease {
         fn session_id(&self)->&str {"stu-native"}
         fn account(&self)->Option<&str> {Some(&self.account)}
@@ -3806,7 +3822,7 @@ mod tests {
         }
         fn prompt(&mut self,text:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
             self.reached.lock().unwrap().push((self.account.clone(),text.to_string()));
-            Ok("end_turn".into())
+            self.prompted.lock().unwrap().pop_front().unwrap_or_else(|| Ok("end_turn".into())).map_err(CognitionError::Protocol)
         }
     }
     struct NativeSend { account: String, reached: Reached, answers: Answers }
@@ -3819,27 +3835,27 @@ mod tests {
             Ok(true)
         }
     }
-    struct NativeFactory { quota: Arc<crate::quota::Service>, sink: SinkSlot, reached: Reached, answers: Answers }
+    struct NativeFactory { quota: Arc<crate::quota::Service>, sink: SinkSlot, reached: Reached, answers: Answers, prompted: Answers }
     impl LeaseFactory for NativeFactory {
         fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
         fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
             Ok(Box::new(NativeLease {account:self.quota.lease_account().id,sink:self.sink.clone(),
-                reached:self.reached.clone(),answers:self.answers.clone()}))
+                reached:self.reached.clone(),answers:self.answers.clone(),prompted:self.prompted.clone()}))
         }
     }
     struct NativeStu { h: Harness, host: Arc<WorkHost>, quota: Arc<crate::quota::Service>, sink: SinkSlot,
-        reached: Reached, answers: Answers, clock: Arc<RecordedRetryClock>, notices: Arc<RecordingNotifier> }
+        reached: Reached, answers: Answers, prompted: Answers, clock: Arc<RecordedRetryClock>, notices: Arc<RecordingNotifier> }
     /// Stu on the quota service `quota`, on a recorded retry clock, his lease opened on the
     /// account in use by a first message from Rich.
     fn native_stu(h: Harness, quota: Arc<crate::quota::Service>) -> NativeStu {
-        let (sink,reached,answers): (SinkSlot,Reached,Answers)=Default::default();
+        let (sink,reached,answers,prompted): (SinkSlot,Reached,Answers,Answers)=Default::default();
         let notices=Arc::new(RecordingNotifier::default());
         let host=WorkHost::new(&h.state,Box::new(NativeFactory {quota:quota.clone(),sink:sink.clone(),
-            reached:reached.clone(),answers:answers.clone()}),notices.clone());
+            reached:reached.clone(),answers:answers.clone(),prompted:prompted.clone()}),notices.clone());
         let clock=Arc::new(RecordedRetryClock::default());
         host.set_retry_clock(clock.clone());
         host.set_quota(quota.clone());
-        let stu=NativeStu {h,host,quota,sink,reached,answers,clock,notices};
+        let stu=NativeStu {h,host,quota,sink,reached,answers,prompted,clock,notices};
         crate::session_tools::bind(&stu.status(),&stu.scope(),"front","rich",None).unwrap();
         crate::session_tools::send(&stu.status(),&stu.scope(),serde_json::json!({"text":"First message"})).unwrap();
         stu.host.wake_messages(&stu.h.binding);
@@ -4014,6 +4030,32 @@ mod tests {
         assert!(stu.quota.accounts.limited_until("1").is_some(),"Account 1 was not marked gone");
         assert_eq!(*stu.clock.0.lock().unwrap(),[std::time::Duration::ZERO],"Home had room: no hold");
         assert!(stu.failures().is_empty());
+        stu.end();
+    }
+
+    /// **The message that carries an automatic turn on has had the one retry** (review
+    /// rv-20261029T140028Z-3e883526-10b9, finding 1: `turn_usage_limit` reached `run_message`
+    /// with a fresh retry of its own, so a second refusal was held and sent a third time). One
+    /// account. A helper hands back and the automatic turn Claude Code starts for it is refused,
+    /// with a reset an hour away: held to it, and Stu gets one `turn_usage_limit` message. The
+    /// turn that message starts is refused too. It is not held or sent again: its failure
+    /// reaches Rich, once.
+    #[test]
+    fn the_message_that_carries_a_cut_automatic_turn_on_is_not_retried_after_its_own_usage_limit() {
+        let h=harness(0);
+        let quota=Arc::new(crate::quota::Service::open(&h.root.join("quota")).unwrap());
+        let stu=native_stu(h,quota);
+        stu.prompted.lock().unwrap().push_back(session_limit(crate::util::now_millis()+3_600_000));
+
+        stu.automatic_turn_cut(crate::util::now_millis()+3_600_000);
+        until("the refused continuation was neither reported nor sent again",
+            ||stu.rich_told()||stu.reached("turn_usage_limit").len()>1);
+
+        assert_eq!(stu.accounts("turn_usage_limit"),["1"],"the continuation was held and sent again after its own refusal");
+        assert!(about_an_hour(&stu.clock.0.lock().unwrap()),"not one hold, the automatic turn's: {:?}",stu.clock.0.lock().unwrap());
+        let failures=stu.failures();
+        assert_eq!(failures.len(),1,"{failures:?}");
+        assert!(failures[0].to_string().contains(crate::claude_accounts::USAGE_LIMIT),"{failures:?}");
         stu.end();
     }
 
