@@ -308,10 +308,9 @@ NEW_USER_WALK_STEPS = ("identity", "setup", "signed-out", "accounts", "update", 
 NEW_USER_WALK_WAIT = 3600
 NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 
-# GUEST MEMORY, ASKED AT ONCE (2026-10-29, nightly 80). That build passed every gate, then its
-# boot proof waited the full hour for a slot and ended "a guest needs 5120 MB: 8847 MB
-# available ... would leave 3727 MB (floor 4096 MB)": memory no slot wait could free, found
-# only at the deadline. So a build that will boot a guest asks `testvm/slots.py fits` before its
+# GUEST MEMORY, ASKED AT ONCE. A build that passed every gate could wait the full hour for a
+# guest slot and end "a guest needs N MB: M MB available ... (floor F MB)": memory no slot wait
+# could free, found only at the deadline. So a build that will boot a guest asks `testvm/slots.py fits` before its
 # gates and again on entering each VM phase, and a shortfall is REPORTED AT ONCE, naming what
 # holds it (apps, the kernel's leak, running guests), instead of surfacing at the hour's end.
 # The phase still waits for its slot while what processes hold could cover the shortfall:

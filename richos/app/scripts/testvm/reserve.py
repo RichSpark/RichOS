@@ -18,7 +18,7 @@ line is not applied, the memory rule and the backoff still are, and the command
 runs under nice -n 10. Every use is announced. When that build ends, the 80%
 line applies again: stop passing the flag.
 
-A NIGHTLY WAITING FOR ITS GUEST GOES FIRST (2026-10-29, nightly 80). While a
+A NIGHTLY WAITING FOR ITS GUEST GOES FIRST. While a
 nightly's vm-boot-proof or new-user-walk waits for a test-VM guest slot,
 slots.py writes <TESTVM_ROOT>/nightly-guest-wait.json, and every admission
 sampled here (this command, proof-run.py's checks, every other guest walk's
@@ -62,11 +62,12 @@ NIGHTLY_GUEST_WAIT = 'nightly-guest-wait.json'
 NIGHTLY_GUEST_WAIT_STALE = MAX_WAIT_SECONDS + 600
 
 
-# THE KERNEL'S OWN LEAK (2026-10-29, Otto's read-only trace). With no guest running this Mac had
-# 12.57 GiB wired, about 9.3 GiB of it one kernel zone, data.kalloc.1024, growing about 46
-# elements/s under agent workloads; only a restart gives it back. A memory refusal that named
-# only apps sent people closing apps for memory no app held. `zprint ZONE` needs no sudo; without
-# it the size columns read 0K, so the zone's size is its elements in use times the element size.
+# A KERNEL ZONE THAT LEAKS. Admission reads the machine's live available memory; when that is short
+# and one kernel zone (LEAK_ZONE, read from `zprint`) holds a large share of it, the refusal names the
+# zone, because closing apps cannot return memory no app holds and only a restart gives it back. A
+# refusal that named only apps would send people closing apps for nothing. `zprint ZONE` needs no
+# sudo; without it the size columns read 0K, so the zone's size is its elements in use times the
+# element size.
 LEAK_ZONE = 'data.kalloc.1024'
 LEAK_SHARE = 0.10           # named once the zone holds this share of physical memory
 _ZONE_CACHE = {}
@@ -97,7 +98,7 @@ def kernel_zone_text(zone=LEAK_ZONE, now=None):
 
 
 def kernel_leak_note(total_mb=None, text=None):
-    """'' unless the leaking kernel zone holds LEAK_SHARE or more of this Mac's memory, else the
+    """'' unless the leaking kernel zone holds LEAK_SHARE or more of the machine's memory, else the
     clause that names it. `text` is zprint's output (read here when None)."""
     held = zone_in_use_mb(kernel_zone_text() if text is None else text)
     if held is None:

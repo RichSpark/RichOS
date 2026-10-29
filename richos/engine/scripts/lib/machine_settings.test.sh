@@ -32,13 +32,13 @@ class Settings(unittest.TestCase):
    with self.assertRaises(ValueError):M.load({'HOME':str(home),'RICHOS_ENV_FILE':str(home/'missing')})
    with self.assertRaises(ValueError):M.load({'HOME':str(home),'RICHOS_ENV_FILE':'relative'})
  def test_limits_live_beside_env_and_never_in_it(self):
-  # 2026-10-29: a number in .env would make every older engine's parse() refuse the whole file.
+  # A number in .env would make every older engine's parse() refuse the whole file.
   with tempfile.TemporaryDirectory() as root:
    home=pathlib.Path(root).resolve();source=home/'Library/Application Support/RichOS/limits.env'
    env={'HOME':str(home)}
    self.assertEqual(M.limit('TESTVM_MEMORY_FLOOR_MB',4096,env),(4096,f'default; no TESTVM_MEMORY_FLOOR_MB in {source}'))
-   source.parent.mkdir(parents=True);source.write_text('# measured\nTESTVM_MEMORY_FLOOR_MB=2048\n')
-   self.assertEqual(M.limit('TESTVM_MEMORY_FLOOR_MB',4096,env),(2048,f'machine setting TESTVM_MEMORY_FLOOR_MB in {source}'))
+   source.parent.mkdir(parents=True);source.write_text('# a floor lower than the default\nTESTVM_MEMORY_FLOOR_MB=2500\n')
+   self.assertEqual(M.limit('TESTVM_MEMORY_FLOOR_MB',4096,env),(2500,f'machine setting TESTVM_MEMORY_FLOOR_MB in {source}'))
    self.assertEqual(M.load(env),{},'the limits file is not read as .env paths')
    self.assertEqual(M.limit('TESTVM_MEMORY_FLOOR_MB',4096,{**env,'TESTVM_MEMORY_FLOOR_MB':'3000'})[0],3000)
    for bad in ('TESTVM_MEMORY_FLOOR_MB=x\n','TESTVM_MEMORY_FLOOR_MB=99999999\n','CARGO_TARGET_DIR=/x\n'):
@@ -46,7 +46,7 @@ class Settings(unittest.TestCase):
     with self.assertRaises(ValueError):M.limit('TESTVM_MEMORY_FLOOR_MB',4096,env)
    with self.assertRaises(ValueError):M.limit('UNKNOWN',1,env)
    with self.assertRaises(ValueError):M.limit('TESTVM_MEMORY_FLOOR_MB',4096,{**env,'RICHOS_LIMITS_FILE':'relative'})
-   with self.assertRaises(ValueError):M.parse('TESTVM_MEMORY_FLOOR_MB=2048\n')
+   with self.assertRaises(ValueError):M.parse('TESTVM_MEMORY_FLOOR_MB=2500\n')
  def test_mount_refusal_before_writes_and_mount_component(self):
   volume=pathlib.Path('/Volumes/'+'Fixture')
   env={'HOME':'/fixture home','RICHOS_BULK_ROOT':str(volume/'nested')}

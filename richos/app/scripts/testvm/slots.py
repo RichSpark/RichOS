@@ -48,8 +48,8 @@ So a guest is admitted only when the kernel's available memory, less what every 
 may still take (its RAM less what its VM process already holds) and less this guest's whole
 RAM, leaves the memory floor for everything else on the Mac.
 
-THE FLOOR IS A MACHINE SETTING (2026-10-29, nightly 80: refused for an hour with 3727 MB left
-against a hard-coded 4096). TESTVM_MEMORY_FLOOR_MB, from the environment or this Mac's private
+THE FLOOR IS A MACHINE SETTING, not a constant: a fixed floor refused a guest for an hour on a
+machine whose own margin was lower. TESTVM_MEMORY_FLOOR_MB, from the environment or this machine's private
 limits file (engine machine_settings.py `limit`), else GUEST_MEMORY_FLOOR_MB below, the stated
 default for a Mac nobody has measured. Admission still reads live available memory every time;
 the floor is only the margin a guest leaves for everything else. A refusal names the setting it
@@ -263,7 +263,7 @@ def guest_fit(sample=None, running=None, resident=None, total_mb=None, ram_mb=No
     `waitable` is True when what processes hold could cover the shortfall: running guests
     (their RAM comes back when they end), other agents' builds and checks that end within
     minutes, or apps somebody can close. Then the slot wait is worth having, and the caller says
-    so at once. It is False only when the shortfall is more than every process on this Mac holds
+    so at once. It is False only when the shortfall is more than every process on the machine holds
     together: the kernel holds it (reserve.py LEAK_ZONE), and only a restart returns it."""
     sample = sample or reserve.memory_sample()
     running = running_guests() if running is None else running

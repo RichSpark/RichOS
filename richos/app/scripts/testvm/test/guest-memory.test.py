@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Guest memory after nightly 80 (2026-10-29), offline: no guest, no tart, no `top`.
+"""Guest memory admission, offline: no guest, no tart, no `top`.
 
-Nightly 80's VM boot proof waited an hour and ended "a guest needs 5120 MB: 8847 MB available
-... would leave 3727 MB (floor 4096 MB)", with every worker's proof run admitted beside it.
+A VM boot proof that waits an hour for a guest slot and ends "a guest needs N MB: M MB available
+... (floor F MB)" is a memory shortfall nobody was told about, with every other proof run admitted
+beside it. Every figure below is a synthetic machine, never a real one: 32768 MB of memory, a 5120 MB
+guest and the 4096 MB default floor.
 
-  1. the floor is this Mac's machine setting (limits.env), the environment wins, a missing
+  1. the floor is the machine's own setting (limits.env), the environment wins, a missing
      setting is the stated default 4096, a malformed one is an error
-  2. a refusal names the kernel's own leak (zprint data.kalloc.1024) when it holds a large
+  2. a refusal names a leaking kernel zone (zprint LEAK_ZONE) when it holds a large
      share of memory, read from zprint's output, before the apps
   3. `guest_fit` tells a shortfall running guests will clear from one apps or the kernel hold
   4. while a nightly's VM phase waits for its slot, reserve.py refuses every other admission
@@ -35,15 +37,19 @@ import slots  # noqa: E402
 import machine_settings  # noqa: E402
 
 REAL_RUN = subprocess.run
-# `zprint data.kalloc.1024` as this Mac printed it without sudo on 2026-10-29: sizes read 0K, the
-# elements in use do not. 9,733,229 x 1024 bytes is 9.3 GB.
+# `zprint ZONE` without sudo prints the sizes as 0K but not the elements in use: the zone's size is
+# those elements times the element size. 4,194,304 x 1024 bytes is 4.0 GB, 12.5% of the machine below.
 ZPRINT_HEAD = ('                            elem         cur         max        cur         max         cur  alloc  alloc    \n'
                'zone name                   size        size        size      #elts       #elts       inuse   size  count    \n'
                '-------------------------------------------------------------------------------------------------------------\n')
-LEAKING = ZPRINT_HEAD + 'data.kalloc.1024            1024          0K          0K          0           0     9733229     0K      0   \n'
+LEAKING = ZPRINT_HEAD + 'data.kalloc.1024            1024          0K          0K          0           0     4194304     0K      0   \n'
 HEALTHY = ZPRINT_HEAD + 'data.kalloc.1024            1024          0K          0K          0           0      300000     0K      0   \n'
-NIGHTLY_80 = {'memory_free_percent': 8847 / 24576 * 100}
-APPS = [('/Applications/ChatGPT.app/Contents/MacOS/ChatGPT', 2338), ('/Applications/RichOS.app/Contents/MacOS/RichOS', 800)]
+TOTAL_MB = 32768            # the synthetic machine
+GUEST_MB = 5120
+# 8800 MB available: the guest would leave 3680 MB, 416 MB under the 4096 MB default floor and 680 MB
+# over a floor setting of 3000 MB.
+JUST_SHORT = {'memory_free_percent': 8800 / TOTAL_MB * 100}
+APPS = [('/Applications/AppOne.app/Contents/MacOS/AppOne', 2300), ('/Applications/AppTwo.app/Contents/MacOS/AppTwo', 800)]
 
 
 def zprint_says(text):
@@ -75,21 +81,21 @@ class Isolated(unittest.TestCase):
 
 
 class Floor(Isolated):
-    def test_the_floor_is_this_macs_setting_and_nightly_80s_guest_fits_under_it(self):
-        self.limits.write_text('# this Mac, 2026-10-29\nTESTVM_MEMORY_FLOOR_MB=2048\n')
+    def test_a_machine_whose_floor_setting_is_lower_than_the_default_admits_a_guest_the_default_refuses(self):
+        self.limits.write_text('# a floor lower than the default\nTESTVM_MEMORY_FLOOR_MB=3000\n')
         floor, where = slots.guest_memory_floor()
-        self.assertEqual(floor, 2048)
+        self.assertEqual(floor, 3000)
         self.assertIn(f'machine setting TESTVM_MEMORY_FLOOR_MB in {self.limits}', where)
-        fits = slots.memory_refusal(NIGHTLY_80, [], resident=[], total_mb=24576, ram_mb=5120, processes=[],
+        fits = slots.memory_refusal(JUST_SHORT, [], resident=[], total_mb=TOTAL_MB, ram_mb=GUEST_MB, processes=[],
                                     zone_text='')
-        self.assertEqual(fits, '', 'nightly 80 left 3727 MB: over a 2048 MB floor')
-        short = slots.memory_refusal({'memory_free_percent': 25}, [], resident=[], total_mb=24576, ram_mb=5120,
+        self.assertEqual(fits, '', 'the guest leaves 3680 MB: over a 3000 MB floor')
+        short = slots.memory_refusal({'memory_free_percent': 20}, [], resident=[], total_mb=TOTAL_MB, ram_mb=GUEST_MB,
                                      processes=[], zone_text='')
-        self.assertIn('(floor 2048 MB, machine setting TESTVM_MEMORY_FLOOR_MB', short)
+        self.assertIn('(floor 3000 MB, machine setting TESTVM_MEMORY_FLOOR_MB', short)
 
     def test_a_missing_setting_falls_back_to_the_stated_default_and_says_so(self):
         # Second review, P3: the no-file case once dropped RICHOS_LIMITS_FILE for the cases after
-        # it, which then read this Mac's own limits.env (2048). Each case states its whole input.
+        # it, which then read the machine's own limits file. Each case states its whole input.
         empty_home = self.dir / 'home'
         empty_home.mkdir()
         cases = (('', {'RICHOS_LIMITS_FILE': str(self.limits)}),
@@ -108,16 +114,16 @@ class Floor(Isolated):
             if text is None:
                 self.assertIn(str(empty_home / 'Library/Application Support/RichOS/limits.env'), where)
         self.assertEqual(os.environ.get('RICHOS_LIMITS_FILE'), str(self.limits))
-        short = slots.memory_refusal(NIGHTLY_80, [], resident=[], total_mb=24576, ram_mb=5120, processes=[],
+        short = slots.memory_refusal(JUST_SHORT, [], resident=[], total_mb=TOTAL_MB, ram_mb=GUEST_MB, processes=[],
                                      zone_text='')
-        self.assertIn('would leave 3727 MB (floor 4096 MB, default; no TESTVM_MEMORY_FLOOR_MB', short)
+        self.assertIn('would leave 3680 MB (floor 4096 MB, default; no TESTVM_MEMORY_FLOOR_MB', short)
 
     def test_the_environment_wins_and_a_malformed_value_is_an_error_never_a_silent_default(self):
-        self.limits.write_text('TESTVM_MEMORY_FLOOR_MB=2048\n')
-        with patch.dict(os.environ, {'TESTVM_MEMORY_FLOOR_MB': '3072'}):
-            self.assertEqual(slots.guest_memory_floor(), (3072, 'environment TESTVM_MEMORY_FLOOR_MB'))
+        self.limits.write_text('TESTVM_MEMORY_FLOOR_MB=3000\n')
+        with patch.dict(os.environ, {'TESTVM_MEMORY_FLOOR_MB': '3500'}):
+            self.assertEqual(slots.guest_memory_floor(), (3500, 'environment TESTVM_MEMORY_FLOOR_MB'))
         for bad in ('TESTVM_MEMORY_FLOOR_MB=2 GB\n', 'TESTVM_MEMORY_FLOOR_MB=-1\n', 'TESTVM_MEMORY_FLOOR_MB=10\n',
-                    'TESTVM_MEMORY_FLOOR_MB=2048\nTESTVM_MEMORY_FLOOR_MB=4096\n', 'RICHOS_BULK_ROOT=/x\n'):
+                    'TESTVM_MEMORY_FLOOR_MB=3000\nTESTVM_MEMORY_FLOOR_MB=4096\n', 'RICHOS_BULK_ROOT=/x\n'):
             self.limits.write_text(bad)
             with self.assertRaises(ValueError, msg=bad):
                 slots.guest_memory_floor()
@@ -127,26 +133,26 @@ class Floor(Isolated):
 
     def test_the_setting_is_never_in_env_where_every_older_engine_would_refuse_it(self):
         with self.assertRaisesRegex(ValueError, 'unknown key TESTVM_MEMORY_FLOOR_MB'):
-            machine_settings.parse('TESTVM_MEMORY_FLOOR_MB=2048\n')
+            machine_settings.parse('TESTVM_MEMORY_FLOOR_MB=3000\n')
         self.assertNotIn('TESTVM_MEMORY_FLOOR_MB', machine_settings.KEYS)
 
 
 class KernelLeak(Isolated):
     def test_a_large_leaked_zone_is_named_before_the_apps(self):
         with zprint_says(LEAKING):
-            text = slots.memory_refusal(NIGHTLY_80, [], resident=[], total_mb=24576, ram_mb=5120, floor_mb=4096,
+            text = slots.memory_refusal(JUST_SHORT, [], resident=[], total_mb=TOTAL_MB, ram_mb=GUEST_MB, floor_mb=4096,
                                         processes=APPS)
-        self.assertIn('369 MB more must be free; kernel leak data.kalloc.1024 holds 9.3 GB; only a restart '
-                      'returns it; largest apps by memory: ChatGPT 2338 MB, RichOS 800 MB', text)
+        self.assertIn('416 MB more must be free; kernel leak data.kalloc.1024 holds 4.0 GB; only a restart '
+                      'returns it; largest apps by memory: AppOne 2300 MB, AppTwo 800 MB', text)
 
     def test_a_small_zone_is_not_blamed(self):
         with zprint_says(HEALTHY):
-            text = slots.memory_refusal(NIGHTLY_80, [], resident=[], total_mb=24576, ram_mb=5120, floor_mb=4096,
+            text = slots.memory_refusal(JUST_SHORT, [], resident=[], total_mb=TOTAL_MB, ram_mb=GUEST_MB, floor_mb=4096,
                                         processes=APPS)
         self.assertNotIn('kernel leak', text)
-        self.assertIn('largest apps by memory: ChatGPT 2338 MB', text)
+        self.assertIn('largest apps by memory: AppOne 2300 MB', text)
         self.assertEqual(reserve.zone_in_use_mb('zprint: no such zone\n'), None)
-        self.assertEqual(reserve.kernel_leak_note(24576, ''), '')
+        self.assertEqual(reserve.kernel_leak_note(TOTAL_MB, ''), '')
 
     def test_reserve_s_own_memory_refusal_names_the_leak_too(self):
         total = slots.host_memory_mb()
@@ -166,27 +172,27 @@ class KernelLeak(Isolated):
 
 class Fit(Isolated):
     def test_what_processes_could_free_is_waited_for_and_only_the_kernel_s_share_is_not(self):
-        # Nightly 80: 369 MB short while ChatGPT and RichOS alone held 3138 MB. Second review, P2:
+        # 416 MB short while two apps alone hold 3100 MB. Second review, P2:
         # memory processes hold (apps, other agents' builds) is worth the slot wait, and says so.
         with zprint_says(LEAKING):
-            apps = slots.guest_fit(NIGHTLY_80, running=[], resident=[], total_mb=24576, ram_mb=5120, floor_mb=4096,
+            apps = slots.guest_fit(JUST_SHORT, running=[], resident=[], total_mb=TOTAL_MB, ram_mb=GUEST_MB, floor_mb=4096,
                                    processes=APPS)
         self.assertEqual((apps['fits'], apps['waitable'], apps['needed_mb'], apps['freeable_mb']),
-                         (False, True, 369, 3138))
-        self.assertIn('kernel leak data.kalloc.1024 holds 9.3 GB', apps['reason'])
-        # 25% of 24 GB is 6144 MB: a 5120 MB guest leaves 1024 MB, 3072 MB short of a 4096 floor, and
-        # every process together holds 2600 MB: no wait frees it, the kernel holds the rest.
-        stuck = slots.guest_fit({'memory_free_percent': 25}, running=[], resident=[], total_mb=24576, ram_mb=5120,
-                                floor_mb=4096, processes=[('/bin/x', 2600)], zone_text='')
+                         (False, True, 416, 3100))
+        self.assertIn('kernel leak data.kalloc.1024 holds 4.0 GB', apps['reason'])
+        # 25% of 32768 MB is 8192 MB: a 5120 MB guest leaves 3072 MB, 1024 MB short of a 4096 floor, and
+        # every process together holds 600 MB: no wait frees it, the kernel holds the rest.
+        stuck = slots.guest_fit({'memory_free_percent': 25}, running=[], resident=[], total_mb=TOTAL_MB, ram_mb=GUEST_MB,
+                                floor_mb=4096, processes=[('/bin/x', 600)], zone_text='')
         self.assertEqual((stuck['fits'], stuck['waitable'], stuck['needed_mb'], stuck['freeable_mb']),
-                         (False, False, 3072, 2600))
+                         (False, False, 1024, 600))
         # One guest running and settled at 5000 MB: it is owed 120 MB more and gives back 5000 when it ends.
-        busy = slots.guest_fit({'memory_free_percent': 25}, running=['walk-a'], resident=[5000], total_mb=24576,
-                               ram_mb=5120, floor_mb=2048, processes=[], zone_text='')
+        busy = slots.guest_fit({'memory_free_percent': 25}, running=['walk-a'], resident=[5000], total_mb=TOTAL_MB,
+                               ram_mb=GUEST_MB, floor_mb=3000, processes=[], zone_text='')
         self.assertEqual((busy['fits'], busy['waitable'], busy['running'], busy['freeable_mb']),
                          (False, True, ['walk-a'], 5120))
-        free = slots.guest_fit({'memory_free_percent': 60}, running=[], resident=[], total_mb=24576, ram_mb=5120,
-                               floor_mb=2048, processes=[], zone_text='')
+        free = slots.guest_fit({'memory_free_percent': 60}, running=[], resident=[], total_mb=TOTAL_MB, ram_mb=GUEST_MB,
+                               floor_mb=3000, processes=[], zone_text='')
         self.assertEqual((free['fits'], free['reason'], free['waitable']), (True, '', False))
 
 

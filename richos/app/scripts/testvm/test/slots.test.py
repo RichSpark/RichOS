@@ -61,7 +61,7 @@ class Slots(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / 'testvm'
-        # This Mac's own limits file never decides a floor a test asserts (the default is used).
+        # The machine's own limits file never decides a floor a test asserts (the default is used).
         limits = Path(self.tmp.name) / 'limits.env'
         limits.write_text('')
         self.env = patch.dict(os.environ, {'TESTVM_ROOT': str(self.root), 'RICHOS_LIMITS_FILE': str(limits)})

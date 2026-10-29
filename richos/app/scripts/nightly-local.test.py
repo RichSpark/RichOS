@@ -1883,23 +1883,23 @@ while True: time.sleep(.02)
             publisher.require_new_user_walk(info, "fixture-run-id")
         self.assertIsNone(publisher.require_new_user_walk(dict(self.CANDIDATE_INFO), "fixture-run-id"))
 
-    # ---- 2026-10-29, nightly 80: guest memory is asked at once, never found at an hour's end ----
-    # Its retake ended "guest slot refused after 3602s: a guest needs 5120 MB: 8847 MB available
-    # ... would leave 3727 MB (floor 4096 MB)", reported only at that deadline. On main the VM phase
-    # starts its slot wait whatever the memory and says nothing until it ends, so these are red
-    # there. Here a shortfall is reported AT ONCE, naming what holds it; the slot wait goes on while
+    # ---- guest memory is asked at once, never found at an hour's end ----
+    # A shortfall used to be reported only at the slot wait's deadline ("guest slot refused after
+    # N s: a guest needs ... MB"). On main the VM phase starts its slot wait whatever the memory
+    # and says nothing until it ends, so these are red there. The figures are synthetic: a 32768 MB
+    # machine, a 5120 MB guest, the 4096 MB default floor. Here a shortfall is reported AT ONCE, naming what holds it; the slot wait goes on while
     # processes hold enough to cover it, and only a shortfall no process could free ends the phase.
-    SHORT_FOR_GOOD = {"fits": False, "waitable": False, "running": [], "needed_mb": 3100, "freeable_mb": 2600,
+    SHORT_FOR_GOOD = {"fits": False, "waitable": False, "running": [], "needed_mb": 1024, "freeable_mb": 600,
                       "reason": (
-        "a guest needs 5120 MB: 6144 MB available, 0 MB still owed to 0 running guest(s), would leave "
-        "1024 MB (floor 4096 MB, default); 3072 MB more must be free; kernel leak data.kalloc.1024 holds "
-        "9.3 GB; only a restart returns it; largest apps by memory: ChatGPT 2338 MB")}
-    # Nightly 80's own numbers: 369 MB short, while ChatGPT, RichOS and other agents' builds held GBs.
-    SHORT_FOR_NOW = {"fits": False, "waitable": True, "running": [], "needed_mb": 369, "freeable_mb": 6200,
+        "a guest needs 5120 MB: 8192 MB available, 0 MB still owed to 0 running guest(s), would leave "
+        "3072 MB (floor 4096 MB, default); 1024 MB more must be free; kernel leak data.kalloc.1024 holds "
+        "4.0 GB; only a restart returns it; largest apps by memory: AppOne 2300 MB")}
+    # Short by a little, while apps and other agents' builds hold gigabytes that end within minutes.
+    SHORT_FOR_NOW = {"fits": False, "waitable": True, "running": [], "needed_mb": 416, "freeable_mb": 6200,
                      "reason": (
-        "a guest needs 5120 MB: 8847 MB available, 0 MB still owed to 0 running guest(s), would leave "
-        "3727 MB (floor 4096 MB, default); 369 MB more must be free; largest apps by memory: "
-        "ChatGPT 2338 MB, RichOS 800 MB")}
+        "a guest needs 5120 MB: 8800 MB available, 0 MB still owed to 0 running guest(s), would leave "
+        "3680 MB (floor 4096 MB, default); 416 MB more must be free; largest apps by memory: "
+        "AppOne 2300 MB, AppTwo 800 MB")}
 
     @staticmethod
     def slot_waits(calls):
@@ -1918,7 +1918,7 @@ while True: time.sleep(.02)
         self.assertLess(before, out.index("Building "), "reported before the gates, not at the hour's end")
         entry = out.index("GUEST MEMORY SHORT ON ENTERING THE VM BOOT PROOF")
         self.assertLess(entry, out.index("VM boot proof PASSED"), "reported before the slot wait, not after it")
-        for words in ("369 MB more must be free", "ChatGPT 2338 MB", "6200 MB, 369 MB needed",
+        for words in ("416 MB more must be free", "AppOne 2300 MB", "6200 MB, 416 MB needed",
                       "the slot wait goes on, new test and proof admissions are held while it waits"):
             self.assertIn(words, out[entry:])
 
@@ -1930,8 +1930,8 @@ while True: time.sleep(.02)
                 self.assertRaisesRegex(RuntimeError, "ITS BOOT WAS NOT PROVEN IN THE TEST VM") as caught:
             r.perform("build", no_host_screen=True)
         self.assertEqual(self.slot_waits(calls), [], "a shortfall no slot wait can clear never starts one")
-        for words in ("Nothing waited for a slot", "kernel leak data.kalloc.1024 holds 9.3 GB; only a restart",
-                      "than every process on this Mac holds (2600 MB)", "only a restart of this Mac does",
+        for words in ("Nothing waited for a slot", "kernel leak data.kalloc.1024 holds 4.0 GB; only a restart",
+                      "than every process on this Mac holds (600 MB)", "only a restart of this Mac does",
                       "After a restart, take the proof with richos/app/scripts/gui-proof-in-vm.sh --run fixture-run-id"):
             self.assertIn(words, str(caught.exception))
         out = buf.getvalue()

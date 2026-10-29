@@ -29,9 +29,9 @@ KEYS = (
 )
 RESOLVED = 'RICHOS_MACHINE_SETTINGS_RESOLVED'
 
-# NUMBERS, NOT PATHS, AND NEVER IN .env (2026-10-29). Every reader of `.env`, the engine the app
+# NUMBERS, NOT PATHS, AND NEVER IN .env. Every reader of `.env`, the engine the app
 # has installed included, refuses a key it does not know (`parse` below), so a number written
-# there would stop every older engine on this Mac from reading its paths at all. A machine's
+# there would stop every older engine on the machine from reading its paths at all. A machine's
 # limits live in a file of their own beside it, `limits.env`, read only by `limit()`. Its name
 # may be given in RICHOS_LIMITS_FILE; a limit's own name in the environment wins over the file.
 #   name: (smallest, largest) whole number accepted
