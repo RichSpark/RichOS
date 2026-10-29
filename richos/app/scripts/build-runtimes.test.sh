@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-tests: no-host-screen: Python closure and isolated shell launchers; no screen or downloads
-# run-tests: inputs richos/app/scripts/runtime-launchers.test.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/runtime-sources.json richos/app/scripts/lib/no_host_paths.py richos/app/scripts/build-runtimes.test.sh richos/app/scripts/build-runtimes.py
-# run-tests: covers richos/app/scripts/build-runtimes.py richos/app/scripts/runtime-launchers.test.py
+# run-tests: inputs richos/app/scripts/runtime-launchers.test.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/runtime-sources.json richos/app/scripts/lib/no_host_paths.py richos/app/scripts/build-runtimes.test.sh richos/app/scripts/build-runtimes.py richos/app/scripts/runtime-launcher.c
+# run-tests: covers richos/app/scripts/build-runtimes.py richos/app/scripts/runtime-launchers.test.py richos/app/scripts/runtime-launcher.c
 #
 # build-runtimes.test.sh — the delivered Python's dependency closure, as build-runtimes.py
 # checks it inside every fresh runtime build.
@@ -134,6 +134,31 @@ PY
   echo "  PASS  B6 the precomposed-unicode check refuses a git that dies on UTF-8-MAC and one that reports the name decomposed"
 else
   echo "  FAIL  B6 the precomposed-unicode check's positive probes: $out"; fail=1
+fi
+
+# 7. The delivered runtime's bin entries do what the old #! wrappers did, with none of the
+#    wrappers' variables in the caller's environment: git finds its exec-path and templates,
+#    Python writes no .pyc, node gets the runtime's OpenSSL module directory. The same
+#    check_launched_entries the builder runs on every fresh runtime.
+if [ -n "${RICHOS_RUNTIME_DIR:-}" ] && [ -d "$RICHOS_RUNTIME_DIR/bin" ]; then
+  if out=$(env -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR -u PYTHONDONTWRITEBYTECODE -u OPENSSL_MODULES \
+      python3 - "$HERE/build-runtimes.py" "$RICHOS_RUNTIME_DIR" 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("build_runtimes", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+    print("; ".join(module.check_launched_entries(sys.argv[2])))
+except RuntimeError as error:
+    raise SystemExit(str(error))
+PY
+); then
+    echo "  PASS  B7 $RICHOS_RUNTIME_DIR/bin entries are Mach-O and keep the wrappers' settings ($out)"
+  else
+    echo "  FAIL  B7 $RICHOS_RUNTIME_DIR/bin entries: $out"; fail=1
+  fi
+else
+  echo "  NOT RUN  B7 the delivered runtime's launched entries: RICHOS_RUNTIME_DIR names no runtime; build-runtimes.py ran check_launched_entries on every runtime it built"  # not-a-subcheck: with no runtime named this suite checks the builder only; build() runs check_launched_entries before it writes delivery.json, and runtime-launchers.test.py compiles and checks the launchers every run
 fi
 
 python3 -B "$HERE/runtime-launchers.test.py" || fail=1

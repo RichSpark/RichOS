@@ -291,14 +291,14 @@
       "sha256": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6"
     }
   },
-  "launcher_revision": 2,
+  "launcher_revision": 3,
   "strip_node_debug_symbols": true,
   "portable_git_link_paths": true,
   "upstream_path_exemptions": [
     {
       "member": "node/bin/node",
       "sha256": "56b1e32581092d03ce0e01f54b6822496153acadfca8ce3d5bc160ed4c37d3d0",
-      "reason": "machine-path-exempt: Pinned Node OpenSSL MODULESDIR metadata. The bin/node wrapper sets a portable OPENSSL_MODULES default.",
+      "reason": "machine-path-exempt: Pinned Node OpenSSL MODULESDIR metadata. The bin/node launcher (runtime-launcher.c) sets a portable OPENSSL_MODULES default.",
       "prefixes": ["/Users/admin"]
     },
     {

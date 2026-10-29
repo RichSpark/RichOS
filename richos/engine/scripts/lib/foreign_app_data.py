@@ -63,37 +63,105 @@ PROTECTED_RELATIVE = (
     os.path.join("Library", "Daemon Containers"),  # foreign-app-data-exempt: the rule's own list of protected folders
 )
 
+# THE REST OF THE USER'S PROTECTED DATA (2026-10-29). App Data is one TCC service of many.
+# At 08:34:10 `du -sk ~/Library/Caches` (the disk watchdog's attribution walk, run by
+# disk-watchdog.test.sh with the real home folder) reached ~/Library/Caches/com.apple.Music,
+# sandboxd asked tccd for kTCCServiceSystemPolicyAllFiles and kTCCServiceMediaLibrary, and
+# the CEO was asked whether "RichOS.app" may access Apple Music. ~/Library/Caches is
+# neither inside nor above a container folder, so the rule above let it through. Desktop,
+# Documents and Downloads are their own TCC services; Music, Movies and Pictures hold the
+# media and photo libraries; ~/Library holds Mail, Messages, Safari, and Apple's caches.
+# A walk of any of them, or of a folder that holds them, is refused. RichOS's OWN folders
+# inside ~/Library (OWN_NAMES, one level below a Library area, e.g. Caches/RichOS,
+# Application Support/com.richos.app) stay measurable: they are ours.
+PROTECTED_USER_DIRS = ("Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures",
+                       "Library")
+OWN_NAMES = ("RichOS", "com.richos.", "group.com.richos.")
+
+# The per-user Darwin folders under /private/var/folders/<xx>/<id>/: T is every app's
+# temporary folder (their TemporaryItems are sandbox-protected; measured 2026-10-29,
+# `du(64366) deny(1) file-read-data .../T/com.apple.triald/TemporaryItems`), C is every
+# app's cache. Walking T, C or anything above them is refused; a folder RichOS made
+# inside T (a test sandbox, the scratch allocator) is not.
+_DARWIN_USER = re.compile(
+    r"^/private(?:/var(?:/folders(?:/[^/]+(?:/[^/]+(?:/[^/]+)?)?)?)?)?$")
+_DARWIN_CACHE = re.compile(r"^/private/var/folders/[^/]+/[^/]+/C(?:/|$)")
+_DATA_VOLUME = "/System/Volumes/Data"
+
 
 def _home(home=None):
     return home or os.environ.get("HOME") or os.path.expanduser("~")
 
 
+def _homes(home=None):
+    """Every home folder the rule protects: the one named (or $HOME) AND the account's own.
+
+    A test that points HOME at a fixture must not make the REAL home folder walkable:
+    the account's home from the password database is protected whatever HOME says."""
+    out = [os.path.realpath(_home(home))]
+    try:
+        import pwd
+        out.append(os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir))
+    except (ImportError, KeyError, OSError):
+        pass
+    return list(dict.fromkeys(h for h in out if h and h != os.sep))
+
+
 def protected_roots(home=None):
-    h = os.path.realpath(_home(home))
-    return [os.path.join(h, rel) for rel in PROTECTED_RELATIVE]
+    return [os.path.join(h, rel) for h in _homes(home) for rel in PROTECTED_RELATIVE]
 
 
 def _norm(path):
-    return os.path.realpath(os.path.expanduser(path)).rstrip(os.sep) or os.sep
+    p = os.path.realpath(os.path.expanduser(path)).rstrip(os.sep) or os.sep
+    # The data volume is the same files as / through firmlinks.
+    if p == _DATA_VOLUME or p.startswith(_DATA_VOLUME + os.sep):
+        p = p[len(_DATA_VOLUME):] or os.sep
+    return p
+
+
+def _own(p, h):
+    """True when `p` is at or below a RichOS folder one level inside a Library area."""
+    lib = os.path.join(h, "Library") + os.sep
+    if not p.startswith(lib):
+        return False
+    parts = p[len(lib):].split(os.sep)
+    return len(parts) >= 2 and parts[1].startswith(OWN_NAMES)
 
 
 def entering(path, home=None):
-    """A sentence saying why walking `path` would enter another app's data, or None.
+    """A sentence saying why walking `path` would enter macOS-protected data, or None.
 
-    Three shapes, all of them walks `du -sk` or os.walk would make:
-      inside   the path is one of those folders or below one
-      holds    the path is an ancestor of one (the home folder, its Library)
-    The comparison is on resolved paths, so a symlink pointing into a container is caught.
+    Two shapes, both walks `du -sk` or os.walk would make:
+      inside   the path is a protected folder or below one: another app's container, a
+               user folder macOS guards (Desktop, Documents, Downloads, Movies, Music,
+               Pictures, Library), or the per-user Darwin cache folder
+      holds    the path is an ancestor of one: the home folder, /Users, /, the per-user
+               Darwin temporary folder and those above it
+    RichOS's own folders inside ~/Library are allowed. The comparison is on resolved
+    paths, so a symlink pointing into protected data is caught.
     """
     if not path:
         return None
     p = _norm(path)
-    for root in protected_roots(home):
-        r = _norm(root)
-        if p == r or p.startswith(r + os.sep):
-            return "%s is inside %s, which macOS protects as another app's data" % (path, r)
-        if r.startswith(p + os.sep) or p == os.sep:
-            return "%s holds %s, so walking it walks other apps' data" % (path, r)
+    if p == os.sep:
+        return "%s holds every user's data, so walking it walks other apps' data" % path
+    if _DARWIN_USER.match(p) or _DARWIN_CACHE.match(p):
+        return ("%s is or holds the per-user folders where macOS keeps other apps' "
+                "temporary files and caches" % path)
+    for h in _homes(home):
+        for root in protected_roots(home):
+            r = _norm(root)
+            if not r.startswith(h + os.sep):
+                continue
+            if (p == r or p.startswith(r + os.sep)) and not _own(p, h):
+                return "%s is inside %s, which macOS protects as another app's data" % (path, r)
+        for name in PROTECTED_USER_DIRS:
+            r = os.path.join(h, name)
+            if (p == r or p.startswith(r + os.sep)) and not _own(p, h):
+                return ("%s is inside %s, which macOS protects as the user's own data; "
+                        "walking it asks the user for permission" % (path, r))
+        if p == h or h.startswith(p + os.sep):
+            return "%s holds %s, so walking it walks the user's protected data" % (path, h)
     return None
 
 
@@ -246,15 +314,41 @@ def self_test():
         (home + "/Library", True),
         (home, True),
         ("/", True),
-        (home + "/Library/Caches", False),
-        (home + "/Library/Developer", False),
+        ("/Users", True),
+        # 2026-10-29: the walk that asked the CEO about Apple Music, and its kin.
+        (home + "/Library/Caches", True),
+        (home + "/Library/Caches/com.apple.Music", True),
+        (home + "/Library/Developer", True),
+        (home + "/Music", True),
+        (home + "/Movies", True),
+        (home + "/Pictures/Photos Library.photoslibrary", True),
+        (home + "/Desktop", True),
+        (home + "/Documents/x", True),
+        (home + "/Downloads", True),
+        ("/private/var/folders/mx/abc123/T", True),
+        ("/private/var/folders/mx/abc123", True),
+        ("/private/var/folders/mx/abc123/C/com.apple.x", True),
+        ("/System/Volumes/Data/Users/someone/Music", True),
+        # RichOS's own, and what is not protected at all.
+        (home + "/Library/Caches/RichOS", False),
+        (home + "/Library/Application Support/com.richos.app/engine-state", False),
+        (home + "/Library/Containers/com.richos.app", False),  # foreign-app-data-exempt: self-test case
+        (home + "/Library/Logs/RichOS", False),
+        (home + "/.claude", False),
         (home + "/ab", False),
+        ("/private/var/folders/mx/abc123/T/richos-scratch", False),
         ("/Volumes/E1TB/vm", False), # machine-path-exempt: negative or parser fixture; this literal is test input, never a storage default
     ]
     for path, want in cases:
         got = entering(path, home=home) is not None
         print(("  ok   " if got == want else "  FAIL ") + "entering(%s) = %s" % (path, got))
         bad += 0 if got == want else 1
+    # A FIXTURE HOME DOES NOT UNPROTECT THE REAL ONE: the account's home stays refused.
+    real = _homes()[-1]
+    for path in (os.path.join(real, "Library", "Caches"), os.path.join(real, "Music"), real):
+        got = entering(path, home=home) is not None
+        print(("  ok   " if got else "  FAIL ") + "entering(%s, fixture home) = %s" % (path, got))
+        bad += 0 if got else 1
     print("%d failure(s)" % bad)
     return 1 if bad else 0
 
