@@ -1102,6 +1102,8 @@ impl WorkHost {
         let label = |id: &Option<String>| id.as_deref().and_then(|id| quota.accounts.list().into_iter().find(|a| a.id == id)).map(|a| a.label);
         let fact = match outcome {
             Renewal::Waits { from } => {
+                // The accounts screen says the move cannot happen yet, until he moves.
+                quota.accounts.move_waits(binding.thread_id());
                 let to = quota.accounts.in_use();
                 {
                     let mut inner = backend.inner.lock().unwrap();

@@ -22,6 +22,10 @@ pub struct Hold {
     pub task: Option<String>,
     pub since_at: u64,
     pub released_at: Option<u64>,
+    /// The Claude account the held call runs on (`gate::ACCOUNT_ENV`), so the staggered
+    /// release counts the held team of that account only. Absent in records written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 #[derive(Default, Serialize)]
@@ -243,6 +247,7 @@ pub(super) fn from_hook(state: &Path, scope: &Path, payload: &Value) -> io::Resu
         task: None,
         since_at: crate::util::now_millis(),
         released_at: None,
+        account: None,
     };
     if agent.is_none() {
         return Ok(record);
@@ -307,6 +312,7 @@ mod tests {
             task: Some("Review settings".into()),
             since_at: crate::util::now_millis(),
             released_at: None,
+            account: None,
         }
     }
     #[test]
