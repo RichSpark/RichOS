@@ -301,10 +301,45 @@ class Lock(object):
                 Lock._fd = None
 
 
+# A test must never leave a fixture in the app's LIVE registry. On 2026-10-28 a unit run from an app
+# shell wrote a record named "lead-fixture" (session "fixture") into the conversation's real registry
+# and stall-watch then reported an unreadable record for as long as it stayed. The record canary's
+# sandbox now removes the app's variables from a unit's environment; this is the registry's own
+# half, so a writer that still reaches the live registry (an absolute path, a missed variable)
+# is refused rather than trusted. "Live" is the account's own app data folder, found from the
+# password database and not from $HOME, because a sandbox HOME is exactly what a fixture runs
+# under; "fixture-shaped" is an identity field that carries the word fixture.
+_FIXTURE_WORD = re.compile(r"(?i)(?:^|[^a-z0-9])fixture(?:$|[^a-z0-9])")
+_IDENTITY_FIELDS = ("key", "name", "teammate", "session", "session_id", "agent_id", "agent", "ref")
+
+
+def _account_home():
+    try:
+        import pwd
+        return os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError, OSError):
+        return ""
+
+
+def _live_app_registry():
+    home = _account_home()
+    if not home:
+        return False
+    live = os.path.join(home, "Library", "Application Support", APP_IDENTIFIER, "engine-state", "workspaces")
+    here = realpath(state_dir())
+    return here == live or here.startswith(live + os.sep)
+
+
+def _fixture_shaped(fields):
+    return any(isinstance(fields.get(k), str) and _FIXTURE_WORD.search(fields[k]) for k in _IDENTITY_FIELDS)
+
+
 def event(what, **fields):
     """Append one fact to events.jsonl. The history, never the authority."""
     rec = {"ts": iso(), "event": what}
     rec.update(fields)
+    if _fixture_shaped(rec) and _live_app_registry():
+        return                                   # history only; the record write is what refuses
     try:
         _ensure_dirs()
         with open(_p("events.jsonl"), "a", encoding="utf-8") as f:
@@ -1060,6 +1095,10 @@ def load_agent(key):
 
 
 def save_agent(rec):
+    if _fixture_shaped(rec) and _live_app_registry():
+        raise SpecError("refused: %r looks like a test fixture and this is the app's live workspace "
+                        "registry (%s). A test builds a registry of its own (RICHOS_WORKSPACES_DIR in "
+                        "a temporary folder)." % (rec.get("key"), state_dir()))
     write_json(agent_path(rec["key"]), rec)
     if rec.get("agent_id"):
         _write_id(rec["agent_id"], rec["key"])
