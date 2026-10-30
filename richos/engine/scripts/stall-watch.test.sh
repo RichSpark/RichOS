@@ -367,6 +367,19 @@ class IdleSamples(unittest.TestCase):
         for now in range(1000,1721,60):self.look(now)
         self.assertEqual(self.ended,[])
 
+    def test_an_app_workers_idle_foreground_command_awaiting_its_notice_is_never_ended(self):
+        # 2026-10-30: an app worker's ordinary command runs in the foreground (mode "host");
+        # the host moves a long one to the background at its timeout and the worker ends its
+        # turn to await the notice. 15 idle minutes (a notarization's --wait) end nothing.
+        self.src.agent_hold.calls=lambda *_:[{'mode':'host','at':1,'pid':101,'command':'xcrun notarytool submit --wait'}]
+        for now in range(1000,1000+15*60+1,60):self.look(now)
+        self.assertEqual(self.ended,[])
+        # The same idle time on an explicit background loop (mode "bg") is still ended.
+        self.src.agent_hold.calls=lambda *_:[{'mode':'bg','at':1,'pid':101,'command':'until grep -q x f; do sleep 20; done'}]
+        self.state={}
+        for now in range(2000,2000+15*60+1,60):self.look(now)
+        self.assertEqual(self.ended[:1],[2600])
+
 class InstalledSources(unittest.TestCase):
     def test_not_installed_optional_helpers_are_not_source_errors(self):
         engine=os.path.join(scratch,'absent-helper','engine')

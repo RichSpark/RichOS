@@ -42,9 +42,11 @@ WHAT IS A STALL (every threshold, and why)
    (STALL_WATCH_SILENT_MINUTES). Why 20: a working teammate writes its
    transcript at every tool result. The longest honest gap between two is one
    tool call: the Bash tool's ceiling is 600 s (a longer foreground command is
-   moved to the background at 600 s and the move is a result), and a teammate
-   waiting on a background command runs `agent_hold.py wait`, which returns at
-   most every 270 s. So a long honest test run keeps writing the transcript at
+   moved to the background at 600 s and the move is a result), and a terminal
+   teammate waiting on a background command runs `agent_hold.py wait`, which returns at
+   most every 270 s. (An app teammate does not run that wait since 2026-10-30: it keeps
+   working or ends its turn to await the host's notice, and an ended turn with its own
+   command still running is the deferred end below.) So a long honest test run keeps writing the transcript at
    least every ten minutes however long the run itself takes, and twenty is
    twice the longest honest silence. A commit is not required: a teammate that
    is working but has not committed for an hour is not silent.
@@ -993,6 +995,15 @@ def _silent(src, reg, now, session_id, th, waits):
 # so a loop of short commands is work; a process whose CPU cannot be read makes
 # the whole look busy. A build, a test run or a walk that uses CPU in any look
 # starts the ten minutes again, so it is never ended this way however long it runs.
+#
+# HOST CALLS ARE NEVER ENDED HERE (2026-10-30). An app worker's ordinary command now runs in
+# the foreground exactly as in the terminal (agent_hold.py, HOST CALLS); the host moves a long
+# one to the background at its Bash timeout and the worker may end its turn to await the
+# host's notification. That is the normal path now, and such a command can sit idle for a long
+# time on purpose (a notarization's `--wait`, a download). So an agent with a live call recorded
+# as mode "host" is skipped: its end stays deferred until the command ends, and the SILENT
+# notice still names the deferred end and the one command that ends it by hand. Explicit
+# background calls (mode "bg") and the terminal's handed-off calls keep the rule above.
 
 def _last_activity(src, rec):
     """Epoch of the agent's latest commit or transcript write, or None."""
@@ -1056,6 +1067,12 @@ def idle_end(src, now, session_id, prev):
         if fin or paused or last is None or last > at + 60 or os.path.lexists(ah._held_path(sid, aid)):
             continue
         table = ah.snapshot()
+        if any(c["mode"] == "host" for c in ah.calls(sid, aid, table)):
+            # An ordinary command the agent ran in the foreground, which the host moved to the
+            # background at its timeout: the agent ended its turn to await its notification,
+            # as in the terminal. Idle is not forgotten (a notarization's --wait, a slow
+            # download), so it is never ended here; SILENT still names it (HOST CALLS, above).
+            continue
         work = ah.work_tree(sid, aid, table)
         if not work or work & in_line:
             continue
