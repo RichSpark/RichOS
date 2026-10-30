@@ -2535,7 +2535,7 @@
     },
     "scripts/hooks/agent-state-claims.test.sh": {
       "source": "scripts/hooks/agent-state-claims.test.sh",
-      "sha256": "caee6e4bf0d49f75a88161379ae14100037e94ed18202fc986fa14b5f02efe20",
+      "sha256": "b8bd204fa2dbdda4c37cd3ba12533e6e53b63904bf6160e23ed3772c3cb87ab1",
       "evidence": "Each hook call targets a private Git entity with a literal empty config. The suite builds its own transcripts/worktrees/registry. Mirror mutations execute only the fixed liveness resolver and claim extractor. Copied hook/library files are not a declaration that all of them execute.",
       "keys": [],
       "edges": [
