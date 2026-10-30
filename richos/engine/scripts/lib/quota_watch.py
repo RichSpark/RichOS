@@ -252,6 +252,7 @@ import time
 import pause_protocol
 import quota_weekly
 import host_child  # the RichOS app host's child (--monitor --host-json)
+from quiet_wait import Watch  # --watch blocks on its files and processes, never a 0.5 s clock
 
 # --monitor --host-json: this poller is the app host's own child, for the lead the host names.
 HOST = {"on": False}
@@ -1704,6 +1705,9 @@ def ensure_poller(a, sd, spid):
 # The doorbells wait on files with the real clock, whatever a test does to `time`.
 _real_sleep = time.sleep
 _real_time = time.time
+# --watch blocks on its files and processes (quiet_wait.Watch); this is the longest it goes
+# without looking when nothing woke it. A doorbell for a wake-up minutes away, not a UI.
+WATCH_RECHECK_SECONDS = 5.0
 
 
 def mode_poll(a):
@@ -1872,34 +1876,42 @@ def mode_watch(a):
             a.poll, fmt_pct(a.threshold), "; waking only at the release and the reset" if a.until_reset else "",
             pid, "started now" if started else "already polling"), flush=True)
         offset = _cursor(sd)
+        delivered = None
         alive = session_alive_check(spid)
         while True:
-            ppos = _print_new_lines(polls, ppos)
-            woke = False
-            for end, ev in _read_events(sd, offset):
-                offset = end
-                if a.until_reset and ev.get("kind") not in UNTIL_RESET_KINDS:
-                    continue
-                age = int(_real_time()) - int(ev.get("at") or 0)
-                if age > 90:
-                    print("(this wake-up came at %s, %s ago, while no --watch was running)" % (
-                        _hms(ev.get("at") or 0), span(age)))
-                sys.stdout.write(ev["text"])
-                woke = True
-            _set_cursor(sd, offset)
-            if woke:
-                print("  To be woken at the next one, start this again as a background command:")
-                print("    %s --watch" % a.command)
-                sys.stdout.flush()
-                return 0
-            if not lock_held(os.path.join(sd, "poller.lock")):
-                if not alive():
-                    print("quota-watch: the session has ended")
+            # Blocks until the poller appends a poll line or a wake-up, or the poller or the
+            # session exits (quiet_wait.py); it used to look, and rewrite delivered.json, every
+            # 0.5 s for as long as the agent waited. Registered before the look, so nothing between
+            # is missed; WATCH_RECHECK_SECONDS is only the longest gap between looks.
+            with Watch(paths=[polls, os.path.join(sd, "events.jsonl")], pids=[pid, spid]) as w:
+                ppos = _print_new_lines(polls, ppos)
+                woke = False
+                for end, ev in _read_events(sd, offset):
+                    offset = end
+                    if a.until_reset and ev.get("kind") not in UNTIL_RESET_KINDS:
+                        continue
+                    age = int(_real_time()) - int(ev.get("at") or 0)
+                    if age > 90:
+                        print("(this wake-up came at %s, %s ago, while no --watch was running)" % (
+                            _hms(ev.get("at") or 0), span(age)))
+                    sys.stdout.write(ev["text"])
+                    woke = True
+                if offset != delivered:
+                    _set_cursor(sd, offset)
+                    delivered = offset
+                if woke:
+                    print("  To be woken at the next one, start this again as a background command:")
+                    print("    %s --watch" % a.command)
+                    sys.stdout.flush()
                     return 0
-                pid, started = ensure_poller(a, sd, spid)
-                print("quota-watch: the poller had stopped; %s" % (
-                    "started again, pid %s" % pid if pid else "it could not be started again"), flush=True)
-            _real_sleep(0.5)
+                if not lock_held(os.path.join(sd, "poller.lock")):
+                    if not alive():
+                        print("quota-watch: the session has ended")
+                        return 0
+                    pid, started = ensure_poller(a, sd, spid)
+                    print("quota-watch: the poller had stopped; %s" % (
+                        "started again, pid %s" % pid if pid else "it could not be started again"), flush=True)
+                w.wait(WATCH_RECHECK_SECONDS)
     finally:
         os.close(wfd)
 

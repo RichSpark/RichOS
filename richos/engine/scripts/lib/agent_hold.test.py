@@ -644,7 +644,7 @@ class Wait(Base):
         first, _ = self.start_rewritten(agent_hold.WAIT_COMMAND, tuid="toolu_notice")
         text, _ = first.communicate(timeout=3)
         self.assertIn("WAIT:", text)
-        call, got = self.start_rewritten("python3 %s wait" % (HERE / "agent_hold.py"), tuid="toolu_wait")
+        call, got = self.start_rewritten("python3 %s wait" % shlex.quote(str(HERE / "agent_hold.py")), tuid="toolu_wait")
         self.assertEqual(got["input"], {"timeout": agent_hold.TOOL_MAX_TIMEOUT_MS, "run_in_background": False},
                          "its call gets the tool's longest timeout, so it returns before being backgrounded")
         time.sleep(1.0)
@@ -768,7 +768,7 @@ class LegacyForeground(Base):
         first, _ = self.start_rewritten(agent_hold.WAIT_COMMAND, tuid="toolu_legacy_notice")
         notice, _ = first.communicate(timeout=3)
         self.assertIn("WAIT:", notice)
-        waiter, _got = self.start_rewritten("python3 %s wait" % (HERE / "agent_hold.py"), tuid="toolu_wait")
+        waiter, _got = self.start_rewritten("python3 %s wait" % shlex.quote(str(HERE / "agent_hold.py")), tuid="toolu_wait")
         time.sleep(1.0)
         self.assertIsNone(waiter.poll(), "the wait waits while held")
         Path(go).touch()   # seen only once released: the held worker cannot run until then

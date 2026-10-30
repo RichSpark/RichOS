@@ -51,7 +51,49 @@ import subprocess
 import sys
 import time
 
+# A PERMIT WAIT BLOCKS ON WHAT FREES A PERMIT (2026-10-28). It used to look every 0.2 s for as
+# long as it waited (up to 30 min): about 0.55 s of CPU a minute per waiter, measured, in every
+# queued unit at once. Now it blocks (quiet_wait.py) until a permit's recorded holder exits or
+# the budget directory changes (a waiter ahead leaves the queue), and looks then, never more
+# often than every POLL_SECONDS (the admission queue's oldest waiter takes a freed permit at
+# once; the rest defer to it) and at least every PERMIT_RECHECK_SECONDS (a permit released
+# without its holder exiting, or the CPU admission clearing, has no event).
 POLL_SECONDS = 0.2
+PERMIT_RECHECK_SECONDS = 1.0
+
+
+def _permit_watch(budget, free=None):
+    """A quiet_wait.Watch on the exits of every permit's recorded holder and on the budget
+    directories, or None where quiet_wait.py is not beside this file (it then looks every
+    POLL_SECONDS, as before). Registered before the caller's look, so a release between is seen."""
+    try:
+        from quiet_wait import Watch
+    except ImportError:
+        return None
+    paths, pids, files = [], [], [free] if free else []
+    while budget is not None:
+        paths.append(budget.dir)
+        files.extend(budget.usable)
+        budget = budget.shared
+    for path in files:
+        try:
+            with open(path) as f:
+                holder = (json.loads(f.read() or "{}") or {}).get("holder")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(holder, list) and holder and isinstance(holder[0], int):
+            pids.append(holder[0])
+    return Watch(paths=paths, pids=pids)
+
+
+def _wait_for_permit(watch, looked):
+    """Block on `watch` (from _permit_watch, made before the look at `looked`) until a permit
+    may be free, then keep the old minimum gap between looks."""
+    if watch is None:
+        time.sleep(POLL_SECONDS)
+        return
+    watch.wait(PERMIT_RECHECK_SECONDS)
+    time.sleep(max(0.0, looked + POLL_SECONDS - time.monotonic()))
 
 
 class Token:
@@ -201,12 +243,17 @@ class Budget:
         open(marker, "w").close()
         try:
             while True:
-                t = self._try_free(free) or self.try_acquire()
-                if t:
-                    return t
-                if clock.now() >= deadline:
-                    raise TimeoutError("worker admission timed out after %gs: %s" % (timeout, self.dir))
-                time.sleep(POLL_SECONDS)
+                watch, looked = _permit_watch(self, free), time.monotonic()
+                try:
+                    t = self._try_free(free) or self.try_acquire()
+                    if t:
+                        return t
+                    if clock.now() >= deadline:
+                        raise TimeoutError("worker admission timed out after %gs: %s" % (timeout, self.dir))
+                    _wait_for_permit(watch, looked)
+                finally:
+                    if watch is not None:
+                        watch.close()
         finally:
             self.close()
             try:
@@ -447,9 +494,17 @@ def lease_worker(directory, owner, ready, release, free):
     while token is None:
         if interrupted or proc_tree.identity(owner) != born or clock.now() >= deadline:
             return 125
-        token = budget._try_free(free if free != "-" else None) or budget.try_acquire()
-        if token is None:
-            time.sleep(POLL_SECONDS)
+        watch, looked = _permit_watch(budget, free if free != "-" else None), time.monotonic()
+        try:
+            if watch is not None:
+                watch.add_pids([owner])            # the pool worker's end ends this wait at once
+                watch.add_signals((signal.SIGTERM, signal.SIGINT, signal.SIGHUP))
+            token = budget._try_free(free if free != "-" else None) or budget.try_acquire()
+            if token is None:
+                _wait_for_permit(watch, looked)
+        finally:
+            if watch is not None:
+                watch.close()
     try:
         token.publish(owner)
         with open(ready + ".borrow", "w") as out:
@@ -458,8 +513,26 @@ def lease_worker(directory, owner, ready, release, free):
             out.write(scope)
         os.replace(ready + ".new", ready)
         while not os.path.exists(release) and not interrupted and proc_tree.identity(owner) == born:
-            tracker.refresh()
-            time.sleep(POLL_SECONDS)
+            # 2026-10-28: blocks until the release file appears, the worker or a member of its tree
+            # forks or exits, or a signal arrives (proc_tree.tree_watch), then samples, at most every
+            # POLL_SECONDS as before; it used to sample the tree every 0.2 s for the worker's whole run.
+            sampled = time.monotonic()
+            watch = proc_tree.tree_watch(owner, owner, tracker.known)
+            try:
+                if watch is not None:
+                    watch.add_paths([os.path.dirname(os.path.abspath(release))])
+                tracker.refresh()
+                if watch is None:
+                    time.sleep(POLL_SECONDS)
+                    continue
+                if os.path.exists(release):
+                    break
+                watch.add_pids(tracker.known, forks=True)
+                watch.wait(proc_tree.IDLE_SAMPLE_SECONDS)
+            finally:
+                if watch is not None:
+                    watch.close()
+            time.sleep(max(0.0, sampled + POLL_SECONDS - time.monotonic()))
         # The worker waits for us on normal completion. Exclude it from cleanup while
         # retaining its children, including children reparented after an abrupt death.
         class Owner:
