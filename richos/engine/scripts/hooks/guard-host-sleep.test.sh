@@ -128,6 +128,14 @@ check 2 P7 'a heredoc fed to bash after quoted <<EOF' "echo \"use <<EOF here\"
 bash <<'X'
 caffeinate -i -t 5
 X"
+check 2 P7 'a heredoc fed to bash after an ANSI-quoted apostrophe' "echo \$'it\\'s'
+bash <<'EOF'
+caffeinate -i -t 5
+EOF"
+check 2 P7 'a heredoc fed to bash after an arithmetic shift' "x=\$((1 << SHIFT))
+bash <<EOF
+caffeinate -i -t 5
+EOF"
 }
 
 echo "=== guard-host-sleep: allowed ==="

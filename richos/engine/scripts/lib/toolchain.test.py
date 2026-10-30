@@ -375,6 +375,9 @@ class FakeMac(unittest.TestCase):
                         "ls  # writes <<EOF somewhere\nbash <<'EOF'\nmake\nEOF",
                         "echo \"use <<EOF here\"\nbash <<'X'\nmake\nX",
                         "echo 'use <<EOF here'\nbash <<X\nmake\nX",
+                        # review rv-20261030T221210Z-f238edab-a661: ANSI quoting and arithmetic
+                        "echo $'it\\'s'\nbash <<'EOF'\nmake\nEOF",
+                        "x=$((1 << SHIFT))\nbash <<EOF\nmake\nEOF",
                         "out=\"$(bash <<EOF\nmake\nEOF\n)\""):
             rc, message = self.guard(command)
             self.assertEqual(rc, 2, "%r passed: %s" % (command, message))

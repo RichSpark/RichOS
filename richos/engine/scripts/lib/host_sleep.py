@@ -165,7 +165,9 @@ def heredocs(text):
     rv-20261030T162409Z-41c917da finding 1: each of those, read as a head, swallowed the real
     heredoc after it), and never inside an earlier heredoc's body, which its own command decides
     about (`cat > notes.sh <<'SCRIPT'` holding `bash <<'BUILD'` only writes a file). A `$( ... )`
-    inside double quotes is shell again until its `)`."""
+    inside double quotes is shell again until its `)`. An ANSI-quoted string ($'...', where \\'
+    does not end it) and arithmetic ($(( ... )), (( ... )), whose << is a shift) are skipped whole
+    (review rv-20261030T221210Z-f238edab-a661)."""
     out, i, n = [], 0, len(text)
     quote, frames = None, []  # frames: [the quote outside a $( ... ), parentheses open inside it]
     while i < n:
@@ -176,6 +178,25 @@ def heredocs(text):
             i += 1
             continue
         if c == "\\":
+            i += 2
+            continue
+        if quote == "$'":
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if quote is None and (text.startswith("$((", i) or (
+                text.startswith("((", i) and (i == 0 or text[i - 1] in " \t\n;&|("))):
+            j, depth = (i + 1 if c == "$" else i), 0
+            while j < n:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+                if depth == 0:
+                    break
+            i = j
+            continue
+        if quote is None and text.startswith("$'", i):
+            quote = "$'"
             i += 2
             continue
         if quote == '"':
