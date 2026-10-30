@@ -252,6 +252,7 @@ import time
 import pause_protocol
 import quota_weekly
 import host_child  # the RichOS app host's child (--monitor --host-json)
+from quiet_wait import Watch  # --watch blocks on its files and processes, never a 0.5 s clock
 
 # --monitor --host-json: this poller is the app host's own child, for the lead the host names.
 HOST = {"on": False}
@@ -647,8 +648,305 @@ def report_login_failure(engine_root, text):
     return r.returncode == 0
 
 
+def app_state():
+    """The RichOS app's state folder when this runs for the app (RICHOS_APP_STATE), else ""."""
+    return (os.environ.get("RICHOS_APP_STATE") or "").strip()
+
+
+def app_account(data):
+    """{"id", "label"}: the account the published file's top level describes. `inUse`; for an app
+    older than the field, its accounts row in use; with no list, the one account, Account 1, by its
+    name when it has one. A list with no row in use names nobody (id None): never guessed as
+    Account 1, which named Home beside Work's figures in the live file of 2026-10-28 17:14Z."""
+    who = data.get("inUse") if isinstance(data.get("inUse"), dict) else None
+    listed = [x for x in data.get("accounts") or [] if isinstance(x, dict)]
+    if who is None:
+        who = next((x for x in listed if x.get("inUse")), None)
+    if who is None and not listed:
+        who = {"id": "1", "label": data.get("firstLabel") or "Account 1"}
+    label = "".join(c for c in str((who or {}).get("label") or "not named")[:80] if c.isprintable())
+    return {"id": str(who["id"]) if who and who.get("id") else None, "label": label}
+
+
+def _ms(value):
+    """A published moment (milliseconds) as an int, or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        return None
+    return int(value)
+
+
+def gate_admission(state, now, account=None):
+    """THE APP'S OWN HOLD, AS ITS GATE DECIDES IT (richos-hq follow-ups.md, "app-launched reviews
+    never apply the usage hold"). Never raises. {"held", "until" (epoch s or None), "account",
+    "line"}.
+
+    In the app the hold is the desktop gate's (quota/gate.rs `decide`), read from the file the
+    quota service publishes (<state>/claude-quota.json) and the pause setting beside it. `account`
+    is the id of the account the work will run on: the gate judges a call on that account's own
+    row of `accounts`, and on the top level (the account the work runs on now, `inUse`) only when
+    there is no row for it, one account or no id. During a move the two differ (main's `moving`:
+    the top level is still the account being left, while a new session, a review's included,
+    starts on the account in use). It needs no terminal entity config: the app's watcher starts with
+    a cleared environment (review_watch.rs `environment`), so quota-watch's QUOTA_PAUSE_PERCENT was
+    never found there and every app review answered UNKNOWN and started during a hold.
+
+    The gate's own order, rule for rule:
+      1. heldUntil in the future: every account is exhausted; held until then.
+      2. the pause setting (claude-quota-policy.json beside engine-state, else the published one)
+         off: admitted.
+      3. a setting out of 1..99, or a check dated in the future: Unknown, admitted.
+      4. the published admission. Only `held` holds (quota.rs `Admission::allows_work`), and only
+         until its resetsAt: with the figures unchanged, time can only end a hold at its window's
+         reset (quota.rs `view_with`), and a new reading is republished by the service.
+    No file, or one that cannot be read, is the gate's Unknown: admitted, and said so.
+
+    One case is not decided here as the gate decides it: a pause setting newer than the published
+    reading (the publication after a settings change failed). The gate recomputes the figures under
+    the new setting; this reports UNKNOWN and admits until the service publishes again."""
+    path = os.path.join(state, "claude-quota.json")
+    now_ms = int(now * 1000)
+    out = {"held": False, "until": None, "account": None, "line": ""}
+
+    def admitted(why):
+        out["line"] = "quota: the app's gate admits work: %s" % why
+        return out
+
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(262145)
+        if len(raw) > 262144:
+            raise ValueError("oversized")
+        data = json.loads(raw.decode("utf-8"))
+    except FileNotFoundError:
+        return admitted("the app has published no usage reading at %s (the gate's Unknown)" % path)
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        return admitted("its usage reading at %s cannot be read (%s; the gate's Unknown)" % (path, e.__class__.__name__))
+    if not isinstance(data, dict):
+        return admitted("%s is not the app's usage reading (the gate's Unknown)" % path)
+    row = next((x for x in data.get("accounts") or [] if isinstance(x, dict) and account is not None
+                and x.get("id") == str(account)), None)
+    src = row if row is not None else data
+    if row is not None:
+        label = "".join(c for c in str(row.get("label") or "not named")[:80] if c.isprintable())
+        who = out["account"] = {"id": str(row["id"]), "label": label}
+    else:
+        who = out["account"] = app_account(data)
+    named = "%s (account %s)" % (who["label"], who["id"]) if who["id"] else "the account in use (%s)" % who["label"]
+    five = next((w for w in src.get("windows") or [] if isinstance(w, dict) and w.get("id") == "five_hour"), None)
+    figure = "; five-hour %s%%" % fmt_pct(five["usedPercent"]) if five and isinstance(
+        five.get("usedPercent"), (int, float)) and not isinstance(five.get("usedPercent"), bool) else ""
+
+    until = _ms(data.get("heldUntil"))
+    if until is not None and until > now_ms:
+        out.update(held=True, until=until // 1000)
+        out["line"] = ("quota: the app's gate HOLDS work until %s: every account is exhausted (in use: %s)"
+                       % (hhmm(until // 1000), named))
+        return out
+    policy = _policy(data.get("policy"))
+    if policy is None:
+        return admitted("%s does not parse as the app's reading: no pause setting (the gate's Unknown)" % path)
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(state)), "claude-quota-policy.json"), "rb") as fh:
+            policy = _policy(json.loads(fh.read(262145).decode("utf-8"))) or policy
+    except (OSError, ValueError, UnicodeDecodeError):
+        pass
+    enabled, percent = policy
+    if not enabled:
+        return admitted("its automatic pause is off (%s)" % named)
+    if not 1 <= percent <= 99:
+        return admitted("UNKNOWN: its pause setting %d%% is not 1-99%% (the gate's Unknown; %s)" % (percent, named))
+    checked = _ms(src.get("checkedAt"))
+    if checked is not None and checked > now_ms:
+        return admitted("UNKNOWN: its reading is dated in the future (the gate's Unknown; %s)" % named)
+    decided = _gate_recompute(data, src, percent, now_ms)
+    if decided is None:
+        return admitted("%s does not parse as the app's reading (the gate's Unknown)" % path)
+    kind, resets, why = decided
+    if kind == "held":
+        out.update(held=True, until=resets // 1000)
+        out["line"] = "quota: the app's gate HOLDS work on %s until %s (%s)" % (named, hhmm(resets // 1000), why)
+        return out
+    return admitted("%s, %s%s" % (named, why, figure))
+
+
+def _policy(value):
+    """(enabled, pausePercent) as the gate's serde reads a Policy, or None when it would not parse."""
+    if not isinstance(value, dict):
+        return None
+    enabled, percent = value.get("enabled"), value.get("pausePercent")
+    if not isinstance(enabled, bool) or isinstance(percent, bool) or not isinstance(percent, int) or not 0 <= percent <= 255:
+        return None
+    return enabled, percent
+
+
+# quota.rs constants the gate's decision uses.
+REFRESH_INTERVAL_MS = 5 * 60_000
+FAST_REFRESH_INTERVAL_MS = 60_000
+FAST_POINTS_PER_CHECK = 5.0
+HANDOFF_DEFAULT_MS = 5 * 60_000
+WEEKLY_THRESHOLD = 99.0
+RESET_EXEMPTION_MS = 20 * 60_000
+
+
+def _gate_recompute(data, src, percent, now_ms):
+    """("held" | another admission, resets_at ms or None, why), or None when the file would not parse.
+
+    THE GATE'S OWN RECOMPUTE, rule for rule (second review of 2097df51c: the published admission is
+    the service's, computed with the account's measured handoff, token speed and expected rise; the
+    gate builds a fresh Snapshot from the published windows, checkedAt, message, speeds, preHold and
+    emptyAt alone and decides again, quota/gate.rs `decide` -> quota.rs `Snapshot::view_with`). So:
+    no token speed, no since-reading points, no expected rise, no cut-off, and the 5-minute default
+    handoff with no points. `src` is what the gate judges the call on: the call's own account's row
+    of `accounts` with two or more accounts, else the top level (`data`, the account the figures
+    describe). quota::tests::the_review_hold_is_the_gates_own_decision runs this against the gate's
+    `decide` over the same files, so the two cannot drift apart unseen.
+
+    Two rules came with the staggered release (main, Rich 2026-10-29): the five-hour point is set by
+    the larger of the speed measured now and the speed before the hold (`preHold`), and the last 20
+    minutes before the five-hour reset no longer admit: the window still HOLDS, and the gate lets
+    held tool calls out one at a time (`stagger::admit`, a per-call permit). A review takes no such
+    permit, so it waits for the reset, as the gate's admission says."""
+    if not all(k in data for k in ("state", "windows", "refreshIntervalMs", "admission")):
+        return None
+    windows = []
+    for w in src.get("windows") if isinstance(src.get("windows"), list) else [None]:
+        if not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("label"), str):
+            return None
+        used, reset, duration = w.get("usedPercent"), w.get("resetsAt"), w.get("durationMs")
+        if isinstance(used, bool) or not isinstance(used, (int, float)):
+            return None
+        if reset is not None and (isinstance(reset, bool) or not isinstance(reset, int) or reset < 0):
+            return None
+        if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
+            return None
+        windows.append({"id": w["id"], "used": float(used), "resets": reset})
+    number = lambda v: not isinstance(v, bool) and isinstance(v, (int, float))
+    speeds, pre_hold = src.get("speeds") or {}, src.get("preHold") or {}
+    for table in (speeds, pre_hold):
+        if not isinstance(table, dict) or not all(number(s) for s in table.values()):
+            return None
+    speed = lambda w: float(speeds.get(w["id"], 0.0))
+    checked = src.get("checkedAt")
+    empty_at = src.get("emptyAt")
+    error = src.get("message") is not None
+    # Reading::interval with `expected` false: one minute while any speed is fast, else five.
+    is_fast = lambda table: any(float(s) * REFRESH_INTERVAL_MS >= FAST_POINTS_PER_CHECK for s in table.values())
+    interval = FAST_REFRESH_INTERVAL_MS if is_fast(speeds) else REFRESH_INTERVAL_MS
+    clamp = lambda v: min(max(v, 0.0), 100.0)
+    def weekly_point(w):
+        s = speed(w)
+        points = s * interval + max(s * HANDOFF_DEFAULT_MS, 0.0)
+        return clamp(WEEKLY_THRESHOLD - max(math.ceil(points) - 1.0, 0.0))
+    # Snapshot::pre_hold over the gate's one-entry rise log (0% -> the published speed): 0% is under
+    # every valid line, so it is the published five-hour speed, counted only above 0 (`view_with`).
+    before = float(pre_hold.get("five_hour", 0.0))
+    judged = dict(speeds)
+    if before > 0.0:
+        judged["five_hour"] = max(float(judged.get("five_hour", 0.0)), before)
+    judged_interval = FAST_REFRESH_INTERVAL_MS if is_fast(judged) else REFRESH_INTERVAL_MS
+    act_point = lambda w: clamp(min(float(percent), 100.0 - float(judged.get(w["id"], 0.0)) * judged_interval))
+    live = [w for w in windows if w["resets"] is None or w["resets"] > now_ms]
+    expired = any(w["resets"] is not None and w["resets"] <= now_ms for w in windows)
+    fresh = checked is not None and now_ms >= checked and now_ms - checked < interval and not error and not expired
+    answered_empty = empty_at is not None and (checked is None or empty_at >= checked)
+    if checked is None:
+        return ("noReading" if answered_empty else "unknown"), None, "no reading yet"
+    weekly = [w for w in live if w["id"] == "seven_day" and w["used"] >= weekly_point(w)
+              and w["resets"] is not None and w["resets"] > now_ms]
+    if weekly:
+        w = max(weekly, key=lambda x: x["resets"])
+        return "held", w["resets"], "weekly %s%% at its handoff point %s%%" % (fmt_pct(w["used"]), fmt_pct(weekly_point(w)))
+    five = next((w for w in windows if w["id"] == "five_hour"), None)
+    if five is not None and five["used"] >= act_point(five) and five["resets"] is not None and five["resets"] > now_ms:
+        why = "five-hour %s%% at its %d%% pause point %s%%" % (fmt_pct(five["used"]), percent, fmt_pct(act_point(five)))
+        if five["resets"] - now_ms < RESET_EXEMPTION_MS:
+            why += "; its reset is under 20 minutes away, where held work is let out one call at a time and a review waits for the reset"
+        return "held", five["resets"], why
+    if five is not None and fresh and five["resets"] is not None and five["resets"] > now_ms:
+        return "ready", None, "ready"
+    return ("noReading" if answered_empty else "unknown"), None, "no current reading (the gate admits work without one)"
+
+
+def read_app(state, now):
+    """THE ACCOUNT IN USE, FROM THE APP ITSELF (richos-hq follow-ups.md, 7fed0bef). Never raises.
+
+    Inside the app, a `claude` probe or ~/.claude/statusline-payload.json reads whichever account
+    this process's environment happens to name, not the one the app's work runs on: on 2026-10-28
+    the app ran on Work (10% of its week) while a lead deferred work on Home's 99. The app publishes
+    the account in use at the top level of <state>/claude-quota.json (quota.rs `view_at`), so in
+    app context that file is the only source. Missing, unreadable or old, it is reported missing,
+    malformed or stale through the same age rules as the status-line file, never replaced by a
+    probe. The same shape as read_reading()."""
+    path = os.path.join(state, "claude-quota.json")
+    r = {"path": path, "state": "", "why": "", "used": None, "resets_at": None,
+         "age": None, "ended": False, "source": "the app"}
+    try:
+        with open(path, "rb") as fh:
+            data = json.loads(fh.read(262145).decode("utf-8"))
+    except FileNotFoundError:
+        r["state"], r["why"] = "missing", "the app has published no usage reading at %s" % path
+        return r
+    except OSError as e:
+        r["state"], r["why"] = "unreadable", "cannot read %s: %s" % (path, e)
+        return r
+    except (ValueError, UnicodeDecodeError) as e:
+        r["state"], r["why"] = "malformed", "%s is not valid JSON (%s)" % (path, e.__class__.__name__)
+        return r
+    if not isinstance(data, dict):
+        r["state"], r["why"] = "malformed", "%s is not the app's usage reading" % path
+        return r
+    # **The session's own account** (second review of fd0e8f9d9, P2): the app starts every work
+    # session with RICHOS_CLAUDE_ACCOUNT naming the account it runs on (quota/gate.rs ACCOUNT_ENV).
+    # During a move the file's top level is still the account being left (Home at 95%) while a new
+    # session runs on the account in use (Work at 10%); read from the top level, a watcher of the
+    # Work session told the lead to freeze work on Work. Its own row of `accounts`, as the gate
+    # judges its calls (gate::decide); the top level only when there is no row for it.
+    want = (os.environ.get("RICHOS_CLAUDE_ACCOUNT") or "").strip()
+    row = next((x for x in data.get("accounts") or [] if isinstance(x, dict) and want
+                and str(x.get("id")) == want), None) if want else None
+    src = row if row is not None else data
+    if row is not None:
+        r["account"] = {"id": want, "label": "".join(c for c in str(row.get("label") or "not named")[:80] if c.isprintable())}
+    else:
+        r["account"] = app_account(data)
+    label = r["account"]["label"]
+    r["source"] = "the app (account %s)" % label
+    windows = []
+    for w in src.get("windows") or []:
+        if not isinstance(w, dict) or not isinstance(w.get("id"), str):
+            continue
+        used, reset = w.get("usedPercent"), w.get("resetsAt")
+        if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used) or not 0 <= used <= 100:
+            continue
+        reset = int(reset // 1000) if isinstance(reset, (int, float)) and not isinstance(reset, bool) and reset > 0 else None
+        windows.append({"id": w["id"], "label": "".join(c for c in str(w.get("label") or w["id"])[:80] if c.isprintable()),
+                        "used": used, "resets_at": reset})
+    r["windows"] = windows
+    checked = src.get("checkedAt")
+    if isinstance(checked, bool) or not isinstance(checked, (int, float)) or checked <= 0:
+        r["state"], r["why"] = "missing", "the app has no reading of account %s yet" % label
+        return r
+    r["age"] = max(0.0, now - checked / 1000.0)
+    five = next((w for w in windows if w["id"] == "five_hour"), None)
+    if five is None or five["resets_at"] is None:
+        r["state"], r["why"] = "malformed", "the app's reading of account %s carries no five-hour window" % label
+        return r
+    r["state"], r["used"], r["resets_at"] = "ok", five["used"], five["resets_at"]
+    r["ended"] = five["resets_at"] <= now
+    # The app's own measured five-hour speed (`speeds`, points per ms; quota.rs `View::speeds`),
+    # as points per second: the poll loop's speed is never lower than the app's.
+    speed = (src.get("speeds") or {}).get("five_hour") if isinstance(src.get("speeds"), dict) else None
+    if not isinstance(speed, bool) and isinstance(speed, (int, float)) and math.isfinite(speed) and speed >= 0:
+        r["speed"] = speed * 1000.0
+    return r
+
+
 def read_source(a, now):
-    """get_usage first; the status-line file when it fails, saying why."""
+    """get_usage first; the status-line file when it fails, saying why. For the app
+    (RICHOS_APP_STATE set): the app's own reading of the account in use, and nothing else."""
+    state = app_state()
+    if state:
+        return read_app(state, now)
     g = read_get_usage(now)
     if g["state"] == "ok":
         return g
@@ -857,7 +1155,9 @@ def mode_status(a, now):
         print("  threshold : UNKNOWN: %s is %s in %s" % (CONFIG_KEY, a.threshold_problem, a.config or "(no config)"))
     else:
         print("  threshold : %s%%  (%s=%s in %s)" % (fmt_pct(a.threshold), CONFIG_KEY, a.threshold_raw, a.config))
-    if r.get("fallback_why"):
+    if app_state():
+        print("  source    : %s, published at %s (the account in use; no probe in the app)" % (r["source"], r["path"]))
+    elif r.get("fallback_why"):
         print("  source    : the status-line file %s, because %s" % (a.payload, r["fallback_why"]))
     else:
         print("  source    : Claude Code's get_usage (%s), fresh at this read" % claude_binary())
@@ -866,7 +1166,8 @@ def mode_status(a, now):
     else:
         print("  reading   : %s%% of the five-hour window" % fmt_pct(r["used"]))
         print("  age       : %s%s" % (span(r["age"] or 0), " (the payload refreshes only when a status line renders)"
-                                       if r.get("fallback_why") else " (read at this poll)"))
+                                       if r.get("fallback_why") else " (the app's last check)" if app_state()
+                                       else " (read at this poll)"))
         if r["ended"]:
             print("  window    : ENDED at %s; this reading describes a window that no longer exists"
                   % hhmm(r["resets_at"]))
@@ -948,6 +1249,11 @@ def _emit_release(a, reset_at, now, w):
           % (hhmm(reset_at), span(reset_at - now)))
     print("  The CEO's rule (%s): %s" % (RULING, HIS_WORDS))
     print("  %s" % RULE_UPDATE)
+    _wake_quota_paused(w, reset_at)
+    print(KEEPS_POLLING + " Inside the last 20 minutes it pauses nobody, and it wakes you at the reset.")
+
+
+def _wake_quota_paused(w, reset_at):
     print("  %s" % worker_line(w))
     if w["known"]:
         print("  Wake each quota-paused agent with this message: %s" % ", ".join(w["quota_paused"]))
@@ -958,7 +1264,20 @@ def _emit_release(a, reset_at, now, w):
     print("  First, for each agent, run: " + protocol_command("--resume --to <agent> --reason quota"))
     print("  It releases that agent's hold before any message and prints this same message to send.")
     _print_message(release_message(reset_at), pause_protocol.RESUME_SUMMARY)
-    print(KEEPS_POLLING + " Inside the last 20 minutes it pauses nobody, and it wakes you at the reset.")
+
+
+def _emit_switch_release(a, left, r, verdict, now, w):
+    """The hold of the account just left releases: the account in use has room (finding 2 of the
+    second review of d37b1f0de; the hold belongs to the account it was taken on)."""
+    print("QUOTA-RELEASE at %s" % hhmm(now))
+    now_on = r["account"]["label"] if isinstance(r.get("account"), dict) else "another account"
+    state = ("below the threshold" if verdict == "below" else
+             "at or above the threshold, but its reset is less than 20 minutes away")
+    print("  The account in use changed from %s to %s, at %s%% of its five-hour window: %s. The quota hold"
+          " taken on %s releases." % (left["label"], now_on, fmt_pct(r["used"]), state, left["label"]))
+    print("  The CEO's rule (%s): %s" % (RULING, HIS_WORDS))
+    _wake_quota_paused(w, r["resets_at"])
+    print(KEEPS_POLLING + " From here it follows %s's own window and reset." % now_on)
 
 
 def refresh_point(stale_after):
@@ -1361,6 +1680,14 @@ def _poll_loop(a, out, alive, health=None):
     history = []                 # (taken, used) get_usage readings in the current window
     outage = None                # {"at": first failure, "fallback_why"} while get_usage fails
     fast_alerted = None          # the window whose high speed was announced (QUOTA-FAST, once)
+    # The account every per-window value above describes (the app's reading names it; a terminal's
+    # never does, so there it stays None and nothing below changes). Second review of d37b1f0de
+    # (rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): after Home -> Work the loop kept Home's
+    # window_end, so Work, paused at 99%, was released on Home's reset timer while Work's own reset
+    # was still 4,740 s away.
+    bound = None                 # {"id", "label"} of that account
+    app_window = None            # the five-hour reset of the last app reading in `history`
+    left_held = None             # the account just left while its hold may still hold workers
     first = True
     print("quota-watch: polling every %d s; threshold %s%%%s" % (
         a.poll, fmt_pct(a.threshold), "; waking only at the release and the reset" if a.until_reset else ""),
@@ -1375,7 +1702,35 @@ def _poll_loop(a, out, alive, health=None):
         w = workers(a.engine_root)
         retry = False
         asked_refresh = False
-        if r.get("source") == "get_usage":
+        who = r.get("account") if isinstance(r.get("account"), dict) and r["account"].get("id") else None
+        if who is not None and bound is not None and who["id"] != bound["id"]:
+            # A SWITCH: every timer and dedupe above was the account left's. They are cleared and
+            # bound again from the account in use's own reading below, by window_end's usual rule.
+            print("  the account in use changed: %s -> %s; its own window and notices from here"
+                  % (bound["label"], who["label"]), flush=True)
+            if window_end is not None:
+                left_held = bound
+            window_end = released = reset_done = fast_alerted = refreshed_for = app_window = None
+            threshold_named, weekly_seen, history, last_gu, outage = {}, set(), [], None, None
+            blind_since, blind_woken = None, False
+        if who is not None:
+            bound = who
+        # **An app reading is a measured reading** (second review of 2320ca5ad, P2): the app's
+        # reading of the account in use is its own get_usage, republished (read_app), so it feeds
+        # the speed exactly as get_usage does. Treated as a fallback, every app watcher lost
+        # QUOTA-FAST and the early pause during a fast rise (60% -> 92% in 300 s: no wake at all).
+        app_ok = isinstance(r.get("account"), dict) and r["state"] == "ok"
+        if app_ok:
+            # Measured when the app checked, not when this poll read the file: the same reading
+            # read twice is one point of history, never a flat stretch.
+            taken = now - int(r["age"] or 0)
+            if app_window is not None and not same_window(app_window, r["resets_at"]):
+                history = []
+            app_window = r["resets_at"]
+            if not history or history[-1][0] != taken:
+                history = (history + [(taken, r["used"])])[-24:]
+            outage = None
+        elif r.get("source") == "get_usage":
             if last_gu is not None and not same_window(last_gu["resets_at"], r["resets_at"]):
                 history = []
             history = (history + [(now, r["used"])])[-24:]
@@ -1401,7 +1756,9 @@ def _poll_loop(a, out, alive, health=None):
                                  "source": "get_usage at %s" % _hms(last_gu["taken"])})
                     r = kept
         # RULING §108: the speed, measured from this window's get_usage readings.
-        speed = recent_speed(history, a.poll, a.fast_poll) if r.get("source") == "get_usage" else None
+        speed = recent_speed(history, a.poll, a.fast_poll) if r.get("source") == "get_usage" or app_ok else None
+        if app_ok and r.get("speed") is not None:
+            speed = max(speed or 0.0, r["speed"])
         fast = speed is not None and speed >= fast_speed(a)
         # ... and a big rise EXPECTED (many teammates just started) checks
         # every minute before any rise is measured. Back at normal speed with
@@ -1481,6 +1838,18 @@ def _poll_loop(a, out, alive, health=None):
                           flush=True)
                 else:
                     verdict, early = "at-or-above", _early_text(a, r, speed, now)
+        if left_held is not None and r["state"] == "ok" and not r["ended"] and verdict != "unknown":
+            # The hold in place was the account just left's. Once the account in use reads below the
+            # line (or at it with its reset less than 20 minutes away), whoever that hold paused may
+            # work again now, not at the new account's reset. At or above it, the new account's own
+            # hold takes over, and its release follows its own reset.
+            if verdict in ("below", "near-reset"):
+                w = workers(a.engine_root)
+                if not w["known"] or w["quota_paused"]:
+                    out.wake("RELEASE", _capture(_emit_switch_release, a, left_held, r, verdict, now, w), now)
+                    if verdict == "near-reset":
+                        released = window_end  # this window's own release has now been told
+            left_held = None
         # A get_usage OUTAGE: it answered earlier in this window and fails now.
         # Its last reading, or the status-line file when that is fresher, is
         # the reading; the 2026-09-25 status-line rules (wake to refresh before
@@ -1704,6 +2073,9 @@ def ensure_poller(a, sd, spid):
 # The doorbells wait on files with the real clock, whatever a test does to `time`.
 _real_sleep = time.sleep
 _real_time = time.time
+# --watch blocks on its files and processes (quiet_wait.Watch); this is the longest it goes
+# without looking when nothing woke it. A doorbell for a wake-up minutes away, not a UI.
+WATCH_RECHECK_SECONDS = 5.0
 
 
 def mode_poll(a):
@@ -1872,34 +2244,42 @@ def mode_watch(a):
             a.poll, fmt_pct(a.threshold), "; waking only at the release and the reset" if a.until_reset else "",
             pid, "started now" if started else "already polling"), flush=True)
         offset = _cursor(sd)
+        delivered = None
         alive = session_alive_check(spid)
         while True:
-            ppos = _print_new_lines(polls, ppos)
-            woke = False
-            for end, ev in _read_events(sd, offset):
-                offset = end
-                if a.until_reset and ev.get("kind") not in UNTIL_RESET_KINDS:
-                    continue
-                age = int(_real_time()) - int(ev.get("at") or 0)
-                if age > 90:
-                    print("(this wake-up came at %s, %s ago, while no --watch was running)" % (
-                        _hms(ev.get("at") or 0), span(age)))
-                sys.stdout.write(ev["text"])
-                woke = True
-            _set_cursor(sd, offset)
-            if woke:
-                print("  To be woken at the next one, start this again as a background command:")
-                print("    %s --watch" % a.command)
-                sys.stdout.flush()
-                return 0
-            if not lock_held(os.path.join(sd, "poller.lock")):
-                if not alive():
-                    print("quota-watch: the session has ended")
+            # Blocks until the poller appends a poll line or a wake-up, or the poller or the
+            # session exits (quiet_wait.py); it used to look, and rewrite delivered.json, every
+            # 0.5 s for as long as the agent waited. Registered before the look, so nothing between
+            # is missed; WATCH_RECHECK_SECONDS is only the longest gap between looks.
+            with Watch(paths=[polls, os.path.join(sd, "events.jsonl")], pids=[pid, spid]) as w:
+                ppos = _print_new_lines(polls, ppos)
+                woke = False
+                for end, ev in _read_events(sd, offset):
+                    offset = end
+                    if a.until_reset and ev.get("kind") not in UNTIL_RESET_KINDS:
+                        continue
+                    age = int(_real_time()) - int(ev.get("at") or 0)
+                    if age > 90:
+                        print("(this wake-up came at %s, %s ago, while no --watch was running)" % (
+                            _hms(ev.get("at") or 0), span(age)))
+                    sys.stdout.write(ev["text"])
+                    woke = True
+                if offset != delivered:
+                    _set_cursor(sd, offset)
+                    delivered = offset
+                if woke:
+                    print("  To be woken at the next one, start this again as a background command:")
+                    print("    %s --watch" % a.command)
+                    sys.stdout.flush()
                     return 0
-                pid, started = ensure_poller(a, sd, spid)
-                print("quota-watch: the poller had stopped; %s" % (
-                    "started again, pid %s" % pid if pid else "it could not be started again"), flush=True)
-            _real_sleep(0.5)
+                if not lock_held(os.path.join(sd, "poller.lock")):
+                    if not alive():
+                        print("quota-watch: the session has ended")
+                        return 0
+                    pid, started = ensure_poller(a, sd, spid)
+                    print("quota-watch: the poller had stopped; %s" % (
+                        "started again, pid %s" % pid if pid else "it could not be started again"), flush=True)
+                w.wait(WATCH_RECHECK_SECONDS)
     finally:
         os.close(wfd)
 
@@ -1985,7 +2365,8 @@ def mode_notice(a, now):
         lines.append("  THE WATCHER CANNOT RUN HERE: %s is %s in %s. Declare it there, e.g. %s=93."
                      % (CONFIG_KEY, a.threshold_problem, a.config or "(no orchestration.config)", CONFIG_KEY))
     else:
-        r = read_reading(a.payload, now)
+        # The app's own reading in app context (read_app, a file read, no process), else the file.
+        r = read_app(app_state(), now) if app_state() else read_reading(a.payload, now)
         verdict, why = rule_verdict(r, a.threshold, a.stale, now)
         lines.append("  Threshold: %s=%s (%s)" % (CONFIG_KEY, a.threshold_raw, a.config))
         now_line = describe(r, a.threshold, now)

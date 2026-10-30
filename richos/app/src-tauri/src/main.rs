@@ -1304,6 +1304,59 @@ fn spawn_media_tools_refresh() {
     if let Err(e) = spawned { eprintln!("[richos] yt-dlp: could not start its check: {e}"); }
 }
 
+/// How often the idle-session check runs. A session is therefore ended between its timeout and
+/// thirty seconds after it.
+const IDLE_SESSION_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// **Ends the `claude` process of a conversation nobody has spoken to for the configured time**
+/// (richos-hq `docs/plans/follow-ups.md`, "a nightly's VM boot proof cannot get a guest slot",
+/// decision 3). Until this, a conversation's process lived until the app quit or until eight
+/// newer ones pushed it out (`MAX_RESIDENT_FRONT_DESKS`). The decision of which are idle is the
+/// spine's (`Spine::retire_idle_front_desks`); this thread is only the clock and the two facts
+/// the spine does not own.
+fn spawn_idle_session_retirement(app: AppHandle) {
+    let spawned = std::thread::Builder::new().name("idle-session-retire".into()).spawn(move || loop {
+        std::thread::sleep(IDLE_SESSION_CHECK_EVERY);
+        if let Some(state) = app.try_state::<AppState>() {
+            retire_idle_sessions(&state);
+        }
+    });
+    if let Err(e) = spawned { eprintln!("[richos] idle sessions: could not start the check, every session stays running: {e}"); }
+}
+
+fn retire_idle_sessions(state: &AppState) {
+    // Read on every tick, so a changed setting applies without a relaunch. Released before the
+    // spine is taken (lock order: config, then entity, then spine).
+    let minutes = state.config.lock().unwrap().idle_session_minutes();
+    if minutes == 0 { return; }
+    // Never wait for the spine: a lock somebody holds is somebody using it, and nothing here is
+    // worth his message waiting behind. The next tick asks again.
+    let Ok(mut spine) = state.spine.try_lock() else { return };
+    let questions = question_host::store(state);
+    let engine_state = state.data_dir.join("engine-state");
+    // The two facts the spine does not own. Each one that cannot be read keeps the session: a
+    // question store that cannot be read is not a store with nothing open in it, and worker
+    // observations that cannot be read are `work_gate`'s `Unknown`, which waits.
+    let held = |binding: &richos_core::entity::ThreadBinding| {
+        questions.pending_for_thread(binding.entity_id().as_str(), binding.thread_id()).unwrap_or(true)
+            || state.control.for_thread(binding.thread_id()).lease_session().is_some_and(|session| {
+                let view = richos_core::app_workers::status(&engine_state, Some(&session));
+                !richos_core::work_gate::workers(&view).0.permits_action()
+            })
+    };
+    let idle_after = std::time::Duration::from_secs(u64::from(minutes) * 60);
+    let retired = spine.retire_idle_front_desks(richos_core::util::now_millis(), idle_after, &held);
+    drop(spine);
+    if retired.is_empty() { return; }
+    // Opening a retired conversation readies it again (`ready_the_front_desk`), so most of the
+    // resume happens while he reads rather than after he sends.
+    let mut asked = state.front_desk_primed_for.lock().unwrap();
+    for thread in &retired { asked.remove(thread); }
+    drop(asked);
+    eprintln!("[richos] idle sessions: ended {} conversation session(s) idle for {minutes} minute(s): {}; each resumes on its next message",
+        retired.len(), retired.join(", "));
+}
+
 fn spine_wait_notice(site: &str, waited: std::time::Duration) -> Option<String> {
     let millis = waited.as_millis();
     (millis > 0).then(|| format!(
@@ -3530,6 +3583,7 @@ fn main() {
             // Readiness starts before the window's setup/navigation reads, with the
             // selected thread's immutable company scope. Reader snapshots stay available.
             ready_selected_front_desk(app.handle());
+            spawn_idle_session_retirement(app.handle().clone());
             // The composer's attachments, in the SAME app-data directory the phone's
             // attachment desk writes to (`phone/attachments.rs`). No I/O until a file arrives.
             let attachments_home = app.state::<AppState>().data_dir.clone();

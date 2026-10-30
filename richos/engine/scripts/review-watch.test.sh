@@ -125,6 +125,10 @@
 #   W38  a look whose evaluation raises is a failed look: told once per failing streak,
 #        --status says failing; a clean look reads healthy again; the same error after a
 #        successful look is told again (the second review of 5331505bd, finding 1)
+#   W39  a review that ended on the quota hold is held, never lost: two holds spend
+#        none of the two retries, a held commit is not started again inside the
+#        quota poll's five minutes, and is started again after it; a real loss still
+#        counts (the second review of 3331a349416c, finding 1, fixture quota_hold_retry.py)
 #
 # Every case loads scripts/lib/app_review.py too: review_watch.py imports its app_paths.
 # The app mode (--app-state) and app_review.py's mid-job notice are driven over the real
@@ -403,6 +407,18 @@ losses = [dict(repo=item.repo, tip=item.tip, outcome="lost", trigger="handover",
 book = rw.Book([], {}, losses)
 ok3 = ok3 and not rw.due([item], book, retry_at + cooldown - 1, {}, 3600)
 ok3 = ok3 and len(rw.due([item], book, retry_at + cooldown, {}, 3600)) == 1
+# A quota hold spends no loss budget and keeps its own shorter retry delay,
+# including when a real-loss cooldown has already elapsed for an app handover.
+held = dict(repo=item.repo, tip=item.tip, outcome="held", trigger="handover", ended_at=retry_at)
+held_book = rw.Book([], {}, [held])
+ok3 = ok3 and not held_book.losses
+ok3 = ok3 and not rw.due([item], held_book, retry_at + rw.HOLD_RETRY_SECONDS - 1, {}, 3600)
+ok3 = ok3 and len(rw.due([item], held_book, retry_at + rw.HOLD_RETRY_SECONDS, {}, 3600)) == 1
+held["ended_at"] = retry_at + cooldown
+mixed_book = rw.Book([], {}, losses + [held])
+ok3 = ok3 and len(mixed_book.losses[item.key]) == 3
+ok3 = ok3 and not rw.due([item], mixed_book, held["ended_at"] + rw.HOLD_RETRY_SECONDS - 1, {}, 3600)
+ok3 = ok3 and len(rw.due([item], mixed_book, held["ended_at"] + rw.HOLD_RETRY_SECONDS, {}, 3600)) == 1
 item.source = "registry"
 ok3 = ok3 and not rw.due([item], book, retry_at + cooldown * 10, {}, 3600)
 item.source, item.state = "app", "running"
@@ -2996,6 +3012,68 @@ kill "$W38_PID" 2>/dev/null; wait "$W38_PID" 2>/dev/null
 [ "$W38_N" -ge 1 ] && [ "$TOLD2" = "2" ]
 check "W38 the same evaluation error after a successful look is told again" $? \
     "failing looks=$W38_N told=$TOLD2 out=$(head -c 900 "$W38/out")"
+
+# --- W39 ---------------------------------------------------------------------
+# The second review of 3331a349416c, finding 1: second_review.py ends a Claude review with no verdict
+# while the quota hold is in force, and settle counted that as lost, so a hold that outlasted two
+# looks ended the commit's automatic reviews for good. Through the real settle, Book and due.
+python3 - "$LIB" "$SB/w39" <<'PY'
+import json, os, sys
+lib, root = sys.argv[1:3]
+os.environ["SECOND_REVIEW_STATE_DIR"] = os.path.join(root, "sr")
+os.environ["REVIEW_WATCH_STATE_DIR"] = os.path.join(root, "rw")
+os.makedirs(root)
+sys.path.insert(0, lib)
+import review_watch as rw
+
+repo = os.path.realpath(root)
+tip, now = "a" * 40, 1800000000
+item = rw.Item("work-w39", "worker-w39", repo, tip, "b" * 40, "running", started=now - 7200, quiet=True)
+watcher = rw.Watcher(os.path.join(root, "engine"), "", world=object())
+rows = []
+
+
+def attempts():
+    try:
+        with open(rw._p("attempts.jsonl"), encoding="utf-8") as f:
+            return [json.loads(ln) for ln in f if ln.strip()]
+    except OSError:
+        return []
+
+
+def due(t):
+    return rw.due([item], rw.Book(rows, {}, attempts()), t, {}, 3600)
+
+
+def review(t, n, held=True):
+    row = {"id": "w39-%d" % n, "at": rw.iso(t), "repo": repo, "tip": tip, "work": item.work, "verdict": None,
+           "why": "the quota hold is in force" if held else "the reviewer exited without a verdict"}
+    if held:
+        row["quota_held"] = True
+    rows.append(row)
+    lock = os.path.join(root, "lock-%d" % n)
+    open(lock, "w").close()
+    info = {"repo": repo, "tip": tip, "work": item.work, "name": item.name, "trigger": "quiet",
+            "started_at": t, "attempt": n, "prior_reviews": [], "session": "lead"}
+    return watcher.settle(lock, info, t + 1, rows)["outcome"]
+
+
+got = {}
+got["first look starts a review"] = len(due(now)) == 1
+got["a hold settles as held"] = review(now, 1) == "held"
+got["inside the poll's five minutes: nothing starts"] = due(now + 61) == []
+got["after five minutes: started again"] = [d[1] for d in due(now + 302)] == ["quiet"]
+got["a second hold settles as held"] = review(now + 302, 2) == "held"
+book = rw.Book(rows, {}, attempts())
+got["two holds spend no retry"] = book.losses == {}
+got["after the reset: still started again"] = [d[1] for d in due(now + 3600)] == ["quiet"]
+got["a real loss still counts as lost"] = review(now + 3600, 3, held=False) == "lost" \
+    and len(rw.Book(rows, {}, attempts()).losses.get((repo, tip), [])) == 1
+print("    %s" % got)
+sys.exit(0 if all(got.values()) else 1)
+PY
+check "W39 a review ended by the quota hold is held, not lost: retried after the poll interval, retries kept" \
+    $? "see above"
 
 echo
 echo "review-watch.test.sh: $PASS passed, $FAIL failed"
