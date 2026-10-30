@@ -297,6 +297,10 @@ pub fn endpoint(state: &Path) -> PathBuf {
         #[cfg(not(target_os = "macos"))]
         let base = "/tmp";
         let uid = unsafe { libc::geteuid() };
+        // Engine profiles resolve the app data directory. Readers using that
+        // spelling must reach the same sampler as an app started through a link.
+        // Missing state still yields an address whose read reports unavailable.
+        let state = std::fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
         let key = format!("{:x}", Sha256::digest(state.as_os_str().as_bytes()));
         PathBuf::from(format!("{base}/richos-{uid}/resources-{}.sock", &key[..32]))
     }
@@ -819,6 +823,33 @@ mod tests {
         let next = Monitor::start(&root).unwrap();
         assert_ne!(read(&root).instance_id, first.instance_id);
         drop(next);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_state_paths_share_one_sampler() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("rr-{}", uuid::Uuid::new_v4()));
+        let data = root.join("data");
+        let state = data.join("engine-state");
+        std::fs::create_dir_all(&state).unwrap();
+        let alias = root.join("linked-data");
+        symlink(&data, &alias).unwrap();
+        let alias_state = alias.join("engine-state");
+        let canonical_state = std::fs::canonicalize(&state).unwrap();
+        for server_state in [&alias_state, &canonical_state] {
+            let monitor = Monitor::start(server_state).unwrap();
+            let first = read(server_state);
+            assert!(!first.instance_id.is_empty(), "{:?}", first.detail);
+            assert_eq!(endpoint(&alias_state), endpoint(&canonical_state));
+            assert_eq!(read(&alias_state).instance_id, first.instance_id);
+            assert_eq!(read(&canonical_state).instance_id, first.instance_id);
+            assert!(Monitor::start(&alias_state).is_err());
+            assert!(Monitor::start(&canonical_state).is_err());
+            drop(monitor);
+            assert_eq!(read(&alias_state).status, "unavailable");
+            assert_eq!(read(&canonical_state).status, "unavailable");
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
     #[cfg(unix)]
