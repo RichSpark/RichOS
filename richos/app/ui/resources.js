@@ -96,9 +96,10 @@
     '<div class="res-axis" aria-hidden="true"><span>60 seconds ago</span><span>Now</span></div>' +
     '<dl class="res-rows" data-k="rows"></dl>' +
     '<p class="res-note" data-k="note" hidden></p>' +
-    '<p class="res-view-hint">Press ↓ to choose Ink or Readout</p>' +
+    '<p class="res-view-hint"></p>' +
     '<div class="res-foot"><span data-k="age"></span><span>Agents read this too</span></div>';
   document.body.appendChild(card);
+  card.querySelector(".res-view-hint").textContent = "Press ↓ to choose Ink or Readout";
   const bigCanvas = card.querySelector(".res-graph");
   const $ = (k) => card.querySelector(`[data-k="${k}"]`);
 
