@@ -121,6 +121,8 @@
     }
   }
   let view = readLocalView();
+  let viewChosen = false;
+  let viewSave = Promise.resolve();
   function applyView(v) {
     view = VIEWS.includes(v) ? v : "ink";
     btn.dataset.view = view;
@@ -133,18 +135,21 @@
   /// truth, written on every choice and read back once at start, the same shape as the
   /// assertiveness dial and the splash switch in `main.js`.
   function chooseView(v) {
+    viewChosen = true;
     applyView(v);
     try {
       window.localStorage.setItem(VIEW_KEY, view);
     } catch (_e) {
       /* the store below still keeps it */
     }
-    return bridge.invoke("set_resources_view", { view }).catch(() => {});
+    const selected = view;
+    viewSave = viewSave.catch(() => {}).then(() => bridge.invoke("set_resources_view", { view: selected }));
+    return viewSave.catch(() => {});
   }
   async function syncViewFromStore() {
     try {
       const stored = await bridge.invoke("get_resources_view");
-      if (VIEWS.includes(stored)) {
+      if (!viewChosen && VIEWS.includes(stored)) {
         try {
           window.localStorage.setItem(VIEW_KEY, stored);
         } catch (_e) {

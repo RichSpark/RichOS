@@ -103,6 +103,27 @@ function installFixture(opts) {
   };
 }
 
+// Hold the startup read's old answer until the test releases it after a user choice.
+function holdInitialViewRead() {
+  let bridge;
+  Object.defineProperty(window, "RichBridge", {
+    configurable: true,
+    get: () => bridge,
+    set(value) {
+      bridge = value;
+      const invoke = value.invoke.bind(value);
+      value.invoke = (cmd, args) => {
+        const answer = invoke(cmd, args);
+        if (cmd !== "get_resources_view") return answer;
+        window.__resourcesReadPending = true;
+        return new Promise((resolve) => {
+          window.__releaseResourcesRead = () => Promise.resolve(answer).then(resolve);
+        });
+      };
+    },
+  });
+}
+
 /// A browser context per theme, seeded once like an install: the theme, 100% type, the name.
 /// A relaunch is a new page in the SAME context, which keeps the mock's durable config.
 async function newContext(browser, theme) {
@@ -614,6 +635,61 @@ async function main() {
         .catch(() => { throw new Error("a click elsewhere did not close it"); });
       assertEqual(page.__errors, [], "no page error");
       return `focus stayed on ${before.focused}, chat ${before.thread}`;
+    });
+
+    await run.check(`11 ${theme}  a slow startup read cannot overwrite a newer view choice`, async () => {
+      const raceContext = await newContext(browser, theme);
+      await raceContext.addInitScript(holdInitialViewRead);
+      try {
+        const racePage = await openApp(raceContext, "live");
+        await racePage.waitForFunction(() => window.__resourcesReadPending);
+        await racePage.click("#res-square", { button: "right" });
+        await racePage.click('#res-menu [data-view="readout"]');
+        await racePage.waitForFunction(() => JSON.parse(localStorage.getItem("richos-mock-config")).resources_view === "readout");
+        await racePage.evaluate(() => window.__releaseResourcesRead());
+        await flushFrames(racePage);
+        const f = await facts(racePage);
+        assertEqual([f.view, f.stored], ["readout", "readout"], "the newer choice wins over the old startup answer");
+        return "Readout remains selected after the held Ink answer arrives";
+      } finally {
+        await raceContext.close();
+      }
+    });
+
+    await run.check(`12 ${theme}  a slow earlier save cannot replace the last chosen view`, async () => {
+      const raceContext = await newContext(browser, theme);
+      try {
+        let racePage = await openApp(raceContext, "live");
+        await racePage.evaluate(() => {
+          const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+          const gate = new Promise((resolve) => { window.__releaseResourcesSave = resolve; });
+          window.RichBridge.invoke = async (cmd, args) => {
+            if (cmd === "set_resources_view" && args.view === "readout") {
+              window.__resourcesSavePending = true;
+              await gate;
+            }
+            const answer = await invoke(cmd, args);
+            if (cmd === "set_resources_view") window[args.view === "ink" ? "__resourcesInkSaved" : "__resourcesReadoutSaved"] = true;
+            return answer;
+          };
+        });
+        await racePage.click("#res-square", { button: "right" });
+        await racePage.click('#res-menu [data-view="readout"]');
+        await racePage.waitForFunction(() => window.__resourcesSavePending);
+        await racePage.click("#res-square", { button: "right" });
+        await racePage.click('#res-menu [data-view="ink"]');
+        await racePage.evaluate(() => window.__releaseResourcesSave());
+        await racePage.waitForFunction(() => window.__resourcesReadoutSaved && window.__resourcesInkSaved);
+        const f = await facts(racePage);
+        assertEqual([f.view, f.stored], ["ink", "ink"], "the last choice is shown and saved");
+        await racePage.evaluate(() => localStorage.removeItem("richos.resources-view"));
+        await racePage.close();
+        racePage = await openApp(raceContext, "live");
+        assertEqual((await facts(racePage)).view, "ink", "the last choice survives a relaunch");
+        return "Ink is retained after the earlier Readout save completes and after relaunch";
+      } finally {
+        await raceContext.close();
+      }
     });
 
     await page.close();
