@@ -75,6 +75,8 @@ reviews run at once: second-review admits each by the engine's CPU rule.
 A REVIEW THAT ENDS WITHOUT A VERDICT (crashed, refused, past its own 60-minute
 limit, or running past OVERRUN_MINUTES, when it is stopped by its recorded
 process id) is started ONCE more; a second loss is told to the lead, once.
+For an ended app worker, its only integration review then retries at the existing
+30-minute repeat interval until it produces a verdict, including after restart.
 
 ===========================================================================
 WHAT IS TOLD (plan §2.4, §2.5). Each printed block wakes the lead.
@@ -589,9 +591,9 @@ class World(object):
                     if t:
                         try:
                             marks.append(os.path.getmtime(t))
+                            quiet = now - max(marks) >= th_silent
                         except OSError:
                             pass
-                    quiet = now - max(marks) >= th_silent
                 item = Item(work, name, repo, tip, base, state, started=started, branch=w["branch"],
                             ref=rec["key"], quiet=quiet, continued=rec["key"] in continued)
                 item.session = str(rec.get("session_id") or "")
@@ -711,9 +713,8 @@ class AppWorld(World):
         orchestration.config to list it in.
       * WORKERS ONLY: an item is a registry workspace whose receipt says request.role worker; a
         handover reviewer's cc/ workspace is never itself picked for a review.
-      * MID-JOB ONLY (long-job, gone quiet). A handover in the app is already reviewed, and
-        `integrate` refuses without that review's pass (DESKTOP.md step 5, app.py integrate);
-        a second handover review would only spend the user's subscription twice.
+      * The same automatic handover and mid-job review flow as the terminal. Integration
+        consumes its handover verdict instead of requiring another reviewer agent.
       * Claude reviews, on the CLI the app ships (--claude), with the user's own turn, kept
         beside the worker's receipt by app.py prepare, as the original words. Each review runs on
         the Claude account the app's work runs on when its reviewer starts: second-review reads
@@ -916,21 +917,24 @@ def notes_only(item):
     return _NOTES_ONLY[k]
 
 
-def due(items, book, now, seen, long_seconds, handover=True):
+def due(items, book, now, seen, long_seconds):
     """[(item, trigger, supersede lock info or None)]: the reviews to start now.
-    Pure: everything it needs is in its arguments. handover=False is the app's watcher
-    (AppWorld): its handovers are reviewed by the app's own reviewer, so it starts mid-job
-    reviews only."""
+    Pure: everything it needs is in its arguments. App and terminal handovers
+    use this same scheduler."""
     out = []
     for it in items:
         if it.tip == it.base:
             continue
-        if it.state == "ended" and not handover:
-            continue
         key = it.key
         lost = book.losses.get(key) or []
         if len(lost) >= MAX_LOSSES:
-            continue                                # told once; nothing more starts by itself
+            # The app's handover verdict is its only integration route. A quota
+            # hold or unavailable CLI must not disable that route permanently.
+            # Keep retries apart using the existing repeat interval, including
+            # across restarts, and keep the terminal/progress loss cap.
+            if (it.source != "app" or it.state != "ended"
+                    or now - float(lost[-1].get("ended_at") or 0) < REPEAT_MINUTES * 60):
+                continue
         running = book.running.get(key)
         held = book.held.get(key)
         if held and not running and now - float(held.get("ended_at") or 0) < HOLD_RETRY_SECONDS:
@@ -1400,7 +1404,9 @@ class Watcher(object):
         citems, cproblems = self.world.codex_items(now, codex_state)
         items += citems
         problems += cproblems
-        items = [it for it in items if not notes_only(it)]
+        # App integration requires a verdict for every implementation worker, including
+        # release notes. The terminal keeps its existing release-note exemption.
+        items = [it for it in items if isinstance(self.world, AppWorld) or not notes_only(it)]
         import recovery_runner
         entity = os.path.dirname(self.config) if self.config else os.environ.get("RICHOS_ENTITY_ROOT", "")
         recovery_requests = recovery_runner.tick(items, self.engine_root, entity,
@@ -1442,8 +1448,7 @@ class Watcher(object):
                 info = self.start(item, "handover", now, 1, None, rows)
                 if info:
                     book.running[item.key] = info
-        handover = not isinstance(self.world, AppWorld)
-        for it, trigger, supersede in due(items, book, now, seen, LONG_JOB_MINUTES * 60, handover):
+        for it, trigger, supersede in due(items, book, now, seen, LONG_JOB_MINUTES * 60):
             n = len(book.losses.get(it.key) or []) + 1
             info = self.start(it, trigger, now, n, supersede, rows)
             if info:
@@ -1833,11 +1838,16 @@ def tell(now, sstate, rows, book, items, problems, attempts):
         if key[0] and git(key[0], "merge-base", "--is-ancestor", str(key[1]), "refs/heads/main") is not None:
             continue
         a = book.losses[key][-1]
+        item = items_by_key.get(key + (a.get("work") or "",)) or items_by_key.get(key)
+        if item and item.source == "app" and item.state == "ended" and not item.stopped_early:
+            action = "The automatic handover review will retry at %s; fix the cause if it persists." % hhmm(
+                float(a.get("ended_at") or 0) + REPEAT_MINUTES * 60)
+        else:
+            action = "Nothing more starts for this commit by itself. You can: fix the cause, then run second-review.sh by hand."
         session = a.get("session") or getattr(items_by_key.get(key + (a.get("work") or "",)), "session", "") or ""
         add(["  [NO VERDICT TWICE] %s, %s@%s: %s" % (a.get("name"), os.path.basename(key[0] or ""),
                                                     str(key[1])[:12], " ".join(str(a.get("why")).split())[:300]),
-             "      Nothing more starts for this commit by itself. You can: fix the cause, then run "
-             "%s by hand." % "second-review.sh"], session=session, key=k if ours(session) else None,
+             "      " + action], session=session, key=k if ours(session) else None,
             mark=None if ours(session) else (k, {"first": now}))
     # -- what could not be read or started ------------------------------------------
     for p in problems:
@@ -2144,8 +2154,6 @@ def app_mode(a, engine_root):
     paths = app_paths(a.app_state)
     os.environ["REVIEW_WATCH_STATE_DIR"] = paths["watch"]
     os.environ["SECOND_REVIEW_STATE_DIR"] = paths["reviews"]
-    if not (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip():
-        os.environ["RICHOS_PROJECTS_DIR"] = os.path.join(os.path.realpath(a.app_state), "platform-projects")
     watcher = Watcher(engine_root, "", AppWorld(engine_root, a.app_state, a.claude, a.accounts, a.codex_reviews))
     if a.status:
         for path in sorted(glob.glob(_p("locks", "*.lock"))):

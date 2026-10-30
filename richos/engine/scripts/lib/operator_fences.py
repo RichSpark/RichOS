@@ -1094,20 +1094,34 @@ def clean_merge(cwd, commit, parents, keep_git_env=False):
     return bool(merged) and merged == tree.strip()
 
 
+def review_ledgers(ledger):
+    """A terminal land and an app land consume the same review, never request a second.
+
+    The app's automatic watcher owns its existing ledger under engine-state. A
+    repository fence still reads its installed ledger and all its open findings.
+    """
+    paths=[ledger]
+    app=os.environ.get("RICHOS_APP_STATE")
+    if app:
+        paths.append(os.path.join(os.path.realpath(app),"second-review","reviews.jsonl"))
+    return list(dict.fromkeys(paths))
+
+
 def read_reviews(ledger):
     rows = []
-    try:
-        with open(ledger, encoding="utf-8") as fh:
-            for raw in fh:
-                try:
-                    r = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(r, dict) and r.get("verdict"):
-                    rows.append(r)
-    except OSError:
-        pass
-    return rows
+    for path in review_ledgers(ledger):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for raw in fh:
+                    try:
+                        r = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(r, dict) and r.get("verdict"):
+                        rows.append(r)
+        except OSError:
+            pass
+    return sorted(rows,key=lambda r:str(r.get("finished_at") or r.get("at") or ""))
 
 
 def review_repo_resolved(repo):
@@ -1321,21 +1335,22 @@ def read_deferrals(ledger):
     `second-review.sh --follow-up`; a later `--reopen` row of the same finding
     undoes it, so the later row wins."""
     out = {}
-    try:
-        with open(review_deferrals_path(ledger), encoding="utf-8") as fh:
-            for raw in fh:
-                try:
-                    r = json.loads(raw)
-                except ValueError:
-                    continue
-                if not isinstance(r, dict) or not r.get("finding"):
-                    continue
-                if r.get("action") == "follow-up":
-                    out[r["finding"]] = r
-                elif r.get("action") == "reopen":
-                    out.pop(r["finding"], None)
-    except OSError:
-        pass
+    for path in review_ledgers(ledger):
+        try:
+            with open(review_deferrals_path(path), encoding="utf-8") as fh:
+                for raw in fh:
+                    try:
+                        r = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if not isinstance(r, dict) or not r.get("finding"):
+                        continue
+                    if r.get("action") == "follow-up":
+                        out[r["finding"]] = r
+                    elif r.get("action") == "reopen":
+                        out.pop(r["finding"], None)
+        except OSError:
+            pass
     return out
 
 
