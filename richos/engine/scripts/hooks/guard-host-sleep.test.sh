@@ -15,6 +15,8 @@
 #   P4   pmset writes: sleepnow, displaysleepnow, noidle, -a/-c settings, schedule, relative
 #   P5   the other sleep-assertion changes: systemsetup -set...sleep, defaults write
 #        com.apple.PowerManagement, open -a <keep-awake app>, inline python/osascript code
+#   P6   review 2026-10-29: a heredoc fed to a shell (its body is commands) or an interpreter
+#        (its body is code) that starts caffeinate
 #   N1   reading is allowed: pmset -g, pmset -g assertions, bare pmset
 #   N2   a MENTION is not a run: echo, grep, which, man, a commit message, a heredoc body, a comment
 #   N3   the test VM: ssh <vm> caffeinate, ssh <vm> 'sudo pmset ...', a testvm/ script
@@ -101,6 +103,16 @@ check 2 P5 'open of a keep-awake app by path' 'open /Applications/KeepingYouAwak
 check 2 P5 'python -c running caffeinate' "python3 -c 'import subprocess; subprocess.run([\"caffeinate\", \"-i\", \"-t\", \"60\"])'"
 check 2 P5 'osascript -e running caffeinate' "osascript -e 'do shell script \"caffeinate -i -t 60\"'"
 check 2 P5 'python -c creating an IOKit assertion' "python3 -c 'from ctypes import cdll; iokit.IOPMAssertionCreateWithName(1)'"
+check 2 P6 'a heredoc fed to python' "python3 - <<'EOF'
+import subprocess; subprocess.run(['caffeinate', '-i', '-t', '5'])
+EOF"
+check 2 P6 'a heredoc fed to bash' "bash <<'EOF'
+caffeinate -i -t 5
+EOF"
+check 2 P6 'a heredoc fed to sh behind nohup, unquoted delimiter' "nohup sh <<EOF
+echo start
+caffeinate -s -t 5
+EOF"
 }
 
 echo "=== guard-host-sleep: allowed ==="
@@ -119,6 +131,12 @@ check 0 N2 'man pmset' 'man pmset'
 check 0 N2 'a commit message' "git commit -m 'guard: refuse caffeinate and pmset sleepnow'"
 check 0 N2 'a heredoc body' "cat > notes.sh <<'EOF'
 caffeinate -i -w 1
+EOF"
+check 0 N2 'a heredoc fed to bash that only mentions it' "bash <<'EOF'
+echo 'never run caffeinate on the host'
+EOF"
+check 0 N3 'a heredoc sent to the guest' "ssh vm bash <<'EOF'
+caffeinate -i -t 60
 EOF"
 check 0 N2 'a comment' 'ls # caffeinate -i'
 check 0 N2 'a path that names it' 'cat scripts/lib/host-shield/caffeinate'

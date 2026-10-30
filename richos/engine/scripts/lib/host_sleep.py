@@ -19,10 +19,11 @@ backticks, sh -c / bash -c scripts, behind sudo, env, nohup, exec, time, nice, t
   4. `defaults write|delete` of com.apple.PowerManagement
   5. `open -a`/`-b` of a keep-awake app (Amphetamine, Caffeine, KeepingYouAwake, Lungo, Theine)
   6. inline interpreter code (python -c, node -e, osascript -e, ...) that names caffeinate or
-     creates an IOKit power assertion (IOPMAssertionCreate..., IOPMAssertionDeclareUserActivity)
+     creates an IOKit power assertion (IOPMAssertionCreate..., IOPMAssertionDeclareUserActivity),
+     and the same in a heredoc fed to an interpreter; a heredoc fed to a shell is read as commands
 
 What it lets through: `pmset -g ...` (reading), a mention (echo, grep, a commit message, a heredoc
-body, a comment), and anything sent to the test VM: a segment whose command word is ssh/scp/sftp
+body written to a file, a comment), and anything sent to the test VM: a segment whose command word is ssh/scp/sftp
 or a script under a `testvm/` path runs in the guest, whose power state is its own.
 
 IT IS A TEXT MATCH AND LEAKS (a script file that runs caffeinate, eval, a variable holding the
@@ -153,6 +154,18 @@ def _scan_words(words, findings, depth):
         findings.append(reason)
 
 
+def _heredoc_bodies(text):
+    """(command line, body) for each heredoc in `text`."""
+    out = []
+    for m in re.finditer(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n", text):
+        start = m.end()
+        end = re.search(r"^\s*%s\s*$" % re.escape(m.group(2)), text[start:], re.M)
+        body = text[start:start + end.start()] if end else text[start:]
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        out.append((text[line_start:m.start()], body))
+    return out
+
+
 def _scan_text(text, findings, depth=0):
     if depth > 6:
         return
@@ -161,6 +174,25 @@ def _scan_text(text, findings, depth=0):
         _scan_words(words, findings, depth)
     for body in nested:
         _scan_text(body, findings, depth + 1)
+    # A heredoc is input to the command in front of it (review 2026-10-29: `python3 <<EOF` and
+    # `bash <<EOF` ran caffeinate). Fed to a shell, its body is commands; fed to an interpreter, it
+    # is code. Written to a file or sent to the guest, it is text and passes.
+    for head, body in _heredoc_bodies(text):
+        head_cmds, _ = tokenize(head)
+        for words in head_cmds:
+            argv = _strip_prefix(words)
+            if not argv:
+                continue
+            name = os.path.basename(argv[0])
+            if name in REMOTE or re.search(r"(?:^|/)testvm/", argv[0]):
+                break
+            if name in SHELLS and not any(re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a) for a in argv[1:]):
+                _scan_text(body, findings, depth + 1)
+                break
+            if INTERPRETERS.match(name) and INLINE_CODE.search(body):
+                findings.append("`%s <<...`: the heredoc it reads starts caffeinate or creates a power "
+                                "assertion that keeps the Mac awake" % name)
+                break
 
 
 def verdict(command):
