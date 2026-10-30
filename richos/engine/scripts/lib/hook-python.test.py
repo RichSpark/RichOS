@@ -14,7 +14,9 @@ quiet stand-ins).
   H1  every hook script sources hook-python.sh as its first command
   H2  the library on four fake Macs: the app's bundled runtime (by path, before the stubs on PATH,
       reached by `python3`, `exec python3`, `env python3`, a child bash script and `git`); a python
-      on PATH after the stubs; the Command Line Tools only; nothing at all (127, said, no stub)
+      on PATH after the stubs; the Command Line Tools only; nothing but the stub (127, said, no
+      stub); the app's lease PATH left as it is; no stub and no python3 on PATH (nothing changes,
+      so each hook's own missing-python3 handling still runs)
   H3  the whole hook chain on a fake regular-user Mac with the app's runtime beside the engine:
       every registration in hooks/hooks.json run as Claude Code runs it, with its event's payload
       (the Bash payload names every dispatcher rule's words, so every rule is forked); the desktop
@@ -175,6 +177,17 @@ exec python3 -c 'print("exec ok")'
             self.assertTrue(os.path.exists(log + ".git"), "the runtime's git, not the stub")
         self.assertEqual(self.stubs_run(), [])
 
+    def test_h2f_no_stub_and_no_python_changes_nothing(self):
+        # A PATH with neither a python3 nor the stub folder: python3 stays missing exactly as
+        # before, so each hook's own missing-python3 handling (most fail closed) still runs.
+        script = os.path.join(self.t, "nostub.sh")
+        write(script, f'. "{LIB}"\nif command -v python3 >/dev/null; then echo found; else echo missing; fi\n'
+                      'echo "PY=${RICHOS_HOOK_PYTHON:-}"\n')
+        proc = subprocess.run(["/bin/bash", script], env=self.env(PATH="/bin"), capture_output=True,
+                              text=True, timeout=60)
+        self.assertIn("missing\nPY=\n", proc.stdout, proc.stderr)
+        self.assertEqual(self.stubs_run(), [])
+
     def test_h2e_the_app_lease_path_is_left_as_it_is(self):
         # The app puts <engine>/runtime/bin first on every lease's PATH (runtime.rs path_with): a
         # hook sourcing the library the way every hook does finds that same folder, by the same
@@ -222,7 +235,7 @@ exec python3 -c 'print("exec ok")'
         write(script, f'. "{LIB}"\npython3 -c "print(1)"\necho "rc=$?"\n')
         proc = subprocess.run(["/bin/bash", script], env=self.env(), capture_output=True, text=True, timeout=60)
         self.assertIn("rc=127", proc.stdout)
-        self.assertIn("the stub was not run", proc.stderr)
+        self.assertIn("developer-tools stub, which was not run", proc.stderr)
         self.assertEqual(self.stubs_run(), [])
 
 

@@ -50,7 +50,7 @@ case "$_gllc_in" in
     *cherry-pick*|*revert*|*" am"*|*rebase*|*stash*|*commit*|*reset*|*--abort*|*--quit*) ;;
     *) exit 0 ;;
 esac
-_gllc_py=python3
+_gllc_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 printf '%s' "$_gllc_in" | "$_gllc_py" "$_gllc_dir/../lib/operator_fences.py" early-check
 _gllc_rc=$?
 [ "$_gllc_rc" = 2 ] && exit 2

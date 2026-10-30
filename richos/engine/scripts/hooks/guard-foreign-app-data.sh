@@ -41,7 +41,7 @@ case "$_gfad_in" in
     *Containers*|*find*|*du\ *|*grep*|*rg\ *|*ls\ *) ;;
     *) exit 0 ;;
 esac
-_gfad_py=python3
+_gfad_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 printf '%s' "$_gfad_in" | "$_gfad_py" "$_gfad_dir/../lib/foreign_app_data.py" bash-check
 _gfad_rc=$?
 [ "$_gfad_rc" = 2 ] && exit 2

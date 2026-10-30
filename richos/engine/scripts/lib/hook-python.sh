@@ -14,7 +14,8 @@
 # RESOLUTION, first found wins:
 #   1. <engine>/runtime/bin/python3   the desktop app's bundled runtime (runtime.rs EngineRuntime::load)
 #   2. the first python3 on PATH outside the stub folder (Homebrew, pyenv, a virtual environment)
-#   3. <developer dir>/usr/bin/python3 by path (DEVELOPER_DIR, the xcode-select link, Xcode, the
+#   3. only when the stub folder is on PATH (so the bare name would have run the stub):
+#      <developer dir>/usr/bin/python3 by path (DEVELOPER_DIR, the xcode-select link, Xcode, the
 #      Command Line Tools), the real tool the stub would have run
 # THEN:
 #   - python3 is a function running that interpreter, exported to the bash scripts a hook starts;
@@ -23,7 +24,9 @@
 #     first on PATH, so `exec python3`, `env python3` and `#!/usr/bin/env python3` children (and, from
 #     the runtime, its git) never reach a stub either. RICHOS_HOOK_CALLER_PATH keeps the PATH the
 #     hook was started with, for a rule that judges the agent's own command (guard-toolchain.sh).
-#   - with no interpreter at all, python3 says so on stderr and returns 127; the stub never runs.
+#   - with no interpreter but the stub on PATH, python3 says so on stderr and returns 127; the stub
+#     never runs. With neither, nothing changes: python3 is missing exactly as before, and each
+#     hook's own missing-python3 handling (most fail closed) still runs.
 # RICHOS_TOOLCHAIN_ROOT prefixes the system paths, as in toolchain.py (tests build fake Macs).
 # Safe under set -euo pipefail; sourcing it twice in one shell does the work once.
 
@@ -50,6 +53,13 @@ _hp_py=""
 if [ -f "$_hp_engine/runtime/bin/python3" ] && [ -x "$_hp_engine/runtime/bin/python3" ]; then
     _hp_py="$_hp_engine/runtime/bin/python3"
 fi
+# Is a stub folder on PATH at all? Only then can the bare name reach a stub.
+_hp_stub_on_path=""
+_hp_ifs="$IFS"; IFS=:
+for _hp_d in $PATH; do
+    if [ "$_hp_d" = /usr/bin ] || [ "$_hp_d" = "$_hp_stubs" ]; then _hp_stub_on_path=1; break; fi
+done
+IFS="$_hp_ifs"
 # 2. The first python3 on PATH that is not in a stub folder.
 if [ -z "$_hp_py" ]; then
     _hp_ifs="$IFS"; IFS=:
@@ -63,7 +73,7 @@ if [ -z "$_hp_py" ]; then
     IFS="$_hp_ifs"
 fi
 # 3. The developer directory the stub itself would use, read from the file system.
-if [ -z "$_hp_py" ]; then
+if [ -z "$_hp_py" ] && [ -n "$_hp_stub_on_path" ]; then
     _hp_link=""
     if [ -L "$_hp_root/var/db/xcode_select_link" ]; then
         _hp_link="$(readlink "$_hp_root/var/db/xcode_select_link" 2>/dev/null)" || _hp_link=""
@@ -95,11 +105,12 @@ if [ -n "$_hp_py" ]; then
         PATH="${_hp_py%/*}:$PATH"
         export PATH
     fi
-else
+    export -f python3
+elif [ -n "$_hp_stub_on_path" ]; then
     python3() {
-        printf '%s\n' "hook-python.sh: no Python interpreter outside Apple's developer-tools stub on this Mac, so this hook could not run Python; the stub was not run." >&2
+        printf '%s\n' "hook-python.sh: no python3 on this Mac except Apple's developer-tools stub, which was not run (it opens the install dialog)." >&2
         return 127
     }
+    export -f python3
 fi
-export -f python3
-unset _hp_root _hp_stubs _hp_lib _hp_engine _hp_py _hp_ifs _hp_d _hp_link _hp_first _hp_dir
+unset _hp_root _hp_stubs _hp_lib _hp_engine _hp_py _hp_ifs _hp_d _hp_link _hp_first _hp_dir _hp_stub_on_path

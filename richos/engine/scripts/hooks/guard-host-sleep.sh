@@ -29,7 +29,7 @@ case "$_ghs_in" in
     *caffeinate*|*pmset*|*systemsetup*|*PowerManagement*|*IOPMAssertion*|*Amphetamine*|*Caffeine*|*KeepingYouAwake*|*Lungo*|*Theine*) ;;
     *) exit 0 ;;
 esac
-_ghs_py=python3
+_ghs_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 printf '%s' "$_ghs_in" | "$_ghs_py" -B "$_ghs_dir/../lib/host_sleep.py" check
 _ghs_rc=$?
 [ "$_ghs_rc" = 2 ] && exit 2

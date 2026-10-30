@@ -28,7 +28,7 @@ case "$_gsc_in" in
     *-*c*) ;;
     *) exit 0 ;;
 esac
-_gsc_py=python3
+_gsc_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 printf '%s' "$_gsc_in" | "$_gsc_py" "$_gsc_dir/../lib/shell_c.py"
 _gsc_rc=$?
 [ "$_gsc_rc" = 2 ] && exit 2

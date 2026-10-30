@@ -42,7 +42,7 @@ case "$_gss_in" in
     *rm*|*unlink*|*trash*|*-delete*) ;;
     *) exit 0 ;;
 esac
-_gss_py=python3
+_gss_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 printf '%s' "$_gss_in" | "$_gss_py" "$_gss_dir/../lib/shared_scratchpad.py" bash-check
 _gss_rc=$?
 [ "$_gss_rc" = 2 ] && exit 2

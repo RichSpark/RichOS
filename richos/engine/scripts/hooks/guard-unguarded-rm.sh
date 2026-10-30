@@ -27,7 +27,7 @@ case "$_gur_in" in
     *rm*|*find*) ;;
     *) exit 0 ;;
 esac
-_gur_py=python3
+_gur_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 printf '%s' "$_gur_in" | "$_gur_py" "$_gur_dir/../lib/unguarded_rm.py" check
 _gur_rc=$?
 [ "$_gur_rc" = 2 ] && exit 2
