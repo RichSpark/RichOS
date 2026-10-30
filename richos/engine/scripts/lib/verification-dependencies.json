@@ -507,7 +507,7 @@
     },
     "scripts/lib/engine_pass.py": {
       "source": "scripts/lib/engine_pass.py",
-      "sha256": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+      "sha256": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
       "evidence": "Admission/slot policy reads its own records, Git identity and process generations; no orchestration settings.",
       "keys": [],
       "edges": [
@@ -1295,7 +1295,7 @@
     },
     "scripts/engine_pass.mutation.sh": {
       "source": "scripts/engine_pass.mutation.sh",
-      "sha256": "4123cef0fb2052fcb587abbc682431d5326dd0b5c8c895e0e8e5cdf7fbd9d542",
+      "sha256": "cc4b9a6ec4ddb04a4c5f3370773b8209c75b07184aa494b4ef026a3862b3ef77",
       "evidence": "Eight literal engine_pass.py transformations run the named nested case. The generic harness copies config but the nested slot fixture never consumes it.",
       "keys": [],
       "edges": [
@@ -15132,7 +15132,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/engine_pass.py",
-          "sha256": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+          "sha256": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15186,7 +15186,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "df85e64aad6fac120aadcd7276ccf0a2deebf070cd82ac77c3b73846db3ac568",
+          "sha256": "5a5f7b1f35e5cfd6a34e0dee3061744fc5912f6e0518406c0695443d41c21634",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
@@ -15198,7 +15198,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "b41312c4d55f63949506399643fb3b4d40d6c06b6e98677983e4465c01881a92",
+          "sha256": "8a8e34d6a20d446d69ac254bc38c4fefe5fa63c04b5a95a602631aef4c80e6fd",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15369,13 +15369,13 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "df85e64aad6fac120aadcd7276ccf0a2deebf070cd82ac77c3b73846db3ac568",
+          "sha256": "5a5f7b1f35e5cfd6a34e0dee3061744fc5912f6e0518406c0695443d41c21634",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "b41312c4d55f63949506399643fb3b4d40d6c06b6e98677983e4465c01881a92",
+          "sha256": "8a8e34d6a20d446d69ac254bc38c4fefe5fa63c04b5a95a602631aef4c80e6fd",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -17467,7 +17467,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b"
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c"
       },
       "evidence": "G1 counts each of the three literal registrations. Other wiring assertions read probe/installer source data. The finite nested mutants execute this same registration block; they do not run the full hook inventory. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "probe_registration_needles": [
@@ -17510,7 +17510,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b"
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c"
       },
       "evidence": "9a checks guard-ceo-ruled-ask in the first AskUserQuestion group, 9b checks notice-ceo-ruled-prose presence. Six nested predicate mutants and drift runs use this same block. Group-index changes affecting the registered commands are retained by semantic entry diff. The first matching group assertion observes all PreToolUse matcher/group ordering, not only the guard command.",
       "events": [
@@ -17550,7 +17550,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4"
       },
       "evidence": "8a parses the PreToolUse Agent groups for the stale-staging command. No JSON formatting or unrelated registration is asserted. Nested mutants execute the same assertion and all their executable helper sources are bound. Seated settings are observed only by assertion 8b, a grep for guard-stale-staging.sh. Comparing every complete line containing the guard-stale-staging prefix covers its unescaped-dot pattern and formatting changes. The bound mutation transport copies settings for the same assertion; no other reached reader consumes them.",
@@ -17663,7 +17663,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/lib/resolve-roots.test.sh": "d5d4f7b6dc49da7d8dbc216bd244cd41028297b4141b18586323c8f4bb5a02c8",
         "scripts/hooks/session-start-stdin.test.sh": "7fe7fa956e36b6d93e4ed748fd4c57a96199cbde01bbce0d12567513d2fecd5f",
@@ -17773,7 +17773,7 @@
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/entrypoints.sh": "ca4d90b9bc460ead00bc7e4cd85c523abad1b0d6077408dbc7c27393f1df8659",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/lib/hook-dependencies.py": "2c781d7e717a3356f81ceda3253ab1ee3a764dd686d8ff963d8f57b351ac4b44",
@@ -18015,7 +18015,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960"
       },
@@ -18141,7 +18141,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/guard-bash-main-writes.sh": "86d87ebcda5e74dc0e0e728bbe5b3c1a198f13946714c326d8c0fe2ae7573884",
         "scripts/hooks/guard-ceo-todos-commits.sh": "d4ce06b9d6d3e6bcc741657e738bcbe3d227f0d5f370fc57121cd325cd808625",
@@ -18261,7 +18261,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b"
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c"
       }
     },
     "scripts/hooks/guard-vendoring-commits.test.sh": {
@@ -18290,7 +18290,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960"
       },
@@ -18420,7 +18420,7 @@
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
@@ -18527,7 +18527,7 @@
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/guard-host-display-power.sh": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
@@ -18771,7 +18771,7 @@
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
@@ -18858,7 +18858,7 @@
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/owned-systems.py": "f07b79f4608753f0a622bf9c8ddba78f3058e2b1a20d4b75106e028fd81c11f9",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693"
       },
@@ -18881,7 +18881,7 @@
         "scripts/hooks/guard-ceo-todos-commits.sh": "d4ce06b9d6d3e6bcc741657e738bcbe3d227f0d5f370fc57121cd325cd808625",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
-        "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
+        "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/hooks/ceo-todos.mutation.sh": "b84e9b40ba67ff10767e38c451804c32d2789c99f8881a5d063bef590d954b25",
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",

@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 import subprocess
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -160,6 +162,123 @@ class FailurePolicy(unittest.TestCase):
                 self.assertTrue(all(i.admission_wait >= .5 for i in items[:-1]))
             finally:
                 holder.communicate("\n", timeout=5)
+
+    def engine_slot_fixture(self, release_after):
+        """Two engine units (FULL_PASS_UNITS patched to 2, so they need the slot) and a live holder
+        of the slot that frees it `release_after` real seconds from now. A teammate run."""
+        (self.root / "scripts").mkdir()
+        (self.root / "scripts" / "ci-shard.sh").write_text("exit 0\n")
+        slot_root = self.root / "engine-slot"
+        code = ("import sys, time; sys.path.insert(0,sys.argv[1]); import engine_pass; "
+                "s=engine_pass.acquire(20,'fixture holder',sys.argv[2],wait=0); "
+                "print('ready',flush=True); time.sleep(float(sys.argv[3]))")
+        for change in (patch.dict(os.environ, {"RICHOS_ENGINE_PASS_DIR": str(slot_root)}),
+                       patch.object(pr.engine_pass, "FULL_PASS_UNITS", 2),
+                       patch.object(pr.engine_pass, "is_main_checkout", return_value=False)):
+            change.start()
+            self.addCleanup(change.stop)
+        holder = subprocess.Popen([sys.executable, "-c", code, str(Path(pr.engine_pass.__file__).parent),
+                                   str(self.root), str(release_after)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        self.addCleanup(holder.wait, 30)
+        self.assertEqual(holder.stdout.readline().strip(), "ready")
+        holder.stdout.close()
+        return [pr.Item("engine-%d" % i, str(self.root), ["bash", "scripts/ci-shard.sh", "--only-units", str(i)])
+                for i in range(2)]
+
+    def test_engine_units_queued_past_the_old_teammate_bound_still_run(self):
+        # 2026-10-30: P1-B's teammate proof run waited its 1800 s (engine_pass.TEAMMATE_WAIT) for
+        # the engine slot and failed all 76 engine units "not-admitted" for only waiting its turn.
+        # The holder here is alive for 2 s of real time; engine_pass's clock jumps 1801 s after
+        # 0.5 s, so the run has queued past the old bound while the slot is still held.
+        units = self.engine_slot_fixture(release_after=2)
+        offset = [0.0]
+        clock = SimpleNamespace(monotonic=lambda: time.monotonic() + offset[0], time=time.time, sleep=time.sleep)
+        jump = threading.Timer(.5, lambda: offset.__setitem__(0, 1801.0))
+        jump.start()
+        self.addCleanup(jump.cancel)
+        with patch.object(pr.engine_pass, "time", clock):
+            self.run_items(units)
+        self.assertEqual([i.state for i in units], ["passed", "passed"], [i.notes for i in units])
+        self.assertTrue(all(i.slot_wait > 1 for i in units), [i.slot_wait for i in units])
+
+    def test_engine_slot_wait_does_not_consume_the_run_cap(self):
+        # 2026-10-30: land-gate attempt __c3r0s4 was ended at its run cap after its engine units
+        # had queued 285 s for the slot. Here the slot is held for 4 s and the run cap is 2.5 s:
+        # only execution counts, so the two quick units still run once the slot frees.
+        units = self.engine_slot_fixture(release_after=4)
+        self.args.engine_slot_wait = 60
+        self.args.run_cap = 2.5
+        started = time.monotonic()
+        self.run_items(units)
+        self.assertEqual([i.state for i in units], ["passed", "passed"], [i.notes for i in units])
+        self.assertGreater(time.monotonic() - started, 3.5)
+
+    def test_run_joining_an_owner_queued_for_the_engine_slot_waits_as_slot_wait(self):
+        # Review rv-20261030T193938Z-4fb43f97-6a65 (P1): a run whose 20 engine checks are owned by
+        # another run that is itself queued for the engine slot never reaches the gate, so its
+        # wait spent its run cap (all 20 canceled at 2.6 s) and, with no cap, its admission wait
+        # (all 20 not-admitted at 1800 s) while the owner was only queued. Real input-owner locks
+        # and a real slot holder; only the scheduler's clock is controlled (10 s a pass, under
+        # HELD_GAP_SECONDS so no pass reads as a pause).
+        class Stop(Exception):
+            pass
+
+        def units():
+            return [pr.Item("engine unit-%02d" % i, str(self.root),
+                            ["bash", "scripts/ci-shard.sh", "--only-units", "unit-%02d" % i]) for i in range(20)]
+
+        def schedule(items, pool, gate, until, cap=None):
+            elapsed = [0.0]
+
+            def advance(_seconds):
+                elapsed[0] += 10.0
+                if elapsed[0] > until:
+                    raise Stop()
+            clock = SimpleNamespace(monotonic=lambda: elapsed[0], time=time.time, sleep=advance)
+            args = SimpleNamespace(run_cap=cap, run_started=0.0, engine_gate=gate, pool=pool,
+                                   admission_wait=1800, deadline=1800, budget=600, integration_episode=None)
+            with patch.object(pr, "time", clock), patch.object(pr, "checkpoint"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    pr.schedule(items, list(items), [], args, str(self.root / "no-logs"), "unused",
+                                SimpleNamespace(shared=None), 0, lambda: {})
+                except Stop:
+                    return True
+            return False
+
+        original = units()
+        identities = {it.label: {"contract": "fixture-qualified-input", "input": it.label} for it in original}
+        pools = [pr.proof_evidence.Pool(self.root / "owners", SimpleNamespace(identities=identities,
+                                                                             logdir=self.root / name))
+                 for name in ("owner-run", "joined-run-cap", "joined-run-wait")]
+        owner = pools[0]
+        with patch.dict(os.environ, {"RICHOS_ENGINE_PASS_DIR": str(self.root / "engine-slot")}), \
+                patch.object(pr.engine_pass, "is_main_checkout", return_value=False):
+            holder = pr.engine_pass.acquire(20, "live preceding engine run", str(self.root), wait=0)
+            gates = [pr.engine_pass.PlanGate(20, name, str(self.root)) for name in ("owner", "cap", "wait")]
+            try:
+                # The owner's own scheduler claims the inputs and queues for the slot.
+                self.assertTrue(schedule(original, owner, gates[0], until=30))
+                self.assertEqual({it.wait_reason for it in original}, {"engine-slot"})
+                for case, pool, gate, cap in (("cap", pools[1], gates[1], 2.5), ("wait", pools[2], gates[2], None)):
+                    joined = units()
+                    stopped = schedule(joined, pool, gate, until=4000, cap=cap)
+                    self.assertTrue(stopped, "%s: the joining run ended while its owner was only queued: %s"
+                                    % (case, sorted({(it.state, (it.notes or [""])[-1]) for it in joined})))
+                    self.assertEqual({(it.state, it.wait_reason) for it in joined}, {("waiting", "engine-slot")}, case)
+                    self.assertTrue(all(it.started is None and it.slot_wait >= 3990 for it in joined), case)
+                # Once the owner holds them back for anything else, the admission wait counts again.
+                owner.mark_slot_wait(set())
+                joined = units()
+                self.assertFalse(schedule(joined, pools[2], gates[2], until=4000))
+                self.assertEqual({it.state for it in joined}, {"not-admitted"})
+            finally:
+                for pool in pools:
+                    pool.close(original)
+                for gate in gates:
+                    gate.close()
+                holder.release()
 
     def test_lane_refill_avoids_global_delay_but_new_lane_still_ramps(self):
         items = [self.item("slow", "import time; time.sleep(4)", lane="a", weight=3),

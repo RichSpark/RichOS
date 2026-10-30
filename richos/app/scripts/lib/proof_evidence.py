@@ -1891,7 +1891,9 @@ class Pool:
                 owner = json.loads(path.read_text())
                 description = str(owner.get("run", "owner is publishing its identity"))
             except (OSError, ValueError):
-                description = "owner is publishing its identity"
+                owner, description = {}, "owner is publishing its identity"
+            # The owner queued for the engine slot (mark_slot_wait): the joiner waits for the slot too.
+            item.owner_slot_wait = owner.get("engine_slot_wait") is True
             note = "join identical input owner: " + description
             if note not in item.notes:
                 item.notes.append(note)
@@ -1949,6 +1951,16 @@ class Pool:
             os.close(fd)
             raise
 
+    def mark_slot_wait(self, labels):
+        """Publish, in each held row, whether this run holds that check back for the engine slot.
+        A run joining the check reads it (claim) and counts that time as slot wait, never against
+        its run cap or its admission wait. Written only when it changes."""
+        for label, (_fd, path, row) in self.held.items():
+            waiting = label in labels
+            if row.get("engine_slot_wait", False) != waiting:
+                row["engine_slot_wait"] = waiting
+                atomic(path, row)
+
     def finish(self, item):
         held = self.held.pop(item.label, None)
         if held is None:
@@ -1956,6 +1968,7 @@ class Pool:
         fd, path, row = held
         try:
             row["state"] = item.state
+            row.pop("engine_slot_wait", None)
             if self.functional_failure(item):
                 row["functional_failures"].append({"run": str(self.record.logdir),
                     "exit": item.rc, "diagnosis": self.retry_reason})
