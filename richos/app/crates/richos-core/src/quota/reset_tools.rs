@@ -23,7 +23,14 @@ fn authorized(scope: &Path) -> bool {
 ///
 /// `declared` is the lease's `RICHOS_APP_STATE`, when it has one (`engine_profile.rs`): a server
 /// pointed at another app's folder would report another app's account, so it must match.
-pub(super) fn status(app: &Path, resets: &Service, now: u64, declared: Option<&std::ffi::OsStr>) -> Result<Value, String> {
+///
+/// `caller` is the session's own account, its `RICHOS_CLAUDE_ACCOUNT` ([`super::gate::ACCOUNT_ENV`]),
+/// when it has one (second review of 0b0afd1f1, P2): during a move the top level is still the
+/// account being left (Home at 95%) while a new session runs on the account in use (Work at 10%),
+/// and a Work session was told Home's held admission. With a row for it, the reply is that
+/// account's own figures and the gate's decision on it, exactly as the gate judges its calls.
+pub(super) fn status(app: &Path, resets: &Service, now: u64, declared: Option<&std::ffi::OsStr>,
+                     caller: Option<&str>) -> Result<Value, String> {
     let state = app.join("engine-state");
     if let Some(declared) = declared.filter(|v| !v.is_empty()) {
         let same = match (std::fs::canonicalize(declared), std::fs::canonicalize(&state)) {
@@ -47,15 +54,29 @@ pub(super) fn status(app: &Path, resets: &Service, now: u64, declared: Option<&s
         (None, None) => return Err("The app's reading does not say which account is in use. No reading is reported.".into()),
     };
     let r = resets.view();
+    let row = caller.filter(|id| !id.is_empty()).and_then(|id| view.accounts.iter().find(|a| a.id == id));
+    let (account, windows, checked_at, reading_state) = match row {
+        // The row's state as the gate rebuilds it from the same fields (`gate::decide`).
+        Some(row) => (json!({"id": row.id, "label": row.label}), row.windows.clone(), row.checked_at, super::Snapshot {
+            windows: row.windows.clone(),
+            checked_at: row.checked_at,
+            error: row.message.as_ref().map(|_| super::ReadError::Failed),
+            speeds: row.speeds.clone(),
+            empty_at: row.empty_at,
+            ..Default::default()
+        }.view(view.policy.clone(), now).state),
+        None => (account, view.windows.clone(), view.checked_at, view.state),
+    };
     Ok(json!({
         "account": account,
-        "windows": view.windows,
-        "checkedAt": view.checked_at,
-        "state": view.state,
+        "windows": windows,
+        "checkedAt": checked_at,
+        "state": reading_state,
         "heldUntil": view.held_until,
-        // The gate's decision on the top-level reading, the account named above (main's gate
-        // keeps `admission` for tests only; `decide` with no account is the same decision).
-        "admission": super::gate::decide(&state, None, now).0,
+        // The gate's decision on the account named above: its own row when the caller has one,
+        // else the top level (main's gate keeps `admission` for tests only; `decide` with no
+        // account is that decision).
+        "admission": super::gate::decide(&state, row.map(|a| a.id.as_str()), now).0,
         "resets": {
             "state": r.state,
             "offers": r.offers,
@@ -84,7 +105,8 @@ fn invoke(
     let service = Service::new(root);
     let view = match name {
         "status" => return status(app, &service, crate::util::now_millis(),
-            std::env::var_os("RICHOS_APP_STATE").as_deref()),
+            std::env::var_os("RICHOS_APP_STATE").as_deref(),
+            std::env::var(super::gate::ACCOUNT_ENV).ok().as_deref()),
         "use_approved_reset" => {
             if service.view().approval.is_none() {
                 return Err("The user has not approved a reset in Technical Settings.".into());

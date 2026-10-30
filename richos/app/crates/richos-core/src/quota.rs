@@ -3441,7 +3441,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
             serde_json::from_slice::<(bool, String)>(&out.stdout).unwrap()
         };
-        let tool = || reset_tools::status(&app, &resets::Service::new(&app), crate::util::now_millis(), Some(state.as_os_str())).unwrap();
+        let tool = || reset_tools::status(&app, &resets::Service::new(&app), crate::util::now_millis(), Some(state.as_os_str()), None).unwrap();
         let published = || serde_json::from_slice::<Value>(&fs::read(state.join("claude-quota.json")).unwrap()).unwrap();
         let top = |view: &Value, id: &str| view["windows"].as_array().unwrap().iter()
             .find(|w| w["id"] == id).map(|w| w["usedPercent"].as_f64().unwrap());
@@ -3651,7 +3651,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
             file.as_object_mut().unwrap().remove("inUse");
             edit(&mut file);
             fs::write(&path, file.to_string()).unwrap();
-            reset_tools::status(root.path(), &resets::Service::new(root.path()), crate::util::now_millis(), None)
+            reset_tools::status(root.path(), &resets::Service::new(root.path()), crate::util::now_millis(), None, None)
         };
         let reply = older(&|_| {}).unwrap();
         assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str()), (Some("2"), Some("Work")), "{reply}");
@@ -3660,7 +3660,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         let refused = older(&|file| for row in file["accounts"].as_array_mut().into_iter().flatten() { row["inUse"] = json!(false); });
         assert!(refused.is_err(), "{refused:?}");
         service.publish().unwrap();
-        let reply = reset_tools::status(root.path(), &resets::Service::new(root.path()), crate::util::now_millis(), None).unwrap();
+        let reply = reset_tools::status(root.path(), &resets::Service::new(root.path()), crate::util::now_millis(), None, None).unwrap();
         assert_eq!(reply["account"]["id"], "2", "{reply}");
     }
 
@@ -3911,6 +3911,22 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         let (held, line): (bool, String) = serde_json::from_slice(&out.stdout).unwrap();
         assert!(!held, "a review on Work at 10% was held on Home's 95%: {line}");
         assert!(line.contains(&format!("Work (account {})", work.id)), "the review names Work's reading: {line}");
+        // **And the quota tool answers each session for its own account** (second review of
+        // 0b0afd1f1, P2): a Work session (RICHOS_CLAUDE_ACCOUNT=2) was told Home's held admission.
+        let tool = |caller: Option<&str>| reset_tools::status(_root.path(), &resets::Service::new(_root.path()),
+            crate::util::now_millis(), None, caller).unwrap();
+        let five_of = |reply: &Value| reply["windows"].as_array().unwrap().iter()
+            .find(|w| w["id"] == "five_hour").and_then(|w| w["usedPercent"].as_f64());
+        let on_work = tool(Some(&work.id));
+        assert_eq!((on_work["account"]["id"].as_str(), on_work["account"]["label"].as_str(), five_of(&on_work)),
+            (Some(work.id.as_str()), Some("Work"), Some(10.)), "{on_work}");
+        assert_eq!(on_work["admission"]["state"], "ready", "a Work session is told Work's admission: {on_work}");
+        assert_eq!(on_work["state"], "fresh", "{on_work}");
+        for caller in [Some("1"), None, Some("9")] {
+            let reply = tool(caller);
+            assert_eq!((reply["account"]["id"].as_str(), five_of(&reply)), (Some("1"), Some(95.)), "{caller:?}: {reply}");
+            assert_eq!(reply["admission"]["state"], "held", "{caller:?}: {reply}");
+        }
 
         service.accounts.back_end_on("thread-stu", Some(&work.id));
         let view = service.view();
