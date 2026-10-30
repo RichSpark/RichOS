@@ -439,8 +439,12 @@ exit 127
 
 
 def harness_env(env, standin_dir):
-    """`env` with a usable DEVELOPER_DIR passed through, or stub stand-ins ahead of /usr/bin."""
+    """`env` with a usable DEVELOPER_DIR passed through, or stub stand-ins ahead of /usr/bin.
+    Only on macOS: the stubs are Apple's, and elsewhere /usr/bin/git and make are the real tools,
+    which a stand-in ahead of them would hide (review rv-20261030T130236Z-aaf88b85-fcb0)."""
     env = dict(env)
+    if sys.platform != "darwin":
+        return env
     directory, _source = developer_dir(env)
     if directory:
         env["DEVELOPER_DIR"] = directory
