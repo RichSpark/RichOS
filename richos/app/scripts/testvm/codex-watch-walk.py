@@ -27,9 +27,10 @@ conventional folder in the GUEST's home (the setting is unset, as on a new insta
              prompt from codex-watch carrying it, ended with a reply)
   answer     typed to Rich: add one line to the to-codex.md beside that to-rich.md. PASS needs the
              line in the guest's to-codex.md
-  context    what each input added to Rich's context, from the guest's native transcripts: each
-             entry's turn under 1,000 tokens (chars/4), carrying neither the full continuity block
-             nor the company material. For one session, run it without relaunch:
+  context    what each input added to Rich's context, from the guest's native transcripts: a
+             session's first input carries the full blocks; every later one, the second entry's
+             included, under 1,000 tokens (chars/4) with neither the full continuity block nor
+             the company material. For one session, run it without relaunch:
              --steps identity,first-run,channel,append,context
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
@@ -57,6 +58,27 @@ STEPS = ['identity', 'first-run', 'channel', 'relaunch', 'append', 'answer', 'co
 # `context` measures one session, which `relaunch` ends, so it runs only when asked for.
 DEFAULT_STEPS = [s for s in STEPS if s != 'context']
 CHANNEL = '.richos-coordination/rich-codex'
+
+
+def judge_context(rows):
+    """The `context` step's verdict over its rows (one per input, in transcript order): None when
+    it passes, else why not. Each entry's input must be on record. The first input of a session is
+    given the full blocks by design (the model holds no earlier copy); every LATER input of that
+    session, and so the second entry's always, must add under 1,000 tokens (chars/4) and carry
+    neither the full continuity block nor the company material."""
+    for name in ('first', 'second'):
+        if not any(r['entry'] == name for r in rows):
+            return 'no input carrying the %s entry has host context on record' % name
+    seen = set()
+    for r in rows:
+        later = r['session'] in seen
+        seen.add(r['session'])
+        if r['entry'] == 'second' and not later:
+            return 'the second entry was the first input of its session, so it proves nothing about a repeat'
+        if later and (r['tokens'] >= 1000 or r['full_continuity'] or r['full_company']):
+            return 'a later input (%s entry) added %d tokens (chars/4), full continuity %s, full company material %s' % (
+                r['entry'] or 'no', r['tokens'], r['full_continuity'], r['full_company'])
+    return None
 
 
 class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
@@ -188,9 +210,9 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
     def context(self):
         """What each input of the conversation added to Rich's context: every UserPromptSubmit
         `hook_additional_context` in the guest's native transcripts, beside the input it came
-        with. PASS needs each codex-watch entry's input to add under 1,000 tokens (chars/4) and to
-        carry neither the full continuity block nor the company material (follow-up "Rich's
-        context fills with the same injected blocks on every message", 2026-10-30). Run it without
+        with ([`judge_context`]: each later input of a session under 1,000 tokens, chars/4, with
+        neither the full continuity block nor the company material; follow-up "Rich's context
+        fills with the same injected blocks on every message", 2026-10-30). Run it without
         `relaunch`: a relaunched app is a new session and gives the full blocks once again."""
         marks = {k: v for k, v in self.marks.items() if k in ('first', 'second')}
         if set(marks) != {'first', 'second'}:
@@ -223,14 +245,9 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
         (self.out / 'context.json').write_text(json.dumps(rows, indent=2) + '\n')
         summary = [{k: r[k] for k in ('session', 'entry', 'input', 'characters', 'tokens', 'full_continuity', 'full_company')}
                    for r in rows]
-        for name in ('first', 'second'):
-            told = [r for r in rows if r['entry'] == name]
-            if not told:
-                raise StepFailed('no input carrying the %s entry has host context on record; see context.json' % name)
-            r = told[0]
-            if r['tokens'] >= 1000 or r['full_continuity'] or r['full_company']:
-                raise StepFailed('the %s entry added %d tokens (chars/4), full continuity %s, full company material %s; '
-                                 'see context.json' % (name, r['tokens'], r['full_continuity'], r['full_company']))
+        problem = judge_context(rows)
+        if problem:
+            raise StepFailed(problem + '; see context.json')
         return {'inputs': summary}
 
 
