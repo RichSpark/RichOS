@@ -301,13 +301,15 @@ fn the_launcher_runs_python3_on_the_current_version_with_the_arguments() {
         .unwrap();
     assert!(out.status.success());
     let file = installed(&tools).unwrap().file;
-    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("[{}]\n[--version]\n[two words]\n", file.display()));
+    // `-E -s`: the user's PYTHONPATH and `pip --user` packages, which an agent's commands carry,
+    // never reach the Python that runs yt-dlp.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("[-E]\n[-s]\n[{}]\n[--version]\n[two words]\n", file.display()));
 
     // In a lease: the runtime's Python, named in RICHOS_RUNTIME_PYTHON, even with the user's
     // `python3` first on PATH (Hank's parity audit 2026-10-30, item 2: an agent's own commands
     // find the user's tools first, and Apple's Python 3.9 cannot run yt-dlp).
     let runtime = root.join("runtime python3");
-    std::fs::write(&runtime, "#!/bin/sh\necho runtime \"$1\"\n").unwrap();
+    std::fs::write(&runtime, "#!/bin/sh\necho runtime \"$@\"\n").unwrap();
     std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
     let out = std::process::Command::new(tools.join("yt-dlp"))
         .arg("--version")
@@ -317,7 +319,7 @@ fn the_launcher_runs_python3_on_the_current_version_with_the_arguments() {
         .output()
         .unwrap();
     assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("runtime {}\n", file.display()));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("runtime -E -s {} --version\n", file.display()));
 }
 
 /// A launcher written before the launcher ran the runtime's Python is not an installed copy, so

@@ -274,12 +274,19 @@ pub fn commands_path(runtime_bin: &Path, user: &str, tools: Option<&Path>, stand
 /// Delivered interpreters must not import a launching terminal's modules or
 /// startup scripts. Credentials and ordinary OS settings are not copied here.
 pub fn isolate_interpreter_environment(command: &mut std::process::Command) {
-    for key in ["PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
-        "NODE_PATH", "NODE_OPTIONS", "BASH_ENV", "ENV"] {
+    for key in INTERPRETER_KEYS {
         command.env_remove(key);
     }
-    command.env("PYTHONNOUSERSITE", "1").env("PYTHONDONTWRITEBYTECODE", "1");
+    command.env(NO_USER_SITE, "1").env("PYTHONDONTWRITEBYTECODE", "1");
 }
+
+/// The user's interpreter settings [`isolate_interpreter_environment`] removes. An agent's own
+/// commands get the user's back (`EngineProfile::commands_env`).
+pub const INTERPRETER_KEYS: [&str; 8] = ["PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
+    "NODE_PATH", "NODE_OPTIONS", "BASH_ENV", "ENV"];
+
+/// Set to `1` by [`isolate_interpreter_environment`]: Python skips the user's `pip --user` packages.
+pub const NO_USER_SITE: &str = "PYTHONNOUSERSITE";
 pub fn interpreter_command(path: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let mut command = std::process::Command::new(path);
     isolate_interpreter_environment(&mut command);

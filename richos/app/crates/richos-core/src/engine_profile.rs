@@ -673,7 +673,7 @@ impl EngineProfile {
         let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None,
                   claude_account: None, token_sink: None, speech_model: None,
                   lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
-        write(&profile.plugin.join(COMMANDS_ENV), &format!("export PATH={}\n", quote(Path::new(&profile.commands_path()))))?;
+        write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
         Ok(profile)
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
@@ -805,6 +805,25 @@ impl EngineProfile {
         let mut path = self.runtime.commands_path(user, &crate::user_git::StandIns::installed());
         self.with_git_helpers(&mut path);
         path
+    }
+
+    /// **What [`COMMANDS_ENV`] says ahead of every Bash command of an agent**: the agent's own
+    /// `PATH` ([`Self::commands_path`]), and the user's interpreter settings that the lease leaves
+    /// out for the app's own scripts (`runtime::isolate_interpreter_environment`): `PYTHONPATH`,
+    /// `PYTHONUSERBASE` and the rest as the user's terminal has them (`settings.json`'s, else the
+    /// login shell's), and Python's `pip --user` packages back on, so the user's `python3` imports
+    /// what it imports in the terminal (second review rv-20261030T220254Z, P2). A name the user
+    /// does not set is unset, as in the terminal.
+    pub fn commands_env(&self) -> String {
+        let user = |key: &str| self.user.settings.env.get(key).or_else(|| self.user.login.as_ref()?.get(key));
+        let mut text = format!("export PATH={}\n", quote(Path::new(&self.commands_path())));
+        for key in crate::runtime::INTERPRETER_KEYS.into_iter().chain([crate::runtime::NO_USER_SITE]) {
+            match user(key) {
+                Some(value) => text.push_str(&format!("export {key}={}\n", quote(Path::new(value)))),
+                None => text.push_str(&format!("unset {key}\n")),
+            }
+        }
+        text
     }
 
     /// **The folders this one lease was given, removed when it retires**: its engine plugin and

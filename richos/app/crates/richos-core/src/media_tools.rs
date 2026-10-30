@@ -155,10 +155,12 @@ fn version_name(sha256: &str) -> String {
 /// the user's `python3` first (`runtime::commands_path`), and yt-dlp no longer runs on the Python
 /// 3.9 that Apple's developer tools put in `/usr/bin` (measured 2026-10-30: a traceback before
 /// `--version` printed). Outside a lease, `python3`
-/// from PATH. A launcher written before this text is not an installed copy, so the next check
-/// writes this one.
+/// from PATH. `-E -s`: an agent's commands carry the user's own `PYTHONPATH`, `PYTHONHOME` and
+/// `pip --user` packages (`EngineProfile::commands_env`), which are for the user's Python and
+/// never reach this one. A launcher written before this text is not an installed copy, so the
+/// next check writes this one.
 fn launcher_text(tag: &str, sha256: &str) -> String {
-    format!("#!/bin/sh\n# yt-dlp nightly {tag} sha256 {sha256}\nexec \"${{{RUNTIME_PYTHON}:-python3}}\" \"$(dirname \"$0\")/{}\" \"$@\"\n",
+    format!("#!/bin/sh\n# yt-dlp nightly {tag} sha256 {sha256}\nexec \"${{{RUNTIME_PYTHON}:-python3}}\" -E -s \"$(dirname \"$0\")/{}\" \"$@\"\n",
         version_name(sha256))
 }
 

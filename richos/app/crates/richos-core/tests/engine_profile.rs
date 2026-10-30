@@ -1152,6 +1152,43 @@ fn an_agents_commands_find_the_users_own_tools_first() {
     assert_eq!(environment["RICHOS_RUNTIME_PYTHON"].as_deref(), f.runtime().python.to_str());
 }
 
+/// **An agent's own commands have the user's Python packages, as in the terminal** (second review
+/// rv-20261030T220254Z, P2): the lease removes `PYTHONPATH`, `PYTHONUSERBASE` and the like and
+/// turns `pip --user` packages off for the app's own scripts, so the user's `python3`, found first,
+/// still could not import what it imports in the terminal. Ahead of every Bash command the user's
+/// values come back, and a name the user does not set stays unset. The hooks keep the isolation.
+#[test]
+fn an_agents_commands_have_the_users_python_packages_as_in_the_terminal() {
+    let f = Scratch::new();
+    let set = |login: &[(&str, &str)]| -> (BTreeMap<String, Option<String>>, Vec<String>) {
+        let login: BTreeMap<String, String> = login.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let profile = EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(), richos_core::machine_settings::Settings::default(),
+            None, Some(std::sync::Arc::new(login))).unwrap();
+        let mut command = std::process::Command::new("/fictional/provider");
+        profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+        let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+        // An agent's Bash command: the lease's whole environment, then the commands file.
+        let file = environment["CLAUDE_ENV_FILE"].clone().unwrap();
+        let mut shell = std::process::Command::new("/bin/sh");
+        shell.arg("-c").arg(format!(". '{file}'\nfor k in PYTHONPATH PYTHONUSERBASE PYTHONNOUSERSITE NODE_PATH; do eval \"echo $k=\\${{$k-unset}}\"; done"))
+            .env_clear().envs(environment.iter().filter_map(|(k, v)| Some((k, v.as_ref()?))));
+        let out = shell.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        (environment, String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect())
+    };
+    let (lease, agent) = set(&[("PATH", "/usr/bin:/bin"), ("PYTHONPATH", "/user/lib's"), ("PYTHONUSERBASE", "/user/base"), ("NODE_PATH", "/user/node")]);
+    // The hooks and the app's own scripts: isolated, as before.
+    assert_eq!(lease["PYTHONPATH"], None);
+    assert_eq!(lease["PYTHONNOUSERSITE"].as_deref(), Some("1"));
+    assert_eq!(agent, ["PYTHONPATH=/user/lib's", "PYTHONUSERBASE=/user/base", "PYTHONNOUSERSITE=unset", "NODE_PATH=/user/node"]);
+    // Nothing set by the user: nothing set for the agent, and `pip --user` packages on.
+    let (_, agent) = set(&[("PATH", "/usr/bin:/bin")]);
+    assert_eq!(agent, ["PYTHONPATH=unset", "PYTHONUSERBASE=unset", "PYTHONNOUSERSITE=unset", "NODE_PATH=unset"]);
+    // The user turned `pip --user` packages off in the terminal: off for the agent too.
+    let (_, agent) = set(&[("PATH", "/usr/bin:/bin"), ("PYTHONNOUSERSITE", "1")]);
+    assert_eq!(agent[2], "PYTHONNOUSERSITE=1");
+}
+
 /// **On a Mac without the developer tools nothing reaches Apple's stand-ins** (the CEO,
 /// 2026-10-29: "Most regular users aren't expected to be developers"). A fake Mac: its `/usr/bin`
 /// holds `python3` and `git` stand-ins that leave a mark when run, and its developer folders hold
