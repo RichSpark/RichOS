@@ -4048,7 +4048,11 @@ mod tests {
         let in_an_hour=|| crate::util::now_millis()+3_600_000;
 
         stu.live("Live input under test")(crate::steering::InputOutcome {result:session_limit(in_an_hour()),report_failure:true});
-        until("the cut live input was neither sent once more nor reported",||!stu.reached("Live input under test").is_empty()||stu.rich_told());
+        // Waits for the input to be closed, not for it to reach Stu: the retry's completion
+        // closes it on the usage-limit thread after the send, so a read of `reached` alone could
+        // come before that on a slow machine. It is open from `live` until then (`begin_attempt`).
+        until("the cut live input was neither closed nor reported",
+            ||crate::session_tools::pending_after(&stu.scope(),"stu",0).unwrap().is_none()||stu.rich_told());
 
         assert_eq!(stu.accounts("Live input under test"),["1"],"not sent once more, live, after the hold");
         let retried: serde_json::Value=serde_json::from_str(&stu.reached("Live input under test")[0].1).unwrap();
