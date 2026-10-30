@@ -17,7 +17,40 @@
 # Any error in the check is a pass. Suite: scripts/lib/toolchain.test.sh.
 
 _gtc_in="$(cat)"
-# Cheap exit first: most commands name no stub at all. EVERY stub in toolchain.py SHIMS is here
+# No dirname: on a Mac without developer tools a scrubbed PATH may hold nothing beyond /bin.
+_gtc_src="${BASH_SOURCE[0]}"
+case "$_gtc_src" in */*) _gtc_dir="${_gtc_src%/*}" ;; *) _gtc_dir=. ;; esac
+_gtc_dir="$(cd "$_gtc_dir" && pwd)"
+# Nothing this hook runs may itself be a stub: /usr/bin/python3 IS one, and on a Mac without
+# developer tools running it opens the very dialog this rule exists to prevent. Take the first
+# python3 on PATH outside /usr/bin (the app's bundled runtime, Homebrew); with none, pass. That
+# python's folder goes first on PATH for the rest of the hook, so the shared library sourced below
+# (which calls `python3` by name) gets it too, never the stub. Only file tests here, nothing run.
+_gtc_py=""
+_gtc_stubs="${RICHOS_TOOLCHAIN_ROOT:-}/usr/bin"   # the suite's fake Mac keeps its stubs under a root
+_gtc_ifs="$IFS"; IFS=:
+for _gtc_d in $PATH; do
+    [ -n "$_gtc_d" ] && [ "$_gtc_d" != "/usr/bin" ] && [ "$_gtc_d" != "$_gtc_stubs" ] &&
+        [ -x "$_gtc_d/python3" ] && { _gtc_py="$_gtc_d/python3"; break; }
+done
+IFS="$_gtc_ifs"
+# The command is resolved with the caller's own PATH (review 2026-10-29: with the bundled python's
+# folder prepended, its pip3 hid the /usr/bin stub the agent's shell would actually run).
+_gtc_caller_path="$PATH"
+[ -n "$_gtc_py" ] && PATH="${_gtc_py%/*}:$PATH"
+# An unreadable payload is said, never passed in silence (unevaluated-payload.test.sh), and that
+# comes BEFORE the cheap exit below: an empty, truncated or non-JSON payload names no stub, so the
+# cheap exit used to pass it without a word. The library runs `python3` by name (to read the payload
+# and to write the notice), so it runs only with the non-stub python first on PATH; with none, the
+# hook passes as before (toolchain.test.py T9: a PATH without /bin even reads the payload as empty).
+_UE_LIB="$_gtc_dir/../lib/unevaluated-notice.sh"
+if [ -f "$_UE_LIB" ] && [ -n "$_gtc_py" ]; then
+    # shellcheck source=../lib/unevaluated-notice.sh
+    . "$_UE_LIB"
+    unevaluated_or_continue "guard-toolchain.sh" "$_gtc_in" "" \
+        "whether a Bash command runs an Apple developer-tools stub with no toolchain behind it"
+fi
+# Cheap exit: most commands name no stub at all. EVERY stub in toolchain.py SHIMS is here
 # (a short name only as a word: followed by a non-word character, or last); toolchain.test.py
 # T11 runs the hook once per stub.
 case "$_gtc_in" in
@@ -35,35 +68,7 @@ case "$_gtc_in" in
     *yacc*) ;;
     *) exit 0 ;;
 esac
-# No dirname: on a Mac without developer tools a scrubbed PATH may hold nothing beyond /bin.
-_gtc_src="${BASH_SOURCE[0]}"
-case "$_gtc_src" in */*) _gtc_dir="${_gtc_src%/*}" ;; *) _gtc_dir=. ;; esac
-_gtc_dir="$(cd "$_gtc_dir" && pwd)"
-# Nothing this hook runs may itself be a stub: /usr/bin/python3 IS one, and on a Mac without
-# developer tools running it opens the very dialog this rule exists to prevent. Take the first
-# python3 on PATH outside /usr/bin (the app's bundled runtime, Homebrew); with none, pass. That
-# python's folder goes first on PATH for the rest of the hook, so the shared library sourced below
-# (which calls `python3` by name) gets it too, never the stub.
-_gtc_py=""
-_gtc_stubs="${RICHOS_TOOLCHAIN_ROOT:-}/usr/bin"   # the suite's fake Mac keeps its stubs under a root
-_gtc_ifs="$IFS"; IFS=:
-for _gtc_d in $PATH; do
-    [ -n "$_gtc_d" ] && [ "$_gtc_d" != "/usr/bin" ] && [ "$_gtc_d" != "$_gtc_stubs" ] &&
-        [ -x "$_gtc_d/python3" ] && { _gtc_py="$_gtc_d/python3"; break; }
-done
-IFS="$_gtc_ifs"
 [ -n "$_gtc_py" ] || exit 0
-# The command is resolved with the caller's own PATH (review 2026-10-29: with the bundled python's
-# folder prepended, its pip3 hid the /usr/bin stub the agent's shell would actually run).
-_gtc_caller_path="$PATH"
-PATH="${_gtc_py%/*}:$PATH"
-_UE_LIB="$_gtc_dir/../lib/unevaluated-notice.sh"
-if [ -f "$_UE_LIB" ]; then
-    # shellcheck source=../lib/unevaluated-notice.sh
-    . "$_UE_LIB"
-    unevaluated_or_continue "guard-toolchain.sh" "$_gtc_in" "" \
-        "whether a Bash command runs an Apple developer-tools stub with no toolchain behind it"
-fi
 printf '%s' "$_gtc_in" | RICHOS_TOOLCHAIN_CALLER_PATH="$_gtc_caller_path" "$_gtc_py" -B "$_gtc_dir/../lib/toolchain.py" check
 _gtc_rc=$?
 [ "$_gtc_rc" = 2 ] && exit 2
