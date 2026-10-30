@@ -21,6 +21,7 @@
 #       sentence to its evidence note merge by themselves, both sentences and both edges kept:
 #       the exact entry that stopped the folderfiles2 land on 2026-10-22.
 #   V5  a note one side shortened while the other appended to it is still a conflict.
+#   V6  two notes that each had a sentence inserted in the middle merge by themselves, both kept.
 #   V3  install.sh --check names the driver, and --uninstall removes it.
 #
 # Exit 0 = all cases pass; exit 1 = at least one failure.
@@ -231,6 +232,43 @@ if [ "$V5RC" != 0 ] && grep -q '^<<<<<<<' "$R/richos/engine/scripts/lib/verifica
     ok "V5  a note one side shortened and the other extended is a conflict: the dropped sentence is not brought back"
 else
     bad "V5  merge rc=$V5RC — a sentence one side deleted was merged back without a person" "$(tail -3 "$SANDBOX/v5.out" | tr '\n' ' ')"
+fi
+git -C "$R" merge --abort >/dev/null 2>&1
+
+# --- V6 --------------------------------------------------------------------
+# Follow-up 6 (2026-10-30): two notes that each GREW IN THE MIDDLE (a sentence inserted before the
+# last one, not appended) needed hand work at two merges of one batch. Both insertions
+# are kept, ours first, and the sentences the base had stay in their order.
+note6() { # <edit>: sets scripts/a.sh's note
+    python3 - "$R/richos/engine/scripts/lib/verification-dependencies.json" "$1" <<'PY'
+import json, sys
+p, edit = sys.argv[1], sys.argv[2]
+d = json.load(open(p)); row = d["nodes"]["scripts/a.sh"]
+base = "First reason stated. Second reason stated. Closing line stated."
+mid = "Second reason stated."
+row["evidence"] = {"base": base,
+                   "ours": base.replace(mid, mid + " Ours added mid."),
+                   "theirs": base.replace(mid, mid + " Theirs added mid.")}[edit]
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+}
+git -C "$R" checkout -q -f main
+note6 base
+git -C "$R" commit -qam "main: a three-sentence note"
+git -C "$R" switch -q -c left6
+note6 theirs
+git -C "$R" commit -qam "left6: inserts a sentence in the middle"
+git -C "$R" switch -q main
+note6 ours
+git -C "$R" commit -qam "main: inserts a different sentence in the middle"
+( cd "$R" && git merge --no-ff --no-edit left6 ) >"$SANDBOX/v6.out" 2>&1
+V6RC=$?
+GOT6="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["nodes"]["scripts/a.sh"]["evidence"])' "$R/richos/engine/scripts/lib/verification-dependencies.json" 2>/dev/null)"
+WANT6="First reason stated. Second reason stated. Ours added mid. Theirs added mid. Closing line stated."
+if [ "$V6RC" = 0 ] && [ "$GOT6" = "$WANT6" ]; then
+    ok "V6  two notes that each grew in the middle merge by themselves: both sentences kept, ours first, the base's order intact"
+else
+    bad "V6  merge rc=$V6RC, note: ${GOT6:0:120}" "$(tail -3 "$SANDBOX/v6.out" | tr '\n' ' ')"
 fi
 git -C "$R" merge --abort >/dev/null 2>&1
 
