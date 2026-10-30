@@ -16,6 +16,16 @@ pub fn stop_task_request(request_id: &str, task_id: &str) -> Value {
            "request": {"subtype": "stop_task", "task_id": task_id}})
 }
 
+/// Move one foreground command to the background, by the tool call that started it, without
+/// interrupting it: Ctrl+B for that one call. Measured on Claude Code 2.1.314 in print mode
+/// on an async helper's foreground `Bash` call: answered `{"backgrounded": true}` at once,
+/// the helper's call returned "Command was manually backgrounded by user", and the same
+/// process ran on and finished with its own notice (richos-hq 2026-10-29-two-day-cleanup).
+pub fn background_task_request(request_id: &str, tool_use_id: &str) -> Value {
+    json!({"type": "control_request", "request_id": request_id,
+           "request": {"subtype": "background_tasks", "tool_use_id": tool_use_id}})
+}
+
 // =============================================================================================
 // the task book: which named agent is which task, and how it last stood (r4 §1.1)
 // =============================================================================================
@@ -90,6 +100,12 @@ pub struct TaskBook {
     answered: HashSet<String>,
     /// task id → when its `task_started` was read (ms since the epoch, `assignment::now_ms`).
     started_at_ms: HashMap<String, u64>,
+    /// A helper's `Bash` calls still running in the foreground, from the stream's own words
+    /// (`task_started`: `local_bash`, `owned_by_subagent`, not `is_backgrounded`): tool_use id
+    /// → (task id, the helper's agent id, which is the task's `parent_task_id`, and the
+    /// frame's `session_id`). Gone once the host says the task moved to the background or
+    /// ended. [`Self::held_foreground`].
+    helper_foreground: HashMap<String, (String, String, String)>,
 }
 
 impl TaskBook {
@@ -141,6 +157,14 @@ impl TaskBook {
                     if !tool.is_empty() {
                         self.task_tool.insert(task.to_string(), tool.to_string());
                     }
+                    let helper = frame.get("parent_task_id").and_then(Value::as_str).unwrap_or("");
+                    if frame.get("task_type").and_then(Value::as_str) == Some("local_bash")
+                        && frame.get("owned_by_subagent").and_then(Value::as_bool) == Some(true)
+                        && frame.get("is_backgrounded").and_then(Value::as_bool) == Some(false)
+                        && !tool.is_empty() && !helper.is_empty() {
+                        let session = frame.get("session_id").and_then(Value::as_str).unwrap_or("");
+                        self.helper_foreground.insert(tool.to_string(), (task.to_string(), helper.to_string(), session.to_string()));
+                    }
                     if frame.get("task_type").and_then(Value::as_str) == Some("local_agent") || self.names.contains_key(tool) {
                         changed.extend(self.bind(task, tool));
                     }
@@ -154,6 +178,9 @@ impl TaskBook {
             }
             (Some("system"), Some("task_updated")) => {
                 let task = frame.get("task_id").and_then(Value::as_str).unwrap_or("");
+                if frame.pointer("/patch/is_backgrounded").and_then(Value::as_bool) == Some(true) {
+                    self.helper_foreground.retain(|_, (t, _, _)| t != task);
+                }
                 if let Some(status) = frame.pointer("/patch/status").and_then(Value::as_str).and_then(TaskStatus::parse) {
                     changed.extend(self.set_status(task, status));
                 }
@@ -231,6 +258,25 @@ impl TaskBook {
         out
     }
 
+    /// **The foreground calls of the helpers a pause holds, each handed out once.** A pause
+    /// freezes a helper's commands at once (`agent_hold.py`), but its WAIT message reaches it
+    /// only when its running call returns: measured on Claude Code 2.1.314, a lead's message
+    /// does not move a helper's foreground call, which in the app now runs as in the terminal
+    /// (engine `docs/foreground-bash.md`). `held(session id, agent id)` says whether that
+    /// helper is held (the session id is empty when the frame named none);
+    /// the tool_use ids returned are moved to the background by the caller
+    /// ([`background_task_request`]) and forgotten here, so each is asked for once.
+    pub fn held_foreground(&mut self, held: impl Fn(&str, &str) -> bool) -> Vec<String> {
+        let ended: Vec<String> = self.helper_foreground.iter()
+            .filter(|(_, (task, _, _))| self.task_ended(task)).map(|(tool, _)| tool.clone()).collect();
+        for tool in ended { self.helper_foreground.remove(&tool); }
+        let mut out: Vec<String> = self.helper_foreground.iter()
+            .filter(|(_, (_, helper, session))| held(session, helper)).map(|(tool, _)| tool.clone()).collect();
+        out.sort();
+        for tool in &out { self.helper_foreground.remove(tool); }
+        out
+    }
+
     pub fn task_ended(&self, task: &str) -> bool {
         self.early_status.get(task).is_some_and(|status| !status.is_running())
             || self.agents.iter().any(|row| row.task_id == task && !row.status.is_running())
@@ -304,6 +350,42 @@ mod tests {
         book.observe(&started("b5zdytibr", "toolu_bash"));
         assert_eq!(book.agents().len(), 1);
         assert_eq!(book.running(), ["mark-sonnet-x1"]);
+    }
+
+    /// The frame shape recorded on Claude Code 2.1.314 for an async helper's foreground `Bash`.
+    fn helper_bash(task: &str, tool: &str, helper: &str, backgrounded: bool) -> Value {
+        json!({"type":"system","subtype":"task_started","task_id":task,"tool_use_id":tool,
+               "owned_by_subagent":true,"is_backgrounded":backgrounded,"parent_task_id":helper,
+               "task_type":"local_bash","description":"d","session_id":"s1"})
+    }
+
+    #[test]
+    fn a_held_helpers_foreground_calls_are_handed_out_once_and_nobody_elses() {
+        let mut book = TaskBook::default();
+        book.observe(&helper_bash("b1", "toolu_fg1", "aheld", false));
+        book.observe(&helper_bash("b2", "toolu_fg2", "aheld", false));
+        book.observe(&helper_bash("b3", "toolu_other", "afree", false));
+        book.observe(&helper_bash("b4", "toolu_bg", "aheld", true));        // already background
+        book.observe(&helper_bash("b5", "toolu_done", "aheld", false));
+        book.observe(&notified("b5", "completed"));                            // already ended
+        book.observe(&helper_bash("b6", "toolu_moved", "aheld", false));
+        book.observe(&json!({"type":"system","subtype":"task_updated","task_id":"b6","patch":{"is_backgrounded":true}}));
+        // The lead's own foreground Bash (no owned_by_subagent) is never a helper's.
+        book.observe(&json!({"type":"system","subtype":"task_started","task_id":"b7","tool_use_id":"toolu_lead",
+                             "is_backgrounded":false,"task_type":"local_bash"}));
+        assert!(book.held_foreground(|_, _| false).is_empty(), "nothing is held: nothing is moved");
+        assert!(book.held_foreground(|session, agent| session == "s2" && agent == "aheld").is_empty(),
+                "a hold in another session is not this one");
+        assert_eq!(book.held_foreground(|session, agent| session == "s1" && agent == "aheld"), ["toolu_fg1", "toolu_fg2"]);
+        assert!(book.held_foreground(|_, agent| agent == "aheld").is_empty(), "each call is asked for once");
+        assert_eq!(book.held_foreground(|_, _| true), ["toolu_other"]);
+    }
+
+    #[test]
+    fn the_background_request_names_the_one_tool_call() {
+        assert_eq!(background_task_request("r1", "toolu_x"),
+                   json!({"type":"control_request","request_id":"r1",
+                          "request":{"subtype":"background_tasks","tool_use_id":"toolu_x"}}));
     }
 
     #[test]

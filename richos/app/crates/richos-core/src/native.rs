@@ -1456,6 +1456,12 @@ pub struct NativeClient {
 /// to be declared first.
 struct ReaderState {
     agent_tasks: crate::agent_tasks::TaskBook,
+    /// **Where a pause's hold records are** (`<engine state>/agent-hold/held`, the
+    /// `RICHOS_AGENT_HOLD_DIR` [`crate::engine_profile::EngineProfile::configure`] gives the
+    /// child), and this lease's own session id for a frame that names none. A held helper's
+    /// foreground calls are moved to the background as soon as the hold is seen, so its WAIT
+    /// reaches it ([`NativeClient::background_held_calls`]). `None` without an engine profile.
+    hold_records: Option<(std::path::PathBuf, String)>,
     /// Stu's turn-end signal for stall-watch; `None` on every lease that has no monitor.
     lead: Option<Arc<LeadSignal>>,
     /// How a turn that ended on an API failure learns whether the connection is up, and waits
@@ -1681,6 +1687,7 @@ impl Default for ReaderState {
     fn default() -> Self {
         ReaderState {
             agent_tasks: crate::agent_tasks::TaskBook::default(),
+            hold_records: None,
             lead: None,
             connection: Arc::new(crate::connection::ConnectionWatch::system()),
             api_error: None,
@@ -2138,6 +2145,7 @@ impl NativeClient {
         state.lock().unwrap().question_scope = onboarding.map(|(_,_,path,_)|crate::question_tools::path(path));
         state.lock().unwrap().token_sink = profile
             .and_then(|p| Some((p.claude_account.as_ref()?.id.clone(), p.token_sink.clone()?)));
+        state.lock().unwrap().hold_records = profile.map(|p| (p.state.join("agent-hold").join("held"), session_id.clone()));
         // **The reader is told which lease it is on, from the same pure function that set the
         // environment** — not from a second opinion about the role. See
         // `ReaderState::tool_residency`: without this the work lease raised the front desk's
@@ -2459,6 +2467,9 @@ impl NativeClient {
     ) {
         drop(state.lock().unwrap().agent_tasks.observe(&msg));
         let ty = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if ty == "user" || ty == "system" {
+            Self::background_held_calls(stdin, pending, state);
+        }
 
         // Kept whichever turn (or none) the frame belongs to: it is a reading of the account.
         if ty == "rate_limit_event" {
@@ -3107,6 +3118,41 @@ impl NativeClient {
             }
             if !routed {
                 between.lock().unwrap().push(m);
+            }
+        }
+    }
+
+    /// **A paused helper hears its WAIT within a second, not at its command's timeout.** In the
+    /// app a helper's ordinary command runs in the foreground, as in the terminal (engine
+    /// `docs/foreground-bash.md`). A pause freezes that command at once (`agent_hold.py`), but
+    /// the queued WAIT reaches the helper only when its running call returns: measured on Claude
+    /// Code 2.1.314, a lead's message does not move a helper's foreground call, so the WAIT
+    /// waited for the call's Bash timeout (two minutes by default, up to ten). So each
+    /// foreground call of a helper whose hold record exists is moved to the background, still
+    /// frozen, with `background_tasks` for its tool call (measured: answered at once, the call
+    /// returned, the same process finished after RESUME with its own notice). Checked on every
+    /// `user` and `system` frame: a hold is made inside one of the lead's tool calls, so that
+    /// call's result frame follows it, and a helper call that starts later says so in its own
+    /// `task_started`. Each call is asked for once, and the reply is not waited on.
+    fn background_held_calls(stdin: &Arc<Mutex<ChildStdin>>,
+                             pending: &Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>>,
+                             state: &Arc<Mutex<ReaderState>>) {
+        let tools = {
+            let mut st = state.lock().unwrap();
+            let Some((held, own)) = st.hold_records.clone() else { return };
+            st.agent_tasks.held_foreground(|session, agent| {
+                let session = if session.is_empty() { own.as_str() } else { session };
+                held.join(format!("{session}__{agent}.json")).exists()
+            })
+        };
+        for tool in tools {
+            let id = format!("richos_hold_background_{tool}");
+            // The provider's acknowledgment is consumed here (nobody waits on it) rather than
+            // surfacing as unmatched traffic.
+            let (tx, _rx) = channel();
+            pending.lock().unwrap().insert(id.clone(), tx);
+            if Self::write_line(stdin, &crate::agent_tasks::background_task_request(&id, &tool)).is_err() {
+                pending.lock().unwrap().remove(&id);
             }
         }
     }
@@ -6076,6 +6122,54 @@ read -r scope_response"#);
         drop(client);
         assert_eq!(stopping.join().unwrap(), crate::steering::CommandStop::Unconfirmed,
                    "a stop nobody answered was reported as something other than unknown");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// **A paused helper's foreground command is moved to the background as soon as its hold
+    /// is seen, so the WAIT reaches it within a second** (2026-10-30). In the app a helper's
+    /// ordinary command runs in the foreground; measured on Claude Code 2.1.314, the lead's
+    /// WAIT message does not move it, so without this the WAIT waited for the command's Bash
+    /// timeout. A helper that is not held is left alone, the hold of another session is not
+    /// this one's, and each call is asked for once.
+    #[test]
+    fn a_held_helpers_foreground_command_is_moved_to_the_background_once_and_nobody_elses() {
+        let root = fixture_root().join(format!("hold-background-{}", uuid::Uuid::new_v4()));
+        let held = root.join("agent-hold").join("held");
+        std::fs::create_dir_all(&held).unwrap();
+        let heard = root.join("heard.jsonl");
+        let mut child = std::process::Command::new("/bin/sh").arg("-c").arg(format!("cat > '{}'", heard.display()))
+            .stdin(std::process::Stdio::piped()).spawn().unwrap();
+        let stdin = Arc::new(Mutex::new(child.stdin.take().unwrap()));
+        let pending: Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>> = Arc::new(Mutex::new(Default::default()));
+        let current: Arc<Mutex<Vec<PendingTurn>>> = Arc::new(Mutex::new(Vec::new()));
+        let between = Arc::new(Mutex::new(BetweenTurn::default()));
+        let state = Arc::new(Mutex::new(ReaderState::default()));
+        state.lock().unwrap().hold_records = Some((held.clone(), "sess-own".into()));
+        let (deltas, closed) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
+        {
+            let feed = |frame: Value| NativeClient::dispatch(frame, &stdin, &pending, &current, &between, &state, &deltas, &closed);
+            // The frame shape recorded on 2.1.314 for an async helper's foreground Bash call.
+            let started = |task: &str, tool: &str, helper: &str| json!({"type":"system","subtype":"task_started",
+                "task_id":task,"tool_use_id":tool,"owned_by_subagent":true,"is_backgrounded":false,
+                "parent_task_id":helper,"task_type":"local_bash","description":"d","session_id":"sess-own"});
+            let lead_result = json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_send","content":"queued"}]}});
+            feed(started("b1", "toolu_held", "aworker"));
+            feed(started("b2", "toolu_free", "aother"));
+            feed(lead_result.clone());
+            assert!(pending.lock().unwrap().is_empty(), "nothing is held, so nothing is asked for");
+            std::fs::write(held.join("other-session__aother.json"), "{}").unwrap();
+            // The lead's pause: its SendMessage hook writes the hold record, then its result arrives.
+            std::fs::write(held.join("sess-own__aworker.json"), "{}").unwrap();
+            feed(lead_result.clone());
+            feed(lead_result);
+        }
+        drop(stdin);
+        child.wait().unwrap();
+        let frames: Vec<Value> = std::fs::read_to_string(&heard).unwrap().lines()
+            .map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(frames.len(), 1, "exactly one request, for the held helper's one call: {frames:?}");
+        assert_eq!(frames[0]["request"], json!({"subtype": "background_tasks", "tool_use_id": "toolu_held"}));
+        assert!(frames[0]["request_id"].as_str().is_some_and(|id| id.starts_with("richos_hold_background_")), "{frames:?}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
