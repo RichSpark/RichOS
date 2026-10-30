@@ -988,6 +988,52 @@ fn the_users_settings_json_adds_environment_and_hooks_and_never_the_apps_own_nam
     assert_eq!(profile.user.settings, Default::default());
 }
 
+/// **The user's commit attribution setting reaches every lease, exactly as in the terminal**
+/// (Hank's parity audit 2026-10-30, item 3). A lease starts Claude with `--setting-sources ''`,
+/// so `"attribution": {"commit": "", "pr": ""}` was dropped and Claude signed every commit with
+/// a co-author line the user had switched off. Its `--settings` carries the key as written.
+#[test]
+fn the_users_attribution_setting_reaches_every_lease_as_in_the_terminal() {
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    std::fs::create_dir_all(&folder).unwrap();
+    let off = serde_json::json!({"commit": "", "pr": ""});
+    std::fs::write(folder.join("settings.json"), serde_json::json!({"attribution": off, "model": "fixture-model"}).to_string()).unwrap();
+    let profile = prepare_for_user(&f, &folder);
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    let settings: serde_json::Value = serde_json::from_str(&args[args.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
+    assert_eq!(settings["attribution"], off, "{settings}");
+    assert!(settings["model"].is_null(), "only the attribution keys are added");
+
+    // Set in the terminal's own settings file and not in the app's: the terminal's applies,
+    // the older key included. Set in both: the app's file wins.
+    let terminal = f.0.join("claude-home/settings.json");
+    std::fs::create_dir_all(terminal.parent().unwrap()).unwrap();
+    std::fs::write(&terminal, serde_json::json!({"attribution": off, "includeCoAuthoredBy": false, "model": "x"}).to_string()).unwrap();
+    std::fs::write(folder.join("settings.json"), "{}").unwrap();
+    let mut profile = prepare_for_user(&f, &folder);
+    assert!(profile.lease_settings()["attribution"].is_null(), "nothing set, nothing passed: Claude Code's own default");
+    profile.user.settings = profile.user.settings.clone().with_terminal_attribution(&terminal);
+    let settings = profile.lease_settings();
+    assert_eq!(settings["attribution"], off, "{settings}");
+    assert_eq!(settings["includeCoAuthoredBy"], false, "{settings}");
+    assert!(settings["model"].is_null(), "{settings}");
+    let mine = serde_json::json!({"commit": "Made with my team", "pr": ""});
+    std::fs::write(folder.join("settings.json"), serde_json::json!({"attribution": mine}).to_string()).unwrap();
+    let mut profile = prepare_for_user(&f, &folder);
+    profile.user.settings = profile.user.settings.clone().with_terminal_attribution(&terminal);
+    let settings = profile.lease_settings();
+    assert_eq!(settings["attribution"], mine, "{settings}");
+    assert!(settings["includeCoAuthoredBy"].is_null(), "the app's file wins as a whole: {settings}");
+    // A terminal file that is not there, or not JSON, adds nothing.
+    let none = richos_core::user_settings::LeaseSettings::default().with_terminal_attribution(&f.0.join("missing.json"));
+    assert!(none.attribution.is_empty());
+    std::fs::write(&terminal, "{ not json").unwrap();
+    assert!(richos_core::user_settings::LeaseSettings::default().with_terminal_attribution(&terminal).attribution.is_empty());
+}
+
 /// The digest that renews a session moves when any of the user's files is created, changed or
 /// removed, and with nothing else in the folder.
 #[test]

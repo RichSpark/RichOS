@@ -495,8 +495,14 @@ impl EngineProfile {
     /// files in the central folder (`company::install_central_root`) and the user's login
     /// shell environment (`login_environment::current`).
     pub fn prepare(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<Self, RuntimeError> {
-        Self::prepare_for(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?,
-            crate::company::install_central_root(), Some(crate::login_environment::current()))
+        let mut profile = Self::prepare_for(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?,
+            crate::company::install_central_root(), Some(crate::login_environment::current()))?;
+        // The co-author line the user switched off in the terminal stays off here (Hank's parity
+        // audit 2026-10-30, item 3): the terminal reads it from its Claude folder's settings file.
+        if let Some(home) = machine_claude_home() {
+            profile.user.settings = std::mem::take(&mut profile.user.settings).with_terminal_attribution(&home.join("settings.json"));
+        }
+        Ok(profile)
     }
 
     /// A profile that reads no user settings file, for a caller that names its own machine
@@ -791,14 +797,16 @@ impl EngineProfile {
         self.user.standing.clone().unwrap_or_else(|| shipped.to_path_buf())
     }
 
-    /// **The `--settings` a lease starts with**: the app's own keys, and the user's own hooks
-    /// from `settings.json` beside the engine plugin's, which Claude Code runs together.
+    /// **The `--settings` a lease starts with**: the app's own keys, the user's own hooks from
+    /// `settings.json` beside the engine plugin's, which Claude Code runs together, and the
+    /// user's commit attribution (`user_settings::ATTRIBUTION`).
     pub fn lease_settings(&self) -> serde_json::Value {
         // Auto-memory on (build plan item 10); where Rich and Stu keep it is their definitions'
         // `memory:` scope (`user_settings::MEMORY_SCOPE`), in the coordination folder.
         let mut settings = json!({"autoMemoryEnabled":true,
             "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]});
         if let Some(hooks) = &self.user.settings.hooks { settings["hooks"] = hooks.clone(); }
+        for (key, value) in &self.user.settings.attribution { settings[key] = value.clone(); }
         settings
     }
 
