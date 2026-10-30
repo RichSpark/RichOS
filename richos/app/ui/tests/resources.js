@@ -142,8 +142,9 @@ async function newContext(browser, theme) {
   return context;
 }
 
-async function openApp(context, kind) {
+async function openApp(context, kind, opts) {
   const page = await context.newPage();
+  if (opts && opts.clock) await page.clock.install();
   page.__errors = [];
   page.on("pageerror", (e) => page.__errors.push(String(e)));
   await page.addInitScript(installFixture, { kind });
@@ -689,6 +690,45 @@ async function main() {
         return "Ink is retained after the earlier Readout save completes and after relaunch";
       } finally {
         await raceContext.close();
+      }
+    });
+
+    await run.check(`13 ${theme}  a hung read expires and its delayed answer stays stale`, async () => {
+      const timedContext = await newContext(browser, theme);
+      try {
+        const timedPage = await openApp(timedContext, "live", { clock: true });
+        await timedPage.evaluate(() => {
+          const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+          const gate = new Promise((resolve) => { window.__releaseResourcesPoll = resolve; });
+          window.__heldResourcesCalls = 0;
+          window.RichBridge.invoke = async (cmd, args) => {
+            const answer = await invoke(cmd, args);
+            if (cmd === "system_resources" && !window.__resourcesPollReleased) {
+              window.__heldResourcesCalls++;
+              window.__resourcesPollPending = true;
+              await gate;
+            }
+            return answer;
+          };
+          window.__heldResourcesPoll = window.RichResources.pollNow();
+        });
+        await timedPage.waitForFunction(() => window.__resourcesPollPending);
+        // Controlled page time proves expiry without waiting for a slow machine or bridge.
+        await timedPage.clock.fastForward(4000);
+        assertEqual(await timedPage.evaluate(() => window.RichResources.status), "stale", "an unresolved read cannot keep old values live");
+        assertEqual(await timedPage.evaluate(() => window.__heldResourcesCalls), 1, "the watchdog does not overlap pending reads");
+        await timedPage.evaluate(async () => {
+          window.__resourcesPollReleased = true;
+          window.__releaseResourcesPoll();
+          await window.__heldResourcesPoll;
+        });
+        assertEqual(await timedPage.evaluate(() => window.RichResources.status), "stale", "transport delay counts toward the returned reading's age");
+        await timedPage.evaluate(() => window.RichResources.pollNow());
+        assertEqual(await timedPage.evaluate(() => window.RichResources.status), "live", "a fresh answer recovers normally");
+        assertEqual(timedPage.__errors, [], "no page error");
+        return "one pending read; stale after controlled 4 seconds, delayed answer remains stale, fresh answer recovers";
+      } finally {
+        await timedContext.close();
       }
     });
 

@@ -181,7 +181,7 @@
     return slots.slice(-HIST);
   }
 
-  function absorb(snapshot, readAt) {
+  function absorb(snapshot, readAt, transitMs = 0) {
     const status = snapshot && snapshot.status;
     const detail = (snapshot && snapshot.detail) || "";
     const history = Array.isArray(snapshot && snapshot.history) ? snapshot.history.slice(-HIST) : [];
@@ -200,14 +200,14 @@
       const newest = history[history.length - 1];
       const observed = Number(snapshot.observed_monotonic_ms);
       if (observed >= newest.monotonic_ms) {
-        S.ageMs = observed - newest.monotonic_ms;
+        S.ageMs = observed - newest.monotonic_ms + transitMs;
         S.newestAt = readAt - S.ageMs;
       }
     }
     if (status === "available" && snapshot.current) {
-      S.status = "live";
       S.current = snapshot.current;
-      S.ageMs = snapshot.age_ms || 0;
+      S.ageMs = (snapshot.age_ms || 0) + transitMs;
+      S.status = S.ageMs > 3000 ? "stale" : "live";
       S.newestAt = readAt - S.ageMs;
     } else if (status === "warming_up" || (status === "unavailable" && FRESH_INTERVAL.test(detail))) {
       S.status = "measuring";
@@ -238,13 +238,11 @@
     polling = true;
     const wall = Date.now();
     const mono = performance.now();
-    if (S.lastTick && wall - S.lastTick.wall - (mono - S.lastTick.mono) > 2000) {
-      noteSleep(S.lastTick.wall, wall);
-    }
-    S.lastTick = { wall, mono };
     try {
       const snapshot = await bridge.invoke("system_resources");
-      absorb(snapshot, performance.now());
+      const readAt = performance.now();
+      // Conservatively include bridge transit, including sleep while the answer was pending.
+      absorb(snapshot, readAt, Math.max(0, readAt - mono, Date.now() - wall));
     } catch (_e) {
       absorb(null, performance.now());
     } finally {
@@ -797,10 +795,22 @@
   function loop() {
     clearTimeout(pollTimer);
     if (document.hidden) return;
-    poll().finally(() => {
-      scheduleGlide();
-      pollTimer = setTimeout(loop, POLL_MS);
-    });
+    const wall = Date.now();
+    const mono = performance.now();
+    const sleepMs = S.lastTick ? wall - S.lastTick.wall - (mono - S.lastTick.mono) : 0;
+    if (sleepMs > 2000) {
+      noteSleep(S.lastTick.wall, wall);
+      S.newestAt -= sleepMs;
+    }
+    S.lastTick = { wall, mono };
+    if (S.status === "live" && mono - S.newestAt > 3000) {
+      S.status = "stale";
+      render();
+    }
+    // Freshness must keep ticking even when the one permitted bridge read is unresolved.
+    void poll();
+    scheduleGlide();
+    pollTimer = setTimeout(loop, POLL_MS);
   }
   /// Started by `main.js` once the app is ready, so reading the sampler is never on the launch
   /// path. Idempotent.
