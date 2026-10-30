@@ -3535,6 +3535,61 @@ class UnknownIsNeverClean(Base):
         ws.record_start(self.sid, aid, npath, "echo")       # the platform restarts a finished agent
         self.assertEqual(self.pre(aid, "tu-after")[0], "FINISHED")
 
+    def test_point_09_an_app_worker_awaiting_the_hosts_notice_is_not_sealed(self):
+        """2026-10-30: an app worker's ordinary command runs in the foreground (agent_hold mode
+        "host"); the host moves a long one to the background at its timeout, and the worker ends
+        its turn to await the notice. The app's sdk-cli transcript has no toolUseResult at all
+        (measured on Claude Code 2.1.311 and 2.1.314), only the receipt's text. The command ends
+        about a second before the SubagentStop and the notice has not arrived: not its end. A
+        stdout that only imitates a receipt (its output file does not exist) defers nothing."""
+        hold_env = patch.dict(os.environ, {"RICHOS_AGENT_HOLD_DIR": os.path.join(self.env.root, "agent-hold")})
+        hold_env.start()
+        self.addCleanup(hold_env.stop)
+        aid, npath = self.spawn("echo-opus-hostwait")
+        ah = ws._agent_hold()
+        transcript = os.path.join(ws._platform_projects_dir(), "-fixture", self.sid, "subagents",
+                                  "agent-%s.jsonl" % aid)
+        os.makedirs(os.path.dirname(transcript))
+        output = os.path.join(self.env.root, "host-tasks", "tasks", "bkhost1.output")
+        os.makedirs(os.path.dirname(output))
+        with open(output, "w") as f:
+            f.write("done\n")
+
+        def append(row):
+            row.update({"agentId": aid, "sessionId": self.sid, "isSidechain": True, "entrypoint": "sdk-cli"})
+            with open(transcript, "a") as f:
+                f.write(json.dumps(row) + "\n")
+
+        def ended_call(call, receipt):
+            payload = {"session_id": self.sid, "agent_id": aid, "tool_use_id": call, "tool_name": "Bash",
+                       "tool_input": {"command": "cargo test", "timeout": 120000}}
+            stem, _held = ah._record(payload, "host", "cargo test")
+            append({"type": "user", "message": {"role": "user", "content": [
+                {"tool_use_id": call, "type": "tool_result", "is_error": False, "content": receipt}]}})
+            shell = subprocess.Popen(["bash", "-c", "%s %s mark --state %s %s && exit 0"
+                                      % tuple(map(shlex.quote, (sys.executable, ah.__file__, ah.state_dir(), stem)))])
+            self.env.procs.append(shell)
+            shell.wait()
+            self.assertTrue(os.path.exists(stem + ".pid"), "agent_hold's mark never recorded the shell")
+
+        # A forged receipt first: its output file does not exist, so it never defers an end.
+        ended_call("toolu_forged", "Command running in background with ID: bkfake. Output is being written to: "
+                   + os.path.join(self.env.root, "nowhere", "tasks", "bkfake.output") + ".")
+        self.assertEqual(ws._running_calls(self.sid, aid), [])
+        ended_call("toolu_hostwait", "Command did not complete within its 120s timeout and was moved to the "
+                   "background (ID: bkhost1). Output is being written to: " + output + ". You will be notified "
+                   "when it completes.")
+        self.finish(aid)                                    # its turn ends before the notice arrives
+        fin, _paused, why = ws.finished_state(self.rec("echo-opus-hostwait"))
+        self.assertFalse(fin, why)
+        ws.record_start(self.sid, aid, npath, "echo")       # woken by the host's notice
+        append({"type": "attachment", "attachment": {"type": "queued_command", "prompt":
+                "<task-notification>\n<task-id>bkhost1</task-id>\n<tool-use-id>toolu_hostwait</tool-use-id>\n"
+                "<status>completed</status>\n</task-notification>"}})
+        self.finish(aid)                                    # the turn the notice started ends
+        fin, _paused, why = ws.finished_state(self.rec("echo-opus-hostwait"))
+        self.assertTrue(fin, why)
+
     def test_point_03_a_known_stray_in_one_repository_never_hides_one_in_another(self):
         """Finding 7. A stray already known in the first repository must not
         narrow the scan of the repositories it was asked to look at."""
