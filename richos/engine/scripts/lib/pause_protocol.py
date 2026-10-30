@@ -62,7 +62,9 @@ CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]Z\Z")
 # never a control message: on 2026-10-28 a word match on "pause" or "hold" refused
 # plain messages, and it never protected anything, because the hold itself is made
 # by the registry before any message (see the docstring above), not by the text.
-CONTROL_LINE = re.compile(r"(?im)^\s*(?:pause-until|richos-pause-control|richos-resume-control)\s*:")
+# Rows are split with str.splitlines(), the same split the registry uses, so a control line
+# set off by a bare CR, U+2028, U+0085, a form feed or a vertical tab is still seen.
+CONTROL_LINE = re.compile(r"(?i)\s*(?:pause-until|richos-pause-control|richos-resume-control)\s*:")
 
 
 def until_text(reason, reset=None):
@@ -145,7 +147,7 @@ def is_resume(text):
 
 
 def declared(text):
-    return isinstance(text, str) and bool(CONTROL_LINE.search(text))
+    return isinstance(text, str) and any(CONTROL_LINE.match(row) for row in text.splitlines())
 
 
 def validate_text(text):

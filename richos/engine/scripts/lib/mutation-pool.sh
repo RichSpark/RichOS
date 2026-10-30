@@ -336,9 +336,20 @@ mut_pool_submit() {
             python3 "${RICHOS_WORKER_TOKENS_TOOL:-$_MUT_WORKER_TOOL_DEFAULT}" lease "$RICHOS_WORKER_TOKENS" \
                 "$(cat "$MUT_POOL_DIR/$seq.pid")" "$MUT_POOL_DIR/$seq.ready" "$MUT_POOL_DIR/$seq.release" "$_free" 8>&- &
             _lease=$!
+            # 2026-10-28: the lease can wait minutes for a permit, and this looked every 0.02 s
+            # (a `sleep` process 50 times a second). The first half second still looks that
+            # often (a free permit is ready within it); after that it blocks in quiet_wait.py
+            # until the ready file appears or the lease exits, at about 0% CPU.
+            _ready_looks=0
             while [ ! -s "$MUT_POOL_DIR/$seq.ready" ]; do
                 if ! kill -0 "$_lease" 2>/dev/null; then exit 125; fi
-                sleep 0.02
+                if [ "$_ready_looks" -lt 25 ]; then
+                    sleep 0.02
+                    _ready_looks=$((_ready_looks + 1))
+                else
+                    python3 "$(dirname "${RICHOS_WORKER_TOKENS_TOOL:-$_MUT_WORKER_TOOL_DEFAULT}")/quiet_wait.py" \
+                        --until-exists "$MUT_POOL_DIR/$seq.ready" --pid "$_lease" --seconds 60 8>&- 2>/dev/null || sleep 1
+                fi
             done
             RICHOS_PROCESS_SCOPE="${RICHOS_PROCESS_SCOPE:+$RICHOS_PROCESS_SCOPE:}$(cat "$MUT_POOL_DIR/$seq.ready")"
             RICHOS_WORKER_SLOT_HELD=1

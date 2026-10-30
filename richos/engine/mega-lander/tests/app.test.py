@@ -888,18 +888,261 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual((self.target_of(dirty)/"notes.txt").read_text(),"UNCOMMITTED")
 
     def test_a_prepare_from_an_earlier_turn_dispatches_when_it_is_prepared_again(self):
-        """f0a399b8: a prepare from an earlier turn is not refused merely for being stale."""
+        """f0a399b8: a prepare from an earlier turn is not refused merely for being stale. Asked
+        again under the same request_id, it is bound to this turn and its payload handed back."""
         ready=self.call("prepare",self.args)
         self.next_turn(2)
-        call={"session_id":self.session,"tool_use_id":"call-stale","tool_input":ready["agent_payload"]}
-        with self.assertRaisesRegex(ValueError,"prepare again with the same request_id"):
-            self.app.dispatch_intent(self.scope,call,inspect_only=True)
         again=self.call("prepare",self.args)
         self.assertEqual(again["id"],ready["id"])
         self.assertEqual(again["binding"],self.scope["binding"])
         self.assertEqual(again["agent_payload"],ready["agent_payload"])
         self.start_fixture_worker(again,"rebound-worker")
         self.assertEqual(self.receipt_of(ready)["status"],"running")
+
+    # =======================================================================
+    # P1-A (2026-10-29): WORK TOOLS IN NOTIFICATION TURNS, RETRYABLE REFUSALS, NAMED CAUSES
+    # =======================================================================
+    # richos-hq docs/plans/follow-ups.md: "work tools refuse to dispatch in notification turns,
+    # so jobs stall unless someone messages", "app work tools refused dispatches for unexplained
+    # reasons", "preparing a review of an incomplete handover is refused with a misleading
+    # message". The host half (a notice queued mid-turn no longer closes the running turn's
+    # grant) is native.rs's a_message_queued_while_stu_is_in_a_turn_never_closes_that_turns_grant.
+
+    def receipt_file(self, ready):
+        """The receipt as saved, read without a work tool (a closed grant refuses those)."""
+        return json.loads((self.app.folder(self.scope)/(ready["id"]+".json")).read_text())
+
+    def close_grant(self, by, at_ms=1793261100000):
+        """The scope as the app writes it with its grant closed (ecs.rs GrantClosed)."""
+        self.scope["actions_allowed"]=False
+        self.scope["closed"]={"by":by,"at_ms":at_ms}
+        self.scope_path.write_text(json.dumps(self.scope))
+
+    def open_grant(self):
+        self.scope["actions_allowed"]=True
+        self.scope.pop("closed",None)
+        self.scope_path.write_text(json.dumps(self.scope))
+
+    def test_p1a_a_notification_only_turn_dispatches_its_jobs_prepared_receipt(self):
+        """Done-when 1. Stu prepared Tom's review in a message turn; a stall-watch notice then
+        came as its own turn, with its own binding. He is woken by his own job's task
+        notification, which writes no new scope, and sends the prepared Agent call. On main it
+        was refused ("this was prepared in an earlier turn: call prepare again", and before
+        f0a399b8 "this dispatch is stale or already attempted")."""
+        ready=self.call("prepare",self.args)
+        self.next_turn(2)
+        call={"session_id":self.session,"tool_use_id":"call-in-notification-turn","tool_input":dict(ready["agent_payload"])}
+        authority=self.app.dispatch_intent(self.scope,{**call,"tool_input":dict(call["tool_input"])},inspect_only=True)
+        self.assertEqual(authority["kind"],"implementation")
+        self.app.dispatch_intent(self.scope,call)
+        record=self.receipt_file(ready)
+        self.assertEqual(record["status"],"dispatching")
+        self.assertEqual(record["tool_use_id"],"call-in-notification-turn")
+        self.assertEqual(record["binding"],self.scope["binding"],"the dispatch is not bound to the turn that sent it")
+        self.assertEqual(record["rebound"]["from_turn"],"turn-a")
+        # The same checks prepare's own rebind makes still refuse: another provider session, a Stop.
+        other=self.call("prepare",{**self.args,"request_id":"second","brief":"A second, separate part."})
+        self.scope["binding"]=self.bind_seat(None,"turn-3",audience="ceo",session="the-next-session",revision=2)
+        self.scope_path.write_text(json.dumps(self.scope))
+        with self.assertRaisesRegex(ValueError,"earlier provider session"):
+            self.app.dispatch_intent(self.scope,{"session_id":"the-next-session","tool_use_id":"x","tool_input":dict(other["agent_payload"])})
+
+    def test_p1a_a_stopped_assignment_is_never_dispatched_from_a_later_turn(self):
+        ready=self.call("prepare",self.args)
+        self.next_turn(2)
+        identity=json.dumps(["depot","thread-a"],separators=(",", ":"))
+        root=self.root/"engine-state/assignments"/hashlib.sha256(identity.encode()).hexdigest();root.mkdir(parents=True)
+        (root/"stopped.json").write_text(json.dumps({"schema":1,"entity_id":"depot","thread_id":"thread-a","obligation_id":"fixture-task","user_stop_requested_at_ms":1}))
+        with self.assertRaisesRegex(ValueError,"user stopped"):
+            self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"y","tool_input":dict(ready["agent_payload"])})
+        self.assertEqual(self.receipt_file(ready)["status"],"prepared")
+
+    def test_p1a_an_assignment_closed_in_the_turn_that_prepared_its_work_never_dispatches_it(self):
+        """Second review of 6e9a03c3, finding 1: the open-assignment check ran only for a receipt
+        rebound from an earlier turn, so a job superseded through the checkpoint tool in the SAME
+        turn was dispatched ("SUPERSEDED_SAME_TURN: assignment=superseded; receipt=dispatching").
+        On 6e9a03c3 the first assertRaises fails: nothing is raised."""
+        ready=self.call("prepare",self.args)
+        accepted=self.app.ecs(self.scope,{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],
+            "request_id":"replace-request","checkpoint":{"statements":[
+                {"verb":"commitment","fields":{"id":"replacement","title":"The revised job"}},
+                {"verb":"supersede","fields":{"id":"fixture-task","replacement":"replacement",
+                    "evidence":"The user replaced the original request with this revised job."}}]}})
+        self.assertTrue(accepted["accepted"],accepted)
+        call={"session_id":self.session,"tool_use_id":"superseded-job-call","tool_input":dict(ready["agent_payload"])}
+        with self.assertRaisesRegex(ValueError,"its assignment fixture-task is superseded, not open"):
+            self.app.dispatch_intent(self.scope,{**call,"tool_input":dict(call["tool_input"])})
+        with self.assertRaisesRegex(ValueError,"is superseded, not open"):
+            self.app.dispatch_intent(self.scope,{**call,"tool_input":dict(call["tool_input"])},inspect_only=True)
+        record=self.receipt_file(ready)
+        self.assertEqual(record["status"],"prepared","obsolete work was marked dispatching")
+        self.assertFalse(record.get("tool_use_id"))
+
+    def test_p1a_a_reused_work_seat_never_dispatches_another_assignments_receipt(self):
+        """Second review of 6e9a03c3, finding 3 (follow-up): a rebind compared company, thread and
+        provider session but never the assignment the work seat carries, so a lease reused for a
+        second assignment dispatched the first one's receipt ("OTHER_JOB: scope_job=second-job;
+        receipt_job=fixture-task; receipt=dispatching"). On 6e9a03c3 nothing is raised."""
+        self.app.ecs(self.scope,{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],
+            "request_id":"open-second-job","checkpoint":{"statements":[
+                {"verb":"commitment","fields":{"id":"second-job","title":"Other work"}}]}})
+        self.scope["seat"]="work-seat:reused"
+        self.scope["binding"]=self.bind_seat(self.scope["seat"],"fixture-task",session=self.session)
+        self.scope_path.write_text(json.dumps(self.scope))
+        ready=self.call("prepare",self.args)
+        self.scope["binding"]=self.bind_seat(self.scope["seat"],"second-job",session=self.session,revision=1)
+        self.scope_path.write_text(json.dumps(self.scope))
+        with self.assertRaisesRegex(ValueError,"prepared for assignment fixture-task, and this work carries assignment second-job"):
+            self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"other-job-call",
+                                                 "tool_input":dict(ready["agent_payload"])})
+        self.assertEqual(self.receipt_file(ready)["status"],"prepared")
+
+    def test_p1a_a_notice_bound_while_prepare_runs_never_fails_that_prepare(self):
+        """Second review of 6e9a03c3, finding 2: the host bound Stu's seat for his next notice while
+        a prepare was creating its workspace, and that prepare's final projection was refused with
+        "stale app binding" and its receipt marked unknown. The host now binds a queued input when
+        its turn starts (native.rs a_notice_queued_while_stu_is_in_a_turn_keeps_the_running_turns_binding);
+        this is the app's half, for a binding that moves in that window anyway. On 6e9a03c3 the
+        prepare raises "stale app binding"."""
+        seat="stu-thread:thread-a"
+        self.scope.update(seat=seat,background_work_allowed=True)
+        self.scope["binding"]=self.bind_seat(seat,"peer:1",audience="rich",session=self.session)
+        self.scope_path.write_text(json.dumps(self.scope))
+        original=self.app.run
+        def notice_bound_meanwhile(*args,**kwargs):
+            result=original(*args,**kwargs)
+            self.scope["binding"]=self.bind_seat(seat,"peer:2",audience="rich",session=self.session,revision=1)
+            self.scope_path.write_text(json.dumps(self.scope))
+            return result
+        with patch.object(self.app,"run",notice_bound_meanwhile):
+            ready=self.call("prepare",self.args)
+        self.assertEqual(ready["status"],"prepared")
+        record=self.receipt_file(ready)
+        self.assertEqual(record["binding"],self.scope["binding"],"the receipt kept the binding ECS refuses")
+        self.assertEqual(record["rebound"]["from_turn"],"peer:1")
+        self.assertEqual(record["rebound"]["by"],"prepare")
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"after-notice",
+                                             "tool_input":dict(ready["agent_payload"])})
+        self.assertEqual(self.receipt_file(ready)["status"],"dispatching")
+        # Another provider session is never adopted: that prepare still fails, as before.
+        other={**self.args,"request_id":"second","brief":"A second, separate part."}
+        def other_session_meanwhile(*args,**kwargs):
+            result=original(*args,**kwargs)
+            self.scope["binding"]=self.bind_seat(seat,"peer:3",audience="rich",session="the-next-session",revision=2)
+            self.scope_path.write_text(json.dumps(self.scope))
+            return result
+        with patch.object(self.app,"run",other_session_meanwhile):
+            with self.assertRaises(Exception):
+                self.call("prepare",other)
+
+    def test_p1a_a_dispatch_refused_in_a_notification_turn_stays_retryable(self):
+        """Done-when 2 (2026-10-28 18:27Z, 2026-10-29 08:05Z). A dispatch is refused in a
+        notification turn whose grant closed while Pierce reviewed it. Pierce's findings are its
+        cause and are recorded as such (on main the closed grant raised "work tools require a
+        current visible app turn" in their place and nothing was recorded); the closed grant
+        refuses the call with its own cause and marks nothing; and the same request, as sent, is
+        dispatched in the next turn (on main: refused as stale or prepared in an earlier turn)."""
+        ready=self.call("prepare",self.args)
+        self.next_turn(2)
+        self.close_grant("not-started")
+        call={"session_id":self.session,"tool_use_id":"call-refused","tool_input":dict(ready["agent_payload"])}
+        self.app.dispatch_intent(self.scope,{**call,"tool_input":dict(call["tool_input"])},review_refused=True)
+        record=self.receipt_file(ready)
+        self.assertEqual(record["status"],"prepared","a refused dispatch marked the payload attempted")
+        self.assertTrue(record.get("pierce_refused"))
+        self.assertFalse(record.get("tool_use_id"))
+        with self.assertRaisesRegex(ValueError,"has not started yet"):
+            self.app.dispatch_intent(self.scope,{**call,"tool_input":dict(call["tool_input"])})
+        record=self.receipt_file(ready)
+        self.assertEqual(record["status"],"prepared")
+        self.assertFalse(record.get("tool_use_id"),"a refused dispatch was recorded as an attempt")
+        # The next turn: the same request, sent again unchanged.
+        self.open_grant();self.next_turn(3)
+        self.app.dispatch_intent(self.scope,{**call,"tool_use_id":"call-next-turn","tool_input":dict(call["tool_input"])})
+        record=self.receipt_file(ready)
+        self.assertEqual(record["status"],"dispatching")
+        self.assertEqual(record["binding"]["turn_id"],"turn-3")
+        self.assertNotIn("pierce_refused",record)
+
+    def test_p1a_a_closed_grant_refusal_names_which_work_who_closed_it_and_when(self):
+        """Done-when 4, the closed grant: which work, closed by whom, when."""
+        for by,words in (("stop","a Stop"),("assignment-end","the end of the assignment"),
+                         ("not-started","has not started yet"),("crash-recovery","quit unexpectedly")):
+            self.close_grant(by)
+            with self.assertRaises(ValueError) as refused:
+                self.call("prepare",self.args)
+            said=str(refused.exception)
+            self.assertTrue(said.startswith("work tools require a current visible app turn. Cause: "),said)
+            self.assertIn("thread thread-a, turn turn-a",said)
+            self.assertIn(words,said)
+            self.assertIn("at 2026-10-29T08:05:00Z",said)
+        self.scope.pop("closed");self.scope_path.write_text(json.dumps(self.scope))
+        with self.assertRaisesRegex(ValueError,"no reason for closing it was recorded"):
+            self.call("prepare",self.args)
+        self.assertFalse((self.root/"engine-state/target-worktrees").exists())
+
+    def test_p1a_the_hook_refusal_of_a_closed_turn_names_its_cause(self):
+        hook=self.app.load("app_engine_hook_p1a",ENGINE/"scripts/app-engine-hook.py")
+        self.close_grant("stop")
+        with patch.dict(os.environ,{"RICHOS_APP_SCOPE":str(self.scope_path)}):
+            with self.assertRaises(ValueError) as refused:
+                hook.handle({"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":self.session,
+                             "tool_input":{"command":"true"}})
+        said=str(refused.exception)
+        self.assertIn("New actions are unavailable. Cause: the work of thread thread-a, turn turn-a",said)
+        self.assertIn("closed by a Stop",said)
+        self.assertIn("2026-10-29T08:05:00Z",said)
+
+    def test_p1a_a_prepare_collision_names_the_receipt_it_collides_with(self):
+        """Done-when 4, prepare (2026-10-28, n78-ray-rewalk-5 and n78-zach-gate-fix-2: refused with
+        no receipt named, and cleared only when the title was changed)."""
+        first=self.call("prepare",self.args)
+        with self.assertRaises(ValueError) as refused:
+            self.call("prepare",{**self.args,"request_id":"fresh-id"})
+        said=str(refused.exception)
+        self.assertIn("receipt %s (request prepare-one, status prepared, prepared in turn turn-a)"%first["name"],said)
+        with self.assertRaises(ValueError) as reused:
+            self.call("prepare",{**self.args,"brief":"A different brief under the same request_id."})
+        said=str(reused.exception)
+        self.assertIn("request_id was already used for different work: prepare-one is receipt %s"%first["name"],said)
+        self.assertIn("prepared with another brief",said)
+
+    def test_p1a_a_review_of_a_handover_whose_proof_run_failed_says_so(self):
+        """Done-when 4, the review of an incomplete handover (2026-10-28 15:22Z: refused three
+        times with "I could not give this work its own separate copy of your project" while the
+        handover's own report said 54 planned, 41 passed, 12 failed)."""
+        worker=self.call("prepare",self.args)
+        target=self.start_fixture_worker(worker,"handover-worker")
+        (target/"result.txt").write_text("FICTIONAL")
+        self.app.git(target,"add","result.txt");self.app.git(target,"commit","-qm","Fictional result")
+        commit=self.app.git(target,"rev-parse","HEAD")
+        self.finish_fixture_worker("handover-worker")
+        key=self.app.W.named_key(self.session,worker["name"])
+        def report(head):
+            with self.app.W.Lock():
+                record=self.app.W.load_agent(key)
+                for w in record["workspaces"]:
+                    if w.get("kind")=="cc":
+                        w["proof_report"]={"run":"/fixture/proof-runs/run-1","head":head,"planned":54,
+                            "outcomes":{"passed":41,"failed":12,"not-run":1},
+                            "unresolved":[{"check":"gates/check-%d"%n,"result":"failed","why":None} for n in range(12)]
+                                         +[{"check":"gates/vm","result":"not-run","why":"no guest slot"}],
+                            "line":"54 planned, 41 passed; NOT complete: ...","on":"handed-in"}
+                self.app.W.save_agent(record)
+        review={**self.args,"role":"reviewer","review_of":worker["id"],"request_id":"review-1",
+                "title":"Review the result","brief":"Review result.txt; change nothing."}
+        report(commit)
+        with self.assertRaises(ValueError) as refused:
+            self.call("prepare",review)
+        said=str(refused.exception)
+        self.assertTrue(said.startswith("this handover's proof run is not complete: 12 failed"),said)
+        self.assertIn("gates/check-0",said);self.assertIn("and 2 more",said)
+        self.assertIn("continue_of %s"%worker["id"],said)
+        self.assertNotIn("separate copy",said)
+        self.assertEqual([r["id"] for r in self.call("inspect",{"limit":50})["records"]],[worker["id"]],"a refused review left a receipt")
+        # A report of another commit is not this handover's: the review is prepared as before.
+        report("0"*40)
+        self.assertEqual(self.call("prepare",{**review,"request_id":"review-2"})["status"],"prepared")
 
     def test_a_prepare_from_an_ended_session_cleans_up_when_it_is_asked_again(self):
         ready=self.call("prepare",self.args)
@@ -1790,12 +2033,12 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(told({**call,"agent_id":"someone"}),"")
         self.assertEqual(told({**call,"agent_id":None}),"")
 
-    def test_the_apps_review_watch_starts_mid_job_reviews_only_with_the_users_words(self):
+    def test_the_apps_review_watch_starts_mid_job_and_one_handover_with_the_users_words(self):
         """Second review, slice 4: the app's own review-watch (scripts/lib/review_watch.py
         --app-state, the host's child) reads every conversation's partition of the registry and
         starts a long-job review of a running worker after 60 minutes: Claude, the CLI the app
-        ships, and the user's own turn as the original words. A worker that has ended gets none
-        from it: the app's handover reviewer reviews that. Stopping the watcher stops the reviews
+        ships, and the user's own turn as the original words. A worker that has ended gets one
+        automatic handover review. Stopping the watcher stops the reviews
         it started and does not count them as lost."""
         self.attest(self.USER_TURN)
         rw=self.app.load("review_watch_app_test",ENGINE/"scripts/lib/review_watch.py")
@@ -1855,9 +2098,21 @@ class DesktopWork(unittest.TestCase):
         self.assertFalse(_alive(pid),"the review outlived the watcher's quit")
         attempts=[json.loads(l) for l in (Path(rw.app_paths(state)["watch"])/"attempts.jsonl").read_text().splitlines()]
         self.assertEqual([x["outcome"] for x in attempts],["stopped"])
-        # A worker that has ended is the app's handover reviewer's: nothing more starts here.
+        # Finishing the job starts one automatic handover review, on the selected backend.
         self.finish_fixture_worker("watched-worker")
-        self.assertEqual(len(look(200)),1)
+        setting=state.parent/"codex-reviews.json";setting.write_text('{"on":true}')
+        a.codex_reviews=str(setting)
+        handed=look(200)
+        self.assertEqual(len(handed),2)
+        new=written(next(name for name in handed if name!=started[0].name))
+        args=(new/"args").read_text().split("\n")
+        self.assertEqual(args[args.index("--trigger")+1],"handover")
+        self.assertEqual(args[args.index("--reviewer")+1],"auto")
+        self.assertEqual(len(look(201)),2,"another handover review started for the same tip")
+        pid=json.loads(lock.read_text())["pid"]
+        watcher.children[pid]=type("Child",(),{"poll":lambda self:None if _alive(pid) else 0})()
+        watcher.stop_own(_t.time())
+        self.assertFalse(_alive(pid),"the handover review outlived its watcher")
 
     def test_review_exact_commit_integration_recovery_and_dirty_checkout_preservation(self):
         worker=self.call("prepare",self.args)
@@ -2435,6 +2690,79 @@ class DesktopWork(unittest.TestCase):
         except (BrokenPipeError,ValueError):
             holder.kill()
         holder.wait(timeout=30)
+
+    def automatic_worker(self, tag):
+        self.app.git(self.repo,"config","user.name","Fixture")
+        self.app.git(self.repo,"config","user.email","fixture@example.invalid")
+        worker=self.call("prepare",{**self.args,"request_id":tag})
+        target=self.start_fixture_worker(worker,tag)
+        (target/"result.txt").write_text("FICTIONAL "+tag)
+        self.app.git(target,"add","result.txt")
+        self.app.git(target,"-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-qm",tag)
+        self.finish_fixture_worker(tag)
+        return worker,target,self.app.git(target,"rev-parse","HEAD")
+
+    def automatic_verdict(self, worker, commit, reviewer="codex", **overrides):
+        fences=self.app.load("automatic_review_fences",ENGINE/"scripts/lib/operator_fences.py")
+        work=self.app.W.recovery_work_key(self.app.W.load_agent(worker["workspace_ref"]))
+        home=self.root/"engine-state/second-review";home.mkdir(exist_ok=True)
+        record=home/("review-"+reviewer);record.mkdir(exist_ok=True)
+        row={"id":record.name,"repo":str(self.repo),"repo_id":fences.review_repo_identity(str(self.repo)),
+             "tip":commit,"work":work,"trigger":"handover","verdict":"passed",
+             "reviewer":reviewer,"record":str(record),**overrides}
+        (record/"verdict.json").write_text(json.dumps({"row":row,"answer":{"findings":[]}}))
+        (home/"reviews.jsonl").write_text(json.dumps(row)+"\n")
+        return row
+
+    def test_one_automatic_review_integrates_and_completes_without_a_reviewer_agent(self):
+        self.assert_automatic_integration("codex")
+
+    def test_automatic_claude_review_uses_the_same_integration_path(self):
+        self.assert_automatic_integration("claude")
+
+    def assert_automatic_integration(self, backend):
+        worker,target,commit=self.automatic_worker("automatic-"+backend)
+        self.automatic_verdict(worker,commit,backend)
+        fences=self.app.load("automatic_gate",ENGINE/"scripts/lib/operator_fences.py")
+        self.assertEqual(fences.review_gaps(str(self.root/"operator-reviews.jsonl"),[commit],str(self.repo)),{},
+                         "the repository gate requested another review instead of consuming the app verdict")
+        checker=self.root/"repository review check.py"
+        checker.write_text("import importlib.util,sys\n"
+            "s=importlib.util.spec_from_file_location('fences',%r)\n" % str(ENGINE/"scripts/lib/operator_fences.py")+
+            "f=importlib.util.module_from_spec(s);s.loader.exec_module(f)\n"+
+            "sys.exit(bool(f.review_gaps(%r,[%r],%r)))\n" % (str(self.root/"operator-reviews.jsonl"),commit,str(self.repo)))
+        self.repository_hook("pre-merge-commit",shlex.quote(sys.executable)+" "+shlex.quote(str(checker))+"\n")
+        due=self.app.W.due_set(self.session,self.app.W.pending(self.session,auto=False,dry=True))
+        self.assertTrue(any(d["source"]=="automatic-review" and d["review"] for d in due),
+                        "the existing watcher cannot tell the lead that the automatic review is ready: "+repr(due))
+        args={"worker_id":worker["id"]}
+        result=self.call("integrate",args)
+        self.assertTrue(result["work_integrated"])
+        self.assertEqual(result["commit"],commit)
+        self.assertFalse(result["cleanup_pending"])
+        # A retry consumes the same verdict, with no new reviewer preparation.
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        self.assertFalse(any(r["request"]["role"]=="reviewer" for _,r in self.app.receipts(self.app.folder(self.scope))))
+        self.assertTrue(self.call("complete",{"obligation_id":"fixture-task","worker_ids":[worker["id"]]})["obligation_closed"])
+
+    def test_automatic_review_must_cover_the_exact_work_repository_and_handover(self):
+        worker,target,commit=self.automatic_worker("automatic-refusals")
+        before=self.app.git(self.repo,"rev-parse","HEAD")
+        for bad in ({"tip":"0"*40},{"repo_id":"another-repository"},{"work":"another-assignment"},
+                    {"trigger":"long-job"},{"verdict":"changes-requested"}):
+            with self.subTest(bad=bad):
+                self.automatic_verdict(worker,commit,**bad)
+                with self.assertRaisesRegex(ValueError,"automatic independent review"):
+                    self.call("integrate",{"worker_id":worker["id"]})
+                self.assertEqual(self.app.git(self.repo,"rev-parse","HEAD"),before)
+        self.automatic_verdict(worker,commit,verdict="changes-requested")
+        due=self.app.W.due_set(self.session,self.app.W.pending(self.session,auto=False,dry=True))
+        self.assertTrue(any(d["source"]=="review" for d in due),"changes requested never reached the existing watcher")
+        row=self.automatic_verdict(worker,commit)
+        (Path(row["record"])/"verdict.json").unlink()
+        with self.assertRaisesRegex(ValueError,"automatic independent review"):
+            self.call("integrate",{"worker_id":worker["id"]})
+        self.assertEqual(self.app.git(self.repo,"rev-parse","HEAD"),before)
 
     def reviewed_pair(self,tag,repo=None,file="result.txt"):
         """A worker and a passing reviewer, both run-ended: the exact state

@@ -39,6 +39,9 @@ ofx_init() {
     export GIT_CONFIG_NOSYSTEM=1
     unset CLAUDE_PID CLAUDE_CODE_ENTRYPOINT RICHOS_SESSION_PID RICHOS_ENTITY_ROOT LAND_LEASE_WAIT LAND_LEASE_TTL \
           GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE 2>/dev/null
+    # An app lease exports these; inherited, they would aim the review ledger and the workspace
+    # registry at the live ones (a case that wants one sets it itself).
+    unset RICHOS_CLAUDE_HOME RICHOS_CLAUDE_ACCOUNT_DIR RICHOS_WORKSPACES_DIR RICHOS_APP_STATE 2>/dev/null
     # The fence suite runs through the operator's own global dispatcher when it
     # exists (spec r3 e2: "through his global dispatcher"), else a minimal
     # chaining one, so the launcher is reached exactly the way it is on his Mac.

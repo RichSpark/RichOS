@@ -405,6 +405,8 @@ def declared_holders(conf):
 # ---------------------------------------------------------------------------
 
 def sessions_dir():
+    # Claude Code writes its session records under the account's own folder, so this one follows
+    # CLAUDE_CONFIG_DIR and never machine_settings.claude_home().
     base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude")
     return os.path.join(base, "sessions")
 
@@ -909,12 +911,23 @@ REVIEW_MID_JOB = ("long-job", "quiet")
 
 
 def review_ledger_default():
-    """The path second_review.py's state_root() gives, plus reviews.jsonl."""
+    """The path second_review.py's state_root() gives, plus reviews.jsonl: in the machine's one
+    Claude home (machine_settings.claude_home), whichever Claude account the caller spends."""
     d = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip()
     if not d:
-        base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude")
-        d = os.path.join(base, "state")
+        d = os.path.join(_machine_settings().claude_home(), "state")
     return os.path.join(d, "reviews.jsonl")
+
+
+def _machine_settings():
+    """machine_settings.py from beside this file: the engine's scripts/lib, or the copy install
+    puts beside the installed fence (PROGRAM_FILES). Imported here, never at module level."""
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    try:
+        import machine_settings      # noqa: E402  (a sibling, copied with this file)
+    finally:
+        sys.path.pop(0)
+    return machine_settings
 
 
 # ONE READER, AND IT ASKS THE SHELL (reviews rv-20261009T050654Z-e21238ff-7685
@@ -1094,20 +1107,34 @@ def clean_merge(cwd, commit, parents, keep_git_env=False):
     return bool(merged) and merged == tree.strip()
 
 
+def review_ledgers(ledger):
+    """A terminal land and an app land consume the same review, never request a second.
+
+    The app's automatic watcher owns its existing ledger under engine-state. A
+    repository fence still reads its installed ledger and all its open findings.
+    """
+    paths=[ledger]
+    app=os.environ.get("RICHOS_APP_STATE")
+    if app:
+        paths.append(os.path.join(os.path.realpath(app),"second-review","reviews.jsonl"))
+    return list(dict.fromkeys(paths))
+
+
 def read_reviews(ledger):
     rows = []
-    try:
-        with open(ledger, encoding="utf-8") as fh:
-            for raw in fh:
-                try:
-                    r = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(r, dict) and r.get("verdict"):
-                    rows.append(r)
-    except OSError:
-        pass
-    return rows
+    for path in review_ledgers(ledger):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for raw in fh:
+                    try:
+                        r = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(r, dict) and r.get("verdict"):
+                        rows.append(r)
+        except OSError:
+            pass
+    return sorted(rows,key=lambda r:str(r.get("finished_at") or r.get("at") or ""))
 
 
 def review_repo_resolved(repo):
@@ -1171,12 +1198,64 @@ def review_record(row):
         return {}
 
 
-def open_review_findings(rows):
+def _carried_ids(row):
+    """The finding ids a review carried: those it raised and those it was handed."""
+    if not row:
+        return set()
+    record = review_record(row)
+    ids = {"%s#%d" % (row.get("id"), n) for n, _ in enumerate((record.get("answer") or {}).get("findings") or [], 1)}
+    ids.update(e.get("id") for e in record.get("earlier_findings_in") or [])
+    return ids
+
+
+def _recheck_chain_carries(row, fid, old_tip, by_id):
+    """Whether a review that `row` rechecks, directly or through rechecks of rechecks,
+    all of the commit `old_tip`, carried `fid`."""
+    seen, node = set(), by_id.get(row.get("recheck_of"))
+    while node and node.get("tip") == old_tip and node.get("id") not in seen:
+        seen.add(node.get("id"))
+        if fid in _carried_ids(node):
+            return True
+        node = by_id.get(node.get("recheck_of"))
+    return False
+
+
+def _landed(repo, commit):
+    """Whether `commit` is on main in `repo` (reachable from refs/heads/main). When
+    Git cannot tell (no repository, an unknown commit), it is not: a check that
+    cannot decide holds the stricter rule."""
+    if not repo or not commit:
+        return False
+    code, _out, _err = git(repo, "merge-base", "--is-ancestor", commit, MAIN)
+    return code == 0
+
+
+def open_review_findings(rows, tip=None, repo=None):
     """Finding identity survives duplicate reviews. Only witnessed resolutions
     remove it. A same-source withdrawal must be an explicit independent recheck
     carrying the original finding; a later PASS cannot erase another review.
+
+    When `tip` (the commit being decided) is given, a "fixed" ruling on a finding
+    raised in the land's own range counts only from a review of exactly `tip`,
+    whether or not that review was handed the finding: a fix judged at another
+    commit, even one `tip` was built on, never vouches for `tip`, so the finding
+    stays open and the next reviewer of `tip` is handed it (2026-10-29: a handed
+    "fixed" at T1 cleared a finding at T, whose own review never mentioned it).
+    A finding raised at a commit already on main (`repo`'s refs/heads/main)
+    passed the gate when its work landed and reaches `tip` only through a merge
+    of main, so a "fixed" ruling at any commit of the history still counts for
+    it: otherwise every branch that merges main would have to re-rule every
+    landed finding (2026-10-29, the lead's ruling on esc-20261029T165526Z-fb650d7b:
+    6e9a03c3-f0d4#1 and #2 reach 5611a7964 only through its merge of main).
+    Such a ruling also counts at the finding's own commit through a chain of
+    rechecks of that commit, one of which carried it, even when the review it
+    directly rechecks omitted it. An exact-tip "fixed" not handed the finding
+    is the one ruling that counts unwitnessed (2026-10-29:
+    rv-20261029T155324Z-5611a796-3aed ruled rv-20261029T140028Z-3e883526-10b9#1
+    fixed at 5611a7964 and the fence still refused that tip on it). Any other
+    ruling on a finding the review was not handed is skipped, as before.
     """
-    opened, by_id, seen = {}, {r.get("id"): r for r in rows}, set()
+    opened, by_id, seen, landed = {}, {r.get("id"): r for r in rows}, set(), {}
     for row in rows:
         if row.get("id") and row["id"] in seen:
             continue
@@ -1184,18 +1263,24 @@ def open_review_findings(rows):
         record = review_record(row)
         answer = record.get("answer") or {}
         parent = by_id.get(row.get("recheck_of"))
-        parent_record = review_record(parent) if parent else {}
-        parent_ids = {"%s#%d" % (parent.get("id"), n) for n, _ in enumerate(
-                      (parent_record.get("answer") or {}).get("findings") or [], 1)} if parent else set()
-        parent_ids.update(e.get("id") for e in parent_record.get("earlier_findings_in") or [])
+        parent_ids = _carried_ids(parent)
         witnessed = {e.get("id"): e for e in record.get("earlier_findings_in") or []}
+        at_tip = bool(tip) and row.get("tip") == tip
+        of_tip = at_tip and answer.get("reviewed_commit") == tip
         for e in answer.get("earlier_findings") or []:
             fid = e.get("id")
-            if fid not in opened or fid not in witnessed:
+            fixed_here = of_tip and e.get("status") == "fixed"
+            if fid not in opened or (fid not in witnessed and not fixed_here):
                 continue
             old_tip = opened[fid].get("source_tip")
+            if tip and e.get("status") == "fixed" and not at_tip:
+                if old_tip not in landed:
+                    landed[old_tip] = _landed(repo, old_tip)
+                if not landed[old_tip]:
+                    continue
             same_source = old_tip == row.get("tip")
-            allowed = not same_source or (parent and parent.get("tip") == old_tip and fid in parent_ids)
+            allowed = not same_source or (parent and parent.get("tip") == old_tip and fid in parent_ids) \
+                or (fixed_here and _recheck_chain_carries(row, fid, old_tip, by_id))
             if e.get("status") in ("fixed", "withdrawn") and e.get("note", "").strip() and allowed:
                 opened.pop(fid)
             elif e.get("status") == "still-open":
@@ -1236,6 +1321,22 @@ def _own_history(repo, other, tip):
     return code != 1
 
 
+def review_history(rows, tip, repo, works=()):
+    """The reviews among `rows` whose findings decide `tip`: every review on a work
+    key that has a land review of `tip` (or is in `works`), of `tip` or a commit it
+    was built on, and every land review of `tip`. The land fence (review_of) and the
+    hand-in to the next reviewer (second_review.earlier_findings, which adds the key
+    of the review about to run) both read this one set, so a reviewer is asked about
+    every finding the fence holds on (2026-10-29: a manual --recheck on its range
+    key was handed nothing while the fence held on a finding under the app's key)."""
+    keys = {r.get("work") for r in rows if r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS}
+    keys.update(works)
+    keys.discard(None)
+    keys.discard("")
+    return [r for r in rows if (r.get("work") in keys and _own_history(repo, r.get("tip"), tip)) or
+            (r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)]
+
+
 def review_deferrals_path(ledger):
     """review-deferrals.jsonl, beside the review ledger (second_review.py writes it)."""
     return os.path.join(os.path.dirname(ledger), "review-deferrals.jsonl")
@@ -1247,21 +1348,22 @@ def read_deferrals(ledger):
     `second-review.sh --follow-up`; a later `--reopen` row of the same finding
     undoes it, so the later row wins."""
     out = {}
-    try:
-        with open(review_deferrals_path(ledger), encoding="utf-8") as fh:
-            for raw in fh:
-                try:
-                    r = json.loads(raw)
-                except ValueError:
-                    continue
-                if not isinstance(r, dict) or not r.get("finding"):
-                    continue
-                if r.get("action") == "follow-up":
-                    out[r["finding"]] = r
-                elif r.get("action") == "reopen":
-                    out.pop(r["finding"], None)
-    except OSError:
-        pass
+    for path in review_ledgers(ledger):
+        try:
+            with open(review_deferrals_path(path), encoding="utf-8") as fh:
+                for raw in fh:
+                    try:
+                        r = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if not isinstance(r, dict) or not r.get("finding"):
+                        continue
+                    if r.get("action") == "follow-up":
+                        out[r["finding"]] = r
+                    elif r.get("action") == "reopen":
+                        out.pop(r["finding"], None)
+        except OSError:
+            pass
     return out
 
 
@@ -1284,10 +1386,7 @@ def review_of(rows, tip, repo, deferred=None):
         # Preserve this source's job history, including findings raised at an
         # earlier tip. Later source resolutions cannot certify an older source.
         end = max(i for i, r in enumerate(mine) if r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)
-        works = {r.get("work") for r in land if r.get("work")}
-        history = [r for r in mine[:end+1] if (r.get("work") in works and _own_history(repo, r.get("tip"), tip)) or
-                   (r.get("tip") == tip and r.get("trigger") in REVIEW_LAND_KINDS)]
-        opened = open_review_findings(history)
+        opened = open_review_findings(review_history(mine[:end+1], tip, repo), tip, repo)
         applied = {}
         for fid, ruling in (deferred or {}).items():
             if fid in opened and review_row_belongs(ruling, ident):
@@ -2096,7 +2195,8 @@ def _lease_context(opts):
         raise SystemExit(
             "land-lease: REFUSED (G10). This command resolves the lease to %s/%s, but the fence installed in "
             "%s reads %s/%s. Two callers with different homes would each see their own lease as free. Run it "
-            "without RICHOS_LAND_LOCKS_DIR or CLAUDE_CONFIG_DIR overriding the home the installer used."
+            "without RICHOS_LAND_LOCKS_DIR or CLAUDE_CONFIG_DIR overriding the home the installer used (a "
+            "lease on an added Claude account reads RICHOS_CLAUDE_HOME, machine_settings.claude_home)."
             % (home, key, paths["main"], conf.get("HOME"), conf.get("KEY")))
     return conf, Files(conf), repo, repo_paths(paths["main"])
 

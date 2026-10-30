@@ -63,8 +63,12 @@ the host supplies observed completion events as helpers finish, including while 
 remain active. Polling or sleeping is unnecessary. Inspect actual results before relying
 on them. Stop and quit stop owned execution; there is no promise to work while closed.
 
-`richos_work.integrate` requires an actual passing independent review of the exact worker
-commit and clean targets. It integrates locally and performs cleanup through Mega Lander.
+The existing review watcher automatically reviews finished implementation work: Codex when
+enabled and available, otherwise Claude. `richos_work.integrate` takes `worker_id` alone and
+consumes that passing handover verdict for the exact worker commit and every repository.
+Do not prepare a routine second reviewer. An explicit `reviewer_id` remains supported for
+already prepared or specifically requested reviews. Targets must be clean.
+Integration is local and performs cleanup through Mega Lander.
 Dirty or conflicting state is preserved and refused. Publication needs the user's authority
 and its own evidence; local integration does not establish publication.
 

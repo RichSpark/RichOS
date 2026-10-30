@@ -746,7 +746,16 @@ def refusal_lines(suite, findings, errors):
 # Running a check shielded
 # ---------------------------------------------------------------------------------------------
 def shield_env(base, log, runs=()):
-    env = dict(base)
+    # The developer toolchain (scripts/lib/toolchain.py, 2026-10-29): a suite or build that calls
+    # make, git, cc, python3... through an /usr/bin stub finds a usable developer directory via
+    # DEVELOPER_DIR even in a sanitized environment; with none on this Mac, the stubs are shadowed
+    # by stand-ins that exit 127 with a plain line, so no install dialog ever opens.
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import toolchain
+        env = toolchain.harness_env(base, log + ".toolchain-standins")
+    except Exception:  # the toolchain step never stops a suite from running
+        env = dict(base)
     env["PATH"] = SHIELD_DIR + os.pathsep + env.get("PATH", "")
     env[LOG_ENV] = log
     env[RUNS_ENV] = " ".join(sorted(runs))
@@ -821,6 +830,8 @@ def cmd_run(argv):
             os.unlink(log)
         except OSError:
             pass
+        import shutil
+        shutil.rmtree(log + ".toolchain-standins", ignore_errors=True)
     if calls:
         print("\n".join(verdict_lines(calls, suite or argv[0])), flush=True)
         return rc if rc not in (0, 2) else 1

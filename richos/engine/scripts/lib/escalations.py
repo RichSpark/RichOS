@@ -473,7 +473,12 @@ def build_row(args, when=None):
         "tried": (args.tried or "").strip(),
         "meanwhile": (args.meanwhile or "").strip(),
         "record": (args.record or "").strip(),
-        "session_id": (args.session or os.environ.get("CLAUDE_SESSION_ID", "") or "").strip(),
+        # The chat that owns this row, in stall_watch's order: a worker's session tag
+        # (agent_hold exports it on every worker Bash call), the app lead's session, then the
+        # terminal's. Without it a wait raised in the app woke every chat.
+        "session_id": (args.session or os.environ.get("RICHOS_AGENT_SESSION", "")
+                       or os.environ.get("RICHOS_SESSION_ID", "")
+                       or os.environ.get("CLAUDE_SESSION_ID", "") or "").strip(),
         "actor": _actor(),
     }
     needs = (getattr(args, "needs", "") or "").strip()

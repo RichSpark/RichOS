@@ -55,8 +55,19 @@ def config_base():
     return (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude")
 
 
+def claude_home():
+    """machine_settings.claude_home(), loaded from beside this file: the machine's one Claude
+    home, where second-review writes its ledger whichever account the writer spent."""
+    mod = sys.modules.get("machine_settings")
+    if mod is None or not hasattr(mod, "claude_home"):
+        spec = importlib.util.spec_from_file_location("machine_settings", os.path.join(HERE, "machine_settings.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    return mod.claude_home()
+
+
 def ledger_path():
-    d = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(config_base(), "state")
+    d = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(claude_home(), "state")
     return os.path.join(d, "reviews.jsonl")
 
 

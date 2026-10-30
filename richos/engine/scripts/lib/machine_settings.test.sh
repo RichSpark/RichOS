@@ -31,6 +31,22 @@ class Settings(unittest.TestCase):
    with self.assertRaises(ValueError):M.load(env)
    with self.assertRaises(ValueError):M.load({'HOME':str(home),'RICHOS_ENV_FILE':str(home/'missing')})
    with self.assertRaises(ValueError):M.load({'HOME':str(home),'RICHOS_ENV_FILE':'relative'})
+ def test_limits_live_beside_env_and_never_in_it(self):
+  # A number in .env would make every older engine's parse() refuse the whole file.
+  with tempfile.TemporaryDirectory() as root:
+   home=pathlib.Path(root).resolve();source=home/'Library/Application Support/RichOS/limits.env'
+   env={'HOME':str(home)}
+   self.assertEqual(M.limit('TESTVM_MEMORY_FLOOR_MB',4096,env),(4096,f'default; no TESTVM_MEMORY_FLOOR_MB in {source}'))
+   source.parent.mkdir(parents=True);source.write_text('# a floor lower than the default\nTESTVM_MEMORY_FLOOR_MB=2500\n')
+   self.assertEqual(M.limit('TESTVM_MEMORY_FLOOR_MB',4096,env),(2500,f'machine setting TESTVM_MEMORY_FLOOR_MB in {source}'))
+   self.assertEqual(M.load(env),{},'the limits file is not read as .env paths')
+   self.assertEqual(M.limit('TESTVM_MEMORY_FLOOR_MB',4096,{**env,'TESTVM_MEMORY_FLOOR_MB':'3000'})[0],3000)
+   for bad in ('TESTVM_MEMORY_FLOOR_MB=x\n','TESTVM_MEMORY_FLOOR_MB=99999999\n','CARGO_TARGET_DIR=/x\n'):
+    source.write_text(bad)
+    with self.assertRaises(ValueError):M.limit('TESTVM_MEMORY_FLOOR_MB',4096,env)
+   with self.assertRaises(ValueError):M.limit('UNKNOWN',1,env)
+   with self.assertRaises(ValueError):M.limit('TESTVM_MEMORY_FLOOR_MB',4096,{**env,'RICHOS_LIMITS_FILE':'relative'})
+   with self.assertRaises(ValueError):M.parse('TESTVM_MEMORY_FLOOR_MB=2500\n')
  def test_mount_refusal_before_writes_and_mount_component(self):
   volume=pathlib.Path('/Volumes/'+'Fixture')
   env={'HOME':'/fixture home','RICHOS_BULK_ROOT':str(volume/'nested')}
@@ -72,6 +88,28 @@ class Settings(unittest.TestCase):
    with self.assertRaises(ValueError):M.scratch('escape',env)
    nested=base/'richos-scratch';nested.mkdir()
    with self.assertRaises(ValueError):M.agent_root({**env,'RICHOS_BULK_ROOT':str(nested)})
+ def test_each_worker_of_one_teammate_gets_its_own_scratch_folder(self):
+  import shutil
+  with tempfile.TemporaryDirectory() as root:
+   base=pathlib.Path(root).resolve();bulk=base/'bulk';bulk.mkdir()
+   env={'HOME':str(base),'TMPDIR':str(base),'RICHOS_BULK_ROOT':str(bulk)}
+   first=M.scratch('zach',{**env,'RICHOS_AGENT_OWNER':'a1f684fad4d37879f'})
+   second=M.scratch('zach',{**env,'RICHOS_AGENT_OWNER':'b2e795be5e48980aa'})
+   self.assertNotEqual(first,second)
+   self.assertEqual(first,bulk/'tmp/claude/zach/a1f684fad4d37879f')
+   self.assertEqual(M.scratch('zach',{**env,'RICHOS_AGENT_OWNER':'a1f684fad4d37879f'}),first)
+   (first/'home').mkdir();(second/'home').mkdir();(second/'home'/'work').write_text('still working')
+   # One worker's cleanup of the folder it was given leaves the other worker's files alone.
+   shutil.rmtree(first)
+   self.assertTrue((second/'home'/'work').exists())
+   # A caller with no worker id (the lead, a script) keeps the plain per-name folder.
+   self.assertEqual(M.scratch('zach',env),bulk/'tmp/claude/zach')
+   for bad in ('../x','a/b','..','.'):
+    with self.assertRaises(ValueError):M.scratch('zach',{**env,'RICHOS_AGENT_OWNER':bad})
+   # The command line reads the same variable from the caller's environment.
+   cli=subprocess.run([sys.executable,str(pathlib.Path(sys.argv[1],'machine_settings.py')),'scratch','zach'],capture_output=True,text=True,check=True,
+                      env={**{k:v for k,v in os.environ.items() if not k.startswith('RICHOS_')},**env,'RICHOS_AGENT_OWNER':'c3d8a6cf6f59a91bb'})
+   self.assertEqual(pathlib.Path(cli.stdout.strip()),bulk/'tmp/claude/zach/c3d8a6cf6f59a91bb')
  def test_process_sweep_uses_job_tmp_and_never_named_root(self):
   import importlib.util
   spec=importlib.util.spec_from_file_location('fixture_reaper',pathlib.Path(sys.argv[1],'scratch-reaper.py'))

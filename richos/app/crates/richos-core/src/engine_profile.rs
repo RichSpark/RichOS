@@ -27,11 +27,14 @@ pub const GUARD_AUDIENCE_DECLARATION: &str = "spawn-guard-audience.declaration";
 /// does nothing for a user who has declared nothing. The rest of the manifest polices the
 /// terminal operator's own sessions (his claim, his worktrees and lands, his record) and is
 /// left out; the claim hooks above all, which must never run in a user's app.
-const APP_BASH_RULES: [&str; 4] = [
+const APP_BASH_RULES: [&str; 7] = [
     "guard-publication-commits.sh",   // private material in a commit to a public repository
     "guard-named-persons-commands.sh", // a listed person's name in a commit message, branch or PR
     "guard-public-record-repo.sh",    // a plan or research record added to a public repository
     "guard-unguarded-rm.sh",          // Claude Code's own rm prompt, which bypass mode still asks
+    "guard-host-sleep.sh",            // caffeinate or a sleep-setting change on the user's Mac
+    "guard-headed-browser.sh",        // a visible browser window opened by automation
+    "guard-toolchain.sh",             // an Apple developer-tools stub with no toolchain (install dialog)
 ];
 
 /// **The engine's Write-chain rules every lease runs** (gap E), the same way. `dialect-guard.sh`
@@ -155,6 +158,14 @@ pub struct EngineProfile {
     /// read by [`Self::prepare`] from the user's central folder, the same way for every user.
     /// Empty when prepared without a user folder ([`Self::prepare_with_settings`]).
     pub user: crate::user_settings::UserSetup,
+}
+
+/// **Account 1's Claude folder, the machine-wide home** a lease is given as `RICHOS_CLAUDE_HOME`:
+/// the app's own `CLAUDE_CONFIG_DIR`, else `~/.claude`, exactly as a terminal resolves it.
+fn machine_claude_home() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from).or_else(|| {
+        std::env::var_os("HOME").filter(|home| !home.is_empty()).map(|home| PathBuf::from(home).join(".claude"))
+    })
 }
 
 /// **Which speech model the video skill transcribes with**, the value of
@@ -816,8 +827,20 @@ impl EngineProfile {
         for key in crate::machine_settings::KEYS { command.env_remove(key); }
         command.envs(self.machine_settings.environment());
         command.env_remove("RICHOS_APP_ENTITY").env_remove("RICHOS_APP_THREAD");
+        // **One Claude home for the whole machine** (richos-hq follow-ups, "the usage hold reads
+        // the wrong Claude account", 2026-10-28; Rich's decision 23:58Z): the engine's own stores
+        // (the land lease, the fence settings, second-review records, the workspace registry's
+        // fallback) live in Account 1's folder whichever account this lease spends. An added
+        // account's `CLAUDE_CONFIG_DIR` moves only what Claude Code itself keeps there. The
+        // engine reads `RICHOS_CLAUDE_HOME` only while `CLAUDE_CONFIG_DIR` is still the folder
+        // named by `RICHOS_CLAUDE_ACCOUNT_DIR` (`machine_settings.claude_home`), so a test sandbox
+        // that sets its own `CLAUDE_CONFIG_DIR` inside this lease keeps its own stores. Inherited
+        // values of both were removed with every other `RICHOS_` name above.
+        if let Some(home) = machine_claude_home() {
+            command.env("RICHOS_CLAUDE_HOME", home);
+        }
         if let Some(folder) = self.claude_account.as_ref().and_then(|a| a.folder.as_ref()) {
-            command.env("CLAUDE_CONFIG_DIR", folder);
+            command.env("CLAUDE_CONFIG_DIR", folder).env("RICHOS_CLAUDE_ACCOUNT_DIR", folder);
         }
         // **Which Claude account this provider and every helper inside it spend** (weekly-switch
         // plan §1): hooks run in the provider's environment, so the quota gate reads it on every

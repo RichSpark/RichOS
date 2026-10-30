@@ -161,5 +161,61 @@ else
   echo "  NOT RUN  B7 the delivered runtime's launched entries: RICHOS_RUNTIME_DIR names no runtime; build-runtimes.py ran check_launched_entries on every runtime it built"  # not-a-subcheck: with no runtime named this suite checks the builder only; build() runs check_launched_entries before it writes delivery.json, and runtime-launchers.test.py compiles and checks the launchers every run
 fi
 
+# 8. Git's macOS iconv workaround (-DICONV_RESTART_RESET) cannot be lost to the builder's shell.
+#    git's Makefile compiles it only `ifdef NEEDS_GOOD_LIBICONV` / `ifndef HAS_GOOD_LIBICONV`, and
+#    make reads its environment as variables, so a HAS_GOOD_LIBICONV exported where the build runs
+#    would drop it with nothing to say so (follow-up 2026-10-28, loose end 1 of the iconv fix). Here
+#    a stand-in Makefile with that exact logic, so nothing is downloaded or compiled:
+#      a. the build environment is an allowlist: a stray HAS_GOOD_LIBICONV, LDFLAGS, MAKEFLAGS and
+#         LIBRARY_PATH do not reach make;
+#      b. positive probe: with the stray variable passed through, and WITHOUT the emptying flag, the
+#         check refuses; with the real flags it passes even then (the command line outranks the
+#         environment), and under the allowlisted environment it passes.
+if out=$(python3 - "$HERE/build-runtimes.py" 2>&1 <<'PY'
+import importlib.util, os, sys, tempfile
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("build_runtimes", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+stray = {**os.environ, "HAS_GOOD_LIBICONV": "Yes", "LDFLAGS": "-L/opt/elsewhere/lib", "MAKEFLAGS": "-j9",
+         "LIBRARY_PATH": "/opt/elsewhere/lib", "CPPFLAGS": "-I/opt/elsewhere/include", "FICTIONAL_SETTING": "1"}
+import subprocess
+try:                                  # make's own shim on a Mac looks the SDK up, so give it a real one
+    sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
+except (OSError, subprocess.CalledProcessError):
+    sdk = "/"
+built = module.git_build_environment(stray, sdk)
+for name in ("HAS_GOOD_LIBICONV", "LDFLAGS", "MAKEFLAGS", "LIBRARY_PATH", "CPPFLAGS", "FICTIONAL_SETTING"):
+    assert name not in built, f"{name} reached the git build"
+assert built["SDKROOT"] == sdk and built["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin", built
+assert "HAS_GOOD_LIBICONV=" in module.GIT_ICONV_FLAGS, "the emptying flag is gone from GIT_ICONV_FLAGS"
+with tempfile.TemporaryDirectory(prefix="richos fictional git source ") as temporary:
+    root = Path(temporary)
+    (root / "Makefile").write_text("ifdef NEEDS_GOOD_LIBICONV\nifndef HAS_GOOD_LIBICONV\n"
+                                   "BASIC_CFLAGS += -DICONV_RESTART_RESET\nendif\nendif\nall:\n\t@true\n")
+    flags = list(module.GIT_ICONV_FLAGS)
+    module.check_git_iconv_workaround(root, flags, built)
+    module.check_git_iconv_workaround(root, flags, {**built, "HAS_GOOD_LIBICONV": "Yes"})
+    try:
+        module.check_git_iconv_workaround(root, [f for f in flags if f != "HAS_GOOD_LIBICONV="],
+                                          {**built, "HAS_GOOD_LIBICONV": "Yes"})
+    except RuntimeError as error:
+        assert "ICONV_RESTART_RESET" in str(error), error
+    else:
+        raise SystemExit("a build with HAS_GOOD_LIBICONV set and not emptied passed the workaround check")
+    try:
+        module.check_git_iconv_workaround(root, [f for f in flags if not f.startswith("NEEDS_GOOD_LIBICONV")], built)
+    except RuntimeError:
+        pass
+    else:
+        raise SystemExit("a build without NEEDS_GOOD_LIBICONV passed the workaround check")
+print("ok")
+PY
+); then
+  echo "  PASS  B8 git is built from an allowlisted environment, and the build refuses to start without -DICONV_RESTART_RESET"
+else
+  echo "  FAIL  B8 the git iconv workaround check: $out"; fail=1
+fi
+
 python3 -B "$HERE/runtime-launchers.test.py" || fail=1
 exit "$fail"

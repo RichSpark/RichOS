@@ -80,9 +80,46 @@ def check_git_precompose(git, env=None):
 # config.mak.uname decides: with no "good" (Homebrew/Fink/MacPorts) iconv it compiles
 # ICONV_RESTART_RESET, git's own workaround for macOS 14+ system iconv's piecemeal-conversion
 # fault (utf8.c reencode_string_iconv), so the bytes do not depend on the build Mac's macOS.
+#
+# HAS_GOOD_LIBICONV is what turns that workaround OFF (Makefile: `ifdef NEEDS_GOOD_LIBICONV` /
+# `ifndef HAS_GOOD_LIBICONV` / `BASIC_CFLAGS += -DICONV_RESTART_RESET`), and make takes every
+# variable of its environment as its own, so a HAS_GOOD_LIBICONV exported by the builder's shell
+# would drop it with no sign anywhere. Two defenses, and a check that proves them before the build:
+# the build runs under an allowlisted environment (git_build_environment), the flag is emptied on
+# the command line (which outranks both the environment and the Makefile's own assignments), and
+# check_git_iconv_workaround asks make for its variable database and refuses to build without the
+# -D (the 2026-10-28 review of the bundled-git iconv fix, finding 1).
 GIT_ICONV_FLAGS = ("ICONVDIR=", "USE_HOMEBREW_LIBICONV=", "NEEDS_GOOD_LIBICONV=UnfortunatelyYes",
+                   "HAS_GOOD_LIBICONV=",
                    "NO_HOMEBREW=YesPlease", "NO_FINK=YesPlease", "NO_DARWIN_PORTS=YesPlease")
 SYSTEM_ICONV = "/usr/lib/libiconv.2.dylib"
+# The only variables of the builder's environment that reach git's make; make reads every other one
+# (LDFLAGS, LIBRARY_PATH, CPPFLAGS, HAS_GOOD_LIBICONV, MAKEFLAGS, ...) as its own setting.
+GIT_BUILD_ENV_ALLOWED = ("HOME", "TMPDIR", "DEVELOPER_DIR")
+
+
+def git_build_environment(base, sdkroot):
+    """The environment git is built under: the allowlist above, the system tool path, the SDK the
+    caller found, and the C locale."""
+    environment = {name: base[name] for name in GIT_BUILD_ENV_ALLOWED if name in base}
+    environment.update({"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "SDKROOT": sdkroot,
+                        "LC_ALL": "C", "LANG": "C"})
+    return environment
+
+
+def check_git_iconv_workaround(git_source, flags, environment):
+    """Raise RuntimeError unless make, run in `git_source` with these flags and environment, would
+    compile git with -DICONV_RESTART_RESET (a dry run that prints make's variable database; nothing
+    is compiled). Run before the build so a lost workaround costs seconds, not a nightly."""
+    result = subprocess.run(["make", "-pn", *flags, "all"], cwd=git_source, env=environment,
+                            capture_output=True, text=True)
+    if "-DICONV_RESTART_RESET" in result.stdout:
+        return
+    detail = ("make could not describe the build: " + result.stderr.strip()[-400:]) if not result.stdout.strip() else \
+        "a HAS_GOOD_LIBICONV, or another iconv setting, is turning git's workaround off"
+    raise RuntimeError("git would be built without -DICONV_RESTART_RESET, git's own workaround for "
+                       "the macOS system iconv's piecemeal-conversion fault (utf8.c "
+                       "reencode_string_iconv): " + detail)
 
 
 # Every download names itself. ffmpeg.martin-riedl.de answers Python's default User-Agent
@@ -412,7 +449,8 @@ def build(destination):
             # No installed build-directory rpath.
             if manifest.get("portable_git_link_paths"):
                 flags.append("CC_LD_DYNPATH=")
-            clean_env = {**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "SDKROOT": subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()}
+            clean_env = git_build_environment(os.environ, subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip())
+            check_git_iconv_workaround(git_source, flags, clean_env)
             try:
                 with (scratch / "git-build.log").open("w") as log:
                     subprocess.run(["make", "-j4", *flags, "all"], cwd=git_source, env=clean_env, stdout=log, stderr=log, check=True)

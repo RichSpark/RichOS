@@ -2381,8 +2381,9 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
             (crate / "lib.rs").write_text("fn main() { changed(); }\n")
             record.save(items[0], self.source)
         self.assertEqual(items[0].state, "invalid")
-        self.assertIn("execution inputs changed during the check; changed: input/crate/lib.rs; "
+        self.assertIn("execution inputs changed since the run was planned; changed: input/crate/lib.rs; "
                       "checks started by then: check, writer", record.results["check"]["invalid"])
+        self.assertNotIn("during the check", record.results["check"]["invalid"])
 
     def test_refused_receipt_cannot_become_saved_pass(self):
         items, record = self.attempt("attempt")
@@ -2916,6 +2917,101 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         wrapped = identity()["installed"]["rust"]
         wrapper.write_text('#!/bin/sh\n# a different compiler cache\nexec "$@"\n')
         self.assertNotEqual(identity()["installed"]["rust"], wrapped)
+
+    def test_a_rewritten_dependencies_validated_marker_leaves_the_browser_identity_unchanged(self):
+        # 2026-10-29: an unrelated `npm install` postinstall rewrote ffmpeg-1011/DEPENDENCIES_VALIDATED
+        # in the shared Playwright cache, and its mtime/ctime, hashed into every whole-checkout
+        # identity, marked 39 passing checks in three running proof runs invalid. The marker is a
+        # cache stamp; a browser file, INSTALLATION_COMPLETE and a nested marker still count.
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
+        browsers = Path(self.tmp.name) / "ms-playwright"
+        install = browsers / "ffmpeg-1011"
+        install.mkdir(parents=True)
+        (install / "INSTALLATION_COMPLETE").touch()
+        (install / "ffmpeg-mac").write_bytes(b"browser v1")
+        (install / "lib").mkdir()
+        environment = {"PATH": "/usr/bin:/bin", "HOME": self.tmp.name, "PLAYWRIGHT_BROWSERS_PATH": str(browsers)}
+        identity = lambda: evidence.checkout_identity(self.root, ["bash", "x.sh"], environment)
+        marker = install / "DEPENDENCIES_VALIDATED"
+        without = identity()
+        marker.write_text("first")
+        self.assertEqual(identity(), without, "a marker appearing")
+        marker.write_text("rewritten, later, and longer")
+        os.utime(marker, ns=(2_000_000_000_000_000_000, 2_000_000_000_000_000_000))
+        self.assertEqual(identity(), without, "a marker rewritten")
+        marker.unlink()
+        marker.write_text("recreated")
+        self.assertEqual(identity(), without, "a marker recreated")
+        marker.unlink()
+        self.assertEqual(identity(), without, "a marker removed")
+        # Not loosened: the rest of the install is still bound.
+        (install / "lib/DEPENDENCIES_VALIDATED").write_text("nested")
+        nested = identity()
+        self.assertNotEqual(nested, without, "only the install folder's top-level marker is a stamp")
+        (install / "lib/DEPENDENCIES_VALIDATED").unlink()
+        stamp = (install / "ffmpeg-mac").stat()
+        (install / "ffmpeg-mac").write_bytes(b"browser v2")
+        os.utime(install / "ffmpeg-mac", ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        self.assertNotEqual(identity(), without, "a browser file changed in place")
+        (install / "ffmpeg-mac").write_bytes(b"browser v1")
+        os.utime(install / "ffmpeg-mac", ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        (install / "INSTALLATION_COMPLETE").unlink()
+        self.assertNotEqual(identity(), without, "INSTALLATION_COMPLETE removed")
+
+    def test_an_invalid_pass_names_the_identity_keys_that_differ_and_says_since_planned(self):
+        # B and D. A whole-checkout check declares no paths, so the note could only say "nothing
+        # under its declared paths"; it now names the identity key path, at completion and at finalize.
+        key = "installed.playwright.installs.ffmpeg-1011.metadata"
+        identity = lambda metadata: {**self.inputs, "installed": {"playwright": {
+            "base": "/cache", "installs": {"ffmpeg-1011": {"metadata": metadata, "complete": True},
+                                           "webkit-2311": {"metadata": "same", "complete": True}}}}}
+        planned, moved = identity("a"), identity("b")
+        self.assertEqual(evidence.identity_changed_keys(planned, planned), "")
+        self.assertEqual(evidence.identity_changed_keys(planned, moved), "; identity differs at: " + key)
+        # At completion.
+        items, record = self.attempt("keys-completion", engine=False, identities={"check": planned})
+        record.current_identity = lambda item: moved
+        self.passed(items, record)
+        reason = record.results["check"]["invalid"]
+        self.assertEqual(items[0].state, "invalid")
+        self.assertIn("execution inputs changed since the run was planned", reason)
+        self.assertNotIn("during the check", reason)
+        self.assertIn("identity differs at: " + key, reason)
+        self.assertIn(key, json.loads((record.logdir / "outcomes.json").read_text())["check"]["invalid"])
+        # At finalize.
+        items, record = self.attempt("keys-finalize", engine=False, identities={"check": planned})
+        self.passed(items, record)
+        self.assertEqual(items[0].state, "passed", items[0].notes)
+        record.current_identities = lambda selected: {"check": moved}
+        record.finalize(items)
+        reason = record.results["check"]["invalid"]
+        self.assertEqual(items[0].state, "invalid")
+        self.assertIn("inputs changed since the run was planned", reason)
+        self.assertNotIn("after this check completed", reason)
+        self.assertIn("identity differs at: " + key, reason)
+        self.assertIn(key, json.loads((record.logdir / "outcomes.json").read_text())["check"]["invalid"])
+
+    def test_the_summary_row_of_an_invalid_check_carries_the_reason(self):
+        # C. summary.json said `invalid` and nothing else; the reason was only in outcomes.json.
+        key = "installed.playwright.installs.ffmpeg-1011.metadata"
+        planned = {**self.inputs, "installed": {"playwright": {"installs": {"ffmpeg-1011": {"metadata": "a"}}}}}
+        moved = {**self.inputs, "installed": {"playwright": {"installs": {"ffmpeg-1011": {"metadata": "b"}}}}}
+        items, record = self.attempt("summary", engine=False, identities={"check": planned})
+        record.current_identity = lambda item: moved
+        self.passed(items, record)
+        self.assertEqual(items[0].state, "invalid")
+        logdir = Path(self.tmp.name) / "summary-logs"
+        logdir.mkdir()
+        runner.summarize(items, 1.0, str(logdir), 600, [])
+        rows = json.loads((logdir / "summary.json").read_text())["checks"]
+        self.assertEqual([row["result"] for row in rows], ["invalid"])
+        self.assertEqual(rows[0]["invalid"], record.results["check"]["invalid"])
+        self.assertIn(key, rows[0]["invalid"])
+        fine, ok = self.attempt("summary-fine", engine=False, identities={"check": planned})
+        self.passed(fine, ok)
+        self.assertEqual(fine[0].state, "passed", fine[0].notes)
+        runner.summarize(fine, 1.0, str(logdir), 600, [])
+        self.assertIsNone(json.loads((logdir / "summary.json").read_text())["checks"][0]["invalid"])
 
     def test_the_whole_checkout_identity_binds_the_playwright_package_the_harness_loads_from_outside(self):
         # Part 2 recheck, R11: harness.js loadPlaywright takes the Playwright package from

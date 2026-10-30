@@ -380,6 +380,19 @@ class PauseMessage(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     protocol.validate_payload(payload(message, "Instruction"))
 
+    def test_a_control_line_set_off_by_any_line_break_is_declared(self):
+        # The registry freezes on rows made by str.splitlines(), so declared() must see the
+        # same rows: a bare CR, U+2028, U+2029, U+0085, a form feed or a vertical tab all end a row.
+        for brk in ("\r", "\u2028", "\u2029", "\x85", "\x0b", "\x0c", "\x1c", "\r\n"):
+            for line in ("pause-until: my word", "richos-pause-control: {}", "richos-resume-control: {}"):
+                message = "Ordinary text" + brk + line
+                with self.subTest(brk=repr(brk), line=line):
+                    self.assertTrue(protocol.declared(message))
+                    with self.assertRaises(ValueError):
+                        protocol.validate_payload(payload(message, "Instruction"))
+        # A control word in the middle of a row is still prose.
+        self.assertFalse(protocol.declared("Please write pause-until: in the notes"))
+
     def test_missing_recipient_and_broadcast_do_not_use_the_reply_exemption(self):
         for target in (None,"","main"):
             value=payload(protocol.render("manual"),protocol.SUMMARY,type="broadcast")

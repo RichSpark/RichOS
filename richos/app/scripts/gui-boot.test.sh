@@ -469,6 +469,11 @@ declare_rules() {
   # tell a choice from the failure the declared no-`$HOME` case below is about.
   routine '^\[richos\] Codex watch: watching [1-9][0-9]* channel\(s\) \(process [1-9][0-9]*\)$' \
     'the Codex watcher is running on the configured channels, and its pid; the could-not-start, engine-not-verified and no-channel forms stay unaccounted'
+  # THE APP MANAGEMENT WATCHER (main.rs `ensure_app_management_watch`): printed only when it
+  # started at launch, once per boot. Its could-not-start and engine-not-verified forms stay
+  # UNACCOUNTED on purpose: each is a watcher that is not running.
+  routine '^\[richos\] App Management watch: recording \(process [1-9][0-9]*\)$' \
+    'the read-only App Management watcher is running, and its pid; the could-not-start and engine-not-verified forms stay unaccounted'
 
   # -- the declared gaps ------------------------------------------------------------------
   gap 'RICHOS_SERVICE_BIN' \

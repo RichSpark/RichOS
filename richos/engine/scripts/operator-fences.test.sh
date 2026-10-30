@@ -85,6 +85,14 @@
 #        holder; another name, another team or no team does not pass; status
 #        and the session-start notice name it (scripts/lib/operator-fences-holders.test.py,
 #        run once: it asks the kernel and the bundle, never Git)
+#   F35  a Work-lease caller (CLAUDE_CONFIG_DIR and RICHOS_CLAUDE_ACCOUNT_DIR at the account's
+#        folder, RICHOS_CLAUDE_HOME at the machine-wide home) passes G10 against a fence installed
+#        from that home, and its lease, review ledger and fence settings record (an off) are the
+#        installed ones; without RICHOS_CLAUDE_HOME the same caller is refused, as before (run
+#        once, like F34)
+#   F36  scripts/lib/claude-home.test.py: the lease, the fence settings and the review records
+#        resolve to one home under any account's lease, terminal and app share it, and a
+#        sandbox's own CLAUDE_CONFIG_DIR still wins (run once, like F34)
 #   F3L, F12L  measured limits, asserted so the record goes red if Git changes:
 #        a refused reset --hard and a refused merge --abort have already
 #        rewritten the tree (the early check exists for exactly these)
@@ -735,6 +743,69 @@ export PATH="$ORIG_PATH"
 if [ "$GIT_INDEX" = 1 ] || [ "$GIT_INDEX" = all ]; then
 out="$(python3 "$ENGINE_ROOT/scripts/lib/operator-fences-holders.test.py" 2>&1)"; rc=$?
 expect "F34" "a holder moved inside its app bundle is still the holder, nothing else passes as it, and status names it" "$rc" "$out"
+fi
+
+# ---- F35: a Work-lease caller and the fence's home (G10; 2026-10-28) -------------------------
+# The app runs a lease on the Work account with CLAUDE_CONFIG_DIR (and RICHOS_CLAUDE_ACCOUNT_DIR)
+# at that account's folder and RICHOS_CLAUDE_HOME at Account 1's (EngineProfile.configure). The
+# lease home follows RICHOS_CLAUDE_HOME, so a fence installed from that home accepts the caller,
+# and the fence settings record its off writes is the installed home's too. Claude Code still
+# writes the caller's session record under the account's folder, and the fence still finds it
+# there. Without RICHOS_CLAUDE_HOME the same caller is refused, exactly as before.
+if [ "$GIT_INDEX" = 1 ] || [ "$GIT_INDEX" = all ]; then
+F35_LOCKS="$RICHOS_LAND_LOCKS_DIR"; F35_CFG="$CLAUDE_CONFIG_DIR"
+MACHINE="$OFX/home/.claude"; ACCOUNT="$OFX/claude-accounts/2"
+mkdir -p "$MACHINE" "$ACCOUNT/sessions"
+unset RICHOS_LAND_LOCKS_DIR RICHOS_CLAUDE_HOME RICHOS_CLAUDE_ACCOUNT_DIR SECOND_REVIEW_STATE_DIR
+export CLAUDE_CONFIG_DIR="$MACHINE"                    # the installer runs from the machine-wide home
+ofx_declare on
+ofx_repo work; WR="$OFX_R"
+inst="$(ofx_install "$WR" 2>&1 && ofx_on "$WR" 2>&1)"; irc=$?
+installed="$(python3 - "$ENGINE_ROOT/scripts/lib" "$WR" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import operator_fences as F
+print(F.launcher_for(sys.argv[2])[0].get("HOME", ""))
+PY
+)"
+export CLAUDE_CONFIG_DIR="$ACCOUNT" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" RICHOS_CLAUDE_HOME="$MACHINE"
+ofx_session WK
+ofx_in WK "$(ofx_lease acquire --repo "$WR")"; rc=$?; out="$OFX_OUT"
+[ $irc = 0 ] && [ $rc = 0 ] && [ "$installed" = "$(cd "$MACHINE" && pwd -P)/state/land-locks" ] \
+    && [ -n "$(ls "$installed/"*.lease 2>/dev/null)" ] && [ -z "$(ls "$ACCOUNT/state/land-locks/"*.lease 2>/dev/null)" ]
+expect "F35" "a Work-lease caller passes G10 and takes the lease in the installed home, not the account's" "$?" \
+    "install rc=$irc ($inst) installed=$installed rc=$rc $out"
+ofx_in WK "$(ofx_lease release --repo "$WR")"
+ledger="$(python3 - "$ENGINE_ROOT/scripts/lib" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import operator_fences as F
+print(F.review_ledger_default())
+PY
+)"
+[ "$ledger" = "$MACHINE/state/reviews.jsonl" ]
+expect "F35" "a Work-lease caller's review ledger is the machine-wide home's" "$?" "ledger=$ledger"
+ofx_in WK "env -u RICHOS_CLAUDE_HOME $(ofx_lease acquire --repo "$WR")"; rc=$?
+[ $rc -ne 0 ] && printf '%s' "$OFX_OUT" | grep -q "G10" && [ -z "$(ls "$installed/"*.lease 2>/dev/null)" ]
+expect "F35" "without RICHOS_CLAUDE_HOME the same caller is refused (G10), as before" "$?" "rc=$rc $OFX_OUT"
+ofx_in WK "bash '$OFX_ENGINE/scripts/operator-fences.sh' off --repo '$WR' --reason 'F35 a Work-lease caller turns the fence off'"
+rc=$?; out="$OFX_OUT"
+[ $rc = 0 ] && grep -qF "\"repository\": \"$WR\"" "$installed/operator-fence-settings.jsonl" 2>/dev/null \
+    && [ ! -e "$ACCOUNT/state/land-locks/operator-fence-settings.jsonl" ]
+expect "F35" "a Work-lease caller's fence settings record (its off) is written in the installed home, not the account's" "$?" \
+    "rc=$rc $out; installed home: $(ls "$installed" 2>&1); account: $(ls "$ACCOUNT/state/land-locks" 2>&1)"
+ofx_end WK
+unset RICHOS_CLAUDE_HOME RICHOS_CLAUDE_ACCOUNT_DIR
+export CLAUDE_CONFIG_DIR="$F35_CFG" RICHOS_LAND_LOCKS_DIR="$F35_LOCKS"
+fi
+
+# ---- F36: one Claude home for the terminal and the app (2026-10-28) ---------------------------
+# The lease, the fence settings and the review records each resolve to the machine-wide home under
+# a lease on any added account, a terminal and an app lease read and write the same files, and a
+# sandbox's own CLAUDE_CONFIG_DIR still wins (scripts/lib/claude-home.test.py; once, like F34).
+if [ "$GIT_INDEX" = 1 ] || [ "$GIT_INDEX" = all ]; then
+out="$(python3 "$ENGINE_ROOT/scripts/lib/claude-home.test.py" 2>&1)"; rc=$?
+expect "F36" "the lease, the fence settings and the review records live in one home for the terminal and the app" "$rc" "$out"
 fi
 
 # M: this suite's mutation harness runs as its own unit,

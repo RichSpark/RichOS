@@ -48,6 +48,10 @@ Classes (each named in the log line, so every deletion says why):
 
   claude-session   <root>/<slug>/<session-uuid> whose session is ENDED
   claude-husk      a <root>/<slug> directory left empty by the above
+  claude-export    an EMPTY <root>/<slug> that Claude Code made for a second review
+                   (cwd = <scratch>/export, so the slug is "<scratch root>-<scratch>-
+                   export") when the named scratch no longer exists: the review is
+                   over, nothing can write there again
   claude-orphan    a file or non-session directory sitting directly in a
                    scratch root whose mtime PREDATES THE START OF EVERY
                    RUNNING claude PROCESS — so no running session can have
@@ -1095,7 +1099,15 @@ class Reaper(object):
     def __init__(self, cfg, ws):
         self.cfg = cfg
         self.ws = ws
-        self.live = Liveness(ws)
+        # EVERY SESSION REGISTRY ON THIS MACHINE, the app's accounts' too, for EVERY sweep
+        # (2026-10-28). The RichOS app runs its leads under CLAUDE_CONFIG_DIR=<app data>/
+        # claude-accounts/<id>, and they register there. The scheduled sweep read only
+        # ~/.claude/sessions, so each live app session was "a running claude process named by
+        # no session file": the app's own LIVE coordination session folder was reported as an
+        # undecided entry for a lead to decide (esc-20261028T164945Z-3139e42e), and one whose
+        # scratch predated its resumed process was planned DELETE. scan_app already read them.
+        self.live = Liveness(ws, [d for data in self.app_data_folders()
+                                  for d in self.app_account_session_dirs(data)])
         self.entries = []
         self.roots = []
         self.floor = cfg["age_floor_minutes"] * 60
@@ -1196,6 +1208,8 @@ class Reaper(object):
             return
         sessions = [c for c in children if UUID_RE.match(c)]
         if not sessions:
+            if not children and self.scan_review_export(slug, walls):
+                return
             self.scan_orphan(slug, walls, self.live.oldest_start())
             return
         dead = 0
@@ -1254,6 +1268,82 @@ class Reaper(object):
                 self.add(slug, "claude-husk", 0, DELETE,
                          "every session directory in this scratch root is "
                          "being deleted, so the root is left empty")
+
+    @staticmethod
+    def claude_slug(path):
+        """Claude Code's folder name for a working directory: every character that is not a letter
+        or a digit becomes a hyphen (the folder under a claude scratch root)."""
+        return re.sub(r"[^A-Za-z0-9]", "-", path)
+
+    def allocator_roots(self):
+        """The folders the engine's scratch allocator makes scratch in: <$TMPDIR>/<scratch root name>
+        and the same under each declared shared temp root. Real paths, because Claude Code names a
+        session folder after the real working directory."""
+        name = self.cfg.get("scratch_root_name") or "richos-scratch"
+        bases = [os.environ.get("TMPDIR") or "/tmp"] + list(self.cfg.get("shared_tmp_roots") or [])
+        out = []
+        for base in bases:
+            root = os.path.join(os.path.realpath(base), name)
+            if root not in out:
+                out.append(root)
+        return out
+
+    def review_export(self, name):
+        """(allocator root, scratch slug) when `name` is the Claude session folder of a second
+        review's export, "<allocator root>-<scratch>-export", else None. Second reviews run Claude
+        with cwd = <scratch>/export (second_review.py), and scratch is "<pid>-second-review-<id>"."""
+        if not name.endswith("-export"):
+            return None
+        for root in self.allocator_roots():
+            prefix = self.claude_slug(root) + "-"
+            middle = name[len(prefix):-len("-export")] if name.startswith(prefix) else ""
+            if middle and "second-review" in middle:
+                return root, middle
+        return None
+
+    def scan_review_export(self, slug, walls):
+        """A SECOND REVIEW'S EMPTY CLAUDE SESSION FOLDER IS THE REAPER'S OWN TO DELETE ONCE ITS
+        SCRATCH IS GONE. True when `slug` is one (decided here), False for anything else.
+
+        Every second review run by Claude leaves a 96 byte folder under the Claude scratch root
+        named after its export, and the generic orphan rule could not decide it: any folder
+        written after the earliest running claude process started is "maybe a running session's",
+        which on a Mac that keeps claude running for days is every one of them. The name settles
+        it. The folder is "<allocator root>-<scratch>-export"; while <allocator root>/<scratch>
+        exists the review may still be using it, and once that is gone no process has that
+        working directory to write from. Only an EMPTY folder of that exact shape is recognized
+        (the caller checked it has no children), and the usual age floor and walls apply.
+        """
+        found = self.review_export(os.path.basename(slug))
+        if not found:
+            return False
+        root, scratch_slug = found
+        size, newest, has_git = measure(slug)
+        try:
+            alive = any(self.claude_slug(child) == scratch_slug for child in os.listdir(root))
+        except FileNotFoundError:
+            alive = False
+        except OSError as exc:
+            self.add(slug, "claude-export", size, INDETERMINATE,
+                     "the review scratch folder %s could not be listed (%s), so it cannot be shown "
+                     "that this review is over" % (root, exc))
+            return True
+        if alive:
+            self.add(slug, "claude-export", size, KEEP,
+                     "its review's scratch folder still exists, so the review may still be running")
+            return True
+        if (self.now - newest) < self.floor:
+            self.add(slug, "claude-export", size, KEEP,
+                     "younger than the %d min floor" % self.cfg["age_floor_minutes"])
+            return True
+        refused = walls.check(slug, has_git)
+        if refused:
+            self.add(slug, "claude-export", size, INDETERMINATE, refused)
+            return True
+        self.add(slug, "claude-export", size, DELETE,
+                 "the Claude session folder of a second review's export, empty, and the review's "
+                 "scratch folder no longer exists, so nothing can write here again")
+        return True
 
     def scan_orphan(self, path, walls, oldest_start):
         size, newest, has_git = measure(path)
@@ -3062,6 +3152,14 @@ class Reaper(object):
             if UUID_RE.match(name) and os.path.isfile(os.path.join(state, "evidence", name, "binding.json")):
                 found.add(name)
         return found
+
+    def app_data_folders(self):
+        """The operator's app data folder: the folder of the app's entity registry under this
+        HOME (SCRATCH_APP_REGISTRY_RELPATH), when it exists. Read-only; [] when there is none."""
+        rel = (self.cfg or {}).get("app_registry_relpath") or ""
+        home = os.path.expanduser("~")
+        data = os.path.dirname(os.path.join(home, rel)) if rel and home else ""
+        return [data] if data and os.path.isdir(data) else []
 
     def app_account_session_dirs(self, data):
         """<folder>/sessions for every added account: each folder <data>/claude-accounts.json

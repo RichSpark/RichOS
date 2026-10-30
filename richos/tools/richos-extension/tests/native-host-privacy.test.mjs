@@ -96,6 +96,55 @@ try {
     const text = removableVolumeRefusal({ paths: [scratch], subjects: [nodeReal], home: path.join(scratch, 'absent') });
     assert.ok(text && /permission unknown/.test(text), String(text));
   });
+
+  // ------------------------------------------------ staging off the removable volume
+  // A checkout on the SSD (the nightly's state folder can be there) is copied under an internal
+  // scratch root, so Chrome and the host read nothing on the volume and no permission is needed.
+  let stageOffRemovable = () => { throw new Error('stageOffRemovable is missing from native-host-privacy.mjs'); };
+  try { ({ stageOffRemovable } = await import('./native-host-privacy.mjs')); } catch { /* the checks below name it */ }
+  const checkout = path.join(scratch, 'tools');
+  for (const [dir, file] of [['richos-service/host', 'native-host.js'], ['richos-extension', 'manifest.json'],
+    ['richos-service/node_modules/dep', 'index.js'], ['richos-extension/.git', 'HEAD']]) {
+    fs.mkdirSync(path.join(checkout, dir), { recursive: true });
+    fs.writeFileSync(path.join(checkout, dir, file), `fixture ${file}\n`);
+  }
+  let internal = '';
+  try { internal = spawnSync('/usr/bin/getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout.trim(); } catch { /* none */ }
+  if (internal && fs.existsSync(internal)) {
+    const into = fs.mkdtempSync(path.join(internal, 'native-host-privacy-stage-'));
+    try {
+      const dirs = { service: path.join(checkout, 'richos-service'), extension: path.join(checkout, 'richos-extension') };
+      check('stage: a checkout on the removable volume would be refused (positive control)', () => {
+        const text = removableVolumeRefusal({ paths: Object.values(dirs), subjects: [nodeReal], home: path.join(scratch, 'absent') });
+        assert.ok(text && /removable volume/.test(text), String(text));
+      });
+      let staged;
+      check('stage: the host and the extension are copied off the removable volume', () => {
+        staged = stageOffRemovable({ dirs, into: path.join(into, 'staged') });
+        assert.deepEqual(Object.keys(staged).sort(), ['extension', 'service']);
+        for (const copy of Object.values(staged)) assert.ok(!fs.realpathSync(copy).startsWith('/Volumes/'), copy);
+        assert.equal(fs.readFileSync(path.join(staged.service, 'host', 'native-host.js'), 'utf8'), 'fixture native-host.js\n');
+        assert.equal(fs.readFileSync(path.join(staged.extension, 'manifest.json'), 'utf8'), 'fixture manifest.json\n');
+      });
+      check('stage: node_modules and .git are left behind', () => {
+        assert.equal(fs.existsSync(path.join(staged.service, 'node_modules')), false);
+        assert.equal(fs.existsSync(path.join(staged.extension, '.git')), false);
+      });
+      check('stage: after staging nothing asks for a permission (no TCC read, no refusal)', () => {
+        assert.equal(removableVolumeRefusal({ paths: [...Object.values(staged), into], subjects: [nodeReal], home: path.join(scratch, 'absent') }), null);
+      });
+      check('stage: a directory already off the removable volume is used as it is', () => {
+        assert.deepEqual(stageOffRemovable({ dirs: { extension: staged.extension }, into: path.join(into, 'again') }), { extension: staged.extension });
+      });
+      check('stage: staging onto the removable volume is refused, not pretended', () => {
+        assert.throws(() => stageOffRemovable({ dirs, into: path.join(scratch, 'still-removable') }), /removable volume/);
+      });
+    } finally {
+      fs.rmSync(into, { recursive: true, force: true });
+    }
+  } else {
+    check('stage: an internal scratch root exists', () => { throw new Error('getconf DARWIN_USER_TEMP_DIR named no folder'); });
+  }
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

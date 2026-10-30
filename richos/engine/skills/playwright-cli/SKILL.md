@@ -1,6 +1,6 @@
 ---
 name: playwright-cli
-description: Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages.
+description: Automates browser interactions for web testing, form filling, screenshots and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications or extract information from web pages.
 allowed-tools: Bash(playwright-cli:*)
 ---
 
@@ -23,23 +23,22 @@ playwright-cli screenshot
 playwright-cli close
 ```
 
-## Headed browser requirement
+## Headless on this Mac; a real window only in the test VM
 
-When a task requires live visual verification, open a headed browser explicitly:
+On the user's own Mac the browser always runs headless (the default). A visible window would open
+in front of the person using the Mac, so RichOS refuses `--headed` there, along with every other
+way of opening a browser window from automation.
+
+When a task requires live visual verification in a real window, run it in the test VM, whose
+screen is the test screen:
 
 ```bash
-playwright-cli open --headed
+ssh <vm> 'playwright-cli open --headed --browser=chrome'
 ```
 
-If you specifically need Chrome:
+Do not assume the browser is visibly open just because the command succeeded. Verify that a real browser window appeared in the VM.
 
-```bash
-playwright-cli open --headed --browser=chrome
-```
-
-Do not assume the browser is visibly open just because the command succeeded. Verify that a real browser window appeared.
-
-If the environment only allows headless mode or you cannot get a visibly open browser window, stop and report the blocker. Do not claim live visual verification from headless execution.
+If no test VM is available, stop and report the blocker. Do not claim live visual verification from headless execution.
 
 ## Commands
 
