@@ -3,6 +3,11 @@
 # Shared weekly policy integration. Fake redemption only; never real credentials.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# The app's state is never read from a test unless a case sets it (a test must not read the
+# LIVE claude-quota.json; richos-hq follow-ups.md 7fed0bef, R3).
+unset RICHOS_APP_STATE
+# Nor the account of the session running the test (a work session of the app sets it).
+unset RICHOS_CLAUDE_ACCOUNT
 PYTHONPATH="$HERE/lib${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
 import contextlib, io, json, types, unittest
 from unittest.mock import patch
@@ -16,9 +21,44 @@ def reading(used=99, five=10, until=NOW + 3600):
     return {'state':'ok','used':five,'resets_at':until,'ended':until <= NOW,'age':0,
             'why':'','windows':[{'id':'seven_day','label':'Weekly','used':used,'resets_at':NOW+86400}]}
 
-def workers(working=None, held=None):
-    return {'known':True,'working':working or [],'quota_paused':[],
+def workers(working=None, held=None, paused=None):
+    return {'known':True,'working':working or [],'quota_paused':paused or [],
             'weekly_paused':held or [],'other_paused':[], 'session':'fixture'}
+
+class Recorder(watcher.Out):
+    """The real Out, also keeping (kind, the poll's clock) of every wake."""
+    def __init__(self,*a,**k):
+        super().__init__(*a,**k); self.woken=[]
+    def wake(self,kind,text,now):
+        self.woken.append((kind,now))
+        return super().wake(kind,text,now)
+
+def run_polls(readings,worker_rows,polls,args=None,out_cls=None):
+    """Run the real poll loop for `polls` polls. The clock advances one poll (300 s) per sleep; a
+    reading that is an Exception is raised from read_source. Returns the Out it wrote to."""
+    out_cls=out_cls or watcher.Out
+    args=args or types.SimpleNamespace(threshold=93,threshold_problem='',config='',until_reset=False,
+        engine_root='fixture',poll=300,stale=300,command='watch')
+    out=out_cls(lines=io.StringIO(),events=io.StringIO())
+    naps=[0]
+    class Done(BaseException): pass
+    def nap(_seconds):
+        naps[0]+=1
+        if naps[0]>=polls: raise Done
+    def read(_a,_now):
+        r=readings[min(naps[0],len(readings)-1)]
+        if isinstance(r,Exception): raise r
+        return dict(r)
+    def who(_engine):
+        return worker_rows[min(naps[0],len(worker_rows)-1)]
+    with patch.object(watcher,'read_source',side_effect=read),patch.object(watcher,'workers',side_effect=who), \
+        patch.object(watcher.time,'time',side_effect=lambda:NOW+300*naps[0]),patch.object(watcher.time,'sleep',side_effect=nap), \
+        patch.object(weekly,'reset_tick',return_value={'error':'no offer'}):
+        try:
+            watcher.poll_loop(args,out)
+        except Done:
+            return out
+    raise AssertionError('the poll loop returned before its polls were done')
 
 class Weekly(unittest.TestCase):
     def test_all_reported_windows_and_provider_names(self):
@@ -97,29 +137,8 @@ class Weekly(unittest.TestCase):
                 message=text.split('WAIT until the orchestrator',1)[1].split('\n  Summary:',1)[0]
                 pause_protocol.validate_text('WAIT until the orchestrator'+message)
     def drive(self,readings,worker_rows,polls,args=None,out_cls=None):
-        """Run the real poll loop for `polls` polls. The clock advances one poll per sleep; a reading
-        that is an Exception is raised from read_source. Returns everything woken to the lead."""
-        out_cls=out_cls or watcher.Out
-        args=args or types.SimpleNamespace(threshold=93,threshold_problem='',config='',until_reset=False,
-            engine_root='fixture',poll=300,stale=300,command='watch')
-        lines,events=io.StringIO(),io.StringIO()
-        naps=[0]
-        class Done(BaseException): pass
-        def nap(_seconds):
-            naps[0]+=1
-            if naps[0]>=polls: raise Done
-        def read(_a,_now):
-            r=readings[min(naps[0],len(readings)-1)]
-            if isinstance(r,Exception): raise r
-            return r
-        def who(_engine):
-            return worker_rows[min(naps[0],len(worker_rows)-1)]
-        with patch.object(watcher,'read_source',side_effect=read),patch.object(watcher,'workers',side_effect=who), \
-            patch.object(watcher.time,'time',side_effect=lambda:NOW+300*naps[0]),patch.object(watcher.time,'sleep',side_effect=nap), \
-            patch.object(weekly,'reset_tick',return_value={'error':'no offer'}):
-            with self.assertRaises(Done):
-                watcher.poll_loop(args,out_cls(lines=lines,events=events))
-        return events.getvalue()
+        """Everything run_polls woke the lead with."""
+        return run_polls(readings,worker_rows,polls,args,out_cls).events.getvalue()
     def second_window(self,used):
         r=reading(used);r['windows'][0]['resets_at']=NOW+86400+604800
         return r
@@ -158,6 +177,239 @@ class Weekly(unittest.TestCase):
         for status in ({'error':'unavailable'},{'actionError':'uncertain'},{'resets':{'approval':None}}):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(weekly.handle(args,reading(),NOW,workers(['worker']),status,lambda:'below'),(True,True))
+
+class AppReading(unittest.TestCase):
+    """richos-hq follow-ups.md 7fed0bef: for the app, the reading is the app's own of the account in
+    use, never a probe and never the status-line file, which hold another account's figures."""
+    def setUp(self):
+        import tempfile
+        self.dir=tempfile.TemporaryDirectory(); self.state=self.dir.name
+    def tearDown(self): self.dir.cleanup()
+    def publish(self, checked, five=28, week=3, in_use={'id':'2','label':'Work'}):
+        view={'windows':[{'id':'five_hour','label':'Five-hour','usedPercent':five,'resetsAt':(NOW+3600)*1000,'durationMs':18000000},
+                         {'id':'seven_day','label':'Weekly','usedPercent':week,'resetsAt':(NOW+86400)*1000,'durationMs':604800000}],
+              'checkedAt':checked*1000,'state':'fresh','resets':{'weeklyUsed':None},
+              'accounts':[{'id':'1','label':'Home','inUse':False,'windows':[{'id':'seven_day','usedPercent':99}]}]}
+        if in_use: view['inUse']=in_use
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+    def read(self,session=None):
+        a=types.SimpleNamespace(payload='/nonexistent/statusline-payload.json',engine_root='fixture')
+        env={'RICHOS_APP_STATE':self.state}
+        if session: env['RICHOS_CLAUDE_ACCOUNT']=session
+        with patch.dict(watcher.os.environ,env), \
+             patch.object(watcher,'read_get_usage',side_effect=AssertionError('probed in the app')), \
+             patch.object(watcher,'read_reading',side_effect=AssertionError('read the status line in the app')):
+            return watcher.read_source(a,NOW)
+    def test_the_in_use_account_is_read_and_named(self):
+        self.publish(NOW-30)
+        r=self.read()
+        self.assertEqual((r['state'],r['used'],r['source']),('ok',28,'the app (account Work)'))
+        self.assertEqual(weekly.weekly(r)['used'],3); self.assertEqual(r['age'],30)
+        self.assertFalse(weekly.held(r,NOW))
+        self.assertEqual(watcher.classify(r,93,300)[0],'below')
+    def test_an_old_app_file_names_its_accounts_row_never_account_1_by_default(self):
+        # The live file of 2026-10-28 17:14Z had no inUse; defaulting to Account 1 named Home.
+        self.publish(NOW-30,in_use=None)
+        self.assertEqual(self.read()['source'],'the app (account not named)')
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        view['accounts'].append({'id':'2','label':'Work','inUse':True,'windows':[]})
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        self.assertEqual((self.read()['source'],self.read()['account']['id']),('the app (account Work)','2'))
+        view['accounts']=[]; view['firstLabel']='Home'
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        self.assertEqual((self.read()['source'],self.read()['account']['id']),('the app (account Home)','1'))
+    def test_stale_missing_or_unreadable_is_unknown_never_a_probe(self):
+        self.publish(NOW-3600)
+        self.assertEqual(watcher.classify(self.read(),93,300)[0],'unknown')
+        import os; os.remove(self.state+'/claude-quota.json')
+        self.assertEqual(self.read()['state'],'missing')
+        with open(self.state+'/claude-quota.json','w') as f: f.write('{not json')
+        self.assertEqual(self.read()['state'],'malformed')
+        self.publish(0)
+        self.assertEqual(self.read()['state'],'missing')
+    def test_a_session_reads_its_own_accounts_row_during_a_move(self):
+        # Second review of fd0e8f9d9 (P2): a blocked Home -> Work move. Home, where Stu's session
+        # still runs, is the top level at 95%; a new session runs on Work at 10% and its watcher
+        # told the lead to freeze work on Work. Each session reads its own account's row.
+        self.publish(NOW-30,five=95,in_use={'id':'1','label':'Home'})
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        win=lambda i,used,reset: {'id':i,'label':i,'usedPercent':used,'resetsAt':reset*1000,'durationMs':18000000}
+        view['accounts']=[{'id':'1','label':'Home','inUse':True,'windows':view['windows'],'checkedAt':(NOW-30)*1000},
+                          {'id':'2','label':'Work','inUse':False,'windows':[win('five_hour',10,NOW+5000),win('seven_day',3,NOW+86400)],
+                           'checkedAt':(NOW-60)*1000,'speeds':{'five_hour':1e-6}}]
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        r=self.read('2')
+        self.assertEqual((r['state'],r['used'],r['resets_at'],r['source'],r['account']),
+                         ('ok',10,NOW+5000,'the app (account Work)',{'id':'2','label':'Work'}))
+        self.assertEqual((r['age'],weekly.weekly(r)['used']),(60,3)); self.assertAlmostEqual(r['speed'],1e-3)
+        self.assertEqual(watcher.classify(r,93,300)[0],'below')
+        r=self.read('1'); self.assertEqual((r['used'],r['source']),(95,'the app (account Home)'))
+        # No session account, or one with no row: the top level, the account the work runs on.
+        for session in (None,'9'):
+            r=self.read(session); self.assertEqual((r['used'],r['account']['id']),(95,'1'),session)
+    def test_the_apps_measured_speed_is_read_in_points_per_second(self):
+        self.publish(NOW-30)
+        self.assertNotIn('speed',self.read())
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        view['speeds']={'five_hour':32/300000,'seven_day':1e-6}
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        self.assertAlmostEqual(self.read()['speed'],32/300)
+    def test_the_app_never_ticks_the_shared_reset_record(self):
+        with patch.dict(weekly.os.environ,{'RICHOS_APP_STATE':self.state}), \
+             patch.object(weekly.subprocess,'run',side_effect=AssertionError('ticked from the app')):
+            self.assertEqual(weekly.reset_tick('/engine'),{'status':weekly.APP_RUNS_RESET})
+
+class GateAdmission(unittest.TestCase):
+    """Second review of d37b1f0de (rv-20261028T184535Z-d37b1f0d-e0d9), blocking finding: an app review
+    takes the desktop gate's own decision from the published file and the pause setting beside it
+    (quota/gate.rs `admission`), with no terminal entity config. Only a hold holds. The decision is
+    the gate's recompute from the published figures, never the published `admission`, which every
+    case below sets to the opposite of the gate's answer (second review of 2097df51c)."""
+    def setUp(self):
+        import tempfile, os
+        self.dir=tempfile.TemporaryDirectory(); self.app=self.dir.name
+        self.state=os.path.join(self.app,'engine-state'); os.makedirs(self.state)
+    def tearDown(self): self.dir.cleanup()
+    def publish(self, five=99, five_reset=NOW+4740, week=20, week_reset=NOW+300000, speeds=None, admission=None,
+                held_until=None, policy=None, setting=None, checked=NOW-30):
+        win=lambda i,used,reset,d: {'id':i,'label':i,'usedPercent':used,'resetsAt':reset*1000,'durationMs':d}
+        view={'state':'fresh','refreshIntervalMs':300000,
+              'windows':[win('five_hour',five,five_reset,18000000),win('seven_day',week,week_reset,604800000)],
+              'checkedAt':None if checked is None else checked*1000,'speeds':speeds or {},
+              'policy':policy or {'enabled':True,'pausePercent':93},'admission':admission or {'state':'ready'},
+              'heldUntil':held_until,'inUse':{'id':'2','label':'Work'},
+              'accounts':[{'id':'1','label':'Home','inUse':False,'windows':[]},{'id':'2','label':'Work','inUse':True,'windows':[]}]}
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        if setting is not None:
+            with open(self.app+'/claude-quota-policy.json','w') as f: json.dump(setting,f)
+    def gate(self): return watcher.gate_admission(self.state,NOW)
+    def pre_hold(self, speed):
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        view['preHold']={'five_hour':speed}
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+    def test_the_account_in_use_at_its_line_holds_until_its_reset(self):
+        self.publish()
+        g=self.gate()
+        self.assertEqual((g['held'],g['until'],g['account']['id']),(True,NOW+4740,'2'),g)
+        self.assertIn('HOLDS work on Work (account 2)',g['line'])
+    def test_a_hold_whose_window_has_reset_admits(self):
+        self.publish(five_reset=NOW-1,admission={'state':'held','resetsAt':(NOW+4740)*1000})
+        self.assertFalse(self.gate()['held'])
+    def test_every_account_exhausted_holds_even_with_the_pause_off(self):
+        self.publish(five=10,held_until=(NOW+600)*1000,policy={'enabled':False,'pausePercent':93})
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+600),g)
+    def test_the_published_admission_is_never_the_answer(self):
+        # The review's case: weekly 95% at one point a minute. The service published `ready` with a
+        # measured 3-minute handoff (its point 96%); the gate, with the 5-minute default, has 94%.
+        self.publish(five=10,week=95,speeds={'seven_day':1/60000},admission={'state':'ready'})
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+300000),g)
+        self.assertIn('handoff point 94%',g['line'])
+        # Inside the last 20 minutes the gate still holds (main's staggered release, 2026-10-29): it
+        # lets held tool calls out one at a time on a permit, which a review never takes, so a
+        # review waits for the reset, even with the published admission `ready`.
+        self.publish(five=95,five_reset=NOW+19*60,admission={'state':'ready'})
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+19*60),g)
+        self.assertIn('under 20 minutes away',g['line'])
+        # A weekly hold that has reset leaves a five-hour hold still in force, until ITS reset.
+        self.publish(five=96,five_reset=NOW+3600,week=99,week_reset=NOW-1,admission={'state':'held','resetsAt':(NOW-1)*1000})
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+3600),g)
+    def test_the_speed_before_the_hold_sets_the_point_as_in_the_gate(self):
+        # 92% with the held team's flat reading (speed 0) is under the 93% line: admitted. The gate
+        # judges the point on the larger of that 0 and the speed before the hold (`preHold`):
+        # 0.5 points a minute (8.3e-6/ms) is not fast, 100 - 2.5 = 97.5 leaves the point at 93%,
+        # admitted; 12 a minute (2e-4/ms) is fast, checked every minute, 100 - 12 = 88%: held.
+        self.publish(five=92,speeds={'five_hour':0})
+        self.assertFalse(self.gate()['held'])
+        self.publish(five=92,speeds={'five_hour':0}); self.pre_hold(0.5/60000)
+        self.assertFalse(self.gate()['held'])
+        self.publish(five=92,speeds={'five_hour':0}); self.pre_hold(2e-4)
+        g=self.gate(); self.assertEqual((g['held'],g['until']),(True,NOW+4740),g)
+        self.assertIn('pause point 88%',g['line'])
+    def test_a_review_is_judged_on_its_own_accounts_row(self):
+        # During a move the top level is the account being left (Work, 99%), while the review
+        # starts on the account in use. With Home's row at 20% the review on Home runs; asked
+        # for Work it holds on Work's row; an id with no row is the top level.
+        self.publish()
+        with open(self.state+'/claude-quota.json') as f: view=json.load(f)
+        win=lambda i,used,reset,d: {'id':i,'label':i,'usedPercent':used,'resetsAt':reset*1000,'durationMs':d}
+        view['accounts'][0].update(windows=[win('five_hour',20,NOW+4740,18000000)],checkedAt=(NOW-30)*1000,speeds={})
+        view['accounts'][1].update(windows=[win('five_hour',99,NOW+4740,18000000)],checkedAt=(NOW-30)*1000,speeds={})
+        with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
+        g=watcher.gate_admission(self.state,NOW,'1')
+        self.assertEqual((g['held'],g['account']),(False,{'id':'1','label':'Home'}),g)
+        self.assertIn('Home (account 1)',g['line'])
+        g=watcher.gate_admission(self.state,NOW,'2')
+        self.assertEqual((g['held'],g['until'],g['account']['id']),(True,NOW+4740,'2'),g)
+        g=watcher.gate_admission(self.state,NOW,'9')
+        self.assertEqual((g['held'],g['account']['id']),(True,'2'),g)
+    def test_no_reading_or_an_old_one_below_the_line_admits(self):
+        self.publish(checked=None,admission={'state':'held','resetsAt':(NOW+4740)*1000})
+        self.assertFalse(self.gate()['held'])
+        self.publish(five=50,checked=NOW-3600,admission={'state':'held','resetsAt':(NOW+4740)*1000})
+        self.assertFalse(self.gate()['held'])
+    def test_the_setting_beside_the_file_wins_as_in_the_gate(self):
+        self.publish(setting={'enabled':False,'pausePercent':93})
+        self.assertFalse(self.gate()['held'])
+        self.publish(five=85,setting={'enabled':True,'pausePercent':80})
+        self.assertTrue(self.gate()['held'])
+        self.publish(five=85,setting={'enabled':'yes'})   # not a Policy: the published one (93) decides
+        self.assertFalse(self.gate()['held'])
+    def test_no_file_or_a_broken_one_is_the_gates_unknown_and_admits(self):
+        g=self.gate(); self.assertFalse(g['held']); self.assertIn('no usage reading',g['line'])
+        with open(self.state+'/claude-quota.json','w') as f: f.write('{not json')
+        self.assertFalse(self.gate()['held'])
+
+class AccountSwitch(unittest.TestCase):
+    """Second review of d37b1f0de (rv-20261028T184535Z-d37b1f0d-e0d9), finding 2: quota_watch's poll
+    loop kept window_end and the notice state of the account it read first. Read Home, switch to
+    Work, pause Work at 99%: the release came on Home's reset timer while Work's reset was still
+    4,740 s away. Each account's hold follows its own reset."""
+    HOME={'id':'1','label':'Home'}; WORK={'id':'2','label':'Work'}
+    def on(self,account,five,until):
+        r=reading(10,five,until); r['account']=dict(account); r['source']='the app (account %s)'%account['label']
+        return r
+    def test_after_a_switch_the_release_follows_the_new_accounts_reset(self):
+        home_reset=NOW+1800                 # Home's last 20 minutes begin at NOW+600: the poll at NOW+900 is in them
+        work_reset=NOW+900+4740             # 4,740 s past that poll, as in the review's fixture
+        out=run_polls([self.on(self.HOME,40,home_reset)]+[self.on(self.WORK,99,work_reset)]*16,
+                      [workers(['worker']),workers(['worker'])]+[workers(paused=['worker'])]*15,17,out_cls=Recorder)
+        kinds=[k for k,_ in out.woken]
+        self.assertIn('THRESHOLD',kinds,out.woken)
+        releases=[t for k,t in out.woken if k=='RELEASE']
+        self.assertEqual(len(releases),1,'one release, on Work\'s timer: %s'%out.woken)
+        self.assertTrue(0<work_reset-releases[0]<1200,'released %d s before Work\'s reset: %s'%(work_reset-releases[0],out.woken))
+        self.assertNotIn('RESET',kinds,'Home\'s reset is not the end of Work\'s window: %s'%out.woken)
+    def test_a_hold_left_on_the_account_switched_from_releases_once_the_new_one_has_room(self):
+        out=run_polls([self.on(self.HOME,95,NOW+7200)]*2+[self.on(self.WORK,10,NOW+9000)]*3,
+                      [workers(['worker'])]+[workers(paused=['worker'])]*4,5,out_cls=Recorder)
+        self.assertEqual([(k,t) for k,t in out.woken if k in('THRESHOLD','RELEASE')],
+                         [('THRESHOLD',NOW),('RELEASE',NOW+600)],out.woken)
+        self.assertIn('changed from Home to Work',out.events.getvalue())
+    def test_an_app_reading_measures_the_speed_as_get_usage_does(self):
+        # Second review of 2320ca5ad (P2): 60% -> 92% in 300 s woke FAST and the early pause from
+        # get_usage readings and nothing at all from the app's. 32 points per 5 minutes is fast
+        # (93% gives 5.8), and 92 + 32/300 x (60 + 60) = 104.8 >= 100: the pause is due now.
+        for source in ('get_usage','app'):
+            rs=[]
+            for five in (60,92):
+                r=reading(10,five,NOW+7200)
+                if source=='app': r.update(account=dict(self.WORK),source='the app (account Work)')
+                else: r['source']='get_usage'
+                rs.append(r)
+            out=run_polls(rs,[workers(['worker'])]*2,2,out_cls=Recorder)
+            self.assertEqual(out.woken,[('FAST',NOW+300),('THRESHOLD',NOW+300)],(source,out.woken))
+    def test_the_same_app_reading_read_twice_is_one_point_and_the_apps_speed_counts(self):
+        # The app republishes one check until its next: read at two polls it is not a flat stretch.
+        r=self.on(self.WORK,60,NOW+7200); r2=dict(r,age=300)
+        out=run_polls([r,r2],[workers(['worker'])]*2,2,out_cls=Recorder)
+        self.assertEqual(out.woken,[],out.woken)
+        # The app measured the rise itself: its speed alone is enough, from the first poll.
+        out=run_polls([dict(self.on(self.WORK,92,NOW+7200),speed=32/300)],[workers(['worker'])],1,out_cls=Recorder)
+        self.assertEqual(out.woken,[('FAST',NOW),('THRESHOLD',NOW)],out.woken)
+    def test_a_switch_to_an_account_at_the_line_keeps_the_hold_and_tells_its_threshold(self):
+        out=run_polls([self.on(self.HOME,95,NOW+7200)]+[self.on(self.WORK,96,NOW+9000)]*3,
+                      [workers(['worker'])]*4,4,out_cls=Recorder)
+        self.assertEqual([k for k,_ in out.woken],['THRESHOLD','THRESHOLD'],out.woken)
 
 unittest.main()
 PY

@@ -1217,8 +1217,8 @@
     },
     "scripts/lib/quota_weekly.py#weekly-fixture": {
       "source": "scripts/lib/quota_weekly.py",
-      "sha256": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
-      "evidence": "The weekly suite supplies readings, worker states and time as literals. Its reset_tick call patches subprocess.run; watcher cases patch reset_tick itself. No reset helper, live account or registry is contacted.",
+      "sha256": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
+      "evidence": "The weekly suite supplies readings, worker states and time as literals. Its reset_tick call patches subprocess.run; watcher cases patch reset_tick itself. No reset helper, live account or registry is contacted. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): reset_tick returns without running the reset helper when the environment variable RICHOS_APP_STATE is set (the app runs approved resets itself); the suites unset it unless a case sets it. No config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -1228,8 +1228,8 @@
     },
     "scripts/lib/quota_watch.py#weekly-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "8428f241e91e390a5fdf448c3a3c762a05f82fe16bba91acedaf4d6a3eefd1a2",
-      "evidence": "The weekly suite calls _parse_reset, and (renewed 2026-09-28) poll_loop directly with an in-memory Out writer and literal threshold/config arguments; it patches read_source, workers, time.time, weekly.reset_tick and time.sleep, whose first call ends the case. Each reading triggers the weekly event before any sleep or five-hour path. No CLI wrapper, real config, usage API or registry code executes. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes.",
+      "sha256": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+      "evidence": "The weekly suite calls _parse_reset, and (renewed 2026-09-28) poll_loop directly with an in-memory Out writer and literal threshold/config arguments; it patches read_source, workers, time.time, weekly.reset_tick and time.sleep, whose first call ends the case. Each reading triggers the weekly event before any sleep or five-hour path. No CLI wrapper, real config, usage API or registry code executes. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop binds its per-window state to the account the reading names (read_app's account) and clears it on a switch; a hold left on the account switched from is released by _emit_switch_release once the account in use reads below the line. Same reads as before: no config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -1248,8 +1248,8 @@
     },
     "scripts/quota-weekly.test.sh": {
       "source": "scripts/quota-weekly.test.sh",
-      "sha256": "b4918636c26e322dcde3f091f212c20e0be9ea49cbe3e791e4fbcf6d9a211de7",
-      "evidence": "All settings and time originate in the inline Python fixture. Reviewed imports and mocked subprocess/registry boundaries are explicit helper edges.",
+      "sha256": "16a5f0e9e01d719bc51dd782272585af1a9e683d6ad05b238a36c1fc959556e6",
+      "evidence": "All settings and time originate in the inline Python fixture. Reviewed imports and mocked subprocess/registry boundaries are explicit helper edges. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): GateAdmission writes literal published files and pause settings into a private TemporaryDirectory app folder and calls gate_admission on it at the fixed clock; nothing else is read. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll driver moved to a module-level run_polls (same patches: read_source, workers, time.time, time.sleep, reset_tick) returning a Recorder, the real Out keeping each wake's kind and clock; AccountSwitch feeds it literal readings naming Home and Work.",
       "keys": [],
       "edges": [
         {
@@ -1389,8 +1389,8 @@
     },
     "scripts/lib/quota_watch.py#message-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "8428f241e91e390a5fdf448c3a3c762a05f82fe16bba91acedaf4d6a3eefd1a2",
-      "evidence": "The fixture calls only pause_message, resume_message and release_message with literal reset timestamps. hhmm uses UTC conversion, pause text uses pause_protocol; no config/source/watch/reset operation runs. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). WAIT branch: resume and release text is pause_protocol.render_resume, also a string render. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes.",
+      "sha256": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+      "evidence": "The fixture calls only pause_message, resume_message and release_message with literal reset timestamps. hhmm uses UTC conversion, pause text uses pause_protocol; no config/source/watch/reset operation runs. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). WAIT branch: resume and release text is pause_protocol.render_resume, also a string render. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop clears its per-window state on an account switch; _emit_release's wake lines moved unchanged into _wake_quota_paused, which _emit_switch_release shares. The message functions this fixture calls are unchanged. No config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -1787,8 +1787,8 @@
     },
     "scripts/lib/quota_watch.py#notice": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "8428f241e91e390a5fdf448c3a3c762a05f82fe16bba91acedaf4d6a3eefd1a2",
-      "evidence": "The main --notice path parses arguments and reads the explicitly supplied payload file and timestamp. It never invokes get_usage, reset_tick, workers or the watch loop. Module imports pause_protocol and quota_weekly, neither reading config. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes.",
+      "sha256": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+      "evidence": "The main --notice path parses arguments and reads the explicitly supplied payload file and timestamp. It never invokes get_usage, reset_tick, workers or the watch loop. Module imports pause_protocol and quota_weekly, neither reading config. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. The --notice path does not reach it. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): poll-loop and release-message changes only; the --notice path does not reach them. No config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -1834,7 +1834,7 @@
     },
     "scripts/hooks/session-start-quota.test.sh": {
       "source": "scripts/hooks/session-start-quota.test.sh",
-      "sha256": "15479b2a748147c66b48a26654f819face7e0aabd9882241842e229ca9bbe855",
+      "sha256": "7fd4ac792164379ba56dce21865af72764b0f00fe04f22889084d7007406ee78",
       "evidence": "Creates private HOME/config before scratch allocation, a private entity config and literal payloads at a pinned clock. The absent watcher copy exits before root resolution. Scratch uses unsourced defaults, so no real config values are inherited.",
       "keys": [],
       "edges": [
@@ -8043,8 +8043,8 @@
     },
     "scripts/lib/quota_weekly.py#quota-fixture": {
       "source": "scripts/lib/quota_weekly.py",
-      "sha256": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
-      "evidence": "Reviewed all functions. The quota suite fixes QUOTA_RESET_HELPER to /usr/bin/false, so reset_tick cannot enter quota-reset.sh or a live reset service. Window data and messages are parsed/rendered, never executed.",
+      "sha256": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
+      "evidence": "Reviewed all functions. The quota suite fixes QUOTA_RESET_HELPER to /usr/bin/false, so reset_tick cannot enter quota-reset.sh or a live reset service. Window data and messages are parsed/rendered, never executed. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): reset_tick returns without running the reset helper when the environment variable RICHOS_APP_STATE is set (the app runs approved resets itself); the suites unset it unless a case sets it. No config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -8068,8 +8068,8 @@
     },
     "scripts/lib/quota_watch.py#quota-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "8428f241e91e390a5fdf448c3a3c762a05f82fe16bba91acedaf4d6a3eefd1a2",
-      "evidence": "Reviewed CLI, all imports, file and subprocess operations, workers and watch loop. The suite supplies a missing or literal fake Claude transport and a false reset helper. It loads only fixed workspace, weekly, pause and login-alarm siblings. Payloads, messages and registry records are data. Real clocks and process identities remain runtime inputs. Renewed 2026-09-28 (ad9da4f8, 5d3621a3): --watch and --monitor now start a detached poller that is this same file (--poll) with its state, lock and event files under QUOTA_WATCH_STATE_DIR (private in the suite), read the session pid's start time with ps and poll until the session ends. The threshold still arrives as --threshold-raw from quota-watch.sh; no new engine program and no orchestration.config read. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes.",
+      "sha256": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+      "evidence": "Reviewed CLI, all imports, file and subprocess operations, workers and watch loop. The suite supplies a missing or literal fake Claude transport and a false reset helper. It loads only fixed workspace, weekly, pause and login-alarm siblings. Payloads, messages and registry records are data. Real clocks and process identities remain runtime inputs. Renewed 2026-09-28 (ad9da4f8, 5d3621a3): --watch and --monitor now start a detached poller that is this same file (--poll) with its state, lock and event files under QUOTA_WATCH_STATE_DIR (private in the suite), read the session pid's start time with ps and poll until the session ends. The threshold still arrives as --threshold-raw from quota-watch.sh; no new engine program and no orchestration.config read. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop binds its per-window state to the account the reading names and clears it on a switch; a hold left on the account switched from is released once the account in use reads below the line. Same reads as before: no config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -8135,7 +8135,7 @@
     },
     "scripts/quota-watch.test.sh": {
       "source": "scripts/quota-watch.test.sh",
-      "sha256": "2a21d2247596b3cb310cc9b50fcb9971fb3cee12a714514ed667933f10918bdc",
+      "sha256": "6dbd41579c65d09364f3c38b5602d346e8a2da28e0e65a9d0ffbf59c3320d653",
       "evidence": "Full suite fixes private entity config, payload, registry, session, reset helper and fake Claude transport before watcher calls. Guard values are private; separate workspace edge retains actual engine cleanup readers. Historical replays and finite focused mutants share these dependencies. The fake Claude answers control JSON only; no model agent is launched. WAIT branch: E06 imports pause_protocol.py to recognize the generated RESUME; pauses sent through the fixture registry reach agent_hold.py through the workspace edge, with its state inside that registry. Renewed 2026-09-28: QUOTA_WATCH_STATE_DIR, the session pid and the test-device state are private; a poller the watcher starts is the same bound watcher file.",
       "keys": [],
       "edges": [
@@ -12789,6 +12789,12 @@
           "path": "richos/engine/scripts/lib/machine_settings.py",
           "sha256": "d3d45bd75c142869b5bb7fd1d4a8ca0570c14759758771152529753d13a7a380",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/machine_settings.py",
+          "sha256": "fc31693078bc81e7145955a3ea2482189fb43960888cfabc735d2e6c8377a6b3",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
     },
@@ -12896,6 +12902,12 @@
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
           "sha256": "d3d45bd75c142869b5bb7fd1d4a8ca0570c14759758771152529753d13a7a380",
+          "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/machine_settings.py",
+          "sha256": "fc31693078bc81e7145955a3ea2482189fb43960888cfabc735d2e6c8377a6b3",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -14141,7 +14153,7 @@
     },
     "scripts/lib/review_watch.py": {
       "source": "scripts/lib/review_watch.py",
-      "sha256": "e71c80114ef06137177b5d5a464f37769a63d4a41b96870b1007650df609e055",
+      "sha256": "7ca32ed18f84df233d306f14526b13ccb5c82636c0f15dd86dae5c5b409b9970",
       "evidence": "Added 2026-10-09 (second review slice 4; app.test.py's edge to it came with 8a433f70e and had no row). Module load: standard-library imports, the sibling imports stall_watch and app_review (app_paths), constants and HOST_JSON; nothing else runs. Configuration: only World (the operator monitor, review-watch.sh --config) reads SECOND_REVIEW_REPOS, as text from the file it is given, never executed; it is declared here though app.test.py's AppWorld passes no config and reads none. What app.test.py reaches: app_mode with tick sets REVIEW_WATCH_STATE_DIR, SECOND_REVIEW_STATE_DIR and RICHOS_PROJECTS_DIR under the fixture's private engine-state (app_paths); AppWorld loads mega-lander/workspaces.py by fixed path through stall_watch._load and, per private registry partition (RICHOS_WORKSPACES_DIR), calls all_agents, finished_state, _chain, integration_target and integration_for, reads the private work-receipts JSON and <id>.words beside them, runs git rev-parse/merge-base/log in the fixture's repositories and reads JSON/JSONL state, locks and the ledger under that private state. A due review runs bash on REVIEW_WATCH_SECOND_REVIEW, which the fixture sets to a literal fake script; scripts/second-review.sh is never run by the fixture. Watcher.stop_own reads its own locks, freezes its own child's process group (SIGSTOP; second-review keeps its reviewer in that group), reads the process table (ps -A -o pid=,ppid=,pgid=,stat=) for the process groups of every descendant of that group's processes, signals that group and those groups only, waits for them to be gone (killpg signal 0) and appends an attempts row. Environment read: REVIEW_WATCH_NOW, REVIEW_WATCH_STATE_DIR, REVIEW_WATCH_SECOND_REVIEW, SECOND_REVIEW_STATE_DIR, CLAUDE_CONFIG_DIR, RICHOS_PROJECTS_DIR, RICHOS_WORKSPACES_DIR (set per partition and restored), and in World only REVIEW_WATCH_TO_RICH/REVIEW_WATCH_TO_CODEX (Codex channel files, not reached by AppWorld). Renewed 2026-10-09 (echo-opus-review4c, second review of f14155545, finding 1): stop_all also stops and waits for the process groups of every descendant of a recorded review (second-review's reviewer leads its own session) and returns the reviews not seen gone, which stop_own never records as stopped; no new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4c, finding 2): spawn holds a SIGTERM or SIGHUP that arrives inside Popen until the child is in Watcher.children, and stop_own also stops every child of its own whose pid has not reached its lock, settling the lock start() was filling in; nothing new is read. Renewed 2026-10-09 (echo-opus-review4c, finding 3): owner_session and the lost-twice notice take the review's recorded session first and fall back to the registry only for an item of the same work; _who names an item at the reviewed tip only when it is the same work; nothing new is read. Renewed 2026-10-09 (echo-opus-review4d, second review of 783a8dba1, finding 1): stop_all reads the process table once more (the same ps -A -o pid=,ppid=,pgid=) before its SIGKILL, for the reviews still running after the SIGTERM grace, and signals the groups found below them too; nothing new is read. Renewed 2026-10-09 (echo-opus-review4d, finding 2): tell's repeated handover notice takes only verdicts of the item's own work and sends them through owner_session, on a told-state clock per work; in the plain monitor (run_loop sets MONITOR to the current session id) a block owned by another lead session is left to that session's monitor when its told.json under REVIEW_WATCH_STATE_DIR records a look and it holds its monitor.lock (a non-blocking flock probe, released at once). app.test.py's tick never sets MONITOR. No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4e, second review of b5ff41f02, finding 1): the process-table reads are gone (groups_below and both of its ps -A calls); stop_all signals each recorded review's process group, which now holds second-review's reviewer, waits until that whole group is gone, and sends SIGKILL again on each pass of its wait. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4e, second review of b5ff41f02, finding 2): tell reads and writes last-told.json under REVIEW_WATCH_STATE_DIR once per look, keeping in it, beside the shared `rows` cursor, a `delivered` map of review id to time (entries older than seven days dropped), written only for a verdict this monitor's own session owns or the operator host (--host-json) sends to its owner; a monitor's first look also tells its own session's undelivered verdicts of the last seven days. for_this_monitor no longer reads another session's told.json, only its monitor.lock (the same non-blocking flock probe). No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4e, the real second review of 4d99d0b7e): a verdict whose owner this watcher delivers to (its own monitor's session, or any owner for --host-json) is told whenever it is not in last-told.json's `delivered`, on any look; a monitor's verdicts stop at the BLOCK_CHARS cap, unmarked, and its cursor and the shared `rows` stop there too; the first look under this rule seeds `delivered` from the rows the shared cursor had passed. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4e, esc-20261009T054753Z-400c68b3): stop_all freezes each review's group with SIGSTOP until ps shows its processes stopped (FREEZE_SECONDS), reads the process table once, SIGKILLs the groups below it (Codex's own command groups), sends the review's group SIGTERM and SIGCONT, and freezes, reads and SIGKILLs once more whatever is left; QUIT_TERM_SECONDS is 1.0. Nothing else new is read. Renewed 2026-10-09 (echo-opus-review4e, the real second review of 6e8cc3f6d): `delivered` is no longer seeded from the old shared cursor and keeps every review id still in reviews.jsonl; an undelivered verdict no longer expires; the owner lookup for earlier rows runs only for rows whose repository and tip an attempt row or lock names with a session this watcher delivers to, or whose work a registry item of such a session has. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4f, the real second review of 0d83e456d, findings 1 and 2): the process-table walk is gone (process_table, groups_below). spawn puts RICHOS_REVIEW_OWNER, 16 random bytes in hex, in the review's environment and keeps it in the lock as `mark`; a stop reads the process table once per pass (ps -A -o pid=,uid=,pgid=,stat=), calls os.getsid on this user's processes, and reads each one's environment as it was started (sysctl KERN_PROCARGS2 through ctypes on macOS, /proc/<pid>/environ on Linux) for that exact NAME=value; members of the session the review leads count while its leader is verified alive or one of them carries the mark. It signals only those processes and, while the leader is verified, the leader's group. reconcile ends what an exited launcher left carrying the mark before settling its lock. No new configuration key; the new environment variable is one this module writes for its children, never reads from its own environment. Renewed 2026-10-09 (echo-opus-review4f, the real second review of 0d83e456d, finding 3): tell no longer writes `delivered`; it leaves the review ids of the owned verdicts it printed in PRINTED, and tick records them in last-told.json (under the look lock) only once its output was written and flushed, or, when HOST_JSON is on and the environment variable RICHOS_REVIEW_WATCH_ACKS is \"1\" (set by richos-core review_watch.rs for the operator child), only once the host acknowledges them on this process's stdin as JSON lines {\"ack\": [ids]}, read without blocking at the start of each tick. --host-json lines carry a `keys` list of those ids. New environment read: RICHOS_REVIEW_WATCH_ACKS; new input: stdin acknowledgments in the operator host child only. No new configuration key. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 1): start records `own_session` in the lock (the leader verified alive right after spawn). stop_all owns the leader's session while the leader is verified alive, or, once it has exited, while the lock records own_session or the pid is this watcher's own child, unless os.getsid shows that pid leading a session again; it stops owning it once a read finds no member left. owned_processes' values carry each process's session id (pgid, stat, sid); its unreachable leftover after the return is removed. The same ps read, os.getsid and environment reads as before; nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4h, the real second review of 16c154f5a, finding 1): owned_processes returns None when the process table cannot be read (a ps timeout or error), and stop_all keeps such a review as left with its session still owned, so stop_own never records it stopped and its lock stays for the next look; nothing new is read. Renewed 2026-10-09 (echo-opus-review4h, finding 2): run_host_loop reads and removes RICHOS_REVIEW_WATCH_HOST (the host's own pid, set by richos-core review_watch.rs) from its own environment and returns before the first look when its parent is not that pid; without it, the parent at that point. New environment read: RICHOS_REVIEW_WATCH_HOST, in the host loop only (app.test.py's tick never reaches it). No new configuration key. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 2): the NO VERDICT TWICE notice for an owner this watcher delivers to carries the key lost:<repo>:<tip> (in PRINTED and the --host-json keys) and is recorded in last-told.json's `delivered` only once its output is accepted, like a verdict; `delivered` keeps such a key while attempts.jsonl still holds that commit's two losses. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): app mode takes --accounts (the app's Claude account list, a path) and AppWorld hands it to each app item's second-review arguments as --accounts; the watcher itself never opens it. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4m, the real second review of 0be50ade1, finding 1): tell builds PRINTED (the delivery keys) only from the blocks its output really carries, after the monitor's BLOCK_CHARS cap; the told-state marks of the notices without a delivery key (a NOT STARTED problem, a handover reminder, a block for another lead, a failed look) are written to the session's told.json under REVIEW_WATCH_STATE_DIR only after the output was written and flushed, under the look lock; an owned NOT CONVERGING notice carries the delivery key nc:<work>:<finding> and last-told.json's `delivered` keeps such a key seven days. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4m, merging main 2ec9241b1, the review land gate): the module also imports its sibling operator_fences (as F) at load; World reads SECOND_REVIEW_REPOS only through F.review_repos, which sources the given config in a clean bash (so the config is now executed by that reader, not parsed as text here), and matches repositories with F.review_listed; an unreadable value is told once per session (told_unreadable_repos in the session's told.json). app.test.py's AppWorld passes no config and reaches none of this. No new environment variable. Renewed 2026-10-09 (echo-opus-review4m, after that merge): AppWorld sets repos_error to \"\" beside its repos, which main's Watcher.look reads first; nothing new is read. Renewed 2026-10-09 (echo-opus-codexswitch1, the Codex review switch, round 20.2): app mode takes --codex-reviews, the app's codex-reviews.json, and Item.args reads it as JSON when an app review starts (app_reviewer: {\"on\": true} is --reviewer auto, anything else or no file is --reviewer claude); app.test.py passes none, so it reaches nothing new. No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-codexswitch1, merging main bb0e97920): main's change (the `blocks` field: not_converging compares rechecks repository by repository through _same_repo, by repo_id or real path, and counts only still-open findings that block) and the Codex switch above are both in the file; nothing new is read. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure. Renewed 2026-10-24 (zach-opus-oldlost1, narrowed by zach-opus-oldlost2): the NO VERDICT TWICE notice is not told for a commit already on its repository's main (git merge-base --is-ancestor <tip> refs/heads/main in the attempt's recorded repository, the same git as before); one shown for another session's lead is still marked only in the session's told.json, as before. Nothing new is read: no configuration key or environment variable.",
       "keys": [
         "SECOND_REVIEW_REPOS"
@@ -14968,18 +14980,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/lib/simulator_budget.py",
-          "sha256": "c63a923188aa52be893cf9ee11e4499049d42dc1bccbb0e7efe7b8925abba05c",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/app/scripts/testvm/reserve.py",
-          "sha256": "068796f18885ad8691711bf093a4ec40700ae40a005f5f5d655c4e5b43a61b7c",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/engine/scripts/ci-shard.sh",
           "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -15012,12 +15012,6 @@
           "root": "repository",
           "path": "richos/engine/scripts/lib/cpu_policy.py",
           "sha256": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/engine/scripts/lib/native-work.py",
-          "sha256": "38993b2e6b69b2064974d39eb4f34762429e1fb8aaa6fc9e0e4df2dffea77f12",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15070,12 +15064,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "b435fa6c2e68f6cac2b37b3c7eebdbe85d23f660d83d9fb4ea0d74af64817ae2",
-          "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
-        },
-        {
-          "root": "repository",
           "path": "richos/mobile/native-android/bin/randroid",
           "sha256": "b49476409dd1c2aab9f574789e63ee541bdca2946e426c543bbe9a412f7fd064",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -15097,12 +15085,36 @@
           "path": "richos/engine/scripts/lib/proc_tree.py",
           "sha256": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/simulator_budget.py",
+          "sha256": "0fa2cb40093d138564eddbf72e8a0008c31c12bfc26978c8d91a0fed12656298",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/testvm/reserve.py",
+          "sha256": "302f2b3537facfd326054bd9c53b65ed7443a72eba8e426f3c10ba158c881413",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/native-work.py",
+          "sha256": "f2c51021bb0597e92ad14f7cefd0a954a4587be2df2b0b90ebf78dd5dc1bd8d0",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/nightly-local.py",
+          "sha256": "b5c4f91ae3b2b59b9603c8c1c2a91408d3486305292c1284b6a5f7141c493cd3",
+          "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         }
       ]
     },
     "scripts/lib/native-work.py#cpu-fixtures": {
       "source": "scripts/lib/native-work.py",
-      "sha256": "38993b2e6b69b2064974d39eb4f34762429e1fb8aaa6fc9e0e4df2dffea77f12",
+      "sha256": "f2c51021bb0597e92ad14f7cefd0a954a4587be2df2b0b90ebf78dd5dc1bd8d0",
       "keys": [],
       "edges": [
         {
@@ -15193,12 +15205,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/testvm/reserve.py",
-          "sha256": "068796f18885ad8691711bf093a4ec40700ae40a005f5f5d655c4e5b43a61b7c",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/app/scripts/lib/test_results.py",
           "sha256": "9790f38172be11848fbc50fc5fc387831f25a5bda49e877e1ed4aa59fb6fa0e2",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -15229,14 +15235,14 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/proof-run.py",
-          "sha256": "df85e64aad6fac120aadcd7276ccf0a2deebf070cd82ac77c3b73846db3ac568",
-          "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
+          "path": "richos/app/scripts/lib/proof_evidence.py",
+          "sha256": "b41312c4d55f63949506399643fb3b4d40d6c06b6e98677983e4465c01881a92",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "b41312c4d55f63949506399643fb3b4d40d6c06b6e98677983e4465c01881a92",
+          "path": "richos/app/scripts/testvm/reserve.py",
+          "sha256": "302f2b3537facfd326054bd9c53b65ed7443a72eba8e426f3c10ba158c881413",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         }
       ]
@@ -16376,8 +16382,8 @@
     },
     "scripts/lib/second_review.py": {
       "source": "scripts/lib/second_review.py",
-      "sha256": "be6dd160177c20dfacefae1599dcc6838a34f5605c909be7bb47bf5ef62f33b0",
-      "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle. The lead's follow-up ruling (--follow-up, --reopen) appends to the private review-deferrals.jsonl and review-follow-ups.jsonl beside the ledger, and reads RICHOS_AGENT_OWNER and the caller's Claude session record through operator_fences.claude_session; no orchestration setting. Renewed 2026-10-21 (zach-opus-folderfiles1): the input's repository instructions come from instruction_files.py (edge added), read at the reviewed tip in the reviewed repository through the same call as prepare; AGENTS.md left RULE_FILES. Renewed 2026-10-23 (zach-opus-reviewfix1): --follow-up keeps only later reviews of the finding's tip or a commit built on it, through operator_fences._own_history (git merge-base in the ledger row's own repository); no new key, setting or file.",
+      "sha256": "6026643504e37940a8ea2e424f5822ef5f9b490ef92289ad40e6b9ad4c4504e8",
+      "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle. The lead's follow-up ruling (--follow-up, --reopen) appends to the private review-deferrals.jsonl and review-follow-ups.jsonl beside the ledger, and reads RICHOS_AGENT_OWNER and the caller's Claude session record through operator_fences.claude_session; no orchestration setting. Renewed 2026-10-21 (zach-opus-folderfiles1): the input's repository instructions come from instruction_files.py (edge added), read at the reviewed tip in the reviewed repository through the same call as prepare; AGENTS.md left RULE_FILES. Renewed 2026-10-23 (zach-opus-reviewfix1): --follow-up keeps only later reviews of the finding's tip or a commit built on it, through operator_fences._own_history (git merge-base in the ledger row's own repository); no new key, setting or file. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): in App mode (--accounts) quota_hold gives its quota-watch child RICHOS_APP_STATE=<dirname of the accounts list>/engine-state, so the child reads the app's reading of the account in use; the private quota-command override is unchanged. No config key, edge or file added. Renewed 2026-10-29 (echo, second review rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): in App mode (--accounts) quota_hold no longer runs quota-watch. It imports its sibling quota_watch (module load: standard imports, pause_protocol, quota_weekly, host_child; nothing runs) and calls gate_admission, which reads <dirname of the accounts list>/engine-state/claude-quota.json and <that folder>/claude-quota-policy.json as JSON data: no subprocess, environment variable or orchestration.config key. The terminal path and its private quota-command override are unchanged; the RICHOS_APP_STATE it gave its child is gone.",
       "keys": [],
       "edges": [
         {
@@ -16435,8 +16441,8 @@
     },
     "scripts/lib/machine_settings.py": {
       "source": "scripts/lib/machine_settings.py",
-      "sha256": "d3d45bd75c142869b5bb7fd1d4a8ca0570c14759758771152529753d13a7a380",
-      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader.",
+      "sha256": "05cf2940792768d91c288339a8e7414c493b33ec8d5084bdf85924fd25e0d403",
+      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader. Renewed 2026-10-29: limit() reads whole-number machine limits (TESTVM_MEMORY_FLOOR_MB) from the environment, else limits.env beside .env under the same HOME (or the absolute RICHOS_LIMITS_FILE), else the caller's stated default; .env parsing and KEYS are unchanged. Fixture callers supply HOME or RICHOS_LIMITS_FILE, the same boundary as RICHOS_ENV_FILE; no process.",
       "keys": [],
       "edges": []
     },
@@ -17217,9 +17223,9 @@
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "8428f241e91e390a5fdf448c3a3c762a05f82fe16bba91acedaf4d6a3eefd1a2",
+        "scripts/lib/quota_watch.py": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
         "scripts/lib/pause_protocol.py": "75275cc80313de3ff83dcfba86121d33ca5c4fe208c174a3be2508eb40143a18",
-        "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
+        "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
         "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a"
@@ -17292,9 +17298,9 @@
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "8428f241e91e390a5fdf448c3a3c762a05f82fe16bba91acedaf4d6a3eefd1a2",
+        "scripts/lib/quota_watch.py": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
         "scripts/lib/pause_protocol.py": "75275cc80313de3ff83dcfba86121d33ca5c4fe208c174a3be2508eb40143a18",
-        "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
+        "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
         "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a"
@@ -17522,8 +17528,8 @@
         "scripts/hooks/session-start-escalations.sh": "25af57857b1dc4a1e4a61c6848753ede1d217f3a1037379e30cee4e64b206a5f",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "8428f241e91e390a5fdf448c3a3c762a05f82fe16bba91acedaf4d6a3eefd1a2",
-        "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
+        "scripts/lib/quota_watch.py": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+        "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
         "scripts/hooks/shell-evidence.sh": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",
         "scripts/hooks/shell-evidence.py": "de4326ba4e1c9d8a415e27379efe3b4ecb15d4dd362419925628afe64c1cf240",
@@ -17916,7 +17922,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/hooks/dispatch-pretooluse.manifest": "4b87d8162309bd5c64ed61118eb6d87bd15efc9e6c3108844c2f0cfce02e84d7",
         "scripts/lib/publication-boundary-cache.test.py": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
-        "scripts/lib/machine_settings.py": "d3d45bd75c142869b5bb7fd1d4a8ca0570c14759758771152529753d13a7a380"
+        "scripts/lib/machine_settings.py": "05cf2940792768d91c288339a8e7414c493b33ec8d5084bdf85924fd25e0d403"
       },
       "evidence": "Only the two publication guard registrations are queried on plugin and seated surfaces. Probe and installer source are assertion data. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
