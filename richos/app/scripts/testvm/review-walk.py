@@ -66,6 +66,9 @@ command_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(command_walk)
 StepFailed = command_walk.StepFailed
 OPEN = command_walk.OPEN
+# A worker that stays "dispatching" this long is waiting on something nobody will answer (a review walk waited
+# 20-30 minutes on the Git name card). The walk stops with a line naming it.
+DISPATCH_LIMIT = 300
 
 STEPS = ['identity', 'team', 'first-run', 'fixture', 'connect', 'watcher', 'job', 'observe']
 # The first line app.py prepare writes at the top of every reviewer's brief (USER_WORDS_LABEL).
@@ -89,6 +92,21 @@ JOB = ('Please have builder add a function slugify(text) to acme/text.py in my A
        'yourself: the review is the check.')
 CHECK = ('import sys; sys.path.insert(0, sys.argv[1]); from acme.text import slugify; '
          'print(repr(slugify("  -Hello  World- ")))')
+
+
+class StuckDispatch(Exception):
+    pass
+
+
+def stuck_dispatching(rows, since, now, limit=DISPATCH_LIMIT):
+    """Workers whose receipt has said "dispatching" for `limit` s. `since` maps worker id to the time
+    it was first seen so; it is updated here (a worker that moved on is dropped)."""
+    workers = {r['id']: r for r in rows if r['request']['role'] == 'worker' and r.get('status') == 'dispatching'}
+    for gone in [i for i in since if i not in workers]:
+        del since[gone]
+    for i in workers:
+        since.setdefault(i, now)
+    return [workers[i] for i in workers if now - since[i] >= limit]
 
 
 class ReviewWalk(command_walk.CommandWalk):
@@ -147,14 +165,34 @@ class ReviewWalk(command_walk.CommandWalk):
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 120))
 
+    def stuck_dispatch(self, rows, since, now):
+        """One plain line when a worker has stayed "dispatching" for DISPATCH_LIMIT s, else None."""
+        stuck = stuck_dispatching(rows, since, now)
+        if not stuck:
+            return None
+        card = self.present(command_walk.GIT_NAME_ANSWER)
+        waiting = ('the Git name card, which is on screen and was not answered' if card else
+                   'something that is not on screen (no Git name card); see the app log kept with this run')
+        return ('worker %s stayed "dispatching" for %d s; the app is waiting for %s'
+                % (stuck[0]['request'].get('teammate') or stuck[0]['id'][:12], now - since[stuck[0]['id']], waiting))
+
     def observe(self):
         sent = self.facts.get('sent_ms')
         if not sent:
             raise StepFailed('job must have run (no send time on record)')
         end = time.monotonic() + self.a.within
-        presses, record, misses, last_note = [], None, 0, 0
+        presses, record, misses, last_note, last_dispatch = [], None, 0, 0, 0
+        dispatching = {}
         while time.monotonic() < end:
             try:
+                self.answer_git_name_card()
+                if time.monotonic() - last_dispatch > 30:
+                    last_dispatch = time.monotonic()
+                    stop = self.stuck_dispatch(self.receipts(), dispatching, time.monotonic())
+                    if stop:
+                        self.facts['stuck_dispatch'] = stop
+                        self.save()
+                        raise StuckDispatch(stop)
                 record = self.ours(sent) or record
                 if record and record.get('state') not in OPEN:
                     break
@@ -171,6 +209,8 @@ class ReviewWalk(command_walk.CommandWalk):
                                                     r['review_observation']['report'].get('verdict'))
                                                    for r in rows]}), flush=True)
                 misses = 0
+            except StuckDispatch as exc:
+                raise StepFailed(str(exc))
             except (StepFailed, RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
                 misses += 1
                 self.facts.setdefault('observe_misses', []).append(str(exc)[:500])

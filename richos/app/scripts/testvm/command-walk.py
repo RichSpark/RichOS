@@ -141,6 +141,8 @@ LATE_TASK = ('Please run this harmless test command for me yourself with your sh
 TASK = ('Please run this harmless test command for me yourself with your shell tool, in my Acme '
         'folder, and tell me when it has finished and what it printed: git log --oneline')
 OPEN = {'registered', 'preparing', 'running', 'blocked', 'waiting-for-screen', 'waiting-for-quota'}
+# The Git name card's answer that keeps the stand-in name (ui/git-name.js, `#git-name-skip`).
+GIT_NAME_ANSWER = 'Use “RichOS” instead'
 
 
 class CommandWalk(adopt_walk.Walk):
@@ -167,8 +169,24 @@ class CommandWalk(adopt_walk.Walk):
                   'print(json.dumps(rows))\n')
         return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
 
+    def answer_git_name_card(self):
+        """A person's answer to the first-run Git name card, once, with its own "Use RichOS" button.
+
+        The team's first save in a folder with no Git name waits for that answer (ui/git-name.js,
+        git_name.rs). The work-lease walk and the review walk each sat on it
+        unanswered (a worker "dispatching" for 20-30 minutes). Every walk that sends a job answers
+        it here, as a user may, never by a typed message. Returns whether it pressed now."""
+        if 'git_name_answered_ms' in self.facts or not self.present(GIT_NAME_ANSWER):
+            return False
+        self.press(GIT_NAME_ANSWER)
+        self.facts['git_name_answered_ms'] = round(self.clock())
+        self.save()
+        return True
+
     def approve_if_asked(self, title):
-        """One press of this assignment's Approve, when the panel offers one. Returns whether it pressed."""
+        """One press of this assignment's Approve, when the panel offers one. Returns whether it pressed.
+        The Git name card is answered first, once (see answer_git_name_card)."""
+        self.answer_git_name_card()
         label = 'Approve ' + title
         if not self.present(label):
             try:

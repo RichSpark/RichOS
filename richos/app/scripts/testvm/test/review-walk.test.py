@@ -73,5 +73,65 @@ class Verdict(unittest.TestCase):
         self.assertEqual(self.outcomes(rows(), record={'state': 'running'})['6'], 'FAIL')
 
 
+class Dispatching(unittest.TestCase):
+    """A review walk once saw a worker sit "dispatching" 20-30 minutes on the unanswered name card."""
+
+    def stuck(self, status):
+        r = worker('a')
+        r['status'] = status
+        return [r]
+
+    def test_five_minutes_dispatching_is_stuck_and_less_is_not(self):
+        since = {}
+        self.assertEqual(walk.stuck_dispatching(self.stuck('dispatching'), since, 100), [])
+        self.assertEqual(walk.stuck_dispatching(self.stuck('dispatching'), since, 399), [])
+        self.assertEqual(len(walk.stuck_dispatching(self.stuck('dispatching'), since, 400)), 1)
+
+    def test_a_worker_that_moved_on_restarts_the_clock(self):
+        since = {}
+        walk.stuck_dispatching(self.stuck('dispatching'), since, 0)
+        walk.stuck_dispatching(self.stuck('running'), since, 200)
+        self.assertEqual(walk.stuck_dispatching(self.stuck('dispatching'), since, 500), [])
+
+    def walker(self, card):
+        w = object.__new__(walk.ReviewWalk)
+        w.present = lambda title, role='AXButton', app=None: card
+        return w
+
+    def test_the_line_names_the_card_when_it_is_on_screen(self):
+        w, since = self.walker(True), {}
+        self.assertIsNone(w.stuck_dispatch(self.stuck('dispatching'), since, 0))
+        line = w.stuck_dispatch(self.stuck('dispatching'), since, 301)
+        self.assertIn('name card, which is on screen', line)
+        self.assertIn('builder', line)
+
+    def test_the_line_says_so_when_nothing_is_on_screen(self):
+        w, since = self.walker(False), {}
+        w.stuck_dispatch(self.stuck('dispatching'), since, 0)
+        self.assertIn('not on screen', w.stuck_dispatch(self.stuck('dispatching'), since, 301))
+
+
+class AnswersTheNameCard(unittest.TestCase):
+    def walker(self, on_screen):
+        w = object.__new__(walk.ReviewWalk)
+        w.facts, w.pressed = {}, []
+        w.present = lambda title, role='AXButton', app=None: title in on_screen
+        w.press = lambda title, role='AXButton', app=None, contains=True: w.pressed.append(title)
+        w.clock = lambda: 99.0
+        w.save = lambda: None
+        return w
+
+    def test_answered_once_by_the_shared_helper(self):
+        w = self.walker({walk.command_walk.GIT_NAME_ANSWER})
+        self.assertTrue(w.answer_git_name_card())
+        self.assertFalse(w.answer_git_name_card())
+        self.assertEqual(w.pressed, [walk.command_walk.GIT_NAME_ANSWER])
+
+    def test_no_card_no_press(self):
+        w = self.walker(set())
+        self.assertFalse(w.answer_git_name_card())
+        self.assertEqual(w.pressed, [])
+
+
 if __name__ == '__main__':
     unittest.main()
