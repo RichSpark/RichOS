@@ -1106,6 +1106,92 @@ fn a_lease_carries_the_users_login_environment_under_the_apps_own_names() {
     assert_eq!(today.lease_path(), today.runtime.path());
 }
 
+/// A program file that prints `says` and leaves a mark in `marks` when it runs.
+fn tool(folder: &Path, name: &str, says: &str, marks: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(folder).unwrap();
+    let path = folder.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\necho ran >> '{}'\necho {says}\n", marks.join(format!("{says}-{name}")).display())).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// What `names` run as in an agent's Bash command: Claude Code runs the file named by the lease's
+/// `CLAUDE_ENV_FILE` ahead of every Bash command (2.1.314), in the lease's own environment.
+fn agent_runs(environment: &BTreeMap<String, Option<String>>, names: &[&str]) -> Vec<String> {
+    let file = environment.get("CLAUDE_ENV_FILE").cloned().flatten()
+        .expect("the lease names no CLAUDE_ENV_FILE: an agent's commands get the lease's own PATH, runtime first");
+    let script = format!(". '{file}'\n{}", names.iter().map(|n| format!("{n}\n")).collect::<String>());
+    let out = std::process::Command::new("/bin/sh").arg("-c").arg(script).env_clear()
+        .env("PATH", environment["PATH"].clone().unwrap()).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
+}
+
+/// **An agent's own commands find the user's `python3`, `node` and `git` first** (Hank's parity
+/// audit 2026-10-30, item 2): `package-app.sh`'s icon check refused under the app's Python, which
+/// has no Pillow, and passed under the user's. The hooks keep the runtime first (the lease's
+/// `PATH`); a tool the user does not have is still the runtime's.
+#[test]
+fn an_agents_commands_find_the_users_own_tools_first() {
+    let f = Scratch::new();
+    let marks = f.0.join("marks");
+    std::fs::create_dir_all(&marks).unwrap();
+    let runtime = f.0.join("runtime/bin");
+    for name in ["python3", "node", "git"] { tool(&runtime, name, "runtime", &marks); }
+    let user = f.0.join("user/bin");
+    for name in ["python3", "git"] { tool(&user, name, "user", &marks); }
+    let login: BTreeMap<String, String> = [("PATH", format!("{}:/usr/bin:/bin", user.display()))].into_iter()
+        .map(|(k, v)| (k.to_string(), v)).collect();
+    let profile = EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(), richos_core::machine_settings::Settings::default(),
+        None, Some(std::sync::Arc::new(login))).unwrap();
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert!(environment["PATH"].clone().unwrap().starts_with(&format!("{}:", runtime.display())), "the hooks keep the runtime first");
+    assert_eq!(agent_runs(&environment, &["python3", "git", "node"]), ["user", "user", "runtime"]);
+    // The app's own tools keep the runtime's Python (the yt-dlp launcher reads this name).
+    assert_eq!(environment["RICHOS_RUNTIME_PYTHON"].as_deref(), f.runtime().python.to_str());
+}
+
+/// **On a Mac without the developer tools nothing reaches Apple's stand-ins** (the CEO,
+/// 2026-10-29: "Most regular users aren't expected to be developers"). A fake Mac: its `/usr/bin`
+/// holds `python3` and `git` stand-ins that leave a mark when run, and its developer folders hold
+/// nothing, so the runtime's copies run and no mark is left. With the developer tools installed
+/// the same folder is the user's real Apple tools, and they run.
+#[test]
+fn an_agents_commands_never_reach_an_apple_stand_in() {
+    use richos_core::user_git::StandIns;
+    let f = Scratch::new();
+    let marks = f.0.join("marks");
+    std::fs::create_dir_all(&marks).unwrap();
+    let runtime = f.0.join("runtime/bin");
+    for name in ["python3", "node", "git"] { tool(&runtime, name, "runtime", &marks); }
+    let apple = f.0.join("usr-bin");
+    for name in ["python3", "git"] { tool(&apple, name, "stand-in", &marks); }
+    let user = f.0.join("user/bin");
+    tool(&user, "node", "user", &marks);
+    let runs = |path: &str| -> Vec<String> {
+        let out = std::process::Command::new("/bin/sh").arg("-c").arg("python3\ngit\nnode\n").env_clear()
+            .env("PATH", path).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
+    };
+    let login = format!("{}:{}:/bin", user.display(), apple.display());
+    let no_tools = StandIns { folder: apple.clone(), developer: vec![f.0.join("CommandLineTools")] };
+    let path = richos_core::runtime::commands_path(&runtime, &login, None, &no_tools);
+    assert_eq!(runs(&path), ["runtime", "runtime", "user"], "{path}");
+    assert!(std::fs::read_dir(&marks).unwrap().all(|m| !m.unwrap().file_name().to_string_lossy().starts_with("stand-in")),
+        "a stand-in ran: the developer-tools dialog would be on the user's screen ({path})");
+    // The stand-ins' folder not on the user's PATH at all: the system folders that add it come
+    // after the runtime.
+    let path = richos_core::runtime::commands_path(&runtime, &user.display().to_string(), None, &StandIns::installed());
+    let at = |folder: &str| path.split(':').position(|entry| entry == folder).unwrap();
+    assert!(at(&runtime.display().to_string()) < at("/usr/bin"), "{path}");
+    // The developer tools installed: the folder holds the user's real tools, first, as in the terminal.
+    let tools = f.0.join("CommandLineTools/usr/bin");
+    for name in ["python3", "git"] { tool(&tools, name, "developer", &marks); }
+    let path = richos_core::runtime::commands_path(&runtime, &login, None, &no_tools);
+    assert_eq!(runs(&path), ["stand-in", "stand-in", "user"], "{path}");
+}
+
 /// The login shell is read as a login, interactive shell, between marks, and a shell that does
 /// not answer in time gives up rather than holding the lease.
 #[test]
