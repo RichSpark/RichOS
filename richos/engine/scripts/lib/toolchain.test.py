@@ -301,6 +301,28 @@ class FakeMac(unittest.TestCase):
         self.assertEqual(self.guard("DEVELOPER_DIR=%s make" % d, bad)[0], 0)
         self.no_stub()
 
+    def test_t13_a_heredoc_fed_to_a_shell_is_read_as_commands(self):
+        # Review 2026-10-30: `bash <<'EOF'` running make passed on a Mac without developer tools.
+        for command in ("bash <<'EOF'\nmake -C project all\nEOF",
+                        "nohup sh <<EOF\necho start\nmake\nEOF",
+                        "zsh -s <<'EOF'\ncd project && make\nEOF"):
+            rc, message = self.guard(command)
+            self.assertEqual(rc, 2, "%r passed: %s" % (command, message))
+            self.assertIn("`make`", message)
+        # Text, not commands: a heredoc written to a file, one sent to the guest, and one a shell
+        # runs with -c (its script is the -c argument, the heredoc is only its input). A shell
+        # heredoc inside a file's or the guest's heredoc is text too (review 2026-10-30).
+        for command in ("cat > notes.sh <<'EOF'\nmake\nEOF",
+                        "ssh vm bash <<'EOF'\nmake\nEOF",
+                        "bash -c 'cat' <<'EOF'\nmake\nEOF",
+                        "cat > notes.sh <<'SCRIPT'\nbash <<'BUILD'\n/usr/bin/make\nBUILD\nSCRIPT",
+                        "ssh vm bash <<'REMOTE'\nbash <<'BUILD'\n/usr/bin/make\nBUILD\nREMOTE"):
+            self.assertEqual(self.guard(command)[0], 0, command)
+        # With developer tools the same heredoc runs.
+        self.developer("Library/Developer/CommandLineTools", "clt")
+        self.assertEqual(self.guard("bash <<'EOF'\nmake -C project all\nEOF")[0], 0)
+        self.no_stub()
+
     def test_t14_xcrun_runs_wherever_a_developer_directory_is_usable(self):
         # Review 2026-10-30: xcrun is /usr/bin's own resolver; Xcode's Developer/usr/bin has no
         # copy of it, so every `xcrun` command was refused on a Mac with Xcode.
