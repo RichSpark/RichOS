@@ -698,6 +698,17 @@ button {
   background: var(--res-crit);
 }
 
+.res-view-hint {
+  display: none;
+  margin: 8px 0 0;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--ink-faint);
+}
+.res-card.is-keyboard .res-view-hint {
+  display: block;
+}
+
 /* The card: hover, keyboard focus, or a click to pin. Not focusable inside, so opening it never
    moves focus. Hidden from the accessibility tree's walk while closed; the square's
    `aria-describedby` still reads it. */

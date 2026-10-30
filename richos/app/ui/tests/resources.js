@@ -22,6 +22,10 @@
 //    8  warming up, not current, unavailable and a failed read never show 0%
 //    9  after sleep the gap is drawn as a gap labeled Asleep, never as zeros
 //   10  hover and click open the card without moving focus or changing the selected chat
+//   11–13 ordered settings and stale/pending-read regressions
+//   14  collapsed sidebar stops UI reads/paint, restores fresh values and dismisses overlays
+//   15  long names wrap at all seven type sizes, both views; an open card follows reflow
+//   16  visible keyboard hint, Down Arrow menu access, saved choice and focus restoration
 //
 // Run: node resources.js            (RICHOS_SHOTS_REGENERATE=shots-resources to rewrite shots)
 
@@ -850,6 +854,39 @@ async function main() {
         assertEqual(p.__errors, [], "no page errors");
         return `${measured} rendered layouts: three names, seven supported scales, both views; no clipping, overlap or font reduction`;
       } finally { await namesContext.close(); }
+    });
+
+    await run.check(`16 ${theme}  a visible keyboard hint opens view choices with Down Arrow and preserves click-to-pin`, async () => {
+      const keyboardContext = await newContext(browser, theme);
+      try {
+        const p = await openApp(keyboardContext, "live");
+        await p.keyboard.press("Tab");
+        await p.focus("#res-square");
+        await p.waitForFunction(() => document.getElementById("res-card").classList.contains("is-open"));
+        assert(await p.evaluate(() => {
+          const hint = document.querySelector(".res-view-hint");
+          return hint && getComputedStyle(hint).display !== "none" && hint.textContent === "Press ↓ to choose Ink or Readout";
+        }), "keyboard focus shows the Down Arrow instruction");
+        for (const pair of await textPairs(p, ".res-view-hint")) {
+          assert(pair.size >= 14 && pair.ratio >= TEXT_FLOOR, "the shortcut hint meets the text size and contrast floors");
+        }
+        await footerShot(p, `keyboard-${theme}.png`);
+        const thread = (await facts(p)).thread;
+        await p.keyboard.press("ArrowDown");
+        await p.waitForSelector("#res-menu", { state: "visible" });
+        await p.keyboard.press("ArrowDown");
+        await p.keyboard.press("Enter");
+        await p.waitForFunction(() => JSON.parse(localStorage.getItem("richos-mock-config")).resources_view === "readout");
+        let f = await facts(p);
+        assertEqual([f.view, f.focused, f.thread], ["readout", "res-square", thread], "Down Arrow/Enter saves the view and restores focus without changing chats");
+        await p.click("#res-square");
+        assert((await facts(p)).cardOpen, "an ordinary click still pins the card");
+        await p.click("#res-square", { button: "right" });
+        assert((await facts(p)).menuOpen, "right-click remains available");
+        await p.keyboard.press("Escape");
+        assertEqual(p.__errors, [], "no page errors");
+        return "visible focus hint, no media/function key required, saved choice, focus restored, ordinary click and right-click preserved";
+      } finally { await keyboardContext.close(); }
     });
 
     await page.close();

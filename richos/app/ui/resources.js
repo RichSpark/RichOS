@@ -24,7 +24,7 @@
 // reaches every number without color. There is no live region: nothing is announced every
 // second. The card opens on hover, on keyboard focus and on a click (pinned), and never moves
 // focus or changes the selected chat. Escape closes it while focus stays on the square.
-// Right-click, the context-menu key or Shift+F10 opens the view menu (Ink, Readout), whose
+// Down Arrow, right-click, the context-menu key or Shift+F10 opens the view menu (Ink, Readout), whose
 // choice is saved in the app's settings store (`config.rs` `resources_view`).
 (function () {
   const bridge = window.RichBridge;
@@ -73,7 +73,7 @@
   btn.setAttribute("aria-label", "Mac resources");
   btn.setAttribute("aria-describedby", "res-card");
   btn.setAttribute("aria-expanded", "false");
-  btn.setAttribute("aria-keyshortcuts", "Shift+F10");
+  btn.setAttribute("aria-keyshortcuts", "ArrowDown Shift+F10");
   btn.innerHTML =
     '<span class="res-readout" aria-hidden="true">' +
     '<span class="res-num"><i class="res-key cpu"><i></i><i></i></i><b id="res-cpu">…</b></span>' +
@@ -96,6 +96,7 @@
     '<div class="res-axis" aria-hidden="true"><span>60 seconds ago</span><span>Now</span></div>' +
     '<dl class="res-rows" data-k="rows"></dl>' +
     '<p class="res-note" data-k="note" hidden></p>' +
+    '<p class="res-view-hint">Press ↓ to choose Ink or Readout</p>' +
     '<div class="res-foot"><span data-k="age"></span><span>Agents read this too</span></div>';
   document.body.appendChild(card);
   const bigCanvas = card.querySelector(".res-graph");
@@ -607,6 +608,7 @@
     if (open) place();
     const was = card.classList.contains("is-open");
     card.classList.toggle("is-open", open);
+    card.classList.toggle("is-keyboard", btn.matches(":focus-visible"));
     btn.setAttribute("aria-expanded", String(pinned && open));
     if (open && !was) paintBig();
     scheduleGlide();
@@ -658,8 +660,9 @@
       closeCard();
       return;
     }
-    if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+    if (e.key === "ArrowDown" || e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
       e.preventDefault();
+      e.stopPropagation();
       openMenu(null);
     }
   });
