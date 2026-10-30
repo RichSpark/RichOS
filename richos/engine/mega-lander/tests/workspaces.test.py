@@ -3055,7 +3055,7 @@ class WorkerTranscriptActivity(unittest.TestCase):
         self.assertEqual(ws.platform_agent_records("worker-session"),
                          [(self.rec["agent_id"], {"name": "fixture", "status": "running"})])
 
-    def activity(self):
+    def activity(self, commit_at=100):
         view = self.types.SimpleNamespace(all_agents=lambda: [self.rec],
             finished_state=lambda *_: (False, False, ""), review_chain=lambda _: [],
             recovery_work_key=lambda _: "worker", platform_agent_transcript=ws.platform_agent_transcript)
@@ -3067,7 +3067,7 @@ class WorkerTranscriptActivity(unittest.TestCase):
         world.merge_base = lambda *_: "base"
         reg = self.types.SimpleNamespace(recs=[self.rec], problem="")
         with patch.object(self.rw, "git", return_value="tip"), \
-             patch.object(self.sw, "_git_last_commit", return_value=(100, "sha")):
+             patch.object(self.sw, "_git_last_commit", return_value=(commit_at, "sha")):
             items, _ = world.registry_items(2000, {})
             stalls, problem = self.sw._silent(self.src, reg, 2000, "worker-session", {"silent": 1200}, [])
             last = self.sw._last_activity(self.src, self.rec)
@@ -3079,6 +3079,11 @@ class WorkerTranscriptActivity(unittest.TestCase):
         self.assertEqual(stalls, [])
         self.assertIn("transcript", problem)
         self.assertIsNone(last)
+
+    def test_missing_transcript_does_not_warn_before_the_inactivity_threshold(self):
+        self.assertEqual(self.activity(commit_at=1900)[2], "")
+        self.rec["spawned_at"] = ws.iso(1900)
+        self.assertEqual(self.activity()[2], "")
 
     def test_active_default_transcript_prevents_both_false_silence_and_quiet_review(self):
         self.transcript(self.default, 1900)

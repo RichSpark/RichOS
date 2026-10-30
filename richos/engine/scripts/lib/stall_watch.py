@@ -837,7 +837,8 @@ def _silent(src, reg, now, session_id, th, waits):
         except OSError:
             mt = None
         if mt is None:
-            unread.append(name)
+            if now - max(marks) >= th["silent"]:
+                unread.append(name)
             continue  # missing evidence cannot prove inactivity
         marks.append(mt)
         tline = "last transcript write %s (%s)" % (hhmm(mt), path)
