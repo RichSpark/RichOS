@@ -42,6 +42,10 @@
   // square says Measuring, not Unavailable (system_resources.rs, the sampler loop).
   const FRESH_INTERVAL = /first CPU interval|fresh CPU interval/;
   const AFTER_SLEEP = /after sleep/;
+  // Match both the live rail state and the pre-paint durable mirror. The narrow drawer
+  // ignores the docked mirror, just as the shell's stylesheet does.
+  const visible = () => !document.hidden && !document.body.classList.contains("rail-closed") &&
+    (document.body.classList.contains("bp-narrow") || document.documentElement.dataset.sidebar !== "hidden");
   const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // ---- state --------------------------------------------------------------------------------
@@ -234,7 +238,7 @@
 
   let polling = false;
   async function poll() {
-    if (polling) return;
+    if (polling || !visible()) return;
     polling = true;
     const wall = Date.now();
     const mono = performance.now();
@@ -405,6 +409,7 @@
   }
 
   function paintTile() {
+    if (!visible()) return;
     const ctx = sizeCanvas(tileCanvas, 34, 34);
     const P = palette();
     ctx.fillStyle = P.ground;
@@ -450,6 +455,7 @@
   }
 
   function paintBig() {
+    if (!visible()) return;
     const w = 266;
     const h = 72;
     const ctx = sizeCanvas(bigCanvas, w, h);
@@ -519,6 +525,7 @@
 
   let lastRows = "";
   function render() {
+    if (!visible()) return;
     const c = S.current;
     const live = S.status === "live" && c;
     const pending = S.status === "measuring";
@@ -593,7 +600,7 @@
     return !focusDismissed && btn.matches(":focus-visible");
   }
   function isOpen() {
-    return menu.hidden && (pinned || hovering || focusShowsCard());
+    return visible() && menu.hidden && (pinned || hovering || focusShowsCard());
   }
   function sync() {
     const open = isOpen();
@@ -755,7 +762,7 @@
   let glideTimer = 0;
   let glideFrame = 0;
   function moving() {
-    if (document.hidden || reduced()) return false;
+    if (!visible() || reduced()) return false;
     return S.status === "live" || (S.status === "measuring" && !S.history.length);
   }
   function scheduleGlide() {
@@ -794,7 +801,7 @@
   let pollTimer = 0;
   function loop() {
     clearTimeout(pollTimer);
-    if (document.hidden) return;
+    if (!visible()) return;
     const wall = Date.now();
     const mono = performance.now();
     const sleepMs = S.lastTick ? wall - S.lastTick.wall - (mono - S.lastTick.mono) : 0;
@@ -818,15 +825,35 @@
     if (S.started) return;
     S.started = true;
     syncViewFromStore();
-    loop();
+    syncVisibility();
   }
-  document.addEventListener("visibilitychange", () => {
+  let wasVisible = null;
+  function syncVisibility() {
     if (!S.started) return;
-    if (document.hidden) {
-      clearTimeout(pollTimer);
-      scheduleGlide();
-    } else loop();
-  });
+    const shown = visible();
+    if (shown === wasVisible) return;
+    wasVisible = shown;
+    clearTimeout(pollTimer);
+    if (!shown) {
+      const focusInWidget = btn.contains(document.activeElement) || menu.contains(document.activeElement);
+      pinned = false;
+      hovering = false;
+      clearTimeout(hideTimer);
+      closeMenu(false);
+      sync();
+      if (focusInWidget && !document.hidden) document.getElementById("rail-toggle").focus();
+    } else {
+      // Age the held reading before painting, then ask the existing native cache for a fresh
+      // snapshot. Native collection and agent reads continue throughout the UI pause.
+      loop();
+      render();
+      sync();
+    }
+  }
+  document.addEventListener("visibilitychange", syncVisibility);
+  const railWatch = new MutationObserver(syncVisibility);
+  railWatch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  railWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-sidebar"] });
   const themeWatch = new MutationObserver(() => {
     lastRows = "";
     render();

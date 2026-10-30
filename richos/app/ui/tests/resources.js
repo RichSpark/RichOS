@@ -126,9 +126,9 @@ function holdInitialViewRead() {
 
 /// A browser context per theme, seeded once like an install: the theme, 100% type, the name.
 /// A relaunch is a new page in the SAME context, which keeps the mock's durable config.
-async function newContext(browser, theme) {
+async function newContext(browser, theme, opts) {
   const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 }, colorScheme: theme, reducedMotion: "reduce", deviceScaleFactor: 2,
+    viewport: { width: 1440, height: 900 }, colorScheme: theme, reducedMotion: opts && opts.motion ? "no-preference" : "reduce", deviceScaleFactor: 2,
   });
   await context.addInitScript((t) => {
     try {
@@ -730,6 +730,64 @@ async function main() {
       } finally {
         await timedContext.close();
       }
+    });
+
+    await run.check(`14 ${theme}  collapsed rail stops cache reads and canvas paints, then refreshes before showing live values`, async () => {
+      const pausedContext = await newContext(browser, theme, { motion: true });
+      try {
+        const p = await openApp(pausedContext, "live", { clock: true });
+        await p.evaluate(() => {
+          window.__resourceCounts = { reads: 0, paints: 0 };
+          const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+          window.RichBridge.invoke = async (cmd, args) => {
+            if (cmd === "system_resources") window.__resourceCounts.reads++;
+            const answer = await invoke(cmd, args);
+            if (cmd === "system_resources" && window.__holdResourceResume) {
+              window.__resumePending = true;
+              await new Promise((resolve) => { window.__releaseResourceResume = resolve; });
+            }
+            return answer;
+          };
+          const fill = CanvasRenderingContext2D.prototype.fillRect;
+          CanvasRenderingContext2D.prototype.fillRect = function (...args) {
+            if (this.canvas.closest("#res-square, #res-card")) window.__resourceCounts.paints++;
+            return fill.apply(this, args);
+          };
+        });
+        await p.clock.fastForward(2000);
+        const active = await p.evaluate(() => window.__resourceCounts);
+        assert(active.reads > 0 && active.paints > 0, "the visible square has an active read and glide control");
+        await p.click("#res-square");
+        await p.click("#rail-toggle");
+        await p.clock.fastForward(500);
+        const stopped = await p.evaluate(() => ({ ...window.__resourceCounts }));
+        await p.clock.fastForward(5000);
+        assertEqual(await p.evaluate(() => window.__resourceCounts), stopped, "no reads or paints while collapsed");
+        assertEqual(await p.evaluate(() => document.getElementById("res-card").classList.contains("is-open")), false, "the detached card closes with its rail");
+        await p.evaluate(() => { window.__resourcesKind = "busy"; window.__holdResourceResume = true; });
+        await p.click("#rail-toggle");
+        await p.waitForFunction(() => window.__resumePending);
+        assertEqual(await p.evaluate(() => window.RichResources.status), "stale", "old values are stale while the restored cache read is pending");
+        await p.evaluate(() => { window.__holdResourceResume = false; window.__releaseResourceResume(); });
+        await p.waitForFunction(() => window.RichResources.status === "live");
+        await p.click("#res-square");
+        assert((await facts(p)).cardText.includes("Warning"), "restoring reads the new busy snapshot, not the held pre-collapse values");
+        // The first-paint mirror can hide the rail without the body class too.
+        await p.evaluate(() => document.documentElement.setAttribute("data-sidebar", "hidden"));
+        await p.clock.fastForward(500);
+        assertEqual(await p.evaluate(() => document.getElementById("res-card").classList.contains("is-open")), false, "the mirrored close dismisses the detached card");
+        const mirrored = await p.evaluate(() => ({ ...window.__resourceCounts }));
+        await p.clock.fastForward(5000);
+        assertEqual(await p.evaluate(() => window.__resourceCounts), mirrored, "the durable hidden mirror also stops all resource work");
+        await p.evaluate(() => document.documentElement.removeAttribute("data-sidebar"));
+        await p.waitForFunction((n) => window.__resourceCounts.reads > n, mirrored.reads);
+        await p.click("#res-square", { button: "right" });
+        await p.evaluate(() => document.documentElement.setAttribute("data-sidebar", "hidden"));
+        await p.waitForFunction(() => document.getElementById("res-menu").hidden);
+        assertEqual(await p.evaluate(() => document.activeElement.id), "rail-toggle", "a hidden menu returns focus to the way back to its rail");
+        assertEqual(p.__errors, [], "no page errors");
+        return "visible activity control; no cache reads or canvas paint in either closed selector; held restore is stale, then fresh busy values arrive";
+      } finally { await pausedContext.close(); }
     });
 
     await page.close();
