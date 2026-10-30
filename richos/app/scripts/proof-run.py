@@ -1014,6 +1014,18 @@ def describe_input_change(item, baseline, items, limit=5):
         return ""
 
 
+def invalid_reason(item):
+    """Why a check is INVALID, for summary.json: the reason its outcome row carries (outcomes.json
+    `invalid`, which names the changed identity keys), or None when the check is not invalid.
+    Before 2026-10-29 the summary said `invalid` and nothing else; the reason was only in the
+    run's console output and outcomes.json."""
+    if item.state != "invalid":
+        return None
+    evidence = getattr(item, "evidence", None)
+    row = (evidence.results.get(item.label) if evidence is not None else None) or {}
+    return row.get("invalid") or (item.notes[-1] if item.notes else None)
+
+
 def reserve_item(item, n, args, logdir):
     if not getattr(args, 'managed_verification', False):
         return
@@ -2419,6 +2431,7 @@ def summarize(items, wall, logdir, budget_seconds=600, monitor_lines=()):
                      "engine_slot_wait": round(it.slot_wait, 1),
                      "wait_seconds_by_reason": {k: round(v, 3) for k, v in it.wait_times.items()},
                      "exit": it.rc, "log": it.log,
+                     "invalid": invalid_reason(it),
                      "reused_from": getattr(it, "reused_from", None),
                      "attempts": it.attempts,
                      "repeated_seconds": sum(a['seconds'] for a in it.previous_attempts),
