@@ -569,6 +569,13 @@ const SIGNED_OUT_QUOTA = { state: "unavailable", windows: [], checkedAt: null, r
   message: "This Claude account is not signed in on this Mac.", signedIn: false };
 
 const FIXTURES = {
+  async "resources-keyboard"(browser) {
+    const page = await openApp(browser);
+    await page.keyboard.press("Tab");
+    await page.focus("#res-square");
+    await page.waitForSelector("#res-card.is-keyboard.is-open .res-view-hint", { state: "visible" });
+    return page;
+  },
   "question-edit": browser => questionState(browser,"edit"),
   "question-saved": browser => questionState(browser,"saved"),
   "question-retry": browser => questionState(browser,"retry"),
@@ -1452,6 +1459,7 @@ const FIXTURES = {
 /// names is present and usable on the screen the sentence appears on. Said here rather than
 /// left as an unexplained asymmetry.
 const TEXT_RENDERING_FIXTURES = new Set([
+  "resources-keyboard",
   "question-edit", "question-saved", "question-retry", "question-deleted", "question-storage",
   "connect-setup", "connect-setup-unreadable", "connect-helper-missing", "connect-history-full",
   "connect-history-unreadable", "connect-unavailable", "connect-address-invalid", "connect-credential-invalid",

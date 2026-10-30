@@ -24,7 +24,7 @@
 // reaches every number without color. There is no live region: nothing is announced every
 // second. The card opens on hover, on keyboard focus and on a click (pinned), and never moves
 // focus or changes the selected chat. Escape closes it while focus stays on the square.
-// Right-click, the context-menu key or Shift+F10 opens the view menu (Ink, Readout), whose
+// Down Arrow, right-click, the context-menu key or Shift+F10 opens the view menu (Ink, Readout), whose
 // choice is saved in the app's settings store (`config.rs` `resources_view`).
 (function () {
   const bridge = window.RichBridge;
@@ -42,6 +42,10 @@
   // square says Measuring, not Unavailable (system_resources.rs, the sampler loop).
   const FRESH_INTERVAL = /first CPU interval|fresh CPU interval/;
   const AFTER_SLEEP = /after sleep/;
+  // Match both the live rail state and the pre-paint durable mirror. The narrow drawer
+  // ignores the docked mirror, just as the shell's stylesheet does.
+  const visible = () => !document.hidden && !document.body.classList.contains("rail-closed") &&
+    (document.body.classList.contains("bp-narrow") || document.documentElement.dataset.sidebar !== "hidden");
   const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // ---- state --------------------------------------------------------------------------------
@@ -69,7 +73,7 @@
   btn.setAttribute("aria-label", "Mac resources");
   btn.setAttribute("aria-describedby", "res-card");
   btn.setAttribute("aria-expanded", "false");
-  btn.setAttribute("aria-keyshortcuts", "Shift+F10");
+  btn.setAttribute("aria-keyshortcuts", "ArrowDown Shift+F10");
   btn.innerHTML =
     '<span class="res-readout" aria-hidden="true">' +
     '<span class="res-num"><i class="res-key cpu"><i></i><i></i></i><b id="res-cpu">…</b></span>' +
@@ -92,8 +96,10 @@
     '<div class="res-axis" aria-hidden="true"><span>60 seconds ago</span><span>Now</span></div>' +
     '<dl class="res-rows" data-k="rows"></dl>' +
     '<p class="res-note" data-k="note" hidden></p>' +
+    '<p class="res-view-hint"></p>' +
     '<div class="res-foot"><span data-k="age"></span><span>Agents read this too</span></div>';
   document.body.appendChild(card);
+  card.querySelector(".res-view-hint").textContent = "Press ↓ to choose Ink or Readout";
   const bigCanvas = card.querySelector(".res-graph");
   const $ = (k) => card.querySelector(`[data-k="${k}"]`);
 
@@ -234,7 +240,7 @@
 
   let polling = false;
   async function poll() {
-    if (polling) return;
+    if (polling || !visible()) return;
     polling = true;
     const wall = Date.now();
     const mono = performance.now();
@@ -405,6 +411,7 @@
   }
 
   function paintTile() {
+    if (!visible()) return;
     const ctx = sizeCanvas(tileCanvas, 34, 34);
     const P = palette();
     ctx.fillStyle = P.ground;
@@ -450,6 +457,7 @@
   }
 
   function paintBig() {
+    if (!visible()) return;
     const w = 266;
     const h = 72;
     const ctx = sizeCanvas(bigCanvas, w, h);
@@ -519,6 +527,7 @@
 
   let lastRows = "";
   function render() {
+    if (!visible()) return;
     const c = S.current;
     const live = S.status === "live" && c;
     const pending = S.status === "measuring";
@@ -593,13 +602,14 @@
     return !focusDismissed && btn.matches(":focus-visible");
   }
   function isOpen() {
-    return menu.hidden && (pinned || hovering || focusShowsCard());
+    return visible() && menu.hidden && (pinned || hovering || focusShowsCard());
   }
   function sync() {
     const open = isOpen();
     if (open) place();
     const was = card.classList.contains("is-open");
     card.classList.toggle("is-open", open);
+    card.classList.toggle("is-keyboard", btn.matches(":focus-visible"));
     btn.setAttribute("aria-expanded", String(pinned && open));
     if (open && !was) paintBig();
     scheduleGlide();
@@ -651,8 +661,9 @@
       closeCard();
       return;
     }
-    if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+    if (e.key === "ArrowDown" || e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
       e.preventDefault();
+      e.stopPropagation();
       openMenu(null);
     }
   });
@@ -680,6 +691,13 @@
     if (isOpen()) place();
     if (!menu.hidden) closeMenu(false);
   });
+
+  // Name wrapping and the user's type size can change the footer's height without a
+  // window resize. Keep an open card anchored to the square as that layout changes.
+  const footerWatch = new ResizeObserver(() => {
+    if (isOpen()) place();
+  });
+  footerWatch.observe(footer);
 
   // ---- the view menu ----------------------------------------------------------------------------
   function items() {
@@ -755,7 +773,7 @@
   let glideTimer = 0;
   let glideFrame = 0;
   function moving() {
-    if (document.hidden || reduced()) return false;
+    if (!visible() || reduced()) return false;
     return S.status === "live" || (S.status === "measuring" && !S.history.length);
   }
   function scheduleGlide() {
@@ -794,7 +812,7 @@
   let pollTimer = 0;
   function loop() {
     clearTimeout(pollTimer);
-    if (document.hidden) return;
+    if (!visible()) return;
     const wall = Date.now();
     const mono = performance.now();
     const sleepMs = S.lastTick ? wall - S.lastTick.wall - (mono - S.lastTick.mono) : 0;
@@ -818,15 +836,35 @@
     if (S.started) return;
     S.started = true;
     syncViewFromStore();
-    loop();
+    syncVisibility();
   }
-  document.addEventListener("visibilitychange", () => {
+  let wasVisible = null;
+  function syncVisibility() {
     if (!S.started) return;
-    if (document.hidden) {
-      clearTimeout(pollTimer);
-      scheduleGlide();
-    } else loop();
-  });
+    const shown = visible();
+    if (shown === wasVisible) return;
+    wasVisible = shown;
+    clearTimeout(pollTimer);
+    if (!shown) {
+      const focusInWidget = btn.contains(document.activeElement) || menu.contains(document.activeElement);
+      pinned = false;
+      hovering = false;
+      clearTimeout(hideTimer);
+      closeMenu(false);
+      sync();
+      if (focusInWidget && !document.hidden) document.getElementById("rail-toggle").focus();
+    } else {
+      // Age the held reading before painting, then ask the existing native cache for a fresh
+      // snapshot. Native collection and agent reads continue throughout the UI pause.
+      loop();
+      render();
+      sync();
+    }
+  }
+  document.addEventListener("visibilitychange", syncVisibility);
+  const railWatch = new MutationObserver(syncVisibility);
+  railWatch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  railWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-sidebar"] });
   const themeWatch = new MutationObserver(() => {
     lastRows = "";
     render();
