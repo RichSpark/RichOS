@@ -1936,6 +1936,61 @@ else
 fi
 
 # ===========================================================================
+# W25 — ONE FINDING, ONE ID, HOWEVER ITS COUNT MOVES (2026-10-28/29)
+# ===========================================================================
+# "/private/tmp/claude-501: N undecided claude-session entries (S), e.g. <path>: <why>"
+# reached the lead under 26 escalation ids, each acknowledged as the same finding again.
+# Its count, size and example move with every second review's 96-byte folder; its root
+# and its kind of failure do not. Acknowledged once, it stays acknowledged while only
+# those move: a repeat keeps its id. (W23h2: another kind of failure is still new.)
+SD="$REAL/scope-d"; mkdir -p "$SD"
+claude_rows() {            # <count> <size> <example> <entry|entries>: the reaper's own shape
+    healthy_reaper_state "$RS" '"outcome": "unresolved", "roots": ["'"$SD"'"], "unresolved": [{"scope": "'"$SD"'", "class": "claude-session", "count": '"$1"', "bytes": 0, "identity": "i'"$1"'", "cause": "'"$1"' undecided claude-session '"$4"' ('"$2"'), e.g. '"$SD/$3"': a running claude process is named by no session file and started before this scratch was last written, so it could own it"}]'
+}
+N0="$(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])')"
+claude_rows 2 "320 B" a entries
+run_wd_scheduled >/dev/null 2>&1
+ID5="$(wd_assoc)"
+esc ack "$ID5" --disposition "known: empty second-review session folders, filed as a follow-up"
+claude_rows 15 "37.8 MB" b entries
+run_wd_scheduled >/dev/null 2>&1
+claude_rows 1 "96 B" c entry
+run_wd_scheduled >/dev/null 2>&1
+N5="$(( $(esc_rows 'len([r for r in rows if r.get("event") == "Escalation"])') - N0 ))"
+if [ -n "$ID5" ] && [ "$(wd_assoc)" = "$ID5" ] && [ "$N5" = "1" ]; then
+    ok "W25  an acknowledged finding whose count, size and example change keeps its one id (no new escalation)"
+else
+    bad "W25  the same finding was raised again under a new id (first=$ID5 now=$(wd_assoc) raised=$N5)"
+fi
+# W25b: the numbers dropped are measurements, never the place. Two roots that differ only
+# in a digit (/Volumes/SSD1/cache, /Volumes/SSD2/cache) are two findings; one root whose
+# count and size move is still one.
+if W25B="$(python3 - "$SCRIPT_DIR/lib" <<'PYKEY' 2>&1
+import importlib.util, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+spec = importlib.util.spec_from_file_location('watchdog', Path(sys.argv[1]) / 'disk-watchdog.py')
+w = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(w)
+def p(root, n, size):
+    return "%s: %d undecided claude-session entries (%s), e.g. %s/x: why" % (root, n, size, root)
+k = w.finding_key
+checks = {
+    "different_roots_same_key": k([p("/Volumes/SSD1/cache", 2, "320 B")]) == k([p("/Volumes/SSD2/cache", 2, "320 B")]),
+    "root_with_space_digit_same_key": k([p("/Volumes/SSD 1/cache", 2, "1 KB")]) == k([p("/Volumes/SSD 2/cache", 2, "1 KB")]),
+    "count_move_new_key": k([p("/private/tmp/claude-501", 2, "320 B")]) != k([p("/private/tmp/claude-501", 15, "37.8 MB")]),
+    "path_in_cause_merged": k(["the scheduled cleanup job is not installed (/a/job1.plist)"]) == k(["the scheduled cleanup job is not installed (/a/job2.plist)"]),
+}
+print(checks)
+sys.exit(1 if any(checks.values()) else 0)
+PYKEY
+)"; then
+    ok "W25b a root is kept verbatim: roots differing only in a digit are two findings, a moved count is one"
+else
+    bad "W25b the finding key merged distinct roots or split one finding: $W25B"
+fi
+
+# ===========================================================================
 # W27 — NOTHING IN THIS SUITE WALKED THE REAL MACHINE
 # ===========================================================================
 if [ -s "$DU_ALL" ] && [ ! -s "$DU_OUTSIDE" ]; then

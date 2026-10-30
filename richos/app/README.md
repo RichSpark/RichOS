@@ -476,7 +476,16 @@ richos/app/
                               reports `requires_thread_isolation()` true — `MockCognition`
                               reports false and never comes down this path — and its `Drop`
                               is the only honest witness that a parked desk was not quietly
-                              killed
+                              killed. Past the cap a desk with a running turn is passed over
+                              for the next oldest idle one
+    tests/idle_front_desk_retirement_tests.rs for idle retirement (follow-ups,
+                              decision 3): a parked desk idle past `idle_session_minutes` has
+                              its child ended and the desk on screen never does; zero retires
+                              nothing; a running turn, input awaiting admission, a background
+                              command, an unanswered question or a queued message each keeps
+                              its desk, and each released hold lets it go; a retired
+                              conversation's next message spawns a desk on the thread's own
+                              session and is answered with what was said before
     tests/two_conversations_at_once_tests.rs against the REAL delivered engine for
                               his per-thread ECS cursor: two conversations hold turns open at
                               once and BOTH check point, with the identical sequence on the

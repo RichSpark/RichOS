@@ -29,6 +29,18 @@ KEYS = (
 )
 RESOLVED = 'RICHOS_MACHINE_SETTINGS_RESOLVED'
 
+# NUMBERS, NOT PATHS, AND NEVER IN .env. Every reader of `.env`, the engine the app
+# has installed included, refuses a key it does not know (`parse` below), so a number written
+# there would stop every older engine on the machine from reading its paths at all. A machine's
+# limits live in a file of their own beside it, `limits.env`, read only by `limit()`. Its name
+# may be given in RICHOS_LIMITS_FILE; a limit's own name in the environment wins over the file.
+#   name: (smallest, largest) whole number accepted
+LIMITS = {
+    # testvm/slots.py: MB that must stay available for the Mac once a test guest has all its RAM.
+    'TESTVM_MEMORY_FLOOR_MB': (256, 65536),
+}
+LIMITS_FILE = 'RICHOS_LIMITS_FILE'
+
 
 def parse(text, source='<settings>'):
     result = {}
@@ -73,6 +85,60 @@ def load(environment=None, home=None):
     if 'RICHOS_NATIVE_ANDROID_CACHE' in result:
         result.setdefault('RANDROID_CACHE', result['RICHOS_NATIVE_ANDROID_CACHE'])
     return result
+
+
+def _limit_value(key, raw, source):
+    low, high = LIMITS[key]
+    if not re.fullmatch(r'[0-9]{1,9}', raw) or not low <= int(raw) <= high:
+        raise ValueError(f'{source}: {key} must be a whole number from {low} to {high}, not {raw!r}')
+    return int(raw)
+
+
+def parse_limits(text, source='<limits>'):
+    result = {}
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        key, separator, value = line.partition('=')
+        key, value = key.strip(), value.strip()
+        if not separator or key not in LIMITS or key in result:
+            raise ValueError(f'{source}:{number}: malformed, duplicate or unknown limit {key}')
+        result[key] = _limit_value(key, value, f'{source}:{number}')
+    return result
+
+
+def limits_file(environment=None, home=None):
+    env = os.environ if environment is None else environment
+    explicit = env.get(LIMITS_FILE)
+    if explicit is not None:
+        if not Path(explicit).is_absolute():
+            raise ValueError(f'{LIMITS_FILE} must be an absolute path')
+        return Path(explicit)
+    return Path(home or env.get('HOME') or Path.home()) / 'Library/Application Support/RichOS/limits.env'
+
+
+def limit(key, default, environment=None, home=None):
+    """(value, where it came from) for one of LIMITS: the environment, else this machine's
+    limits file, else `default`, which the caller states. A malformed value is an error, never
+    a silent default: a limit somebody set and nobody applies is worse than none."""
+    if key not in LIMITS:
+        raise ValueError(f'unknown limit {key}')
+    env = os.environ if environment is None else environment
+    if env.get(key) is not None:
+        return _limit_value(key, env[key], f'environment {key}'), f'environment {key}'
+    source = limits_file(env, home)
+    try:
+        values = parse_limits(source.read_text(encoding='utf-8'), str(source))
+    except FileNotFoundError:
+        if env.get(LIMITS_FILE) is not None:
+            raise ValueError(f'explicit limits file does not exist: {source}') from None
+        values = {}
+    except OSError as exc:
+        raise ValueError(f'cannot read limits file {source}: {exc}') from exc
+    if key in values:
+        return values[key], f'machine setting {key} in {source}'
+    return default, f'default; no {key} in {source}'
 
 
 def apply():
@@ -140,16 +206,68 @@ def agent_root(environment=None):
     return root
 
 
+WORKER_TAG = 'RICHOS_AGENT_OWNER'
+WORKER_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}')
+
+
 def scratch(name, environment=None):
+    """The named scratch folder for `name`, one subfolder per worker.
+
+    Every worker of one teammate asks for the same name ("zach"), so the folder itself used to be
+    shared: one worker's cleanup of "its own" scratch deleted another worker's files mid-run
+    (2026-10-29). A worker's shell carries RICHOS_AGENT_OWNER (its agent id, set by the engine's
+    shell wrapper for every subagent call), so the folder returned is <root>/<name>/<worker id>
+    and `rm -r` of it touches that worker alone. A caller with no worker id (the lead's own
+    session, a script) gets <root>/<name> as before.
+    """
+    env = os.environ if environment is None else environment
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', name) or name in ('.', '..'):
         raise ValueError('agent name must be one safe path component')
     root = agent_root(environment)
     target = root / name
+    worker = env.get(WORKER_TAG) or ''
+    if worker:
+        if not WORKER_ID.fullmatch(worker) or worker in ('.', '..'):
+            raise ValueError('worker id must be one safe path component')
+        target = target / worker
     resolved = target.resolve()
-    if not resolved.is_relative_to(root) or resolved == root:
+    if not resolved.is_relative_to(root) or resolved == root or resolved == (root / name).resolve() and worker:
         raise ValueError('named scratch escapes its configured root')
     resolved.mkdir(mode=0o700, parents=True, exist_ok=True)
     return resolved
+
+
+def claude_home(environment=None):
+    """The ONE Claude home of this machine, as a string: where the engine's own stores live
+    (land locks and land records, the fence settings beside them, second-review records, the
+    workspace registry's fallback).
+
+    `CLAUDE_CONFIG_DIR`, else `~/.claude`, EXCEPT where `CLAUDE_CONFIG_DIR` is the added Claude
+    account's folder the app gave this lease (`RICHOS_CLAUDE_ACCOUNT_DIR`): then
+    `RICHOS_CLAUDE_HOME`, Account 1's folder. On an added account the app points
+    `CLAUDE_CONFIG_DIR` at that account's folder, and a store derived from it split by account:
+    a Work lease's land lease, fence settings and review records went to claude-accounts/2 while
+    the installed fence and a terminal read ~/.claude (richos-hq follow-ups, 2026-10-28; Rich's
+    decision 23:58Z: one machine-wide home, the same for terminal and app). A terminal sets none
+    of the three and resolves exactly as before.
+
+    WHY THE PAIR, NOT RICHOS_CLAUDE_HOME ALONE. Every test sandbox isolates the engine's stores
+    with its own `CLAUDE_CONFIG_DIR` (global-state-witness.sh: "CLAUDE_CONFIG_DIR=$(mktemp -d)").
+    Run from an app shell, it inherits the lease's `RICHOS_CLAUDE_HOME`; were that to win, the
+    sandbox's land locks and review ledger would be the live ones. A `CLAUDE_CONFIG_DIR` other
+    than the one the app set is somebody's own choice, and it wins, as it always has.
+
+    NOT for what Claude Code itself writes (sessions/, projects/): those live under the
+    account's own `CLAUDE_CONFIG_DIR`, and their readers keep reading it there.
+
+    Standard library only: install copies this file beside the operator fence (PROGRAM_FILES)."""
+    env = os.environ if environment is None else environment
+    config = (env.get('CLAUDE_CONFIG_DIR') or '').strip()
+    home = (env.get('RICHOS_CLAUDE_HOME') or '').strip()
+    account = (env.get('RICHOS_CLAUDE_ACCOUNT_DIR') or '').strip()
+    if config and home and account and os.path.normpath(config) == os.path.normpath(account):
+        return home
+    return config or os.path.join(os.path.expanduser('~'), '.claude')
 
 
 def main():

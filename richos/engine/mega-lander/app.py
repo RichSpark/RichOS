@@ -32,6 +32,9 @@ def load(name, path):
 ECS = load("richos_ecs_app", ENGINE / "ecs/adapters/app.py")
 W = load("richos_app_workspaces", ENGINE / "mega-lander/workspaces.py")
 INSTRUCTIONS = load("richos_instruction_files", ENGINE / "scripts/lib/instruction_files.py")
+REVIEWS = load("richos_app_reviews", ENGINE / "scripts/lib/app_review.py")
+FENCES = load("richos_app_review_fences", ENGINE / "scripts/lib/operator_fences.py")
+CLOSURE = load("richos_scope_closure", ENGINE / "scripts/lib/scope_closure.py")
 
 
 def bounded(path, limit=1024 * 1024):
@@ -63,9 +66,12 @@ SCOPE_LIMIT = 256 * 1024
 
 def read_scope(path, require_action=True, allow_read_only=False):
     value = bounded(Path(path), SCOPE_LIMIT)
-    if value.get("version") != 1 or (require_action and value.get("actions_allowed") is not True
+    if value.get("version") != 1:
+        raise ValueError("work tools require a current visible app turn: the scope file is not a version 1 app scope")
+    if (require_action and value.get("actions_allowed") is not True
             and not (allow_read_only and value.get("read_only_tools"))):
-        raise ValueError("work tools require a current visible app turn")
+        # Its cause and scope, never the bare sentence (2026-10-28: read as a Stop nobody made).
+        raise ValueError("work tools require a current visible app turn. " + CLOSURE.describe(value))
     if require_action:
         if any(value["binding"][key] != os.environ.get(env) for key, env in (("entity_id", "RICHOS_APP_ENTITY"), ("thread_id", "RICHOS_APP_THREAD"))):
             raise ValueError("work tools cannot cross their host-issued company/thread partition")
@@ -1289,6 +1295,37 @@ def save_words(path, words):
         temporary.unlink(missing_ok=True)
 
 
+def handover_proof_incomplete(worker, commits):
+    """The refusal for a review of a handover whose own proof run FAILED, or None.
+
+    2026-10-28 15:22Z (nightly 78): three reviewer preparations for a handover were refused with
+    "I could not give this work its own separate copy of your project", while the handover's own
+    proof report, recorded at its end, said "NOT complete" (54 planned, 41 passed, 12 failed). A
+    lead could not act on the right thing without forensic work. The report is the one
+    `workspaces.attach_proof_reports` saved on the worker's workspace when it handed in, read for
+    exactly the commit under review; a report of another commit, or none, refuses nothing. Only
+    failed checks (or a crashed run) refuse: a check that could not run is named by the report and
+    judged by the reviewer, as before."""
+    canonical = W.load_agent(worker["workspace_ref"]) if worker.get("workspace_ref") else None
+    if not canonical:
+        return None
+    for workspace in W.live_workspaces(canonical):
+        report = workspace.get("proof_report") or {}
+        if not report.get("head") or report["head"] not in commits.values():
+            continue
+        failed = (report.get("outcomes") or {}).get("failed", 0)
+        if not failed and not report.get("crashed"):
+            continue
+        names = [u.get("check") for u in report.get("unresolved") or [] if u.get("result") == "failed"]
+        return ("this handover's proof run is not complete: %d failed%s (%s%s; run %s, commit %s). Continue the "
+                "worker (prepare a worker with continue_of %s) to fix it, then review the commit it hands in"
+                % (failed, ", and the run crashed" if report.get("crashed") else "",
+                   ", ".join(str(n) for n in names[:10]) or report.get("line") or "no check named",
+                   " and %d more" % (len(names) - 10) if len(names) > 10 else "",
+                   report.get("run"), report["head"][:12], worker["id"]))
+    return None
+
+
 def prepare(scope_path, scope, args):
     if set(args) - {"request_id","obligation_id","repo","repos","title","brief","role","teammate","model","integration","base","review_of","continue_of"}:
         raise ValueError("unsupported preparation fields")
@@ -1343,7 +1380,11 @@ def prepare(scope_path, scope, args):
         path = root / (identity + ".json")
         if path.exists():
             old = bounded(path)
-            if old["request"] != normalized: raise ValueError("request_id was already used for different work")
+            if old["request"] != normalized:
+                differs = sorted(k for k in set(old["request"]) | set(normalized) if old["request"].get(k) != normalized.get(k))
+                raise ValueError("request_id was already used for different work: %s is receipt %s (status %s), "
+                                 "prepared with another %s. Use a new request_id for this request"
+                                 % (request_id, old["name"], old["status"], ", ".join(differs)))
             if preparing_elsewhere(old): return view(old)   # still being prepared: nothing to settle or project yet
             refresh(old)
             if old["status"] == "prepared" and old["binding"] != scope["binding"] and never_started(old):
@@ -1379,7 +1420,12 @@ def prepare(scope_path, scope, args):
                 # An assignment may have several independent workers, reviewers or consults.
                 # Reject an exact duplicate under another id, not every request sharing a duty.
                 if old["request"] == normalized and old["status"] in ("preparing","prepared","dispatching","running","unknown"):
-                    raise ValueError("this request already has unresolved work; inspect its receipt before retrying")
+                    # Which receipt it collides with (2026-10-28: two prepares under fresh ids were
+                    # refused with no name, and cleared only when the title was changed).
+                    raise ValueError("this request already has unresolved work: receipt %s (request %s, status %s, "
+                                     "prepared in turn %s) has the same assignment, role and brief. Dispatch or "
+                                     "inspect that receipt, or settle it, before preparing it again"
+                                     % (old["name"], old.get("request_id"), old["status"], old["binding"].get("turn_id")))
         name = f"{teammate}-{model}-{identity[:12]}"
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
@@ -1436,6 +1482,9 @@ def prepare(scope_path, scope, args):
                     raise ValueError("commit or reconcile the worker's uncommitted changes before review")
                 commits[target_repo] = git(target["path"], "rev-parse", "HEAD")
             commit = commits[str(repo)]
+            incomplete = handover_proof_incomplete(worker, commits)
+            if incomplete:
+                raise ValueError(incomplete)
             if args.get("base") not in (None, commit): raise ValueError("review base must be the actual worker commit")
             record["review_target"] = review_identity(worker["id"], commits, str(repo))
             if len(commits) == 1:
@@ -1524,7 +1573,19 @@ def prepare(scope_path, scope, args):
                     outcome = None
                 preparation_refused = outcome == {"ready": False, "phase": "preflight", "created": []}
                 raise
-            read_scope(scope_path)  # Stop cannot turn preparation into permission to dispatch.
+            current = read_scope(scope_path)  # Stop cannot turn preparation into permission to dispatch.
+            # THE SESSION'S BINDING AS IT IS NOW, NOT AS IT WAS WHEN THIS CALL BEGAN (second review
+            # of 6e9a03c3, finding 2). The workspace takes a while to create; if the host bound this
+            # session's next input meanwhile, the binding this call started with is stale to ECS and
+            # its final projection was refused ("stale app binding"), marking a created workspace
+            # unknown. The same company, thread and provider session is the very check `prepare`'s
+            # own rebind and `dispatch_intent` make; anything else is still refused below.
+            moved = (current["binding"] != scope["binding"]
+                     and carried_obligation(current) == carried_obligation(scope)
+                     and all(current["binding"].get(key) == scope["binding"].get(key)
+                             for key in ("entity_id", "thread_id", "session_id")))
+            if moved:
+                scope = {**scope, "binding": current["binding"]}
             if ready.get("ready") is not True or any(g.get("verdict") != "ok" for g in ready.get("guards",[])):
                 # THE APP'S OWN WORDS, because this sentence can reach a person.
                 # A guard that REFUSES exits nonzero and never gets here — the
@@ -1563,6 +1624,9 @@ def prepare(scope_path, scope, args):
                 record = bounded(path)
                 require_not_stopped(scope, obligation)
                 record.pop("preparing_by", None)
+                if moved:
+                    record["rebound"] = {"at": W.iso(), "from_turn": record["binding"].get("turn_id"), "by": "prepare"}
+                    record["binding"] = scope["binding"]
                 record.update(status="prepared",payload={**ready["payload"],"run_in_background":True},
                     workspace_ref=W.named_key(scope["binding"]["session_id"],name))
                 save(path,record);project(scope,path,record)
@@ -1630,16 +1694,54 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
         if len(matches) != 1: raise ValueError("Agent input is absent from or differs from its prepared scoped receipt; prepare this assignment with the app work tool before calling Agent")
         path,record = matches[0]
         require_not_stopped(scope, record["request"]["obligation_id"])
-        if record["status"] == "prepared" and record["binding"] != scope["binding"] and not admitted(record):
-            raise ValueError("this was prepared in an earlier turn: call prepare again with the same request_id "
-                             "to dispatch it in this turn, or prepare a replacement under a new request_id")
-        if record["binding"] != scope["binding"] or record["status"] != "prepared":
-            raise ValueError("this dispatch is stale or already attempted; reconcile before retrying")
+        # A PREPARE FROM AN EARLIER TURN OF THIS SESSION DISPATCHES AS IT STANDS (P1-A, 2026-10-29).
+        # Stu is woken by his own job's notification, which writes no new scope; the receipt he
+        # prepared in an earlier turn, or one whose dispatch was refused there, carries that turn's
+        # binding. This used to refuse it ("prepared in an earlier turn: call prepare again", and
+        # before f0a399b8 "stale or already attempted"), so a notification turn could not dispatch
+        # its own job's prepared work and a refused dispatch was not retryable as sent. It is
+        # admitted on exactly the checks `prepare`'s own rebind makes: the same company, thread and
+        # provider session, never admitted before, and its assignment still open and not stopped.
+        rebind = (record["status"] == "prepared" and record["binding"] != scope["binding"] and not admitted(record))
+        obligation = record["request"]["obligation_id"]
+        if rebind:
+            if any(record["binding"].get(key) != scope["binding"].get(key) for key in ("entity_id", "thread_id", "session_id")):
+                raise ValueError("receipt %s (request %s) was prepared in an earlier provider session (%s), which "
+                                 "no dispatch can reach; prepare it again under a new request_id"
+                                 % (record["name"], record.get("request_id"), record["binding"].get("session_id")))
+        elif record["binding"] != scope["binding"] or record["status"] != "prepared":
+            raise ValueError("receipt %s (request %s) was already attempted, so it is not dispatched again: its "
+                             "status is %s%s. Inspect it; a new attempt is prepared under a new request_id"
+                             % (record["name"], record.get("request_id"), record["status"],
+                                ", Agent call %s" % record["tool_use_id"] if record.get("tool_use_id") else ""))
+        # A WORK SEAT DISPATCHES ONLY ITS OWN ASSIGNMENT'S RECEIPT (second review of 6e9a03c3,
+        # finding 3): a lease reused for another assignment carries that one, read off its scope.
+        carried = carried_obligation(scope)
+        if carried is not None and carried != obligation:
+            raise ValueError("receipt %s cannot be dispatched here: it was prepared for assignment %s, and this "
+                             "work carries assignment %s" % (record["name"], obligation, carried))
+        # EVERY DISPATCH, NOT ONLY A REBOUND ONE (second review of 6e9a03c3, finding 1): an assignment
+        # completed, cancelled or superseded after its work was prepared never starts that work, in
+        # the turn that prepared it as in any later one. Measured: a job superseded through the
+        # checkpoint tool in the same turn was dispatched ("assignment=superseded; receipt=dispatching").
+        item = ecs(scope, {"protocol":1,"command":"inspect","binding":scope["binding"],
+                           "query":{"item_id":obligation}})["item"]
+        if item["status"] not in ("accepted","active","pending","blocked"):
+            raise ValueError("receipt %s cannot be dispatched: its assignment %s is %s, not open"
+                             % (record["name"], obligation, item["status"]))
         ti = {"name": record["name"], **ti}
         payload["tool_input"] = ti
         if ti != record["payload"]: raise ValueError("Agent input differs from its prepared scoped receipt")
         if payload.get("session_id") != scope["binding"]["session_id"] or not payload.get("tool_use_id"):
             raise ValueError("dispatch has no matching native call identity")
+        if review_refused:
+            # Recorded whatever state the turn's grant is in now: Pierce's findings are the cause of
+            # this refusal, and a grant that closed while the review ran must not replace them with
+            # "work tools require a current visible app turn" (2026-10-29 08:05Z) or leave the
+            # receipt unmarked. The receipt stays `prepared`, so the same call can be sent again.
+            record["pierce_refused"] = True
+            save(path,record)
+            return
         read_scope(os.environ["RICHOS_APP_SCOPE"])
         if inspect_only:
             request = record["request"]
@@ -1649,10 +1751,6 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
                     "acceptance": record.get("recovery_acceptance") or instruction.get("sha256") or hashlib.sha256(
                         json.dumps(instruction["ledger_ref"], sort_keys=True).encode()).hexdigest(),
                     "authority": instruction["ledger_ref"], "instruction": instruction}
-        if review_refused:
-            record["pierce_refused"] = True
-            save(path,record)
-            return
         # The repository's own instruction file joins the prompt here, and only here: the
         # admitted call's input is what the hook hands Agent as `updatedInput`, so the worker
         # gets the file in full and Stu, who prepared and submitted the call, never read it.
@@ -1662,6 +1760,9 @@ def dispatch_intent(scope, payload, inspect_only=False, review_refused=False):
                 raise ValueError("the prepared brief has lost the place for the repository's own instructions")
             ti = {**ti, "prompt": ti["prompt"].replace(INSTRUCTIONS.PLACEHOLDER, kept.read_text(encoding="utf-8"), 1)}
         record.pop("pierce_refused", None)
+        if rebind:
+            record["rebound"] = {"at": W.iso(), "from_turn": record["binding"].get("turn_id"), "by": "dispatch"}
+            record["binding"] = scope["binding"]
         record.update(status="dispatching",tool_use_id=payload["tool_use_id"])
         save(path,record)
         payload["tool_input"] = ti
@@ -1860,6 +1961,28 @@ def observe(scope, payload=None):
     # not write through a turn binding which has already been closed or superseded.
 
 
+def automatic_reviews(worker, commits):
+    """Consume the watcher's exact handover verdicts, using the land gate's finding rules."""
+    ledger=REVIEWS.app_paths(state())["ledger"]
+    canonical=W.load_agent(worker["workspace_ref"])
+    work=W.recovery_work_key(canonical) if canonical else ""
+    rows=[row for row in FENCES.read_reviews(ledger) if work and row.get("work")==work]
+    deferred=FENCES.read_deferrals(ledger)
+    refs={}
+    for repo,commit in commits.items():
+        row,_mid=FENCES.review_of(rows,commit,repo,deferred)
+        record=FENCES.review_record(row) if row else {}
+        saved=record.get("row") or {}
+        if (not row or row.get("verdict")!="passed" or not isinstance(record.get("answer"),dict)
+                or FENCES.review_gaps(ledger,[commit],repo)
+                or any(saved.get(k)!=row.get(k) for k in ("id","tip","work","repo_id","trigger"))):
+            raise ValueError("The automatic independent review of %s in %s has not passed or its record is unavailable. "
+                             "Wait for its review notice or address its findings; do not prepare another reviewer."
+                             % (commit[:12],repo))
+        refs[repo]=row["id"]
+    return refs
+
+
 def verification_evidence(scope, identity):
     """Read durable host receipts and Git again, including after interrupted cleanup."""
     root=folder(scope)
@@ -1875,6 +1998,18 @@ def verification_evidence(scope, identity):
             raise ValueError("review completion requires the actual independent reviewer's observed report")
         return f"review:{worker['id']}:{report['commit']}:{report['verdict']}:{observed['message_sha256']}"
     integration=worker.get("integration",{})
+    if integration.get("automatic_reviews"):
+        repo=worker["request"]["repo"]
+        landed=[(repo,integration)]+sorted((integration.get("repos") or {}).items())
+        commits={r:entry.get("commit") for r,entry in landed}
+        if (not integration.get("verified") or set(commits)!=set(request_repos(worker))
+                or any(not re.fullmatch(r"[a-f0-9]{40,64}",c or "") for c in commits.values())):
+            raise ValueError("verified integration requires the automatic independent review of every commit")
+        refs=automatic_reviews(worker,commits)
+        for r,entry in landed:
+            if r not in repositories(scope): raise ValueError("the repository is no longer connected to this company")
+            git(r,"merge-base","--is-ancestor",entry["commit"],"refs/heads/"+entry["branch"])
+        return "+".join("git:%s:%s:%s:review:%s" % (r,entry["branch"],entry["commit"],refs[r]) for r,entry in landed)
     reviewer=read_record(root,integration.get("reviewer_id"))
     observed=reviewer.get("review_observation",{})
     commit=integration.get("commit")
@@ -2052,9 +2187,11 @@ def _take_fence_lease(repo, lock):
     THE LEASE IS TAKEN UNDER THE FENCE'S OWN LOCK, named by the repository's launcher (its baked
     home and key): the lock land-lease.sh takes and releases a lease under. Usually that is `lock`,
     the land flock this land already holds (operator_fences_admin installs the launcher's home from
-    the same land_lock_path). It is ANOTHER file when this lease runs under another Claude account:
-    EngineProfile.configure points CLAUDE_CONFIG_DIR at the selected account's folder, and the land
-    lock's home follows it while the fence keeps the home it was installed with. Then the fence's
+    the same land_lock_path). It is ANOTHER file only when the fence was installed from another
+    home than this land's: the land lock's home is the machine's one Claude home
+    (machine_settings.claude_home: Account 1's folder, RICHOS_CLAUDE_HOME, for a lease on an added
+    account, which EngineProfile.configure marks), so since 2026-10-28 a lease on an added
+    account no longer moves it; a launcher installed with another home still can. Then the fence's
     lock is taken as well, after this land's own (one order for every land, so two never wait on
     each other), and a live lease of another holder is waited for under it, within the land lock's
     bound.
@@ -2262,7 +2399,8 @@ def require_current_assignment(scope, record):
 
 
 def integrate(scope_path,scope,args):
-    if set(args)!={"worker_id","reviewer_id"}: raise ValueError("integration needs the worker and reviewer receipts")
+    if "worker_id" not in args or set(args)-{"worker_id","reviewer_id"}:
+        raise ValueError("integration needs the worker receipt")
     # The repository is read under this conversation's own receipt lock, which
     # is then RELEASED before the repository land lock is taken: see land_lock()
     # for why a wait that belongs to another conversation must not be held
@@ -2271,7 +2409,8 @@ def integrate(scope_path,scope,args):
     with locked(scope) as root:
         worker=read_record(root,args["worker_id"])
         require_current_assignment(scope,worker)
-        require_current_assignment(scope,read_record(root,args["reviewer_id"]))
+        if args.get("reviewer_id"):
+            require_current_assignment(scope,read_record(root,args["reviewer_id"]))
         if worker["request"]["role"]!="worker":
             raise ValueError("integration lands a worker's receipt; a %s has nothing to land" % worker["request"]["role"])
         repository=worker["request"]["repo"]
@@ -2289,30 +2428,35 @@ def integrate(scope_path,scope,args):
             # here would mean landing one repository under another's lock.
             if worker["request"]["repo"]!=repository or request_repos(worker)!=repositories_to_land:
                 raise ValueError("this receipt named another repository between being read and being locked")
-            reviewer=refresh(read_record(root,args["reviewer_id"]))
-            require_current_assignment(scope,reviewer)
             path=root/(worker["id"]+".json")
             existing=worker.get("integration")
-            if existing and existing["reviewer_id"] != reviewer["id"]:
+            reviewer_id=args.get("reviewer_id") or (existing or {}).get("reviewer_id")
+            reviewer=refresh(read_record(root,reviewer_id)) if reviewer_id else None
+            if reviewer: require_current_assignment(scope,reviewer)
+            if existing and existing.get("reviewer_id") != reviewer_id:
                 raise ValueError("integration already has a different reviewer; reconcile its receipt")
             if existing and existing.get("verified"):
                 verification_evidence(scope,worker["id"])
             else:
-                if worker["status"]!="run-ended" or reviewer["status"]!="run-ended":
+                if worker["status"]!="run-ended" or (reviewer and reviewer["status"]!="run-ended"):
                     raise ValueError("both provider runs must have an observed end before integration")
-                if not same_repos(request_repos(reviewer),repositories_to_land):
+                if reviewer and not same_repos(request_repos(reviewer),repositories_to_land):
                     raise ValueError("this reviewer did not review every repository of this work; "
                                      "a fresh independent review of all of them is required")
                 targets=target_workspaces(worker)
-                review_targets=target_workspaces(reviewer)
                 commits={r:git(targets[r]["path"],"rev-parse","HEAD") for r in repositories_to_land}
-                if reviewer.get("review_target")!=review_identity(worker["id"],commits,repository):
-                    raise ValueError("worker commit changed or this reviewer reviewed another assignment")
-                report=reviewer.get("review_observation",{})
-                if not report.get("valid") or report.get("report",{}).get("verdict")!="passed":
-                    raise ValueError("the actual reviewer has not returned a passing review")
-                if any(git(review_targets[r]["path"],"rev-parse","HEAD")!=commits[r] for r in repositories_to_land):
-                    raise ValueError("reviewer changed its commit; a fresh independent review is required")
+                refs={}
+                if reviewer:
+                    review_targets=target_workspaces(reviewer)
+                    if reviewer.get("review_target")!=review_identity(worker["id"],commits,repository):
+                        raise ValueError("worker commit changed or this reviewer reviewed another assignment")
+                    report=reviewer.get("review_observation",{})
+                    if not report.get("valid") or report.get("report",{}).get("verdict")!="passed":
+                        raise ValueError("the actual reviewer has not returned a passing review")
+                    if any(git(review_targets[r]["path"],"rev-parse","HEAD")!=commits[r] for r in repositories_to_land):
+                        raise ValueError("reviewer changed its commit; a fresh independent review is required")
+                else:
+                    refs=automatic_reviews(worker,commits)
                 canonical=W.load_agent(worker["workspace_ref"])
                 plan={}
                 for repo in repositories_to_land:
@@ -2322,7 +2466,8 @@ def integrate(scope_path,scope,args):
                     if problem: raise ValueError(problem)
                     if git(repo,"symbolic-ref","--short","HEAD")!=branch:
                         raise ValueError("select the recorded integration branch before integrating")
-                    for tree in (repo,targets[repo]["path"],review_targets[repo]["path"]):
+                    trees=[repo,targets[repo]["path"]]+([review_targets[repo]["path"]] if reviewer else [])
+                    for tree in trees:
                         if git(tree,"status","--porcelain","--untracked-files=all"):
                             raise ValueError("integration preserves local edits; reconcile the dirty checkout first")
                         for marker in ("MERGE_HEAD","CHERRY_PICK_HEAD","REVERT_HEAD","rebase-merge","rebase-apply"):
@@ -2346,9 +2491,10 @@ def integrate(scope_path,scope,args):
                         merge_tree(repo,tip,commit,branch)   # refuses a conflict before any intent is written
                     plan[repo]={"commit":commit,"branch":branch,"tip":tip,"already":already}
                 if not existing:
-                    worker["integration"]={"reviewer_id":reviewer["id"],"commit":plan[repository]["commit"],
+                    worker["integration"]={"reviewer_id":reviewer_id,"commit":plan[repository]["commit"],
                         "branch":plan[repository]["branch"],"before":plan[repository]["tip"],
                         "instruction_ref":worker["instruction_ref"],"verified":False}
+                    if refs: worker["integration"]["automatic_reviews"]=refs
                     if len(repositories_to_land)>1:
                         worker["integration"]["repos"]={r:{"commit":plan[r]["commit"],"branch":plan[r]["branch"],
                             "before":plan[r]["tip"]} for r in repositories_to_land[1:]}
@@ -2383,7 +2529,7 @@ def integrate(scope_path,scope,args):
                     commit,branch,tip=plan[repo]["commit"],plan[repo]["branch"],plan[repo]["tip"]
                     if not plan[repo]["already"]:
                         try:
-                            landed=plan[repo]["landed"]=land_merge(repo,tip,commit,branch,reviewer["id"],
+                            landed=plan[repo]["landed"]=land_merge(repo,tip,commit,branch,reviewer_id or refs[repo],
                                                                    W._author_runs(chain,commit))
                         except ValueError as error:
                             if landed_now:
@@ -2901,7 +3047,7 @@ TOOLS = [
     {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
     {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns agent_payload only while no dispatch has been attempted. Submit that exact JSON to Agent once. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused, or it was prepared in an earlier turn; what it created is withdrawn only when it holds no commit and no uncommitted file, and anything else is kept and reported. A preparation from an earlier turn is dispatched by preparing it again with the same request_id. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
-    {"name":"integrate","description":"After an authorized implementation and an actual passing independent review, merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id","reviewer_id"],"additionalProperties":False}},
+    {"name":"integrate","description":"When the automatic independent handover review passes, integrate with worker_id alone. Do not prepare a routine reviewer agent: the watcher uses Codex when enabled and available, otherwise Claude automatically. reviewer_id is accepted for an existing explicit reviewer. Merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers; RichOS then sends a team_reloaded message: carry on there with the work that waited for them. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
     {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a later turn prepares a replacement for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded. With registry_record instead of request_id, it removes one record the workspace registry reports as unreadable, only when no workspace lifecycle wrote it (a stray test fixture); it is moved aside, never deleted, and a record that could own a workspace is refused.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"registry_record":{"type":"string"},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["reason"],"additionalProperties":False}},

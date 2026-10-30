@@ -74,6 +74,28 @@
 #   C25  --follow-up reads a finding as the land fence does: a "withdrawn" from a review of
 #        an unrelated tip (one not built on the finding's tip) never closes it, so the
 #        finding the fence refuses on can be filed, and the fence then admits that tip
+#   C26  a recheck that rules a finding "fixed" at exactly the tip it reviewed clears it at
+#        the fence for that tip, even when it was not handed that finding; and the next
+#        reviewer is handed every finding still open in its own tip's history, never one a
+#        review of an unrelated tip withdrew. A "still-open" ruling, or a "fixed" ruling at
+#        another tip, still blocks
+#   C27  a "fixed" ruling counts only from a review of the exact tip being decided, handed the
+#        finding or not: one at T1 leaves the finding open at T, and T's next reviewer is handed it
+#   C28  a "fixed" ruling at the finding's own tip counts through a chain of rechecks back to the
+#        review that raised it, even when the review between them omitted it; a fresh review of
+#        that tip still cannot clear it
+#   C29  the next reviewer of a tip is handed every finding the fence holds on at that tip, from
+#        every work key with a land review there, not only its own (a manual --recheck's range key)
+#   C30  C27's exact-tip rule holds only for findings raised in the land's own range: a branch that
+#        merged main, carrying a landed work's finding ruled fixed only at the landed commit, is
+#        admitted without re-ruling it
+#   C32  under a Work lease (CLAUDE_CONFIG_DIR and RICHOS_CLAUDE_ACCOUNT_DIR at the account's
+#        folder, RICHOS_CLAUDE_HOME at the machine-wide home) the ledger row is written in
+#        RICHOS_CLAUDE_HOME's state and every reader finds it there; without RICHOS_CLAUDE_HOME
+#        all follow CLAUDE_CONFIG_DIR as before, and so does a sandbox's own CLAUDE_CONFIG_DIR
+#   C31  an app review takes the app gate's own hold, in review-watch's real (cleared)
+#        environment, through the watcher's own spawn: the account in use published held,
+#        no Claude review starts; another account in use with room, it runs on that one
 #
 
 # Exit 0 = every case passed; exit 1 = at least one failed.
@@ -100,6 +122,8 @@ has()   { printf '%s' "$1" | grep -qF -- "$2"; }
 
 # --- isolation -------------------------------------------------------------
 unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT CODEX_HOME
+# An app lease exports these; a case that wants one sets it itself (C26).
+unset RICHOS_CLAUDE_HOME RICHOS_CLAUDE_ACCOUNT_DIR RICHOS_APP_STATE
 mkdir -p "$SB/bin" "$SB/state" "$SB/calls" "$SB/tmp" "$SB/claude" "$SB/codex-sessions" \
          "$SB/workspaces/agents" "$SB/workspaces/done"
 export SECOND_REVIEW_STATE_DIR="$SB/state"
@@ -627,6 +651,139 @@ check "C19 an app review runs Claude on the account in use when the reviewer sta
 [ "$(( $(wc -l <"$SB/state/reviews.jsonl" | tr -d ' ') - ROWS0 ))" = "2" ]
 check "C19 both reviews are in the same ledger: the account's folder moves only the reviewer" $? "rows before=$ROWS0"
 
+# --- C31 ---------------------------------------------------------------------
+# The second review of the usage-readings fix (rv-20261028T184535Z-d37b1f0d-e0d9, its blocking
+# finding; richos-hq follow-ups.md "app-launched reviews never apply the usage hold"): the app's
+# watcher starts with a cleared environment, so an app review's quota hold ran quota-watch, found
+# no QUOTA_PAUSE_PERCENT, answered UNKNOWN, and a Claude review started while the account in use
+# was held. Main had the same hole. The whole chain runs here in review-watch's REAL environment:
+# exactly the keys review_watch.rs `environment` and `app_environment` pass, read from that source
+# so the two cannot drift, a runtime PATH with no `claude` on it, a fixture HOME, and no other
+# variable but this file's fake-reviewer and fixture-state seams. No entity root, project folder,
+# app state or quota command, and the review's working directory (the watcher's state) holds no
+# orchestration.config. The app publishes Work, the account in use, as held: no Claude review may
+# start. Then Home is in use with room while Work's row is at 99%: the review runs, on Home.
+APP31="$SB/app31"
+mkdir -p "$APP31/engine-state" "$SB/runtime-bin" "$SB/home31" "$SB/account-two-31"
+# Each by its full path: a delivered runtime's bin/python3 and bin/git are wrappers that find their
+# real program beside themselves, so a link to one from elsewhere finds nothing.
+for tool in python3 git bash; do
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v "$tool")" >"$SB/runtime-bin/$tool"
+    chmod +x "$SB/runtime-bin/$tool"
+done
+TMPDIR="$RUN_TMP" python3 - "$SCRIPT_DIR" "$REPO" "$BASE" "$SB/brief.txt" "$APP31" "$SB/bin/fake-reviewer" \
+    "$SB/account-two-31" "$SB/rw31" "$SB/runtime-bin" "$SB/home31" "$RUN_CFG" <<'PY' >"$SB/c31.out" 2>&1
+import json, os, re, shutil, subprocess, sys, time
+scripts, repo, base, words, app, reviewer, folder, rwstate, runtime, home, cfg = sys.argv[1:]
+source = open(os.path.join(scripts, "..", "..", "app", "crates", "richos-core", "src", "review_watch.rs")).read()
+inherited = re.search(r"pub fn environment\(.*?for key in \[([^\]]*)\]", source, re.S)
+search = re.search(r'pub const SEARCH_ENV: &str = "([A-Z_]+)"',
+                   open(os.path.join(scripts, "..", "..", "app", "crates", "richos-core", "src", "codex_reviews.rs")).read())
+assert inherited and search, "review_watch.rs no longer builds its environment as this test reads it"
+path = runtime + ":/usr/bin:/bin:/usr/sbin:/sbin"
+assert shutil.which("claude", path=path) is None, "a claude on the runtime PATH would let main's path probe a real account"
+values = {"HOME": home, "TMPDIR": os.environ["TMPDIR"], "CLAUDE_CONFIG_DIR": cfg,
+          "USER": os.environ.get("USER", "fixture"), "LOGNAME": os.environ.get("LOGNAME", "fixture"),
+          "LANG": os.environ.get("LANG", "en_US.UTF-8")}
+env = {"PATH": path, search.group(1): path}
+for key in re.findall(r'"([A-Z_]+)"', inherited.group(1)):
+    env[key] = values[key]
+seams = {k: os.environ[k] for k in ("SECOND_REVIEW_STATE_DIR", "SECOND_REVIEW_CPU_BUSY", "RICHOS_WORKSPACES_DIR",
+                                    "RICHOS_PROJECTS_DIR", "FAKE_LOG")}
+seams.update(SECOND_REVIEW_CLAUDE=reviewer, SECOND_REVIEW_CODEX=reviewer)
+quota_sources = [k for k in list(env) + list(seams)
+                 if k in ("RICHOS_ENTITY_ROOT", "CLAUDE_PROJECT_DIR", "RICHOS_APP_STATE", "SECOND_REVIEW_QUOTA_CMD")
+                 or k.startswith("QUOTA_")]
+assert not quota_sources, "not review-watch's environment: %s" % quota_sources
+env.update(seams)
+
+now = int(time.time())
+def publish(in_use, label, five, other, other_five):
+    windows = lambda used, reset: [{"id": "five_hour", "label": "Five-hour", "usedPercent": used,
+                                    "resetsAt": reset * 1000, "durationMs": 18000000},
+                                   {"id": "seven_day", "label": "Weekly", "usedPercent": 20,
+                                    "resetsAt": (now + 300000) * 1000, "durationMs": 604800000}]
+    held = five >= 93
+    view = {"state": "fresh", "windows": windows(five, now + 4740), "checkedAt": (now - 30) * 1000,
+            "retryAt": None, "nextCheckAt": None, "refreshIntervalMs": 300000, "message": None,
+            "policy": {"enabled": True, "pausePercent": 93},
+            "admission": {"state": "held", "resetsAt": (now + 4740) * 1000} if held else {"state": "ready"},
+            "inUse": {"id": in_use, "label": label}, "heldUntil": None,
+            # Each row with its own check time, as the app publishes them: the gate judges a call
+            # on its own account's row (gate::decide), and so does the review.
+            "accounts": [{"id": in_use, "label": label, "inUse": True, "windows": windows(five, now + 4740),
+                          "checkedAt": (now - 30) * 1000},
+                         {"id": other[0], "label": other[1], "inUse": False, "windows": windows(other_five, now + 900),
+                          "checkedAt": (now - 30) * 1000}]}
+    with open(os.path.join(app, "engine-state", "claude-quota.json"), "w") as f:
+        json.dump(view, f)
+    with open(os.path.join(app, "claude-quota-policy.json"), "w") as f:
+        json.dump({"enabled": True, "pausePercent": 93}, f)
+    with open(os.path.join(app, "claude-accounts.json"), "w") as f:
+        json.dump({"accounts": [{"id": "1", "label": "Home"}, {"id": "2", "label": "Work", "folder": folder}],
+                   "inUse": in_use}, f)
+
+# The chain the app runs: the watcher's own spawn of an app item, second-review.sh, the reviewer.
+drive = r'''
+import json, os, sys, subprocess
+from types import SimpleNamespace
+scripts, repo, base, words, accounts, claude, rwstate, case = sys.argv[1:]
+sys.path.insert(0, os.path.join(scripts, "lib"))
+import review_watch as rw, second_review as sr
+os.environ["REVIEW_WATCH_SECOND_REVIEW"] = os.path.join(scripts, "second-review.sh")
+os.environ["REVIEW_WATCH_STATE_DIR"] = rwstate
+os.makedirs(rwstate, exist_ok=True)
+subprocess.check_call(["git", "-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Author",
+                       "-c", "user.email=author@example.invalid", "-c", "commit.gpgsign=false",
+                       "commit", "--allow-empty", "-qm", "usage hold fixture " + case])
+tip = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+ws = sr.load_workspaces(os.path.dirname(scripts))
+work = ws.recovery_work_key(sr.find_teammate(ws, "echo-sonnet-x1"))
+it = rw.Item(work, "echo-sonnet-x1", repo, tip, base, "running", ref="echo-sonnet-x1", source="app", words=[words])
+it.claude, it.accounts = claude, accounts
+log = os.environ["FAKE_LOG"]
+before = len(os.listdir(log))
+watcher = rw.Watcher(os.path.dirname(scripts), "", world=SimpleNamespace())
+pid, _start = watcher.spawn(it, "long-job", os.path.join(rwstate, "review-%s.log" % case))
+watcher.children[pid].wait()
+calls = [json.load(open(os.path.join(log, c, "call.json"))) for c in sorted(os.listdir(log))[before:]]
+ledger = os.path.join(os.environ["SECOND_REVIEW_STATE_DIR"], "reviews.jsonl")
+row = json.loads(open(ledger).read().splitlines()[-1])
+print(json.dumps({"reviewers": [(c["kind"], c["account"]) for c in calls], "tip": row.get("tip") == tip,
+                  "quota": row.get("quota"), "why": row.get("why"), "verdict": row.get("verdict"),
+                  "quota_held": row.get("quota_held")}))
+'''
+got = {}
+os.makedirs(rwstate)
+for case, args in (("work held", ("2", "Work", 99, ("1", "Home"), 10)),
+                   ("home in use, work at 99", ("1", "Home", 10, ("2", "Work"), 99))):
+    publish(*args)
+    p = subprocess.run([os.path.join(runtime, "python3"), "-c", drive, scripts, repo, base, words,
+                        os.path.join(app, "claude-accounts.json"), reviewer, rwstate, case],
+                       env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=rwstate)
+    lines = p.stdout.strip().splitlines()
+    got[case] = json.loads(lines[-1]) if p.returncode == 0 and lines else {"failed": p.stdout}
+print(json.dumps(got, indent=1))
+held, room = got["work held"], got["home in use, work at 99"]
+bad = []
+if held.get("reviewers") != [] or not held.get("tip"):
+    bad.append("a reviewer ran while Work, the account in use, was published held: %s" % held)
+if "quota hold is in force" not in (held.get("why") or "") or "Work (account 2)" not in (held.get("quota") or ""):
+    bad.append("the held row does not say the gate's hold on Work: %s" % held)
+# The watcher settles a marked row as held, never lost (review-watch.test.sh W39; the second review
+# of 3331a349416c, finding 1), so the mark is what keeps a hold from spending the commit's retries.
+if held.get("quota_held") is not True or room.get("quota_held"):
+    bad.append("only the held row carries quota_held: held %s, room %s" % (held, room))
+if room.get("reviewers") != [["claude", "1"]] or room.get("verdict") != "passed":
+    bad.append("Home in use with room: the review did not run on Home: %s" % room)
+if "Home (account 1)" not in (room.get("quota") or ""):
+    bad.append("the review on Home does not name Home's reading: %s" % room)
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+PY
+check "C31 an app review in review-watch's own environment takes the gate's hold: Work published held, no Claude review starts; Home in use with room, it runs on Home" \
+    $? "$(cat "$SB/c31.out")"
+
 # --- C16 ---------------------------------------------------------------------
 # The Codex review switch in the app's Settings (round 20.2; his words, §114: "we should give
 # the user a toggle/switch to manually enable that"). The app saves it as codex-reviews.json
@@ -943,6 +1100,260 @@ check "C25 the finding the fence refuses on is filed by --follow-up (one deferra
 GATE="$(c25_gate)"
 [ -z "$GATE" ]
 check "C25 once filed, the fence admits tip A" $? "gate=$GATE"
+
+# --- C26 ---------------------------------------------------------------------
+# 2026-10-29, richos 5611a7964: rv-20261029T140028Z-3e883526-10b9 raised blocking finding #1. A
+# review of an unrelated tip on the same work key (2f57a3fd, not built on it) withdrew it, so the
+# reviewers of 5611a7964 were not handed it, although the fence (which reads only the land tip's own
+# history) still held on it. The --recheck rv-20261029T155324Z-5611a796-3aed of 5611a7964 ruled it
+# "fixed" anyway; the fence skipped that ruling because the id was not in its earlier_findings_in,
+# and refused the land with "Blocking finding id(s): rv-20261029T140028Z-3e883526-10b9#1". Fixture
+# ledger only: base -> A -> T1 -> T, and B cut from base. Review a (A) raises #1; review b (B)
+# withdraws it; review c (T) is not handed it; review d rechecks c at T.
+REPO6="$SB/repo-unhanded-fixed"
+G6() { git -C "$REPO6" -c core.hooksPath=/dev/null -c user.name=Author -c user.email=author@example.invalid -c commit.gpgsign=false "$@"; }
+mkdir -p "$REPO6"
+G6 init -q -b main
+printf 'base\n' >"$REPO6/a.txt"; G6 add -A; G6 commit -qm "base"
+BASE6="$(G6 rev-parse HEAD)"
+G6 checkout -qb cc/work; printf 'base\na\n' >"$REPO6/a.txt"; G6 commit -qam "tip A"
+TIP6A="$(G6 rev-parse HEAD)"
+printf 'base\na\nt1\n' >"$REPO6/a.txt"; G6 commit -qam "tip T1"
+TIP6T1="$(G6 rev-parse HEAD)"
+printf 'base\na\nt1\nt\n' >"$REPO6/a.txt"; G6 commit -qam "tip T"
+TIP6T="$(G6 rev-parse HEAD)"
+G6 checkout -qb cc/other "$BASE6"; printf 'b\n' >"$REPO6/b.txt"; G6 add -A; G6 commit -qm "tip B"
+TIP6B="$(G6 rev-parse HEAD)"
+G6 checkout -q main
+c26() { # <scenario>: prints "<earlier ids handed to a review of T>|<the fence's refusal of T>"
+    python3 - "$SCRIPT_DIR/lib" "$SB/c26-$1" "$1" "$REPO6" "$BASE6" "$TIP6A" "$TIP6B" "$TIP6T1" "$TIP6T" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+state, scenario, repo, base, a, b, t1, t = sys.argv[2:10]
+os.makedirs(state)
+os.environ["SECOND_REVIEW_STATE_DIR"] = state
+import operator_fences as f
+import second_review as sr
+ident, work = f.review_repo_identity(repo), "work-c26"
+finding = {"priority": 2, "title": "Retry budget lost on continuation", "files": ["x.rs"], "evidence": "e",
+           "fixture": "", "blocks": True}
+note = "x.rs:505 keeps the marking through continuation creation; the probe confirms it."
+ruling = {"id": "rv-c26a#1", "status": "fixed", "blocks": False, "note": note}
+if scenario == "still-open":
+    ruling = dict(ruling, status="still-open", blocks=True)
+d_tip = t1 if scenario == "other-tip" else t
+reviews = [("rv-c26a", a, "changes-requested", "", {"findings": [finding], "earlier_findings": []}, []),
+           ("rv-c26b", b, "passed", "", {"findings": [], "earlier_findings": [
+               {"id": "rv-c26a#1", "status": "withdrawn", "blocks": False, "note": "absent from tip B"}]},
+            [dict(finding, id="rv-c26a#1")])]
+c = ("rv-c26c", t, "passed", "", {"findings": [], "earlier_findings": []}, [])
+d = ("rv-c26d", d_tip, "passed", "rv-c26c" if d_tip == t else "", {"findings": [], "earlier_findings": [ruling]}, [])
+# The ruling at another tip comes before the land tip's own review, so the fence reads it.
+reviews += [d, c] if scenario == "other-tip" else [c, d]
+with open(os.path.join(state, "reviews.jsonl"), "w") as ledger:
+    for n, (rid, tip, verdict, recheck, answer, handed) in enumerate(reviews):
+        os.makedirs(os.path.join(state, rid))
+        answer = dict(answer, reviewed_commit=tip, verdict=verdict)
+        json.dump({"answer": answer, "earlier_findings_in": handed},
+                  open(os.path.join(state, rid, "verdict.json"), "w"))
+        ledger.write(json.dumps({"id": rid, "tip": tip, "repo": repo, "repo_id": ident, "work": work,
+                                 "trigger": "manual", "verdict": verdict, "recheck_of": recheck,
+                                 "record": os.path.join(state, rid)}) + "\n")
+        if rid == "rv-c26b":
+            # What the reviewer of T is handed once a, b are on the ledger (review c's input).
+            ledger.flush()
+            handed_to_t = ",".join(fid for fid, _ in sr.earlier_findings(work, t, repo, ident))
+print("%s|%s" % (handed_to_t, " ".join(f.review_gaps(os.path.join(state, "reviews.jsonl"), [t], repo).get(t, []))))
+PY
+}
+OUT6="$(c26 fixed)"
+has "${OUT6%%|*}" "rv-c26a#1"
+check "C26 the reviewer of T is handed rv-c26a#1, still open in T's own history (only unrelated tip B withdrew it)" $? "out=$OUT6"
+[ -z "${OUT6#*|}" ]
+check "C26 a recheck at T ruling rv-c26a#1 fixed, though not handed it, clears it: the fence admits T" $? "out=$OUT6"
+OUT6="$(c26 still-open)"
+has "${OUT6#*|}" "Blocking finding id(s): rv-c26a#1"
+check "C26 guard: a still-open ruling at T, not handed it, still blocks T" $? "out=$OUT6"
+OUT6="$(c26 other-tip)"
+has "${OUT6#*|}" "Blocking finding id(s): rv-c26a#1"
+check "C26 guard: a fixed ruling at another tip (T1, built on by T), not handed it, does not clear it at T" $? "out=$OUT6"
+
+# --- C27, C28, C29 ------------------------------------------------------------
+# Review rv-20261029T164027Z-d147e6e5-6f22 of the C26 fix, same fixture repository (base -> A ->
+# T1 -> T). Each scenario writes a ledger; c27 prints "<ids handed to a new review of T on
+# <handin-key>>|<the fence's refusal of T>". A finding is raised as rv-x#1.
+c27() { # <scenario>
+    python3 - "$SCRIPT_DIR/lib" "$SB/c27-$1" "$1" "$REPO6" "$TIP6A" "$TIP6T1" "$TIP6T" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+state, scenario, repo, a, t1, t = sys.argv[2:8]
+os.makedirs(state)
+os.environ["SECOND_REVIEW_STATE_DIR"] = state
+import operator_fences as f
+import second_review as sr
+ident, app, rng = f.review_repo_identity(repo), "work-app", "range:%s:base" % repo
+finding = {"priority": 2, "title": "Retry budget lost on continuation", "files": ["x.rs"], "evidence": "e",
+           "fixture": "", "blocks": True}
+handed = [dict(finding, id="rv-x#1")]
+note = "x.rs:505 keeps the marking through continuation creation; the probe confirms it."
+def rule(status):
+    return [{"id": "rv-x#1", "status": status, "blocks": status == "still-open", "note": note}]
+# (id, tip, work, recheck_of, findings, rulings, handed in)
+raise_at = lambda tip: ("rv-x", tip, app, "", [finding], [], [])
+handin_key = app
+if scenario == "other-tip-handed":      # finding 1: a handed FIXED at T1; T's own review never mentions it
+    reviews = [raise_at(a), ("rv-d", t1, app, "", [], rule("fixed"), handed), ("rv-c", t, app, "", [], [], [])]
+elif scenario == "same-tip-omitted":    # finding 2: raised at T; recheck c of it omits it; recheck d of c fixes it
+    reviews = [raise_at(t), ("rv-c", t, app, "rv-x", [], [], []), ("rv-d", t, app, "rv-c", [], rule("fixed"), handed)]
+elif scenario == "same-tip-unlinked":   # guard: d is a fresh review of T, not a recheck of x's line
+    reviews = [raise_at(t), ("rv-c", t, app, "rv-x", [], [], []), ("rv-d", t, app, "", [], rule("fixed"), handed)]
+elif scenario == "range-key":           # finding 3: app key holds it at T; a manual recheck uses its range key
+    reviews = [raise_at(a), ("rv-c", t, app, "", [], rule("still-open"), handed),
+               ("rv-d", t, rng, "rv-c", [], [], [])]
+    handin_key = rng
+elif scenario == "range-key-fixed":     # control: the range-key reviewer, handed it, rules it fixed at T
+    reviews = [raise_at(a), ("rv-c", t, app, "", [], rule("still-open"), handed),
+               ("rv-d", t, rng, "rv-c", [], [], []), ("rv-e", t, rng, "rv-d", [], rule("fixed"), handed)]
+    handin_key = rng
+with open(os.path.join(state, "reviews.jsonl"), "w") as ledger:
+    for rid, tip, work, recheck, findings, rulings, given in reviews:
+        os.makedirs(os.path.join(state, rid))
+        verdict = "changes-requested" if findings or any(r["blocks"] for r in rulings) else "passed"
+        answer = {"reviewed_commit": tip, "verdict": verdict, "findings": findings, "earlier_findings": rulings}
+        json.dump({"answer": answer, "earlier_findings_in": given},
+                  open(os.path.join(state, rid, "verdict.json"), "w"))
+        ledger.write(json.dumps({"id": rid, "tip": tip, "repo": repo, "repo_id": ident, "work": work,
+                                 "trigger": "manual", "verdict": verdict, "recheck_of": recheck,
+                                 "record": os.path.join(state, rid)}) + "\n")
+handin = ",".join(fid for fid, _ in sr.earlier_findings(handin_key, t, repo, ident))
+print("%s|%s" % (handin, " ".join(f.review_gaps(os.path.join(state, "reviews.jsonl"), [t], repo).get(t, []))))
+PY
+}
+OUT7="$(c27 other-tip-handed)"
+has "${OUT7#*|}" "Blocking finding id(s): rv-x#1"
+check "C27 a handed fixed ruling at T1 does not clear rv-x#1 at T, whose own review never mentioned it: the fence refuses T" $? "out=$OUT7"
+has "${OUT7%%|*}" "rv-x#1"
+check "C27 the next reviewer of T is handed rv-x#1, as the fence still holds on it" $? "out=$OUT7"
+OUT8="$(c27 same-tip-omitted)"
+[ -z "${OUT8#*|}" ]
+check "C28 a fixed ruling at T by a recheck of a recheck of the review of T that raised rv-x#1 clears it, though the review between omitted it" $? "out=$OUT8"
+OUT8="$(c27 same-tip-unlinked)"
+has "${OUT8#*|}" "Blocking finding id(s): rv-x#1"
+check "C28 guard: a fixed ruling at T by a fresh review of T, not a recheck of the review that raised it, still blocks" $? "out=$OUT8"
+OUT9="$(c27 range-key)"
+has "${OUT9%%|*}" "rv-x#1"
+check "C29 a review of T on a range key is handed rv-x#1, held at T under the app's work key" $? "out=$OUT9"
+has "${OUT9#*|}" "Blocking finding id(s): rv-x#1"
+check "C29 the fence still refuses T on rv-x#1 until a reviewer rules on it" $? "out=$OUT9"
+OUT9="$(c27 range-key-fixed)"
+[ -z "${OUT9#*|}" ]
+check "C29 control: the range-key reviewer, handed rv-x#1, rules it fixed at T and the fence admits T" $? "out=$OUT9"
+
+# --- C30 ---------------------------------------------------------------------
+# The lead's ruling on esc-20261029T165526Z-fb650d7b (2026-10-29): the exact-tip rule of C27 holds
+# only for findings raised in the land's own range. 6e9a03c3-f0d4#1 and #2 were raised and ruled
+# fixed by an earlier work that landed (main c69f65d76); 5611a7964 carries them only through its
+# merge of main. Fixture: base -> L1 -> L2 landed on main (review x at L1 raises #1, review f at L2,
+# handed it, rules it fixed); branch N cut from base merges main as M, on the same work key. Review
+# m of M never mentions #1, and the fence admits M.
+REPO10="$SB/repo-landed-fixed"
+G10() { git -C "$REPO10" -c core.hooksPath=/dev/null -c user.name=Author -c user.email=author@example.invalid -c commit.gpgsign=false "$@"; }
+mkdir -p "$REPO10"
+G10 init -q -b main
+printf 'base\n' >"$REPO10/a.txt"; G10 add -A; G10 commit -qm "base"
+BASE10="$(G10 rev-parse HEAD)"
+G10 checkout -qb cc/landed; printf 'base\nl1\n' >"$REPO10/a.txt"; G10 commit -qam "L1"
+TIP10L1="$(G10 rev-parse HEAD)"
+printf 'base\nl1\nl2\n' >"$REPO10/a.txt"; G10 commit -qam "L2"
+TIP10L2="$(G10 rev-parse HEAD)"
+G10 checkout -q main; G10 merge -q --ff-only cc/landed
+G10 checkout -qb cc/new "$BASE10"; printf 'n\n' >"$REPO10/n.txt"; G10 add -A; G10 commit -qm "N1"
+G10 merge -q --no-edit main
+TIP10M="$(G10 rev-parse HEAD)"
+G10 checkout -q main
+OUT10="$(python3 - "$SCRIPT_DIR/lib" "$SB/c30" "$REPO10" "$TIP10L1" "$TIP10L2" "$TIP10M" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+state, repo, l1, l2, m = sys.argv[2:7]
+os.makedirs(state)
+os.environ["SECOND_REVIEW_STATE_DIR"] = state
+import operator_fences as f
+import second_review as sr
+ident, work = f.review_repo_identity(repo), "work-app"
+finding = {"priority": 2, "title": "Retry budget lost on continuation", "files": ["x.rs"], "evidence": "e",
+           "fixture": "", "blocks": True}
+fixed = [{"id": "rv-x#1", "status": "fixed", "blocks": False, "note": "x.rs:505 keeps the marking; probe confirms."}]
+reviews = [("rv-x", l1, [finding], [], []), ("rv-f", l2, [], fixed, [dict(finding, id="rv-x#1")]),
+           ("rv-m", m, [], [], [])]
+with open(os.path.join(state, "reviews.jsonl"), "w") as ledger:
+    for rid, tip, findings, rulings, given in reviews:
+        os.makedirs(os.path.join(state, rid))
+        verdict = "changes-requested" if findings else "passed"
+        answer = {"reviewed_commit": tip, "verdict": verdict, "findings": findings, "earlier_findings": rulings}
+        json.dump({"answer": answer, "earlier_findings_in": given}, open(os.path.join(state, rid, "verdict.json"), "w"))
+        ledger.write(json.dumps({"id": rid, "tip": tip, "repo": repo, "repo_id": ident, "work": work,
+                                 "trigger": "manual", "verdict": verdict, "recheck_of": "",
+                                 "record": os.path.join(state, rid)}) + "\n")
+handin = ",".join(fid for fid, _ in sr.earlier_findings(work, m, repo, ident))
+print("%s|%s" % (handin, " ".join(f.review_gaps(os.path.join(state, "reviews.jsonl"), [m], repo).get(m, []))))
+PY
+)"
+[ -z "${OUT10#*|}" ]
+check "C30 a merge of main carrying a landed work's finding, ruled fixed only at the landed commit L2, is admitted" $? "out=$OUT10"
+[ -z "${OUT10%%|*}" ]
+check "C30 and the reviewer of the merge is not handed that landed finding" $? "out=$OUT10"
+
+# --- C32 ---------------------------------------------------------------------
+# A review written under a Work lease (2026-10-28): the app points CLAUDE_CONFIG_DIR at the
+# account's folder (and RICHOS_CLAUDE_ACCOUNT_DIR at the same folder) and RICHOS_CLAUDE_HOME at the
+# machine-wide home. The ledger is written in the machine-wide home, and every reader finds it
+# there: the land rule, the land's gate, review-watch, the verdict delivery and its hook. integrate
+# refused b20f108f because the writer and the land's reader had split. Without RICHOS_CLAUDE_HOME
+# (a terminal) all of them follow CLAUDE_CONFIG_DIR, and so does a sandbox's own CLAUDE_CONFIG_DIR.
+WL="$SB/work-lease"; MACHINE="$WL/home/.claude"; ACCOUNT="$WL/claude-accounts/2"
+mkdir -p "$MACHINE" "$ACCOUNT"
+OUT="$(env -u SECOND_REVIEW_STATE_DIR TMPDIR="$RUN_TMP" CLAUDE_CONFIG_DIR="$ACCOUNT" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" \
+       RICHOS_CLAUDE_HOME="$MACHINE" FAKE_MODE=pass bash "$SR" --repo "$REPO" --tip "$TIP1" --base "$BASE" --words-file "$SB/codex-words.txt" 2>&1)"; RC=$?
+[ "$RC" -eq 0 ] && [ "$(field "$(tail -1 "$MACHINE/state/reviews.jsonl" 2>/dev/null)" 'r["tip"]')" = "$TIP1" ] \
+  && [ ! -e "$ACCOUNT/state/reviews.jsonl" ]
+check "C32 a review under a Work lease writes its ledger row in RICHOS_CLAUDE_HOME's state, not the account's" $? \
+  "rc=$RC out=$OUT"
+readers() { # <expected state dir> <tip>: every reader of the ledger, in the caller's environment
+    python3 - "$SCRIPT_DIR" "$1" "$2" <<'PY'
+import importlib.util, os, subprocess, sys
+scripts, state, tip = sys.argv[1:4]
+sys.path.insert(0, os.path.join(scripts, "lib"))
+import second_review, operator_fences, review_watch, review_delivery
+spec = importlib.util.spec_from_file_location("ws_c26", os.path.join(scripts, "..", "mega-lander", "workspaces.py"))
+ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
+lines = [l for l in open(os.path.join(scripts, "hooks", "deliver-review-verdict.sh"))
+         if l.startswith(('case "${CLAUDE_CONFIG_DIR', "LEDGER="))]
+assert len(lines) == 2, lines
+hook = subprocess.run(["bash", "-uc", "".join(lines) + 'printf %s "$LEDGER"'], capture_output=True, text=True).stdout
+want = os.path.join(state, "reviews.jsonl")
+seen = {"second_review.ledger_path": second_review.ledger_path(),
+        "operator_fences.review_ledger_default": operator_fences.review_ledger_default(),
+        "review_watch.review_ledger": review_watch.review_ledger(),
+        "review_delivery.ledger_path": review_delivery.ledger_path(),
+        "deliver-review-verdict.sh LEDGER": hook}
+bad = ["%s=%s" % kv for kv in seen.items() if kv[1] != want]
+if tip and tip not in ws._reviews_by_tip():
+    bad.append("workspaces._reviews_by_tip has no row for %s" % tip)
+print("; ".join(bad))
+PY
+}
+R="$(unset SECOND_REVIEW_STATE_DIR; export CLAUDE_CONFIG_DIR="$ACCOUNT" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" RICHOS_CLAUDE_HOME="$MACHINE"
+      readers "$MACHINE/state" "$TIP1" 2>&1)"
+[ -z "$R" ]
+check "C32 under a Work lease every reader reads that row from RICHOS_CLAUDE_HOME's state" $? "$R"
+R="$(unset SECOND_REVIEW_STATE_DIR RICHOS_CLAUDE_HOME; export CLAUDE_CONFIG_DIR="$ACCOUNT"
+      readers "$ACCOUNT/state" "" 2>&1)"
+[ -z "$R" ]
+check "C32 without RICHOS_CLAUDE_HOME every reader and the writer follow CLAUDE_CONFIG_DIR, as before" $? "$R"
+R="$(unset SECOND_REVIEW_STATE_DIR; export CLAUDE_CONFIG_DIR="$WL/sandbox" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" RICHOS_CLAUDE_HOME="$MACHINE"
+      readers "$WL/sandbox/state" "" 2>&1)"
+[ -z "$R" ]
+check "C32 a sandbox inside a Work lease (its own CLAUDE_CONFIG_DIR) keeps its own ledger for every reader" $? "$R"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"

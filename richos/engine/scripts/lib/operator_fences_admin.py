@@ -45,6 +45,7 @@ PROGRAM_SOURCE = os.path.join(HERE, "operator_fences.py")
 PROGRAM_FILES = F.PROGRAM_FILES   # what install copies beside the hook
 RECORDER_MARKER = "ref-transaction-forensics.sh"
 REGISTRY_NAME = "operator-fences.json"
+SETTINGS_LOG_NAME = "operator-fence-settings.jsonl"
 _ASSIGN = re.compile(r'^\s*([A-Z_][A-Z0-9_]*)=(?:"([^"]*)"|\'([^\']*)\'|(\S*))\s*(?:#.*)?$')
 
 
@@ -83,6 +84,14 @@ def review_unreadable(decl, config):
 
 def registry_path():
     return os.path.join(F._default_home(), REGISTRY_NAME)
+
+
+def settings_log_path():
+    """The fence settings record (every `off`, with its authority): beside the lease, in the
+    machine's one Claude home (machine_settings.claude_home), whichever Claude account the caller
+    spends. Until 2026-10-28 it followed CLAUDE_CONFIG_DIR, so an `off` from a Work lease went to
+    claude-accounts/2 and a terminal reading ~/.claude never saw it."""
+    return os.path.join(F._default_home(), SETTINGS_LOG_NAME)
 
 
 def read_registry():
@@ -380,7 +389,7 @@ def cmd_set_state(opts, repos, state):
         with open(target, encoding="utf-8") as fh:
             text = fh.read()
         if state=="off":
-            F.append_jsonl(os.path.join(F._default_home(), "operator-fence-settings.jsonl"),
+            F.append_jsonl(settings_log_path(),
                 dict(off_authorities[repo], at=F.iso(), repository=paths["main"], setting="OPERATOR_FENCES", value="off",
                      previous=conf.get("STATE"), review_enforcement=bool(conf.get("REVIEWS"))))
         write_executable(target, set_state_text(text, state))

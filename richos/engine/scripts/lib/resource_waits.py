@@ -669,15 +669,26 @@ def escalation_waits(rows, now):
         if since is None:
             since = raised_epoch - _stated_wait_seconds(r.get("title") or "")
         go = GO_FILE.search(text)
-        key = (str(r.get("teammate") or r.get("worktree") or r.get("id")), resource)
+        # The session that raised it is part of whose wait it is: in the app every chat
+        # has its own teammates, and two chats' "echo-opus-wait" are two waits.
+        key = (str(r.get("session_id") or ""),
+               str(r.get("teammate") or r.get("worktree") or r.get("id")), resource)
         groups.setdefault(key, []).append({
             "id": str(r.get("id") or ""), "raised": raised_epoch, "since": since,
             "worktree": str(r.get("worktree") or ""), "go": go.group(1) if go else "",
             "title": str(r.get("title") or ""),
         })
+    # A row that names no session joins every session's wait for the same teammate and
+    # resource (one wait each, as before), and is its own wait only when none names one.
+    for (session, teammate, resource) in [k for k in groups if not k[0]]:
+        named = [k for k in groups if k[0] and k[1:] == (teammate, resource)]
+        for k in named:
+            groups[k] = groups[k] + groups[("", teammate, resource)]
+        if named:
+            del groups[("", teammate, resource)]
     waits = []
-    for (teammate, resource), items in groups.items():
-        items.sort(key=lambda i: i["raised"])
+    for (session, teammate, resource), items in groups.items():
+        items = sorted(items, key=lambda i: i["raised"])
         # A WaitOver for any of them ends every one raised before it; a later
         # escalation that still says "waiting" is a new wait from its own time.
         ends = [t for i in items for t in over.get(i["id"], [])]
@@ -699,6 +710,7 @@ def escalation_waits(rows, now):
             "reason": "escalation %s: %s" % (latest["id"], latest["title"][:160]),
             "holding": [], "command": "", "until": go,
             "escalations": [i["id"] for i in live], "worktree": worktree,
+            "session": session,
         })
     return waits
 

@@ -52,10 +52,16 @@ class Env(object):
                                                      "RICHOS_SESSION_PID", "RICHOS_SESSIONS_DIR",
                                                      "RICHOS_SESSION_ID", "GIT_CONFIG_GLOBAL",
                                                      "RICHOS_BULK_ROOT", "RICHOS_CARGO_CACHE_ROOT",
-                                                     "RICHOS_MACHINE_SETTINGS_RESOLVED", "RICHOS_APP_STATE")}
+                                                     "RICHOS_MACHINE_SETTINGS_RESOLVED",
+                                                     "RICHOS_CLAUDE_HOME", "RICHOS_CLAUDE_ACCOUNT_DIR",
+                                                     "RICHOS_APP_STATE")}
         os.environ["HOME"] = self.home
         # The app's state is found from here too (other_registries); a test run
-        # inside the app must never read the operator's real app registries.
+        # inside the app must never read the operator's real app registries. An app
+        # lease also exports the machine-wide Claude home: left set, it would point
+        # this sandbox's land locks and review reads at the live ones.
+        os.environ.pop("RICHOS_CLAUDE_HOME", None)
+        os.environ.pop("RICHOS_CLAUDE_ACCOUNT_DIR", None)
         os.environ.pop("RICHOS_APP_STATE", None)
         # A land removes the workspace's build caches (build_caches.py). Here they live in the
         # sandbox, so no test ever reads or moves the operator's real cache folders.
@@ -2994,6 +3000,119 @@ class Point14_IntegrationBranch(Base):
         self.assertIn(first["id"], ws.all_bodies_of_work())
 
 
+class WorkerTranscriptActivity(unittest.TestCase):
+    """Account moves must not turn a working teammate into a silence claim."""
+
+    def setUp(self):
+        import types
+        self.types = types
+        self.env = Env()
+        self.addCleanup(self.env.close)
+        clean = patch.dict(os.environ, {"RICHOS_PROJECTS_DIR": ""})
+        clean.start()
+        self.addCleanup(clean.stop)
+        self.default = os.path.join(self.env.home, ".claude", "projects")
+        self.account = os.path.join(self.env.home, "Library", "Application Support",
+                                    ws.APP_IDENTIFIER, "claude-accounts", "2")
+        os.environ["CLAUDE_CONFIG_DIR"] = self.account
+        self.rec = {"key": "worker", "name": "echo-sonnet-fixture", "session_id": "worker-session",
+                    "agent_id": "abcdef0123456789", "spawned_at": ws.iso(100),
+                    "workspaces": [{"repo": self.env.root, "path": self.env.root, "branch": "cc/worker"}]}
+        lib = os.path.realpath(os.path.join(HERE, "..", "..", "scripts", "lib"))
+        with patch.object(sys, "path", [lib] + sys.path):
+            self.rw = ws._import_path("transcript_review_watch", os.path.join(lib, "review_watch.py"))
+        self.sw = self.rw.stall_watch
+        self.src = self.types.SimpleNamespace(ws=ws, transcripts={}, agent_hold=None, engine_root=self.env.root)
+
+    def transcript(self, base, at, sid="worker-session"):
+        folder = os.path.join(base, "fixture", sid, "subagents")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "agent-abcdef0123456789.jsonl")
+        with open(path, "w") as f:
+            f.write('{}\n')
+        os.utime(path, (at, at))
+        return path
+
+    def test_account_config_does_not_hide_the_default_provider_transcript(self):
+        path = self.transcript(self.default, 1900)
+        self.assertEqual(ws.platform_agent_transcript(self.rec), path)
+
+    def test_rotation_uses_the_latest_copy_for_this_session_and_refreshes_the_cache(self):
+        old = self.transcript(os.path.join(self.account, "projects"), 100)
+        self.assertEqual(self.sw._transcript(self.src, self.rec), old)
+        current = self.transcript(self.default, 1900)
+        self.transcript(os.path.join(os.path.dirname(self.account), "3", "projects"), 1950, sid="other-session")
+        self.assertEqual(self.sw._transcript(self.src, self.rec), current)
+        os.unlink(current)
+        moved = self.transcript(os.path.join(os.path.dirname(self.account), "3", "projects"), 2000)
+        self.assertEqual(self.sw._transcript(self.src, self.rec), moved)
+
+    def test_an_explicit_project_root_remains_authoritative(self):
+        self.transcript(self.default, 2000)
+        with patch.dict(os.environ, {"RICHOS_PROJECTS_DIR": os.path.join(self.env.root, "isolated")}):
+            self.assertEqual(ws.platform_agent_transcript(self.rec), "")
+
+    def test_platform_status_uses_the_same_rotated_account_roots(self):
+        path = self.transcript(os.path.join(os.path.dirname(self.account), "3", "projects"), 1900)
+        meta = path[:-len(".jsonl")] + ".meta.json"
+        with open(meta, "w") as f:
+            json.dump({"name": "fixture", "status": "running"}, f)
+        self.assertEqual(ws.platform_agent_record(self.rec)["status"], "running")
+        self.assertEqual(ws.platform_agent_records("worker-session"),
+                         [(self.rec["agent_id"], {"name": "fixture", "status": "running"})])
+
+    def activity(self, commit_at=100):
+        view = self.types.SimpleNamespace(all_agents=lambda: [self.rec],
+            finished_state=lambda *_: (False, False, ""), review_chain=lambda _: [],
+            recovery_work_key=lambda _: "worker", platform_agent_transcript=ws.platform_agent_transcript)
+        self.src.ws = view
+        world = self.rw.World.__new__(self.rw.World)
+        world.ws, world.src = view, self.src
+        world.wants_space = lambda _: True
+        world.integration_tip = lambda *_: ("main", "")
+        world.merge_base = lambda *_: "base"
+        reg = self.types.SimpleNamespace(recs=[self.rec], problem="")
+        with patch.object(self.rw, "git", return_value="tip"), \
+             patch.object(self.sw, "_git_last_commit", return_value=(commit_at, "sha")):
+            items, _ = world.registry_items(2000, {})
+            stalls, problem = self.sw._silent(self.src, reg, 2000, "worker-session", {"silent": 1200}, [])
+            last = self.sw._last_activity(self.src, self.rec)
+        return items[0].quiet, stalls, problem, last
+
+    def test_missing_transcript_is_unknown_never_silent_quiet_or_permission_to_end_commands(self):
+        quiet, stalls, problem, last = self.activity()
+        self.assertFalse(quiet)
+        self.assertEqual(stalls, [])
+        self.assertIn("transcript", problem)
+        self.assertIsNone(last)
+
+    def test_missing_transcript_does_not_warn_before_the_inactivity_threshold(self):
+        self.assertEqual(self.activity(commit_at=1900)[2], "")
+        self.rec["spawned_at"] = ws.iso(1900)
+        self.assertEqual(self.activity()[2], "")
+
+    def test_active_default_transcript_prevents_both_false_silence_and_quiet_review(self):
+        self.transcript(self.default, 1900)
+        quiet, stalls, _, _ = self.activity()
+        self.assertFalse(quiet)
+        self.assertEqual(stalls, [])
+
+    def test_a_genuinely_stale_transcript_still_reports_silence_and_allows_quiet_review(self):
+        self.transcript(self.default, 100)
+        quiet, stalls, problem, _ = self.activity()
+        self.assertTrue(quiet)
+        self.assertEqual([s.kind for s in stalls], ["SILENT"])
+        self.assertEqual(problem, "")
+
+    def test_app_mode_does_not_invent_a_project_mirror(self):
+        a = self.types.SimpleNamespace(app_state=self.env.root, claude="", accounts="", codex_reviews="",
+                                       status=False, tick=True)
+        with patch.dict(os.environ), patch.object(self.rw, "Watcher"), \
+             patch.object(self.rw, "AppWorld"), patch.object(self.rw, "tick"):
+            self.rw.app_mode(a, self.env.root)
+            self.assertEqual(os.environ.get("RICHOS_PROJECTS_DIR"), "")
+
+
 class QAToolkitAtTheLand(Base):
     """What a QA walk wrote from scratch is said at its land.
 
@@ -5305,6 +5424,81 @@ class ReleaseLandChecksRunOutsideTheOperatorsRecord(Base):
                              "the land's checks ran inside the operator's record: %s" % where)
         self.assertTrue(where.startswith(os.path.realpath(self.env.root) + os.sep), where)
         self.assertFalse(os.path.exists(where), "the temporary checkout was left behind")
+
+
+class WorkLease_OneMachineWideHome(Base):
+    """2026-10-28 (richos-hq follow-ups, "the usage hold reads the wrong Claude account"): on the
+    Work account the app points CLAUDE_CONFIG_DIR at claude-accounts/2, and every engine store
+    derived from it split by account. A Work lease's land lock was another file than the installed
+    fence's, and integrate refused b20f108f with "no second review" right after a passing one. The
+    app now exports RICHOS_CLAUDE_HOME (Account 1's folder) with RICHOS_CLAUDE_ACCOUNT_DIR (the
+    folder it set) and the engine's own stores follow it, never the account. Claude Code's own
+    records (sessions/, projects/) still follow the account, because Claude Code writes them there.
+    A sandbox's own CLAUDE_CONFIG_DIR inside such a lease still wins."""
+
+    def setUp(self):
+        super().setUp()
+        self.machine = os.environ["CLAUDE_CONFIG_DIR"]      # the fixture's terminal home: <scratch>/home/.claude
+        self.account = os.path.join(self.env.root, "claude-accounts", "2")
+        os.makedirs(self.account)
+        for k in ("SECOND_REVIEW_STATE_DIR", "RICHOS_LAND_LOCKS_DIR", "RICHOS_SESSIONS_DIR", "RICHOS_PROJECTS_DIR",
+                  "RICHOS_CLAUDE_ACCOUNT_DIR"):
+            self.env.saved.setdefault(k, os.environ.get(k))
+            os.environ.pop(k, None)
+
+    def work_lease(self):
+        """The environment EngineProfile.configure gives a lease on the Work account."""
+        os.environ["CLAUDE_CONFIG_DIR"] = self.account
+        os.environ["RICHOS_CLAUDE_ACCOUNT_DIR"] = self.account
+        os.environ["RICHOS_CLAUDE_HOME"] = self.machine
+
+    def test_a_sandbox_inside_a_work_lease_keeps_its_own_stores(self):
+        os.makedirs(os.path.join(self.machine, "state"), exist_ok=True)
+        with open(os.path.join(self.machine, "state", "reviews.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "rv-live", "tip": "b" * 40, "verdict": "passed"}) + "\n")
+        self.work_lease()
+        self.assertIn("b" * 40, ws._reviews_by_tip(), "the lease itself reads the machine-wide ledger")
+        sandbox = os.path.join(self.env.root, "sandbox-config")
+        os.environ["CLAUDE_CONFIG_DIR"] = sandbox           # CLAUDE_CONFIG_DIR=$(mktemp -d), inherited pair
+        self.assertEqual(ws.land_locks_dir(), os.path.join(os.path.realpath(sandbox), "state", "land-locks"))
+        self.assertEqual(ws.state_dir(), os.path.join(sandbox, "state", "workspaces"))
+        self.assertEqual(ws._reviews_by_tip(), {}, "a sandbox read the lease's review ledger")
+
+    def test_a_work_lease_takes_its_land_lock_and_land_record_in_the_machine_wide_home(self):
+        self.work_lease()
+        home = os.path.join(os.path.realpath(self.machine), "state", "land-locks")
+        self.assertEqual(ws.land_locks_dir(), home)
+        self.assertEqual(os.path.dirname(ws.land_lock_path(self.other)), home)
+        written = ws.append_land_record(self.other, {"commit": "c0ffee", "by": "work-lease"})
+        self.assertTrue(written.startswith(home + os.sep), written)
+        self.assertEqual([r.get("commit") for r in ws.land_records(self.other)], ["c0ffee"])
+        self.assertEqual(ws.state_dir(), os.path.join(self.machine, "state", "workspaces"))
+        self.assertFalse(os.path.exists(os.path.join(self.account, "state")),
+                         "an engine store was written in the account's own folder")
+
+    def test_a_work_lease_reads_the_verdict_a_review_wrote_in_the_machine_wide_home(self):
+        tip = "a" * 40
+        state = os.path.join(self.machine, "state")
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "reviews.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "rv-work-1", "tip": tip, "verdict": "passed",
+                                "finished_at": "2026-10-28T16:00:00Z"}) + "\n")
+        self.work_lease()
+        self.assertEqual(ws._reviews_by_tip().get(tip, {}).get("id"), "rv-work-1")
+        self.assertEqual(ws._review_ended("rv-work-1"), "review rv-work-1 has its verdict")
+
+    def test_claude_codes_own_records_still_follow_the_account(self):
+        self.work_lease()
+        self.assertEqual(ws._platform_sessions_dir(), os.path.join(self.account, "sessions"))
+        self.assertEqual(ws._platform_projects_dir(), os.path.join(self.account, "projects"))
+
+    def test_without_richos_claude_home_a_terminal_resolves_as_before(self):
+        os.environ["CLAUDE_CONFIG_DIR"] = self.account      # a terminal that sets its own config folder
+        self.assertEqual(ws.land_locks_dir(), os.path.join(os.path.realpath(self.account), "state", "land-locks"))
+        self.assertEqual(ws.state_dir(), os.path.join(self.account, "state", "workspaces"))
+        os.environ.pop("CLAUDE_CONFIG_DIR")                 # and one that sets nothing: ~/.claude
+        self.assertEqual(ws.land_locks_dir(),
+                         os.path.join(os.path.realpath(os.path.join(self.env.home, ".claude")), "state", "land-locks"))
 
 
 class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
@@ -8155,6 +8349,59 @@ class AppDueNotice(Base):
                                          "workspaces.sh holds\n" % len(commands)), start)
         self.assertTrue(bad.endswith("the due work told is from the readable records only. workspaces.sh status "
                                      "names it; repair or remove it when convenient."), bad)
+
+
+class LiveAppRegistry_RefusesFixtureShapedWrites(unittest.TestCase):
+    """Follow-up 2026-10-28: record-canary.test.sh 7d'' wrote agents/wait-regression.json (name
+    lead-fixture, session fixture) and events.jsonl rows into the app conversation's live registry."""
+
+    def setUp(self):
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix="ws-live-"))
+        self.account_home = os.path.join(self.root, "account")
+        self.live = os.path.join(self.account_home, "Library", "Application Support", ws.APP_IDENTIFIER,
+                                 "engine-state", "workspaces", "partition")
+        self.elsewhere = os.path.join(self.root, "registry")
+        for d in (self.live, self.elsewhere):
+            os.makedirs(d)
+        self.saved = os.environ.get("RICHOS_WORKSPACES_DIR")
+        patcher = patch.object(ws, "_account_home", create=True, return_value=self.account_home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        if self.saved is None:
+            os.environ.pop("RICHOS_WORKSPACES_DIR", None)
+        else:
+            os.environ["RICHOS_WORKSPACES_DIR"] = self.saved
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    FIXTURE = {"key": "wait-regression", "name": "lead-fixture", "session_id": "fixture"}
+
+    def test_the_live_registry_refuses_the_incident_record_and_writes_nothing(self):
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.live
+        with self.assertRaises(ws.SpecError) as raised:
+            ws.save_agent(dict(self.FIXTURE))
+        self.assertIn("live workspace registry", str(raised.exception))
+        ws.event("wait", name="lead-fixture", session="fixture")
+        self.assertEqual(sorted(os.listdir(self.live)), [])        # no agent record, no event row, no dirs
+
+    def test_a_real_record_is_written_to_the_live_registry(self):
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.live
+        ws.save_agent({"key": "zach-opus-abc", "name": "zach-opus-abc", "session_id": "sess-1234"})
+        ws.event("spawn", name="zach-opus-abc")
+        self.assertTrue(os.path.isfile(os.path.join(self.live, "agents", "zach-opus-abc.json")))
+        self.assertTrue(os.path.isfile(os.path.join(self.live, "events.jsonl")))
+
+    def test_a_fixture_registry_of_its_own_still_takes_fixture_records(self):
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.elsewhere
+        ws.save_agent(dict(self.FIXTURE))
+        self.assertTrue(os.path.isfile(os.path.join(self.elsewhere, "agents", "wait-regression.json")))
+
+    def test_the_word_must_stand_alone(self):
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.live
+        ws.save_agent({"key": "zach-opus-fixtures1", "name": "zach-opus-fixtures1", "session_id": "s"})
+        with self.assertRaises(ws.SpecError):
+            ws.save_agent({"key": "echo-opus-fixture", "name": "echo-opus-fixture", "session_id": "s"})
 
 
 if __name__ == "__main__":

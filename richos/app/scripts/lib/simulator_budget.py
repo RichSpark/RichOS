@@ -49,14 +49,22 @@ def acquire(kind, timeout=1800, sampler=None, cache=None, inventory=None):
         if token is None:
             time.sleep(.2)
             continue
+        held = ""
         try:
-            if kind != "boot" or (boot_admitted(sample()) and (inventory or booted_devices)() < 2):
+            if kind != "boot":
+                return token
+            measured = sample()
+            # A nightly waiting for its test-VM guest holds every admission (reserve.py) and says so.
+            held = measured.get("held_for_nightly", "") if isinstance(measured, dict) else ""
+            if boot_admitted(measured) and (inventory or booted_devices)() < 2:
                 return token
         except BaseException:
             token.release()
             raise
         token.release()
-        print("simulator-budget: boot waits for CPU/memory headroom or an existing booted device", file=sys.stderr, flush=True)
+        print("simulator-budget: " + (f"boot held: {held}" if held else
+                                      "boot waits for CPU/memory headroom or an existing booted device"),
+              file=sys.stderr, flush=True)
         time.sleep(min(30, max(0, deadline - time.monotonic())))
     raise TimeoutError("simulator %s admission exceeded %gs" % (kind, timeout))
 

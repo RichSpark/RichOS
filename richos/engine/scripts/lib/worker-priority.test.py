@@ -98,7 +98,9 @@ class Priority(unittest.TestCase):
         second = self.episode("second")
         self.assertFalse(second.enter())
         self.assertEqual(first.record["plan"], ["first"])
-        self.assertEqual(first.record["deadline"] - first.requested, 600)
+        # deadline = requested + 600 on a time.monotonic() float, so the difference is 600
+        # only to within float rounding (600.0000000000009 at some uptimes); never exact.
+        self.assertAlmostEqual(first.record["deadline"] - first.requested, 600, delta=1e-6)
         original = first.record.copy()
         self.assertFalse(second.enter())
         self.assertEqual(json.loads(Path(first.path).read_text()), original)

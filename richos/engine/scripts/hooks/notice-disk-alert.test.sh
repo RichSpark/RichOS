@@ -78,6 +78,10 @@ DISK_PRIMARY_VOLUME="/System/Volumes/Data"
 DISK_EXTRA_VOLUMES=""
 DISK_RICH_ALERT_GB="$1"
 DISK_DROP_ALERT_GB="999999"
+# The per-hour fall rate has its own threshold (default 80). Without this line the
+# suite read the HOST's real fall rate on the machine's own working drive (an extra
+# volume taken from machine settings) and failed whenever proof runs wrote to it.
+DISK_DROP_ALERT_GB_PER_HOUR="999999999"
 DISK_CEO_NOTIFY_GB="0"
 DISK_CEO_URGENT_GB="0"
 DISK_CEO_REPEAT_HOURS="24"

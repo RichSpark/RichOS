@@ -1,0 +1,121 @@
+# gui-boot-launch-lines.unaccounted: the `[richos] ...` lines src-tauri/src/main.rs can print that
+# gui-boot.test.sh deliberately has NO rule for, one per line, each hole written `{}`.
+#
+# Why they are here: gui-boot's B2 fails on any line of a healthy boot that no rule accounts for.
+# These are the failures, runtime events and not-running siblings of accounted lines that a healthy
+# boot never prints. Leaving them without a rule is the point: if a healthy boot ever printed one,
+# B2 would fail on it. gui-boot-launch-lines.py (test: gui-boot-launch-lines.test.sh) reads this list
+# at every land that touches main.rs or gui-boot.test.sh:
+#   - a new line in main.rs that no rule accounts for and that is not here fails it, so the author
+#     decides: add a routine/resolved/gap rule to gui-boot.test.sh if a healthy boot prints it, or
+#     append it here (exactly as the check prints it) if a healthy boot never does;
+#   - a line here that main.rs no longer prints, or that a rule now accounts for, fails it too.
+# Started from main.rs as it stood when the check was added; it is a classification nobody had
+# written down, not a review of each line.
+[richos]   looked in {}
+[richos]   looked in {} ({})
+[richos]   passed over {} ({}) — {}
+[richos] App Management watch: not watching yet, the engine is not verified ({})
+[richos] App Management watch: the watcher could not start ({})
+[richos] Codex watch: an entry waits for Rich ({})
+[richos] Codex watch: an entry waits for a conversation to be open
+[richos] Codex watch: its sink was already set
+[richos] Codex watch: no Codex channel is set
+[richos] Codex watch: not watching yet, the engine is not verified ({})
+[richos] Codex watch: the watcher could not start ({})
+[richos] Haiku's conversation title was not saved ({})
+[richos] a spoken answer went to the bug report, not to the conversation
+[richos] claude accounts: the adding could not be recorded ({})
+[richos] company registry: added {} ("{}"), {} root(s) -> {}
+[richos] conversation preparation finished in {} ms{}
+[richos] corpus company {}: not created — {}
+[richos] corpus compiler: NOT installed — looked in: {}. The corpus exists and is his; what is missing is the program that reads it.
+[richos] corpus git: NOT a git repository — {}. The record is on disk and is his; what is missing is the history under it.
+[richos] corpus git: {} @ {}, no remote
+[richos] dictation feature conversation {}: written and could not be recorded: {}
+[richos] dictation offer: the offer was shown and could not be recorded: {}
+[richos] dictation: the window could not be brought forward: {}
+[richos] dictation: the window could not be told dictation.json changed: {}
+[richos] dictation: the window could not be told to open the Dictation sheet: {}
+[richos] dictation: the window could not be told: {}
+[richos] feedback store unavailable, the feedback surface will refuse rather than take an answer it cannot keep: {}
+[richos] forgetting the phone did not complete: {}
+[richos] heard-vs-sent trigger ON — reading the dictation journal at {}
+[richos] heard-vs-sent trigger was switched on, but no journal location could be resolved (no $HOME and no RICHOS_DICTATION_JOURNAL) — the trigger stays silent
+[richos] heard-vs-sent trigger was switched on, but there is no dictation journal at {} — the trigger has no "heard" side and stays silent. Install the flywheel patch (tools/richos-hud/dictation-flywheel.patch) or point RICHOS_DICTATION_JOURNAL at the journal.
+[richos] his Send could not be written to the intake log ({}); it takes the blocking road the way it did before, which is the only cost
+[richos] his Send is durable (intake {}) and is on his phone before the spine has been asked for anything
+[richos] home field: could not read the corpus census ({}) — the home screen keeps the demonstration
+[richos] home field: no topic compiled ({}) — the home screen keeps the demonstration
+[richos] home field: {} object(s) of {} record(s) at {}, {} link(s), {} source(s), {} question(s) asked. Whether that replaces the demonstration is home.js's HOME_FIELD_MIN_OBJECTS, not this line.
+[richos] hop-trace +{} ms  spine RELEASED at {} after holding {} ms
+[richos] hop-trace +{} ms  spine TAKEN at {} after waiting {} ms
+[richos] idle sessions: could not start the check, every session stays running: {}
+[richos] idle sessions: ended {} conversation session(s) idle for {} minute(s): {}; each resumes on its next message
+[richos] incoming message: {}
+[richos] intake reconciliation at boot: {}
+[richos] launch record: could not mark a clean exit: {}
+[richos] launch record: {}
+[richos] loro correction desk is open but no context compiler is configured — nothing was ever put in front of Rich, so no correction can name a record and the trigger will stay silent
+[richos] loro correction desk unavailable, corrections will refuse rather than pretend: {}
+[richos] loro correction desk: CLOSED — {}. Confirming a correction will refuse and say so rather than appearing to write.
+[richos] loro correction desk: OPEN at {} — installed by provisioning, no relaunch. Corrections work in this session.
+[richos] loro correction desk: still closed after provisioning — the corpus exists and the desk's own log could not be opened. Confirming a correction will refuse and say so rather than appearing to write.
+[richos] machine settings starter could not be created: {}
+[richos] machinery: evicted {} raw shard(s) past the retention window
+[richos] next conversation ready for {}: preparation took {} ms
+[richos] no spare front desk was made ready for {}: {}
+[richos] no window could be reopened: this build declares none
+[richos] onboarding answer migration failed: {}
+[richos] onboarding: company notes unusable — {}
+[richos] onboarding: declination NOT recorded — {}
+[richos] output: the list could not be told about new files: {}
+[richos] provisioned a corpus at {}
+[richos] queued reply: {}
+[richos] quit and stop the work: a job's stop could not be recorded: {}
+[richos] quit and stop the work: {} job(s) recorded as stopped by the user.
+[richos] quit: the App Management watcher {} ended.
+[richos] quit: the Codex watcher {} ended.
+[richos] quit: the second review's watcher(s) {} ended.
+[richos] quit: {} lease(s) ended their tool commands; {} stopped at the bound.
+[richos] resources unavailable: {}
+[richos] saved answer order unreadable: {}
+[richos] second review: not watching yet, the engine is not verified ({})
+[richos] second review: the app's review-watch could not start ({})
+[richos] spoken reply: {}
+[richos] spoken turn refused before it started (first-run setup is incomplete)
+[richos] spoken-correction desk unavailable, corrections will not be recorded: {}
+[richos] steering intake unavailable, stop will refuse rather than pretend: {}
+[richos] text turn refused before it started ({})
+[richos] the back end's overload wait could not be shown ({})
+[richos] the front desk was not made ready before he types: {}
+[richos] the last assignment ended with no window open and a command Rich started still running: RichOS stays until it ends.
+[richos] the last assignment ended with no window open: RichOS is closing itself.
+[richos] the last command Rich started has ended with no window open: RichOS is closing itself.
+[richos] the newer shipped instructions could not be checked: {}
+[richos] the phone channel could not start: {}
+[richos] the press on this Mac could not be recorded: {}
+[richos] the quit question could not be shown ({}); quitting as this app used to
+[richos] the sidebar was not told about the new title ({})
+[richos] the window could not be rebuilt: {}
+[richos] ui-emit {}
+[richos] update selftest: {}
+[richos] voice mode failed to start: {}
+[richos] voice turn failed: {}
+[richos] voice: a spoken turn was withdrawn while it waited for earlier work; his next turn carries its words
+[richos] voice: he went on before Rich answered; nothing was running to stop
+[richos] voice: he went on before Rich answered; stopped {} so his whole thought is one request
+[richos] voice: not ready on this machine ({}) — {}
+[richos] voice: ready on this machine ({}) — {}
+[richos] voice: speech decoder initialization failed: {}
+[richos] voice: the partial turn could not be stopped: {}
+[richos] voice: the window could not be told voice mode ended: {}
+[richos] window closed with pending questions: the phone service stays available. Quit ends it; the questions are saved.
+[richos] window closed with work registered: RichOS stays running with no window. The Dock icon brings it back.
+[richos] window did not come to the front: {}
+[richos] window: geometry not recorded: {}
+[richos] yt-dlp: check failed ({}): {}
+[richos] yt-dlp: could not start its check: {}
+[richos] yt-dlp: installed nightly {}{}
+[richos] yt-dlp: nightly {} is the newest
+[richos] yt-dlp: no HOME, so no tools folder; not checking

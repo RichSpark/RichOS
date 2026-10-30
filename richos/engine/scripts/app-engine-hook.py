@@ -45,6 +45,16 @@ def scope():
     return value
 
 
+def closure_of(active):
+    """Which work a closed scope is, who closed its grant and when (scripts/lib/scope_closure.py),
+    so a refusal names its actual cause and scope rather than one sentence for every cause
+    (follow-up "app work tools refused dispatches for unexplained reasons", 2026-10-28)."""
+    try:
+        return load("richos_scope_closure", ENGINE / "scripts/lib/scope_closure.py").describe(active)
+    except Exception as error:  # noqa: BLE001 -- a cause that cannot be read is said, never hidden
+        return "Its cause could not be read (%s: %s)." % (type(error).__name__, str(error)[:200])
+
+
 def a_worker_this_lease_already_dispatched(active, payload):
     """Is this tool call a BACKGROUND WORKER's, under a standing grant that survives the
     turn that dispatched it?
@@ -154,7 +164,7 @@ def handle(payload):
         active = scope()
         if active.get("actions_allowed") is not True and not presentation \
                 and not a_worker_this_lease_already_dispatched(active, payload):
-            raise ValueError("This app turn is stopped or is supplying context. New actions are unavailable.")
+            raise ValueError("This app turn is stopped or is supplying context. New actions are unavailable. " + closure_of(active))
     evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")
     instruction = None
     if event in ("UserPromptSubmit", "PreToolUse"):

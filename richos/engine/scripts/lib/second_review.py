@@ -174,6 +174,7 @@ if HERE not in sys.path:
 
 import cpu_policy  # noqa: E402  (sibling in scripts/lib: the engine's CPU admission rule)
 import instruction_files  # noqa: E402  (sibling: the repository's own CLAUDE.md or AGENTS.md, by Claude Code's rule)
+import machine_settings  # noqa: E402  (sibling: claude_home, the machine's one Claude home)
 
 CODEX_MODEL = "gpt-6.1-sol"
 CODEX_EFFORT = "high"
@@ -249,11 +250,13 @@ def git(repo, *args, check=True):
 
 
 def state_root():
+    """The ledger's folder: SECOND_REVIEW_STATE_DIR, else <the machine's one Claude home>/state,
+    whichever Claude account this review spends (machine_settings.claude_home). Every reader of
+    the ledger resolves it the same way, so a review written under a Work lease is found."""
     d = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip()
     if d:
         return d
-    base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.path.join(base, "state")
+    return os.path.join(machine_settings.claude_home(), "state")
 
 
 def ledger_path():
@@ -483,13 +486,22 @@ def earlier_findings(work_key, tip, repo, repo_id=""):
     asked about, and only ever files, findings of the repository it reviews
     (review rv-20261009T104053Z-8662354d-47b2). A finding a passed review
     already filed as a follow-up carries "filed": true, so a later pass never
-    files it twice."""
-    rows = [r for r in read_ledger() if r.get("work") == work_key and r.get("verdict")
-            and same_repo(r, repo, repo_id)]
+    files it twice.
+
+    The reviews read are the ones the land fence reads for `tip`
+    (operator_fences.review_history), plus this work key's: only reviews of
+    `tip` or a commit it was built on count, so a review of an unrelated tip on
+    the same work key that withdrew a finding no longer hides it (it kept the
+    reviewers of 5611a7964 from being asked about
+    rv-20261029T140028Z-3e883526-10b9#1, 2026-10-29); and every work key with a
+    land review of `tip` counts, so a manual --recheck on its own range key is
+    handed the findings held under the app's key."""
+    import operator_fences as fences
+    rows = fences.review_history([r for r in read_ledger() if r.get("verdict") and same_repo(r, repo, repo_id)],
+                                 tip, repo, [work_key])
     # The gate and the next reviewer see the same unresolved findings, including
     # conflicting duplicate reviews. Never carry only the last writer's subset.
-    import operator_fences as fences
-    return list(fences.open_review_findings(rows).items())
+    return list(fences.open_review_findings(rows, tip, repo).items())
 
 
 def is_ancestor(repo, older, newer):
@@ -838,8 +850,29 @@ def admit(wait_seconds, say):
         time.sleep(min(ADMISSION_SAMPLE_SECONDS, max(0.0, deadline - time.monotonic())))
 
 
-def quota_hold(engine_root):
-    """(held, reading). His 93% rule, read through quota-watch's own --once."""
+def quota_hold(engine_root, accounts=""):
+    """(held, reading). His 93% rule.
+
+    In the app (`accounts`, the app's account list, --accounts): THE GATE'S OWN ADMISSION, read
+    from the file the app publishes beside that list (<app>/engine-state/claude-quota.json) for
+    the account the review runs on, by quota_watch.gate_admission, and nothing else. The app's
+    watcher starts with a cleared environment (review_watch.rs `environment`: no RICHOS_ENTITY_ROOT,
+    no CLAUDE_PROJECT_DIR), so quota-watch.sh found no QUOTA_PAUSE_PERCENT there, answered UNKNOWN,
+    and every app review started during a hold, on main as on the first version of this fix, which
+    only pointed quota-watch at the app's reading (richos-hq follow-ups.md, "app-launched reviews
+    never apply the usage hold"; rv-20261028T184535Z-d37b1f0d-e0d9). The app's pause setting, not a
+    terminal's config, decides an app review, as it decides every tool call of the app's work.
+
+    In a terminal: quota-watch's own --once (SECOND_REVIEW_QUOTA_CMD replaces it in tests)."""
+    if accounts:
+        import quota_watch  # sibling in scripts/lib: the app's published reading, read one way
+        state = os.path.join(os.path.dirname(os.path.abspath(accounts)), "engine-state")
+        # Judged on the account the review will run on (account_in_use, read again when it
+        # starts), as the gate judges every call on its own account: during a move the file's top
+        # level is still the account being left.
+        account = account_in_use(accounts)
+        gate = quota_watch.gate_admission(state, time.time(), (account or {}).get("id"))
+        return gate["held"], gate["line"]
     cmd = (os.environ.get("SECOND_REVIEW_QUOTA_CMD") or "").strip()
     argv = [cmd] if cmd else ["bash", os.path.join(engine_root, "scripts", "quota-watch.sh"), "--once"]
     try:
@@ -1085,14 +1118,17 @@ def claude_env(account=None):
     an added account's folder becomes CLAUDE_CONFIG_DIR and its id RICHOS_CLAUDE_ACCOUNT, exactly
     as a work lease is given them (richos-core engine_profile.rs configure); Account 1 has no
     folder and keeps the inherited one. Only the reviewer gets them: this command's own state and
-    scratch stay where they were."""
+    scratch stay where they were. Like a lease, an added account's reviewer is also given the
+    machine's one Claude home (RICHOS_CLAUDE_HOME, paired with RICHOS_CLAUDE_ACCOUNT_DIR), so the
+    engine's hooks inside it read this command's ledger, not the account's folder."""
     env = dict(os.environ)
     for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"):
         env.pop(k, None)
     if account:
         env["RICHOS_CLAUDE_ACCOUNT"] = account["id"]
         if account.get("folder"):
-            env["CLAUDE_CONFIG_DIR"] = account["folder"]
+            env["RICHOS_CLAUDE_HOME"] = machine_settings.claude_home()
+            env["CLAUDE_CONFIG_DIR"] = env["RICHOS_CLAUDE_ACCOUNT_DIR"] = account["folder"]
     return env
 
 
@@ -1512,9 +1548,12 @@ def _review_owned(a, w):
         return finish(None, raw)
 
     # Claude: the reviewer of Codex's work, and the fallback.
-    held, reading = quota_hold(a.engine_root)
+    held, reading = quota_hold(a.engine_root, a.accounts)
     row["quota"] = reading
     if held:
+        # Marked, so the watcher settles it as held, never as lost: a hold is not a crash and spends
+        # none of the commit's two retries (review_watch.py settle/due, HOLD_RETRY_SECONDS).
+        row["quota_held"] = True
         row["why"] = ("the quota hold is in force (his 93%% rule; %s), so no Claude review started; it waits "
                       "for the reset, as every teammate does" % reading)
         return finish(None, raw)

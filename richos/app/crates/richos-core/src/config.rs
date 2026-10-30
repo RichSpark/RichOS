@@ -530,6 +530,23 @@ struct StoredConfig {
     /// answers Ink for anything this build cannot draw.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resources_view: Option<String>,
+    /// HOW LONG ANOTHER CONVERSATION'S RICH STAYS RUNNING WITH NOTHING TO DO, in minutes
+    /// (follow-ups, "a nightly's VM boot proof cannot get a guest slot", decision 3). Past it
+    /// the conversation's `claude` process is ended; his next message resumes the same session
+    /// (`Spine::retire_idle_front_desks`). Absent reads as
+    /// [`IDLE_SESSION_MINUTES_DEFAULT`]; `0` keeps every session running, as before.
+    #[serde(default = "idle_session_minutes_default")]
+    idle_session_minutes: u32,
+}
+
+/// Thirty minutes. Long enough that a conversation he is moving between during a working
+/// session keeps its running Rich; short enough that an afternoon of opened conversations does
+/// not leave each one's `claude` process resident until the app quits. A number to revisit
+/// with a measurement of the resume delay, not a constant with a measurement behind it.
+pub const IDLE_SESSION_MINUTES_DEFAULT: u32 = 30;
+
+fn idle_session_minutes_default() -> u32 {
+    IDLE_SESSION_MINUTES_DEFAULT
 }
 
 /// The views the resources square can be drawn in. The first is the default.
@@ -558,6 +575,7 @@ impl Default for StoredConfig {
             stu_model: ModelChoice::default(),
             oxford_comma: false,
             resources_view: None,
+            idle_session_minutes: IDLE_SESSION_MINUTES_DEFAULT,
         }
     }
 }
@@ -1096,6 +1114,21 @@ impl ConfigStore {
             return Ok(());
         }
         self.config.resources_view = Some(view.to_string());
+        self.persist()
+    }
+
+    // ---- idle conversation sessions (follow-ups, decision 3) -----------------------
+
+    /// Minutes another conversation's session may sit idle before it is ended. `0` = never.
+    pub fn idle_session_minutes(&self) -> u32 {
+        self.config.idle_session_minutes
+    }
+
+    pub fn set_idle_session_minutes(&mut self, minutes: u32) -> io::Result<()> {
+        if self.config.idle_session_minutes == minutes {
+            return Ok(());
+        }
+        self.config.idle_session_minutes = minutes;
         self.persist()
     }
 
@@ -2386,6 +2419,26 @@ mod tests {
         assert!(json.as_object_mut().unwrap().remove("oxford_comma").is_some(), "the key is on disk");
         std::fs::write(&path, json.to_string()).unwrap();
         assert!(!ConfigStore::open(&path).unwrap().oxford_comma(), "an older file reads as off");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn the_idle_session_timeout_defaults_to_thirty_minutes_and_his_choice_survives_a_reopen() {
+        let path = tmp_path("idle-session-minutes");
+        if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+        {
+            let mut store = ConfigStore::open(&path).unwrap();
+            assert_eq!(store.idle_session_minutes(), 30, "a fresh install retires after thirty minutes");
+            store.set_idle_session_minutes(0).unwrap();
+        }
+        assert_eq!(ConfigStore::open(&path).unwrap().idle_session_minutes(), 0, "zero (never) survives a reopen");
+        // A config file written before this setting existed reads as the default.
+        let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(json.as_object_mut().unwrap().remove("idle_session_minutes").is_some(), "the key is on disk");
+        std::fs::write(&path, json.to_string()).unwrap();
+        assert_eq!(ConfigStore::open(&path).unwrap().idle_session_minutes(), IDLE_SESSION_MINUTES_DEFAULT);
         std::fs::remove_file(&path).unwrap();
     }
 

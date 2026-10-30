@@ -2866,8 +2866,13 @@
     const firstLabel = accounts.length ? null : (inUse && inUse.label && inUse.label !== "Account 1" ? inUse.label : (fixture.firstLabel ?? null));
     return { refreshIntervalMs: 5 * 60000, ...fixture, resets: structuredClone(resetOffers), policy: { ...quotaPolicy }, admission,
       accounts, atThreshold, heldUntil: fixture.heldUntil ?? null, changes: structuredClone(mockChanges), nudge: mockNudge && { ...mockNudge },
-      notes: structuredClone(mockNotes), firstLabel, lastSwitch: mockLastSwitch === undefined ? (fixture.lastSwitch ?? null) : mockLastSwitch };
+      notes: structuredClone(mockNotes), firstLabel, lastSwitch: mockLastSwitch === undefined ? (fixture.lastSwitch ?? null) : mockLastSwitch,
+      ...(mockMoving === undefined ? {} : { moving: mockMoving && { ...mockMoving } }) };
   }
+  // A MOVE THAT WAITS (quota.rs `View::moving`): with `preset.moveWaits` "pending" or "blocked",
+  // Use this one now decides the move and the work stays on the account in use, as the app does
+  // while work still runs there; `__RICHOS_MOCK__.finishAccountMove()` is the work arriving.
+  let mockMoving = undefined;
   let mockAccounts = structuredClone(preset.quota?.accounts || []);
   let mockAtThreshold = preset.quota?.atThreshold || "pause";
   let mockChanges = structuredClone(preset.quota?.changes || []);
@@ -3221,6 +3226,12 @@
           if (!pick) throw "That account is no longer on this Mac.";
           if (!pick.windows.length) throw `${pick.label} has no reading yet. Sign it in, then refresh.`;
           if (!pick.inUse) { changed("chose", pick.id, pick.label); mockLastSwitch = null; }
+          const current = mockAccounts.find(a => a.inUse);
+          if (preset.moveWaits && current && current.id !== pick.id) {
+            mockMoving = { from: current.id, to: pick.id, blocked: preset.moveWaits === "blocked" };
+            return quotaView();
+          }
+          if (mockMoving !== undefined) mockMoving = null;
           for (const a of mockAccounts) a.inUse = a.id === args.id;
           return quotaView();
         }
@@ -5548,6 +5559,12 @@
       for (const a of mockAccounts) a.inUse = a.id === toId;
       mockLastSwitch = { from: fromId, to: toId, at: Date.now(), why, used };
       changed("switched", toId, to.label, { from: from.label, why, used });
+    },
+    /// A move that waited (`preset.moveWaits`) happens: the work now runs on the account chosen.
+    finishAccountMove() {
+      if (!mockMoving) return;
+      for (const a of mockAccounts) a.inUse = a.id === mockMoving.to;
+      mockMoving = null;
     },
     simulateProactiveInterrupt(threadId = "acme") {
       const turnId = uid("turn");

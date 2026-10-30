@@ -428,24 +428,67 @@ def cargo_key(argv):
     return (" ".join(rest), flt)
 
 
-def supply_runtime(items):
+# What a suite says when it refuses without the runtime (or the speech models): the check "needs" them.
+RUNTIME_REFUSALS = ("set RICHOS_RUNTIME_DIR to a prepared, verified runtime", "a verified RICHOS_RUNTIME_DIR",
+                    "a verified delivered runtime is required")
+
+
+def suite_text(item):
+    """The source of the run-tests suite an item runs, '' for any other kind of check."""
+    argv = item.argv
+    if len(argv) < 2 or argv[0] != "scripts/run-tests.sh" or argv[-2] != "--only":
+        return ""
+    try:
+        with open(os.path.join(item.cwd, "scripts", argv[-1]), encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return ""
+
+
+def runs_on_screen(item):
+    """True when the suite will really boot the app (a host-screen suite under --no-host-screen is skipped)."""
+    argv = item.argv
+    return not ("--no-host-screen" in argv and is_host_screen(os.path.join(item.cwd, "scripts", argv[-1])))
+
+
+def needs_runtime(item):
+    """True when this check refuses without RICHOS_RUNTIME_DIR: its suite says so and will run."""
+    text = suite_text(item)
+    return bool(text) and any(marker in text for marker in RUNTIME_REFUSALS) and runs_on_screen(item)
+
+
+def needs_speech_models(item):
+    """True when this check boots gui-boot's healthy machine, which needs both speech models."""
+    text = suite_text(item)
+    return bool(text) and "RICHOS_GUI_SPEECH_MODELS" in text and runs_on_screen(item) and item.lane == "guest"
+
+
+def supply_runtime(items, build=False):
     """Packaging suites need RICHOS_RUNTIME_DIR. Unset, the runner supplies the one the
     nightly uses (<state>/runtime-<recipe sha256[:12]>, nightly-local.py `runtime()`, named by
     lib/runtime_cache.py) to every check, only after verify-runtime.py accepts it against the
-    tracked recipe, exactly as the nightly does. Returns the line that says which, printed with
-    the plan."""
+    tracked recipe, exactly as the nightly does. With `build`, a runtime that is not there is BUILT
+    first when a selected check needs it (needs_runtime), so no lead or engineer builds one by hand
+    and sets the variable (2026-10-28, twice); a planning pass never builds. Returns the line that
+    says which, printed with the plan."""
     if os.environ.get("RICHOS_RUNTIME_DIR"):
         return "RICHOS_RUNTIME_DIR=%s (from the caller)" % os.environ["RICHOS_RUNTIME_DIR"]
     if os.path.join(HERE, "lib") not in sys.path:
         sys.path.insert(0, os.path.join(HERE, "lib"))
     import runtime_cache
     recipe = os.path.join(HERE, "runtime-sources.json")
+    state = os.path.join(os.path.expanduser("~"), ".richos-nightly")
     try:
-        path = str(runtime_cache.cache_path(os.path.join(os.path.expanduser("~"), ".richos-nightly"),
-                                            recipe))
+        path = str(runtime_cache.cache_path(state, recipe))
     except OSError as error:
         return "RICHOS_RUNTIME_DIR is unset and %s cannot be read (%s); suites that need it will refuse" % (
             recipe, error.strerror or error)
+    if build and not os.path.isdir(path) and any(needs_runtime(it) for it in items):
+        try:
+            runtime_cache.ensure_runtime(state, recipe, scripts=HERE, build=True,
+                                         say=lambda line: print("  " + line, flush=True))
+        except runtime_cache.RuntimeNotReady as error:
+            return "RICHOS_RUNTIME_DIR is unset and the runtime could not be had: %s" % error
     # The one command that builds it, printed with the refusal (what gui-proof-in-vm.sh prints too).
     build = "python3 %s %s" % (shlex.quote(os.path.join(HERE, "build-runtimes.py")), shlex.quote(path))
     if not os.path.isdir(path):
@@ -461,10 +504,11 @@ def supply_runtime(items):
     return "RICHOS_RUNTIME_DIR=%s (the nightly's runtime, verified against runtime-sources.json)" % path
 
 
-def supply_speech_models(items):
+def supply_speech_models(items, refuse=False):
     """gui-boot's healthy machine needs both pinned speech models (the video tools are a setup
     essential); the nightly hands it lib/runtime_cache.py's gui_speech_models(), so the checks
-    get the same files. Returns the line that says which."""
+    get the same files. With `refuse`, a run that will boot gui-boot without them stops here with
+    the command that fetches them instead of failing inside gui-boot. Returns the line that says which."""
     if os.path.join(HERE, "lib") not in sys.path:
         sys.path.insert(0, os.path.join(HERE, "lib"))
     import runtime_cache
@@ -472,8 +516,10 @@ def supply_speech_models(items):
         return "RICHOS_GUI_SPEECH_MODELS=%s (from the caller)" % os.environ["RICHOS_GUI_SPEECH_MODELS"]
     models = runtime_cache.gui_speech_models()
     if models is None:
-        return ("RICHOS_GUI_SPEECH_MODELS is unset and %s are not all on this Mac; gui-boot will refuse"
-                % ", ".join(str(m) for m in runtime_cache.GUI_SPEECH_MODELS))
+        if refuse and any(needs_speech_models(it) for it in items):
+            raise SystemExit("proof-run: NOT RUN: " + runtime_cache.speech_models_refusal())
+        return ("RICHOS_GUI_SPEECH_MODELS is unset and %s are not all on this Mac; gui-boot will refuse. %s"
+                % (", ".join(str(m) for m in runtime_cache.GUI_SPEECH_MODELS), runtime_cache.speech_models_refusal()))
     for it in items:
         it.env["RICHOS_GUI_SPEECH_MODELS"] = models
     return "RICHOS_GUI_SPEECH_MODELS=%s (the nightly's)" % models
@@ -966,6 +1012,18 @@ def describe_input_change(item, baseline, items, limit=5):
         return "; changed: %s; checks started by then: %s" % (where, ", ".join(started) or "none")
     except Exception:  # noqa: BLE001 — an explanation never breaks the verdict it explains
         return ""
+
+
+def invalid_reason(item):
+    """Why a check is INVALID, for summary.json: the reason its outcome row carries (outcomes.json
+    `invalid`, which names the changed identity keys), or None when the check is not invalid.
+    Before 2026-10-29 the summary said `invalid` and nothing else; the reason was only in the
+    run's console output and outcomes.json."""
+    if item.state != "invalid":
+        return None
+    evidence = getattr(item, "evidence", None)
+    row = (evidence.results.get(item.label) if evidence is not None else None) or {}
+    return row.get("invalid") or (item.notes[-1] if item.notes else None)
 
 
 def reserve_item(item, n, args, logdir):
@@ -2373,6 +2431,7 @@ def summarize(items, wall, logdir, budget_seconds=600, monitor_lines=()):
                      "engine_slot_wait": round(it.slot_wait, 1),
                      "wait_seconds_by_reason": {k: round(v, 3) for k, v in it.wait_times.items()},
                      "exit": it.rc, "log": it.log,
+                     "invalid": invalid_reason(it),
                      "reused_from": getattr(it, "reused_from", None),
                      "attempts": it.attempts,
                      "repeated_seconds": sum(a['seconds'] for a in it.previous_attempts),
@@ -2880,7 +2939,7 @@ def run_main(argv, run_state):
         print("  %-40s lane %-7s ~%5.0f s  cd %s && %s" % (it.label, it.lane or "-", it.weight,
                                                          os.path.relpath(it.cwd, ROOT), " ".join(it.argv)))
     print("  " + supply_runtime(items))
-    print("  " + supply_speech_models(items))
+    print("  " + supply_speech_models(items, refuse=not args.dry_run))
     print("  " + conditions_line(items))
     if args.dry_run:
         return 0
@@ -2908,6 +2967,10 @@ def run_main(argv, run_state):
                      else "proof-run slot %d on this Mac (%d run(s) at once), waited %.0f s for it" % (
                          SLOT.index, proof_slots.limit()[0], slot_wait))
         print("[%s] %s" % (stamp(), slot_line), flush=True)
+        # A runtime a selected check needs and this Mac does not have yet is built now, under the
+        # slot, once, before any input is read (the plan above only looked). Nobody builds it by hand.
+        if any(needs_runtime(it) for it in items):
+            print("  " + supply_runtime(items, build=True), flush=True)
         before = source_identity()
         with open(os.path.join(logdir, "source.json"), "w") as out:
             json.dump(before, out, indent=2)

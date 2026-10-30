@@ -184,7 +184,7 @@ fn close_orphan_grants(state: &Path, unreconciled: &mut Vec<String>) -> usize {
         if open == Some(false) {
             continue;
         }
-        match crate::ecs::revoke(&path) {
+        match crate::ecs::revoke_by(&path, crate::ecs::closed_by::CRASH_RECOVERY) {
             Ok(()) => closed += 1,
             Err(_) => unreconciled.push(name.to_string()),
         }
@@ -491,6 +491,7 @@ mod tests {
             // An assignment that was live when the app died: its workers held the standing
             // grant, and the sweep below is what takes it back.
             background_work_allowed: true,
+            closed: None,
         };
         for path in [&open_work, &conversation] {
             std::fs::write(path, serde_json::to_vec(&granted).unwrap()).unwrap();

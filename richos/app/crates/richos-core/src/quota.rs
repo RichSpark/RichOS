@@ -17,6 +17,7 @@ pub mod terminal;
 pub mod tokens;
 pub mod reset_transport;
 pub mod reset_tools;
+pub mod stagger;
 
 pub const REFRESH_INTERVAL_MS: u64 = 5 * 60_000;
 
@@ -179,7 +180,21 @@ impl Reading {
             && w.resets_at.is_none_or(|t| t > now))
     }
 }
+/// **The 93% rule's window before a five-hour reset** (his §87/§108). Inside it a held team is
+/// released staggered, judged on the speed measured before the hold, and only while the account
+/// stays under 100% at the reset (`stagger`, Rich's decision of 2026-10-29); before it, the
+/// hold holds.
 pub const RESET_EXEMPTION_MS: u64 = 20 * 60_000;
+
+
+/// **One window read two ways is one window**: reset times that agree within a minute. The
+/// probe reports an ISO time and the stream whole seconds, so exact equality would make one
+/// window two (`Snapshot::measure`), and would start the staggered release's count over in
+/// the middle of a window (`stagger::admit`, review of 2026-10-29, finding 2). Two five-hour
+/// windows are five hours apart.
+fn same_reset(a: u64, b: u64) -> bool {
+    a.abs_diff(b) < 60_000
+}
 
 /// A span as Rich says it: "41 min", "1 h 41 min", "2 d 3 h" (round 16's way of writing one).
 pub fn words(ms: u64) -> String {
@@ -385,6 +400,35 @@ pub struct View {
     /// running on one of these accounts to commit, hand off and end (`gate.rs`).
     #[serde(default)]
     pub leaving: Vec<String>,
+    /// **The speed measured before the hold**, points per ms, by window: the last rise that
+    /// started under the pause line (`Snapshot::pre_hold`). Published so the separate-process
+    /// gate judges a release inside the window on it, never on the 0 a held team reads.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pre_hold: BTreeMap<String, f64>,
+    /// **Held by the five-hour window with its reset less than 20 minutes away**: what the
+    /// staggered release is judged on (`stagger`). `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<stagger::Release>,
+    /// **A move to the account in use that has not happened yet** (Rich, 2026-10-29): work
+    /// still runs on `from`, so `accounts` marks `from` in use and `to` as the one being
+    /// switched to. `None` once everything runs on the account in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moving: Option<crate::claude_accounts::Moving>,
+    /// **The account every figure above describes** (richos-hq follow-ups.md, 7fed0bef): the
+    /// account the work runs on, named, with one account too, so a reader of this file never
+    /// has to guess whose numbers it holds. That is the account in use once everything has
+    /// moved to it, and during a move (`moving`) the account the work is still on, the same
+    /// account the `accounts` row marked in use names. `None` only in a file an older app wrote.
+    #[serde(default)]
+    pub in_use: Option<InUse>,
+}
+
+/// [`View::in_use`]: the account the top-level figures describe, by its id and the user's own
+/// label.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InUse {
+    pub id: String,
+    pub label: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -566,6 +610,11 @@ struct Snapshot {
     /// and `SignedInNoLimits` (`Some(true)`); every other outcome leaves it as it was. A
     /// changed account connection starts a new `Snapshot` and so forgets it (`disconnect`).
     signed_in: Option<bool>,
+    /// Each window's last measured rises in this window (same reset), oldest first: the used
+    /// percent each started from and the speed measured over it. A reading that gained nothing
+    /// adds none, so a held team's flat readings never replace the speed before the hold
+    /// (`pre_hold`).
+    rise_log: BTreeMap<String, Vec<(f64, f64)>>,
 }
 
 /// **An account with no reading yet is asked again soon after a null answer** (handoff round
@@ -609,11 +658,9 @@ impl Snapshot {
     fn measure(&mut self, windows: &[Window], observed: u64) {
         for window in windows {
             let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed, last: observed, rose: false };
-            // The SAME window when the reset times agree within a minute: the probe reports
-            // an ISO time and the stream whole seconds, so exact equality would treat one
-            // window read two ways as two windows and never measure a speed across them.
+            // The SAME window when the reset times agree within a minute (`same_reset`).
             let same = |a: Option<u64>, b: Option<u64>| match (a, b) {
-                (Some(a), Some(b)) => a.abs_diff(b) < 60_000,
+                (Some(a), Some(b)) => same_reset(a, b),
                 (a, b) => a == b,
             };
             match self.bases.get(&window.id).copied() {
@@ -633,6 +680,16 @@ impl Snapshot {
                         }
                         self.speeds.insert(window.id.clone(), speed);
                         self.rises.insert(window.id.clone(), rise);
+                        if speed > 0. {
+                            // One rise per whole point it started from, the latest: a window's
+                            // climb from 0 to 100% keeps at most 101, so the last rise that began
+                            // under the pause line is never pushed out by the rises above it
+                            // (second review of 2026-10-29, finding 2: eight kept, and the rise
+                            // into the hold was evicted by eight readings above the line).
+                            let log = self.rise_log.entry(window.id.clone()).or_default();
+                            log.retain(|(from, _)| from.floor() != base.used.floor());
+                            log.push((base.used, speed));
+                        }
                         if window.used_percent != base.used {
                             self.bases.insert(window.id.clone(), SpeedBase { rose: gained > 0., ..fresh });
                         }
@@ -644,6 +701,7 @@ impl Snapshot {
                 _ => {
                     self.speeds.remove(&window.id);
                     self.rises.remove(&window.id);
+                    self.rise_log.remove(&window.id);
                     self.bases.insert(window.id.clone(), fresh);
                 }
             }
@@ -695,10 +753,11 @@ impl Snapshot {
         let speeds = std::mem::take(&mut self.speeds);
         let bases = std::mem::take(&mut self.bases);
         let rises = std::mem::take(&mut self.rises);
+        let rise_log = std::mem::take(&mut self.rise_log);
         let (rise_until, token_speed, handoff) = (self.rise_until, self.token_speed, self.handoff);
         // Only a signed-in account reports a reading.
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
-            since_reading: 0., handoff, empties: 0, signed_in: Some(true) };
+            since_reading: 0., handoff, empties: 0, signed_in: Some(true), rise_log };
     }
     /// **A check that came back with no figures.** Every kind records when, so the pause stops
     /// waiting on it (`Admission::NoReading`). A null answer (`ReadError::NoReading`) is not a
@@ -755,6 +814,32 @@ impl Snapshot {
     fn view(&self, policy: Policy, now: u64) -> View {
         self.view_with(policy, None, now)
     }
+    /// **The speed measured before the hold** (Rich, 2026-10-29: *"a rate of 0 while everyone
+    /// is held is no measurement"*): the speed of the last rise of window `id` that started
+    /// under `line`, the pause line. Rises from the hold onwards started at or over it, and a
+    /// held team's flat readings add no rise at all, so neither replaces it. 0 when no rise into
+    /// the hold was seen in this window.
+    ///
+    /// **A hold the speed brought on early is held at its own point** (review
+    /// rv-20261029T150133Z-2f57a3fd-6d74, finding 1): 80% -> 92% in a minute holds at 92%,
+    /// under 93%, because at 11 points a minute the point is 100 - 11 = 89%. A rise that
+    /// starts at or over the point in force when it starts (Stu's own turns, a released
+    /// worker) is a rise during that hold, so it never replaces the rise into it. The rises
+    /// are read in the order they came (`measure` appends), each moving the point by its
+    /// speed exactly as [`Reading::act_point`] does: `line` at a speed under 1 point a minute
+    /// (5 points or less per five-minute check), `100 - speed x 1 minute` above it.
+    fn pre_hold(&self, id: &str, line: f64) -> f64 {
+        let point = |speed: f64| {
+            let interval = if speed * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK {
+                FAST_REFRESH_INTERVAL_MS
+            } else {
+                REFRESH_INTERVAL_MS
+            };
+            line.min(100. - speed * interval as f64).clamp(0., 100.)
+        };
+        self.rise_log.get(id).map_or(0., |log| log.iter()
+            .fold(0., |found, &(from, speed)| if from < point(found) { speed } else { found }))
+    }
     /// [`View::signed_in`]: what the last answer about the sign-in established, and nothing
     /// more; a check that said nothing about it leaves it standing (`Snapshot::signed_in`).
     fn signed_in(&self) -> Option<bool> {
@@ -791,6 +876,10 @@ impl Snapshot {
         // Unknown and missing readings remain visible as such, but do not hold work.
         // An observed above-threshold window still holds until its actual reset.
         let answered_empty = self.empty_at.is_some_and(|e| self.checked_at.is_none_or(|c| e >= c));
+        let line = f64::from(policy.pause_percent);
+        let pre_hold: BTreeMap<String, f64> = [("five_hour", self.pre_hold("five_hour", line))].into_iter()
+            .filter(|(_, s)| *s > 0.).map(|(id, s)| (id.to_string(), s)).collect();
+        let mut release = None;
         let admission = if !policy.enabled {
             Admission::Disabled
         } else if self.checked_at.is_some_and(|t| t > now) {
@@ -805,28 +894,43 @@ impl Snapshot {
             Admission::Held { resets_at: until }
         } else {
             // §108: at normal speed the 93% rule exactly as before; at a measured fast speed
-            // the pause comes EARLIER, when the next check would already find 100%. The
-            // 20-minute exception still lets work continue near a reset, but only when the
-            // measured speed would not carry the window to 100% before that reset.
+            // the pause comes EARLIER, when the next check would already find 100%.
+            //
+            // **Inside the 20-minute window the hold is released staggered** (Rich, 2026-10-29),
+            // never all at once: the view still says Held, and carries what each release is
+            // judged on (`release`). The separate-process gate releases one held call at a time
+            // while the speed before the hold projects the account under 100% at the reset
+            // (`stagger::admit`); the rest wait for the reset. Before, the window admitted every
+            // call whenever the measured speed was 0, and with the whole team held it always was.
             let speed = |w: &Window| reading.speeds.get(&w.id).copied().unwrap_or(0.);
+            // **The hold is judged on the speed before it too** (review
+            // rv-20261029T150133Z-2f57a3fd-6d74, finding 1; Rich: *"a rate of 0 while everyone
+            // is held is no measurement"*): 80% -> 92% in a minute holds at 92% (point 89%), and
+            // the held team's next, flat reading measures 0. Judged on that 0 alone the point was
+            // 93% again, 92% was under it, and all ten went at once past the stagger. The point
+            // is set by the larger of the speed measured now and the one before the hold.
+            let mut judged = reading.clone();
+            if let Some(&before) = pre_hold.get("five_hour") {
+                let now_speed = judged.speeds.entry("five_hour".to_string()).or_insert(0.);
+                *now_speed = now_speed.max(before);
+            }
             match self.windows.iter().find(|w| w.id == "five_hour") {
-                Some(w)
-                    if reading.reaches(w, f64::from(policy.pause_percent))
-                        && w.resets_at
-                            .is_some_and(|t| t > now && t - now < RESET_EXEMPTION_MS
-                                && (speed(w) == 0.
-                                    || w.used_percent + speed(w) * ((t - now) as f64) < 100.)) =>
-                {
-                    Admission::Ready
-                }
                 // Within the same window, a stale above-threshold value still proves a hold.
                 Some(w)
-                    if reading.reaches(w, f64::from(policy.pause_percent))
+                    if judged.reaches(w, line)
                         && w.resets_at.is_some_and(|t| t > now) =>
                 {
-                    Admission::Held {
-                        resets_at: w.resets_at.unwrap(),
+                    let resets_at = w.resets_at.unwrap();
+                    if resets_at - now < RESET_EXEMPTION_MS {
+                        release = Some(stagger::Release {
+                            used: w.used_percent,
+                            checked_at: self.checked_at.map_or(now, |c| c.min(now)),
+                            resets_at,
+                            speed: speed(w),
+                            pre_hold: pre_hold.get("five_hour").copied().unwrap_or(0.),
+                        });
                     }
+                    Admission::Held { resets_at }
                 }
                 Some(w) if fresh && w.resets_at.is_some_and(|t| t > now) => Admission::Ready,
                 _ if answered_empty => Admission::NoReading,
@@ -875,6 +979,10 @@ impl Snapshot {
             notes: Vec::new(),
             first_label: None,
             leaving: Vec::new(),
+            pre_hold,
+            release,
+            moving: None,
+            in_use: None,
         }
     }
 }
@@ -1063,16 +1171,24 @@ impl Service {
     fn cutoff(&self, account: &str) -> Option<f64> {
         self.weekly_cutoff.as_ref().filter(|(id, _)| id == account).map(|(_, percent)| *percent)
     }
-    fn view_at(&self, now: u64) -> View {
+    /// [`Self::view`] as at `now`, which may be later than the clock: what ends by then has ended.
+    pub(crate) fn view_at(&self, now: u64) -> View {
         let policy = self.policy.lock().unwrap().clone();
         let in_use = self.accounts.in_use();
-        let cutoff = self.cutoff(&in_use.id);
-        // The top-level reading is the account IN USE, so the pause gate and every existing
-        // reader keep describing the subscription the work is actually running on.
-        let mut view = if in_use.id == crate::claude_accounts::ACCOUNT_ONE {
+        // **The account the work actually runs on** (Rich, 2026-10-29): the account in use
+        // once everything has moved to it, and until then the account the work is still on
+        // (`Accounts::running_on`). The CEO saw "Switching to Home" with Home listed first
+        // while every worker still spent Work, and switched by hand.
+        let moving = self.accounts.moving();
+        let shown = self.accounts.running_on();
+        let cutoff = self.cutoff(&shown.id);
+        // The top-level reading is that account, so every existing reader keeps describing the
+        // subscription the work is actually running on. The gate judges each call on its own
+        // account's row (`gate::decide`), never on this one alone.
+        let mut view = if shown.id == crate::claude_accounts::ACCOUNT_ONE {
             self.snapshot.lock().unwrap().view_with(policy.clone(), cutoff, now)
         } else {
-            match self.extra.lock().unwrap().get(&in_use.id) {
+            match self.extra.lock().unwrap().get(&shown.id) {
                 Some((_, snapshot)) => snapshot.view_with(policy.clone(), cutoff, now),
                 None => Snapshot::default().view(policy.clone(), now),
             }
@@ -1088,6 +1204,18 @@ impl Service {
                 .map(|account| account.id).collect()
         };
         view.resets = self.resets.view();
+        // **The reset record's weekly figure is not the account in use's** (richos-hq
+        // follow-ups.md, 7fed0bef). The record is shared by every app and terminal on this Mac
+        // and refreshed under Account 1's sign-in (`resets.rs` `update`), so on 2026-10-28 this
+        // file said `resets.weeklyUsed: 99` (Home) beside a top level of 10 (Work, in use), and a
+        // lead deferred work on the 99. The weekly figures are the top-level windows' alone; the
+        // record keeps its own copy for the prepared reset action (`prepared_action_due`).
+        view.resets.weekly_used = None;
+        view.resets.weekly_resets_at = None;
+        // The account the figures above are, which during a move is the one the work is still
+        // on (`shown`), not the one it is moving to: naming `in_use` there would put Home's name
+        // beside Work's figures, the wrong-account reading this field exists to end.
+        view.in_use = Some(InUse { id: shown.id.clone(), label: shown.label.clone() });
         view.at_threshold = self.accounts.at_threshold();
         if self.accounts.count() > 1 {
             view.accounts = self.accounts.list().into_iter().map(|account| {
@@ -1097,11 +1225,14 @@ impl Service {
                     self.extra.lock().unwrap().get(&account.id).map(|(_, s)| s.view(policy.clone(), now))
                         .unwrap_or_else(|| Snapshot::default().view(policy.clone(), now))
                 };
+                let reading = readings.get(&account.id);
                 let exhausted = crate::claude_accounts::gone(
-                    readings.get(&account.id).unwrap_or(&Reading::default()), view.at_threshold,
+                    reading.unwrap_or(&Reading::default()), view.at_threshold,
                     policy.line(), self.accounts.limited_until(&account.id), now);
+                let weekly_point = reading.and_then(|r| r.windows.iter().find(|w| w.id == "seven_day")
+                    .map(|w| r.weekly_point(w)));
                 crate::claude_accounts::AccountView {
-                    in_use: account.id == in_use.id,
+                    in_use: account.id == shown.id,
                     working: self.accounts.working_on(&account.id),
                     id: account.id,
                     label: account.label,
@@ -1110,8 +1241,13 @@ impl Service {
                     exhausted_until: exhausted.map(|(_, until)| until),
                     message: account_view.message,
                     signed_in: account_view.signed_in,
+                    weekly_point,
+                    speeds: account_view.speeds,
+                    pre_hold: account_view.pre_hold,
+                    empty_at: account_view.empty_at,
                 }
             }).collect();
+            view.moving = moving;
             view.held_until = self.accounts.held_until(&readings, policy.line(), now);
             // The card after a switch, only once the switch has happened for every session
             // (`Accounts::switch_pending`): nightly 65 showed "Rich switched to Home ... the
@@ -1120,6 +1256,8 @@ impl Service {
             view.last_switch = self.accounts.last_switch().filter(|_| !pending);
             if let Some(until) = view.held_until {
                 view.admission = Admission::Held { resets_at: until };
+                // Every account used up: nothing is released before the soonest reset.
+                view.release = None;
             }
         }
         view.agents_working = self.agents_working.load(std::sync::atomic::Ordering::SeqCst);
@@ -1932,6 +2070,180 @@ pub(crate) mod tests {
         assert!(after.act_at["seven_day"] < 99., "the switch point moved: {}", after.act_at["seven_day"]);
     }
 
+    /// Home (Account 1) at 99% of its week and Work (Account 2) in use at `weekly`% of its week
+    /// and 28% of its five hours, read just now; Work's learned episodes are `episodes`, kept in
+    /// `TOKEN_POINTS_FILE` as the app keeps them across launches.
+    fn home_spent_work_in_use(dir: &Path, episodes: serde_json::Value, weekly: f64) -> (Service, String) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(TOKEN_POINTS_FILE), json!({ "2": episodes }).to_string()).unwrap();
+        let service = Service::open(dir).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        assert_eq!(work.id, "2");
+        *service.snapshot.lock().unwrap() = live(99.);
+        let mut reading = live(weekly);
+        reading.windows[0].used_percent = 28.;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        service.extra.lock().unwrap().insert(work.id.clone(), (
+            std::sync::Arc::new(Mutex::new(Box::new(FakeSource { calls, result: Err(ReadError::Failed) }) as Box<dyn Source>)),
+            reading));
+        service.accounts.use_first(&work.id).unwrap();
+        (service, work.id)
+    }
+
+    /// Frames of one lease on `account`, through its own `tokens::Tally` into the service's
+    /// sink, exactly as `native.rs` passes a lease's stream on.
+    fn lease_frames(service: &Service, account: &str, frames: &[(serde_json::Value, u64)]) {
+        let mut tally = tokens::Tally::default();
+        for (frame, at) in frames {
+            for found in tally.frame(frame, *at) { service.token_sink().push(account, found); }
+        }
+    }
+
+    /// An `assistant` frame of `model` whose usage is `input`, 1 output token and `read` cache reads.
+    fn model_frame(model: &str, id: &str, input: u64, read: u64, parent: Option<&str>) -> serde_json::Value {
+        json!({"type": "assistant", "parent_tool_use_id": parent, "message": {"id": id, "model": model,
+            "usage": {"input_tokens": input, "output_tokens": 1, "cache_read_input_tokens": read, "cache_creation_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}}}})
+    }
+
+    /// **One lease's late result frame does not hand off an account with room** (2026-10-28
+    /// 13:05Z: Work at 3% of its week, Ray and Zach ordered to hand off). Work's two learned
+    /// episodes as the app kept them then (`claude-token-points.json`), and the fit exactly as on
+    /// main it gave Haiku 3,953 tokens a point (Sonnet and Haiku fit both episodes exactly;
+    /// Opus got no figure); with the card prior (`tokens::figures`) Haiku is read near its card,
+    /// 1.99 billion a point, and Opus has a figure. A lease's Opus turn whose `result` also reports 83,446 Haiku tokens
+    /// (76,707 input, 6,739 output), in two shapes: (a) no Haiku frame was streamed, so the
+    /// remainder is a correction stamped at the result; (b) one Haiku helper message was
+    /// streamed (1,000 input, 1 output, 20 s ago), so the remainder is that message at its final
+    /// size, and only its first 1,001 tokens were live.
+    ///
+    /// On main the late tokens are 83,446 / 3,953 = 21.1 points in the live minute: fast, so I =
+    /// 1 minute and H the default 5, and the point is 99 - (ceil(21.1 x 6 = 126.7) - 1) = -27,
+    /// clamped to 0: Work at 3% is `leaving` (the gate's handoff order) and held. With the late
+    /// tokens counted at most `tokens::LATE_POINTS_MAX` (1 point) the speed is (a) 1 point a
+    /// minute and (b) 1,001 / 3,953 + 1 = 1.25: the point is (a) 99 - (ceil(1 x 6) - 1) = 94,
+    /// or 93 when f64 puts 1/60,000 x 60,000 a hair over 1; (b) 99 - (ceil(1.25 x 6 = 7.5) - 1) = 92.
+    /// With the card prior the late Haiku is 0.00004 points and the lead's Opus about 0.005, so
+    /// the cap does not bind here and the point is 99 (`tokens.rs`
+    /// `a_late_lump_counts_at_most_late_points_max_in_the_live_minute` is where it binds).
+    /// Either way it stays at or above 89 (the most one late lump can move it at either interval: 99 -
+    /// (ceil(1 x (5 + 5)) - 1) = 90, 89 with that same hair) and Work at 3% is not left. Home, at
+    /// 99%, is being left all along.
+    #[test]
+    fn one_leases_late_result_frame_does_not_collapse_the_handoff_point() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+        let learned: Vec<tokens::Episode> = serde_json::from_value(episodes.clone()).unwrap();
+        let fit = tokens::figures(&learned);
+        let (opus, haiku) = (fit["claude-opus-5-5"], fit["claude-haiku-5-5"]);
+        assert!(haiku > 1e9, "Haiku is read near its card (1.99 billion tokens a point), not at main's 3,953: {haiku}");
+        // Each message: what the frames streamed in full, what only the result showed at most
+        // `tokens::LATE_POINTS_MAX`. The lead's result adds 399 output and 1 cache read (late).
+        let lump = |late: f64, figure: f64| (late / figure).min(tokens::LATE_POINTS_MAX);
+        let lead = 180_002. / opus + lump(400., opus);
+        let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+            "claude-opus-5-5": {"inputTokens": 2, "outputTokens": 400, "cacheReadInputTokens": 180_000, "cacheCreationInputTokens": 0},
+            "claude-haiku-5-5": {"inputTokens": 76_707, "outputTokens": 6_739, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+        for streamed_helper in [false, true] {
+            let app = root.path().join(format!("app-{streamed_helper}"));
+            let (service, work) = home_spent_work_in_use(&app, episodes.clone(), 3.);
+            let now = crate::util::now_millis();
+            let mut frames = vec![(model_frame("claude-opus-5-5", "msg_lead", 2, 179_999, None), now - 30_000)];
+            if streamed_helper {
+                frames.push((model_frame("claude-haiku-5-5", "msg_helper", 1_000, 0, Some("toolu_1")), now - 20_000));
+            }
+            frames.push((result.clone(), now - 1_000));
+            lease_frames(&service, &work, &frames);
+            service.before_turn(&work, None);
+            let state = app.join("engine-state");
+            let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+            let point = published.act_at["seven_day"];
+            let per_minute = published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.;
+            assert!(point >= 89., "helper streamed: {streamed_helper}; one late result frame moved Work's point to {point} \
+                (its weekly speed {per_minute} points a minute)");
+            let capped = lead + if streamed_helper { 1_001. / haiku + lump(82_445., haiku) } else { lump(83_446., haiku) };
+            assert!((per_minute - capped).abs() < 1e-9, "helper streamed: {streamed_helper}; {per_minute} points a minute, \
+                by hand {capped}");
+            assert_eq!(published.leaving, vec!["1".to_string()], "helper streamed: {streamed_helper}; only Home, at 99%, \
+                is being left; Work at 3% is not (its point {point}, its speed {per_minute} points a minute)");
+            assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "{:?}", published.admission);
+        }
+    }
+
+    /// **A real sustained speed still hands off at the point it did on main** (the CEO's
+    /// weekly-switch rule, unchanged). Work learned Opus at 30M tokens a point from two Opus
+    /// episodes. Then 52 Opus requests of 1M tokens each streamed, one a second through the last
+    /// minute, and the lease's `result` adding 52,000 output tokens no frame showed (a
+    /// correction: 52 messages were open), 52,000 / 30M = 0.0017 points, under the late cap, so
+    /// counted in full exactly as on main. 52,052,000 / 30M = 1.735 points a minute, fast
+    /// (1.735 x 5 >= 5), so I is 1 minute and H the default 5: 99 - (ceil(1.735 x 6 = 10.41) -
+    /// 1) = 89. At 89% Work is leaving; at 88% it is not.
+    #[test]
+    fn a_real_sustained_speed_still_hands_off_at_the_same_point() {
+        let root = Scratch::new();
+        let episodes = json!([{"points": 1.0, "tokens": {"claude-opus-5-5": 30_000_000}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 30_000_000}}]);
+        for (weekly, leaving) in [(89., true), (88., false)] {
+            let app = root.path().join(format!("app-{weekly}"));
+            let (service, work) = home_spent_work_in_use(&app, episodes.clone(), weekly);
+            let now = crate::util::now_millis();
+            let mut frames: Vec<(serde_json::Value, u64)> = (0..52u64)
+                .map(|i| (model_frame("claude-opus-5-5", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 52_000 + i * 1_000))
+                .collect();
+            frames.push((json!({"type": "result", "session_id": "lead", "modelUsage": {"claude-opus-5-5": {
+                "inputTokens": 104, "outputTokens": 52 + 52_000, "cacheReadInputTokens": 52 * (1_000_000 - 3),
+                "cacheCreationInputTokens": 0}}}), now - 500));
+            lease_frames(&service, &work, &frames);
+            service.before_turn(&work, None);
+            let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+            let per_minute = published.speeds["seven_day"] * 60_000.;
+            assert!((per_minute - 52_052_000. / 30_000_000.).abs() < 1e-9, "{per_minute} points a minute");
+            assert_eq!(published.act_at["seven_day"], 89., "{per_minute} points a minute");
+            assert_eq!(published.leaving.contains(&work), leaving, "Work at {weekly}%: {:?}", published.leaving);
+        }
+    }
+
+    /// **A minority model's real burst still hands off as on main** (Fable included). Work's
+    /// six learned episodes as `claude-token-points.json` kept them on 2026-10-28: Fable is in
+    /// three, 8,760,602 tokens in all, and the fit (as on main) gives it a figure. Then a Fable
+    /// burst through a lease: 20 requests of 1M tokens in the last minute, every token streamed.
+    /// Nothing here is late, so the speed and the point are main's exactly: 20M / Fable's figure
+    /// points a minute, fast, I = 1 minute, H the default 5, point = 99 - (ceil(speed x 6) - 1),
+    /// recomputed below from `tokens::figures` and asserted equal. Work at 93% is being left.
+    #[test]
+    fn a_minority_models_burst_still_hands_off() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-haiku-5-5": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 2939271, "claude-haiku-5-5": 83446, "claude-opus-5-5": 27210374, "claude-sonnet-5-5": 3477888}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 1667801, "claude-opus-5-5": 13890036, "claude-sonnet-5-5": 2311295}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 4153530, "claude-opus-5-5": 36103747, "claude-sonnet-5-5": 5854694}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 54593932, "claude-sonnet-5-5": 291147}}]);
+        let learned: Vec<tokens::Episode> = serde_json::from_value(episodes.clone()).unwrap();
+        let fable = tokens::figures(&learned)["claude-fable-5-1"];
+        let speed = 20_000_000. / fable;
+        assert!(speed * 5. >= FAST_POINTS_PER_CHECK, "Fable at {fable} tokens a point: {speed} points a minute is not fast");
+        let expected = 99. - ((speed * 6.).ceil() - 1.);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 93.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(serde_json::Value, u64)> = (0..20u64)
+            .map(|i| (model_frame("claude-fable-5-1", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 57_000 + i * 3_000))
+            .collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        let per_minute = published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.;
+        assert!((per_minute - speed).abs() < 1e-9, "Fable read at {per_minute} points a minute, as on main {speed}");
+        assert_eq!(point, expected, "Fable at {fable} tokens a point, {per_minute} points a minute");
+        assert!(point <= 93., "a Fable burst left the week's point at {point}");
+        assert!(published.leaving.contains(&work), "Work at 93% during a Fable burst is not being left: {:?}", published.leaving);
+    }
+
     /// **The spend counts both sources once** (§118): a request in Account 1's transcripts and a
     /// request a lease streamed (no transcript holds it), each priced at its own model's rates;
     /// the quota's own reader still gets the lease's tokens, from its own queue.
@@ -2058,6 +2370,177 @@ pub(crate) mod tests {
         assert!(service.view().leaving.is_empty(), "a fresh 53% is current and is not moved");
     }
 
+    /// **One lease's result does not hand off an account with room** (2026-10-28 13:05-13:06Z:
+    /// Work at 3% of its week and 28% of its five hours, Ray and Zach ordered to hand off, and
+    /// an agent dispatch held 16 s). Work's two learned episodes exactly as the app kept them
+    /// (`claude-token-points.json`); a lease's Opus turn whose `result` also reports 83,446 Haiku
+    /// tokens no assistant frame showed (the 13:00 slot of the spend ledger: Haiku, 0 requests,
+    /// 76,707 input and 6,739 output, all of it result remainder). Before the fix the fit gave
+    /// Haiku 3,953 tokens a point, so the remainder was 21.1 points in the live minute; at the
+    /// fast interval the point was 99 - (ceil(21.1 x (1 + 5)) - 1) = 99 - 126, clamped to 0, and
+    /// Work at 3% was `leaving` (the gate's handoff order, gate.rs `handoff`) and held (the
+    /// gate's `admission`) until the minute passed. Home at 99% is leaving all along. Again with
+    /// 1,500 Haiku tokens in the second episode (the second review of d73436c94: a fix that
+    /// still let Haiku be fitted alone read 59.5 points a minute there).
+    #[test]
+    fn a_leases_haiku_remainder_does_not_hand_off_an_account_with_room() {
+        let root = Scratch::new();
+        for haiku in [3_151, 1_500] {
+            let episodes = json!([
+                {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+                {"points": 1.0, "tokens": {"claude-haiku-5-5": haiku, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+            let app = root.path().join(format!("app-{haiku}"));
+            let (service, work) = home_spent_work_in_use(&app, episodes, 3.);
+            let now = crate::util::now_millis();
+            let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+                "claude-opus-5-5": {"inputTokens": 2, "outputTokens": 400, "cacheReadInputTokens": 180_000, "cacheCreationInputTokens": 0},
+                "claude-haiku-5-5": {"inputTokens": 76_707, "outputTokens": 6_739, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+            lease_frames(&service, &work, &[(model_frame("claude-opus-5-5", "msg_lead", 2, 180_000, None), now - 20_000), (result, now - 1_000)]);
+            service.before_turn(&work, None);
+            let state = app.join("engine-state");
+            let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+            assert_eq!(published.leaving, vec!["1".to_string()], "only Home, at 99%, is being left; Work at 3% is not \
+                (its point read {}, its weekly speed {} points a minute)", published.act_at["seven_day"],
+                published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+            assert_eq!(published.act_at["seven_day"], 99.);
+            assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "{:?}", published.admission);
+        }
+    }
+
+    /// **One model's whole-point readings keep their total over total** (the second review of
+    /// dc6918a1d, its fixture through the service). Opus alone, 10M tokens for one point and 50M
+    /// for the next: 30M a point, as main measures it. Then 59M Opus tokens in the last minute
+    /// (the review's 60M is exactly 2 a minute, and f64 puts it a hair over: ceil(12.00...02) =
+    /// 13): 1.967 points a minute, fast, I = 1 minute: 99 - (ceil(1.967 x 6 = 11.8) - 1) = 88, so
+    /// Work at 89% is left. dc6918a1d pulled Opus toward its card at the dearest point (41.4M:
+    /// 1.43 a minute, point 91, Work at 89% kept running).
+    #[test]
+    fn a_single_models_burst_hands_off_at_its_total_over_total() {
+        let root = Scratch::new();
+        let episodes = json!([{"points": 1.0, "tokens": {"claude-opus-5-5": 10_000_000}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 50_000_000}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 89.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..59u64).map(|i| (model_frame("claude-opus-5-5", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 59_000 + i * 1_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert_eq!(point, 88., "a 59M-token Opus minute put the week's point at {point} (weekly speed {} points a minute)",
+            published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 89% during an Opus burst is not being left: {:?}", published.leaving);
+    }
+
+    /// **A model with an episode of its own hands off at what it measured** (the second review of
+    /// 0e2a10356, its fixture through the service). 40M Opus cache reads for one point, then 4M
+    /// Sonnet input for the next ($8 of card each): Sonnet is 4M a point, as on main (its episode
+    /// measures it). Then 7.6M Sonnet tokens in the last minute: 1.9 points a minute, fast,
+    /// I = 1 minute: 99 - (ceil(1.9 x 6 = 11.4) - 1) = 88; Work at 89% is left. 0e2a10356 let the
+    /// card pull Sonnet to 5.97M (1.27 a minute, point 92: Work at 89% kept running). (7.6M, not
+    /// the review's 8M: 2.0 a minute exactly would put main's point on f64's rounding.)
+    #[test]
+    fn a_model_with_an_episode_of_its_own_hands_off_at_what_it_measured() {
+        let root = Scratch::new();
+        let episodes = json!([{"points": 1.0, "tokens": {"claude-opus-5-5": 40_000_000}},
+            {"points": 1.0, "tokens": {"claude-sonnet-5-5": 4_000_000}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 89.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..19u64)
+            .map(|i| (model_frame("claude-sonnet-5-5", &format!("msg_{i}"), 2, 400_000 - 3, None), now - 57_000 + i * 3_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 89., "a 7.6M-token Sonnet minute left the week's point at {point} (weekly speed {} points a minute); \
+            at Sonnet's measured 4M a point it is 88", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 89% during a Sonnet burst is not being left: {:?}", published.leaving);
+    }
+
+    /// **A model the episodes measure still hands off at its own speed** (the second review of
+    /// d22fc43f8, its fixture through the service). Two one-point episodes where Opus and Fable
+    /// always come in the same ratio and Sonnet apart, Sonnet at 4M tokens a point; then 8M Sonnet
+    /// tokens in the last minute: 2 points a minute, fast, I = 1 minute:
+    /// 99 - (ceil(2 x 6 = 12) - 1) = 88, so Work at 90% is left, as on main. d22fc43f8 read Sonnet
+    /// with the pair at 7.04M (1.14 a minute, point 93: Work at 90% kept running).
+    #[test]
+    fn a_measured_models_burst_hands_off_beside_a_pair_the_episodes_cannot_separate() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 800_000, "claude-fable-5-1": 8_000, "claude-sonnet-5-5": 3_720_000}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 8_400_000, "claude-fable-5-1": 84_000, "claude-sonnet-5-5": 1_060_000}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 90.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..8u64)
+            .map(|i| (model_frame("claude-sonnet-5-5", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 56_000 + i * 7_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 90., "an 8M-token Sonnet minute left the week's point at {point} (weekly speed {} points a minute); \
+            at Sonnet's measured 4M a point it is 88", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 90% during a Sonnet burst is not being left: {:?}", published.leaving);
+    }
+
+    /// **A late Fable `result` does not hand off an account with room** (the third review of the
+    /// late-frame fix, rv-20261029T115538Z, finding 1, its fixture through the service). Work's
+    /// first two episodes with Fable 5.1 in Haiku's place (1,029 and 3,151 tokens), then a lease
+    /// whose `result` reports 3M Fable tokens no frame showed. At Fable's list price (16M a point
+    /// against Opus 5.5's 40M) that is 0.1875 a minute, not fast, so I = 5 minutes and H 5:
+    /// 99 - (ceil(0.1875 x 10 = 1.875) - 1) = 98, and Work at 3% is not left. Main fitted Fable
+    /// at a few thousand tokens a point (point 0); d22fc43f8 held it at its worst-case bound,
+    /// 147,761 (20.3 a minute, point 0). Read from its card at Work's dearest point (19.89M; two
+    /// episodes cannot measure three models): 0.151 a minute, ceil(1.51) - 1 = 1, point 98.
+    #[test]
+    fn a_late_minority_result_does_not_hand_off_an_account_with_room() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 3.);
+        let now = crate::util::now_millis();
+        let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+            "claude-fable-5-1": {"inputTokens": 3_000_000, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+        lease_frames(&service, &work, &[(result, now - 1_000)]);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point >= 98., "a late 3M-token Fable result moved the week's point to {point} (weekly speed {} points a minute); \
+            at Fable's list price it is 98", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert_eq!(published.leaving, vec!["1".to_string()], "only Home, at 99%, is being left; Work at 3% is not");
+    }
+
+    /// **A dear minority's burst hands off when its spend requires it** (the third review,
+    /// finding 2, its fixture through the service). Four one-point mixes of Opus 5.5, Sonnet 5.5,
+    /// Fable 5.1 and Haiku 5.5 at their list ratios (40M, 80M, 16M, 1,600M tokens a point), then
+    /// 20 Fable requests of 1M tokens in the last minute: at 16M a point, 1.25 a minute, fast, so
+    /// I = 1 minute: 99 - (ceil(1.25 x 6 = 7.5) - 1) = 92. Main's fit gives Fable 9.34M (87);
+    /// d22fc43f8 read Fable with Opus at 111.8M (0.18 a minute, point 98: Work at 93% kept
+    /// running). Any figure under 33.3M is more than 0.6 a minute, at or under 93.
+    #[test]
+    fn a_dear_minoritys_burst_hands_off_when_its_spend_requires() {
+        let root = Scratch::new();
+        let mix = |o: u64, s: u64, f: u64, h: u64| json!({"points": 1.0, "tokens": {"claude-opus-5-5": o,
+            "claude-sonnet-5-5": s, "claude-fable-5-1": f, "claude-haiku-5-5": h}});
+        let episodes = json!([mix(34_000_000, 14_500_000, 700_000, 100_000), mix(40_000_000, 21_500_000, 2_200_000, 90_000),
+            mix(18_000_000, 19_500_000, 1_900_000, 110_000), mix(18_500_000, 22_500_000, 1_000_000, 160_000)]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 93.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..20u64)
+            .map(|i| (model_frame("claude-fable-5-1", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 57_000 + i * 3_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 93., "a 20M-token Fable burst left the week's point at {point} (weekly speed {} points a minute); \
+            at Fable's list price it is 92", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 93% during a Fable burst is not being left: {:?}", published.leaving);
+    }
+
     /// **An account the app has never read is asked again soon** (handoff round 2, runs 2-4
     /// and 6: null answers starved Work's first reading for the whole run, and an account with
     /// no reading is never switched to). While there is no reading yet, a null answer is asked
@@ -2135,9 +2618,15 @@ pub(crate) mod tests {
         assert_eq!(state.view(policy(), NOW).admission, Admission::Held { resets_at: NOW + 600_000 });
         // An old high reading also holds; time passing alone cannot invent allowance.
         assert!(matches!(state.view(policy(), NOW + 300_000).admission, Admission::Held { .. }));
-        assert!(state.view(policy(), NOW + 600_000).admission.allows_work());
+        // Past the weekly reset only the five-hour window holds, inside its 20 minutes. Until
+        // 2026-10-29 that admitted work at once; now it is the staggered release, and at 100%
+        // nothing is released: it waits for the five-hour reset.
+        let five_hour_only = |view: View| (view.admission, view.release.map(|r| r.allows(1, 0, 1)));
+        assert_eq!(five_hour_only(state.view(policy(), NOW + 600_000)),
+            (Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 }, Some(false)));
         state.windows[1].resets_at = None;
-        assert!(state.view(policy(), NOW).admission.allows_work());
+        assert_eq!(five_hour_only(state.view(policy(), NOW)),
+            (Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 }, Some(false)));
         let fresh_five = snapshot(10., 3_600_000).windows;
         state.accept(fresh_five, NOW);
         assert!(state.view(policy(), NOW).admission.allows_work());
@@ -2147,7 +2636,11 @@ pub(crate) mod tests {
         state.windows[0] = snapshot(100., RESET_EXEMPTION_MS - 1).windows.remove(0);
         state.error = None;
         state.windows[1].used_percent = 98.99;
-        assert_eq!(state.view(policy(), NOW).admission, Admission::Ready);
+        // Inside the 20-minute window the five-hour hold is released staggered, by the gate
+        // (`stagger`), never all at once: the view holds and carries what a release is judged on.
+        let view = state.view(policy(), NOW);
+        assert_eq!(view.admission, Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 });
+        assert!(view.release.is_some(), "the weekly window does not hold, so the window's release applies");
         state.windows[0].resets_at = Some(NOW + 3_600_000);
         assert!(matches!(state.view(policy(), NOW).admission, Admission::Held { .. }));
     }
@@ -2166,12 +2659,14 @@ pub(crate) mod tests {
                 .admission,
             Admission::Held { .. }
         ));
-        assert_eq!(
-            snapshot(100., RESET_EXEMPTION_MS - 1)
-                .view(policy(), NOW)
-                .admission,
-            Admission::Ready
-        );
+        // **Changed 2026-10-29 (Rich's decision after Work's 09:50Z limit).** This read Ready:
+        // 100% with 19:59 left released every held call at once. Inside the window the view now
+        // holds, with the release the gate staggers (`stagger::admit`); outside it, none.
+        let near = snapshot(100., RESET_EXEMPTION_MS - 1).view(policy(), NOW);
+        assert_eq!(near.admission, Admission::Held { resets_at: NOW + RESET_EXEMPTION_MS - 1 });
+        assert_eq!(near.release.map(|r| (r.used, r.resets_at)), Some((100., NOW + RESET_EXEMPTION_MS - 1)));
+        assert!(!near.release.unwrap().allows(1, 0, 1), "at 100% nothing is released: it waits for the reset");
+        assert_eq!(snapshot(93., RESET_EXEMPTION_MS).view(policy(), NOW).release, None, "the window has not begun");
         assert_eq!(
             snapshot(93., 0).view(policy(), NOW).admission,
             Admission::Unknown
@@ -2210,10 +2705,21 @@ pub(crate) mod tests {
             s.view(policy(), NOW).admission,
             Admission::Held { .. }
         ));
-        assert_eq!(
-            s.view(policy(), NOW + 2_400_001).admission,
-            Admission::Ready
-        );
+        // Inside the window: still held, released staggered by the gate (`stagger`).
+        let near = s.view(policy(), NOW + 2_400_001);
+        assert_eq!(near.admission, Admission::Held { resets_at: NOW + 3_600_000 });
+        // No speed measured before the hold or since: no measurement, so nobody goes before the
+        // reset (second review of 2026-10-29, finding 2).
+        assert!(near.release.is_some_and(|r| !r.allows(1, 0, 1)), "94% with no speed measured: it waits");
+        // The climb into the hold measured: projected from the stale reading itself (taken an
+        // hour before the reset), 0.1 points a minute reaches 94 + 0.1 x 60 = 100 and waits,
+        // 0.05 reaches 94 + 0.05 x 60 = 97 and one may go.
+        s.rise_log.insert("five_hour".into(), vec![(90., 0.1 / 60_000.)]);
+        let measured = s.view(policy(), NOW + 2_400_001);
+        assert!(measured.release.is_some_and(|r| !r.allows(1, 0, 1)), "94% at 0.1 a minute for 60: 100%");
+        s.rise_log.insert("five_hour".into(), vec![(90., 0.05 / 60_000.)]);
+        let measured = s.view(policy(), NOW + 2_400_001);
+        assert!(measured.release.is_some_and(|r| r.allows(1, 0, 1)), "94% at 0.05 a minute: one may go");
         assert_eq!(
             s.view(policy(), NOW + 3_600_000).admission,
             Admission::Unknown
@@ -2344,6 +2850,69 @@ pub(crate) mod tests {
         next[0].resets_at = next[0].resets_at.map(|t| t + 3_600_000);
         s.observe(&next, NOW + 120_000);
         assert!(s.speeds.is_empty());
+    }
+
+    /// **The rise into the hold outlives the rises above the line** (second review of
+    /// 2026-10-29, finding 2). With the pause line at 85%: 80% to 86% in five minutes is the
+    /// rise into the hold, 1 point a minute (whole points, the first unseen: 5 / 5). Twelve
+    /// readings above the line follow, 0.7 points a minute. Eight rises were kept, so the twelve
+    /// evicted the one from 80% and the speed before the hold read 0. Now one rise per whole
+    /// point is kept, and the speed before the hold is still the 1 point a minute.
+    #[test]
+    fn the_speed_before_the_hold_survives_many_rises_above_the_line() {
+        let mut s = Snapshot::default();
+        s.accept(five_hour_at(80.), NOW);
+        s.accept(five_hour_at(86.), NOW + 5 * 60_000);
+        for k in 1..=12u64 {
+            s.accept(five_hour_at(86. + 0.7 * k as f64), NOW + (5 + k) * 60_000);
+        }
+        assert!(s.rise_log["five_hour"].len() <= 101, "bounded: one rise per whole point");
+        let per_minute = s.pre_hold("five_hour", 85.) * 60_000.;
+        assert!((per_minute - 1.).abs() < 1e-9, "the rise from 80%: {per_minute} points a minute");
+    }
+
+    /// **A hold the speed brought on under 93% outlives the held team's flat reading** (review
+    /// rv-20261029T150133Z-2f57a3fd-6d74, finding 1, its probe `early-hold.py`). 80% -> 92% in
+    /// one minute, 19 minutes before the reset: whole points, the first unseen, so 11 points a
+    /// minute; checked every minute, the point is 100 - 11 = 89%, and 92% holds. One of ten is
+    /// judged at 92 + 1.1 x 19 = 112.9: nobody goes. The held team's next reading is 92% again,
+    /// a speed of 0. Before, the point went back to 93%, 92% was under it, the view said Ready
+    /// and all ten went at once. Now it holds at 89% on the speed before the hold, in the
+    /// service's view and in the gate's own recomputation. Then Stu's own turn (never held)
+    /// moves it to 92.4% a minute on, at least 0.4 points a minute: that rise started at 92%,
+    /// over the 89% point, so it is a rise during the hold and never replaces the one into it.
+    #[test]
+    fn a_speed_hold_under_93_holds_through_the_held_teams_flat_and_slow_readings() {
+        const MINUTE: u64 = 60_000;
+        let at = |used: f64| snapshot(used, 19 * MINUTE).windows;
+        let mut s = Snapshot::default();
+        s.accept(at(80.), NOW - MINUTE);
+        s.accept(at(92.), NOW);
+        let pre = s.pre_hold("five_hour", 93.) * MINUTE as f64;
+        assert!((pre - 11.).abs() < 1e-9, "{pre} points a minute");
+        let held = s.view(policy(), NOW);
+        assert_eq!(held.admission, Admission::Held { resets_at: NOW + 19 * MINUTE });
+        assert!(held.release.is_some_and(|r| !r.allows(1, 0, 10)), "92 + 1.1 x 19 = 112.9");
+
+        let dir = Scratch::new();
+        let state = dir.path().join("engine-state");
+        atomic_write(&dir.path().join("claude-quota-policy.json"), &policy()).unwrap();
+        let check = |s: &Snapshot, at: u64, what: &str| {
+            let view = s.view(policy(), at);
+            assert_eq!(view.admission, Admission::Held { resets_at: NOW + 19 * MINUTE }, "{what}: the service");
+            assert!(view.release.is_some_and(|r| !r.allows(1, 0, 10)), "{what}: nobody is released early");
+            atomic_write(&state.join("claude-quota.json"), &view).unwrap();
+            let (gate, release) = gate::decide(&state, None, at);
+            assert!(matches!(gate, Admission::Held { .. }), "{what}: the gate, {gate:?}");
+            assert!(release.is_some_and(|r| !r.allows(1, 0, 10)), "{what}: the gate releases nobody early");
+        };
+        s.accept(at(92.), NOW + MINUTE);
+        assert_eq!(s.speeds["five_hour"], 0., "the held team's flat reading measures 0");
+        check(&s, NOW + MINUTE, "flat at 92%");
+        s.accept(at(92.4), NOW + 2 * MINUTE);
+        assert!(s.speeds["five_hour"] > 0., "Stu's own turn is measured");
+        assert!((s.pre_hold("five_hour", 93.) * MINUTE as f64 - 11.).abs() < 1e-9, "the rise into the hold is kept");
+        check(&s, NOW + 2 * MINUTE, "92.4% after Stu's turn");
     }
 
     /// **Plan §15 answer 10, point 3: a measured jump moves BOTH check points at once**, and the
@@ -2750,15 +3319,16 @@ pub(crate) mod tests {
 
     /// A fake `claude` that answers `get_usage` with the figures in `usage.json` of the
     /// folder it was started under (`CLAUDE_CONFIG_DIR`), or `usage-1.json` beside it for
-    /// Account 1, which runs with the app's own environment.
+    /// Account 1, which runs with the app's own environment. `root` is the quota service's
+    /// data folder, so an added account's folder is under `root/claude-accounts/`.
     #[cfg(unix)]
     pub(crate) fn fake_claude(root: &Path) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let path = root.join("claude-fixture");
         fs::write(&path, format!(r#"#!/usr/bin/env python3
 import json, os, sys
-folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
-usage = os.path.join(folder, "usage.json") if "claude-accounts" in folder else "{}"
+{ADDED_ACCOUNT_PY}
+usage = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "usage.json") if added else "{}"
 for line in sys.stdin:
     v = json.loads(line)
     kind = v["request"]["subtype"]
@@ -2771,6 +3341,18 @@ for line in sys.stdin:
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
+    /// Python for a fake `claude` beside the quota service's data folder: `root` is that
+    /// folder and `added` says whether this process runs for an added account, whose
+    /// `CLAUDE_CONFIG_DIR` the probe sets to a folder under `root/claude-accounts/`. Account 1's
+    /// reader inherits the caller's `CLAUDE_CONFIG_DIR`, which can be ANY folder, including
+    /// one of the developer's own `.../claude-accounts/<id>` (the lead's session on its second
+    /// account, 2026-10-29): only the test's own folder says it is an added account.
+    #[cfg(unix)]
+    const ADDED_ACCOUNT_PY: &str = r#"root = os.path.dirname(os.path.realpath(__file__))
+_accounts = os.path.join(root, "claude-accounts") + os.sep
+_folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
+added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
+
     pub(crate) fn usage(path: &Path, five: f64, weekly: f64, weekly_reset: &str) {
         fs::write(path, serde_json::to_vec(&json!([five, weekly, weekly_reset])).unwrap()).unwrap();
     }
@@ -2906,6 +3488,360 @@ for line in sys.stdin:
             Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly, resets_at: reset(&json!(weekly_reset)), duration_ms: 168 * 3_600_000 },
         ];
         service.before_turn(account, Some((windows, crate::util::now_millis() + hours * 3_600_000)));
+    }
+
+    /// Every path in `value` holding the number `target`, outside what names Home (account 1) itself:
+    /// its own `accounts[]` row, and a switch away from it (`from: "1"`, Recent changes and the
+    /// last switch, which say "Home" with its figure). A path ending in an `allowed` suffix is a
+    /// threshold (a weekly point, the reset trigger), not a usage figure.
+    fn outside_home(value: &Value, target: f64, path: &str, allowed: &[&str], found: &mut Vec<String>) {
+        match value {
+            Value::Number(n) if n.as_f64() == Some(target) && !allowed.iter().any(|a| path.ends_with(a)) => found.push(path.to_string()),
+            Value::Array(items) => for (i, item) in items.iter().enumerate() {
+                if item.get("id").and_then(Value::as_str) == Some("1") && path.ends_with("accounts") { continue; }
+                outside_home(item, target, &format!("{path}[{i}]"), allowed, found);
+            },
+            Value::Object(fields) => {
+                if fields.get("from").and_then(Value::as_str) == Some(crate::claude_accounts::ACCOUNT_ONE) { return; }
+                for (key, field) in fields {
+                    let at = if path.is_empty() { key.clone() } else { format!("{path}.{key}") };
+                    outside_home(field, target, &at, allowed, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// **EVERY USAGE CONSUMER FOLLOWS THE ACCOUNT IN USE** (richos-hq follow-ups.md, 7fed0bef; the
+    /// CEO, 2026-10-28: "This idiotic shit shouldn't need any manual checking. That should all be
+    /// automated."). That day the app ran on Work while `mcp__richos_quota__status` answered
+    /// `weeklyUsed 99` with no account named, Home's figure from the shared reset record, and a
+    /// lead deferred work until Thursday on it.
+    ///
+    /// Home is at 99% of its week (and of its five hours), resetting in 16 h; Work is at 3% of its
+    /// week and 28% of its five hours. The reset record is seeded with Home's 99, and every ambient
+    /// source a consumer could fall back on says 99 too: HOME's status-line payload, no
+    /// CLAUDE_CONFIG_DIR, a `claude` that only fails, so a consumer that bypasses the app's own
+    /// reading reads 99 (the terminal path is run once to show the trap is armed). The app switches
+    /// the way it does, with no agent step: Home's 99 arrives before a turn and `before_turn` moves
+    /// the account in use to Work. Then every consumer must report Work: the published file, the
+    /// gate (admission, and no order to a helper on Work while a helper on Home is ordered off it),
+    /// the quota tool, `quota-watch.sh --once` and second review's quota hold. Then Home's week is
+    /// fresh again with its five hours still at 99, Rich picks Home first (`use_account_first`), and
+    /// every one of them flips to Home and holds.
+    #[test]
+    #[cfg(unix)]
+    fn every_usage_consumer_follows_the_account_in_use() {
+        use std::process::Command;
+        let root = Scratch::new();
+        let app = root.path().join("app");
+        let state = app.join("engine-state");
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
+        let service = Service::open(&app).unwrap();
+        service.accounts.rename("1", "Home").unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        assert_eq!(work.id, "2");
+        {
+            // The added account's record, as `refresh_accounts` creates it (no probe here).
+            let folder = work.folder.clone().unwrap();
+            service.extra.lock().unwrap().entry(work.id.clone()).or_insert_with(|| service.reader(folder));
+        }
+        let (hour, now) = (3_600_000, crate::util::now_millis() / 1000 * 1000);
+        let home_week_reset = now + 16 * hour;
+        let window = |id: &str, used: f64, resets: u64, duration: u64| Window {
+            id: id.into(), label: if id == "five_hour" { "Five-hour".into() } else { "Weekly".into() },
+            used_percent: used, resets_at: Some(resets), duration_ms: duration };
+        let (five, week) = (5 * hour, 168 * hour);
+
+        // The shared reset record carries Home's 99, read under Home's sign-in.
+        struct HomeRecord(String);
+        impl resets::Transport for HomeRecord {
+            fn account(&mut self) -> Result<resets::Account, String> { Ok(resets::Account { key: "home-fixture".into() }) }
+            fn usage(&mut self) -> Result<Value, String> {
+                Ok(json!({"seven_day":{"utilization":99,"resets_at":self.0},
+                    "cedar_ember":{"eligible":false,"ineligible_reason":"no_grant","next_grant_id":null,"cooldown_until":null,"grants":[]}}))
+            }
+            fn redeem(&mut self, _: &str, _: &str) -> Result<Value, String> { Err("never redeemed here".into()) }
+        }
+        let at = time::OffsetDateTime::from_unix_timestamp((home_week_reset / 1000) as i64).unwrap();
+        let iso = format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", at.year(), u8::from(at.month()), at.day(),
+            at.hour(), at.minute(), at.second());
+        let seeded = service.resets.refresh_transport(&mut HomeRecord(iso)).unwrap();
+        assert_eq!(seeded.weekly_used, Some(99.), "the record itself keeps Home's figure (R1: it is not changed)");
+
+        // Traps: everything a consumer could read instead of the app says 99.
+        let home = root.path().join("home");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let secs = |ms: u64| ms / 1000;
+        fs::write(home.join(".claude/statusline-payload.json"), json!({"rate_limits":{
+            "five_hour":{"used_percentage":99,"resets_at":secs(now + hour)},
+            "seven_day":{"used_percentage":99,"resets_at":secs(home_week_reset)}}}).to_string()).unwrap();
+        let entity = root.path().join("entity");
+        fs::create_dir_all(&entity).unwrap();
+        fs::write(entity.join("orchestration.config"), "PROTECTED_PATHS=\"\"\nQUOTA_PAUSE_PERCENT=93\n").unwrap();
+        let scope = root.path().join("scope.json");
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":true,"background_work_allowed":true})).unwrap();
+        let accounts_list = app.join(crate::claude_accounts::LIST_FILE);
+        assert!(accounts_list.exists(), "the account list the app's review-watch is given");
+        // One environment for every engine child, from nothing: no CLAUDE_CONFIG_DIR, no app state.
+        let engine_child = |program: &str, app_state: Option<&Path>| {
+            let mut command = Command::new(program);
+            command.env_clear().current_dir(root.path())
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("HOME", &home).env("TMPDIR", root.path())
+                .env("QUOTA_CLAUDE_BIN", "/usr/bin/false")
+                .env("QUOTA_WATCH_STATE_DIR", root.path().join("quota-watch-state"))
+                .env("RICHOS_ENTITY_ROOT", &entity)
+                .env("RICHOS_WORKSPACES_DIR", root.path().join("workspaces"))
+                .env("PYTHONDONTWRITEBYTECODE", "1");
+            if let Some(app_state) = app_state { command.env("RICHOS_APP_STATE", app_state); }
+            command
+        };
+        let once = |app_state: Option<&Path>| {
+            let out = engine_child("bash", app_state).arg(engine.join("scripts/quota-watch.sh")).arg("--once").output().unwrap();
+            (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr))
+        };
+        // **The review's hold runs in review-watch's OWN environment** (review_watch.rs
+        // `app_environment`, exactly what the app's watcher and so every app review gets), never in
+        // `engine_child`'s: the second review of d37b1f0de (rv-20261028T184535Z-d37b1f0d-e0d9) found
+        // this step passing only because `engine_child` handed it RICHOS_ENTITY_ROOT and its
+        // QUOTA_PAUSE_PERCENT=93, which the app's watcher never has; there quota-watch answered
+        // UNKNOWN and a Claude review started during a hold. HOME is the trap's (its status line
+        // says 99), and the working directory holds no orchestration.config.
+        let review_hold = || {
+            let program = "import json, sys\nsys.path.insert(0, sys.argv[1])\nimport second_review\n\
+                print(json.dumps(second_review.quota_hold(sys.argv[2], sys.argv[3])))";
+            let environment = crate::review_watch::app_environment(&std::env::var("PATH").unwrap_or_default(), "");
+            for key in ["RICHOS_ENTITY_ROOT", "CLAUDE_PROJECT_DIR", "RICHOS_APP_STATE", "QUOTA_CLAUDE_BIN"] {
+                assert!(!environment.contains_key(key), "review-watch's environment now carries {key}: re-read this test");
+            }
+            let out = Command::new("python3").env_clear().current_dir(root.path()).envs(&environment)
+                .env("HOME", &home).arg("-I").arg("-c").arg(program)
+                .arg(engine.join("scripts/lib")).arg(&engine).arg(&accounts_list).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            serde_json::from_slice::<(bool, String)>(&out.stdout).unwrap()
+        };
+        let tool = || reset_tools::status(&app, &resets::Service::new(&app), crate::util::now_millis(), Some(state.as_os_str()), None).unwrap();
+        let published = || serde_json::from_slice::<Value>(&fs::read(state.join("claude-quota.json")).unwrap()).unwrap();
+        let top = |view: &Value, id: &str| view["windows"].as_array().unwrap().iter()
+            .find(|w| w["id"] == id).map(|w| w["usedPercent"].as_f64().unwrap());
+        let (trap_code, trap_text) = once(None);
+        assert_eq!(trap_code, Some(1), "the trap is armed: outside the app the status line's 99 holds: {trap_text}");
+
+        // The readings arrive before turns, Work's first; Home's 99 then moves the app to Work.
+        assert_eq!(service.before_turn(&work.id, Some((vec![window("five_hour", 28., now + 2 * hour, five),
+            window("seven_day", 3., now + 100 * hour, week)], now))), "1");
+        assert_eq!(service.before_turn("1", Some((vec![window("five_hour", 99., now + hour, five),
+            window("seven_day", 99., home_week_reset, week)], now))), "2", "Home at 99% of its week: the app moves to Work");
+
+        // 1. The published file: Work's figures, Work named, no weekly figure of the record's.
+        let view = published();
+        assert_eq!((top(&view, "seven_day"), top(&view, "five_hour")), (Some(3.), Some(28.)), "{view}");
+        assert_eq!((view["inUse"]["id"].as_str(), view["inUse"]["label"].as_str()), (Some("2"), Some("Work")), "{view}");
+        assert!(view["resets"].get("weeklyUsed").is_none_or(Value::is_null), "{}", view["resets"]);
+        assert!(view["resets"].get("weeklyResetsAt").is_none_or(Value::is_null), "{}", view["resets"]);
+        let mut found = Vec::new();
+        outside_home(&view, 99., "", &["actAt.seven_day", ".weeklyPoint", "resets.weeklyThreshold"], &mut found);
+        assert!(found.is_empty(), "99 outside Home's own row: {found:?} in {view}");
+        outside_home(&view, home_week_reset as f64, "", &[], &mut found);
+        assert!(found.is_empty(), "Home's weekly reset outside Home's own row: {found:?} in {view}");
+
+        // 2. The gate: Work admits work; a helper on Work gets no order, one still on Home does (R5),
+        // and its marker states the account and the figure it acted on (C7).
+        assert_eq!(gate::admission(&state, crate::util::now_millis()), Admission::Ready);
+        let helper = |agent: &str| json!({"agent_id":agent,"session_id":"s","tool_name":"Bash"});
+        assert!(gate::handoff(&helper("helper-work"), &state, &scope, "2").is_none(), "a helper on Work is ordered off Work");
+        assert!(matches!(gate::handoff(&helper("helper-home"), &state, &scope, "1"), Some(Err(_))), "a helper still on Home is not ordered off it");
+        let marker: gate::Handoff = gate::read_json(&state.join(gate::HANDOFFS_DIR).join("helper-home.json")).unwrap();
+        assert_eq!((marker.account.as_str(), marker.label.as_deref(), marker.weekly_used), ("1", Some("Home"), Some(99.)), "{marker:?}");
+        assert!(marker.weekly_point.is_some_and(|p| p <= 99.), "{marker:?}");
+
+        // 3. The quota tool: Work, named, with Work's figures and the gate's own admission, nothing of Home's.
+        let reply = tool();
+        assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str()), (Some("2"), Some("Work")), "{reply}");
+        assert_eq!(top(&reply, "seven_day"), Some(3.), "{reply}");
+        assert_eq!(reply["admission"]["state"], "ready", "{reply}");
+        let mut found = Vec::new();
+        outside_home(&reply, 99., "", &[], &mut found);
+        outside_home(&reply, home_week_reset as f64, "", &[], &mut found);
+        assert!(found.is_empty(), "Home's figures in the tool's reply: {found:?} in {reply}");
+        let text = reply.to_string();
+        assert!(!text.contains("99%") && !text.contains(&home_week_reset.to_string()) && !text.contains("Home"), "{text}");
+        assert!(reply["resets"].get("weeklyUsed").is_none() && reply["resets"].get("weeklyThreshold").is_none(), "{reply}");
+
+        // 4. quota-watch.sh --once for the app: Work, below the line.
+        let (code, said) = once(Some(&state));
+        assert_eq!(code, Some(0), "{said}");
+        assert!(said.contains("account Work") && !said.contains("status-line"), "{said}");
+
+        // 5. Second review's quota hold, in App mode, in review-watch's own environment: the gate's
+        // own decision on the published file, naming the account in use.
+        let (held, reading) = review_hold();
+        assert!(!held && reading.contains("app's gate") && reading.contains("Work (account 2)"), "{reading}");
+        assert_eq!(held, !gate::admission(&state, crate::util::now_millis()).allows_work(), "{reading}");
+
+        // Back on Home, the app's own way: its week is fresh, its five hours still at 99, and Rich
+        // picks Home first. Every consumer flips to Home and holds.
+        service.before_turn("1", Some((vec![window("five_hour", 99., now + hour, five),
+            window("seven_day", 2., now + 160 * hour, week)], crate::util::now_millis().max(now + 1))));
+        assert_eq!(service.accounts.in_use().id, "2", "Work still in use until Home is picked");
+        service.use_account_first("1").unwrap();
+        let view = published();
+        assert_eq!((view["inUse"]["id"].as_str(), top(&view, "five_hour")), (Some("1"), Some(99.)), "{view}");
+        assert!(view["resets"].get("weeklyUsed").is_none_or(Value::is_null), "{}", view["resets"]);
+        assert!(matches!(gate::admission(&state, crate::util::now_millis()), Admission::Held { .. }));
+        let reply = tool();
+        assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str(), reply["admission"]["state"].as_str()),
+            (Some("1"), Some("Home"), Some("held")), "{reply}");
+        let (code, said) = once(Some(&state));
+        assert_eq!(code, Some(1), "{said}");
+        assert!(said.contains("account Home"), "{said}");
+        let (held, reading) = review_hold();
+        assert!(held && reading.contains("HOLDS") && reading.contains("Home (account 1)"), "{reading}");
+        assert_eq!(held, !gate::admission(&state, crate::util::now_millis()).allows_work(), "{reading}");
+    }
+
+    /// **An app review's hold is the gate's own decision, case for case** (second review of
+    /// 2097df51c: the review read the service's published `admission`, which the gate recomputes
+    /// with other inputs, so a review could start during a hold the gate enforced). The engine's
+    /// reader (`quota_watch.gate_admission`, which `second_review.quota_hold` uses in the app) is
+    /// run over 600 published files, each a real `Service::publish` with the fields the gate reads
+    /// varied around its boundaries: five-hour and weekly use near the pause and handoff points,
+    /// resets around the 20-minute exemption and already past, speeds below and above the fast
+    /// check, a reading fresh, old, missing or dated ahead, an empty answer, an error, every
+    /// account exhausted, the published policy and the setting file beside it. It must hold exactly
+    /// when `gate::admission` does not allow work, until the same moment.
+    ///
+    /// With main's staggered release (merge of 2026-10-29) the gate also judges the five-hour
+    /// point on the speed before the hold (`preHold`), holds inside the last 20 minutes, and judges
+    /// a call on its own account's row (`gate::decide` with an account). So the files vary
+    /// `preHold` too, a third carry an `accounts` list whose row for Work has its own reading, and
+    /// the account asked about is Work, Home, one with no row, or none: the reader must agree
+    /// with `gate::decide` for that account.
+    #[test]
+    fn the_review_hold_is_the_gates_own_decision() {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        service.set_policy(Policy { enabled: true, pause_percent: 93 }).unwrap();
+        service.publish().unwrap();
+        let template: Value = serde_json::from_slice(&fs::read(root.path().join("engine-state/claude-quota.json")).unwrap()).unwrap();
+        let now: u64 = 1_900_000_000_000;
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut pick = |n: usize| { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; (seed % n as u64) as usize };
+        let offsets = |v: &[Option<i64>], i: usize| v[i].map(|d| (now as i64 + d) as u64);
+        let (minute, hour) = (60_000i64, 3_600_000i64);
+        let five_used = [0., 50., 79.9, 80., 92.99, 93., 93.5, 97., 99., 100.];
+        let week_used = [10., 93., 94., 95., 96., 98., 99., 100.];
+        let five_reset = [Some(-minute), Some(0), Some(1), Some(10 * minute), Some(20 * minute - 1), Some(20 * minute), Some(20 * minute + 1), Some(hour), None];
+        let week_reset = [Some(-1), Some(1), Some(24 * hour), Some(80 * hour), None];
+        let speeds = [None, Some(0.), Some(1e-6), Some(1. / 60_000.), Some(2e-5), Some(5e-4)];
+        let checked = [None, Some(-30_000), Some(-299_999), Some(-300_000), Some(-hour), Some(5_000)];
+        let held_until = [None, Some(-1), Some(10 * minute)];
+        let policies = [json!({"enabled": true, "pausePercent": 93}), json!({"enabled": false, "pausePercent": 93}),
+            json!({"enabled": true, "pausePercent": 80}), json!({"enabled": true, "pausePercent": 0})];
+        let settings = [None, Some(json!({"enabled": true, "pausePercent": 93})), Some(json!({"enabled": false, "pausePercent": 93})),
+            Some(json!({"enabled": true, "pausePercent": 80})), Some(json!({"enabled": "yes"}))];
+        let window = |id: &str, used: f64, resets: Option<u64>| json!({"id": id, "label": id, "usedPercent": used,
+            "resetsAt": resets, "durationMs": if id == "five_hour" { 18_000_000u64 } else { 604_800_000u64 }});
+        let pre_holds = [None, Some(0.), Some(1. / 60_000.), Some(2e-5), Some(5e-4)];
+        let mut cases = Vec::new();
+        for i in 0..600 {
+            let app = root.path().join(format!("case-{i}"));
+            let state = app.join("engine-state");
+            fs::create_dir_all(&state).unwrap();
+            let mut view = template.clone();
+            // One account's reading, the fields `gate::decide` takes from a row or the top level.
+            let reading = |pick: &mut dyn FnMut(usize) -> usize, into: &mut Value| {
+                let mut windows = Vec::new();
+                if pick(8) != 0 { windows.push(window("five_hour", five_used[pick(five_used.len())], offsets(&five_reset, pick(five_reset.len())))); }
+                if pick(4) != 0 { windows.push(window("seven_day", week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len())))); }
+                into["windows"] = json!(windows);
+                let mut speed_map = serde_json::Map::new();
+                for id in ["five_hour", "seven_day"] {
+                    if let Some(s) = speeds[pick(speeds.len())] { speed_map.insert(id.into(), json!(s)); }
+                }
+                into["speeds"] = Value::Object(speed_map);
+                into["preHold"] = match pre_holds[pick(pre_holds.len())] { Some(s) => json!({"five_hour": s}), None => json!({}) };
+                let checked_at = offsets(&checked, pick(checked.len()));
+                into["checkedAt"] = json!(checked_at);
+                into["emptyAt"] = match pick(4) {
+                    0 => json!(checked_at.map(|c| c - 1)), 1 => json!(checked_at.map(|c| c + 1)), 2 => json!(now - 10), _ => Value::Null };
+                into["message"] = if pick(5) == 0 { json!("fixture error") } else { Value::Null };
+            };
+            reading(&mut pick, &mut view);
+            if pick(3) == 0 {
+                let mut work = json!({"id": "2", "label": "Work", "inUse": true});
+                reading(&mut pick, &mut work);
+                let mut home = json!({"id": "1", "label": "Home", "inUse": false});
+                for key in ["windows", "speeds", "preHold", "checkedAt", "emptyAt", "message"] { home[key] = view[key].clone(); }
+                view["accounts"] = json!([home, work]);
+            }
+            let account = [None, Some("1"), Some("2"), Some("9")][pick(4)];
+            view["heldUntil"] = json!(offsets(&held_until, pick(held_until.len())));
+            view["policy"] = policies[pick(policies.len())].clone();
+            // The published admission is never the answer: here it is a coin toss.
+            view["admission"] = if pick(2) == 0 { json!({"state": "ready"}) } else { json!({"state": "held", "resetsAt": now + 1}) };
+            fs::write(state.join("claude-quota.json"), view.to_string()).unwrap();
+            if let Some(setting) = &settings[pick(settings.len())] {
+                fs::write(app.join("claude-quota-policy.json"), setting.to_string()).unwrap();
+            }
+            let gate = gate::decide(&state, account, now).0;
+            cases.push((state, account, gate, view));
+        }
+        let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
+        let program = "import json, sys\nsys.path.insert(0, sys.argv[1])\nimport quota_watch\n\
+            print(json.dumps([quota_watch.gate_admission(s, n / 1000, a) for s, n, a in json.load(sys.stdin)]))";
+        let mut child = std::process::Command::new("python3").arg("-I").arg("-c").arg(program).arg(engine.join("scripts/lib"))
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+        let input = json!(cases.iter().map(|(state, account, _, _)| json!([state, now, account])).collect::<Vec<_>>()).to_string();
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        let answers: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
+        let mut differ = Vec::new();
+        let mut held_seen = 0;
+        for ((_, account, gate, view), answer) in cases.iter().zip(&answers) {
+            let want_until = match gate { Admission::Held { resets_at } => Some(resets_at / 1000), _ => None };
+            held_seen += usize::from(want_until.is_some());
+            if answer["held"].as_bool() != Some(!gate.allows_work()) || answer["until"].as_u64() != want_until {
+                differ.push(format!("gate {gate:?} on {account:?}, review {answer} for {view}"));
+            }
+        }
+        assert!(differ.is_empty(), "{} of 600 differ; first: {}", differ.len(), differ[0]);
+        assert!((30..=570).contains(&held_seen), "the cases must both hold and admit in number: {held_seen} of 600 held");
+    }
+
+    /// **A file an older app wrote names no account in use** (the live file of 2026-10-28 17:14Z,
+    /// written by the installed app before `inUse` existed). The quota tool then names the
+    /// `accounts[]` row marked in use, never Account 1 by default: that named Home beside Work's
+    /// figures. With no accounts list it is the one account; a list with no row in use is refused.
+    #[test]
+    fn the_quota_tool_names_the_account_in_use_from_a_file_an_older_app_wrote() {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        service.accounts.rename("1", "Home").unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        service.accounts.use_first(&work.id).unwrap();
+        service.publish().unwrap();
+        let path = root.path().join("engine-state/claude-quota.json");
+        let older = |edit: &dyn Fn(&mut Value)| {
+            service.publish().unwrap(); // each case starts from the file the app writes
+            let mut file: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            file.as_object_mut().unwrap().remove("inUse");
+            edit(&mut file);
+            fs::write(&path, file.to_string()).unwrap();
+            reset_tools::status(root.path(), &resets::Service::new(root.path()), crate::util::now_millis(), None, None)
+        };
+        let reply = older(&|_| {}).unwrap();
+        assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str()), (Some("2"), Some("Work")), "{reply}");
+        let reply = older(&|file| { file["accounts"] = json!([]); file["firstLabel"] = json!("Home"); }).unwrap();
+        assert_eq!((reply["account"]["id"].as_str(), reply["account"]["label"].as_str()), (Some("1"), Some("Home")), "{reply}");
+        let refused = older(&|file| for row in file["accounts"].as_array_mut().into_iter().flatten() { row["inUse"] = json!(false); });
+        assert!(refused.is_err(), "{refused:?}");
+        service.publish().unwrap();
+        let reply = reset_tools::status(root.path(), &resets::Service::new(root.path()), crate::util::now_millis(), None, None).unwrap();
+        assert_eq!(reply["account"]["id"], "2", "{reply}");
     }
 
     /// **Round 18: Rich suggests a second account, once** (the CEO 2026-10-06, feedback item 9:
@@ -3044,6 +3980,140 @@ for line in sys.stdin:
             self.result.clone()
         }
     }
+    /// Two accounts, Account 1 named Home and an added Work, each read at `home` and `work`
+    /// percent of its five hours (its week at 20%), automatic pause on.
+    fn home_and_work(home: f64, work: f64) -> (Scratch, Service, crate::claude_accounts::Account) {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        service.set_policy(policy()).unwrap();
+        service.accounts.rename("1", "Home").unwrap();
+        let account = service.accounts.add("Work").unwrap();
+        let now = crate::util::now_millis();
+        let at = |used: f64| Snapshot { checked_at: Some(now), windows: vec![
+            Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: used,
+                resets_at: Some(now + 3 * 3_600_000), duration_ms: 18_000_000 },
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: 20.,
+                resets_at: Some(now + 48 * 3_600_000), duration_ms: 168 * 3_600_000 }], ..Default::default() };
+        *service.snapshot.lock().unwrap() = at(home);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        service.extra.lock().unwrap().insert(account.id.clone(), (
+            std::sync::Arc::new(Mutex::new(Box::new(FakeSource { calls, result: Err(ReadError::Failed) }) as Box<dyn Source>)),
+            at(work)));
+        (root, service, account)
+    }
+
+    /// **Item 3 of 2026-10-29: nothing marks or announces the new account until Stu has really
+    /// moved.** The CEO: *"I saw "switching to home" and the Home account was listed first in
+    /// the list. But apparently it didn't actually switch."* Work is in use and Stu's session
+    /// runs on it; Work reaches 95% of its five hours and the switch to Home is decided. New
+    /// sessions start on Home from now on, but Stu's still runs on Work, so the screen keeps
+    /// Work marked in use, the top-level reading stays Work's, no switch card and no "I switched
+    /// the team" line. Once his session is on Home (`Renewal::Moved` reports it through
+    /// `back_end_on`), Home is marked in use and its reading is the one shown; the card and the
+    /// line follow once a reply of Rich's ran on Home too, as before. On main the switch marked
+    /// Home in use and published Home's reading the moment it was decided.
+    #[test]
+    fn the_new_account_is_marked_in_use_only_once_stus_session_has_moved() {
+        let (_root, service, work) = home_and_work(10., 95.);
+        service.accounts.use_first(&work.id).unwrap();
+        service.accounts.back_end_on("thread-stu", Some(&work.id));
+        let view = service.set_at_threshold(crate::claude_accounts::AtThreshold::Switch).unwrap();
+        assert_eq!(service.accounts.in_use().id, "1", "the switch to Home is decided");
+        assert_eq!(service.lease_account().id, "1", "every new session starts on Home");
+        let marked = |view: &View| view.accounts.iter().filter(|a| a.in_use).map(|a| a.label.clone()).collect::<Vec<_>>();
+        let five = |view: &View| view.windows.iter().find(|w| w.id == "five_hour").unwrap().used_percent;
+        assert_eq!(marked(&view), vec!["Work".to_string()], "Stu still runs on Work: Work stays marked in use");
+        assert_eq!(five(&view), 95., "the reading shown is Work's, where the work runs");
+        assert_eq!(view.last_switch, None, "no switch card before the move");
+        assert_eq!(service.accounts.take_notice(), None, "no \"I switched the team\" before the move");
+
+        service.accounts.back_end_on("thread-stu", Some("1"));
+        let view = service.view();
+        assert_eq!(marked(&view), vec!["Home".to_string()], "Stu is on Home: Home is in use now");
+        assert_eq!(five(&view), 10.);
+        service.accounts.ran_on("reply-on-home", "1");
+        assert!(service.accounts.take_notice().is_some_and(|line| line.starts_with("I switched the team to your **Home** account.")));
+        assert_eq!(service.view().last_switch.map(|s| (s.from, s.to)), Some((work.id.clone(), "1".to_string())));
+    }
+
+    /// **Item 3, the rest: a move that cannot happen yet says so, and new work already uses
+    /// the new account's configuration.** Home is in use with Stu on it; Home reaches 95% and
+    /// the switch to Work is decided. Every new session (Rich's next turn, Stu's next session
+    /// and so every helper inside it) is opened on `lease_account`, now Work with Work's own
+    /// folder: `CLAUDE_CONFIG_DIR` and `RICHOS_CLAUDE_ACCOUNT` come from it
+    /// (`EngineProfile::configure`). Stu's session still runs a helper, so the work host reports
+    /// `Renewal::Waits` (`move_waits`): the view says the move is blocked, from Home to Work. The
+    /// gate judges a helper still in Stu's old session on Home (95%: held) and one in a new
+    /// session on Work (10%: goes on). When Stu moves, the move is over.
+    #[test]
+    fn a_move_that_cannot_happen_yet_says_so_and_new_work_uses_the_new_account() {
+        let (_root, service, work) = home_and_work(95., 10.);
+        service.accounts.back_end_on("thread-stu", Some("1"));
+        service.set_at_threshold(crate::claude_accounts::AtThreshold::Switch).unwrap();
+        let next = service.lease_account();
+        assert_eq!((next.id.as_str(), next.folder.as_ref()), (work.id.as_str(), work.folder.as_ref()),
+            "new turns and workers are opened under Work's own folder");
+        let moving = crate::claude_accounts::Moving { from: "1".into(), to: work.id.clone(), blocked: false };
+        assert_eq!(service.view().moving, Some(moving.clone()));
+        service.accounts.move_waits("thread-stu");
+        assert_eq!(service.view().moving, Some(crate::claude_accounts::Moving { blocked: true, ..moving }),
+            "Stu's session still runs something: the move cannot happen yet");
+        assert!(service.view().accounts.iter().any(|a| a.id == "1" && a.in_use));
+
+        service.publish().unwrap();
+        let state = _root.path().join("engine-state");
+        let now = crate::util::now_millis();
+        assert!(matches!(gate::decide(&state, Some("1"), now).0, Admission::Held { .. }), "a helper still on Home is held");
+        assert!(gate::decide(&state, Some(&work.id), now).0.allows_work(), "a helper on Work goes on");
+        // **The file names the account its figures are** (merge of main into the account-in-use
+        // fix, 2026-10-29): during the move the top level is Home's, where the work still runs,
+        // so `inUse` names Home, the row marked in use, never Work, where new sessions start.
+        // A held call is refused with the name of its own account.
+        let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+        assert_eq!(published.in_use.as_ref().map(|a| (a.id.as_str(), a.label.as_str())), Some(("1", "Home")),
+            "the top level is Home's 95%: it must name Home");
+        assert_eq!(published.windows.iter().find(|w| w.id == "five_hour").map(|w| w.used_percent), Some(95.));
+        assert_eq!(gate::held_named(&state, "1"), "Home (account 1)");
+        assert_eq!(gate::held_named(&state, &work.id), format!("Work (account {})", work.id));
+        // **A review in the move starts on Work and is judged on Work** (second review of
+        // 0cdf39aee, P2: second_review.quota_hold judged the top level, Home at 95%, and held a
+        // review that runs on Work at 10%). Run in review-watch's own environment, on the account
+        // list the app writes, exactly as an app review reads it.
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine").canonicalize().unwrap();
+        let program = "import json, sys\nsys.path.insert(0, sys.argv[1])\nimport second_review\n\
+            print(json.dumps(second_review.quota_hold(sys.argv[2], sys.argv[3])))";
+        let environment = crate::review_watch::app_environment(&std::env::var("PATH").unwrap_or_default(), "");
+        let out = std::process::Command::new("python3").env_clear().current_dir(_root.path()).envs(&environment)
+            .env("HOME", _root.path()).env("PYTHONDONTWRITEBYTECODE", "1").arg("-I").arg("-c").arg(program)
+            .arg(engine.join("scripts/lib")).arg(&engine).arg(_root.path().join(crate::claude_accounts::LIST_FILE))
+            .output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let (held, line): (bool, String) = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(!held, "a review on Work at 10% was held on Home's 95%: {line}");
+        assert!(line.contains(&format!("Work (account {})", work.id)), "the review names Work's reading: {line}");
+        // **And the quota tool answers each session for its own account** (second review of
+        // 0b0afd1f1, P2): a Work session (RICHOS_CLAUDE_ACCOUNT=2) was told Home's held admission.
+        let tool = |caller: Option<&str>| reset_tools::status(_root.path(), &resets::Service::new(_root.path()),
+            crate::util::now_millis(), None, caller).unwrap();
+        let five_of = |reply: &Value| reply["windows"].as_array().unwrap().iter()
+            .find(|w| w["id"] == "five_hour").and_then(|w| w["usedPercent"].as_f64());
+        let on_work = tool(Some(&work.id));
+        assert_eq!((on_work["account"]["id"].as_str(), on_work["account"]["label"].as_str(), five_of(&on_work)),
+            (Some(work.id.as_str()), Some("Work"), Some(10.)), "{on_work}");
+        assert_eq!(on_work["admission"]["state"], "ready", "a Work session is told Work's admission: {on_work}");
+        assert_eq!(on_work["state"], "fresh", "{on_work}");
+        for caller in [Some("1"), None, Some("9")] {
+            let reply = tool(caller);
+            assert_eq!((reply["account"]["id"].as_str(), five_of(&reply)), (Some("1"), Some(95.)), "{caller:?}: {reply}");
+            assert_eq!(reply["admission"]["state"], "held", "{caller:?}: {reply}");
+        }
+
+        service.accounts.back_end_on("thread-stu", Some(&work.id));
+        let view = service.view();
+        assert_eq!(view.moving, None, "the move is over");
+        assert!(view.accounts.iter().any(|a| a.id == work.id && a.in_use));
+    }
+
     #[test]
     fn startup_and_session_signals_refresh_without_waiting_for_the_interval() {
         use std::time::Duration;
@@ -3284,11 +4354,10 @@ for line in sys.stdin:
     fn overlapping_refreshes_never_read_an_added_account_with_account_ones_reader() {
         let root = Scratch::new();
         let dir = root.path().to_path_buf();
-        let bin = script(&dir.join("claude-fixture"), r#"#!/usr/bin/env python3
+        let bin = script(&dir.join("claude-fixture"), &format!("#!/usr/bin/env python3
 import json, os, sys, time
-root = os.path.dirname(os.path.abspath(__file__))
-added = "claude-accounts" in os.environ.get("CLAUDE_CONFIG_DIR", "")
-for line in sys.stdin:
+{ADDED_ACCOUNT_PY}
+{}", r#"for line in sys.stdin:
     v = json.loads(line)
     payload = {}
     if v["request"]["subtype"] != "initialize":
@@ -3305,7 +4374,7 @@ for line in sys.stdin:
             "five_hour": {"utilization": 10, "resets_at": "2099-01-01T00:00:00Z"},
             "seven_day": {"utilization": used, "resets_at": "2099-01-05T00:00:00Z"}}}
     print(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": v["request_id"], "response": payload}}), flush=True)
-"#);
+"#));
         let service = std::sync::Arc::new(Service::open(&dir).unwrap());
         let work = service.accounts.add("Work").unwrap();
         let (one, b1) = (service.clone(), bin.clone());
@@ -3369,11 +4438,10 @@ for line in sys.stdin:
     fn shutdown_interrupts_account_ones_pending_read_after_another_account_was_read() {
         let root = Scratch::new();
         let dir = root.path().to_path_buf();
-        let bin = script(&dir.join("claude-fixture"), r#"#!/usr/bin/env python3
+        let bin = script(&dir.join("claude-fixture"), &format!("#!/usr/bin/env python3
 import json, os, sys, time
-root = os.path.dirname(os.path.abspath(__file__))
-added = "claude-accounts" in os.environ.get("CLAUDE_CONFIG_DIR", "")
-n = 0
+{ADDED_ACCOUNT_PY}
+{}", r#"n = 0
 for line in sys.stdin:
     v = json.loads(line)
     payload = {}
@@ -3386,7 +4454,7 @@ for line in sys.stdin:
             "five_hour": {"utilization": 5, "resets_at": "2099-01-01T00:00:00Z"},
             "seven_day": {"utilization": 5, "resets_at": "2099-01-05T00:00:00Z"}}}
     print(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": v["request_id"], "response": payload}}), flush=True)
-"#);
+"#));
         let service = std::sync::Arc::new(Service::open(&dir).unwrap());
         service.accounts.add("Work").unwrap();
         let first = service.refresh(&bin, true);

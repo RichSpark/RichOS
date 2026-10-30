@@ -215,7 +215,7 @@ check() { # <id+label> <condition-exit> <detail>
 }
 
 # --- isolation: nothing here reads the operator's payload, registry or sessions
-unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT
+unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT RICHOS_APP_STATE
 export QUOTA_PAYLOAD="$SB/payload.json"
 export RICHOS_ENTITY_ROOT="$SB/entity"
 export RICHOS_WORKSPACES_DIR="$SB/ws"
