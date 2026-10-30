@@ -161,6 +161,42 @@ class OpenEnabled(unittest.TestCase):
         w.wait_open_enabled()
         self.assertEqual(w.calls, 2)
 
+    def test_one_slow_read_on_a_loaded_host_does_not_end_the_wait(self):
+        """A review walk once failed when a read that used its whole 20 s deadline ended a fixed 15 s wait;
+        it passed only with TESTVM_AX_TIMEOUT=40 set by hand. The default wait outlasts several reads."""
+        import os
+        before = os.environ.pop('TESTVM_AX_TIMEOUT', None)
+        try:
+            w = walk.Walk.__new__(walk.Walk)
+            w.calls = 0
+            def ax(mode, *a, **k):
+                w.calls += 1
+                if w.calls <= 2:
+                    self.now += 20   # the read ran to its deadline and had no answer
+                    raise walk.StepFailed('{"error": "guest_deadline"}')
+                return [{'meta': True}, {'title': 'Open', 'x': 1, 'enabled': True}]
+            w.ax = ax
+            w.wait_open_enabled()
+            self.assertEqual(w.calls, 3)
+        finally:
+            if before is not None:
+                os.environ['TESTVM_AX_TIMEOUT'] = before
+
+    def test_the_default_wait_follows_the_read_deadline(self):
+        import os
+        before = os.environ.get('TESTVM_AX_TIMEOUT')
+        os.environ['TESTVM_AX_TIMEOUT'] = '40'
+        try:
+            w = self.walk_on([False])
+            with self.assertRaises(walk.StepFailed) as ctx:
+                w.wait_open_enabled()
+            self.assertIn('within 120.0 s', str(ctx.exception))
+        finally:
+            if before is None:
+                os.environ.pop('TESTVM_AX_TIMEOUT')
+            else:
+                os.environ['TESTVM_AX_TIMEOUT'] = before
+
     def test_still_disabled_at_the_limit_names_the_step_and_state(self):
         w = self.walk_on([False])
         with self.assertRaises(walk.StepFailed) as ctx:

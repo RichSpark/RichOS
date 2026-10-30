@@ -227,11 +227,18 @@ class Walk:
         self.wait_for('Company', role='AXPopUpButton')
         time.sleep(2)
 
-    def wait_open_enabled(self, seconds=15):
+    def wait_open_enabled(self, seconds=None):
         """Wait for the chooser's Open button to read as enabled, then return so the caller clicks
         it once. Typing the path and Return makes the chooser load the folder; on a busy host
         Open stays disabled for seconds (walk-9696d0b3a4f1: "matched element is disabled"). A read
-        the app did not answer is "not yet" (axwait.py); the click is never sent here."""
+        the app did not answer is "not yet" (axwait.py); the click is never sent here.
+
+        The limit is a number of reads' worth of time, never fewer than three: each read has its own
+        deadline (TESTVM_AX_TIMEOUT, 20 s), and a fixed 15 s ended the wait the moment one slow read
+        on a loaded Mac used up its deadline (a review walk passed only with the
+        deadline set to 40 by hand). Default: three read deadlines, at least 60 s."""
+        if seconds is None:
+            seconds = max(60.0, 3 * float(os.environ.get('TESTVM_AX_TIMEOUT', '20')))
         end = time.monotonic() + seconds
         state = 'not found'
         while True:
