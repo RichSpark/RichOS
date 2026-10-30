@@ -30,12 +30,13 @@ import os
 import signal
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from proc_tree import kill_tree  # noqa: E402
+from quiet_wait import Watch  # noqa: E402
 
-POLL_SECONDS = 0.1
+# The longest it goes without looking when neither a write nor the exit woke it: a safety net only.
+RECHECK_SECONDS = 5.0
 GRACE_SECONDS = 10
 
 
@@ -75,21 +76,24 @@ def main():
     pending = b""
     with open(a.out, "rb") as reader:
         while True:
-            rc = child.poll()
-            chunk = reader.read()
-            if chunk:
-                pending += chunk
-                *lines, pending = pending.split(b"\n")
-                if any(hit(line) for line in lines):
-                    return stop(child, a.marker)
-            if rc is not None:
-                # One last read: the command may have written its final line and exited
-                # between the read above and the poll.
-                tail = pending + reader.read()
-                if any(hit(line) for line in tail.split(b"\n")):
-                    return stop(child, a.marker)
-                return rc if rc >= 0 else 128 - rc
-            time.sleep(POLL_SECONDS)
+            # Blocks until the command writes to --out or exits (quiet_wait.py), registered
+            # before the look so nothing between is missed; it used to look every 0.1 s.
+            with Watch(paths=[a.out], pids=[child.pid]) as w:
+                rc = child.poll()
+                chunk = reader.read()
+                if chunk:
+                    pending += chunk
+                    *lines, pending = pending.split(b"\n")
+                    if any(hit(line) for line in lines):
+                        return stop(child, a.marker)
+                if rc is not None:
+                    # One last read: the command may have written its final line and exited
+                    # between the read above and the poll.
+                    tail = pending + reader.read()
+                    if any(hit(line) for line in tail.split(b"\n")):
+                        return stop(child, a.marker)
+                    return rc if rc >= 0 else 128 - rc
+                w.wait(RECHECK_SECONDS)
 
 
 def stop(child, marker):
