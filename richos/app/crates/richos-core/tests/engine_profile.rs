@@ -149,12 +149,14 @@ fn the_provider_is_told_which_claude_account_it_spends() {
     let mut profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     let environment = |profile: &EngineProfile| {
         let mut command = std::process::Command::new("/fictional/provider");
-        command.env("RICHOS_CLAUDE_ACCOUNT", "9");
+        command.env("RICHOS_CLAUDE_ACCOUNT", "9").env("RICHOS_CLAUDE_HOME", "/fictional/inherited")
+            .env("RICHOS_CLAUDE_ACCOUNT_DIR", "/fictional/inherited-account");
         profile.configure(&mut command, Path::new("/fictional/provider"), "fictional-session", &f.0.join("scope.json"));
         command.get_envs().map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
             .collect::<BTreeMap<_, _>>()
     };
-    assert_eq!(environment(&profile)["RICHOS_CLAUDE_ACCOUNT"], None, "an inherited account is removed");
+    let none = environment(&profile);
+    assert_eq!(none["RICHOS_CLAUDE_ACCOUNT"], None, "an inherited account is removed");
     profile.claude_account = Some(Account { id: "1".into(), label: "Home".into(), folder: None });
     let one = environment(&profile);
     assert_eq!(one["RICHOS_CLAUDE_ACCOUNT"].as_deref(), Some("1"));
@@ -164,6 +166,20 @@ fn the_provider_is_told_which_claude_account_it_spends() {
     let two = environment(&profile);
     assert_eq!(two["RICHOS_CLAUDE_ACCOUNT"].as_deref(), Some("2"));
     assert_eq!(two["CLAUDE_CONFIG_DIR"].as_deref(), folder.to_str());
+    // **One machine-wide Claude home whichever account is spent** (2026-10-28): Account 1's folder,
+    // the app's own CLAUDE_CONFIG_DIR else ~/.claude, never the added account's and never inherited.
+    let machine = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap()).join(".claude"));
+    for (lease, env) in [("no account", &none), ("Account 1", &one), ("Account 2", &two)] {
+        assert_eq!(env["RICHOS_CLAUDE_HOME"].as_deref(), machine.to_str(), "{lease}: the engine's home is Account 1's");
+    }
+    // The engine honors that home only while CLAUDE_CONFIG_DIR is the added account's folder the
+    // app set (machine_settings.claude_home), so the pair names exactly that folder, and nothing
+    // where the app set no folder; an inherited value never survives.
+    assert_eq!(two["RICHOS_CLAUDE_ACCOUNT_DIR"].as_deref(), folder.to_str(), "Account 2: the folder it was given");
+    for (lease, env) in [("no account", &none), ("Account 1", &one)] {
+        assert_eq!(env["RICHOS_CLAUDE_ACCOUNT_DIR"], None, "{lease}: no added account's folder, none inherited");
+    }
 }
 
 /// **Media-tools plan section 3: the video skill finds the speech model in

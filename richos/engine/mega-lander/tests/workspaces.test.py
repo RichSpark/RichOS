@@ -52,10 +52,16 @@ class Env(object):
                                                      "RICHOS_SESSION_PID", "RICHOS_SESSIONS_DIR",
                                                      "RICHOS_SESSION_ID", "GIT_CONFIG_GLOBAL",
                                                      "RICHOS_BULK_ROOT", "RICHOS_CARGO_CACHE_ROOT",
-                                                     "RICHOS_MACHINE_SETTINGS_RESOLVED", "RICHOS_APP_STATE")}
+                                                     "RICHOS_MACHINE_SETTINGS_RESOLVED",
+                                                     "RICHOS_CLAUDE_HOME", "RICHOS_CLAUDE_ACCOUNT_DIR",
+                                                     "RICHOS_APP_STATE")}
         os.environ["HOME"] = self.home
         # The app's state is found from here too (other_registries); a test run
-        # inside the app must never read the operator's real app registries.
+        # inside the app must never read the operator's real app registries. An app
+        # lease also exports the machine-wide Claude home: left set, it would point
+        # this sandbox's land locks and review reads at the live ones.
+        os.environ.pop("RICHOS_CLAUDE_HOME", None)
+        os.environ.pop("RICHOS_CLAUDE_ACCOUNT_DIR", None)
         os.environ.pop("RICHOS_APP_STATE", None)
         # A land removes the workspace's build caches (build_caches.py). Here they live in the
         # sandbox, so no test ever reads or moves the operator's real cache folders.
@@ -5305,6 +5311,81 @@ class ReleaseLandChecksRunOutsideTheOperatorsRecord(Base):
                              "the land's checks ran inside the operator's record: %s" % where)
         self.assertTrue(where.startswith(os.path.realpath(self.env.root) + os.sep), where)
         self.assertFalse(os.path.exists(where), "the temporary checkout was left behind")
+
+
+class WorkLease_OneMachineWideHome(Base):
+    """2026-10-28 (richos-hq follow-ups, "the usage hold reads the wrong Claude account"): on the
+    Work account the app points CLAUDE_CONFIG_DIR at claude-accounts/2, and every engine store
+    derived from it split by account. A Work lease's land lock was another file than the installed
+    fence's, and integrate refused b20f108f with "no second review" right after a passing one. The
+    app now exports RICHOS_CLAUDE_HOME (Account 1's folder) with RICHOS_CLAUDE_ACCOUNT_DIR (the
+    folder it set) and the engine's own stores follow it, never the account. Claude Code's own
+    records (sessions/, projects/) still follow the account, because Claude Code writes them there.
+    A sandbox's own CLAUDE_CONFIG_DIR inside such a lease still wins."""
+
+    def setUp(self):
+        super().setUp()
+        self.machine = os.environ["CLAUDE_CONFIG_DIR"]      # the fixture's terminal home: <scratch>/home/.claude
+        self.account = os.path.join(self.env.root, "claude-accounts", "2")
+        os.makedirs(self.account)
+        for k in ("SECOND_REVIEW_STATE_DIR", "RICHOS_LAND_LOCKS_DIR", "RICHOS_SESSIONS_DIR", "RICHOS_PROJECTS_DIR",
+                  "RICHOS_CLAUDE_ACCOUNT_DIR"):
+            self.env.saved.setdefault(k, os.environ.get(k))
+            os.environ.pop(k, None)
+
+    def work_lease(self):
+        """The environment EngineProfile.configure gives a lease on the Work account."""
+        os.environ["CLAUDE_CONFIG_DIR"] = self.account
+        os.environ["RICHOS_CLAUDE_ACCOUNT_DIR"] = self.account
+        os.environ["RICHOS_CLAUDE_HOME"] = self.machine
+
+    def test_a_sandbox_inside_a_work_lease_keeps_its_own_stores(self):
+        os.makedirs(os.path.join(self.machine, "state"), exist_ok=True)
+        with open(os.path.join(self.machine, "state", "reviews.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "rv-live", "tip": "b" * 40, "verdict": "passed"}) + "\n")
+        self.work_lease()
+        self.assertIn("b" * 40, ws._reviews_by_tip(), "the lease itself reads the machine-wide ledger")
+        sandbox = os.path.join(self.env.root, "sandbox-config")
+        os.environ["CLAUDE_CONFIG_DIR"] = sandbox           # CLAUDE_CONFIG_DIR=$(mktemp -d), inherited pair
+        self.assertEqual(ws.land_locks_dir(), os.path.join(os.path.realpath(sandbox), "state", "land-locks"))
+        self.assertEqual(ws.state_dir(), os.path.join(sandbox, "state", "workspaces"))
+        self.assertEqual(ws._reviews_by_tip(), {}, "a sandbox read the lease's review ledger")
+
+    def test_a_work_lease_takes_its_land_lock_and_land_record_in_the_machine_wide_home(self):
+        self.work_lease()
+        home = os.path.join(os.path.realpath(self.machine), "state", "land-locks")
+        self.assertEqual(ws.land_locks_dir(), home)
+        self.assertEqual(os.path.dirname(ws.land_lock_path(self.other)), home)
+        written = ws.append_land_record(self.other, {"commit": "c0ffee", "by": "work-lease"})
+        self.assertTrue(written.startswith(home + os.sep), written)
+        self.assertEqual([r.get("commit") for r in ws.land_records(self.other)], ["c0ffee"])
+        self.assertEqual(ws.state_dir(), os.path.join(self.machine, "state", "workspaces"))
+        self.assertFalse(os.path.exists(os.path.join(self.account, "state")),
+                         "an engine store was written in the account's own folder")
+
+    def test_a_work_lease_reads_the_verdict_a_review_wrote_in_the_machine_wide_home(self):
+        tip = "a" * 40
+        state = os.path.join(self.machine, "state")
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "reviews.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "rv-work-1", "tip": tip, "verdict": "passed",
+                                "finished_at": "2026-10-28T16:00:00Z"}) + "\n")
+        self.work_lease()
+        self.assertEqual(ws._reviews_by_tip().get(tip, {}).get("id"), "rv-work-1")
+        self.assertEqual(ws._review_ended("rv-work-1"), "review rv-work-1 has its verdict")
+
+    def test_claude_codes_own_records_still_follow_the_account(self):
+        self.work_lease()
+        self.assertEqual(ws._platform_sessions_dir(), os.path.join(self.account, "sessions"))
+        self.assertEqual(ws._platform_projects_dir(), os.path.join(self.account, "projects"))
+
+    def test_without_richos_claude_home_a_terminal_resolves_as_before(self):
+        os.environ["CLAUDE_CONFIG_DIR"] = self.account      # a terminal that sets its own config folder
+        self.assertEqual(ws.land_locks_dir(), os.path.join(os.path.realpath(self.account), "state", "land-locks"))
+        self.assertEqual(ws.state_dir(), os.path.join(self.account, "state", "workspaces"))
+        os.environ.pop("CLAUDE_CONFIG_DIR")                 # and one that sets nothing: ~/.claude
+        self.assertEqual(ws.land_locks_dir(),
+                         os.path.join(os.path.realpath(os.path.join(self.env.home, ".claude")), "state", "land-locks"))
 
 
 class LeaseHeldThroughTheLand_TheHoldersTurnEndDoesNotReleaseIt(Base):
