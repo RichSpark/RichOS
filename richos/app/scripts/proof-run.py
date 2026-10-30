@@ -468,7 +468,8 @@ def needs_speech_models(item):
 
 def supply_runtime(items, build=False):
     """Packaging suites need RICHOS_RUNTIME_DIR. Unset, the runner supplies the one the
-    nightly uses (<state>/runtime-<recipe sha256[:12]>, nightly-local.py `runtime()`, named by
+    nightly uses (<state>/runtime-<recipe sha256[:12]>, nightly-local.py `runtime()`, in the configured
+    storage's state folder (machine_settings.state()) or ~/.richos-nightly; named by
     lib/runtime_cache.py) to every check, only after verify-runtime.py accepts it against the
     tracked recipe, exactly as the nightly does. With `build`, a runtime that is not there is BUILT
     first when a selected check needs it (needs_runtime), so no lead or engineer builds one by hand
@@ -480,10 +481,11 @@ def supply_runtime(items, build=False):
         sys.path.insert(0, os.path.join(HERE, "lib"))
     import runtime_cache
     recipe = os.path.join(HERE, "runtime-sources.json")
-    state = os.path.join(os.path.expanduser("~"), ".richos-nightly")
     try:
+        # The configured storage (RICHOS_BULK_ROOT's state folder), else ~/.richos-nightly as before.
+        state = str(M.state())
         path = str(runtime_cache.cache_path(state, recipe))
-    except OSError as error:
+    except (OSError, ValueError) as error:
         return "RICHOS_RUNTIME_DIR is unset and %s cannot be read (%s); suites that need it will refuse" % (
             recipe, error.strerror or error)
     if build and not os.path.isdir(path) and any(needs_runtime(it) for it in items):
