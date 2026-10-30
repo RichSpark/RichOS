@@ -4653,7 +4653,7 @@
     },
     "scripts/hooks/notice-disk-alert.test.sh": {
       "source": "scripts/hooks/notice-disk-alert.test.sh",
-      "sha256": "d5b8e177f477fb9d8c640183ddbfb965b07045c8392f4b597cdfca8e66badfc0",
+      "sha256": "bd645b80c7255095c6ca46bd42a3164ec003617f3e72fb4360ac578c933bd506",
       "evidence": "Every watchdog invocation uses a generated literal DISK_WATCHDOG_CONFIG or a deliberately absent file. Hook events are fixed SessionStart and Stop. D7/D8 also call --check, including device collection and condition-triggered measurements; no real engine config values are loaded. Live statvfs/time/external state are runtime inputs, so this declaration alone grants no evidence reuse.",
       "keys": [],
       "edges": [
