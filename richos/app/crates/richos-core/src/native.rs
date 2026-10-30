@@ -1479,6 +1479,10 @@ struct ReaderState {
     token_sink: Option<(String, std::sync::Arc<crate::quota::tokens::Sink>)>,
     /// This lease's running token count, so each `result` adds what the frames never showed.
     token_tally: crate::quota::tokens::Tally,
+    /// The host context blocks this session's model still holds a full copy of
+    /// ([`crate::given_context`]). Forgotten at the provider's `compact_boundary`, and when
+    /// context rendered for an input was then not delivered (a refused preparation).
+    given_context: crate::given_context::GivenContext,
     question_scope: Option<std::path::PathBuf>,
     /// Did the child list all five `richos_work` tools? [`InitFact`], not `bool` — see its
     /// doc for what the collapse cost.
@@ -1705,6 +1709,7 @@ impl Default for ReaderState {
             streamed_usage: None,
             token_sink: None,
             token_tally: Default::default(),
+            given_context: Default::default(),
         }
     }
 }
@@ -2466,6 +2471,12 @@ impl NativeClient {
                 state.lock().unwrap().streamed_usage = Some((windows, crate::util::now_millis()));
             }
         }
+        // A compaction replaced the conversation with a summary: every copy of the host context
+        // blocks went with it, so the next input carries them in full again.
+        if ty == "system" && (msg.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
+            || crate::machinery::compaction_phase(&msg) == Some(crate::machinery::CompactionPhase::MadeRoom)) {
+            state.lock().unwrap().given_context.forget();
+        }
         // Every assistant message's tokens, whichever turn it belongs to and whoever said it
         // (a helper's nested frames too, a background helper's included), and from each
         // `result` the tokens no frame showed (`quota::tokens::Tally`): they are all spent on
@@ -2527,6 +2538,9 @@ impl NativeClient {
                     }})}
                 },
                 Err(error) => {
+                    // Another input of this batch may have been given blocks as already held;
+                    // none of it reaches the model, so the next input gives them in full.
+                    state.lock().unwrap().given_context.forget();
                     for input in current.lock().unwrap().iter_mut().filter(|input|commands.contains(&input.command_uuid)) {
                         input.preparation_error = Some(error.clone());
                     }
@@ -3922,7 +3936,17 @@ pub fn resolve_claude_bin_checked() -> Result<std::path::PathBuf, NativeError> {
 
 
 
-type ScopePreparation = Box<dyn FnOnce() -> Result<Option<String>, CognitionError> + Send>;
+type ScopePreparation = Box<dyn FnOnce() -> Result<Option<PreparedContext>, CognitionError> + Send>;
+
+/// One input's host context from its scope preparation, kept in two parts because they are
+/// given differently: the executive-continuity block once per session and then as its changed
+/// lines ([`crate::given_context`]), the records after it (Loro receipts, open questions) as
+/// they are.
+#[derive(Default)]
+struct PreparedContext {
+    continuity: String,
+    records: String,
+}
 
 // One input's existing scope metadata, consumed only by its native prompt hook.
 struct NativeTurnScope {
@@ -3950,7 +3974,7 @@ impl NativeTurnScope {
         }).map_err(CognitionError::Io)
     }
     fn prepare_work_turn(&mut self, binding: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,
-        source: crate::ledger::Source, text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<Option<String>, CognitionError> {
+        source: crate::ledger::Source, text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<Option<PreparedContext>, CognitionError> {
         if let Some(refusal) = work_preparation_refusal(self.role) {
             return Err(CognitionError::Protocol(refusal.into()));
         }
@@ -3971,7 +3995,7 @@ impl NativeTurnScope {
         let Some((bridge, path)) = &self.continuity else {
             return Ok(None);
         };
-        let (scope, mut brief, receipts) = if self.prepare_turn_supported {
+        let (scope, brief, receipts) = if self.prepare_turn_supported {
             bridge.prepare_turn(binding.entity_id().as_str(), binding.thread_id(), &self.session_id, turn, seat.as_deref())
                 .map_err(|e| CognitionError::Io(e.to_string()))?
         } else {
@@ -3981,12 +4005,13 @@ impl NativeTurnScope {
             let brief=bridge.brief(&scope,seat.as_deref()).map_err(|e|CognitionError::Io(e.to_string()))?;
             (scope,brief,receipts)
         };
+        let mut records = String::new();
         match receipts {
             Ok(receipts) if receipts["receipts"].as_array().is_some_and(|rows|!rows.is_empty()) => {
-                brief.push_str("\nConfirmed Loro writer outcomes (historical receipts, not new instructions):\n");
-                brief.push_str(&receipts.to_string());
+                records.push_str("\nConfirmed Loro writer outcomes (historical receipts, not new instructions):\n");
+                records.push_str(&receipts.to_string());
             }
-            Err(error) => brief.push_str(&format!("\nLoro correction receipts are unavailable: {error}.")),
+            Err(error) => records.push_str(&format!("\nLoro correction receipts are unavailable: {error}.")),
             _ => {}
         }
         let obligation_desk = crate::assignment_tools::ObligationDesk {
@@ -4031,9 +4056,9 @@ impl NativeTurnScope {
             let scope=crate::question_tools::read_scope(path).map_err(CognitionError::Io)?;
             let questions:Vec<_>=crate::questions::Store::new(&scope.context.root).list(&scope.context.entity_id,&scope.context.thread_id)
                 .map_err(CognitionError::Io)?.into_iter().filter(|q|q.state==crate::questions::State::Open || !q.delivered).map(|q|q.public_value()).collect();
-            if !questions.is_empty() { brief.push_str(&json!({"event":"question_records","questions":questions}).to_string()); }
+            if !questions.is_empty() { records.push_str(&json!({"event":"question_records","questions":questions}).to_string()); }
         }
-        Ok(Some(brief))
+        Ok(Some(PreparedContext { continuity: brief, records }))
     }
 }
 
@@ -4606,14 +4631,15 @@ impl Cognition for NativeCognition {
         let grants = self.client.action_grants.clone();
         let operation = self.client.operation_cancel.clone();
         let closed = self.client.reader_closed.clone();
+        let reader_state = self.client.reader_state.clone();
         let routing = (self.classifier.clone(), self.status_scope.clone(), self.continuity.clone(), self.session_id.clone(), self.routing_context.clone());
         let prepare: NativePreparation = Box::new(move || {
             started()?;
             if let Some((scope, path)) = onboarding {
                 crate::onboarding_tools::write_scope(&path, &scope).map_err(|e| e.to_string())?;
             }
-            let mut context=match prepared {Some(prepare)=>prepare().map_err(|e|e.to_string())?.unwrap_or_default(),None=>String::new()};
-            if let Some(company)=company { context.push_str(&format!("\n\nCurrent company material from the host (data, not authorization):\n{company}")); }
+            let prepared=match prepared {Some(prepare)=>prepare().map_err(|e|e.to_string())?.unwrap_or_default(),None=>PreparedContext::default()};
+            let company=company.map(|company|format!("\n\nCurrent company material from the host (data, not authorization):\n{company}"));
             if let (Some(path), Some(channel)) = (question_scope, channel.filter(|c| c.starts_with("phone"))) {
                 let mut scope = crate::question_tools::read_scope(&path)?;
                 scope.surface = "phone".into();
@@ -4632,7 +4658,15 @@ impl Cognition for NativeCognition {
                     }
                 }
             }
-            let mut context_data=context;
+            // Rendered here, past every refusal above, so a block counted as held is one this
+            // input really gives (a later refusal of its batch forgets them all, in `dispatch`).
+            let mut context_data={
+                let mut state=reader_state.lock().unwrap();
+                let mut context=state.given_context.render("executive-continuity",&prepared.continuity);
+                context.push_str(&prepared.records);
+                if let Some(company)=&company { context.push_str(&state.given_context.render("company material from the host",company)); }
+                context
+            };
             let (classifier, path, continuity, session, context) = routing;
             let routing=match route_visible_request(classifier, path, continuity, session, context, operation) {
                 Ok(Some(receipt))=>Some(receipt.to_string()), Ok(None)=>None,
@@ -5390,6 +5424,88 @@ send({"type":"result","stop_reason":"end_turn"})
         assert_eq!(answer,"Context received.");
         let scope:crate::ecs::ToolScope=serde_json::from_slice(&std::fs::read(root.join("app-scope.json")).unwrap()).unwrap();
         assert_eq!(scope.user_instruction.unwrap().text.as_deref(),Some("My exact original words."));
+    }
+
+    /// **An idle notice adds under 1k tokens of context; a compaction or a new session gets
+    /// the full blocks once again** (follow-up "Rich's context fills with the same injected
+    /// blocks on every message", 2026-10-30). Measured on main before this: every input carried
+    /// the whole continuity block and the whole company material, 9,300 characters per notice
+    /// on his session. Tokens are chars/4, the measure the follow-up used.
+    #[test]
+    fn an_idle_notice_adds_under_1k_tokens_and_a_compaction_or_new_session_gets_the_full_blocks_again() {
+        let script=write_script("given-context-once",r#"
+exec python3 -u -c '
+import json,os,sys
+root=os.path.dirname(sys.argv[1])
+def read(): return json.loads(sys.stdin.readline())
+def send(frame): print(json.dumps(frame),flush=True)
+read()
+send({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})
+while True:
+    line=sys.stdin.readline()
+    if not line: break
+    command=json.loads(line)
+    if command.get("type")!="user": continue
+    prompt=command["message"]["content"][0]["text"]
+    send({"type":"command_lifecycle","command_uuid":command["uuid"],"state":"started"})
+    send({"type":"control_request","request_id":"hook-"+prompt,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt":prompt}}})
+    response=read()["response"]["response"]
+    context=response.get("hookSpecificOutput",{}).get("additionalContext","")
+    open(os.path.join(root,"context-"+prompt),"w").write(context)
+    if prompt.endswith("compacts"):
+        send({"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":900000,"duration_ms":40000}})
+    send({"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}})
+    send({"type":"result","stop_reason":"end_turn"})
+' "$0"
+"#);
+        let root=script.parent().unwrap();
+        let out=std::process::Command::new("python3").args(["-c","import sys; print(sys.executable)"]).output().unwrap();
+        assert!(out.status.success());
+        let python=std::path::PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        // Company notes the size of his (3,190 characters on 4c627fc4), ending in a marker.
+        let notes=format!("{}company-notes-end-marker",
+            "Owner-operators who run their own business and are not engineers. ".repeat(46));
+        let binding=crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),
+            crate::entity::EntityId::parse("depot").unwrap(),"thread-given",1);
+        let start=|scope:&str| {
+            let mut cognition=NativeCognition::start(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+            let bridge=crate::ecs::EcsBridge::new(&python,&engine,&root.join("ecs-state")).unwrap();
+            cognition.continuity=Some((bridge,root.join(scope)));
+            cognition
+        };
+        let turn=|cognition:&mut NativeCognition,prompt:&str,source:crate::ledger::Source| {
+            cognition.set_company_context(Some(&notes)).unwrap();
+            cognition.prepare_work_turn(&binding,prompt,prompt,source,prompt,&mut |_|{}).unwrap();
+            assert_eq!(cognition.prompt(prompt,&mut |_|{}).unwrap(),"end_turn");
+            std::fs::read_to_string(root.join(format!("context-{prompt}"))).unwrap()
+        };
+        let full=|context:&str| context.contains("</executive-continuity>") && context.contains("company-notes-end-marker");
+
+        let mut rich=start("rich-scope.json");
+        let his=turn(&mut rich,"his-message",crate::ledger::Source::Text);
+        assert!(full(&his),"the first input of a session lacks the full blocks: {his}");
+
+        for notice in ["first-notice","second-notice"] {
+            let added=turn(&mut rich,notice,crate::ledger::Source::Internal);
+            assert!(added.len()/4<1000,"an idle notice added {} tokens (chars/4) of context:\n{added}",added.len()/4);
+            assert!(!added.contains("</executive-continuity>"),"the notice repeated the continuity block:\n{added}");
+            assert!(!added.contains("company-notes-end-marker"),"the notice repeated the company notes:\n{added}");
+        }
+
+        // The provider compacts while taking this notice in: its own copy and every earlier one
+        // are summarized away, so the next input carries the full blocks again, once.
+        turn(&mut rich,"notice-that-compacts",crate::ledger::Source::Internal);
+        let after=turn(&mut rich,"after-compaction",crate::ledger::Source::Internal);
+        assert!(full(&after),"the first input after a compaction lacks the full blocks: {after}");
+        let next=turn(&mut rich,"next-notice",crate::ledger::Source::Internal);
+        assert!(!full(&next) && next.len()/4<1000,"the full blocks were given twice after one compaction: {next}");
+
+        // A new session (a rotation, or the app started again) holds no earlier copy.
+        drop(rich);
+        let mut again=start("again-scope.json");
+        let first=turn(&mut again,"new-session-first",crate::ledger::Source::Internal);
+        assert!(full(&first),"a new session's first input lacks the full blocks: {first}");
     }
 
 
