@@ -2402,10 +2402,9 @@ pub(crate) mod tests {
 
     /// **A model with an episode of its own hands off at what it measured** (the second review of
     /// 0e2a10356, its fixture through the service). 40M Opus cache reads for one point, then 4M
-    /// Sonnet input for the next ($8 of card each): Sonnet is 4M a point on main, 4.32M here (the
-    /// card moves it a little). Then 7.6M Sonnet tokens in the last minute: 1.9 points a minute on
-    /// main, 99 - (ceil(1.9 x 6 = 11.4) - 1) = 88; 1.76 here, fast, I = 1 minute:
-    /// 99 - (ceil(1.76 x 6 = 10.6) - 1) = 89; Work at 89% is left either way. 0e2a10356 let the
+    /// Sonnet input for the next ($8 of card each): Sonnet is 4M a point, as on main (its episode
+    /// measures it). Then 7.6M Sonnet tokens in the last minute: 1.9 points a minute, fast,
+    /// I = 1 minute: 99 - (ceil(1.9 x 6 = 11.4) - 1) = 88; Work at 89% is left. 0e2a10356 let the
     /// card pull Sonnet to 5.97M (1.27 a minute, point 92: Work at 89% kept running). (7.6M, not
     /// the review's 8M: 2.0 a minute exactly would put main's point on f64's rounding.)
     #[test]
@@ -2460,8 +2459,8 @@ pub(crate) mod tests {
     /// against Opus 5.5's 40M) that is 0.1875 a minute, not fast, so I = 5 minutes and H 5:
     /// 99 - (ceil(0.1875 x 10 = 1.875) - 1) = 98, and Work at 3% is not left. Main fitted Fable
     /// at a few thousand tokens a point (point 0); d22fc43f8 held it at its worst-case bound,
-    /// 147,761 (20.3 a minute, point 0). Read from its card at Work's dearest point (19.89M; the
-    /// two episodes move it to 16.70M): 0.180 a minute, ceil(1.80) - 1 = 1, point 98.
+    /// 147,761 (20.3 a minute, point 0). Read from its card at Work's dearest point (19.89M; two
+    /// episodes cannot measure three models): 0.151 a minute, ceil(1.51) - 1 = 1, point 98.
     #[test]
     fn a_late_minority_result_does_not_hand_off_an_account_with_room() {
         let root = Scratch::new();
