@@ -508,6 +508,22 @@ def resolve(entity_root, target):
                          "the agent's; the lock proves the session runs, not that this agent does"
                          % (reg["name"] or rec.get("agent_id"), reg["why"],
                             rec["evidence"].get("pid", "unrecorded")))
+    elif reg and not reg["finished"] and rec["verdict"] == NOT_ALIVE \
+            and not rec["evidence"].get("registered"):
+        # A WORKER WITH NO ISOLATION WORKTREE AT ALL (2026-10-29 08:31Z). An app worker, and any
+        # teammate given a cc/ workspace, runs in a registered workspace, never in the entity's
+        # .claude/worktrees/agent-<id>, so there is no lock to read: "no registered entity
+        # worktree" is the absence of a lock, not the end of a run. The registry is the one
+        # source that knows such an agent, and it decides "finished" (point 11), its session's
+        # liveness included (point 12): not finished is a running agent. (echo-opus-ff00122b4923
+        # was reported NOT-ALIVE while it wrote 3.79 MB of transcript that second.)
+        rec["evidence"]["lock_verdict"] = rec["verdict"]
+        rec["evidence"]["lock_reason"] = rec["reason"]
+        rec["verdict"] = ALIVE
+        rec["reason"] = ("the workspace registry records %s as not finished (%s)%s; it has no isolation "
+                         "worktree to lock (a registered cc/ workspace), so the registry alone decides"
+                         % (reg["name"] or rec.get("agent_id"), reg["why"],
+                            ", paused by its lead" if reg["paused"] else ""))
     elif reg and not reg["finished"] and rec["verdict"] == NOT_ALIVE:
         rec.setdefault("disagreements", []).append(
             "the workspace registry records %s as not finished (%s) while the lock reads NOT-ALIVE "

@@ -2583,6 +2583,48 @@ def _platform_projects_dir():
         "projects")
 
 
+def _platform_projects_dirs():
+    """EVERY projects folder an agent's transcript can be in, this process's own first.
+
+    2026-10-29 08:28Z: stall-watch called three live app workers SILENT, "no transcript
+    found for it", while each ran a command and wrote its transcript. Their lead's session
+    had started under the default account and writes ~/.claude/projects/...; the watcher,
+    after the switch to an added account, ran with CLAUDE_CONFIG_DIR=<app data>/claude-
+    accounts/2 and looked only there. A session keeps the folder it started in, so every
+    account's folder is looked in: the default ~/.claude, the added accounts beside
+    CLAUDE_CONFIG_DIR, and those of the app whose state RICHOS_APP_STATE names.
+    RICHOS_PROJECTS_DIR, when set, is the only one (a fixture's or a pinned home's)."""
+    pinned = (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip()
+    if pinned:
+        return [pinned]
+    out = [_platform_projects_dir(), os.path.join(os.path.expanduser("~"), ".claude", "projects")]
+    homes = []
+    config = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
+    if config and os.path.basename(os.path.dirname(os.path.normpath(config))) == "claude-accounts":
+        homes.append(os.path.dirname(os.path.normpath(config)))
+    state = (os.environ.get("RICHOS_APP_STATE") or "").strip()
+    if state:
+        homes.append(os.path.join(os.path.dirname(os.path.normpath(state)), "claude-accounts"))
+    for home in homes:
+        out += sorted(glob.glob(os.path.join(home, "*", "projects")))
+    seen, dirs = set(), []
+    for d in out:
+        real = os.path.realpath(d)
+        if real not in seen and os.path.isdir(real):
+            seen.add(real)
+            dirs.append(d)
+    return dirs
+
+
+def _agent_leaf_patterns(rec, leaf):
+    """Glob patterns for a per-agent file the platform writes: under the record's session in
+    every projects folder first, then under any session."""
+    sid = (rec.get("session_id") or "").strip()
+    bases = _platform_projects_dirs()
+    pats = [os.path.join(b, "*", sid, leaf) for b in bases] if sid and "/" not in sid else []
+    return pats + [os.path.join(b, "*", "*", leaf) for b in bases]
+
+
 def platform_agent_record(rec):
     """The platform's OWN per-agent record, which it writes beside the agent's
     transcript as <projects>/<project>/<session>/subagents/agent-<id>.meta.json
@@ -2591,13 +2633,7 @@ def platform_agent_record(rec):
     if not AGENT_ID_RE.match(aid):
         return None
     leaf = os.path.join("subagents", "agent-%s.meta.json" % aid)
-    base = _platform_projects_dir()
-    pats = []
-    sid = (rec.get("session_id") or "").strip()
-    if sid and "/" not in sid:
-        pats.append(os.path.join(base, "*", sid, leaf))
-    pats.append(os.path.join(base, "*", "*", leaf))
-    for pat in pats:
+    for pat in _agent_leaf_patterns(rec, leaf):
         for p in sorted(glob.glob(pat)):
             d = read_json(p)
             if d is not None:
@@ -2638,13 +2674,7 @@ def platform_agent_transcript(rec):
     if not AGENT_ID_RE.match(aid):
         return ""
     leaf = os.path.join("subagents", "agent-%s.jsonl" % aid)
-    base = _platform_projects_dir()
-    sid = (rec.get("session_id") or "").strip()
-    pats = []
-    if sid and "/" not in sid:
-        pats.append(os.path.join(base, "*", sid, leaf))
-    pats.append(os.path.join(base, "*", "*", leaf))
-    for pat in pats:
+    for pat in _agent_leaf_patterns(rec, leaf):
         for p in sorted(glob.glob(pat)):
             if os.path.isfile(p):
                 return p

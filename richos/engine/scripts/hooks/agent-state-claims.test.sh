@@ -394,13 +394,18 @@ mutate_lib() { # <python-replacement-expr>
 import sys
 p, old, new = sys.argv[1:4]
 s = open(p, encoding="utf-8").read()
-assert old in s, "mutation target not found: %r" % old
+# Exactly once: a target that also matches a line added later mutates whichever comes first,
+# and the case then "proves nothing" for a reason that has nothing to do with it (2026-10-30:
+# the registry branch's own `rec["verdict"] = ALIVE` took R1's mutation from the held lock).
+assert s.count(old) == 1, "mutation target must occur exactly once, found %d: %r" % (s.count(old), old)
 open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
 PY
 }
 mirror_verdict() { python3 "$MIRROR/scripts/lib/agent-liveness.py" --entity "$ENTITY" --owner "$1" --format triple | cut -f1; }
 
-mutate_lib '        rec["verdict"] = ALIVE' '        rec["verdict"] = NOT_ALIVE'
+mutate_lib '    elif alive:
+        rec["verdict"] = ALIVE' '    elif alive:
+        rec["verdict"] = NOT_ALIVE'
 if [ "$(mirror_verdict "$ID_LIVE")" != "ALIVE" ]; then
     ok "R1 MUTANT 'a held lock is not alive' -> flips A1 (survivor: none)"
 else
@@ -456,7 +461,7 @@ mutate_analyzer() { # <old> <new>
 import sys
 p, old, new = sys.argv[1:4]
 s = open(p, encoding="utf-8").read()
-assert old in s, "mutation target not found: %r" % old
+assert s.count(old) == 1, "mutation target must occur exactly once, found %d: %r" % (s.count(old), old)
 open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
 PY
 }
