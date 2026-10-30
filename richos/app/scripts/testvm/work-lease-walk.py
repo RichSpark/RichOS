@@ -64,8 +64,8 @@ STEPS = ['identity', 'first-run', 'job', 'idle', 'reload', 'monitor', 'fail', 'a
 # An ordinary request after the monitor was killed, worded as srw.JOB is.
 AFTER_JOB = ('Please add a file named more.md whose whole content is the line "More notes for the walk test." '
              'to the Acme repository and commit it, and land it.')
-# The Git name card's answer that keeps the stand-in name (ui/git-name.js, `#git-name-skip`).
-GIT_NAME_ANSWER = 'Use “RichOS” instead'
+# The Git name card's answer lives in command-walk.py (CommandWalk.answer_git_name_card).
+GIT_NAME_ANSWER = srw.command_walk.GIT_NAME_ANSWER
 
 
 def kept_paths(home, data):
@@ -104,19 +104,6 @@ ROWS = ('import glob,json,sys\n'
 
 
 class WorkLeaseWalk(srw.StuReminderWalk):
-    def approve_if_asked(self, title):
-        """A person's answers while the job runs: the Git name card once, then the assignment's Approve.
-
-        The team's first save in a folder with no Git name waits for the user's answer to that card
-        (ui/git-name.js, git_name.rs, nightly 75). Nightly 75's first run of this walk left it
-        unanswered: Norm's commit waited 11 minutes and the job was still running at 1200 s. The walk
-        answers it as a user may, with the card's own "Use RichOS" button, once."""
-        if 'git_name_answered_ms' not in self.facts and self.present(GIT_NAME_ANSWER):
-            self.press(GIT_NAME_ANSWER)
-            self.facts['git_name_answered_ms'] = round(self.clock())
-            self.save()
-        return super().approve_if_asked(title)
-
     def inbox(self, sender):
         return json.loads(guest(self.vm, 'python3 -c %s %s %s %s' % (
             shlex.quote(ROWS), shlex.quote(self.data), shlex.quote(self.facts['thread']), shlex.quote(sender)), 120) or '[]')
