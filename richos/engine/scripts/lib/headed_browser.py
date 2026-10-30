@@ -35,10 +35,29 @@ file (CLAUDE_CONFIG_DIR/.claude.json or ~/.claude.json: top level and the cwd's 
 Claude in Chrome extension (mcp__claude-in-chrome__*) is the user's own browser, opened by the
 user, and is not judged here.
 
-What passes: headless runs (Playwright and Puppeteer launch headless by default), `--headless`
-Chrome, a mention (echo, grep, a commit message, a comment), `open <url>` (the user's own
-browser), and anything sent to the test VM: a segment whose command word is ssh/scp/sftp or a
-script under a `testvm/` path runs in the guest.
+HEADLESS IS NOT ENOUGH FOR THE FULL CHROME APP (2026-10-29). A suite started the full Chrome for
+Testing app with --headless=new, and macOS put "Google Chrome for Testing" and "... Helper (Alerts)"
+notification permission prompts on the CEO's screen: new-headless Chrome is the whole app bundle,
+and its macOS notification bridge checks in with Notification Center at startup. So, on Bash:
+  7. a Chromium-family binary (Chrome, Chrome for Testing, Chromium, Edge, Brave) started with
+     --headless but without --disable-features=NativeNotifications,SystemNotifications (in the LAST
+     --disable-features, the only one Chrome keeps), --disable-notifications, or a --user-data-dir
+     that is not a real browser profile (Library/Application Support/...) is refused;
+  8. code that starts the full app without those switches: Playwright with `channel: 'chromium'`
+     (or a beta/dev/canary channel) or an executablePath to Chrome for Testing / Chromium,
+     Puppeteer's launch unless `headless: 'shell'`, and Selenium's Chrome driver;
+  9. `playwright screenshot|pdf --channel chromium` (and beta/dev/canary channels).
+And on MCP: a launching Puppeteer server (Puppeteer starts Chrome for Testing) unless its launch
+options use the headless shell or carry SystemNotifications, and a Playwright or DevTools server
+given an executable path or a beta/dev/canary/chromium channel without that evidence.
+Playwright's default Chromium (the headless shell, a plain binary with no app bundle) and the
+user's own installed Chrome or Edge channel are not judged by this part. The same rule for suites
+is richos/app/ui/tests/lib/quiet-browser.js.
+
+What passes: headless runs (Playwright launches headless by default), `--headless` Chrome with the
+notification switches and a throwaway profile, a mention (echo, grep, a commit message, a comment),
+`open <url>` (the user's own browser), and anything sent to the test VM: a segment whose command
+word is ssh/scp/sftp or a script under a `testvm/` path runs in the guest.
 
 IT IS A TEXT MATCH AND LEAKS (a config value computed at run time, a script that imports the
 launcher from another file, eval). Its job is to stop the habitual command. Any error in the
@@ -73,10 +92,88 @@ PLAYWRIGHT_CONFIGS = ("playwright.config.ts", "playwright.config.js", "playwrigh
                       "playwright.config.cjs", "playwright.config.mts")
 COMMENT_LINE = re.compile(r"^\s*(?://|#|\*|/\*)")
 
+# --- the full Chrome app and macOS Notification Center (2026-10-29) ---------------------------
+CHROMIUM_BINARIES = re.compile(
+    r"^(?:google chrome(?: canary| beta| dev| for testing)?|chromium(?:-browser)?|chrome|"
+    r"google-chrome(?:-stable|-beta|-unstable)?|microsoft edge|msedge|brave browser|brave)$", re.I)
+NOTIFICATION_FEATURES = ("NativeNotifications", "SystemNotifications")
+REAL_PROFILE = re.compile(r"Library/Application Support/|\.config/(?:google-chrome|chromium)", re.I)
+# Channels that start a Chrome the user has likely never run: Chrome for Testing ("chromium") and
+# the beta/dev/canary builds. The stable `chrome` / `msedge` channel is the user's own browser.
+FULL_APP_CHANNEL = r"(?:chromium[\w-]*|chrome-(?:beta|dev|canary)|msedge-(?:beta|dev|canary))"
+# Quotes are optional throughout: inline code reaches this check with its quotes removed.
+CODE_FULL_CHANNEL = re.compile(r"""\bchannel['"]?\s*[:=]\s*['"]?%s(?![\w-])""" % FULL_APP_CHANNEL)
+CODE_FULL_EXECUTABLE = re.compile(r"""executable_?[Pp]ath['"]?\s*[:=]\s*['"]?[^,)}\n'"]*(?:Chrome for Testing|Chromium)""")
+PUPPETEER_IMPORT = re.compile(r"""(?:require\(\s*['"]?puppeteer['"]?\s*\)|from\s+['"]?puppeteer\b|import\s+puppeteer\b|\bpyppeteer\b)""")
+PUPPETEER_SHELL = re.compile(r"""headless['"]?\s*:\s*['"]?shell\b""")
+SELENIUM_CHROME = re.compile(r"""\bwebdriver\.Chrome\s*\(|forBrowser\(\s*['"]?chrome\b|\bChromeOptions\s*\(""")
+NOTIFY_ADVICE = ("which registers the app with macOS Notification Center, and macOS asks the user to "
+                 "allow its notifications. Use Playwright's default Chromium (the headless shell), or "
+                 "give the full app --disable-features=NativeNotifications,SystemNotifications, "
+                 "--disable-notifications and a --user-data-dir in $TMPDIR")
+
+
+def _notification_problems(args):
+    """What a headless Chromium-family launch with `args` lacks to stay away from Notification Center."""
+    out = []
+    features = None
+    for a in args:
+        if a.startswith("--disable-features="):
+            features = a.split("=", 1)[1]
+    missing = [f for f in NOTIFICATION_FEATURES if f not in (features or "").split(",")]
+    if missing:
+        out.append("starts the full browser app without --disable-features=%s (in its last "
+                   "--disable-features, the only one Chrome keeps), %s" % (",".join(NOTIFICATION_FEATURES), NOTIFY_ADVICE))
+    elif "--disable-notifications" not in args:
+        out.append("starts the full browser app without --disable-notifications")
+    profile = None
+    for a in args:
+        if a.startswith("--user-data-dir="):
+            profile = a.split("=", 1)[1]
+    if profile is None:
+        out.append("starts the full browser app on the user's real profile (add --user-data-dir=<a new folder in $TMPDIR>)")
+    elif REAL_PROFILE.search(profile):
+        out.append("starts the full browser app on a real browser profile (%s); use a new folder in $TMPDIR" % profile)
+    return out
+
+
+def _config_has_notification_switches(cwd, args):
+    """True when a --config file named among `args` (Playwright MCP / playwright-cli) carries the
+    notification switches in its launch options."""
+    for k, a in enumerate(args):
+        path = a.split("=", 1)[1] if a.startswith("--config=") else \
+            (args[k + 1] if a == "--config" and k + 1 < len(args) else None)
+        if path:
+            full = _resolve(cwd, _unquote(path))
+            text = _read(full) if full else None
+            if text and "SystemNotifications" in text and "NativeNotifications" in text:
+                return True
+    return False
+
+
+def _full_app_code_findings(code, where):
+    """Code that starts the full Chrome app without the notification switches."""
+    if "SystemNotifications" in code:
+        return []
+    m = CODE_FULL_CHANNEL.search(code)
+    if m:
+        return ["%s launches `%s`, the full Chrome app, %s" % (where, m.group(0), NOTIFY_ADVICE)]
+    m = CODE_FULL_EXECUTABLE.search(code)
+    if m:
+        return ["%s launches the full Chrome app by executablePath, %s" % (where, NOTIFY_ADVICE)]
+    if PUPPETEER_IMPORT.search(code) and re.search(r"\.launch\s*\(", code) and not PUPPETEER_SHELL.search(code):
+        return ["%s starts Puppeteer's browser, the full Chrome for Testing app unless `headless: 'shell'`, %s"
+                % (where, NOTIFY_ADVICE)]
+    if SELENIUM_CHROME.search(code):
+        return ["%s starts Chrome through Selenium (the full app, or Chrome for Testing that Selenium "
+                "Manager downloads), %s" % (where, NOTIFY_ADVICE)]
+    return []
+
 
 def _code_findings(text, where):
     """Reasons for source text that opens a visible window: a headless: false outside a comment,
-    or a Selenium driver in code that never mentions headless."""
+    or a Selenium driver in code that never mentions headless; then code that starts the full
+    Chrome app without the notification switches."""
     out = []
     for n, line in enumerate(text.splitlines(), 1):
         if COMMENT_LINE.match(line):
@@ -86,6 +183,9 @@ def _code_findings(text, where):
             break
     if not out and SELENIUM_DRIVER.search(text) and "headless" not in text:
         out.append("%s starts a Selenium browser with no headless option" % where)
+    if not out:
+        code = "\n".join(line for line in text.splitlines() if not COMMENT_LINE.match(line))
+        out.extend(_full_app_code_findings(code, where))
     return out
 
 
@@ -140,18 +240,33 @@ def _assignments(words):
     return out
 
 
-def _playwright_args(argv):
-    """argv after the `playwright` word, or None when this is not a Playwright CLI call."""
-    name = os.path.basename(argv[0])
+def _package_name(word):
+    """A package word without its version: `playwright@latest` -> `playwright`,
+    `@playwright/test@1.49.0` -> `@playwright/test` (review: `npx playwright@latest codegen` passed)."""
+    return re.sub(r"(?<=.)@[^/@]*$", "", word)
+
+
+def _playwright_tool(argv):
+    """(tool, argv after it) for a Playwright CLI call, tool being `playwright` or `playwright-cli`;
+    (None, None) otherwise."""
+    name = _package_name(os.path.basename(argv[0]))
     if name in ("playwright", "playwright-cli"):
-        return argv[1:]
+        return name, argv[1:]
     if name in PACKAGE_RUNNERS:
         rest = [a for a in argv[1:]]
         while rest and (rest[0].startswith("-") or rest[0] in ("exec", "dlx", "x")):
             rest = rest[1:]
-        if rest and rest[0] in ("playwright", "@playwright/test", "playwright-cli", "@playwright/cli"):
-            return rest[1:]
-    return None
+        pkg = _package_name(rest[0]) if rest else ""
+        if pkg in ("playwright", "@playwright/test"):
+            return "playwright", rest[1:]
+        if pkg in ("playwright-cli", "@playwright/cli"):
+            return "playwright-cli", rest[1:]
+    return None, None
+
+
+def _playwright_args(argv):
+    """argv after the `playwright` word, or None when this is not a Playwright CLI call."""
+    return _playwright_tool(argv)[1]
 
 
 def _package_script(ctx, argv, depth):
@@ -213,12 +328,22 @@ def judge(ctx, words, depth):
         if HEADED_FLAG.match(a):
             ctx.add("`%s`: %s opens a visible browser window" % (shown, a))
             break
-    pw = _playwright_args(argv)
+    tool, pw = _playwright_tool(argv)
     if pw is not None:
         positional = [a for a in pw if not a.startswith("-")]
-        if positional and positional[0] in PLAYWRIGHT_WINDOW_SUBCOMMANDS and \
-                os.path.basename(argv[0]) != "playwright-cli":
+        if positional and positional[0] in PLAYWRIGHT_WINDOW_SUBCOMMANDS and tool != "playwright-cli":
             ctx.add("`%s`: `playwright %s` always opens a window" % (shown, positional[0]))
+        # `playwright screenshot --channel chromium`, `playwright-cli open --browser=chromium`: both
+        # start the full Chrome for Testing app (Playwright's MCP config maps --browser chromium to
+        # channel "chromium"). playwright-cli can carry the switches in its --config file.
+        option = "--channel" if tool == "playwright" else "--browser"
+        for k, a in enumerate(pw):
+            value = a.split("=", 1)[1] if a.startswith(option + "=") else \
+                (pw[k + 1] if a == option and k + 1 < len(pw) else None)
+            if value and re.fullmatch(FULL_APP_CHANNEL, _unquote(value)) and \
+                    not _config_has_notification_switches(ctx.cwd, pw):
+                ctx.add("`%s`: %s %s starts the full Chrome app, %s" % (shown, option, value, NOTIFY_ADVICE))
+                break
         if positional and positional[0] == "test":
             for flag in ("--ui", "--debug"):
                 if flag in pw:
@@ -238,6 +363,9 @@ def judge(ctx, words, depth):
     if BROWSER_BINARIES.match(name):
         if not any(a.startswith("--headless") and not HEADED_FLAG.match(a) for a in argv[1:]):
             ctx.add("`%s`: starts the browser with a window (add --headless)" % shown)
+        elif CHROMIUM_BINARIES.match(name):
+            for reason in _notification_problems([_unquote(a) for a in argv[1:]]):
+                ctx.add("`%s`: %s" % (shown, reason))
         return
     if name == "open":
         args = argv[1:]
@@ -325,23 +453,28 @@ TRIGGER = re.compile(r"headless|headed|HEADED|PWDEBUG|playwright|puppeteer|webdr
                      r"python|tsx|ts-node|deno|bun", re.I)
 
 ADVICE = """
-Browser automation on this Mac runs headless, always: a window an agent opens appears in front of
-the person using the Mac.
+Nothing an agent or a test runs shows anything on this Mac's screen: not a browser window, and not
+a notification or a notification permission prompt. Browser automation here runs headless, and a
+full Chrome app runs with its notification bridge off.
 
 What to do instead:
-  * Run it headless: drop --headed and `headless: false` (Playwright and Puppeteer launch headless
-    by default; Chrome takes --headless=new). Screenshots, traces and videos work the same.
+  * Run it headless: drop --headed and `headless: false` (Playwright launches headless by default;
+    Chrome takes --headless=new). Screenshots, traces and videos work the same.
+  * Prefer Playwright's default Chromium (the headless shell: no app bundle, no notifications).
+    A full Chrome, Chrome for Testing or Chromium app also needs
+    --disable-features=NativeNotifications,SystemNotifications --disable-notifications
+    and a --user-data-dir in $TMPDIR; Puppeteer takes headless: 'shell'.
   * A check that needs a real window: run it in the test VM (ssh <vm> '...' or a testvm/ script),
     whose screen is the test screen.
 """
 
-REFUSAL = ("REFUSED (guard-headed-browser): this command would open a visible browser window on "
-           "this Mac's screen. Nothing ran.\n  - %s\n" + ADVICE)
+REFUSAL = ("REFUSED (guard-headed-browser): this command would put a browser window or notification "
+           "prompt on this Mac's screen. Nothing ran.\n  - %s\n" + ADVICE)
 
-MCP_REFUSAL = ("REFUSED (guard-headed-browser): `%s` drives a browser that opens a visible window on "
-               "this Mac's screen. Nothing ran.\n  - %s\n" + ADVICE +
-               "  * For this MCP server: add --headless to its args in the MCP configuration and "
-               "restart the session.\n")
+MCP_REFUSAL = ("REFUSED (guard-headed-browser): `%s` drives a browser that would put a window or "
+               "notification prompt on this Mac's screen. Nothing ran.\n  - %s\n" + ADVICE +
+               "  * For this MCP server: add --headless (and, for a full Chrome app, the switches "
+               "above) to its launch configuration and restart the session.\n")
 
 
 def check(payload_text):
@@ -431,19 +564,45 @@ def mcp_verdict(tool_name, cwd):
                 "(.mcp.json or Claude Code's config) does not show --headless" % server)
     args = [str(a) for a in (config.get("args") or [])]
     env = config.get("env") or {}
-    if any(a.lower() in ("--headless", "--headless=true", "--headless=new", "--headless=shell")
-           for a in args):
-        return None
     if any(ATTACH_FLAGS.match(a) for a in args):
         return None
     if config.get("url") or config.get("type") in ("http", "sse"):
         return None  # a remote server: its browser is not on this Mac
-    if re.search(r'"headless"\s*:\s*(?:true|"new"|"shell")', str(env.get("PUPPETEER_LAUNCH_OPTIONS", ""))):
+    headless = (
+        any(a.lower() in ("--headless", "--headless=true", "--headless=new", "--headless=shell") for a in args)
+        or re.search(r'"headless"\s*:\s*(?:true|"new"|"shell")', str(env.get("PUPPETEER_LAUNCH_OPTIONS", "")))
+        or str(env.get("HEADLESS", "")).lower() in ("1", "true", "yes"))
+    if not headless:
+        return ("the browser server `%s` is configured without --headless, so it opens a visible window"
+                % server)
+    return _mcp_notification_problem(server, launch, args, env, cwd)
+
+
+def _mcp_notification_problem(server, launch, args, env, cwd):
+    """A headless launching browser server that starts the full Chrome app without the notification
+    switches (2026-10-29): Puppeteer (Chrome for Testing unless the headless shell), or a server
+    given an executable path or a chromium/beta/dev/canary browser or channel."""
+    evidence = " ".join([launch] + [str(v) for v in env.values()])
+    if "SystemNotifications" in evidence and "NativeNotifications" in evidence:
         return None
-    if str(env.get("HEADLESS", "")).lower() in ("1", "true", "yes"):
+    if _config_has_notification_switches(cwd, args):
         return None
-    return ("the browser server `%s` is configured without --headless, so it opens a visible window"
-            % server)
+    why = None
+    if re.search(r"puppeteer", server + " " + launch, re.I) and \
+            not re.search(r'"headless"\s*:\s*"shell"', str(env.get("PUPPETEER_LAUNCH_OPTIONS", ""))):
+        why = "launches Puppeteer's Chrome for Testing, the full app"
+    for k, a in enumerate(args):
+        if re.match(r"^--(?:executable-path|executablePath)(?:=|$)", a):
+            why = why or "launches the browser at an executable path"
+        for option in ("--browser", "--channel"):
+            value = a.split("=", 1)[1] if a.startswith(option + "=") else \
+                (args[k + 1] if a == option and k + 1 < len(args) else None)
+            if value and re.fullmatch(FULL_APP_CHANNEL, value):
+                why = why or "launches the `%s` build, the full Chrome app" % value
+    if not why:
+        return None
+    return ("the browser server `%s` %s, %s (for this server: in its launch options or config file)"
+            % (server, why, NOTIFY_ADVICE))
 
 
 def check_mcp(payload_text):

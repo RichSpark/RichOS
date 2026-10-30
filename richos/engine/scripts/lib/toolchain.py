@@ -196,30 +196,111 @@ def _words():
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
 
 
+def _expand(value, env):
+    """$NAME and ${NAME} in a command-local assignment, from the environment it is made in."""
+    return re.sub(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", lambda m: env.get(m.group(1), ""), value)
+
+
+def effective(words, env):
+    """-> (argv from the command word, the environment that command runs with).
+
+    The shared prefix stripper drops `NAME=value` assignments and `env` options; this keeps them
+    (review 2026-10-29: `env -i PATH=/usr/bin:/bin git status` was resolved with the hook's own
+    PATH, where the app's bundled git comes first, and passed, while the shell ran Apple's stub).
+    `env -i` / `env -` clears the environment; `env -u NAME` unsets; `env -P path` (BSD) names the
+    search path; an environment without PATH searches the system default /usr/bin:/bin."""
+    from host_sleep import WRAPPERS, _OPTS_WITH_ARG, _POSITIONAL_VALUE, _ENV_ASSIGN, _unquote  # noqa: E402
+    env = dict(env)
+    search = None
+    i = 0
+    while i < len(words):
+        w = _unquote(words[i])
+        if _ENV_ASSIGN.match(w):
+            k, _, v = w.partition("=")
+            env[k] = _expand(v, env)
+            i += 1
+            continue
+        base = os.path.basename(w)
+        if base not in WRAPPERS:
+            break
+        i += 1
+        opts = _OPTS_WITH_ARG.get(base, set())
+        while i < len(words):
+            t = _unquote(words[i])
+            if base == "env":
+                if _ENV_ASSIGN.match(t):
+                    k, _, v = t.partition("=")
+                    env[k] = _expand(v, env)
+                    i += 1
+                    continue
+                if t in ("-i", "-", "--ignore-environment"):
+                    env = {}
+                    i += 1
+                    continue
+                if t == "-u" and i + 1 < len(words):
+                    env.pop(_unquote(words[i + 1]), None)
+                    i += 2
+                    continue
+                if t.startswith("--unset="):
+                    env.pop(t.split("=", 1)[1], None)
+                    i += 1
+                    continue
+                if t == "-P" and i + 1 < len(words):
+                    search = _unquote(words[i + 1])
+                    i += 2
+                    continue
+            if t == "--":
+                i += 1
+                break
+            if t.startswith("-") and len(t) > 1:
+                i += 2 if (t in opts and "=" not in t) else 1
+                continue
+            break
+        if base in _POSITIONAL_VALUE and i < len(words):
+            i += 1  # the duration
+    argv = [_unquote(w) for w in words[i:]]
+    lookup = dict(env)
+    if search is not None:
+        lookup["PATH"] = search
+    elif "PATH" not in lookup:
+        lookup["PATH"] = os.pathsep.join([_root() + "/usr/bin", _root() + "/bin"])
+    return argv, lookup
+
+
 def _scan(text, env, found, depth=0):
     if depth > 6:
         return
-    strip, tokenize = _words()
+    _strip, tokenize = _words()
     cmds, nested = tokenize(text)
+    env = dict(env)
     for words in cmds:
-        argv = strip(words)
-        if not argv:
+        argv, local = effective(words, env)
+        if not argv or argv[0] == "export":
+            # `PATH=/usr/bin:/bin; git status` and `export PATH=...`: the assignment lasts for the
+            # rest of the text, so later commands resolve with it.
+            for a in (words if not argv else argv[1:]):
+                a = a.strip("'\"")
+                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", a):
+                    k, _, v = a.partition("=")
+                    env[k] = _expand(v.strip("'\""), env)
             continue
         name = os.path.basename(argv[0])
         if name in SHELLS:
             for k, a in enumerate(argv[1:], 1):
                 if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a) and k + 1 < len(argv):
-                    _scan(argv[k + 1], env, found, depth + 1)
+                    _scan(argv[k + 1], local, found, depth + 1)
                     break
             continue
         if name in ("ssh", "scp", "sftp") or re.search(r"(?:^|/)testvm/", argv[0]):
             continue  # runs in the guest, whose tools are its own
         if name == "xcode-select" and any(a in ("--install", "-install") for a in argv[1:]):
-            found.append(("install", "xcode-select", " ".join(argv)[:120]))
+            found.append(("install", "xcode-select", " ".join(argv)[:120], local))
             continue
-        stub = stub_name(argv[0], env)
+        # Resolved in the command's OWN environment: its PATH picks the executable and its
+        # DEVELOPER_DIR picks the toolchain (review 2026-10-29, `env -i PATH=/usr/bin:/bin git`).
+        stub = stub_name(argv[0], local)
         if stub:
-            found.append(("stub", stub, " ".join(argv)[:120]))
+            found.append(("stub", stub, " ".join(argv)[:120], local))
     for body in nested:
         _scan(body, env, found, depth + 1)
 
@@ -257,14 +338,14 @@ def verdict(command, env):
     """-> (exit code, message). 0 passes, 2 refuses."""
     found = []
     _scan(command, env, found)
-    for kind, tool, shown in found:
+    for kind, tool, shown, _local in found:
         if kind == "install":
             return 2, INSTALL_REFUSAL.format(command=shown)
-    for kind, tool, shown in found:
-        directory, source = developer_dir(env)
+    for kind, tool, shown, local in found:
+        directory, source = developer_dir(local)
         where = tool_path(directory, tool)
         if where:
-            given = (env.get("DEVELOPER_DIR") or "").strip()
+            given = (local.get("DEVELOPER_DIR") or "").strip()
             if given and not usable(given):
                 return 2, MISCONFIGURED.format(given=given, tool=tool, found=directory)
             record_found(env, tool, where)
@@ -284,6 +365,10 @@ TRIGGER = re.compile(r"(?<![\w.-])(?:%s)(?![\w-])|xcode-select" % "|".join(re.es
 def check(payload_text, env=None):
     """PreToolUse[Bash]: 2 with the message on stderr, else 0. Unreadable input passes."""
     env = os.environ if env is None else env
+    if env.get("RICHOS_TOOLCHAIN_CALLER_PATH") is not None:
+        # The hook puts its own python first on PATH; the command runs with the caller's PATH.
+        env = dict(env, PATH=env["RICHOS_TOOLCHAIN_CALLER_PATH"])
+        env.pop("RICHOS_TOOLCHAIN_CALLER_PATH", None)
     try:
         payload = json.loads(payload_text)
     except ValueError:

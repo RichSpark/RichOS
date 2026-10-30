@@ -2,7 +2,9 @@
 #
 # guard-toolchain.sh: PreToolUse[Bash] rule (a module of dispatch-pretooluse.sh).
 # NO AGENT COMMAND REACHES AN APPLE DEVELOPER-TOOLS STUB WITHOUT A TOOLCHAIN BEHIND IT.
-# dispatch-words: make git cc clang python3 swift xcrun xcodebuild xcode-select
+# dispatch-words: 2to3 actool agvtool ar as bison c++ c89 c99 cc clang clang++ cmpdylib codesign_allocate cpp ctags dsymutil dwarfdump flex g++ gcc gdb git git-receive-pack git-shell git-upload-archive git-upload-pack gm4 gnumake gperf ibtool indent install_name_tool ld lex libtool lipo lldb m4 make mig nm otool pip3 pydoc3 python3 python3-config ranlib rpcgen scalar segedit size strings strip svn swift swiftc unifdef unifdefall xcode-select xcode-select-tool xcodebuild xcrun xctrace xed yacc
+# (every stub in scripts/lib/toolchain.py SHIMS: the dispatcher skips this rule for a call naming none
+# of them, so a stub missing here would reach Apple's installer; toolchain.test.py T11 holds it)
 #
 # On 2026-10-29 an /usr/bin stub (make) ran where no developer directory was usable and macOS put
 # "The make command requires the command line developer tools" on the CEO's screen (§65). This
@@ -15,10 +17,22 @@
 # Any error in the check is a pass. Suite: scripts/lib/toolchain.test.sh.
 
 _gtc_in="$(cat)"
-# Cheap exit first: most commands name no stub at all.
+# Cheap exit first: most commands name no stub at all. EVERY stub in toolchain.py SHIMS is here
+# (a short name only as a word: followed by a non-word character, or last); toolchain.test.py
+# T11 runs the hook once per stub.
 case "$_gtc_in" in
-    *make*|*git*|*cc*|*clang*|*gcc*|*python3*|*pip3*|*swift*|*xcrun*|*xcodebuild*|*xcode-select*|\
-    *lldb*|*ld\ *|*ar\ *|*nm\ *|*strip*|*lipo*|*otool*|*bison*|*flex*|*m4*|*svn*|*ctags*|*c++*) ;;
+    *2to3*|*actool*|*agvtool*|*ar[!A-Za-z0-9_-]*|*ar|*as[!A-Za-z0-9_-]*|*as|*bison*|\
+    *c++[!A-Za-z0-9_-]*|*c++|*c89[!A-Za-z0-9_-]*|*c89|*c99[!A-Za-z0-9_-]*|*c99|\
+    *cc[!A-Za-z0-9_-]*|*cc|*clang*|*clang++*|*cmpdylib*|*codesign_allocate*|\
+    *cpp[!A-Za-z0-9_-]*|*cpp|*ctags*|*dsymutil*|*dwarfdump*|*flex*|*g++[!A-Za-z0-9_-]*|*g++|\
+    *gcc[!A-Za-z0-9_-]*|*gcc|*gdb[!A-Za-z0-9_-]*|*gdb|*git[!A-Za-z0-9_-]*|*git|*git-receive-pack*|\
+    *git-shell*|*git-upload-archive*|*git-upload-pack*|*gm4[!A-Za-z0-9_-]*|*gm4|*gnumake*|*gperf*|\
+    *ibtool*|*indent*|*install_name_tool*|*ld[!A-Za-z0-9_-]*|*ld|*lex[!A-Za-z0-9_-]*|*lex|*libtool*|\
+    *lipo*|*lldb*|*m4[!A-Za-z0-9_-]*|*m4|*make*|*mig[!A-Za-z0-9_-]*|*mig|*nm[!A-Za-z0-9_-]*|*nm|\
+    *otool*|*pip3*|*pydoc3*|*python3*|*python3-config*|*ranlib*|*rpcgen*|*scalar*|*segedit*|*size*|\
+    *strings*|*strip*|*svn[!A-Za-z0-9_-]*|*svn|*swift*|*swiftc*|*unifdef*|*unifdefall*|\
+    *xcode-select*|*xcode-select-tool*|*xcodebuild*|*xcrun*|*xctrace*|*xed[!A-Za-z0-9_-]*|*xed|\
+    *yacc*) ;;
     *) exit 0 ;;
 esac
 # No dirname: on a Mac without developer tools a scrubbed PATH may hold nothing beyond /bin.
@@ -39,6 +53,9 @@ for _gtc_d in $PATH; do
 done
 IFS="$_gtc_ifs"
 [ -n "$_gtc_py" ] || exit 0
+# The command is resolved with the caller's own PATH (review 2026-10-29: with the bundled python's
+# folder prepended, its pip3 hid the /usr/bin stub the agent's shell would actually run).
+_gtc_caller_path="$PATH"
 PATH="${_gtc_py%/*}:$PATH"
 _UE_LIB="$_gtc_dir/../lib/unevaluated-notice.sh"
 if [ -f "$_UE_LIB" ]; then
@@ -47,7 +64,7 @@ if [ -f "$_UE_LIB" ]; then
     unevaluated_or_continue "guard-toolchain.sh" "$_gtc_in" "" \
         "whether a Bash command runs an Apple developer-tools stub with no toolchain behind it"
 fi
-printf '%s' "$_gtc_in" | "$_gtc_py" -B "$_gtc_dir/../lib/toolchain.py" check
+printf '%s' "$_gtc_in" | RICHOS_TOOLCHAIN_CALLER_PATH="$_gtc_caller_path" "$_gtc_py" -B "$_gtc_dir/../lib/toolchain.py" check
 _gtc_rc=$?
 [ "$_gtc_rc" = 2 ] && exit 2
 exit 0

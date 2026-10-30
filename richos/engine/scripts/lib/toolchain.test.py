@@ -233,6 +233,74 @@ class FakeMac(unittest.TestCase):
         self.assertEqual(subprocess.run(["/bin/bash", HOOK], input=quiet, env=env, text=True).returncode, 0)
         self.no_stub()
 
+    def test_t11_the_dispatcher_runs_the_rule_for_every_stub(self):
+        # Review 2026-10-29: `# dispatch-words:` named nine tools, so the dispatcher skipped this
+        # rule for `pip3 install` and the stub opened the installer. The dispatcher looks for each
+        # word as a substring of the payload, so every stub name must CONTAIN one of the words.
+        with open(HOOK, encoding="utf-8") as fh:
+            words = next(l for l in fh if l.startswith("# dispatch-words:")).split(":", 1)[1].split()
+        uncovered = sorted(s for s in toolchain.SHIMS | {"xcode-select"} if not any(w in s for w in words))
+        self.assertEqual(uncovered, [], "the dispatcher would skip guard-toolchain for these stubs")
+        # The dispatcher's own skip code (the PYWORDS program in dispatch-pretooluse.sh), run as it
+        # runs there: it prints the modules it would NOT fork for this payload.
+        dispatcher = os.path.join(os.path.dirname(HOOK), "dispatch-pretooluse.sh")
+        with open(dispatcher, encoding="utf-8") as fh:
+            text = fh.read()
+        program = text.split("<<'PYWORDS'", 1)[1].split("\n", 1)[1].split("\nPYWORDS\n", 1)[0]
+        for command in ("pip3 install requests", "lldb ./a.out", "otool -L x", "xcodebuild -list"):
+            payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+            skipped = subprocess.run([sys.executable, "-c", program, os.path.dirname(HOOK), "guard-toolchain.sh"],
+                                     input=payload, capture_output=True, text=True).stdout.split()
+            self.assertNotIn("guard-toolchain.sh", skipped, "the dispatcher skips guard-toolchain for `%s`" % command)
+        # And the hook, run once per stub on a Mac without developer tools, stops every one of them:
+        # its own cheap prefilter names them all. The caller's PATH has the stubs BEFORE the python
+        # the hook runs on; the hook must resolve with that PATH, not with its python first (the
+        # test python's folder may hold a real pip3 that would hide the stub).
+        env = self.sanitized()
+        env["PATH"] = os.pathsep.join([os.path.join(self.root, "usr/bin"), os.path.dirname(sys.executable), "/bin"])
+        env.update({"RICHOS_TOOLCHAIN_ROOT": self.root})
+        missed = []
+        for name in sorted(toolchain.SHIMS):
+            self._write(os.path.join(self.root, "usr/bin", name), FAKE_STUB)
+            for command in ("%s --version" % name, name):
+                payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+                proc = subprocess.run(["/bin/bash", HOOK], input=payload, env=env, capture_output=True, text=True)
+                if proc.returncode != 2 or ("`%s`" % name) not in proc.stderr:
+                    missed.append("%s (rc %d)" % (command, proc.returncode))
+        self.assertEqual(missed, [], "the hook let these stubs through")
+        self.no_stub()
+
+    def test_t12_the_command_own_environment_picks_the_executable_and_the_toolchain(self):
+        # Review 2026-10-29: with another git first on the hook's PATH, `env -i PATH=/usr/bin:/bin
+        # git status` passed although the shell would run Apple's stub.
+        other = os.path.join(self.root, "opt/bin")
+        self._write(os.path.join(other, "git"), REAL_TOOL.format(label="bundled git"))
+        stubs = os.path.join(self.root, "usr/bin")
+        env = self.sanitized()
+        env["PATH"] = other + os.pathsep + env["PATH"]
+        self.assertEqual(self.guard("git status", env)[0], 0)
+        for command in ("env -i PATH=%s:/bin git status" % stubs,
+                        "PATH=%s git status" % stubs,
+                        "env -i git status",
+                        "nohup env -i git status",
+                        "export PATH=%s:/bin; git status" % stubs,
+                        "PATH=%s:/bin; git log" % stubs,
+                        "env -P %s git status" % stubs,
+                        "bash -c 'env -i git status'"):
+            rc, message = self.guard(command, env)
+            self.assertEqual(rc, 2, "%s passed: %s" % (command, message))
+            self.assertIn("`git`", message)
+        self.assertEqual(self.guard("env PATH=%s:%s git status" % (other, stubs), env)[0], 0)
+        # DEVELOPER_DIR, too: the command's own value decides, set or unset.
+        d = self.developer("Applications/Xcode.app/Contents/Developer", "xcode")
+        rc, message = self.guard("DEVELOPER_DIR=%s make" % os.path.join(self.root, "nowhere"))
+        self.assertEqual(rc, 2)
+        self.assertIn("DEVELOPER_DIR is set", message)
+        bad = self.sanitized(DEVELOPER_DIR=os.path.join(self.root, "nowhere"))
+        self.assertEqual(self.guard("env -u DEVELOPER_DIR make", bad)[0], 0)
+        self.assertEqual(self.guard("DEVELOPER_DIR=%s make" % d, bad)[0], 0)
+        self.no_stub()
+
     def test_t10_every_suite_gets_the_toolchain_through_host_shield(self):
         log = os.path.join(self.root, "shield.log")
         env = host_shield.shield_env(self.sanitized(), log)

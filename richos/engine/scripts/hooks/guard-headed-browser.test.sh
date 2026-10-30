@@ -28,6 +28,16 @@
 #   N3   the test VM: ssh <vm> 'npx playwright test --headed', a testvm/ script
 #   N4   MCP: --headless servers, an attach-only server, a non-browser server, Claude in Chrome
 #   N5   an unreadable payload and a command naming nothing of this pass
+#   N7   only /usr/bin/python3 on PATH: the hook passes instead of running Apple's stub
+#   P8   2026-10-29: the full Chrome app with --headless but without the notification switches
+#        (--disable-features=NativeNotifications,SystemNotifications in the LAST such switch,
+#        --disable-notifications) or on a real profile; code that starts it (Playwright channel
+#        chromium, Puppeteer's launch, Selenium's Chrome); playwright --channel chromium,
+#        playwright-cli --browser=chromium; MCP servers that launch it (Puppeteer, --browser chromium)
+#   P9   review 2026-10-29: version-qualified Playwright packages (npx playwright@latest codegen)
+#   N6   the quiet full app (headless, both switches, a $TMPDIR profile), chrome-headless-shell,
+#        Puppeteer headless: 'shell', Playwright's default Chromium, playwright-cli with a config
+#        that carries the switches, npx playwright-cli@latest open (headless by default)
 #   D1   through the real dispatcher: Bash refused, and with only this rule named (the app lease)
 #
 # Usage: scripts/hooks/guard-headed-browser.test.sh
@@ -87,7 +97,29 @@ EOF
 cat > "$FX/proj-headless/selenium_ok.py" <<'EOF'
 from selenium import webdriver
 opts = webdriver.ChromeOptions(); opts.add_argument("--headless=new")
+opts.add_argument("--disable-features=NativeNotifications,SystemNotifications")
+opts.add_argument("--disable-notifications")
 driver = webdriver.Chrome(options=opts)
+EOF
+cat > "$FX/proj/selenium_cft.py" <<'EOF'
+from selenium import webdriver
+opts = webdriver.ChromeOptions(); opts.add_argument("--headless=new")
+driver = webdriver.Chrome(options=opts)
+EOF
+cat > "$FX/proj/pptr.mjs" <<'EOF'
+import puppeteer from 'puppeteer';
+const browser = await puppeteer.launch();
+EOF
+cat > "$FX/proj-headless/pptr-shell.mjs" <<'EOF'
+import puppeteer from 'puppeteer';
+const browser = await puppeteer.launch({ headless: 'shell' });
+EOF
+cat > "$FX/proj/cft.mjs" <<'EOF'
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ channel: 'chromium' });
+EOF
+cat > "$FX/proj-headless/quiet-cli.json" <<'EOF'
+{ "browser": { "launchOptions": { "args": ["--disable-features=NativeNotifications,SystemNotifications", "--disable-notifications"] } } }
 EOF
 cat > "$FX/proj-headless/playwright.config.ts" <<'EOF'
 export default { use: { headless: true } };
@@ -101,11 +133,14 @@ cat > "$FX/proj-mcp/.mcp.json" <<'EOF'
     "pw-headless": { "command": "npx", "args": ["@playwright/mcp@latest", "--headless"] },
     "devtools": { "command": "npx", "args": ["chrome-devtools-mcp@latest"] },
     "devtools-attach": { "command": "npx", "args": ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222"] },
+    "pw-cft": { "command": "npx", "args": ["@playwright/mcp@latest", "--headless", "--browser", "chromium"] },
     "tracker": { "command": "npx", "args": ["some-issue-tracker-mcp"] }
 } }
 EOF
 cat > "$FX/home/.claude.json" <<'EOF'
 { "mcpServers": { "puppeteer": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+                                 "env": { "PUPPETEER_LAUNCH_OPTIONS": "{\"headless\": \"shell\"}" } },
+                   "puppeteer-cft": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
                                  "env": { "PUPPETEER_LAUNCH_OPTIONS": "{\"headless\": true}" } } } }
 EOF
 
@@ -166,6 +201,25 @@ check 2 P7 'MCP: Playwright server without --headless' '' "$FX/proj-mcp" mcp__pl
 if printf '%s' "$LAST_OUT" | grep -qF -- "--headless"; then ok "P7 the MCP refusal says to add --headless"; else bad "P7 the MCP refusal does not say to add --headless" "$LAST_OUT"; fi
 check 2 P7 'MCP: Chrome DevTools server without --headless' '' "$FX/proj-mcp" mcp__devtools__new_page
 check 2 P7 'MCP: a browser server whose configuration is not found' '' "$FX/proj" mcp__playwright__browser_snapshot
+check 2 P8 'the 2026-10-29 shape: Chrome for Testing with only --headless=new' '"/x/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" --headless=new --user-data-dir=/tmp/p --remote-debugging-port=0'
+for want in "Notification Center" "SystemNotifications" "Nothing ran"; do
+    if printf '%s' "$LAST_OUT" | grep -qF "$want"; then ok "P8 the refusal carries '$want'"; else bad "P8 the refusal does not carry '$want'" "$LAST_OUT"; fi
+done
+check 2 P8 'an earlier --disable-features does not count (Chrome keeps the last)' '"/x/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" --headless=new --user-data-dir=/tmp/p --disable-features=NativeNotifications,SystemNotifications --disable-notifications --disable-features=MediaRouter'
+check 2 P8 'no --disable-notifications' 'chromium --headless=new --user-data-dir=/tmp/p --disable-features=NativeNotifications,SystemNotifications'
+check 2 P8 'the user profile' '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-features=NativeNotifications,SystemNotifications --disable-notifications --user-data-dir="$HOME/Library/Application Support/Google/Chrome"'
+check 2 P8 'no --user-data-dir (the user real profile)' '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-features=NativeNotifications,SystemNotifications --disable-notifications'
+check 2 P8 'a script launching Playwright channel chromium' 'node cft.mjs'
+check 2 P8 'node -e with channel chromium' "node -e \"await chromium.launch({channel: 'chromium'})\""
+check 2 P8 'Puppeteer launch (Chrome for Testing, the full app)' 'node pptr.mjs'
+check 2 P8 'Selenium Chrome, headless, without the switches' 'python3 selenium_cft.py'
+check 2 P8 'playwright screenshot --channel chromium' 'npx playwright screenshot --channel chromium https://example.com /tmp/s.png'
+check 2 P8 'playwright-cli open --browser=chromium' 'playwright-cli open --browser=chromium https://example.com'
+check 2 P8 'MCP: Puppeteer headless true (Chrome for Testing)' '' "$FX/proj" mcp__puppeteer-cft__puppeteer_navigate
+check 2 P8 'MCP: Playwright --headless --browser chromium' '' "$FX/proj-mcp" mcp__pw-cft__browser_navigate
+check 2 P9 'npx playwright@latest codegen' 'npx playwright@latest codegen localhost:3000'
+check 2 P9 'npx @playwright/test@latest test --ui' 'npx @playwright/test@latest test --ui' "$FX/proj-headless"
+check 2 P9 'pnpm dlx playwright@1.49.0 open' 'pnpm dlx playwright@1.49.0 open http://localhost:4173'
 }
 
 echo "=== guard-headed-browser: allowed ==="
@@ -174,7 +228,7 @@ echo "=== guard-headed-browser: allowed ==="
 check 0 N1 'a script with headless: true (and a commented-out false)' 'node shot.mjs' "$FX/proj-headless"
 check 0 N1 'a script with no option (Playwright launches headless)' 'node plain.mjs' "$FX/proj-headless"
 check 0 N1 'Selenium with --headless=new' 'python3 selenium_ok.py' "$FX/proj-headless"
-check 0 N1 'Chrome with --headless=new' '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --screenshot=/tmp/s.png http://localhost:3000'
+check 0 N1 'Chrome with --headless=new, the notification switches and a temp profile' '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-features=NativeNotifications,SystemNotifications --disable-notifications --user-data-dir="$TMPDIR/p" --screenshot=/tmp/s.png http://localhost:3000'
 check 0 N1 'playwright test with a headless config' 'npx playwright test' "$FX/proj-headless"
 check 0 N1 'npm test of a headless script' 'npm test' "$FX/proj-headless"
 check 0 N1 'npm run of a script with no browser' 'npm run lint'
@@ -197,11 +251,25 @@ check 0 N4 'MCP: Puppeteer with headless launch options (Claude config)' '' "$FX
 check 0 N4 'MCP: a server that is not a browser' '' "$FX/proj-mcp" mcp__tracker__list_issues
 check 0 N4 'MCP: Claude in Chrome (the user own browser)' '' "$FX/proj" mcp__claude-in-chrome__navigate
 check 0 N5 'a command naming nothing of this' 'git status --short'
+check 0 N6 'Chrome for Testing, quiet (both switches merged, $TMPDIR profile)' '"/x/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" --headless=new --user-data-dir=/var/folders/xx/T/richos-nat-1/p --disable-features=MediaRouter,NativeNotifications,SystemNotifications --disable-notifications'
+check 0 N6 'chrome-headless-shell (no app bundle)' '/x/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell --headless --screenshot about:blank'
+check 0 N6 'Puppeteer on the headless shell' 'node pptr-shell.mjs' "$FX/proj-headless"
+check 0 N6 'playwright screenshot on the default Chromium (headless shell)' 'npx playwright screenshot -b chromium https://example.com /tmp/s.png'
+check 0 N6 'playwright-cli --browser=chromium with a config carrying the switches' 'playwright-cli open --browser=chromium --config=quiet-cli.json https://example.com' "$FX/proj-headless"
+check 0 N6 'npx playwright-cli@latest open (headless by default)' 'npx playwright-cli@latest open https://example.com'
+check 0 N6 'npx playwright@latest install' 'npx playwright@latest install chromium'
 }
 
 echo "=== unreadable payload ==="
 out="$(printf 'not json' | bash "$HOOK" 2>&1)"; rc=$?
 if [ "$rc" = 0 ]; then ok "N5 an unreadable payload is not refused"; else bad "N5 an unreadable payload was refused" "rc=$rc $out"; fi
+
+echo "=== never the /usr/bin python3 stub ==="
+# On a Mac without developer tools /usr/bin/python3 is Apple's stub: running it opens the install
+# dialog. With no other python3 on PATH the hook passes rather than run it (a refusal here would
+# mean it ran /usr/bin/python3).
+out="$(payload 'node review.mjs' | PATH=/usr/bin:/bin bash "$HOOK" 2>&1)"; rc=$?
+if [ "$rc" = 0 ]; then ok "N7 with only /usr/bin/python3 on PATH the hook passes and never runs it"; else bad "N7 the hook ran /usr/bin/python3" "rc=$rc $out"; fi
 
 echo "=== through the dispatcher ==="
 out="$(payload 'node review.mjs' | bash "$SCRIPT_DIR/dispatch-pretooluse.sh" Bash 2>&1)"; rc=$?
