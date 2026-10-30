@@ -301,6 +301,21 @@ class FakeMac(unittest.TestCase):
         self.assertEqual(self.guard("DEVELOPER_DIR=%s make" % d, bad)[0], 0)
         self.no_stub()
 
+    def test_t14_xcrun_runs_wherever_a_developer_directory_is_usable(self):
+        # Review 2026-10-30: xcrun is /usr/bin's own resolver; Xcode's Developer/usr/bin has no
+        # copy of it, so every `xcrun` command was refused on a Mac with Xcode.
+        self._write(os.path.join(self.root, "usr/bin", "xcrun"), FAKE_STUB)
+        rc, message = self.guard("xcrun --show-sdk-path")
+        self.assertEqual(rc, 2, "no developer tools: xcrun would open the install dialog")
+        self.assertIn("`xcrun`", message)
+        for rel, label in (("Applications/Xcode.app/Contents/Developer", "xcode"),
+                           ("Library/Developer/CommandLineTools", "clt")):
+            d = self.developer(rel, label)
+            self.assertFalse(os.path.exists(os.path.join(d, "usr/bin/xcrun")))
+            for command in ("xcrun --show-sdk-path", "xcrun simctl list devices", "xcrun clang --version"):
+                self.assertEqual(self.guard(command, self.sanitized(DEVELOPER_DIR=d))[0], 0, "%s with %s" % (command, label))
+        self.no_stub()
+
     def test_t10_every_suite_gets_the_toolchain_through_host_shield(self):
         log = os.path.join(self.root, "shield.log")
         env = host_shield.shield_env(self.sanitized(), log)

@@ -102,9 +102,18 @@ def developer_dir(env):
     return None, None
 
 
+# Tools that ARE /usr/bin's own resolver, with no copy inside a developer directory: xcrun finds
+# its tool in whichever usable developer directory it is given (review 2026-10-30: every `xcrun`
+# command was refused on a Mac with Xcode, whose Developer/usr/bin has no xcrun). It opens the
+# install dialog only where no developer directory is usable, which developer_dir() decides.
+RESOLVERS = frozenset({"xcrun"})
+
+
 def tool_path(directory, name):
     if not directory:
         return None
+    if name in RESOLVERS and usable(directory):
+        return os.path.join(shim_dir(), name)
     for sub in ("usr/bin", TOOLCHAIN):
         candidate = os.path.join(directory, sub, name)
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):

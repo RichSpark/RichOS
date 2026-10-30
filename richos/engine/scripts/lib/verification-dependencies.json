@@ -16945,7 +16945,7 @@
     },
     "scripts/lib/toolchain.py": {
       "source": "scripts/lib/toolchain.py",
-      "sha256": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f",
+      "sha256": "1377155438882011209ba53383f3440c8587ee3f62f7c6306828fab9311f2f60",
       "keys": [],
       "edges": [
         {
@@ -16959,7 +16959,7 @@
     },
     "scripts/lib/toolchain.test.py": {
       "source": "scripts/lib/toolchain.test.py",
-      "sha256": "58f495b5c2cd08126933acbd5960acc9d5b3623c70c699852f13009d20552889",
+      "sha256": "7fe19f3e625def5e07863bf0ce73b751d9ab8a3bcb24dd818f94d5dd06c4499f",
       "keys": [],
       "edges": [
         {
@@ -17697,7 +17697,7 @@
         "scripts/hooks/guard-headed-browser.sh": "bc6b034bf0ed03b3645a92cfb7cf454de0979412dc6ff8369665e6a187f98cf6",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "b30e851381f0558437bcf606a1ea80f7256d1251c36dddb8c9582399a64cdc55",
-        "scripts/lib/toolchain.py": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f"
+        "scripts/lib/toolchain.py": "1377155438882011209ba53383f3440c8587ee3f62f7c6306828fab9311f2f60"
       }
     },
     "scripts/hooks/mechanical-findings.test.sh": {
@@ -17932,7 +17932,7 @@
         "scripts/hooks/guard-headed-browser.sh": "bc6b034bf0ed03b3645a92cfb7cf454de0979412dc6ff8369665e6a187f98cf6",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "b30e851381f0558437bcf606a1ea80f7256d1251c36dddb8c9582399a64cdc55",
-        "scripts/lib/toolchain.py": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f"
+        "scripts/lib/toolchain.py": "1377155438882011209ba53383f3440c8587ee3f62f7c6306828fab9311f2f60"
       }
     },
     "scripts/hooks/stop-hook-visibility.test.sh": {
@@ -18173,7 +18173,7 @@
         "scripts/hooks/guard-headed-browser.sh": "bc6b034bf0ed03b3645a92cfb7cf454de0979412dc6ff8369665e6a187f98cf6",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "b30e851381f0558437bcf606a1ea80f7256d1251c36dddb8c9582399a64cdc55",
-        "scripts/lib/toolchain.py": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f"
+        "scripts/lib/toolchain.py": "1377155438882011209ba53383f3440c8587ee3f62f7c6306828fab9311f2f60"
       },
       "evidence": "R1 checks event/matcher registrations of these five hooks. Dispatcher manifest is independently bound; no other hook registration runs."
     },
@@ -18391,7 +18391,7 @@
         "scripts/hooks/guard-headed-browser.sh": "bc6b034bf0ed03b3645a92cfb7cf454de0979412dc6ff8369665e6a187f98cf6",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "b30e851381f0558437bcf606a1ea80f7256d1251c36dddb8c9582399a64cdc55",
-        "scripts/lib/toolchain.py": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f"
+        "scripts/lib/toolchain.py": "1377155438882011209ba53383f3440c8587ee3f62f7c6306828fab9311f2f60"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
     },
