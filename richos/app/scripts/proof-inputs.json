@@ -3738,6 +3738,7 @@
         "NODE_OPTIONS",
         "NODE_PATH",
         "PLAYWRIGHT_BROWSERS_PATH",
+        "PWDEBUG",
         "RICHOS_PLAYWRIGHT",
         "PW_TEST_SCREENSHOT_NO_FONTS_READY",
         "RUSTUP_HOME",
@@ -3798,6 +3799,9 @@
       "dynamic": {
         "richos/app/ui/tests/lib/harness.js": {
           "require(c)": "loadPlaywright tries each Playwright candidate path in turn; whatever loads is bound as an install by content (portable_dependencies), in the same order"
+        },
+        "richos/app/ui/tests/lib/quiet-browser.js": {
+          "spawn(executable": "spawnQuietChrome starts the full Chrome binary its caller names, for the extension suites under richos/tools (native-transport-e2e.mjs, live-capture.mjs), which are not rows of this family; no ui-suite family suite calls it, and loadPlaywright installs only quiet-browser.js's option checks, which spawn nothing"
         },
         "richos/app/ui/tests/lib/navigation-evidence.js": {
           "spawnSync(file": "helper() is called only with /usr/sbin/sysctl and /bin/ps, to record host pressure in a navigation-failure bundle; system programs, no repository code, never a verdict input"

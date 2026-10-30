@@ -388,6 +388,34 @@ fn ensure_app_codex_watch(engine: &Path, data_dir: &Path, at_launch: bool) {
     }
 }
 
+/// **THE NEXT macOS APP MANAGEMENT NOTICE COMES WITH ITS OWN EVIDENCE**: the engine's read-only
+/// watcher, the app's own child (`richos_core::app_management_watch`), recording kernel write
+/// denials and tccd's attribution of App Management requests in
+/// `engine-state/app-management/ledger.jsonl`. Started at launch when the engine verifies, and
+/// again (a no-op while it runs) whenever a session opens. Ended by the quit path.
+fn ensure_app_management_watch(engine: &Path, data_dir: &Path, at_launch: bool) {
+    let runtime = match richos_core::runtime::verify_engine(engine) {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            if at_launch {
+                eprintln!("[richos] App Management watch: not watching yet, the engine is not verified ({e})");
+            }
+            return;
+        }
+    };
+    let launch = richos_core::app_management_watch::Launch {
+        python: runtime.python.clone(),
+        engine: engine.to_path_buf(),
+        state: data_dir.join("engine-state"),
+        environment: richos_core::review_watch::environment(&runtime.path()),
+    };
+    match richos_core::app_management_watch::ensure(&launch) {
+        Ok(pid) if at_launch => eprintln!("[richos] App Management watch: recording (process {pid})"),
+        Ok(_) => {}
+        Err(e) => eprintln!("[richos] App Management watch: the watcher could not start ({e})"),
+    }
+}
+
 struct WorkNotice {
     app: AppHandle,
 }
@@ -620,6 +648,7 @@ impl LeaseFactory for EngineLeaseFactory {
         ensure_app_review_watch(&dir, &self.data_dir, &bin, false);
         // And the Codex watcher, on the channels the user's setting names now.
         ensure_app_codex_watch(&dir, &self.data_dir, false);
+        ensure_app_management_watch(&dir, &self.data_dir, false);
         let mut profile = richos_core::engine_profile::EngineProfile::prepare(&dir, &self.data_dir, runtime.clone())
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?;
@@ -692,6 +721,7 @@ impl EngineLeaseFactory {
         // The Codex watcher, if launch could not start it (an engine set up since), on the
         // channels the user's setting names now.
         ensure_app_codex_watch(&dir, &self.data_dir, false);
+        ensure_app_management_watch(&dir, &self.data_dir, false);
         let mut profile = richos_core::engine_profile::EngineProfile::prepare(&dir, &self.data_dir, runtime.clone())
             .map_err(|e| CognitionError::Io(e.to_string()))?;
         if let Some(binding) = binding { profile.scope_to(binding).map_err(|e| CognitionError::Io(e.to_string()))?; }
@@ -3222,6 +3252,10 @@ fn main() {
             if let Some(dir) = boot_engine.as_deref() {
                 ensure_app_codex_watch(dir, &data_dir, true);
             }
+            // The App Management watcher, the app's own child from launch to quit.
+            if let Some(dir) = boot_engine.as_deref() {
+                ensure_app_management_watch(dir, &data_dir, true);
+            }
             // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an
             // earlier run left (a crash or a force-quit included) goes now, on its own thread;
             // again whenever Stu's jobs have settled, and at quit (the Exit arm). The engine's
@@ -4093,6 +4127,10 @@ fn main() {
                     // The Codex watcher too (gap X), reaped and its record removed.
                     if let Some(pid) = richos_core::codex_watch::stop_all() {
                         eprintln!("[richos] quit: the Codex watcher {pid} ended.");
+                    }
+                    // The App Management watcher too, reaped and its record removed.
+                    if let Some(pid) = richos_core::app_management_watch::stop_all() {
+                        eprintln!("[richos] quit: the App Management watcher {pid} ended.");
                     }
                     // **WHAT THIS RUN LEFT BEHIND GOES WITH IT** (CEO §54 addendum 2), after every
                     // lease above has ended, so their sessions are provably ended. Waited for, at

@@ -27,11 +27,14 @@ pub const GUARD_AUDIENCE_DECLARATION: &str = "spawn-guard-audience.declaration";
 /// does nothing for a user who has declared nothing. The rest of the manifest polices the
 /// terminal operator's own sessions (his claim, his worktrees and lands, his record) and is
 /// left out; the claim hooks above all, which must never run in a user's app.
-const APP_BASH_RULES: [&str; 4] = [
+const APP_BASH_RULES: [&str; 7] = [
     "guard-publication-commits.sh",   // private material in a commit to a public repository
     "guard-named-persons-commands.sh", // a listed person's name in a commit message, branch or PR
     "guard-public-record-repo.sh",    // a plan or research record added to a public repository
     "guard-unguarded-rm.sh",          // Claude Code's own rm prompt, which bypass mode still asks
+    "guard-host-sleep.sh",            // caffeinate or a sleep-setting change on the user's Mac
+    "guard-headed-browser.sh",        // a visible browser window opened by automation
+    "guard-toolchain.sh",             // an Apple developer-tools stub with no toolchain (install dialog)
 ];
 
 /// **The engine's Write-chain rules every lease runs** (gap E), the same way. `dialect-guard.sh`

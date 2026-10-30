@@ -19,12 +19,17 @@
 
 import { exportBufferedArchive } from './buffered-export.mjs';
 import { trackChrome, stopChrome, stopAllChrome } from './chrome-process.mjs';
-import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:https';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Every full Chrome a suite starts is quiet: headless, a throwaway profile, notifications and
+// permissions denied, never registered with macOS Notification Center (see the module's header).
+const quiet = createRequire(import.meta.url)('../../../app/ui/tests/lib/quiet-browser.js');
 
 const EXT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HEADED = process.argv.includes('--headed');
@@ -269,11 +274,8 @@ async function main() {
   // Point downloads at the scratch folder via profile preferences. (CDP's
   // Browser.setDownloadBehavior renames every file to a GUID, which would hide exactly the
   // thing we want to verify: that sessions land in richos-capture/<session>/…)
-  fs.mkdirSync(path.join(profileDir, 'Default'), { recursive: true });
-  fs.writeFileSync(
-    path.join(profileDir, 'Default', 'Preferences'),
-    JSON.stringify({ download: { default_directory: downloadDir, prompt_for_download: false } }),
-  );
+  // The same Preferences file blocks notifications and every OS-reaching permission.
+  quiet.writeQuietPreferences(profileDir, { download: { default_directory: downloadDir, prompt_for_download: false } });
   console.log(`\nRichOS live capture harness\n  chrome:    ${chromePath}\n  extension: ${EXT_DIR}\n  workdir:   ${workDir}\n`);
 
   // 1. HTTPS fixture server on a random port, pretending to be meet.google.com.
@@ -328,10 +330,12 @@ async function main() {
     '--host-resolver-rules=MAP meet.google.com 127.0.0.1',
     '--no-proxy-server',
     '--window-size=1000,700',
+    // On the host a window is refused (quiet-browser); a real window belongs to the test VM.
+    ...(HEADED ? ['--headed'] : []),
   ];
-  if (!HEADED) args.push('--headless=new');
 
-  const chrome = trackChrome(spawn(chromePath, args, { stdio: ['ignore', 'pipe', 'pipe'] }));
+  // Adds --headless=new and the notification switches, and refuses anything not quiet.
+  const chrome = trackChrome(quiet.spawnQuietChrome(chromePath, args, { stdio: ['ignore', 'pipe', 'pipe'] }));
   const chromeLog = [];
   chrome.stderr.on('data', (d) => chromeLog.push(String(d)));
   chrome.stdout.on('data', (d) => chromeLog.push(String(d)));

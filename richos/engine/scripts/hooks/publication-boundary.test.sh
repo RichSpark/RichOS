@@ -1423,6 +1423,47 @@ if [ "$(di_tree "$DI_LIST")" = "CLEAN" ]; then ok "device id: --scan-tree passes
 if [ "$(di_tree "$SCRATCH/no-such-list" | cut -f1)" = "ABSENT" ]; then ok "device id: --scan-tree with no list says ABSENT, not CLEAN"; else bad "device id: --scan-tree ABSENT"; fi
 rm -rf "$DI_TREE"
 
+# ---------------------------------------------------------------------------
+# (o) ONE MACHINE'S OWN FIGURES. A reviewed branch put one Mac's total RAM, free
+# memory and private floor into public fixtures named for "this Mac" and a
+# nightly. The commit hook runs scripts/lib/machine-figures.py. This host's RAM
+# is READ HERE (sysctl, else /proc/meminfo); every other value is synthetic.
+# ---------------------------------------------------------------------------
+MF_RAM_BYTES="$(/usr/sbin/sysctl -n hw.memsize 2>/dev/null || awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo 2>/dev/null || true)"
+if printf '%s' "$MF_RAM_BYTES" | grep -qE '^[0-9]+$'; then
+    MF_RAM_MB=$((MF_RAM_BYTES / 1048576))
+    MF_OTHER_MB=$((MF_RAM_MB + 1536))   # synthetic: never this host's size
+    SB_MF="$(make_default_sandbox)"
+    mkdir -p "$SB_MF/tests" "$SB_MF/src"
+    mf_commit() { # <name> <expect-rc> [needle-in-stderr]
+        local out rc
+        out="$(bash_payload "git -C $SB_MF commit -m msg" "$SB_MF" \
+            | RICHOS_DEVICE_IDENTIFIERS_FILE="$DI_LIST" RICHOS_LIMITS_FILE="$SCRATCH/no-such-limits" "$COMMIT_HOOK" 2>&1 >/dev/null)"
+        rc=$?
+        if [ "$rc" -ne "$2" ]; then bad "$1 (expected exit $2, got $rc: $(printf '%s' "$out" | head -4 | tr '\n' ' '))"; return; fi
+        if [ -n "${3:-}" ] && ! printf '%s' "$out" | grep -qF -- "$3"; then
+            bad "$1 (stderr did not say \"$3\")"; return
+        fi
+        ok "$1"
+    }
+    printf 'GUEST = dict(total_mb=%s, free_mb=4000)\n' "$MF_RAM_MB" > "$SB_MF/tests/guest_memory.test.py"
+    git -C "$SB_MF" add tests/guest_memory.test.py
+    mf_commit "machine figures: a fixture with this host's RAM size is refused, path:line named" 2 "tests/guest_memory.test.py:1"
+    printf 'GUEST = dict(total_mb=%s, free_mb=4000)\n' "$MF_OTHER_MB" > "$SB_MF/tests/guest_memory.test.py"
+    git -C "$SB_MF" add tests/guest_memory.test.py
+    mf_commit "machine figures: the same fixture with a synthetic value commits" 0
+    printf 'NOTICE = "The memory is held by macOS; only a restart of this Mac does that."\n' > "$SB_MF/src/notice.py"
+    git -C "$SB_MF" add src/notice.py
+    mf_commit "machine figures: user-facing wording about the user's Mac commits" 0
+    printf 'def test_floor_for_this_mac():\n    pass\n' > "$SB_MF/tests/floor.test.py"
+    git -C "$SB_MF" add tests/floor.test.py
+    mf_commit "machine figures: a fixture named for one machine is refused" 2 "this_mac"
+    git -C "$SB_MF" reset -q -- tests/floor.test.py
+    rm -rf "$SB_MF"
+else
+    bad "machine figures: this host's RAM size could not be read"
+fi
+
 # A private record must reject oversized staged text before it breaks public scans.
 if python3 - "$SCRATCH/private-source-index" "$ENGINE_ROOT/scripts/lib/publication-boundary.py" <<'PY_PRIVATE_INDEX'
 import gzip,hashlib,json,os,subprocess,sys,shlex,importlib.util
