@@ -2116,7 +2116,7 @@
     },
     "scripts/lib/mutation-focus.test.sh": {
       "source": "scripts/lib/mutation-focus.test.sh",
-      "sha256": "cb902e151718b1f7f0fb4c3c00e4aa672218248aa822cb0b3b5f0b02fe847090",
+      "sha256": "ad572d855504d5d75d7b44521348f7706bc8d0c4ccf58199c9fa2610e442cfdd",
       "evidence": "Creates a tiny engine with literal PROTECTED_PATHS and feature variables, then executes generated sequential/named/parallel suites under the real mutation helper. Its only eval receives fixed RULE_A/RULE_B assertions. Copied helper directories are transport; discovered production scripts are not run. All worker and supervisor helpers are separately declared. Renewal 2026-10-28 (zero-CPU waits): the tiny engine also receives quiet_wait.py, which stop-at-line.py imports; transport only.",
       "keys": [],
       "edges": [
