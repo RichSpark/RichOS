@@ -72,11 +72,25 @@ constructs for worktree-isolated agents. New calls retain the original command
 at top level after a literal helper invocation and owner exports. The helper
 records its own parent; it never reads or executes the user's command.
 
-Ordinary CLI subagent Bash calls get six seconds to deliver their result in the
+HOST CALLS (2026-10-30): IN THE APP AN ORDINARY CALL RUNS AS THE HOST RUNS IT. The
+app's sessions are `sdk-cli`. There a subagent's ordinary Bash call (mode "host") keeps
+the caller's own foreground choice and timeout, and nothing is said about waiting: its
+result comes back directly, or, when the host moves a long one to the background at its
+timeout, through the host's own notification. It is still recorded here, so a hold
+freezes it and its new calls are refused. Measured on Claude Code 2.1.314 in print mode
+with an async subagent: a lead's message reaches a worker in a foreground call only when
+that call returns; a frozen foreground call past its timeout is moved to the background,
+neither continued nor killed, and the same process finishes after SIGCONT; and
+`control_request{background_tasks, tool_use_id}` moves that call to the background at
+once. So at a hold the app sends that request for each of the worker's foreground calls
+(native.rs) and the WAIT reaches it within about a second. The wait (`wait` below) never
+waits on a host call. Explicit background calls keep their path.
+
+Ordinary CLI (terminal) subagent Bash calls get six seconds to deliver their result in the
 foreground by default, then use the harness's automatic native background
-handoff. Installed acceptance passed on Claude Code 2.1.289. SDK callers and
-explicit background calls keep their existing path. RICHOS_AGENT_BASH_FOREGROUND=0
-restores forced background execution. This is a handoff grace, not a process
+handoff. Installed acceptance passed on Claude Code 2.1.289. Explicit background
+calls keep their existing path. RICHOS_AGENT_BASH_FOREGROUND=0
+restores forced background execution, in the terminal and in the app. This is a handoff grace, not a process
 execution deadline; the host's own background limits still apply. A directly
 delivered result needs
 no collector call and is marked consumed at the next tool boundary.
@@ -497,10 +511,13 @@ def rewrite(payload):
         return None
     command = ti["command"]
     mode = "exempt" if is_wait_call(command) else "bg" if ti.get("run_in_background") else "native"
-    # Only the CLI transcript has authoritative structured handoff metadata.
-    # Keep SDK/other hosts on their established background path.
-    foreground = (mode == "native" and os.environ.get("RICHOS_AGENT_BASH_FOREGROUND", "1") == "1"
-                  and os.environ.get("CLAUDE_CODE_ENTRYPOINT", "cli") == "cli")
+    # The terminal (cli) keeps its six-second grace and the collector that needs its
+    # transcript's task metadata. Every other host (the app's sdk-cli sessions) runs an
+    # ordinary call as the host itself would, with nothing forced (HOST CALLS, module doc).
+    cli = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "cli") == "cli"
+    if mode == "native" and not cli and os.environ.get("RICHOS_AGENT_BASH_FOREGROUND", "1") == "1":
+        mode = "host"
+    foreground = mode == "native" and cli and os.environ.get("RICHOS_AGENT_BASH_FOREGROUND", "1") == "1"
     rec = _record(payload, mode, command, foreground=foreground)
     if rec is None:
         return None
@@ -517,6 +534,10 @@ def rewrite(payload):
     if os.path.exists(held):
         _unlink_call(stem)  # the hook refuses this call, so no native task can start
         return {"command": command, "input": {}, "deny": REFUSED_TEXT}
+    if mode == "host":
+        # The caller's own foreground/timeout choice stands and nothing is said: its result
+        # comes back directly, or through the host's own notification if the host moves it.
+        return {"command": head + command, "input": {}}
     if foreground:
         return {"command": head + command,
                 "input": {"run_in_background": False, "timeout": FOREGROUND_GRACE_MS},
@@ -591,8 +612,9 @@ def _read_pid(path):
 def calls(session_id, agent_id, table):
     """[{tid, pid, ppid, at, mode, stem}] of this agent's recorded calls whose shell is still that shell.
 
-    mode is "fg" (a wrapped foreground call), "bg", "exempt" (its wait command) or
-    "" (recorded by the previous capture, which did not wrap)."""
+    mode is "fg" (a wrapped foreground call), "bg", "exempt" (its wait command), "native"
+    (the terminal's graced or forced-background call), "host" (an app call the host runs
+    as it chooses, HOST CALLS) or "" (recorded by the previous capture, which did not wrap)."""
     directory = _shell_dir(session_id, agent_id)
     try:
         names = sorted(os.listdir(directory))

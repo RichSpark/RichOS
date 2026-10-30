@@ -2,9 +2,10 @@
 """Preserve ordinary Bash command failures before output filters can hide them.
 
 PreToolUse preserves failure propagation and records subagent ownership. Subagent
-CLI commands opt into a six-second foreground grace and native handoff; wait
-calls remain foreground and explicit background calls remain background. Held
-calls are denied. No shell parsing, command execution or auto-approval.
+CLI commands opt into a six-second foreground grace and native handoff; in the app
+(every other entrypoint) an ordinary subagent command runs exactly as the host runs
+it, with no added background flag, timeout or wait instruction. Wait calls remain
+foreground and explicit background calls remain background. Held calls are denied. No shell parsing, command execution or auto-approval.
 Expected failures belong in explicit if/else or || branches. This covers the
 calling shell; scripts and explicit failure handling retain their own semantics.
 """
@@ -73,7 +74,7 @@ def rewrite(payload):
         "additionalContext": "Shell commands use errexit and pipefail: a failed command or pipeline stops this call. "
         "Handle expected nonzero results explicitly with if/else. Keep JSON stdout separate from stderr. "
         "Read saved logs in a separate call; do not turn a failed check into success with a trailing echo or filter."
-        + (" " + owned.get("context", "") if owned else "")
+        + (" " + owned["context"] if owned and owned.get("context") else "")
     }}
 
 

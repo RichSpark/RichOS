@@ -873,6 +873,39 @@ class NativeForeground(Base):
         self.assertIn("RESUMED", resumed)
         self.assertEqual(int(Path(self.out("native") + ".pid").read_text().split()[0]), worker)
 
+    def test_an_app_workers_foreground_call_is_frozen_by_a_hold_and_finishes_after_release(self):
+        """2026-10-30: an app worker's ordinary call runs in the foreground (mode "host"). A hold
+        freezes its whole tree, the shell included, with no CPU advance; its new calls are
+        refused with the WAIT; RESUME continues the same processes and the call returns its own
+        output and exit status. (The app moves the frozen call to the background at once so the
+        WAIT reaches the worker, native.rs; on its own the host does so at the call's timeout.)"""
+        from unittest.mock import patch
+        go = self.out("host-go")
+        command = '%s %s %s %d plain %s; echo host-output; exit 3' % (
+            sys.executable, self.worker, self.out("host"), ROUNDS, go)
+        with patch.dict(os.environ, {"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}):
+            call, got = self.start_rewritten(command, tuid="toolu_host")
+            self.assertEqual(got["input"], {})
+            worker = self.worker_pid("host")
+            result = agent_hold.hold(self.session, self.agent, "host", sample=0.2)
+            self.assertTrue(result["ok"], result)
+            self.assertIn(str(call.pid), result["held"], "the foreground shell itself is frozen")
+            self.assertIn(str(worker), result["held"])
+            self.assertEqual(result["cpu_during_sample"], 0)
+            self.assertTrue(state(worker).startswith("T"))
+            self.assertTrue(state(call.pid).startswith("T"), "the shell itself is stopped, not ended")
+            Path(go).write_text("")
+            self.assertIsNone(call.poll(), "frozen, never ended")
+            refused = self.payload("toolu_host_next")
+            refused["tool_input"] = {"command": "echo next"}
+            self.assertIn("WAIT:", agent_hold.rewrite(refused)["deny"])
+        released = agent_hold.release(self.session, self.agent)
+        self.assertIn(worker, released["continued"])
+        stdout, stderr = call.communicate(timeout=60)
+        self.assertEqual((call.returncode, stdout, stderr), (3, "host-output\n", ""))
+        self.assertEqual(Path(self.out("host")).read_text(), expected())
+        self.assertEqual(int(Path(self.out("host") + ".pid").read_text().split()[0]), worker)
+
     def test_hold_between_hook_and_spawn_refuses_body(self):
         got = agent_hold.rewrite(self.payload("toolu_race"))
         agent_hold.hold(self.session, self.agent, "race", sample=0)
@@ -963,14 +996,31 @@ class NativeResults(Base):
             got=agent_hold.rewrite(payload)
         self.assertEqual(got["input"],{"run_in_background":True})
 
-    def test_cli_default_and_sdk_entrypoints_keep_forced_background(self):
+    def test_app_entrypoints_run_an_ordinary_call_as_the_host_does(self):
+        """2026-10-30: in the app (sdk-cli and every non-cli host) an ordinary call keeps the
+        caller's own foreground choice and timeout, and no wait instruction comes with it. On
+        cb30e5746 sdk-cli got {"run_in_background": True} and the agent_hold.py wait text."""
         from unittest.mock import patch
         payload = self.payload("toolu_capability")
+        payload["tool_input"] = {"command": "sleep 3; echo done", "timeout": 120000}
         for entrypoint in ("sdk-cli", "sdk-py", "sdk-ts", "unknown-host"):
             with self.subTest(entrypoint=entrypoint), patch.dict(os.environ, {"CLAUDE_CODE_ENTRYPOINT":entrypoint}):
+                got = agent_hold.rewrite(payload)
+                self.assertEqual(got["input"], {})
+                self.assertNotIn("wait", got.get("context", ""))
+                self.assertTrue(got["command"].endswith("\nsleep 3; echo done"))
+                record = json.loads(Path(agent_hold._shell_dir(self.session,self.agent), "toolu_capability.json").read_text())
+                self.assertEqual(record["mode"], "host")
+                self.assertNotIn("foreground_grace_ms", record)
+                self.assertNotIn("result_source", record)
+                # An explicit background request stays background.
+                payload["tool_input"]["run_in_background"] = True
+                self.assertEqual(agent_hold.rewrite(payload)["input"], {"run_in_background": True})
+                del payload["tool_input"]["run_in_background"]
+            # The rollback still restores forced background on these hosts.
+            with patch.dict(os.environ, {"CLAUDE_CODE_ENTRYPOINT":entrypoint, "RICHOS_AGENT_BASH_FOREGROUND":"0"}):
                 self.assertEqual(agent_hold.rewrite(payload)["input"], {"run_in_background":True})
-                record = Path(agent_hold._shell_dir(self.session,self.agent), "toolu_capability.json")
-                self.assertNotIn("foreground_grace_ms",json.loads(record.read_text()))
+        # The terminal keeps its six-second grace (§95: the plain terminal is left as it is).
         with patch.dict(os.environ):
             os.environ.pop("RICHOS_AGENT_BASH_FOREGROUND",None)
             self.assertEqual(agent_hold.rewrite(payload)["input"], {"timeout":6000,"run_in_background":False})

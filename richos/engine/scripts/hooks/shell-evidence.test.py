@@ -75,6 +75,29 @@ class ShellEvidence(unittest.TestCase):
         self.assertEqual(json.loads(record.read_text())["mode"], "native")
         self.assertEqual(out["hookSpecificOutput"]["updatedInput"]["timeout"], 6000)
 
+    def test_an_app_workers_ordinary_call_runs_as_in_the_terminal(self):
+        """2026-10-30: an app (sdk-cli) worker's ordinary call through the registered hook comes
+        back with its own foreground choice and timeout and no wait instruction. On cb30e5746 it
+        came back with run_in_background true and 'run agent_hold.py wait' on every command."""
+        payload = self.bash("sleep 3; echo done", agent_id="afixture1")
+        payload["tool_input"]["timeout"] = 120000
+        del payload["tool_input"]["run_in_background"]
+        out = self.run_hook(payload, env={**self.env, "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
+        hso = out["hookSpecificOutput"]
+        ui = hso["updatedInput"]
+        self.assertNotIn("run_in_background", ui)
+        self.assertEqual(ui["timeout"], 120000)
+        self.assertTrue(ui["command"].startswith(PREFIX) and ui["command"].endswith("\nsleep 3; echo done"))
+        self.assertIn(" mark --state ", ui["command"], "ownership is still recorded, so a pause can hold it")
+        self.assertNotIn("agent_hold.py", hso["additionalContext"])
+        self.assertNotIn("wait", hso["additionalContext"].lower())
+        record = Path(self.tmp, "hold", "shells", "fixture-session", "afixture1", "toolu_fixture.json")
+        self.assertEqual(json.loads(record.read_text())["mode"], "host")
+        # It runs in the foreground and its output comes back directly.
+        p = subprocess.run([SHELL, "-c", ui["command"]], capture_output=True, text=True,
+                           env={**self.env, "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}, timeout=30)
+        self.assertEqual((p.returncode, p.stdout), (0, "done\n"), p.stderr)
+
     def test_background_call_is_not_wrapped(self):
         payload = self.bash("echo hi", agent_id="afixture1")
         payload["tool_input"]["run_in_background"] = True
