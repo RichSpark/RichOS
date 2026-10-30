@@ -17267,14 +17267,14 @@
     },
     "scripts/lib/machine-figures.py": {
       "source": "scripts/lib/machine-figures.py",
-      "sha256": "90ce288fecb98b6c5966fb10d881ffe481ff85a6b182394b3c7b0661f9599ae4",
+      "sha256": "89477176392492266297a047153c0ddc464119e0acc6688749c1e92a292c4656",
       "evidence": "Full file reviewed (2026-10-29). Environment reads: RICHOS_LIMITS_FILE (an operator-scope path override for the private limits file) and RICHOS_MACHINE_FIGURES_MEMSIZE (a test stand-in for the host's RAM size), never an orchestration.config key; HOME via expanduser. Subprocesses: /usr/sbin/sysctl -n hw.memsize (read-only) and the external git executable (show HEAD:<path> on the repository the caller names). Manifest rows and blobs are supplied data; no engine imports, no config reads, no writes.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/machine-figures.test.sh": {
       "source": "scripts/lib/machine-figures.test.sh",
-      "sha256": "4b40abd151fcfbb120582dc43b757a8a591f9623e68e8786632cc1913d216167",
+      "sha256": "5b852e83557ebee292c25cf81c5644310cad8ca1293a1eb0a2b1ba798012cec1",
       "evidence": "Builds a private git repository and a synthetic limits file in mktemp; reads this host's RAM size with sysctl (or /proc/meminfo) and feeds manifests to machine-figures.py. Writes nothing outside its temporary folder.",
       "keys": [],
       "edges": [

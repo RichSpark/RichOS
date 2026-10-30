@@ -23,7 +23,8 @@ WHAT IT FLAGS, in the lines a commit ADDS (a line already in HEAD is never judge
 
 WHAT IT LEAVES ALONE: "this Mac" that means the user's Mac (a string the app shows, "only a
 restart of this Mac does", and a comment with no figure, "changes this Mac's display"); documents
-(.md, .txt, .log, .rst and everything under docs/), where a dated record is the point; and
+(.md, .txt, .log, .rst, .csv and everything under docs/), where a dated record is the point, except a
+CSV test fixture (a test path), which is data a test reads and is judged like the test; and
 synthetic values (a fixture whose total is not this host's RAM passes).
 
 NO VALUE IS WRITTEN HERE. Every figure it looks for is read from the host and the private file
@@ -158,7 +159,10 @@ def label_findings(line, is_test):
 
 def is_document(path):
     lower = path.lower()
-    return lower.startswith("docs/") or "/docs/" in lower or os.path.splitext(lower)[1] in DOC_EXT
+    ext = os.path.splitext(lower)[1]
+    if ext == ".csv" and TEST_PATH.search(path):
+        return False  # a CSV test fixture is data a test reads, judged like the test, even under docs/
+    return lower.startswith("docs/") or "/docs/" in lower or ext in DOC_EXT
 
 
 def added_lines(repo, path, text):

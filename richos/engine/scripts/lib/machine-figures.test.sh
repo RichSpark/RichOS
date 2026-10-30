@@ -23,6 +23,8 @@
 #       (docs/, .md) with a nightly number
 #   M6  only ADDED lines: a line already in HEAD is not judged again
 #   M7  the output names path:line and the rule; an unreadable blob is BROKEN, not CLEAN
+#   M8  a CSV test fixture (a test path, docs/ included) is judged like the test that reads it;
+#       a CSV record outside any test path stays an exempt document
 #
 # Usage: scripts/lib/machine-figures.test.sh
 
@@ -90,6 +92,11 @@ expect CLEAN M5 "a test asserting the user-facing string" tests/notice.test.js '
 expect CLEAN M5 "a document with a nightly number" docs/notes.md "nightly 80 failed its VM proof"
 expect CLEAN M6 "a line already in HEAD" src/old.py "old line # nightly 80 kept from before"
 RICHOS_LIMITS_FILE="$SB/no-such-file" expect CLEAN M3 "no limits file is not an error" tests/floor.test.py "floor_mb = 3172"
+
+echo "=== machine-figures: CSV test fixtures are not documents ==="
+expect FOUND M8 "a CSV test fixture with this host's RAM" tests/fixtures/memory.csv "total_mb,$RAM_MB"
+expect FOUND M8 "a CSV test fixture under docs/ is still a fixture" docs/tools/tests/slots.csv "nightly 80,refused"
+expect CLEAN M8 "a CSV record outside any test path stays a document" docs/data/usage.csv "nightly 80,refused"
 
 echo "=== unreadable ==="
 printf 'src/gone.py\t%s\n' "$SB/no-such-blob" > "$SB/manifest"
