@@ -29,6 +29,7 @@
 #   R01  two chats (registry partitions and lead sessions), one stalled agent of the
 #        first: its SELF-WAIT is told in that chat and nothing at all in the other
 #   R02  a ledger wait raised in chat A (its row's session_id): told in A, never in B
+#   R03  the same wait raised through the real writer with the app environment (RICHOS_AGENT_SESSION)
 #   W01  a test VM wait and a device wait over 10 min: one block, two stalls,
 #        who holds each ("no holder recorded" / "not recorded by the waiter")
 #   H01  a teammate the lead holds (agent_hold.py): its wait is no stall
@@ -593,6 +594,24 @@ OUT_B="$(RICHOS_ESCALATION_LEDGER="$R2_LEDGER" RICHOS_SESSION_ID="$SID_B" RICHOS
 check "R02  a ledger wait raised in chat A is told in chat A and never in chat B" \
     "$( has "$OUT_A" "[WAIT] echo-opus-wait" && ! has "$OUT_B" "[WAIT] echo-opus-wait"; echo $?)" \
     "chat A=$OUT_A | chat B=$OUT_B"
+# R03: the same wait raised through the REAL writer with the app's environment: a worker's
+# Bash call carries RICHOS_AGENT_SESSION and the app lead's RICHOS_SESSION_ID, never
+# CLAUDE_SESSION_ID. R02 writes session_id by hand, so it could not see that the writer
+# recorded none and chat B was still woken (second review of 2c4842f14).
+new_state r3a
+R3_LEDGER="$SB/esc-r3.jsonl"
+R3_ROW="$(env -u CLAUDE_SESSION_ID RICHOS_ESCALATION_LEDGER="$R3_LEDGER" RICHOS_AGENT_SESSION="$SID" \
+    python3 "$ENGINE/scripts/lib/escalations.py" raise --teammate echo-opus-wait \
+    --worktree "$SB/repos/echo-opus-wait" --branch cc/echo-opus-wait --repo fixture --state proceeding \
+    --title "Waiting for the test VM" --question "the test VM is held; when is it free" 2>&1)"
+R3NOW=$(( $(date +%s) + 1500 ))
+OUT_A="$(RICHOS_ESCALATION_LEDGER="$R3_LEDGER" STALL_WATCH_NOW=$R3NOW bash "$SW" --tick 2>&1)"
+OUT_B="$(RICHOS_ESCALATION_LEDGER="$R3_LEDGER" RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" \
+         STALL_WATCH_STATE_DIR="$SB/state-r3b" STALL_WATCH_NOW=$R3NOW bash "$SW" --tick 2>&1)"
+check "R03  a wait raised by the real writer in the app is told in its own chat and never in another" \
+    "$( grep -q "\"session_id\": \"$SID\"" "$R3_LEDGER" && has "$OUT_A" "[WAIT] echo-opus-wait" \
+        && ! has "$OUT_B" "[WAIT] echo-opus-wait"; echo $?)" \
+    "raise=$R3_ROW | ledger=$(cat "$R3_LEDGER" 2>&1) | chat A=$OUT_A | chat B=$OUT_B"
 
 # --- W: other recorded waits ---------------------------------------------------
 new_registry w; new_state w
