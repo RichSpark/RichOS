@@ -1527,6 +1527,9 @@ def _review_owned(a, w):
     held, reading = quota_hold(a.engine_root, a.accounts)
     row["quota"] = reading
     if held:
+        # Marked, so the watcher settles it as held, never as lost: a hold is not a crash and spends
+        # none of the commit's two retries (review_watch.py settle/due, HOLD_RETRY_SECONDS).
+        row["quota_held"] = True
         row["why"] = ("the quota hold is in force (his 93%% rule; %s), so no Claude review started; it waits "
                       "for the reset, as every teammate does" % reading)
         return finish(None, raw)

@@ -744,7 +744,8 @@ calls = [json.load(open(os.path.join(log, c, "call.json"))) for c in sorted(os.l
 ledger = os.path.join(os.environ["SECOND_REVIEW_STATE_DIR"], "reviews.jsonl")
 row = json.loads(open(ledger).read().splitlines()[-1])
 print(json.dumps({"reviewers": [(c["kind"], c["account"]) for c in calls], "tip": row.get("tip") == tip,
-                  "quota": row.get("quota"), "why": row.get("why"), "verdict": row.get("verdict")}))
+                  "quota": row.get("quota"), "why": row.get("why"), "verdict": row.get("verdict"),
+                  "quota_held": row.get("quota_held")}))
 '''
 got = {}
 os.makedirs(rwstate)
@@ -763,6 +764,10 @@ if held.get("reviewers") != [] or not held.get("tip"):
     bad.append("a reviewer ran while Work, the account in use, was published held: %s" % held)
 if "quota hold is in force" not in (held.get("why") or "") or "Work (account 2)" not in (held.get("quota") or ""):
     bad.append("the held row does not say the gate's hold on Work: %s" % held)
+# The watcher settles a marked row as held, never lost (review-watch.test.sh W39; the second review
+# of 3331a349416c, finding 1), so the mark is what keeps a hold from spending the commit's retries.
+if held.get("quota_held") is not True or room.get("quota_held"):
+    bad.append("only the held row carries quota_held: held %s, room %s" % (held, room))
 if room.get("reviewers") != [["claude", "1"]] or room.get("verdict") != "passed":
     bad.append("Home in use with room: the review did not run on Home: %s" % room)
 if "Home (account 1)" not in (room.get("quota") or ""):
