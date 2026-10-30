@@ -401,7 +401,10 @@ def judge(rows, record, landed, presses, ledger=None):
     named = set((integration.get('automatic_reviews') or {}).values())
     rechecks = [rv for rv in reviews if successor and rv['id'] != (first_review or {}).get('id')
                 and (rv['tip'] == integration.get('commit') or rv['id'] in named)]
-    recheck = next((rv for rv in rechecks if rv['verdict'] == 'passed' and (not named or rv['id'] in named)), None)
+    # The pass that counts is of the exact commit integrate landed and, when integrate names the review
+    # it consumed, is that review.
+    recheck = next((rv for rv in rechecks if rv['verdict'] == 'passed' and rv['tip'] == integration.get('commit')
+                    and (not named or rv['id'] in named)), None)
     line('4 the recheck of the continuation passed', bool(recheck),
          'rechecks: %s' % json.dumps([short(rv) for rv in rechecks]))
     integrated = bool(integration.get('verified'))

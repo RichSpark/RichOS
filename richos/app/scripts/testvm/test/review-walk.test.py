@@ -111,6 +111,11 @@ class Verdict(unittest.TestCase):
         """integrate names the review it consumed; a pass of some other commit is not the recheck."""
         self.assertEqual(self.outcomes(reviews=ledger(replace={1: review('rv-other', 'e5' * 20, 'passed')}))['4'], 'FAIL')
 
+    def test_the_named_review_must_be_of_the_landed_commit(self):
+        """integrate named the review, but that review passed some other commit than the one landed."""
+        self.assertEqual(self.outcomes(reviews=ledger(replace={1: review('rv-recheck', 'e5' * 20, 'passed')}))['4'],
+                         'FAIL')
+
     def test_a_landing_without_the_fix_fails_line_5(self):
         self.assertEqual(self.outcomes(landed="'-hello-world-'")['5'], 'FAIL')
         rows = receipts()
