@@ -14,13 +14,15 @@ sh -c scripts, behind sudo/env/nohup/exec/time/timeout/xargs), refuses:
   1. a headed flag on any command: --headed, --headless=false, --no-headless
   2. a Playwright command that always opens a window: open, codegen, cr, ff, wk, show-trace,
      show-report, and `test --ui` / `test --debug` (playwright, npx/pnpm/yarn/bunx playwright)
-  3. PWDEBUG=<anything> or HEADED=1 in front of a command (Playwright's debug mode is headed)
+  3. PWDEBUG=<anything> or HEADED=1 in front of a command or behind `env` (Playwright's debug
+     mode is headed)
   4. a browser binary started without --headless (Google Chrome, Chromium, Edge, Firefox, Brave),
      and `open -a <browser> --args ...` (an automation launch through Launch Services)
   5. inline code (node -e, python -c, deno eval, a heredoc fed to an interpreter) that sets
      `headless: false` / `headless=False`, or starts a Selenium driver with no headless option
   6. a script the command runs (node x.mjs, python3 x.py, npx tsx x.ts, ...) whose source sets
-     `headless: false`, and `playwright test` whose playwright.config sets it; `npm test`,
+     `headless: false`, and `playwright test` whose playwright.config, or a spec file named on
+     its command line, sets it; `npm test`,
      `npm run <script>`, `pnpm <script>`, `yarn <script>` are followed one level into
      package.json. Paths resolve from the payload's cwd and any `cd` earlier in the command.
 
@@ -70,7 +72,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from unguarded_rm import tokenize  # noqa: E402
-from host_sleep import _strip_prefix, _unquote, _ENV_ASSIGN, SHELLS, REMOTE  # noqa: E402
+from host_sleep import _strip_prefix, _unquote, _ENV_ASSIGN, SHELLS, REMOTE, \
+    WRAPPERS, _OPTS_WITH_ARG, _POSITIONAL_VALUE  # noqa: E402
 
 MAX_SOURCE_BYTES = 1_000_000
 
@@ -230,13 +233,38 @@ class _Ctx:
 
 
 def _assignments(words):
+    """The NAME=value settings the command runs with: leading ones and those after `env` and the
+    other wrappers (review 2026-10-29: `env PWDEBUG=1 npx playwright test` escaped the debug check)."""
     out = {}
-    for w in words:
+    i = 0
+    while i < len(words):
+        w = _unquote(words[i])
         if _ENV_ASSIGN.match(w):
-            k, _, v = _unquote(w).partition("=")
+            k, _, v = w.partition("=")
             out[k] = v
-        else:
+            i += 1
+            continue
+        base = os.path.basename(w)
+        if base not in WRAPPERS:
             break
+        i += 1
+        opts = _OPTS_WITH_ARG.get(base, set())
+        while i < len(words):
+            t = _unquote(words[i])
+            if base == "env" and _ENV_ASSIGN.match(t):
+                k, _, v = t.partition("=")
+                out[k] = v
+                i += 1
+                continue
+            if t == "--":
+                i += 1
+                break
+            if t.startswith("-") and len(t) > 1:
+                i += 2 if (t in opts and "=" not in t) else 1
+                continue
+            break
+        if base in _POSITIONAL_VALUE and i < len(words):
+            i += 1
     return out
 
 
@@ -359,6 +387,12 @@ def judge(ctx, words, depth):
             else:
                 for candidate in PLAYWRIGHT_CONFIGS:
                     ctx.scan_file(candidate, candidate)
+            # A spec file named on the command line is read too (review 2026-10-29: `npx playwright
+            # test headed.spec.js` ran a spec with headless: false). A positional that is not an
+            # existing script file is a name filter, and scan_file skips it.
+            for a in positional[1:]:
+                if SCRIPT_EXT.search(a):
+                    ctx.scan_file(a, a)
         return
     if BROWSER_BINARIES.match(name):
         if not any(a.startswith("--headless") and not HEADED_FLAG.match(a) for a in argv[1:]):

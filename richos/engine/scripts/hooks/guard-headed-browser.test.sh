@@ -35,6 +35,8 @@
 #        chromium, Puppeteer's launch, Selenium's Chrome); playwright --channel chromium,
 #        playwright-cli --browser=chromium; MCP servers that launch it (Puppeteer, --browser chromium)
 #   P9   review 2026-10-29: version-qualified Playwright packages (npx playwright@latest codegen)
+#   P10  review 2026-10-29: PWDEBUG / HEADED set behind env (env PWDEBUG=1 npx playwright test)
+#   P11  review 2026-10-29: a spec file named to playwright test is read (headless: false in it)
 #   N6   the quiet full app (headless, both switches, a $TMPDIR profile), chrome-headless-shell,
 #        Puppeteer headless: 'shell', Playwright's default Chromium, playwright-cli with a config
 #        that carries the switches, npx playwright-cli@latest open (headless by default)
@@ -90,6 +92,14 @@ cat > "$FX/proj-headless/shot.mjs" <<'EOF'
 import { chromium } from 'playwright';
 // headless: false would put a window on the screen; never on the host.
 const browser = await chromium.launch({ headless: true });
+EOF
+cat > "$FX/proj-headless/headed.spec.js" <<'EOF'
+const { test, chromium } = require('@playwright/test');
+test('walk', async () => { const b = await chromium.launch({ headless: false }); });
+EOF
+cat > "$FX/proj-headless/quiet.spec.js" <<'EOF'
+const { test } = require('@playwright/test');
+test('walk', async ({ page }) => { await page.goto('about:blank'); });
 EOF
 cat > "$FX/proj-headless/plain.mjs" <<'EOF'
 const browser = await chromium.launch();
@@ -174,6 +184,9 @@ check 2 P3 'playwright show-report' 'npx playwright show-report'
 check 2 P3 'playwright test --ui' 'npx playwright test --ui' "$FX/proj-headless"
 check 2 P3 'playwright test --debug' 'npx playwright test --debug login.spec.ts' "$FX/proj-headless"
 check 2 P3 'PWDEBUG=1' 'PWDEBUG=1 npx playwright test' "$FX/proj-headless"
+check 2 P10 'env PWDEBUG=1 (the setting behind env)' 'env PWDEBUG=1 npx playwright test' "$FX/proj-headless"
+check 2 P10 'env -u X PWDEBUG=console behind nohup' 'nohup env -u CI PWDEBUG=console npx playwright test' "$FX/proj-headless"
+check 2 P10 'env HEADED=1 node' 'env HEADED=1 node plain.mjs' "$FX/proj-headless"
 check 2 P3 'python -m playwright codegen' 'python3 -m playwright codegen example.com'
 check 2 P4 'node -e with headless: false' "node -e 'const b = await chromium.launch({headless: false})'"
 check 2 P4 'python -c with headless=False' "python3 -c 'p.chromium.launch(headless=False)'"
@@ -190,6 +203,8 @@ check 2 P5 'python3 runs a script with headless=False' 'python3 check.py'
 check 2 P5 'npx tsx runs a script with "headless": false' 'npx tsx sub/walk.ts'
 check 2 P5 'cd into a folder, then node' 'cd sub && node review.mjs'
 check 2 P5 'playwright test with a headed config' 'npx playwright test'
+check 2 P11 'playwright test naming a spec that launches headed' 'npx playwright test headed.spec.js' "$FX/proj-headless"
+check 2 P11 'playwright test with the spec after options' 'npx playwright test --project=chromium ./headed.spec.js' "$FX/proj-headless"
 check 2 P5 'playwright test --config naming a headed config' "npx playwright test --config $FX/proj/playwright.config.ts" "$FX/proj-headless"
 check 2 P5 'npm test into package.json' 'npm test'
 check 2 P5 'npm run <script> into package.json' 'npm run shots'
@@ -230,6 +245,8 @@ check 0 N1 'a script with no option (Playwright launches headless)' 'node plain.
 check 0 N1 'Selenium with --headless=new' 'python3 selenium_ok.py' "$FX/proj-headless"
 check 0 N1 'Chrome with --headless=new, the notification switches and a temp profile' '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-features=NativeNotifications,SystemNotifications --disable-notifications --user-data-dir="$TMPDIR/p" --screenshot=/tmp/s.png http://localhost:3000'
 check 0 N1 'playwright test with a headless config' 'npx playwright test' "$FX/proj-headless"
+check 0 N1 'playwright test naming a spec with no launch, and a name filter' 'npx playwright test quiet.spec.js walk' "$FX/proj-headless"
+check 0 N1 'env CI=1 playwright test (a setting behind env that is not debug)' 'env CI=1 npx playwright test' "$FX/proj-headless"
 check 0 N1 'npm test of a headless script' 'npm test' "$FX/proj-headless"
 check 0 N1 'npm run of a script with no browser' 'npm run lint'
 check 0 N1 'playwright-cli open, headless' 'playwright-cli open https://example.com'

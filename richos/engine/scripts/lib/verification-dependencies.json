@@ -16871,7 +16871,7 @@
     },
     "scripts/lib/headed_browser.py": {
       "source": "scripts/lib/headed_browser.py",
-      "sha256": "b863e732599618560189fbfa495c798dea6827d45353c4e75ca64acb42bd6138",
+      "sha256": "5c9254e6143976af77c74cf0242d57bd8e7d3a47d76bb41fc153341d5fc1afc8",
       "keys": [],
       "edges": [
         {
@@ -16885,7 +16885,7 @@
     },
     "scripts/hooks/guard-headed-browser.test.sh": {
       "source": "scripts/hooks/guard-headed-browser.test.sh",
-      "sha256": "29b653c486d3dab2c7bf461999e1216127dcf43bed1fecf2d5b7c084ee852f67",
+      "sha256": "1072a673db7793ff165a60dd903b4678e48a427aaa0905211b381f91315f5b49",
       "keys": [],
       "edges": [
         {
@@ -17695,7 +17695,7 @@
         "scripts/hooks/guard-host-sleep.sh": "f3ad52b475c31c5bec3f09f4de6c94af37a58e9517a1bc20759aee3f97848fce",
         "scripts/lib/host_sleep.py": "551ce9aba594457a9ff28127e257be3f9e3543ff9c45289e7350a408d18d8c59",
         "scripts/hooks/guard-headed-browser.sh": "bc6b034bf0ed03b3645a92cfb7cf454de0979412dc6ff8369665e6a187f98cf6",
-        "scripts/lib/headed_browser.py": "b863e732599618560189fbfa495c798dea6827d45353c4e75ca64acb42bd6138",
+        "scripts/lib/headed_browser.py": "5c9254e6143976af77c74cf0242d57bd8e7d3a47d76bb41fc153341d5fc1afc8",
         "scripts/hooks/guard-toolchain.sh": "b30e851381f0558437bcf606a1ea80f7256d1251c36dddb8c9582399a64cdc55",
         "scripts/lib/toolchain.py": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f"
       }
@@ -17930,7 +17930,7 @@
         "scripts/hooks/guard-host-sleep.sh": "f3ad52b475c31c5bec3f09f4de6c94af37a58e9517a1bc20759aee3f97848fce",
         "scripts/lib/host_sleep.py": "551ce9aba594457a9ff28127e257be3f9e3543ff9c45289e7350a408d18d8c59",
         "scripts/hooks/guard-headed-browser.sh": "bc6b034bf0ed03b3645a92cfb7cf454de0979412dc6ff8369665e6a187f98cf6",
-        "scripts/lib/headed_browser.py": "b863e732599618560189fbfa495c798dea6827d45353c4e75ca64acb42bd6138",
+        "scripts/lib/headed_browser.py": "5c9254e6143976af77c74cf0242d57bd8e7d3a47d76bb41fc153341d5fc1afc8",
         "scripts/hooks/guard-toolchain.sh": "b30e851381f0558437bcf606a1ea80f7256d1251c36dddb8c9582399a64cdc55",
         "scripts/lib/toolchain.py": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f"
       }
@@ -18171,7 +18171,7 @@
         "scripts/hooks/guard-host-sleep.sh": "f3ad52b475c31c5bec3f09f4de6c94af37a58e9517a1bc20759aee3f97848fce",
         "scripts/lib/host_sleep.py": "551ce9aba594457a9ff28127e257be3f9e3543ff9c45289e7350a408d18d8c59",
         "scripts/hooks/guard-headed-browser.sh": "bc6b034bf0ed03b3645a92cfb7cf454de0979412dc6ff8369665e6a187f98cf6",
-        "scripts/lib/headed_browser.py": "b863e732599618560189fbfa495c798dea6827d45353c4e75ca64acb42bd6138",
+        "scripts/lib/headed_browser.py": "5c9254e6143976af77c74cf0242d57bd8e7d3a47d76bb41fc153341d5fc1afc8",
         "scripts/hooks/guard-toolchain.sh": "b30e851381f0558437bcf606a1ea80f7256d1251c36dddb8c9582399a64cdc55",
         "scripts/lib/toolchain.py": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f"
       },
@@ -18389,7 +18389,7 @@
         "scripts/hooks/guard-host-sleep.sh": "f3ad52b475c31c5bec3f09f4de6c94af37a58e9517a1bc20759aee3f97848fce",
         "scripts/lib/host_sleep.py": "551ce9aba594457a9ff28127e257be3f9e3543ff9c45289e7350a408d18d8c59",
         "scripts/hooks/guard-headed-browser.sh": "bc6b034bf0ed03b3645a92cfb7cf454de0979412dc6ff8369665e6a187f98cf6",
-        "scripts/lib/headed_browser.py": "b863e732599618560189fbfa495c798dea6827d45353c4e75ca64acb42bd6138",
+        "scripts/lib/headed_browser.py": "5c9254e6143976af77c74cf0242d57bd8e7d3a47d76bb41fc153341d5fc1afc8",
         "scripts/hooks/guard-toolchain.sh": "b30e851381f0558437bcf606a1ea80f7256d1251c36dddb8c9582399a64cdc55",
         "scripts/lib/toolchain.py": "acd56f89e1a4d652bcaa61156b6227232af1bdf207c34f56c492e8b045d1787f"
       },
