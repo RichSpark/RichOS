@@ -312,6 +312,21 @@ def _scan(text, env, found, depth=0):
             found.append(("stub", stub, " ".join(argv)[:120], local))
     for body in nested:
         _scan(body, env, found, depth + 1)
+    # A heredoc fed to a shell is commands (review 2026-10-30: `bash <<'EOF'` running
+    # /usr/bin/make passed). Written to a file or sent to the guest, it is text.
+    from host_sleep import _heredoc_bodies  # noqa: E402
+    for head, body in _heredoc_bodies(text):
+        head_cmds, _ = tokenize(head)
+        for words in head_cmds:
+            argv, local = effective(words, env)
+            if not argv:
+                continue
+            name = os.path.basename(argv[0])
+            if name in ("ssh", "scp", "sftp") or re.search(r"(?:^|/)testvm/", argv[0]):
+                break
+            if name in SHELLS and not any(re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a) for a in argv[1:]):
+                _scan(body, local, found, depth + 1)
+                break
 
 
 INSTALL_INVOLVES = ("Apple's free \"Command Line Tools for Xcode\" (a download from Apple of roughly 1 to 2 GB "
