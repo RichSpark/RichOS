@@ -1206,6 +1206,11 @@ if [ "$PROBE_MODE" = "by-reference" ]; then
     # question only a spawn prompt answers. A Write registration would have to
     # re-derive "which surface is this file on" from a path, and that is the
     # ledger's own job.
+    #
+    # guard-headed-browser.sh appears TWICE: once in the Bash chain's manifest
+    # and once under the `mcp__.*` matcher in hooks.json. A headed browser can be
+    # started by an agent's own Bash command or by an MCP browser server, and the
+    # rule refuses both; they are two different tools, not a double-fire.
     BR_EXPECTED="\
 engine-status.sh|SessionStart
 workspace-lifecycle.sh|SessionStart
@@ -1266,6 +1271,7 @@ guard-foreign-app-data.sh|PreToolUse
 guard-shared-scratchpad.sh|PreToolUse
 guard-unguarded-rm.sh|PreToolUse
 guard-host-sleep.sh|PreToolUse
+guard-headed-browser.sh|PreToolUse
 guard-headed-browser.sh|PreToolUse
 guard-toolchain.sh|PreToolUse
 guard-no-shell-c.sh|PreToolUse
