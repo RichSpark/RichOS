@@ -37,6 +37,9 @@ with tempfile.TemporaryDirectory(prefix="claude-quota-proof-") as temporary:
     runs = root / "runs"
     runs.mkdir()
     log = root / "requests"
+    # The fixture is a shell launcher for its Python body: a "#!" line cannot name an
+    # interpreter whose path has a space in it (the engine's own Python lives under
+    # "Application Support"), and the kernel then answers ENOENT for the fixture itself.
     fixture = root / "claude-fixture"
     # A shell wrapper, never `#!<python>`: the app's own Python lives under "Application Support",
     # and a shebang path with a space cannot be executed (ENOENT, "usage reader could not start").
