@@ -577,6 +577,32 @@ def finish_scope(child, tracker, grace=8.0):
 
 GUARD_ROLES = ("session", "release-build")
 
+# THE SUPERVISOR WAITS FOR ITS TREE TO CHANGE, NOT FOR A CLOCK (2026-10-28). It used to sample
+# the whole tree every 0.2 s for as long as the command ran: about 0.8 s of CPU per minute for
+# a command that only waited (measured: `proc_tree.py run <owner> -- sleep 30`, 0.41 s), in every
+# supervised check at once. Now it blocks in the kernel (quiet_wait.py) until a member it knows
+# forks or exits, the command or the owner exits, or a signal arrives, and samples then, at
+# most every SAMPLE_SECONDS as before (so a tree forking all the time costs what it did, and a
+# new child is seen at least as soon). With nothing happening it samples every
+# IDLE_SAMPLE_SECONDS: the verification controller's health is read once a second
+# (cpu_guard.VerificationClient.check_health), and HeldClock counts a gap over 5 s as a pause.
+SAMPLE_SECONDS = 0.2
+IDLE_SAMPLE_SECONDS = 1.0
+
+
+def tree_watch(child, owner, members):
+    """A quiet_wait.Watch on the command, its owner, the members' forks and exits and this
+    process's stop signals, or None where quiet_wait.py is not beside this file (a fixture or
+    runtime that copies proc_tree.py alone keeps sampling every SAMPLE_SECONDS, as before)."""
+    try:
+        from quiet_wait import Watch
+    except ImportError:
+        return None
+    watch = Watch(pids=[child, owner])
+    watch.add_pids(members, forks=True)
+    watch.add_signals((signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
+    return watch
+
 
 def supervise(owner, argv, deadline=None, timeout_marker=None, verification=None, guard_role="session",
               release=None):
@@ -660,19 +686,35 @@ def supervise(owner, argv, deadline=None, timeout_marker=None, verification=None
         os.close(write_fd)
         write_fd = None
         while child.poll() is None:
-            tracker.refresh()
-            if client:
-                client.check_health()
-            if interrupted or identity(owner) != owner_id:
-                rc = 128 + interrupted[0] if interrupted else 125
-                break
-            if deadline is not None and clock.since(started) >= deadline:
-                if timeout_marker:
-                    with open(timeout_marker, "x"):
-                        pass
-                rc = 124
-                break
-            time.sleep(0.2)
+            sampled = time.monotonic()
+            # Registered BEFORE the sample, so a fork by a member it already knows is not missed.
+            watch = tree_watch(child.pid, owner, tracker.known)
+            try:
+                tracker.refresh()
+                if client:
+                    client.check_health()
+                if interrupted or identity(owner) != owner_id:
+                    rc = 128 + interrupted[0] if interrupted else 125
+                    break
+                if deadline is not None and clock.since(started) >= deadline:
+                    if timeout_marker:
+                        with open(timeout_marker, "x"):
+                            pass
+                    rc = 124
+                    break
+                if watch is None:
+                    time.sleep(SAMPLE_SECONDS)
+                    continue
+                watch.add_pids(tracker.known, forks=True)   # and the members this sample found
+                idle = IDLE_SAMPLE_SECONDS
+                if deadline is not None:
+                    idle = min(idle, max(0.0, deadline - clock.since(started)))
+                watch.wait(idle)
+            finally:
+                if watch is not None:
+                    watch.close()
+            # Never sampled more often than before: a tree forking all the time costs what it did.
+            time.sleep(max(0.0, sampled + SAMPLE_SECONDS - time.monotonic()))
         else:
             rc = child.returncode
             if release and client is None:
