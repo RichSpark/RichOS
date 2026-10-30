@@ -27,6 +27,27 @@ still supported — it is now an opt-out rather than the only way in:
 RICHOS_PLAYWRIGHT=/path/to/node_modules/playwright node run.js
 ```
 
+## Nothing a test runs shows anything on the user's screen
+
+This is a rule for every user of RichOS, on every Mac: nothing an agent or a test runs shows
+anything on the user's screen. Not a window, not a dialog and not a notification or a
+notification permission prompt. A check that needs a real window runs in the test VM.
+
+The harness enforces it (`lib/quiet-browser.js`). Every browser it hands a suite is headless and
+a headed request is refused. Chromium runs as Playwright's headless shell, a plain binary that
+macOS never registers with Notification Center. A suite that needs the full Chrome app (the
+extension suites do) starts it through `spawnQuietChrome`, which adds
+`--disable-features=NativeNotifications,SystemNotifications`, `--disable-notifications` and fake
+media devices, uses a throwaway profile in the temp folder whose preferences block notifications
+and every permission that reaches macOS and refuses a launch without them.
+`app/scripts/quiet-browser.test.sh` holds this, including that no suite source starts a full
+Chrome binary any other way.
+
+Headless alone is not enough. On 2026-10-29 `extension-native-browser.test.sh` started the full
+Chrome for Testing app with `--headless=new` and nothing else; Chrome's macOS notification bridge
+asked macOS for notification permission at startup and "Google Chrome for Testing" and "Google
+Chrome for Testing Helper (Alerts)" prompts appeared on the CEO's screen.
+
 ## Making this machine behave like a runner
 
 The first public `ui-suite-ci` runs, 2026-09-04, were red on nine checks between them and
