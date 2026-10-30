@@ -2077,8 +2077,9 @@ pub(crate) mod tests {
     /// **One lease's late result frame does not hand off an account with room** (2026-10-28
     /// 13:05Z: Work at 3% of its week, Ray and Zach ordered to hand off). Work's two learned
     /// episodes as the app kept them then (`claude-token-points.json`), and the fit exactly as on
-    /// main: it gives Haiku 3,953 tokens a point (Sonnet and Haiku fit both episodes exactly;
-    /// Opus gets no figure). A lease's Opus turn whose `result` also reports 83,446 Haiku tokens
+    /// main it gave Haiku 3,953 tokens a point (Sonnet and Haiku fit both episodes exactly;
+    /// Opus got no figure); with the card prior (`tokens::figures`) Haiku is read near its card,
+    /// 1.99 billion a point, and Opus has a figure. A lease's Opus turn whose `result` also reports 83,446 Haiku tokens
     /// (76,707 input, 6,739 output), in two shapes: (a) no Haiku frame was streamed, so the
     /// remainder is a correction stamped at the result; (b) one Haiku helper message was
     /// streamed (1,000 input, 1 output, 20 s ago), so the remainder is that message at its final
@@ -2090,7 +2091,10 @@ pub(crate) mod tests {
     /// tokens counted at most `tokens::LATE_POINTS_MAX` (1 point) the speed is (a) 1 point a
     /// minute and (b) 1,001 / 3,953 + 1 = 1.25: the point is (a) 99 - (ceil(1 x 6) - 1) = 94,
     /// or 93 when f64 puts 1/60,000 x 60,000 a hair over 1; (b) 99 - (ceil(1.25 x 6 = 7.5) - 1) = 92.
-    /// So it stays at or above 89 (the most one late lump can move it at either interval: 99 -
+    /// With the card prior the late Haiku is 0.00004 points and the lead's Opus about 0.005, so
+    /// the cap does not bind here and the point is 99 (`tokens.rs`
+    /// `a_late_lump_counts_at_most_late_points_max_in_the_live_minute` is where it binds).
+    /// Either way it stays at or above 89 (the most one late lump can move it at either interval: 99 -
     /// (ceil(1 x (5 + 5)) - 1) = 90, 89 with that same hair) and Work at 3% is not left. Home, at
     /// 99%, is being left all along.
     #[test]
@@ -2100,8 +2104,13 @@ pub(crate) mod tests {
             {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
             {"points": 1.0, "tokens": {"claude-haiku-5-5": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
         let learned: Vec<tokens::Episode> = serde_json::from_value(episodes.clone()).unwrap();
-        let haiku = tokens::figures(&learned)["claude-haiku-5-5"];
-        assert!((haiku - 3_953.).abs() < 1., "the incident's fit gives Haiku {haiku} tokens a point");
+        let fit = tokens::figures(&learned);
+        let (opus, haiku) = (fit["claude-opus-5-5"], fit["claude-haiku-5-5"]);
+        assert!(haiku > 1e9, "Haiku is read near its card (1.99 billion tokens a point), not at main's 3,953: {haiku}");
+        // Each message: what the frames streamed in full, what only the result showed at most
+        // `tokens::LATE_POINTS_MAX`. The lead's result adds 399 output and 1 cache read (late).
+        let lump = |late: f64, figure: f64| (late / figure).min(tokens::LATE_POINTS_MAX);
+        let lead = 180_002. / opus + lump(400., opus);
         let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
             "claude-opus-5-5": {"inputTokens": 2, "outputTokens": 400, "cacheReadInputTokens": 180_000, "cacheCreationInputTokens": 0},
             "claude-haiku-5-5": {"inputTokens": 76_707, "outputTokens": 6_739, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
@@ -2122,7 +2131,7 @@ pub(crate) mod tests {
             let per_minute = published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.;
             assert!(point >= 89., "helper streamed: {streamed_helper}; one late result frame moved Work's point to {point} \
                 (its weekly speed {per_minute} points a minute)");
-            let capped = if streamed_helper { 1_001. / haiku + 1. } else { 1. };
+            let capped = lead + if streamed_helper { 1_001. / haiku + lump(82_445., haiku) } else { lump(83_446., haiku) };
             assert!((per_minute - capped).abs() < 1e-9, "helper streamed: {streamed_helper}; {per_minute} points a minute, \
                 by hand {capped}");
             assert_eq!(published.leaving, vec!["1".to_string()], "helper streamed: {streamed_helper}; only Home, at 99%, \
@@ -2327,6 +2336,177 @@ pub(crate) mod tests {
         assert_eq!(view.leaving, vec![one.to_string()], "52% read 20 minutes ago + 3 points spent since = 55%, past 54");
         service.before_turn(one, Some(week(53., now)));
         assert!(service.view().leaving.is_empty(), "a fresh 53% is current and is not moved");
+    }
+
+    /// **One lease's result does not hand off an account with room** (2026-10-28 13:05-13:06Z:
+    /// Work at 3% of its week and 28% of its five hours, Ray and Zach ordered to hand off, and
+    /// an agent dispatch held 16 s). Work's two learned episodes exactly as the app kept them
+    /// (`claude-token-points.json`); a lease's Opus turn whose `result` also reports 83,446 Haiku
+    /// tokens no assistant frame showed (the 13:00 slot of the spend ledger: Haiku, 0 requests,
+    /// 76,707 input and 6,739 output, all of it result remainder). Before the fix the fit gave
+    /// Haiku 3,953 tokens a point, so the remainder was 21.1 points in the live minute; at the
+    /// fast interval the point was 99 - (ceil(21.1 x (1 + 5)) - 1) = 99 - 126, clamped to 0, and
+    /// Work at 3% was `leaving` (the gate's handoff order, gate.rs `handoff`) and held (the
+    /// gate's `admission`) until the minute passed. Home at 99% is leaving all along. Again with
+    /// 1,500 Haiku tokens in the second episode (the second review of d73436c94: a fix that
+    /// still let Haiku be fitted alone read 59.5 points a minute there).
+    #[test]
+    fn a_leases_haiku_remainder_does_not_hand_off_an_account_with_room() {
+        let root = Scratch::new();
+        for haiku in [3_151, 1_500] {
+            let episodes = json!([
+                {"points": 1.0, "tokens": {"claude-haiku-5-5": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+                {"points": 1.0, "tokens": {"claude-haiku-5-5": haiku, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+            let app = root.path().join(format!("app-{haiku}"));
+            let (service, work) = home_spent_work_in_use(&app, episodes, 3.);
+            let now = crate::util::now_millis();
+            let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+                "claude-opus-5-5": {"inputTokens": 2, "outputTokens": 400, "cacheReadInputTokens": 180_000, "cacheCreationInputTokens": 0},
+                "claude-haiku-5-5": {"inputTokens": 76_707, "outputTokens": 6_739, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+            lease_frames(&service, &work, &[(model_frame("claude-opus-5-5", "msg_lead", 2, 180_000, None), now - 20_000), (result, now - 1_000)]);
+            service.before_turn(&work, None);
+            let state = app.join("engine-state");
+            let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+            assert_eq!(published.leaving, vec!["1".to_string()], "only Home, at 99%, is being left; Work at 3% is not \
+                (its point read {}, its weekly speed {} points a minute)", published.act_at["seven_day"],
+                published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+            assert_eq!(published.act_at["seven_day"], 99.);
+            assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "{:?}", published.admission);
+        }
+    }
+
+    /// **One model's whole-point readings keep their total over total** (the second review of
+    /// dc6918a1d, its fixture through the service). Opus alone, 10M tokens for one point and 50M
+    /// for the next: 30M a point, as main measures it. Then 59M Opus tokens in the last minute
+    /// (the review's 60M is exactly 2 a minute, and f64 puts it a hair over: ceil(12.00...02) =
+    /// 13): 1.967 points a minute, fast, I = 1 minute: 99 - (ceil(1.967 x 6 = 11.8) - 1) = 88, so
+    /// Work at 89% is left. dc6918a1d pulled Opus toward its card at the dearest point (41.4M:
+    /// 1.43 a minute, point 91, Work at 89% kept running).
+    #[test]
+    fn a_single_models_burst_hands_off_at_its_total_over_total() {
+        let root = Scratch::new();
+        let episodes = json!([{"points": 1.0, "tokens": {"claude-opus-5-5": 10_000_000}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 50_000_000}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 89.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..59u64).map(|i| (model_frame("claude-opus-5-5", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 59_000 + i * 1_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert_eq!(point, 88., "a 59M-token Opus minute put the week's point at {point} (weekly speed {} points a minute)",
+            published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 89% during an Opus burst is not being left: {:?}", published.leaving);
+    }
+
+    /// **A model with an episode of its own hands off at what it measured** (the second review of
+    /// 0e2a10356, its fixture through the service). 40M Opus cache reads for one point, then 4M
+    /// Sonnet input for the next ($8 of card each): Sonnet is 4M a point, as on main (its episode
+    /// measures it). Then 7.6M Sonnet tokens in the last minute: 1.9 points a minute, fast,
+    /// I = 1 minute: 99 - (ceil(1.9 x 6 = 11.4) - 1) = 88; Work at 89% is left. 0e2a10356 let the
+    /// card pull Sonnet to 5.97M (1.27 a minute, point 92: Work at 89% kept running). (7.6M, not
+    /// the review's 8M: 2.0 a minute exactly would put main's point on f64's rounding.)
+    #[test]
+    fn a_model_with_an_episode_of_its_own_hands_off_at_what_it_measured() {
+        let root = Scratch::new();
+        let episodes = json!([{"points": 1.0, "tokens": {"claude-opus-5-5": 40_000_000}},
+            {"points": 1.0, "tokens": {"claude-sonnet-5-5": 4_000_000}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 89.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..19u64)
+            .map(|i| (model_frame("claude-sonnet-5-5", &format!("msg_{i}"), 2, 400_000 - 3, None), now - 57_000 + i * 3_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 89., "a 7.6M-token Sonnet minute left the week's point at {point} (weekly speed {} points a minute); \
+            at Sonnet's measured 4M a point it is 88", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 89% during a Sonnet burst is not being left: {:?}", published.leaving);
+    }
+
+    /// **A model the episodes measure still hands off at its own speed** (the second review of
+    /// d22fc43f8, its fixture through the service). Two one-point episodes where Opus and Fable
+    /// always come in the same ratio and Sonnet apart, Sonnet at 4M tokens a point; then 8M Sonnet
+    /// tokens in the last minute: 2 points a minute, fast, I = 1 minute:
+    /// 99 - (ceil(2 x 6 = 12) - 1) = 88, so Work at 90% is left, as on main. d22fc43f8 read Sonnet
+    /// with the pair at 7.04M (1.14 a minute, point 93: Work at 90% kept running).
+    #[test]
+    fn a_measured_models_burst_hands_off_beside_a_pair_the_episodes_cannot_separate() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 800_000, "claude-fable-5-1": 8_000, "claude-sonnet-5-5": 3_720_000}},
+            {"points": 1.0, "tokens": {"claude-opus-5-5": 8_400_000, "claude-fable-5-1": 84_000, "claude-sonnet-5-5": 1_060_000}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 90.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..8u64)
+            .map(|i| (model_frame("claude-sonnet-5-5", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 56_000 + i * 7_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 90., "an 8M-token Sonnet minute left the week's point at {point} (weekly speed {} points a minute); \
+            at Sonnet's measured 4M a point it is 88", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 90% during a Sonnet burst is not being left: {:?}", published.leaving);
+    }
+
+    /// **A late Fable `result` does not hand off an account with room** (the third review of the
+    /// late-frame fix, rv-20261029T115538Z, finding 1, its fixture through the service). Work's
+    /// first two episodes with Fable 5.1 in Haiku's place (1,029 and 3,151 tokens), then a lease
+    /// whose `result` reports 3M Fable tokens no frame showed. At Fable's list price (16M a point
+    /// against Opus 5.5's 40M) that is 0.1875 a minute, not fast, so I = 5 minutes and H 5:
+    /// 99 - (ceil(0.1875 x 10 = 1.875) - 1) = 98, and Work at 3% is not left. Main fitted Fable
+    /// at a few thousand tokens a point (point 0); d22fc43f8 held it at its worst-case bound,
+    /// 147,761 (20.3 a minute, point 0). Read from its card at Work's dearest point (19.89M; two
+    /// episodes cannot measure three models): 0.151 a minute, ceil(1.51) - 1 = 1, point 98.
+    #[test]
+    fn a_late_minority_result_does_not_hand_off_an_account_with_room() {
+        let root = Scratch::new();
+        let episodes = json!([
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 1029, "claude-opus-5-5": 40634401, "claude-sonnet-5-5": 18154910}},
+            {"points": 1.0, "tokens": {"claude-fable-5-1": 3151, "claude-opus-5-5": 17401885, "claude-sonnet-5-5": 4980038}}]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 3.);
+        let now = crate::util::now_millis();
+        let result = json!({"type": "result", "session_id": "lead", "modelUsage": {
+            "claude-fable-5-1": {"inputTokens": 3_000_000, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}}});
+        lease_frames(&service, &work, &[(result, now - 1_000)]);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point >= 98., "a late 3M-token Fable result moved the week's point to {point} (weekly speed {} points a minute); \
+            at Fable's list price it is 98", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert_eq!(published.leaving, vec!["1".to_string()], "only Home, at 99%, is being left; Work at 3% is not");
+    }
+
+    /// **A dear minority's burst hands off when its spend requires it** (the third review,
+    /// finding 2, its fixture through the service). Four one-point mixes of Opus 5.5, Sonnet 5.5,
+    /// Fable 5.1 and Haiku 5.5 at their list ratios (40M, 80M, 16M, 1,600M tokens a point), then
+    /// 20 Fable requests of 1M tokens in the last minute: at 16M a point, 1.25 a minute, fast, so
+    /// I = 1 minute: 99 - (ceil(1.25 x 6 = 7.5) - 1) = 92. Main's fit gives Fable 9.34M (87);
+    /// d22fc43f8 read Fable with Opus at 111.8M (0.18 a minute, point 98: Work at 93% kept
+    /// running). Any figure under 33.3M is more than 0.6 a minute, at or under 93.
+    #[test]
+    fn a_dear_minoritys_burst_hands_off_when_its_spend_requires() {
+        let root = Scratch::new();
+        let mix = |o: u64, s: u64, f: u64, h: u64| json!({"points": 1.0, "tokens": {"claude-opus-5-5": o,
+            "claude-sonnet-5-5": s, "claude-fable-5-1": f, "claude-haiku-5-5": h}});
+        let episodes = json!([mix(34_000_000, 14_500_000, 700_000, 100_000), mix(40_000_000, 21_500_000, 2_200_000, 90_000),
+            mix(18_000_000, 19_500_000, 1_900_000, 110_000), mix(18_500_000, 22_500_000, 1_000_000, 160_000)]);
+        let app = root.path().join("app");
+        let (service, work) = home_spent_work_in_use(&app, episodes, 93.);
+        let now = crate::util::now_millis();
+        let frames: Vec<(Value, u64)> = (0..20u64)
+            .map(|i| (model_frame("claude-fable-5-1", &format!("msg_{i}"), 2, 1_000_000 - 3, None), now - 57_000 + i * 3_000)).collect();
+        lease_frames(&service, &work, &frames);
+        service.before_turn(&work, None);
+        let published: View = gate::read_json(&app.join("engine-state/claude-quota.json")).unwrap();
+        let point = published.act_at["seven_day"];
+        assert!(point <= 93., "a 20M-token Fable burst left the week's point at {point} (weekly speed {} points a minute); \
+            at Fable's list price it is 92", published.speeds.get("seven_day").copied().unwrap_or(0.) * 60_000.);
+        assert!(published.leaving.contains(&work), "Work at 93% during a Fable burst is not being left: {:?}", published.leaving);
     }
 
     /// **An account the app has never read is asked again soon** (handoff round 2, runs 2-4
