@@ -22,6 +22,8 @@
 #        reviewed once
 #   W02  a lost review (it ends with no verdict) is started once more, and a
 #        second loss is told once; nothing more starts for that commit
+#   W02a an app handover lost twice retries after the cooldown, including after
+#        restart; no overlapping review or repeated pass, and terminal caps remain
 #   W03  a handover, end to end through the script: one review starts at the
 #        first look, by registry key, on the agent's own commits only (the
 #        merge base with main, which has moved on since), with the handover
@@ -363,10 +365,56 @@ told2 = "".join(x[2] for x in log2 if x[0] == "TOLD")
 starts = [s for s in w2.starts]
 ok2 = len(starts) == 2 and told2.count("[NO VERDICT TWICE] echo-opus-dict1c") == 1
 say("W02", ok2, "starts=%s told=%r" % ([(hm(s[0]), s[3]) for s in starts], told2[:600]))
+
+# The app has no manual CLI review path: two transient failures must not strand
+# the only verdict integration can consume. Drive the real watcher and durable
+# attempts through the cooldown with no real waiting, provider or model calls.
+os.environ["REVIEW_WATCH_STATE_DIR"] = os.path.join(root, "rw-app-lost")
+os.environ["SECOND_REVIEW_STATE_DIR"] = os.path.join(root, "sr-app-lost")
+one["gone"] = None  # unlike the historical fixture, this job cannot land without its review
+class AppReplayWorld(ReplayWorld):
+    def registry_items(self, now, seen):
+        items, problems = super().registry_items(now, seen)
+        for item in items:
+            item.source = "app"
+        return items, problems
+w3 = ReplayWatcher(AppReplayWorld(), mode="die")
+start = one["end"]
+first = run(w3, start, start + 120)
+notice = "".join(x[2] for x in first if x[0] == "TOLD")
+lost_at = start + 120
+cooldown = rw.REPEAT_MINUTES * 60
+run(w3, lost_at + 60, lost_at + cooldown - 60)
+before = len(w3.starts)
+# A new watcher must read the existing attempt ledger, not reset its retry budget.
+resumed = ReplayWatcher(AppReplayWorld(), mode="pass")
+resumed.next_pid = 2000
+retry_at = lost_at + cooldown
+run(resumed, retry_at, retry_at + 60)
+after = len(resumed.starts)
+run(resumed, retry_at + 120, retry_at + REVIEW_SECONDS + cooldown * 2)
+rows = rw.read_jsonl(rw.review_ledger())
+ok3 = before == 2 and after == 1 and len(resumed.starts) == 1 and any(r.get("verdict") == "passed" for r in rows)
+ok3 = ok3 and "automatic handover review will retry" in notice and "Nothing more starts" not in notice
+# Persistent failure waits from the latest loss. Terminal and progress reviews
+# keep their cap, while an app worker that stopped early gets no handover.
+item = AppReplayWorld().registry_items(retry_at, {})[0][0]
+losses = [dict(repo=item.repo, tip=item.tip, outcome="lost", trigger="handover", ended_at=retry_at)] * 3
+book = rw.Book([], {}, losses)
+ok3 = ok3 and not rw.due([item], book, retry_at + cooldown - 1, {}, 3600)
+ok3 = ok3 and len(rw.due([item], book, retry_at + cooldown, {}, 3600)) == 1
+item.source = "registry"
+ok3 = ok3 and not rw.due([item], book, retry_at + cooldown * 10, {}, 3600)
+item.source, item.state = "app", "running"
+ok3 = ok3 and not rw.due([item], book, retry_at + cooldown * 10, {}, 3600)
+item.state, item.stopped_early = "ended", True
+ok3 = ok3 and not rw.due([item], book, retry_at + cooldown * 10, {}, 3600)
+say("W02a", ok3, "starts before cooldown=%d, after restart=%d, final=%d, verdicts=%s" %
+    (before, after, len(resumed.starts), [r.get("verdict") for r in rows]))
 PY
 REPLAY="$(cat "$SB/replay.out")"
 grep '^  replay:' "$SB/replay.out" | sed 's/^/    /'
-for c in W01 W02; do
+for c in W01 W02 W02a; do
     line="$(grep "^[A-Z]* $c " "$SB/replay.out" | head -1)"
     case "$line" in
         "PASS $c "*) ok "$c ${line#PASS $c }" ;;

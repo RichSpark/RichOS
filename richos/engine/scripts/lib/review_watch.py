@@ -75,6 +75,8 @@ reviews run at once: second-review admits each by the engine's CPU rule.
 A REVIEW THAT ENDS WITHOUT A VERDICT (crashed, refused, past its own 60-minute
 limit, or running past OVERRUN_MINUTES, when it is stopped by its recorded
 process id) is started ONCE more; a second loss is told to the lead, once.
+For an ended app worker, its only integration review then retries at the existing
+30-minute repeat interval until it produces a verdict, including after restart.
 
 ===========================================================================
 WHAT IS TOLD (plan §2.4, §2.5). Each printed block wakes the lead.
@@ -916,7 +918,13 @@ def due(items, book, now, seen, long_seconds):
         key = it.key
         lost = book.losses.get(key) or []
         if len(lost) >= MAX_LOSSES:
-            continue                                # told once; nothing more starts by itself
+            # The app's handover verdict is its only integration route. A quota
+            # hold or unavailable CLI must not disable that route permanently.
+            # Keep retries apart using the existing repeat interval, including
+            # across restarts, and keep the terminal/progress loss cap.
+            if (it.source != "app" or it.state != "ended"
+                    or now - float(lost[-1].get("ended_at") or 0) < REPEAT_MINUTES * 60):
+                continue
         running = book.running.get(key)
         if it.state == "ended":
             if book.handover_verdict(key) or it.stopped_early:
@@ -1810,11 +1818,16 @@ def tell(now, sstate, rows, book, items, problems, attempts):
         if key[0] and git(key[0], "merge-base", "--is-ancestor", str(key[1]), "refs/heads/main") is not None:
             continue
         a = book.losses[key][-1]
+        item = items_by_key.get(key + (a.get("work") or "",)) or items_by_key.get(key)
+        if item and item.source == "app" and item.state == "ended" and not item.stopped_early:
+            action = "The automatic handover review will retry at %s; fix the cause if it persists." % hhmm(
+                float(a.get("ended_at") or 0) + REPEAT_MINUTES * 60)
+        else:
+            action = "Nothing more starts for this commit by itself. You can: fix the cause, then run second-review.sh by hand."
         session = a.get("session") or getattr(items_by_key.get(key + (a.get("work") or "",)), "session", "") or ""
         add(["  [NO VERDICT TWICE] %s, %s@%s: %s" % (a.get("name"), os.path.basename(key[0] or ""),
                                                     str(key[1])[:12], " ".join(str(a.get("why")).split())[:300]),
-             "      Nothing more starts for this commit by itself. You can: fix the cause, then run "
-             "%s by hand." % "second-review.sh"], session=session, key=k if ours(session) else None,
+             "      " + action], session=session, key=k if ours(session) else None,
             mark=None if ours(session) else (k, {"first": now}))
     # -- what could not be read or started ------------------------------------------
     for p in problems:
