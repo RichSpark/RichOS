@@ -786,6 +786,10 @@ def build_input(w, a, export, earlier):
     else:
         parts.append("- The author has handed this work over. `not_yet_claimed` lists anything the original words "
                      "ask for that the work does not claim at all.\n")
+    if resource_mcp():
+        parts.append("\nWhen current host CPU or memory matters, use mcp__richos_status__system_resources. "
+                     "This read-only tool shares the app's one-second sampler. Check status and age_ms; "
+                     "unavailable is not idle. It changes no resource controls.\n")
     prompt = "".join(parts)
     with open(os.path.join(review, "prompt.md"), "w", encoding="utf-8") as f:
         f.write(prompt)
@@ -1052,8 +1056,21 @@ CODEX_ISOLATION = ["--ephemeral", "--ignore-user-config", "--ignore-rules", "-c"
                    "--disable", "computer_use", "--disable", "browser_use"]
 
 
+def resource_mcp():
+    """App-owned reader runs outside the review sandbox, exposing only host observations."""
+    reader = os.environ.get("RICHOS_RESOURCE_READER", "")
+    state = os.environ.get("RICHOS_APP_STATE", "")
+    if not os.path.isabs(reader) or not os.path.isfile(reader) or not os.path.isabs(state):
+        return {}
+    return {"richos_status": {"command": reader, "args": ["--resources-mcp", state]}}
+
+
 def codex_argv(codex, export, schema_path, answer_path):
-    return [codex, "exec"] + CODEX_ISOLATION + [
+    resource_args = []
+    for name, config in resource_mcp().items():
+        resource_args += ["-c", "mcp_servers.%s.command=%s" % (name, json.dumps(config["command"])),
+                          "-c", "mcp_servers.%s.args=%s" % (name, json.dumps(config["args"]))]
+    return [codex, "exec"] + CODEX_ISOLATION + resource_args + [
         "--sandbox", "workspace-write",
         "-C", export,
         "--skip-git-repo-check",
@@ -1081,7 +1098,8 @@ def claude_argv(claude):
     # a `cd tree && ...` refused as prompts nobody answers. The boundary is the
     # OS sandbox, which bypassPermissions does not lift; the file-writing tools,
     # which the sandbox does not confine, are removed.
-    return [claude, "-p",
+    resource_args = ["--mcp-config", json.dumps({"mcpServers": resource_mcp()})] if resource_mcp() else []
+    return [claude, "-p"] + resource_args + [
             "--model", CLAUDE_MODEL,
             "--effort", CLAUDE_EFFORT,
             "--setting-sources", "",

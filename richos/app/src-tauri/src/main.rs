@@ -311,7 +311,12 @@ fn ensure_app_review_watch(engine: &Path, data_dir: &Path, claude: &Path, at_lau
         state: data_dir.join("engine-state"),
         // Codex is looked for where the Settings row looks (codex_reviews::search_path), so the
         // reviewer the row shows is the one the reviews run (the real second review of cf3c4482f).
-        environment: richos_core::review_watch::app_environment(&runtime.path(), &richos_core::codex_reviews::search_path()),
+        environment: {
+            let mut environment = richos_core::review_watch::app_environment(&runtime.path(), &richos_core::codex_reviews::search_path());
+            environment.insert("RICHOS_RESOURCE_READER".into(), std::env::current_exe().unwrap_or_default().to_string_lossy().into_owned());
+            environment.insert("RICHOS_APP_STATE".into(), data_dir.join("engine-state").to_string_lossy().into_owned());
+            environment
+        },
         mode: richos_core::review_watch::Mode::App {
             claude: claude.is_absolute().then(|| claude.to_path_buf()),
             // The list `quota::Service` opens from this same folder: each review runs on the
@@ -2357,6 +2362,19 @@ fn main() {
         }
         return;
     }
+    // Read-only resource access also works for an isolated reviewer before Tauri boots.
+    if first.as_deref() == Some(std::ffi::OsStr::new("--system-resources"))
+        || first.as_deref() == Some(std::ffi::OsStr::new("--resources-mcp")) {
+        let Some(root) = std::env::args_os().nth(2).map(PathBuf::from).filter(|p| p.is_absolute()) else {
+            eprintln!("An absolute app state directory is required."); std::process::exit(2);
+        };
+        if first.as_deref() == Some(std::ffi::OsStr::new("--resources-mcp")) {
+            if let Err(error) = richos_core::system_resources::run_stdio(&root) { eprintln!("{error}"); std::process::exit(1); }
+        } else {
+            println!("{}", serde_json::to_string(&richos_core::system_resources::read(&root)).unwrap());
+        }
+        return;
+    }
     // RICHDOCTOR (PRD 2026-10-22 §3): installed or refreshed beside this RichOS on a background
     // thread, before any setting or engine exists; nothing below waits for it.
     richdoctor_install::start();
@@ -2479,6 +2497,11 @@ fn main() {
             // AFTER `data_dir` is final, because "the data directory this boot will
             // actually write to" is one of the three facts, and reading it from anywhere
             // but the variable in use would be a second copy that can disagree.
+            let resources = match richos_core::system_resources::Monitor::start(&data_dir.join("engine-state")) {
+                Ok(monitor) => Some(monitor),
+                Err(error) => { eprintln!("[richos] resources unavailable: {error}"); None }
+            };
+            app.manage(ResourceMonitor(Mutex::new(resources)));
             let activation = activation::decide(&activation::gather(&data_dir, &app.config().identifier));
             eprintln!("[richos] {}", activation.log_message());
             // THE SAME DECISION, NOW AUTHORITATIVE, RE-ARMS THE FAILURE ALERT.
@@ -3743,6 +3766,7 @@ fn main() {
         // `output_files::output_save_copy` only; its commands are not granted to the page.
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            system_resources,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
             claude_quota_activity,
@@ -4080,6 +4104,10 @@ fn main() {
                 }
             }
             if let tauri::RunEvent::Exit = event {
+                if let Some(resources) = handle.try_state::<ResourceMonitor>() {
+                    let monitor = resources.0.lock().unwrap_or_else(|e|e.into_inner()).take();
+                    drop(monitor);
+                }
                 if let Some(state) = handle.try_state::<AppState>() {
                     // **HE CHOSE "QUIT AND STOP THE WORK", SO THE WORK STOPS** (§7.4a): every
                     // open job records his Stop as the Stop button does, before anything below
@@ -10109,3 +10137,10 @@ mod onboarding_decline_tests;
 
 #[cfg(test)]
 mod turn_boundary_tests;
+
+struct ResourceMonitor(Mutex<Option<richos_core::system_resources::Monitor>>);
+
+#[richos_command::command]
+fn system_resources(state: State<'_, AppState>) -> richos_core::system_resources::Snapshot {
+    richos_core::system_resources::read(&state.data_dir.join("engine-state"))
+}

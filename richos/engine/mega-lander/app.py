@@ -1802,6 +1802,9 @@ def worker_context(scope, payload):
         if any(record["binding"][key] != scope["binding"][key]
                for key in ("entity_id", "thread_id", "session_id")):
             raise ValueError("this worker belongs to another session or conversation")
+        # The shared host observation carries no company mutation or orchestration grant.
+        if payload.get("tool_name") == "mcp__richos_status__system_resources":
+            return None
         if str(payload.get("tool_name", "")).startswith("mcp__richos_"):
             raise ValueError("CEO-scoped continuity, onboarding and orchestration tools are not worker tools")
         if record["request"]["role"] == "consult":

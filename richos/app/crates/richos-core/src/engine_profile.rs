@@ -379,12 +379,98 @@ pub fn team_digest(engine: &Path, data: &Path) -> Result<String, RuntimeError> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// Find a YAML delimiter outside quoted tool names and comments.
+fn unquoted_delimiter(line: &str, wanted: char) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+    for (at, ch) in line.char_indices() {
+        if escaped { escaped=false; continue; }
+        if quote==Some('"') && ch=='\\' { escaped=true; continue; }
+        if let Some(mark)=quote {
+            if ch==mark { quote=None; }
+        } else if ch=='\'' || ch=='"' { quote=Some(ch); }
+        else if ch==wanted { return Some(at); }
+    }
+    None
+}
+fn tool_yaml_code(line: &str) -> &str {
+    &line[..unquoted_delimiter(line,'#').unwrap_or(line.len())]
+}
+
+/// Generated lease definitions expose the same host read even with a restricted tool list.
+/// Saved definitions are untouched. Other frontmatter and the instruction body stay intact.
+pub fn with_resource_access(body: &str) -> String {
+    let tool=crate::system_resources::QUALIFIED_TOOL;
+    let mut lines: Vec<String>=body.split_inclusive('\n').map(str::to_owned).collect();
+    if lines.first().is_none_or(|line|line.trim_end()!="---") { return body.into(); }
+    let end=lines.iter().skip(1).position(|line|line.trim_end()=="---").map(|n|n+1).unwrap_or(1);
+    for i in 1..end {
+        let Some(value)=tool_yaml_code(&lines[i]).strip_prefix("tools:").map(str::trim).map(str::to_owned) else { continue };
+        let field_end=(i+1..end).find(|j| {
+            let code=tool_yaml_code(&lines[*j]);
+            code.starts_with(|c:char|c.is_ascii_alphabetic()) && code.contains(':')
+        }).unwrap_or(end);
+        let already=lines[i..field_end].iter().any(|line|tool_yaml_code(line)
+            .split(|ch:char|ch.is_whitespace() || ",[]\"'".contains(ch)).any(|part|part==tool));
+        if already { return body.into(); }
+        if value.starts_with('[') {
+            let mut parts=Vec::new();
+            for j in i..field_end {
+                let code=tool_yaml_code(&lines[j]);
+                let part=if j==i { code.strip_prefix("tools:").unwrap().trim_start().strip_prefix('[').unwrap() } else { code };
+                if let Some(close)=unquoted_delimiter(part,']') {
+                    parts.push(part[..close].trim_end_matches(['\r','\n']).to_owned());
+                    let contents=parts.join("\n");
+                    let contents=contents.trim().trim_end_matches(',').trim_end();
+                    let comma=if contents.is_empty() { "" } else { ", " };
+                    let comment=unquoted_delimiter(&lines[j],'#').map(|at|format!(" {}",lines[j][at..].trim_end())).unwrap_or_default();
+                    lines.splice(i..=j,[format!("tools: [{contents}{comma}{tool}]{comment}\n")]);
+                    return lines.concat();
+                }
+                parts.push(part.trim_end_matches(['\r','\n']).to_owned());
+            }
+            // Leave an invalid/incomplete source for the provider's normal validation.
+            return body.into();
+        }
+        if value.is_empty() {
+            if let Some(first)=(i+1..field_end).find(|j|!tool_yaml_code(&lines[*j]).trim().is_empty()) {
+                if tool_yaml_code(&lines[first]).trim_start().starts_with('-') {
+                    let indent=lines[first].chars().take_while(|c|c.is_whitespace() && *c!='\n').collect::<String>();
+                    lines.insert(first,format!("{indent}- {tool}\n"));
+                }
+            }
+            return lines.concat();
+        }
+        let comment=unquoted_delimiter(&lines[i],'#').map(|at|format!(" {}",lines[i][at..].trim_end())).unwrap_or_default();
+        if value.starts_with('"') || value.starts_with('\'') {
+            let quote=value.chars().next().unwrap();
+            if let Some(close)=value.rfind(quote).filter(|n|*n>0) {
+                let mut value=value;
+                let comma=if close==1 { "" } else { ", " };
+                value.insert_str(close,&format!("{comma}{tool}"));
+                lines[i]=format!("tools: {value}{comment}\n");
+            }
+        } else if value!="null" && value!="~" {
+            // YAML folds a hand-wrapped plain scalar. Append at its end, not
+            // between the first line's comma and the continuation's next tool.
+            let last=(i..field_end).rev().find(|j|!tool_yaml_code(&lines[*j]).trim().is_empty()).unwrap_or(i);
+            let code=tool_yaml_code(&lines[last]).trim_end();
+            let separator=if code.ends_with(',') { " " } else { ", " };
+            let comment=unquoted_delimiter(&lines[last],'#').map(|at|format!(" {}",lines[last][at..].trim_end())).unwrap_or_default();
+            lines[last]=format!("{code}{separator}{tool}{comment}\n");
+        }
+        return lines.concat();
+    }
+    // No list (or a null list) means the provider inherits every tool, including this read.
+    body.into()
+}
+
 fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path, preserve_loaded:bool)->Result<Vec<String>,RuntimeError> {
     let team=active_team(engine,data)?;
     for root in [plugin.join("agents"),coordination.join(".claude/agents")] {
         for (name,body) in &team {
             let path=root.join(format!("{name}.md"));
-            if !preserve_loaded || !path.exists() {write(&path,body)?;}
+            if !preserve_loaded || !path.exists() {write(&path,&with_resource_access(body))?;}
         }
         for entry in std::fs::read_dir(&root).map_err(|e|RuntimeError(e.to_string()))? {
             let path=entry.map_err(|e|RuntimeError(e.to_string()))?.path();
@@ -815,6 +901,7 @@ impl EngineProfile {
             .env_remove("GIT_AUTHOR_NAME").env_remove("GIT_AUTHOR_EMAIL")
             .env_remove("GIT_COMMITTER_NAME").env_remove("GIT_COMMITTER_EMAIL")
             .env("RICHOS_APP_REGISTRY", self.coordination.parent().unwrap().join("entities.json"))
+            .env("RICHOS_RESOURCE_READER", std::env::current_exe().unwrap_or_default())
             .env("RICHOS_APP_SCOPE", scope).env("RICHOS_APP_STATE", &self.state)
             .env("RICHOS_AGENT_HOLD_DIR", self.state.join("agent-hold"))
             .env("STALL_WATCH_STATE_DIR", self.state.join("stall-watch"))

@@ -64,6 +64,10 @@ fn read_scope(path: &Path) -> Result<StatusToolScope, String> {
 
 pub fn tools() -> Value {
     json!({"tools":[
+        {"name":crate::system_resources::TOOL,
+         "description":"Read the Mac's current CPU, RAM, memory pressure, swap and last minute of samples. Consult when current host resources matter. Reads the shared one-second sampler immediately; never starts a measurement. Check status and age_ms before relying on a reading. Observations only; this tool changes nothing.",
+         "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
+         "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
         {"name":LOOK_TOOL_NAME,
          "description":"Read the scoped background-work record for this conversation. Lists starting, running, waiting and finished assignments, including each work kind and observed state. Registration is distinct from execution; a running state does not prove progress. This tool changes nothing and cannot start, stop, approve or retry work.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
@@ -128,6 +132,11 @@ pub fn call(
     name: &str,
     arguments: Value,
 ) -> Result<Value, String> {
+    if name == crate::system_resources::TOOL {
+        if arguments != json!({}) { return Err("system_resources takes no arguments.".into()); }
+        let scope = read_scope(scope_path)?;
+        return serde_json::to_value(crate::system_resources::read(&scope.state_root)).map_err(|e| e.to_string());
+    }
     if name == "delegate" {return crate::session_tools::delegate(scope_path, &read_scope(scope_path)?, arguments)}
     if name == "send" {return crate::session_tools::send(scope_path, &read_scope(scope_path)?, arguments)}
     if name == "transcript" || name == "sessions" {
@@ -662,12 +671,24 @@ mod tests {
         // Direct session reads are read-only; peer send has a separate host-bound contract.
         let listed = tools();
         let listed = listed["tools"].as_array().unwrap();
-        assert_eq!(listed.len(), 5);
-        assert!(listed[..3].iter().all(|t|t["annotations"]["readOnlyHint"]==true));
-        assert_eq!(listed[3]["name"],"send");
-        assert_eq!(listed[4]["name"],"delegate");
+        assert_eq!(listed.len(), 6);
+        assert!(listed[..4].iter().all(|t|t["annotations"]["readOnlyHint"]==true));
+        assert_eq!(listed[4]["name"],"send");
+        assert_eq!(listed[5]["name"],"delegate");
         assert!(call(&scope,&UnknownScreen,"delegate",json!({"text":"hello","from":"stu"})).is_err());
         assert!(call(&scope,&UnknownScreen,"send",json!({"text":"hello","from":"stu"})).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resource_read_needs_a_scope_but_no_mutation_grant_and_refuses_arguments() {
+        let (root,scope)=fixture();
+        let value=call(&scope,&UnknownScreen,crate::system_resources::TOOL,json!({})).unwrap();
+        assert_eq!(value["status"],"unavailable");
+        assert!(value["current"].is_null());
+        assert!(call(&scope,&UnknownScreen,crate::system_resources::TOOL,json!({"state_root":"elsewhere"})).is_err());
+        std::fs::remove_file(&scope).unwrap();
+        assert!(call(&scope,&UnknownScreen,crate::system_resources::TOOL,json!({})).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -78,6 +78,7 @@
 [richos] quit: the Codex watcher {} ended.
 [richos] quit: the second review's watcher(s) {} ended.
 [richos] quit: {} lease(s) ended their tool commands; {} stopped at the bound.
+[richos] resources unavailable: {}
 [richos] saved answer order unreadable: {}
 [richos] second review: not watching yet, the engine is not verified ({})
 [richos] second review: the app's review-watch could not start ({})
