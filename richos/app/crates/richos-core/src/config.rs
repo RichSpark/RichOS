@@ -2362,11 +2362,13 @@ mod tests {
             let mut store = ConfigStore::open(&path).unwrap();
             assert_eq!(store.resources_view(), "ink", "a first run draws Ink");
             assert!(store.set_resources_view("dock").is_err(), "a word that is not a view is refused");
+            store.set_idle_session_minutes(0).unwrap();
             store.set_resources_view("readout").unwrap();
         }
         {
             let mut store = ConfigStore::open(&path).unwrap();
             assert_eq!(store.resources_view(), "readout", "his choice survives a reopen");
+            assert_eq!(store.idle_session_minutes(), 0, "saving the view keeps the idle-session choice");
             store.set_resources_view("ink").unwrap();
         }
         assert_eq!(ConfigStore::open(&path).unwrap().resources_view(), "ink");
