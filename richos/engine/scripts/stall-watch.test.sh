@@ -29,7 +29,8 @@
 #   R01  two chats (registry partitions and lead sessions), one stalled agent of the
 #        first: its SELF-WAIT is told in that chat and nothing at all in the other
 #   R02  a ledger wait raised in chat A (its row's session_id): told in A, never in B
-#   R03  the same wait raised through the real writer with the app environment (RICHOS_AGENT_SESSION)
+#   R03  the same wait raised through the real writer with the app environment (RICHOS_AGENT_SESSION): no WAIT and no escalation in chat B
+#   R03b chat A has ended: chat B takes its escalation over
 #   W01  a test VM wait and a device wait over 10 min: one block, two stalls,
 #        who holds each ("no holder recorded" / "not recorded by the waiter")
 #   H01  a teammate the lead holds (agent_hold.py): its wait is no stall
@@ -605,13 +606,33 @@ R3_ROW="$(env -u CLAUDE_SESSION_ID RICHOS_ESCALATION_LEDGER="$R3_LEDGER" RICHOS_
     --worktree "$SB/repos/echo-opus-wait" --branch cc/echo-opus-wait --repo fixture --state proceeding \
     --title "Waiting for the test VM" --question "the test VM is held; when is it free" 2>&1)"
 R3NOW=$(( $(date +%s) + 1500 ))
+# The app's layout: each chat's registry is one partition under <app state>/workspaces, so
+# chat B finds chat A's session record there (workspaces.other_registries).
+R3H="$SB/r3-home"; mkdir -p "$R3H/state/workspaces"
+ln -s "$RICHOS_WORKSPACES_DIR" "$R3H/state/workspaces/chat-a"; ln -s "$REG_B" "$R3H/state/workspaces/chat-b"
 OUT_A="$(RICHOS_ESCALATION_LEDGER="$R3_LEDGER" STALL_WATCH_NOW=$R3NOW bash "$SW" --tick 2>&1)"
 OUT_B="$(RICHOS_ESCALATION_LEDGER="$R3_LEDGER" RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" \
+         HOME="$R3H" RICHOS_APP_STATE="$R3H/state" \
          STALL_WATCH_STATE_DIR="$SB/state-r3b" STALL_WATCH_NOW=$R3NOW bash "$SW" --tick 2>&1)"
-check "R03  a wait raised by the real writer in the app is told in its own chat and never in another" \
+check "R03  a wait raised by the real writer in the app is told in its own chat and never in another (neither as a WAIT nor as an escalation)" \
     "$( grep -q "\"session_id\": \"$SID\"" "$R3_LEDGER" && has "$OUT_A" "[WAIT] echo-opus-wait" \
-        && ! has "$OUT_B" "[WAIT] echo-opus-wait"; echo $?)" \
+        && has "$OUT_A" "Waiting for the test VM" \
+        && ! has "$OUT_B" "[WAIT] echo-opus-wait" && ! has "$OUT_B" "Waiting for the test VM"; echo $?)" \
     "raise=$R3_ROW | ledger=$(cat "$R3_LEDGER" 2>&1) | chat A=$OUT_A | chat B=$OUT_B"
+# R03b: chat A has ended (its session record says so): chat B takes the escalation over.
+R3E="$SB/r3-home-ended"; mkdir -p "$R3E/state/workspaces/chat-a/sessions"
+ln -s "$REG_B" "$R3E/state/workspaces/chat-b"
+python3 - "$RICHOS_WORKSPACES_DIR/sessions/$SID.json" "$R3E/state/workspaces/chat-a/sessions/$SID.json" <<'PY'
+import json, sys
+rec = json.load(open(sys.argv[1]))
+rec["ended_at"] = "2026-10-30T08:00:00Z"
+json.dump(rec, open(sys.argv[2], "w"))
+PY
+OUT_B="$(RICHOS_ESCALATION_LEDGER="$R3_LEDGER" RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" \
+         HOME="$R3E" RICHOS_APP_STATE="$R3E/state" \
+         STALL_WATCH_STATE_DIR="$SB/state-r3e" STALL_WATCH_NOW=$R3NOW bash "$SW" --tick 2>&1)"
+check "R03b the owning chat has ended: another chat is told its escalation" \
+    "$( has "$OUT_B" "Waiting for the test VM"; echo $?)" "chat B=$OUT_B"
 
 # --- W: other recorded waits ---------------------------------------------------
 new_registry w; new_state w

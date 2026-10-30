@@ -1407,6 +1407,22 @@ def session_started(src, sid):
     return None
 
 
+def _session_state_anywhere(src, owner, cache):
+    """'running', 'ended' or 'unknown' for a session this registry may not hold: its own
+    record first, then its identity in every other registry on this machine."""
+    st = src.ws.session_state(owner, None, cache)[0]
+    others = getattr(src.ws, "other_registries", None)
+    if st != "unknown" or others is None:
+        return st
+    for registry in others():
+        identity = _read_json(os.path.join(registry, "sessions", owner + ".json"))
+        if identity:
+            st = "ended" if identity.get("ended_at") else src.ws.session_state(owner, identity)[0]
+            if st != "unknown":
+                return st
+    return "unknown"
+
+
 def _esc_owner(src, reg, e, sid, cache):
     """'ours', 'other' or 'unknown': one live app lead handles host cleanup;
     teammates otherwise belong to an exactly matching live registration."""
@@ -1452,7 +1468,18 @@ def _esc_owner(src, reg, e, sid, cache):
         if any(w.get("path") and os.path.realpath(w["path"]) == real for w in r.get("workspaces") or []):
             matches.append(r)
     if len(matches) != 1:
-        return "unknown"
+        # In the app another chat's registry partition holds neither the worktree nor the name:
+        # the session the row was raised in decides, while it runs (2026-10-30, second review
+        # of 5881747e5: chat B was told chat A's wait). An ended owner's row is still told here.
+        owner = str(e.get("session_id") or "")
+        if not owner or os.sep in owner:
+            return "unknown"
+        if owner == sid:
+            return "ours"
+        try:
+            return "other" if _session_state_anywhere(src, owner, cache) == "running" else "unknown"
+        except Exception:  # noqa: BLE001
+            return "unknown"
     owner = str(matches[0].get("session_id") or "")
     if owner and owner == sid:
         return "ours"
