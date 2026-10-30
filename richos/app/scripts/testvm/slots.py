@@ -17,11 +17,10 @@ DEVELOPMENT TIME TO BE PISSED AWAY FOR EVERY 5-SECOND FART???"*
     run, and holds a slot for that run's length only.
   * A caller waits only while every slot is executing somebody's run.
 
-WHY TWO. Until 2026-09-27 there was one guest lock, and a job that needed the guest for a few
-minutes of a multi-hour task queued everybody else behind it (3 h 58 min for one agent that
-day). This Mac has 10 cores and 24 GB; a guest takes 4 cores and 5 GB (lib.sh), and Apple's
-Virtualization framework runs at most two macOS guests at once on one host. Two is therefore
-both what fits and the ceiling: TESTVM_SLOTS may lower it to 1, never raise it.
+WHY TWO. With one guest lock, a job that needed the guest for a few minutes of a multi-hour
+task queued everybody else behind it for hours. A guest takes a fixed share of the host's cores
+and memory (lib.sh), and Apple's Virtualization framework runs at most two macOS guests at once
+on one host. Two is therefore both the most that can fit and the ceiling: TESTVM_SLOTS may lower it to 1, never raise it.
 
 SLOT 1 KEEPS THE OLD NAME, `<TESTVM_ROOT>/guest.lock`, on purpose: a run-walk.py from a
 checkout older than this file still takes that lock, so it still counts as one slot, and the
@@ -32,18 +31,17 @@ sample is spent while every slot executes a run); fewer guests running than ther
 (tart's own list, so a guest booted by an old checkout is counted); reserve.py's CPU and memory
 rule (CEO ruling §77); then THE GUEST'S OWN MEMORY. ONLY THEN is a slot taken: a caller being
 sampled, refused or waiting holds no slot, so no walk queues behind one that is not admitted
-(2026-10-05; until then a slot was held through the one-second CPU sample, and a walk arriving
-in that second was refused as if both slots ran). `--wait SECONDS` bounds the whole admission;
+(a slot held through the one-second CPU sample would make a walk arriving in that second be
+refused as if both slots ran). `--wait SECONDS` bounds the whole admission;
 0, the default, refuses at once.
 From the first refusal until the caller is admitted or refused for good, the wait is RECORDED
 (the engine's resource_waits.py, through reserve.py), so the lead's turn end is refused once
 any caller has waited past ten minutes (the engine's guard-resource-waits.sh).
 
-THE GUEST'S OWN MEMORY, measured 2026-09-27 18:56Z: two guests admitted 1.5 s apart both
-passed reserve.py's rule, because a guest takes its memory only as it boots. 40 s later the
-host was at 99% CPU, memory pressure warn, 32% free and swapping out 120 MB/s (it had been
-71% free, 0 MB/s, guests then 7 GB). reserve.py samples what is already used; a guest is its
-whole RAM about to be used.
+THE GUEST'S OWN MEMORY: two guests admitted a moment apart both pass reserve.py's rule,
+because a guest takes its memory only as it boots; shortly after, the host can be CPU-saturated
+and swapping heavily although it looked mostly free at admission. reserve.py samples what is
+already used; a guest is its whole RAM about to be used.
 So a guest is admitted only when the kernel's available memory, less what every running guest
 may still take (its RAM less what its VM process already holds) and less this guest's whole
 RAM, leaves the memory floor for everything else on the Mac.
@@ -367,7 +365,7 @@ def _write(handle, record):
 def own_holder(paths, owner=None):
     """(pid, slot name) of a slot held by a run of the SAME owner as this caller, else None. The owner is
     $RICHOS_AGENT_OWNER (one agent's name for itself); no owner, no match. A caller that queues
-    behind its own earlier walk can only wait for itself (2026-10-04: four minutes)."""
+    behind its own earlier walk can only wait for itself."""
     owner = os.environ.get('RICHOS_AGENT_OWNER', '') if owner is None else owner
     if not owner:
         return None
