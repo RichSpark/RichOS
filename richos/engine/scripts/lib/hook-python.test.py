@@ -165,7 +165,7 @@ exec python3 -c 'print("exec ok")'
         proc = self.probe(os.path.join(engine, "scripts/lib/hook-python.sh"), env,
                           git='git --version >/dev/null' if REAL_GIT else "")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(f"PY={engine}/scripts/lib/../../runtime/bin/python3", proc.stdout)
+        self.assertIn(f"PY={engine}/runtime/bin/python3\n", proc.stdout)
         self.assertIn(f"CALLER={self.path}\n", proc.stdout)
         for said in ("function ok", "env ok", "child ok", "exec ok"):
             self.assertIn(said, proc.stdout)
@@ -173,6 +173,25 @@ exec python3 -c 'print("exec ok")'
             self.assertEqual(len(fh.read().splitlines()), 4, "each form ran the bundled runtime")
         if REAL_GIT:
             self.assertTrue(os.path.exists(log + ".git"), "the runtime's git, not the stub")
+        self.assertEqual(self.stubs_run(), [])
+
+    def test_h2e_the_app_lease_path_is_left_as_it_is(self):
+        # The app puts <engine>/runtime/bin first on every lease's PATH (runtime.rs path_with): a
+        # hook sourcing the library the way every hook does finds that same folder, by the same
+        # spelling, and changes nothing.
+        engine = os.path.join(self.t, "engine")
+        os.makedirs(os.path.join(engine, "scripts/lib"))
+        shutil.copy(LIB, os.path.join(engine, "scripts/lib/hook-python.sh"))
+        self.runtime(engine, os.path.join(self.t, "runtime.log"))
+        with open(os.path.join(HOOKS, "guard-host-sleep.sh"), encoding="utf-8") as fh:
+            line = next(l for l in fh if SOURCE_LINE.match(l))
+        hook = os.path.join(engine, "scripts/hooks/probe.sh")
+        write(hook, "#!/usr/bin/env bash\n" + line + 'echo "PY=$RICHOS_HOOK_PYTHON"\necho "PATH=$PATH"\n')
+        lease = os.path.join(engine, "runtime/bin") + os.pathsep + self.path
+        proc = subprocess.run(["/bin/bash", hook], env=self.env(PATH=lease), capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(f"PY={engine}/runtime/bin/python3\n", proc.stdout)
+        self.assertIn(f"PATH={lease}\n", proc.stdout)
         self.assertEqual(self.stubs_run(), [])
 
     def test_h2b_a_python_on_path_after_the_stubs(self):

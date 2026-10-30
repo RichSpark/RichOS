@@ -17492,7 +17492,7 @@
     },
     "scripts/lib/hook-python.sh": {
       "source": "scripts/lib/hook-python.sh",
-      "sha256": "1fcead9d51cadfc3b2228a256c4b43184615ad94c4e22f055f68e9db2c849f85",
+      "sha256": "f3f00fae421f06c3ec401bcae0e71d938959cf008982c9929a7935c4b136a349",
       "keys": [],
       "edges": [],
       "evidence": "Full file reviewed (2026-10-30). Sourced first by every hook: chooses python3 by path with file tests only (<engine>/runtime/bin/python3, a non-stub python3 on PATH, the developer directory's python3) and never executes a stub; defines and exports the python3 function, RICHOS_HOOK_PYTHON and RICHOS_HOOK_CALLER_PATH, and may put the chosen folder first on PATH. Environment: PATH, DEVELOPER_DIR, RICHOS_TOOLCHAIN_ROOT (test prefix); reads /var/db/xcode_select_link; no orchestration key."

@@ -37,11 +37,18 @@ _hp_root="${RICHOS_TOOLCHAIN_ROOT:-}"
 _hp_stubs="$_hp_root/usr/bin"
 _hp_lib="${BASH_SOURCE[0]%/*}"
 [ "$_hp_lib" != "${BASH_SOURCE[0]}" ] || _hp_lib=.
+# The engine folder, spelled as the app spells it on PATH (<engine>/runtime/bin), with no fork:
+# a hook sources this file as <engine>/scripts/hooks/../lib/hook-python.sh.
+case "$_hp_lib" in
+    */scripts/hooks/../lib) _hp_engine="${_hp_lib%/scripts/hooks/../lib}" ;;
+    */scripts/lib) _hp_engine="${_hp_lib%/scripts/lib}" ;;
+    *) _hp_engine="$_hp_lib/../.." ;;
+esac
 _hp_py=""
 
 # 1. The bundled runtime, by its place beside this engine's scripts.
-if [ -f "$_hp_lib/../../runtime/bin/python3" ] && [ -x "$_hp_lib/../../runtime/bin/python3" ]; then
-    _hp_py="$_hp_lib/../../runtime/bin/python3"
+if [ -f "$_hp_engine/runtime/bin/python3" ] && [ -x "$_hp_engine/runtime/bin/python3" ]; then
+    _hp_py="$_hp_engine/runtime/bin/python3"
 fi
 # 2. The first python3 on PATH that is not in a stub folder.
 if [ -z "$_hp_py" ]; then
@@ -95,4 +102,4 @@ else
     }
 fi
 export -f python3
-unset _hp_root _hp_stubs _hp_lib _hp_py _hp_ifs _hp_d _hp_link _hp_first _hp_dir
+unset _hp_root _hp_stubs _hp_lib _hp_engine _hp_py _hp_ifs _hp_d _hp_link _hp_first _hp_dir
