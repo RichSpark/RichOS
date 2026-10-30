@@ -688,6 +688,13 @@
     if (!menu.hidden) closeMenu(false);
   });
 
+  // Name wrapping and the user's type size can change the footer's height without a
+  // window resize. Keep an open card anchored to the square as that layout changes.
+  const footerWatch = new ResizeObserver(() => {
+    if (isOpen()) place();
+  });
+  footerWatch.observe(footer);
+
   // ---- the view menu ----------------------------------------------------------------------------
   function items() {
     return Array.from(menu.querySelectorAll(".res-menu-item"));

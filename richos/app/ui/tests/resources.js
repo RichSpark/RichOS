@@ -790,6 +790,68 @@ async function main() {
       } finally { await pausedContext.close(); }
     });
 
+    await run.check(`15 ${theme}  long names remain whole beside both resource views at every supported type size`, async () => {
+      const namesContext = await newContext(browser, theme);
+      try {
+        const p = await openApp(namesContext, "live");
+        const names = ["Alexandra Montgomery-Booster", "AlexandertheGreatBooster", "WWMMWWMMWWMMWWMMWWMMWWMM"];
+        let measured = 0;
+        for (const scale of [80, 90, 100, 110, 120, 135, 150]) {
+          for (const view of ["ink", "readout"]) {
+            await p.click("#res-square", { button: "right" });
+            await p.click(`#res-menu [data-view="${view}"]`);
+            for (const name of names) {
+              await p.evaluate(async ({ name, scale }) => {
+                await window.RichBridge.invoke("set_user_name", { name });
+                await renderUserIdentity();
+                window.RichTheme.setScale(scale);
+              }, { name, scale });
+              await flushFrames(p);
+              const layout = await p.evaluate(() => {
+                const n = document.getElementById("rail-user-name");
+                const box = n.getBoundingClientRect();
+                const range = document.createRange(); range.selectNodeContents(n);
+                const glyphs = [...range.getClientRects()];
+                const identity = document.getElementById("rail-identity").getBoundingClientRect();
+                const resource = document.getElementById("res-square").getBoundingClientRect();
+                const footer = document.getElementById("rail-footer").getBoundingClientRect();
+                const figures = getComputedStyle(document.querySelector(".res-readout"));
+                return { text: n.textContent, clipped: n.scrollWidth > n.clientWidth || n.scrollHeight > n.clientHeight,
+                  outside: glyphs.some((r) => r.left < box.left - 1 || r.right > box.right + 1 || r.top < box.top - 1 || r.bottom > box.bottom + 1),
+                  overlap: identity.right > resource.left + 1, footerBottom: footer.bottom, height: innerHeight,
+                  railWidth: document.getElementById("rail").getBoundingClientRect().width,
+                  font: parseFloat(getComputedStyle(n).fontSize), line: parseFloat(figures.lineHeight), figuresFont: parseFloat(figures.fontSize) };
+              });
+              assertEqual(layout.text, name, "the saved name is rendered in full");
+              assert(!layout.clipped && !layout.outside && !layout.overlap, `${view} ${scale}% clips or overlaps ${name}: ${JSON.stringify(layout)}`);
+              assertEqual(layout.railWidth, 300, "no rail widening to make the name fit");
+              assert(Math.abs(layout.font - 16 * scale / 100) < 0.001, "the chosen type size is preserved: " + layout.font);
+              assert(layout.footerBottom <= layout.height + 1, "the footer remains within the window");
+              if (view === "readout") assert(layout.line >= layout.figuresFont, "Readout line spacing follows the chosen type size");
+              measured++;
+              if ((scale === 100 && name === names[0]) || (scale === 150 && name === names[1])) {
+                await p.evaluate(() => document.activeElement.blur());
+                await p.mouse.move(700, 450);
+                await footerShot(p, `${scale === 100 ? "long-name" : "long-word-150"}-${view}-${theme}.png`);
+              }
+            }
+          }
+        }
+        await p.evaluate(async () => {
+          await window.RichBridge.invoke("set_user_name", { name: "Alexandra Montgomery-Booster" });
+          await renderUserIdentity();
+          window.RichTheme.setScale(100);
+        });
+        await p.click("#res-square");
+        await p.evaluate(() => window.RichTheme.setScale(150));
+        await flushFrames(p);
+        const anchorGap = await p.evaluate(() => document.querySelector("#res-square .res-tile").getBoundingClientRect().top - document.getElementById("res-card").getBoundingClientRect().bottom);
+        assert(Math.abs(anchorGap - 12) <= 1.5, "the card follows the reflowed footer: " + anchorGap);
+        assertEqual(p.__errors, [], "no page errors");
+        return `${measured} rendered layouts: three names, seven supported scales, both views; no clipping, overlap or font reduction`;
+      } finally { await namesContext.close(); }
+    });
+
     await page.close();
     await context.close();
   }
