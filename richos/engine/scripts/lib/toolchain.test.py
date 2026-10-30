@@ -310,10 +310,13 @@ class FakeMac(unittest.TestCase):
             self.assertEqual(rc, 2, "%r passed: %s" % (command, message))
             self.assertIn("`make`", message)
         # Text, not commands: a heredoc written to a file, one sent to the guest, and one a shell
-        # runs with -c (its script is the -c argument, the heredoc is only its input).
+        # runs with -c (its script is the -c argument, the heredoc is only its input). A shell
+        # heredoc inside a file's or the guest's heredoc is text too (review 2026-10-30).
         for command in ("cat > notes.sh <<'EOF'\nmake\nEOF",
                         "ssh vm bash <<'EOF'\nmake\nEOF",
-                        "bash -c 'cat' <<'EOF'\nmake\nEOF"):
+                        "bash -c 'cat' <<'EOF'\nmake\nEOF",
+                        "cat > notes.sh <<'SCRIPT'\nbash <<'BUILD'\n/usr/bin/make\nBUILD\nSCRIPT",
+                        "ssh vm bash <<'REMOTE'\nbash <<'BUILD'\n/usr/bin/make\nBUILD\nREMOTE"):
             self.assertEqual(self.guard(command)[0], 0, command)
         # With developer tools the same heredoc runs.
         self.developer("Library/Developer/CommandLineTools", "clt")
