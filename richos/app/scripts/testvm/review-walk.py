@@ -34,6 +34,12 @@ thing the user asked for on a first attempt (removing leading and trailing hyphe
 that pass without it and says nothing of it; on a continuation it fixes what it is told. Only a
 reviewer who reads the user's own words, and checks the work against them, finds it.
 
+WHO REVIEWS: the app's review watcher reviews a finished worker by itself and `integrate` takes the
+worker alone, so the reviews are read from the watcher's ledger (<app data>/engine-state/second-review/
+reviews.jsonl, each row with its prompt.md) and tied to the work by commit: the continuation names the
+commit it continued, the integration the commit it landed and the review it consumed. A reviewer a
+coordinator prepared itself is still read from its receipt.
+
 THE PASS LIST, each from the records:
   1 every reviewer's brief starts with the user's turn verbatim (the slice's Rust and Python half)
   2 the first review of builder's work asked for changes
@@ -207,6 +213,24 @@ class ReviewWalk(command_walk.CommandWalk):
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 120))
 
+    def reviews(self):
+        """The app's own review-watch verdicts, read in the guest: every row of its ledger
+        (<app data>/engine-state/second-review/reviews.jsonl) with the prompt its reviewer was given,
+        kept beside the row's record (prompt.md) as `_prompt`."""
+        script = ('import json,glob,os,sys\n'
+                  'out=[]\n'
+                  'for p in sorted(glob.glob(sys.argv[1]+"/engine-state/second-review/reviews.jsonl")'
+                  '+glob.glob(sys.argv[1]+"/engine-state/reviews.jsonl")):\n'
+                  '    for line in open(p):\n'
+                  '        try: r=json.loads(line)\n'
+                  '        except Exception: continue\n'
+                  '        if not isinstance(r,dict) or not r.get("verdict"): continue\n'
+                  '        f=os.path.join(r.get("record") or "","prompt.md")\n'
+                  '        r["_prompt"]=open(f).read() if os.path.exists(f) else None\n'
+                  '        out.append(r)\n'
+                  'print(json.dumps(out))\n')
+        return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 120))
+
     def card_on_screen(self, wait=15):
         """Whether the Git name card is on screen, asked of the UI for at most `wait` s (a probe may hang);
         an unanswered probe counts as not on screen."""
@@ -291,7 +315,13 @@ class ReviewWalk(command_walk.CommandWalk):
         (self.out / 'acme-log.txt').write_text(log)
         landed = guest(self.vm, 'cd ' + shlex.quote(self.company) + ' && git checkout -q main 2>/dev/null; python3 -c '
                        + shlex.quote(CHECK) + ' ' + shlex.quote(self.company) + ' 2>&1 || true').strip()
-        verdict = judge(rows, record, landed, presses)
+        reviews = self.reviews()
+        for r in reviews:
+            if r.get('_prompt') is not None:
+                (briefs / ('review-' + r['id'] + '.md')).write_text(r['_prompt'])
+        (self.out / 'reviews.json').write_text(json.dumps([{k: v for k, v in r.items() if k != '_prompt'}
+                                                           for r in reviews], indent=2) + '\n')
+        verdict = judge(rows, record, landed, presses, reviews)
         (self.out / 'verdict.json').write_text(json.dumps(verdict, indent=2) + '\n')
         failed = [line for line in verdict['lines'] if line['outcome'] != 'PASS']
         if failed:
@@ -300,55 +330,86 @@ class ReviewWalk(command_walk.CommandWalk):
                 'approvals_pressed': len(presses)}
 
 
-def judge(rows, record, landed, presses):
-    """The pass list from the records alone (see the module doc)."""
+WORDS_HEAD = '## The original words'
+WORDS_END = '## What the author claims'
+
+
+def carries_user_words(text):
+    """Whether a reviewer's prompt carries the user's turn verbatim: the watcher's review puts it
+    first, under "## The original words", before anything the author said; a reviewer a coordinator
+    prepared itself carries it between marker lines at the very top of its brief."""
+    text = text or ''
+    if text.startswith(USER_WORDS_LABEL + '\n\n<<<USER-WORDS-'):
+        return JOB in text
+    if WORDS_HEAD in text:
+        section = text.split(WORDS_HEAD, 1)[1].split(WORDS_END, 1)[0]
+        return JOB in section
+    return False
+
+
+def reviews_of(rows, ledger):
+    """Every review of the run as one shape {id, tip, verdict, trigger, prompt}: the watcher's ledger
+    rows (the app reviews a finished worker by itself), and the receipts of a reviewer a coordinator
+    prepared (an explicit reviewer_id is still supported)."""
+    out = [{'id': r['id'], 'tip': r.get('tip'), 'verdict': r.get('verdict'), 'trigger': r.get('trigger'),
+            'prompt': r.get('_prompt')} for r in ledger or []]
+    for r in rows:
+        if r['request']['role'] != 'reviewer':
+            continue
+        report = (r.get('review_observation') or {}).get('report') or {}
+        out.append({'id': r['id'], 'tip': (r.get('review_target') or {}).get('commit'),
+                    'verdict': report.get('verdict'), 'trigger': 'prepared', 'prompt': r.get('_brief')})
+    return out
+
+
+def judge(rows, record, landed, presses, ledger=None):
+    """The pass list from the records alone (see the module doc). `ledger` is the review watcher's
+    rows with their prompts (ReviewWalk.reviews); a review is tied to the work by its commit: the
+    continuation names the commit it continued, and the integration names the commit it landed."""
     workers = [r for r in rows if r['request']['role'] == 'worker']
-    reviewers = [r for r in rows if r['request']['role'] == 'reviewer']
+    reviews = reviews_of(rows, ledger)
     by_id = {r['id']: r for r in rows}
 
-    def verdict_of(r):
-        report = (r.get('review_observation') or {}).get('report') or {}
-        return report.get('verdict')
-
-    def reviewed(r):
-        return (r.get('review_target') or {}).get('worker_id')
+    def short(rv):
+        return (rv['id'][:20], (rv['tip'] or '')[:9], rv['verdict'])
 
     lines = []
 
     def line(name, ok, detail):
         lines.append({'line': name, 'outcome': 'PASS' if ok else 'FAIL', 'detail': detail})
 
-    starts = [(r['id'][:12], (r.get('_brief') or '').startswith(USER_WORDS_LABEL + '\n\n<<<USER-WORDS-')
-               and JOB in (r.get('_brief') or '')) for r in reviewers]
+    starts = [(rv['id'][:20], carries_user_words(rv['prompt'])) for rv in reviews]
     line('1 every reviewer brief starts with the user turn verbatim', bool(starts) and all(ok for _, ok in starts),
          json.dumps(starts))
     # THE CHAIN, not the order (receipts carry no creation time): a review asked for changes on
-    # some worker W, a continuation W2 names W, and a recheck of W2 passed. Run 4 of this walk
-    # (walk-c9eeb4b4e680) is why: the coordinator checked the work itself, continued it before
-    # any review, and the only review then passed, so no review had asked for anything.
-    asked = [r for r in reviewers if verdict_of(r) == 'changes-requested']
-    first_review = next((r for r in asked if any((w.get('continuation') or {}).get('worker_id') == reviewed(r)
-                                                 for w in workers)), asked[0] if asked else None)
-    line('2 a review asked for changes', bool(first_review),
-         'reviews: %s' % json.dumps([(r['id'][:12], verdict_of(r)) for r in reviewers]))
-    first_worker = by_id.get(reviewed(first_review)) if first_review else None
-    successor = next((w for w in workers if first_worker
-                      and (w.get('continuation') or {}).get('worker_id') == first_worker['id']), None)
+    # the commit a continuation continued, and a recheck of what the continuation landed passed.
+    # Run 4 of this walk (walk-c9eeb4b4e680) is why: the coordinator checked the work itself,
+    # continued it before any review, and the only review then passed, so no review had asked
+    # for anything. The defective commit must also never have landed (the review comes before
+    # the merge, not after it).
+    asked = [rv for rv in reviews if rv['verdict'] == 'changes-requested']
+    continued = {(w.get('continuation') or {}).get('commit'): w for w in workers if w.get('continuation')}
+    first_review = next((rv for rv in asked if rv['tip'] in continued), None)
+    successor = continued.get(first_review['tip']) if first_review else None
+    first_worker = by_id.get(successor['continuation'].get('worker_id')) if successor else None
+    defect_landed = bool(first_worker and (first_worker.get('integration') or {}).get('verified'))
+    line('2 a review asked for changes', bool(first_review) and not defect_landed,
+         'reviews: %s; defective work landed: %s' % (json.dumps([short(rv) for rv in reviews]), defect_landed))
     line('3 the coordinator continued the work the review asked to change', bool(successor),
          'continuation %s of %s' % (successor and successor['id'][:12], first_worker and first_worker['id'][:12]))
-    recheck = next((r for r in reviewers if successor and reviewed(r) == successor['id']
-                    and verdict_of(r) == 'passed'), None)
+    integration = (successor or {}).get('integration') or {}
+    named = set((integration.get('automatic_reviews') or {}).values())
+    rechecks = [rv for rv in reviews if successor and rv['id'] != (first_review or {}).get('id')
+                and (rv['tip'] == integration.get('commit') or rv['id'] in named)]
+    recheck = next((rv for rv in rechecks if rv['verdict'] == 'passed' and (not named or rv['id'] in named)), None)
     line('4 the recheck of the continuation passed', bool(recheck),
-         'rechecks: %s' % json.dumps([(r['id'][:12], verdict_of(r)) for r in reviewers
-                                      if successor and reviewed(r) == successor['id']]))
-    integrated = bool(successor and (successor.get('integration') or {}).get('verified'))
+         'rechecks: %s' % json.dumps([short(rv) for rv in rechecks]))
+    integrated = bool(integration.get('verified'))
     line('5 integrate landed the continuation', integrated and landed == "'hello-world'",
          'integration verified %s; slugify on main gives %s' % (integrated, landed))
     line('6 the assignment closed settled', bool(record) and record.get('state') == 'settled',
          'state %s' % (record or {}).get('state'))
-    return {'lines': lines, 'approvals_pressed': len(presses), 'reviews': [(r['id'][:12], reviewed(r) and
-                                                                            by_id.get(reviewed(r), {}).get('name'),
-                                                                            verdict_of(r)) for r in reviewers]}
+    return {'lines': lines, 'approvals_pressed': len(presses), 'reviews': [short(rv) for rv in reviews]}
 
 
 def seed_team(home):
