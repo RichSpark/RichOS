@@ -584,9 +584,9 @@ class World(object):
                     if t:
                         try:
                             marks.append(os.path.getmtime(t))
+                            quiet = now - max(marks) >= th_silent
                         except OSError:
                             pass
-                    quiet = now - max(marks) >= th_silent
                 item = Item(work, name, repo, tip, base, state, started=started, branch=w["branch"],
                             ref=rec["key"], quiet=quiet, continued=rec["key"] in continued)
                 item.session = str(rec.get("session_id") or "")
@@ -2121,8 +2121,6 @@ def app_mode(a, engine_root):
     paths = app_paths(a.app_state)
     os.environ["REVIEW_WATCH_STATE_DIR"] = paths["watch"]
     os.environ["SECOND_REVIEW_STATE_DIR"] = paths["reviews"]
-    if not (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip():
-        os.environ["RICHOS_PROJECTS_DIR"] = os.path.join(os.path.realpath(a.app_state), "platform-projects")
     watcher = Watcher(engine_root, "", AppWorld(engine_root, a.app_state, a.claude, a.accounts, a.codex_reviews))
     if a.status:
         for path in sorted(glob.glob(_p("locks", "*.lock"))):

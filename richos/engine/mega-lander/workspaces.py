@@ -2524,25 +2524,44 @@ def _platform_projects_dir():
         "projects")
 
 
+def _platform_projects_dirs():
+    """Provider storage survives account moves. An explicit root stays isolated."""
+    explicit = (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip()
+    if explicit:
+        return [explicit]
+    home = os.path.expanduser("~")
+    roots = [_platform_projects_dir(), os.path.join(home, ".claude", "projects")]
+    accounts = os.path.join(home, "Library", "Application Support", APP_IDENTIFIER, "claude-accounts")
+    roots += sorted(glob.glob(os.path.join(glob.escape(accounts), "*", "projects")))
+    return list(dict.fromkeys(roots))
+
+
+def _platform_agent_paths(rec, suffix):
+    aid = (rec.get("agent_id") or "").strip()
+    sid = (rec.get("session_id") or "").strip()
+    if not AGENT_ID_RE.match(aid) or (sid and ("/" in sid or sid in (".", ".."))):
+        return []
+    paths = []
+    for base in _platform_projects_dirs():
+        pattern = os.path.join(glob.escape(base), "*", glob.escape(sid) if sid else "*",
+                               "subagents", "agent-%s%s" % (aid, suffix))
+        for path in glob.glob(pattern):
+            try:
+                paths.append((os.path.getmtime(path), path))
+            except OSError:
+                pass
+    # An older account can retain a copy while the current worker writes elsewhere.
+    return [p for _, p in sorted(paths, reverse=True)]
+
+
 def platform_agent_record(rec):
     """The platform's OWN per-agent record, which it writes beside the agent's
     transcript as <projects>/<project>/<session>/subagents/agent-<id>.meta.json
     and updates at the moment a run ends. Read, never written."""
-    aid = (rec.get("agent_id") or "").strip()
-    if not AGENT_ID_RE.match(aid):
-        return None
-    leaf = os.path.join("subagents", "agent-%s.meta.json" % aid)
-    base = _platform_projects_dir()
-    pats = []
-    sid = (rec.get("session_id") or "").strip()
-    if sid and "/" not in sid:
-        pats.append(os.path.join(base, "*", sid, leaf))
-    pats.append(os.path.join(base, "*", "*", leaf))
-    for pat in pats:
-        for p in sorted(glob.glob(pat)):
-            d = read_json(p)
-            if d is not None:
-                return d
+    for p in _platform_agent_paths(rec, ".meta.json"):
+        d = read_json(p)
+        if d is not None:
+            return d
     return None
 
 
@@ -2557,8 +2576,14 @@ def platform_agent_records(session_id):
         return []
     out = []
     seen = set()
-    for p in sorted(glob.glob(os.path.join(_platform_projects_dir(), "*", sid,
-                                           "subagents", "agent-*.meta.json"))):
+    paths = []
+    for base in _platform_projects_dirs():
+        for p in glob.glob(os.path.join(glob.escape(base), "*", glob.escape(sid), "subagents", "agent-*.meta.json")):
+            try:
+                paths.append((os.path.getmtime(p), p))
+            except OSError:
+                pass
+    for _, p in sorted(paths, reverse=True):
         aid = os.path.basename(p)[len("agent-"):-len(".meta.json")]
         if aid in seen or not AGENT_ID_RE.match(aid):
             continue
@@ -2575,20 +2600,9 @@ def platform_agent_transcript(rec):
     <projects>/<project>/<session>/subagents/agent-<id>.jsonl — the same
     directory platform_agent_record reads, and the same file the session's
     scratch `tasks/<id>.output` is a symlink to. Read, never written."""
-    aid = (rec.get("agent_id") or "").strip()
-    if not AGENT_ID_RE.match(aid):
-        return ""
-    leaf = os.path.join("subagents", "agent-%s.jsonl" % aid)
-    base = _platform_projects_dir()
-    sid = (rec.get("session_id") or "").strip()
-    pats = []
-    if sid and "/" not in sid:
-        pats.append(os.path.join(base, "*", sid, leaf))
-    pats.append(os.path.join(base, "*", "*", leaf))
-    for pat in pats:
-        for p in sorted(glob.glob(pat)):
-            if os.path.isfile(p):
-                return p
+    for p in _platform_agent_paths(rec, ".jsonl"):
+        if os.path.isfile(p):
+            return p
     return ""
 
 
