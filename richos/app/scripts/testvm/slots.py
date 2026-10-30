@@ -93,8 +93,8 @@ ENV = 'TESTVM_SLOT'
 NIGHTLY_WAIT_ENV = 'TESTVM_NIGHTLY_WAIT'
 FLOOR_SETTING = 'TESTVM_MEMORY_FLOOR_MB'
 # The DEFAULT for what must stay available for the Mac itself once every admitted guest has all
-# its RAM, used only where no machine sets FLOOR_SETTING. The 18:56Z measurement above swapped
-# hard with about 3 GB projected to be left, so 4 GB.
+# its RAM, used only where no machine sets FLOOR_SETTING. A host left with about 3 GB projected
+# free swapped hard under two booting guests, so the default is 4 GB.
 GUEST_MEMORY_FLOOR_MB = 4096
 VM_PROCESS = 'com.apple.Virtualization.VirtualMachine'
 # Docker Desktop's VM runs in a VM process of its own; the app list counts it as Docker's.
