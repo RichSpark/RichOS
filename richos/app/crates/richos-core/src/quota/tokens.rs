@@ -572,7 +572,7 @@ fn fit(rows: &[(Vec<f64>, f64, f64)], columns: usize) -> Option<(Vec<usize>, Vec
 ///   episode of its own, a third off what it measured). Main's fit, then one model at a time
 ///   read at its card until the episodes measure every model left: first, while the episodes
 ///   cannot tell the models apart at all (two episodes, three models), the one with the least
-///   card spend; then a model the fit sets to nothing (the episodes say less than nothing);
+///   card spend among those they cannot separate (never one they measure apart); then a model the fit sets to nothing (the episodes say less than nothing);
 ///   then the one the episodes measure least, while its standard error is over `MEASURED` of
 ///   its figure or the figure is further from its card than `CARD_SPAN`. The noise is the fit's
 ///   own residual per spare episode (at least `LEAST_NOISE`), and with no spare episode
@@ -646,11 +646,18 @@ pub fn figures(episodes: &[Episode]) -> BTreeMap<String, f64> {
             points - at_card.iter().map(|(i, c)| x[*i] * c).sum::<f64>(), *w)).collect();
         let normal = |pick: &[usize]| -> Vec<Vec<f64>> { pick.iter().map(|a| pick.iter()
             .map(|b| sub.iter().map(|(x, _, w)| w * x[*a] * x[*b]).sum()).collect()).collect() };
+        // While the episodes cannot tell the free models apart, a model among those they cannot
+        // separate (leaving it out leaves the rank as it is) is read at its card, the least card
+        // spend first; a model they measure apart from the rest (an episode of its own) is never
+        // the one (the review of cee29c8e9: 3.9M Opus and 80,000 Fable for one point, 200,000
+        // Sonnet alone for the next, put Sonnet at its card, 8.1M, not its measured 200,000).
         let all: Vec<usize> = (0..free.len()).collect();
-        let separable = sub.len() >= free.len()
-            && solve(normal(&all).into_iter().map(|mut row| { row.push(0.); row }).collect()).is_some();
-        let least = free.iter().copied().filter(|i| cards.contains_key(i)).min_by(|a, b| spend(*a).total_cmp(&spend(*b)));
-        if let (false, Some(i)) = (separable, least) { at_card.insert(i, cards[&i]); continue; }
+        let whole = rank(normal(&all));
+        let inseparable = free.iter().enumerate().filter(|(j, i)| cards.contains_key(i)
+            && rank(normal(&all.iter().copied().filter(|q| q != j).collect::<Vec<_>>())) == whole).map(|(_, i)| *i);
+        if whole < free.len() {
+            if let Some(i) = inseparable.min_by(|a, b| spend(*a).total_cmp(&spend(*b))) { at_card.insert(i, cards[&i]); continue; }
+        }
         let Some((pick, per_million)) = fit(&sub, free.len()) else {
             at_card.extend(free.iter().filter_map(|i| cards.get(i).map(|c| (*i, *c))));
             break;
@@ -690,6 +697,28 @@ pub fn figures(episodes: &[Episode]) -> BTreeMap<String, f64> {
     }
     figures.extend(measured.into_iter().chain(at_card).map(|(i, c)| (fitted[i].0.to_string(), 1e6 / c)));
     figures
+}
+
+/// The rank of a square normal matrix, by Gaussian elimination with partial pivoting and
+/// `solve`'s tolerance: the number of models in it the episodes can tell apart.
+fn rank(mut a: Vec<Vec<f64>>) -> usize {
+    let k = a.len();
+    let scale = (0..k).map(|i| a[i][i].abs()).fold(0., f64::max);
+    if scale.is_nan() || scale <= 0. { return 0; }
+    let mut row = 0;
+    for col in 0..k {
+        let Some(pivot) = (row..k).max_by(|x, y| a[*x][col].abs().total_cmp(&a[*y][col].abs())) else { break };
+        if a[pivot][col].abs() <= scale * 1e-9 { continue; }
+        a.swap(row, pivot);
+        let (top, rest) = a.split_at_mut(row + 1);
+        let lead = &top[row];
+        for below in rest {
+            let factor = below[col] / lead[col];
+            for (cell, l) in below.iter_mut().zip(lead).skip(col) { *cell -= factor * l; }
+        }
+        row += 1;
+    }
+    row
 }
 
 /// Gaussian elimination with partial pivoting on an augmented `k x (k + 1)` system. `None` when
@@ -843,6 +872,21 @@ mod tests {
         let f = figures(&[episode(1., &[("claude-opus-5-5", 4_000_000)]), episode(1., &[("claude-sonnet-5-5", 200_000)])]);
         assert!((f["claude-sonnet-5-5"] / 200e3 - 1.).abs() < 1e-9, "{f:?}");
         assert!((f["claude-opus-5-5"] / 4e6 - 1.).abs() < 1e-9, "{f:?}");
+    }
+    /// **A model measured apart keeps its figure beside a pair the episodes cannot separate**
+    /// (the review of cee29c8e9, its fixture): 3.9M Opus and 80,000 Fable for one point, then
+    /// 200,000 Sonnet alone for the next, $0.80 each in cache reads and one-hour cache writes.
+    /// Two episodes cannot separate three models, and cee29c8e9 read Sonnet, the least card spend,
+    /// at its card (8.1M), so 190,000 Sonnet tokens a minute were 0.02 a minute, point 99, and an
+    /// account at 91% kept running. Sonnet has an episode of its own: it stays at 200,000 (0.95 a
+    /// minute, point 90), and Fable, the least spend of the pair, is at its card.
+    #[test]
+    fn a_model_measured_apart_keeps_its_figure_beside_a_pair_the_episodes_cannot_separate() {
+        let eps = [episode(1., &[("claude-opus-5-5", 3_900_000), ("claude-fable-5-1", 80_000)]),
+            episode(1., &[("claude-sonnet-5-5", 200_000)])];
+        let f = figures(&eps);
+        assert!((f["claude-sonnet-5-5"] / 200e3 - 1.).abs() < 1e-9, "{f:?}");
+        assert_eq!(f.len(), 3, "{f:?}");
     }
     /// **A minority the episodes cannot measure is read at its card, not at their rounding** (the
     /// second review of 835ff3557, finding 1, its fixture A). Work's first two episodes with Fable
