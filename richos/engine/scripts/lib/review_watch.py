@@ -233,12 +233,9 @@ def state_root():
 
 
 def review_ledger():
-    """second-review's ledger: the same path its own state_root() gives."""
-    d = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip()
-    if not d:
-        base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude")
-        d = os.path.join(base, "state")
-    return os.path.join(d, "reviews.jsonl")
+    """second-review's ledger: the same path its own state_root() gives, in the machine's one
+    Claude home whichever account this process spends (the fence's reader, not a copy of it)."""
+    return F.review_ledger_default()
 
 
 def _p(*parts):

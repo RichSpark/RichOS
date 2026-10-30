@@ -2184,9 +2184,11 @@ def _take_fence_lease(repo, lock):
     THE LEASE IS TAKEN UNDER THE FENCE'S OWN LOCK, named by the repository's launcher (its baked
     home and key): the lock land-lease.sh takes and releases a lease under. Usually that is `lock`,
     the land flock this land already holds (operator_fences_admin installs the launcher's home from
-    the same land_lock_path). It is ANOTHER file when this lease runs under another Claude account:
-    EngineProfile.configure points CLAUDE_CONFIG_DIR at the selected account's folder, and the land
-    lock's home follows it while the fence keeps the home it was installed with. Then the fence's
+    the same land_lock_path). It is ANOTHER file only when the fence was installed from another
+    home than this land's: the land lock's home is the machine's one Claude home
+    (machine_settings.claude_home: Account 1's folder, RICHOS_CLAUDE_HOME, for a lease on an added
+    account, which EngineProfile.configure marks), so since 2026-10-28 a lease on an added
+    account no longer moves it; a launcher installed with another home still can. Then the fence's
     lock is taken as well, after this land's own (one order for every land, so two never wait on
     each other), and a live lease of another holder is waited for under it, within the land lock's
     bound.

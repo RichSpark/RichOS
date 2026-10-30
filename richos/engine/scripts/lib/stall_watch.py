@@ -88,6 +88,22 @@ WHAT IS A STALL (every threshold, and why)
    quiet.
 
 ===========================================================================
+EACH FINDING GOES ONLY TO THE CHAT WHOSE WORK IT IS (2026-10-28)
+===========================================================================
+Silent teammates, slow steps and due work were always read from this session's
+own records. The waits (1 and 3) were not: they are read machine-wide, so in the
+app, where every conversation runs its own watcher, a SELF-WAIT of a nightly
+test-VM walk (agent-abbf962a73586890c) was told in the RichSpark avatar chat,
+whose lead then carried another chat's problem. A wait is now told only in the
+session that owns the waiting process (Registry.owning_session): its session tag
+(agent_hold.py exports RICHOS_AGENT_SESSION with RICHOS_AGENT_OWNER on every
+subagent Bash call), else its owner tag through this registry (in the app, one
+conversation's partition, so an agent it does not hold is another chat's), else
+the lead's own RICHOS_SESSION_ID, else the registered workspace it runs in, else
+a waiter name that is exactly one record's. A wait whose owner nothing names is
+still told, as before: unattributed is never silently dropped.
+
+===========================================================================
 HOW OFTEN IT SPEAKS (nothing spams)
 ===========================================================================
 It looks every 60 s (STALL_WATCH_POLL_SECONDS). A stall is announced ONCE when
@@ -167,6 +183,9 @@ DUE_SHOWN = 8              # due items shown one per line; the rest are one poin
 STATE_KEEP_SECONDS = 2 * 86400
 PROOF_SLOT_REASON = "proof-run: waiting for a proof-run slot"
 OWNER_TAG = "RICHOS_AGENT_OWNER"
+SESSION_TAG = "RICHOS_AGENT_SESSION"   # agent_hold.py exports both with every subagent Bash call
+LEAD_SESSION_ENV = "RICHOS_SESSION_ID"  # the app sets it for its lead's whole lease; children inherit it
+OTHER_CHAT = "\0another chat"           # an owner that is provably not any session this registry names
 GIT_SECONDS = 5
 CPU_LINE = 80
 IDLE_END_MINUTES = 10      # a deferred end's own commands idle this long are ended (IDLE END below)
@@ -311,19 +330,27 @@ class Sources(object):
             return "", None
         return sid, pid
 
-    def owner_tag(self, pid):
-        """The agent id in the process's inherited owner tag, or ''."""
+    def tags(self, pid):
+        """{name: value} of the ownership tags in the process's readable environment
+        (OWNER_TAG, SESSION_TAG, the lead's RICHOS_SESSION_ID); {} when it shows none."""
         if self.agent_hold is None or not pid:
-            return ""
+            return {}
         try:
             env = self.agent_hold._environment(int(pid)) or []
         except Exception:  # noqa: BLE001
-            return ""
-        want = (OWNER_TAG + "=").encode()
-        for item in env:
-            if item.startswith(want):
-                return item[len(want):].decode("utf-8", "replace")
-        return ""
+            return {}
+        out = {}
+        for name in (OWNER_TAG, SESSION_TAG, LEAD_SESSION_ENV):
+            want = (name + "=").encode()
+            for item in env:
+                if item.startswith(want):
+                    out[name] = item[len(want):].decode("utf-8", "replace")
+                    break
+        return out
+
+    def owner_tag(self, pid):
+        """The agent id in the process's inherited owner tag, or ''."""
+        return self.tags(pid).get(OWNER_TAG, "")
 
 
 class Registry(object):
@@ -383,6 +410,41 @@ class Registry(object):
         if name:
             return name, "the name its slot record carries"
         return "", ""
+
+    def owning_session(self, pid=None, cwd="", waiter="", worktree="", session=""):
+        """The session (the chat, in the app) whose work a waiting process or a ledger wait
+        is: '' when nothing says, OTHER_CHAT for an agent this registry does not hold.
+
+        Read in order: the session tag every subagent Bash call carries (agent_hold.py), the
+        owner tag through this registry to its record's session, the lead's own session in
+        its environment, then the registered workspace its working directory (or the
+        ledger row's worktree) is in, then the session the ledger row itself was raised in
+        (`session`: another chat's registry holds neither its workspace nor its name, so
+        without it an unrelated chat took the wait as unattributed and was woken by it),
+        then a waiter name that is exactly one record's."""
+        tags = self.src.tags(pid) if pid else {}
+        if tags.get(SESSION_TAG):
+            return tags[SESSION_TAG]
+        if tags.get(OWNER_TAG):
+            rec = self.by_agent.get(tags[OWNER_TAG])
+            # In the app the registry is one conversation's partition: an agent it does not
+            # hold is another conversation's (2026-10-28, a nightly walk told in the avatar chat).
+            return str(rec.get("session_id") or OTHER_CHAT) if rec else OTHER_CHAT
+        if tags.get(LEAD_SESSION_ENV):
+            return tags[LEAD_SESSION_ENV]
+        for where in (cwd, worktree):
+            if where:
+                real = os.path.realpath(where)
+                for path, rec in self.paths:
+                    if real == path or real.startswith(path + os.sep):
+                        return str(rec.get("session_id") or "")
+        if session:
+            return str(session)
+        name = self.name_for_waiter(waiter)
+        named = [r for r in self.recs if name and str(r.get("name") or "") == name]
+        if len(named) == 1:
+            return str(named[0].get("session_id") or "")
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +516,12 @@ def look(src, now, session_id, th=None, due=True):
     reg = Registry(src)
     problems = [reg.problem] if reg.problem else []
     stalls = []
+
+    def ours(pid=None, cwd="", waiter="", worktree="", session=""):
+        """A wait is told only to the session (in the app, the chat) whose work it is
+        (Registry.owning_session); one whose owner nothing names is told, never lost."""
+        owner = reg.owning_session(pid, cwd, waiter, worktree, session)
+        return not owner or not session_id or owner == session_id
     deadline = time.time() + resource_waits.BUDGET_SECONDS
     table = None
 
@@ -482,7 +550,8 @@ def look(src, now, session_id, th=None, due=True):
             resource_waits.apply_holds([pw], reading["holds"], now)
             if pw["held_by"]:
                 continue
-            if now - pw["since"] >= min(th["self"], th["wait"]):
+            if now - pw["since"] >= min(th["self"], th["wait"]) and ours(
+                    w.get("pid"), w.get("cwd") or "", w.get("waiter") or ""):
                 watched.append(("proof", dict(w, since=pw["since"], began=since), slots.get("holders") or []))
     # A proof-run slot waiter also records itself as a CPU-admission wait; with
     # the slot line read, that record is the same wait and is told once.
@@ -501,6 +570,9 @@ def look(src, now, session_id, th=None, due=True):
     vm_slots = None
     for w in others:
         age = now - w["since"]
+        if age < min(th["self"], th["wait"]) or not ours(w.get("pid"), "", w.get("waiter") or "",
+                                                         w.get("worktree") or "", w.get("session") or ""):
+            continue
         if w["resource"] == resource_waits.VM and w["source"] == "record":
             if vm_slots is None:
                 _lines, vm_slots, _g = resource_waits.vm_facts(resource_waits.testvm_root(), table, reading["waits"])
@@ -838,7 +910,17 @@ def _silent(src, reg, now, session_id, th, waits):
             mt = None
         if mt is None:
             if now - max(marks) >= th["silent"]:
-                unread.append(name)
+                running = _running(src, rec, now)
+                # With NO transcript to read, a worker whose turn has not ended and whose own
+                # command still runs is taken as working (2026-10-29 08:28Z: three live workers,
+                # one of them in a 4-minute `git commit`, called SILENT with "no transcript
+                # found"). A transcript that WAS read is the stronger evidence: a foreground call
+                # returns within 600 s and a background one is waited on in steps of at most
+                # 270 s, so a working agent writes it well inside SILENT_MINUTES, and one
+                # unchanged that long is silent however long a command it left behind (a dev
+                # server, a watcher) keeps running.
+                if not (running and not _deferred_end(src, rec, running, marks)):
+                    unread.append(name)
             continue  # missing evidence cannot prove inactivity
         marks.append(mt)
         tline = "last transcript write %s (%s)" % (hhmm(mt), path)
@@ -1325,6 +1407,22 @@ def session_started(src, sid):
     return None
 
 
+def _session_state_anywhere(src, owner, cache):
+    """'running', 'ended' or 'unknown' for a session this registry may not hold: its own
+    record first, then its identity in every other registry on this machine."""
+    st = src.ws.session_state(owner, None, cache)[0]
+    others = getattr(src.ws, "other_registries", None)
+    if st != "unknown" or others is None:
+        return st
+    for registry in others():
+        identity = _read_json(os.path.join(registry, "sessions", owner + ".json"))
+        if identity:
+            st = "ended" if identity.get("ended_at") else src.ws.session_state(owner, identity)[0]
+            if st != "unknown":
+                return st
+    return "unknown"
+
+
 def _esc_owner(src, reg, e, sid, cache):
     """'ours', 'other' or 'unknown': one live app lead handles host cleanup;
     teammates otherwise belong to an exactly matching live registration."""
@@ -1370,7 +1468,18 @@ def _esc_owner(src, reg, e, sid, cache):
         if any(w.get("path") and os.path.realpath(w["path"]) == real for w in r.get("workspaces") or []):
             matches.append(r)
     if len(matches) != 1:
-        return "unknown"
+        # In the app another chat's registry partition holds neither the worktree nor the name:
+        # the session the row was raised in decides, while it runs (2026-10-30, second review
+        # of 5881747e5: chat B was told chat A's wait). An ended owner's row is still told here.
+        owner = str(e.get("session_id") or "")
+        if not owner or os.sep in owner:
+            return "unknown"
+        if owner == sid:
+            return "ours"
+        try:
+            return "other" if _session_state_anywhere(src, owner, cache) == "running" else "unknown"
+        except Exception:  # noqa: BLE001
+            return "unknown"
     owner = str(matches[0].get("session_id") or "")
     if owner and owner == sid:
         return "ours"

@@ -89,6 +89,10 @@
 #   C30  C27's exact-tip rule holds only for findings raised in the land's own range: a branch that
 #        merged main, carrying a landed work's finding ruled fixed only at the landed commit, is
 #        admitted without re-ruling it
+#   C32  under a Work lease (CLAUDE_CONFIG_DIR and RICHOS_CLAUDE_ACCOUNT_DIR at the account's
+#        folder, RICHOS_CLAUDE_HOME at the machine-wide home) the ledger row is written in
+#        RICHOS_CLAUDE_HOME's state and every reader finds it there; without RICHOS_CLAUDE_HOME
+#        all follow CLAUDE_CONFIG_DIR as before, and so does a sandbox's own CLAUDE_CONFIG_DIR
 #   C31  an app review takes the app gate's own hold, in review-watch's real (cleared)
 #        environment, through the watcher's own spawn: the account in use published held,
 #        no Claude review starts; another account in use with room, it runs on that one
@@ -117,7 +121,9 @@ check() { if [ "$2" -eq 0 ]; then ok "$1"; else bad "$1 -- $3"; fi; }
 has()   { printf '%s' "$1" | grep -qF -- "$2"; }
 
 # --- isolation -------------------------------------------------------------
-unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT CODEX_HOME RICHOS_APP_STATE
+unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT CODEX_HOME
+# An app lease exports these; a case that wants one sets it itself (C26).
+unset RICHOS_CLAUDE_HOME RICHOS_CLAUDE_ACCOUNT_DIR RICHOS_APP_STATE
 mkdir -p "$SB/bin" "$SB/state" "$SB/calls" "$SB/tmp" "$SB/claude" "$SB/codex-sessions" \
          "$SB/workspaces/agents" "$SB/workspaces/done"
 export SECOND_REVIEW_STATE_DIR="$SB/state"
@@ -1296,6 +1302,58 @@ PY
 check "C30 a merge of main carrying a landed work's finding, ruled fixed only at the landed commit L2, is admitted" $? "out=$OUT10"
 [ -z "${OUT10%%|*}" ]
 check "C30 and the reviewer of the merge is not handed that landed finding" $? "out=$OUT10"
+
+# --- C32 ---------------------------------------------------------------------
+# A review written under a Work lease (2026-10-28): the app points CLAUDE_CONFIG_DIR at the
+# account's folder (and RICHOS_CLAUDE_ACCOUNT_DIR at the same folder) and RICHOS_CLAUDE_HOME at the
+# machine-wide home. The ledger is written in the machine-wide home, and every reader finds it
+# there: the land rule, the land's gate, review-watch, the verdict delivery and its hook. integrate
+# refused b20f108f because the writer and the land's reader had split. Without RICHOS_CLAUDE_HOME
+# (a terminal) all of them follow CLAUDE_CONFIG_DIR, and so does a sandbox's own CLAUDE_CONFIG_DIR.
+WL="$SB/work-lease"; MACHINE="$WL/home/.claude"; ACCOUNT="$WL/claude-accounts/2"
+mkdir -p "$MACHINE" "$ACCOUNT"
+OUT="$(env -u SECOND_REVIEW_STATE_DIR TMPDIR="$RUN_TMP" CLAUDE_CONFIG_DIR="$ACCOUNT" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" \
+       RICHOS_CLAUDE_HOME="$MACHINE" FAKE_MODE=pass bash "$SR" --repo "$REPO" --tip "$TIP1" --base "$BASE" --words-file "$SB/codex-words.txt" 2>&1)"; RC=$?
+[ "$RC" -eq 0 ] && [ "$(field "$(tail -1 "$MACHINE/state/reviews.jsonl" 2>/dev/null)" 'r["tip"]')" = "$TIP1" ] \
+  && [ ! -e "$ACCOUNT/state/reviews.jsonl" ]
+check "C32 a review under a Work lease writes its ledger row in RICHOS_CLAUDE_HOME's state, not the account's" $? \
+  "rc=$RC out=$OUT"
+readers() { # <expected state dir> <tip>: every reader of the ledger, in the caller's environment
+    python3 - "$SCRIPT_DIR" "$1" "$2" <<'PY'
+import importlib.util, os, subprocess, sys
+scripts, state, tip = sys.argv[1:4]
+sys.path.insert(0, os.path.join(scripts, "lib"))
+import second_review, operator_fences, review_watch, review_delivery
+spec = importlib.util.spec_from_file_location("ws_c26", os.path.join(scripts, "..", "mega-lander", "workspaces.py"))
+ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
+lines = [l for l in open(os.path.join(scripts, "hooks", "deliver-review-verdict.sh"))
+         if l.startswith(('case "${CLAUDE_CONFIG_DIR', "LEDGER="))]
+assert len(lines) == 2, lines
+hook = subprocess.run(["bash", "-uc", "".join(lines) + 'printf %s "$LEDGER"'], capture_output=True, text=True).stdout
+want = os.path.join(state, "reviews.jsonl")
+seen = {"second_review.ledger_path": second_review.ledger_path(),
+        "operator_fences.review_ledger_default": operator_fences.review_ledger_default(),
+        "review_watch.review_ledger": review_watch.review_ledger(),
+        "review_delivery.ledger_path": review_delivery.ledger_path(),
+        "deliver-review-verdict.sh LEDGER": hook}
+bad = ["%s=%s" % kv for kv in seen.items() if kv[1] != want]
+if tip and tip not in ws._reviews_by_tip():
+    bad.append("workspaces._reviews_by_tip has no row for %s" % tip)
+print("; ".join(bad))
+PY
+}
+R="$(unset SECOND_REVIEW_STATE_DIR; export CLAUDE_CONFIG_DIR="$ACCOUNT" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" RICHOS_CLAUDE_HOME="$MACHINE"
+      readers "$MACHINE/state" "$TIP1" 2>&1)"
+[ -z "$R" ]
+check "C32 under a Work lease every reader reads that row from RICHOS_CLAUDE_HOME's state" $? "$R"
+R="$(unset SECOND_REVIEW_STATE_DIR RICHOS_CLAUDE_HOME; export CLAUDE_CONFIG_DIR="$ACCOUNT"
+      readers "$ACCOUNT/state" "" 2>&1)"
+[ -z "$R" ]
+check "C32 without RICHOS_CLAUDE_HOME every reader and the writer follow CLAUDE_CONFIG_DIR, as before" $? "$R"
+R="$(unset SECOND_REVIEW_STATE_DIR; export CLAUDE_CONFIG_DIR="$WL/sandbox" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" RICHOS_CLAUDE_HOME="$MACHINE"
+      readers "$WL/sandbox/state" "" 2>&1)"
+[ -z "$R" ]
+check "C32 a sandbox inside a Work lease (its own CLAUDE_CONFIG_DIR) keeps its own ledger for every reader" $? "$R"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"

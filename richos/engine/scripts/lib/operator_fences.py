@@ -405,6 +405,8 @@ def declared_holders(conf):
 # ---------------------------------------------------------------------------
 
 def sessions_dir():
+    # Claude Code writes its session records under the account's own folder, so this one follows
+    # CLAUDE_CONFIG_DIR and never machine_settings.claude_home().
     base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude")
     return os.path.join(base, "sessions")
 
@@ -909,12 +911,23 @@ REVIEW_MID_JOB = ("long-job", "quiet")
 
 
 def review_ledger_default():
-    """The path second_review.py's state_root() gives, plus reviews.jsonl."""
+    """The path second_review.py's state_root() gives, plus reviews.jsonl: in the machine's one
+    Claude home (machine_settings.claude_home), whichever Claude account the caller spends."""
     d = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip()
     if not d:
-        base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude")
-        d = os.path.join(base, "state")
+        d = os.path.join(_machine_settings().claude_home(), "state")
     return os.path.join(d, "reviews.jsonl")
+
+
+def _machine_settings():
+    """machine_settings.py from beside this file: the engine's scripts/lib, or the copy install
+    puts beside the installed fence (PROGRAM_FILES). Imported here, never at module level."""
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    try:
+        import machine_settings      # noqa: E402  (a sibling, copied with this file)
+    finally:
+        sys.path.pop(0)
+    return machine_settings
 
 
 # ONE READER, AND IT ASKS THE SHELL (reviews rv-20261009T050654Z-e21238ff-7685
@@ -2182,7 +2195,8 @@ def _lease_context(opts):
         raise SystemExit(
             "land-lease: REFUSED (G10). This command resolves the lease to %s/%s, but the fence installed in "
             "%s reads %s/%s. Two callers with different homes would each see their own lease as free. Run it "
-            "without RICHOS_LAND_LOCKS_DIR or CLAUDE_CONFIG_DIR overriding the home the installer used."
+            "without RICHOS_LAND_LOCKS_DIR or CLAUDE_CONFIG_DIR overriding the home the installer used (a "
+            "lease on an added Claude account reads RICHOS_CLAUDE_HOME, machine_settings.claude_home)."
             % (home, key, paths["main"], conf.get("HOME"), conf.get("KEY")))
     return conf, Files(conf), repo, repo_paths(paths["main"])
 

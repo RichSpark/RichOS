@@ -189,11 +189,12 @@ check "a missing result cannot inherit the preceding run's pass" "$ok" "rc=$rc $
 # A boot-proof retake from a worker's worktree (2026-10-28): the worktree has no extracted runtime
 # (it is gitignored) and its shell sets neither RICHOS_RUNTIME_DIR nor RICHOS_GUI_SPEECH_MODELS, so
 # gui-boot stopped until both were set by hand. `--run` now names the nightly's runtime for this
-# checkout's recipe (lib/runtime_cache.py), verifies it, and finds the speech models itself; when
-# the runtime is not there it refuses at once and prints the command that builds it. All of it
-# runs on a fixture state directory (RICHOS_NIGHTLY_STATE) and a fixture HOME.
+# checkout's recipe (lib/runtime_cache.py), verifies it, BUILDS it when it is not there, and finds
+# the speech models itself, refusing a missing one at once with the command that fetches them. All
+# of it runs on a fixture state directory (RICHOS_NIGHTLY_STATE), a fixture HOME and a stand-in
+# builder (RICHOS_RUNTIME_BUILDER), so nothing is downloaded or compiled.
 TMPN="$(cd "$TMP" && pwd)"   # the path the script itself prints: no doubled slash from a TMPDIR that ends in one
-RT="$TMPN/rt"; mkdir -p "$RT/testvm" "$RT/lib" "$TMPN/cand" "$TMPN/nightly/runs" "$TMPN/home/Models/Whisper"
+RT="$TMPN/rt"; mkdir -p "$RT/testvm" "$RT/lib" "$TMPN/cand" "$TMPN/nightly/runs" "$TMPN/home/Models/Whisper" "$TMPN/home-bare"
 cp "$HERE/gui-proof-in-vm.sh" "$RT/"; cp "$HERE/lib/runtime_cache.py" "$RT/lib/"
 cp "$SB/testvm/"*.sh "$RT/testvm/"
 printf '{"recipe": "fixture"}\n' > "$RT/runtime-sources.json"
@@ -204,28 +205,47 @@ cat > "$RT/verify-runtime.py" <<'EOF'
 import os, sys
 sys.exit(int(os.environ.get("STUB_VERIFY_RC", "0")))
 EOF
+# The stand-in builder: build-runtimes.py's command line (the destination), recording that it ran.
+cat > "$RT/stub-build-runtimes.py" <<'EOF'
+import os, sys
+with open(os.environ["STUB_LOG"], "a") as log:
+    log.write("build %s\n" % sys.argv[1])
+if os.environ.get("STUB_BUILD_RC", "0") != "0":
+    sys.exit(int(os.environ["STUB_BUILD_RC"]))
+os.makedirs(sys.argv[1])
+EOF
 : > "$TMPN/home/Models/Whisper/ggml-small.en.bin"; : > "$TMPN/home/Models/Whisper/ggml-large-v3-turbo-q5_0.bin"
 : > "$TMPN/cand/RichOS-9.9.9-macos-aarch64.zip"; : > "$TMPN/cand/RichOS.app.tar.gz"
 printf '{"info": {"build_commit": "abc123", "version": "9.9.9", "tag": "v9.9.9-nightly.1"}}\n' > "$TMPN/cand/candidate.json"
 printf '{"out": "%s"}\n' "$TMPN/cand" > "$TMPN/nightly/runs/RUN1.json"
 WANT_RT="$(python3 "$HERE/lib/runtime_cache.py" path "$TMPN/nightly" "$RT/runtime-sources.json")"
 WANT_MODELS="$TMPN/home/Models/Whisper/ggml-small.en.bin:$TMPN/home/Models/Whisper/ggml-large-v3-turbo-q5_0.bin"
-retake() {
-  env -u RICHOS_RUNTIME_DIR -u RICHOS_GUI_SPEECH_MODELS TESTVM_SLOT=1 HOME="$TMPN/home" PATH="$TMPN/bin:$PATH" \
+retake() {  # retake [HOME]: none of the caller's own variables; the builder is a stand-in
+  env -u RICHOS_RUNTIME_DIR -u RICHOS_GUI_SPEECH_MODELS TESTVM_SLOT=1 HOME="${1:-$TMPN/home}" PATH="$TMPN/bin:$PATH" \
+    RICHOS_RUNTIME_BUILDER="$RT/stub-build-runtimes.py" \
     "$RT/gui-proof-in-vm.sh" --run RUN1 --vm proof-vm --out "$TMPN/retake.proof"
 }
-: > "$STUB_LOG"; rm -rf "$WANT_RT"
+: > "$STUB_LOG"; rm -rf "${WANT_RT:?}"
 out="$(retake 2>&1)"; rc=$?
-[ "$rc" = 2 ] && has "$out" "no runtime at $WANT_RT" "Build it once with: python3 $RT/build-runtimes.py $WANT_RT" \
-  && [ ! -s "$STUB_LOG" ]; ok=$?
-check "--run with no runtime for the recipe is refused at once, naming the one command that builds it, before any guest" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
-mkdir -p "$WANT_RT"
+[ "$rc" = 0 ] && grep -q "^build $WANT_RT\$" "$STUB_LOG" \
+  && grep -q "^prebuild runtime=$WANT_RT models=$WANT_MODELS\$" "$STUB_LOG"; ok=$?
+check "--run with no runtime for the recipe BUILDS it, and the screen suites get it: nobody sets RICHOS_RUNTIME_DIR" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
+: > "$STUB_LOG"
+out="$(retake 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ! grep -q '^build ' "$STUB_LOG" && grep -q "^prebuild runtime=$WANT_RT models=$WANT_MODELS\$" "$STUB_LOG"; ok=$?
+check "--run with a verified runtime already in place builds nothing" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
+: > "$STUB_LOG"
 out="$(STUB_VERIFY_RC=1 retake 2>&1)"; rc=$?
-[ "$rc" = 2 ] && has "$out" "does not verify" "Rebuild it with: python3 $RT/build-runtimes.py $WANT_RT" && [ ! -s "$STUB_LOG" ]; ok=$?
-check "--run with a runtime that does not verify is refused the same way, naming the rebuild" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
-out="$(retake 2>&1)"; rc=$?
-[ "$rc" = 0 ] && grep -q "^prebuild runtime=$WANT_RT models=$WANT_MODELS\$" "$STUB_LOG"; ok=$?
-check "--run finds the nightly's runtime and both speech models itself, and the screen suites get them" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
+[ "$rc" = 2 ] && has "$out" "does not verify" "never overwritten" && [ ! -s "$STUB_LOG" ]; ok=$?
+check "--run with a runtime that does not verify is refused before any guest, and builds nothing over it" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
+: > "$STUB_LOG"; rm -rf "${WANT_RT:?}"
+out="$(STUB_BUILD_RC=7 retake 2>&1)"; rc=$?
+[ "$rc" = 2 ] && has "$out" "failed (exit 7)" "build-runtimes.py" && grep -q "^build $WANT_RT\$" "$STUB_LOG" && ! grep -q '^prebuild' "$STUB_LOG"; ok=$?
+check "--run whose runtime build fails is refused before any guest, naming the command that shows why" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
+: > "$STUB_LOG"; rm -rf "${WANT_RT:?}"
+out="$(retake "$TMPN/home-bare" 2>&1)"; rc=$?
+[ "$rc" = 2 ] && has "$out" "speech models" "ggml-small.en.bin" "fetch-dictation-models.sh" "Fetch them with" && [ ! -s "$STUB_LOG" ]; ok=$?
+check "--run with the speech models missing is refused at once, before any build or guest, with the command that fetches them" "$ok" "rc=$rc log=$(cat "$STUB_LOG") $out"
 : > "$STUB_LOG"
 out="$(RICHOS_RUNTIME_DIR="$TMPN/given-runtime" RICHOS_GUI_SPEECH_MODELS="$TMPN/m1" TESTVM_SLOT=1 HOME="$TMPN/home" PATH="$TMPN/bin:$PATH" \
   "$RT/gui-proof-in-vm.sh" --run RUN1 --vm proof-vm --out "$TMPN/retake.proof" 2>&1)"; rc=$?

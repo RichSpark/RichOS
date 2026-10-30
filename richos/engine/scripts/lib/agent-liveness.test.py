@@ -96,6 +96,23 @@ try:
     r = mod.resolve(repo, t)
     check("P5-19c  empty lock + registry says RUNNING -> still INDETERMINATE",
           r["verdict"] == mod.INDETERMINATE, r["verdict"])
+
+    # 2026-10-29 08:31Z: an app worker runs in a registered cc/ workspace, so the entity has no
+    # .claude/worktrees/agent-<id> for it at all; it was NOT-ALIVE while writing its transcript.
+    mod._registry_says = lambda _aid: None
+    r = mod.resolve(repo, "a47f4a2eae95659d1")
+    check("AW1  (control) no isolation worktree and no registry record -> NOT-ALIVE",
+          r["verdict"] == mod.NOT_ALIVE, r["verdict"] + ": " + r["reason"])
+    mod._registry_says = lambda _aid: {"finished": False, "paused": False, "why": "its run has not ended",
+                                       "name": "echo-opus-ff00122b4923", "key": "k"}
+    r = mod.resolve(repo, "a47f4a2eae95659d1")
+    check("AW2  no isolation worktree + registry says RUNNING (an app worker) -> ALIVE",
+          r["verdict"] == mod.ALIVE and "echo-opus-ff00122b4923" in r["reason"], r["verdict"] + ": " + r["reason"])
+    mod._registry_says = lambda _aid: {"finished": True, "paused": False, "why": "run ended",
+                                       "name": "echo-opus-ff00122b4923", "key": "k"}
+    r = mod.resolve(repo, "a47f4a2eae95659d1")
+    check("AW3  no isolation worktree + registry says FINISHED -> NOT-ALIVE",
+          r["verdict"] == mod.NOT_ALIVE, r["verdict"] + ": " + r["reason"])
 finally:
     shutil.rmtree(scratch, ignore_errors=True)
 

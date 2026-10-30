@@ -26,6 +26,11 @@
 #        RICHOS_AGENT_OWNER), through the registry to the teammate's name,
 #        though the two records carry different waiter names
 #   X06  a holder that is the waiter's own ancestor is a DEADLOCK
+#   R01  two chats (registry partitions and lead sessions), one stalled agent of the
+#        first: its SELF-WAIT is told in that chat and nothing at all in the other
+#   R02  a ledger wait raised in chat A (its row's session_id): told in A, never in B
+#   R03  the same wait raised through the real writer with the app environment (RICHOS_AGENT_SESSION): no WAIT and no escalation in chat B
+#   R03b chat A has ended: chat B takes its escalation over
 #   W01  a test VM wait and a device wait over 10 min: one block, two stalls,
 #        who holds each ("no holder recorded" / "not recorded by the waiter")
 #   H01  a teammate the lead holds (agent_hold.py): its wait is no stall
@@ -38,6 +43,11 @@
 #   T03  it writes its transcript: cleared after two looks, once
 #   L01-L03  slow steps: three agent_hold.py wait steps 4.5 min apart are told once (name,
 #        median, slowest command, since); 10-min run-tests.sh steps are exempt; clears once
+#   T11  an app worker whose transcript is under the account folder its session started
+#        in (not the watcher's CLAUDE_CONFIG_DIR), written a minute ago, is not SILENT
+#   T12  a worker whose transcript was read and is 25 min old is SILENT though a command
+#        it left running (a dev server) still runs; one with no transcript to read and
+#        its own command running is not
 #   T05  a silent teammate whose end the registry deferred because its own endless
 #        loop still runs: the notice says so and names the one command that ends
 #        its own commands (agent_hold.py end), not a pid to look up
@@ -156,10 +166,10 @@ mkdir -p "$RICHOS_ENTITY_ROOT" "$RICHOS_SESSIONS_DIR" "$RICHOS_PROJECTS_DIR" "$R
 printf 'PROTECTED_PATHS=""\n' >"$RICHOS_ENTITY_ROOT/orchestration.config"
 printf '1\n' >"$RICHOS_PROOF_RUN_SLOTS_DIR/limit"
 
-new_registry() { # <name>: an empty registry holding this suite's session
+new_registry() { # <name> [session]: an empty registry holding this suite's session (or the one named)
     export RICHOS_WORKSPACES_DIR="$SB/ws-$1"
     mkdir -p "$RICHOS_WORKSPACES_DIR/sessions" "$RICHOS_WORKSPACES_DIR/agents"
-    python3 - "$ENGINE" "$RICHOS_WORKSPACES_DIR" "$SID" "${RICHOS_SESSION_PID}" <<'PY'
+    python3 - "$ENGINE" "$RICHOS_WORKSPACES_DIR" "${2:-$SID}" "${RICHOS_SESSION_PID}" <<'PY'
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "mega-lander"))
 import workspaces
@@ -244,11 +254,12 @@ if child:
 time.sleep(sleep_s)
 PY
 SPID=""
-start_slot() { # <waiter-name> <marker> [nested-child-marker|-] [owner-tag]; its pid lands in SPID
+start_slot() { # <waiter-name> <marker> [nested-child-marker|-] [owner-tag] [session-tag]; its pid lands in SPID
     # Called in THIS shell, never inside $(...): a pid recorded in a command
     # substitution's subshell never reaches the cleanup.
     local child="${3:-}"; [ "$child" = "-" ] && child=""
     ( cd "$SB" && if [ -n "${4:-}" ]; then export RICHOS_AGENT_OWNER="$4"; fi \
+        && if [ -n "${5:-}" ]; then export RICHOS_AGENT_SESSION="$5"; fi \
         && exec env RICHOS_WAITER="$1" python3 "$SB/slotproc.py" "$APP_LIB" "$2" 600 ${child:+"$child"} \
         >/dev/null 2>&1 ) &
     SPID=$!
@@ -516,7 +527,9 @@ check "X04  two different teammates at 3 min: nothing is said" "$( [ -z "$OUT" ]
 stop_slots
 
 new_registry x5; new_state x5
-add_agent hotel-opus-t1 a0000000000fix5 "other-session" 60 30 10
+# Its record is this session's: an owner tag is the agent's own, and the agent belongs to the
+# session that registered it (R01 below: another session's agent is told only there).
+add_agent hotel-opus-t1 a0000000000fix5 "$SID" 60 30 10
 start_slot foxtrot-a "$SB/x5-held" - a0000000000fix5; H="$SPID"
 wait_for 10 test -f "$SB/x5-held"
 start_slot golf-b "$SB/x5-w-held" - a0000000000fix5; W="$SPID"
@@ -536,6 +549,90 @@ check "X06  a holder that is the waiter's own ancestor is a DEADLOCK" \
 # The nested child is this suite's too: it wrote its own pid at start.
 [ -f "$SB/x6-child-held.pid" ] && kill "$(cat "$SB/x6-child-held.pid")" 2>/dev/null
 stop_slots
+
+# --- R: a finding goes only to the chat whose work it is (2026-10-28) -----------
+# In the app each conversation runs its own watcher, over its own registry partition and
+# its own lead session. At 13:01Z a SELF-WAIT of a nightly walk (another chat's agent)
+# was told in the RichSpark avatar chat (thr_acf7522df3f64765b9c046eac726889e).
+# Two chats, one stalled agent of chat A: exactly one chat is told.
+SID_B="beadfeed-0000-4000-8000-00000000s0b2"
+new_registry rb "$SID_B"; REG_B="$RICHOS_WORKSPACES_DIR"
+new_registry ra; new_state ra
+add_agent romeo-opus-c1 a0000000000fixca "$SID" 60 30 10
+start_slot sierra-a "$SB/ra-held" - a0000000000fixca "$SID"; H="$SPID"
+wait_for 10 test -f "$SB/ra-held"
+start_slot tango-b "$SB/ra-w-held" - a0000000000fixca "$SID"; W="$SPID"
+wait_for 10 has_waiter
+RNOW=$(( $(date +%s) + 180 ))
+OUT_A="$(STALL_WATCH_NOW=$RNOW bash "$SW" --tick 2>&1)"
+OUT_B="$(RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" STALL_WATCH_STATE_DIR="$SB/state-rb" \
+         STALL_WATCH_NOW=$RNOW bash "$SW" --tick 2>&1)"
+check "R01  two chats, one stalled agent: only the chat whose work it is is told" \
+    "$( has "$OUT_A" "[SELF-WAIT] romeo-opus-c1" && ! has "$OUT_B" "SELF-WAIT" \
+        && ! has "$OUT_B" "a0000000000fixca" && ! has "$OUT_B" "STALL-WATCH"; echo $?)" \
+    "chat A=$OUT_A | chat B=$OUT_B"
+stop_slots
+# R02: a wait read from the escalation LEDGER carries the session that raised it. Chat B's
+# registry holds neither the worktree nor the name, which once made the wait unattributed,
+# so chat B was woken by chat A's teammate (second review of fe81a88236c6).
+new_registry r2a; new_state r2a
+add_agent echo-opus-wait a0000000000fixr2 "$SID" 3600 60 60
+R2_LEDGER="$SB/esc-r2.jsonl"
+python3 - "$R2_LEDGER" "$SB/repos/echo-opus-wait" "$SID" <<'PY'
+import json, os, sys, time
+t = time.gmtime(int(time.time()) - 1500)
+row = {"event": "Escalation", "id": "esc-fixture-r2", "raised": time.strftime("%Y-%m-%dT%H:%M:%SZ", t),
+       "teammate": "echo-opus-wait", "worktree": os.path.realpath(sys.argv[2]), "branch": "cc/echo-opus-wait",
+       "repo": "fixture", "head": "", "state": "proceeding", "for": "lead",
+       "title": "Waiting for the test VM", "question": "the test VM is held; when is it free",
+       "tried": "", "meanwhile": "", "record": "", "session_id": sys.argv[3], "actor": "fixture"}
+open(sys.argv[1], "w").write(json.dumps(row) + "\n")
+PY
+R2NOW="$(date +%s)"
+OUT_A="$(RICHOS_ESCALATION_LEDGER="$R2_LEDGER" STALL_WATCH_NOW=$R2NOW bash "$SW" --tick 2>&1)"
+OUT_B="$(RICHOS_ESCALATION_LEDGER="$R2_LEDGER" RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" \
+         STALL_WATCH_STATE_DIR="$SB/state-r2b" STALL_WATCH_NOW=$R2NOW bash "$SW" --tick 2>&1)"
+check "R02  a ledger wait raised in chat A is told in chat A and never in chat B" \
+    "$( has "$OUT_A" "[WAIT] echo-opus-wait" && ! has "$OUT_B" "[WAIT] echo-opus-wait"; echo $?)" \
+    "chat A=$OUT_A | chat B=$OUT_B"
+# R03: the same wait raised through the REAL writer with the app's environment: a worker's
+# Bash call carries RICHOS_AGENT_SESSION and the app lead's RICHOS_SESSION_ID, never
+# CLAUDE_SESSION_ID. R02 writes session_id by hand, so it could not see that the writer
+# recorded none and chat B was still woken (second review of 2c4842f14).
+new_state r3a
+R3_LEDGER="$SB/esc-r3.jsonl"
+R3_ROW="$(env -u CLAUDE_SESSION_ID RICHOS_ESCALATION_LEDGER="$R3_LEDGER" RICHOS_AGENT_SESSION="$SID" \
+    python3 "$ENGINE/scripts/lib/escalations.py" raise --teammate echo-opus-wait \
+    --worktree "$SB/repos/echo-opus-wait" --branch cc/echo-opus-wait --repo fixture --state proceeding \
+    --title "Waiting for the test VM" --question "the test VM is held; when is it free" 2>&1)"
+R3NOW=$(( $(date +%s) + 1500 ))
+# The app's layout: each chat's registry is one partition under <app state>/workspaces, so
+# chat B finds chat A's session record there (workspaces.other_registries).
+R3H="$SB/r3-home"; mkdir -p "$R3H/state/workspaces"
+ln -s "$RICHOS_WORKSPACES_DIR" "$R3H/state/workspaces/chat-a"; ln -s "$REG_B" "$R3H/state/workspaces/chat-b"
+OUT_A="$(RICHOS_ESCALATION_LEDGER="$R3_LEDGER" STALL_WATCH_NOW=$R3NOW bash "$SW" --tick 2>&1)"
+OUT_B="$(RICHOS_ESCALATION_LEDGER="$R3_LEDGER" RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" \
+         HOME="$R3H" RICHOS_APP_STATE="$R3H/state" \
+         STALL_WATCH_STATE_DIR="$SB/state-r3b" STALL_WATCH_NOW=$R3NOW bash "$SW" --tick 2>&1)"
+check "R03  a wait raised by the real writer in the app is told in its own chat and never in another (neither as a WAIT nor as an escalation)" \
+    "$( grep -q "\"session_id\": \"$SID\"" "$R3_LEDGER" && has "$OUT_A" "[WAIT] echo-opus-wait" \
+        && has "$OUT_A" "Waiting for the test VM" \
+        && ! has "$OUT_B" "[WAIT] echo-opus-wait" && ! has "$OUT_B" "Waiting for the test VM"; echo $?)" \
+    "raise=$R3_ROW | ledger=$(cat "$R3_LEDGER" 2>&1) | chat A=$OUT_A | chat B=$OUT_B"
+# R03b: chat A has ended (its session record says so): chat B takes the escalation over.
+R3E="$SB/r3-home-ended"; mkdir -p "$R3E/state/workspaces/chat-a/sessions"
+ln -s "$REG_B" "$R3E/state/workspaces/chat-b"
+python3 - "$RICHOS_WORKSPACES_DIR/sessions/$SID.json" "$R3E/state/workspaces/chat-a/sessions/$SID.json" <<'PY'
+import json, sys
+rec = json.load(open(sys.argv[1]))
+rec["ended_at"] = "2026-10-30T08:00:00Z"
+json.dump(rec, open(sys.argv[2], "w"))
+PY
+OUT_B="$(RICHOS_ESCALATION_LEDGER="$R3_LEDGER" RICHOS_SESSION_ID="$SID_B" RICHOS_WORKSPACES_DIR="$REG_B" \
+         HOME="$R3E" RICHOS_APP_STATE="$R3E/state" \
+         STALL_WATCH_STATE_DIR="$SB/state-r3e" STALL_WATCH_NOW=$R3NOW bash "$SW" --tick 2>&1)"
+check "R03b the owning chat has ended: another chat is told its escalation" \
+    "$( has "$OUT_B" "Waiting for the test VM"; echo $?)" "chat B=$OUT_B"
 
 # --- W: other recorded waits ---------------------------------------------------
 new_registry w; new_state w
@@ -620,6 +717,30 @@ check "T04  a long honest run, a paused teammate and a finished one are not SILE
     "out=$T01OUT"
 check "T04b a preparation and a refused pre-start call never become silent workers" \
     "$( ! has "$T01OUT" "pending-opus-p1" && ! has "$T01OUT" "refused-opus-p1"; echo $?)" "out=$T01OUT"
+
+# --- T11: an app worker's transcript is found in the account its session started under ----
+# 2026-10-29 08:28Z: three live app workers were called SILENT, "no transcript found for it".
+# Their lead's session had started under the default account and writes ~/.claude/projects;
+# the watcher, after the switch to an added account, ran with CLAUDE_CONFIG_DIR=<app data>/
+# claude-accounts/2 and looked only there. One worker wrote its transcript a minute ago; the
+# other (the control, proving the look found the folder at all) 25 minutes ago.
+new_registry t11; new_state t11
+add_agent sierra-opus-a1 a0000000000fixa1 "$SID" 3600 3000 1500
+add_agent tango-opus-a2 a0000000000fixa2 "$SID" 3600 3000 1500
+AHOME="$SB/app-home"; ADATA="$SB/app-data"
+mkdir -p "$AHOME/.claude/projects/-coordination/$SID/subagents" "$ADATA/claude-accounts/2/projects"
+python3 - "$AHOME/.claude/projects/-coordination/$SID/subagents" <<'PY'
+import os, sys, time
+for aid, ago in (("a0000000000fixa1", 60), ("a0000000000fixa2", 1500)):
+    p = os.path.join(sys.argv[1], "agent-%s.jsonl" % aid)
+    open(p, "a").close()
+    os.utime(p, (time.time() - ago, time.time() - ago))
+PY
+OUT="$(env -u RICHOS_PROJECTS_DIR HOME="$AHOME" CLAUDE_CONFIG_DIR="$ADATA/claude-accounts/2" \
+       STALL_WATCH_NOW="$(date +%s)" bash "$SW" --tick 2>&1)"
+check "T11  an app worker whose transcript is in its session's account folder, written a minute ago, is not SILENT" \
+    "$( ! has "$OUT" "sierra-opus-a1" && has "$OUT" "[SILENT] tango-opus-a2" \
+        && has "$OUT" "last transcript write" && ! has "$OUT" "no transcript found"; echo $?)" "out=$OUT"
 
 # --- T05: an end deferred by its own endless loop (2026-10-11, echo-opus-walk49fix1) ----
 new_registry t5; new_state t5
@@ -789,6 +910,23 @@ check "T10  another agent's tagged process inside the tree is left running; the 
     "seen=$FOREIGN_SEEN out=$FOUT loop_gone=$FGONE other_alive=$OTHER_ALIVE shell_alive=$FSHELL_ALIVE"
 alive "$FLOOP" && kill "$FLOOP" 2>/dev/null
 kill "$OTHER" "$FSHELL" 2>/dev/null; rm -f "$SB/t10-other.pid"
+
+# --- T12: a command left running never hides a transcript that proves silence ----
+# Second review of fe81a88236c6: a worker that left a development server running and then
+# stalled was never SILENT, though its transcript was found and unchanged for an hour. A
+# command still running excuses only a worker whose transcript could not be read (T11's
+# 2026-10-29 08:28Z incident); the control below keeps that.
+new_registry t12; new_state t12
+add_agent uniform-opus-s1 a0000000000fixs1 "$SID" 3600 3000 1500
+add_agent victor-opus-s2 a0000000000fixs2 "$SID" 3600 3000 1500
+rm -f "$RICHOS_PROJECTS_DIR/fixture-project/$SID/subagents/agent-a0000000000fixs2.jsonl"
+start_own_call a0000000000fixs1 toolu_server1 'while :; do sleep 1; done'; S1CALL="$OWNPID"
+start_own_call a0000000000fixs2 toolu_build2 'while :; do sleep 1; done'; S2CALL="$OWNPID"
+tick 0
+check "T12  a transcript unchanged 25 min is SILENT despite a command it left running; no transcript plus its own running command is not" \
+    "$( has "$OUT" "[SILENT] uniform-opus-s1" && has "$OUT" "last transcript write" \
+        && ! has "$OUT" "victor-opus-s2"; echo $?)" "out=$OUT"
+kill "$S1CALL" "$S2CALL" 2>/dev/null
 
 # --- L: slow steps (2026-10-04, isaac-opus-logo1: every step cost ~4.5 minutes) ----
 write_steps() { # <agent-id> <command> <result-text> <step-seconds> <count>: steps ending now-60, spaced 5 min

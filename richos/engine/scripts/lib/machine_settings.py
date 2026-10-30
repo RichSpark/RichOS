@@ -206,16 +206,68 @@ def agent_root(environment=None):
     return root
 
 
+WORKER_TAG = 'RICHOS_AGENT_OWNER'
+WORKER_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}')
+
+
 def scratch(name, environment=None):
+    """The named scratch folder for `name`, one subfolder per worker.
+
+    Every worker of one teammate asks for the same name ("zach"), so the folder itself used to be
+    shared: one worker's cleanup of "its own" scratch deleted another worker's files mid-run
+    (2026-10-29). A worker's shell carries RICHOS_AGENT_OWNER (its agent id, set by the engine's
+    shell wrapper for every subagent call), so the folder returned is <root>/<name>/<worker id>
+    and `rm -r` of it touches that worker alone. A caller with no worker id (the lead's own
+    session, a script) gets <root>/<name> as before.
+    """
+    env = os.environ if environment is None else environment
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', name) or name in ('.', '..'):
         raise ValueError('agent name must be one safe path component')
     root = agent_root(environment)
     target = root / name
+    worker = env.get(WORKER_TAG) or ''
+    if worker:
+        if not WORKER_ID.fullmatch(worker) or worker in ('.', '..'):
+            raise ValueError('worker id must be one safe path component')
+        target = target / worker
     resolved = target.resolve()
-    if not resolved.is_relative_to(root) or resolved == root:
+    if not resolved.is_relative_to(root) or resolved == root or resolved == (root / name).resolve() and worker:
         raise ValueError('named scratch escapes its configured root')
     resolved.mkdir(mode=0o700, parents=True, exist_ok=True)
     return resolved
+
+
+def claude_home(environment=None):
+    """The ONE Claude home of this machine, as a string: where the engine's own stores live
+    (land locks and land records, the fence settings beside them, second-review records, the
+    workspace registry's fallback).
+
+    `CLAUDE_CONFIG_DIR`, else `~/.claude`, EXCEPT where `CLAUDE_CONFIG_DIR` is the added Claude
+    account's folder the app gave this lease (`RICHOS_CLAUDE_ACCOUNT_DIR`): then
+    `RICHOS_CLAUDE_HOME`, Account 1's folder. On an added account the app points
+    `CLAUDE_CONFIG_DIR` at that account's folder, and a store derived from it split by account:
+    a Work lease's land lease, fence settings and review records went to claude-accounts/2 while
+    the installed fence and a terminal read ~/.claude (richos-hq follow-ups, 2026-10-28; Rich's
+    decision 23:58Z: one machine-wide home, the same for terminal and app). A terminal sets none
+    of the three and resolves exactly as before.
+
+    WHY THE PAIR, NOT RICHOS_CLAUDE_HOME ALONE. Every test sandbox isolates the engine's stores
+    with its own `CLAUDE_CONFIG_DIR` (global-state-witness.sh: "CLAUDE_CONFIG_DIR=$(mktemp -d)").
+    Run from an app shell, it inherits the lease's `RICHOS_CLAUDE_HOME`; were that to win, the
+    sandbox's land locks and review ledger would be the live ones. A `CLAUDE_CONFIG_DIR` other
+    than the one the app set is somebody's own choice, and it wins, as it always has.
+
+    NOT for what Claude Code itself writes (sessions/, projects/): those live under the
+    account's own `CLAUDE_CONFIG_DIR`, and their readers keep reading it there.
+
+    Standard library only: install copies this file beside the operator fence (PROGRAM_FILES)."""
+    env = os.environ if environment is None else environment
+    config = (env.get('CLAUDE_CONFIG_DIR') or '').strip()
+    home = (env.get('RICHOS_CLAUDE_HOME') or '').strip()
+    account = (env.get('RICHOS_CLAUDE_ACCOUNT_DIR') or '').strip()
+    if config and home and account and os.path.normpath(config) == os.path.normpath(account):
+        return home
+    return config or os.path.join(os.path.expanduser('~'), '.claude')
 
 
 def main():

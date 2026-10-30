@@ -8,7 +8,11 @@ set -uo pipefail
 INPUT="$(cat)"
 # The lead's own call carries no agent_id: nothing to deliver, no interpreter.
 case "$INPUT" in *'"agent_id"'*) ;; *) exit 0 ;; esac
-LEDGER="${SECOND_REVIEW_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state}/reviews.jsonl"
+# The machine's one Claude home, by scripts/lib/machine_settings.py claude_home's rule:
+# CLAUDE_CONFIG_DIR, else ~/.claude, and RICHOS_CLAUDE_HOME where CLAUDE_CONFIG_DIR is the added
+# account's folder the app gave this lease. These two lines are run alone by second-review.test.sh C26.
+case "${CLAUDE_CONFIG_DIR:-}" in "") CLAUDE_HOME_DIR="$HOME/.claude" ;; "${RICHOS_CLAUDE_ACCOUNT_DIR:-}") CLAUDE_HOME_DIR="${RICHOS_CLAUDE_HOME:-$CLAUDE_CONFIG_DIR}" ;; *) CLAUDE_HOME_DIR="$CLAUDE_CONFIG_DIR" ;; esac
+LEDGER="${SECOND_REVIEW_STATE_DIR:-$CLAUDE_HOME_DIR/state}/reviews.jsonl"
 [ -f "$LEDGER" ] || exit 0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 command -v python3 >/dev/null 2>&1 || exit 0

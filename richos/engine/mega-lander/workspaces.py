@@ -14,8 +14,9 @@ THE TWO EVENTS (point 3)
                                                   (land, discard; retry)
 
 STATE — outside every repository and session, one JSON file per agent:
-    $RICHOS_WORKSPACES_DIR, else $CLAUDE_CONFIG_DIR/state/workspaces,
-    else ~/.claude/state/workspaces
+    $RICHOS_WORKSPACES_DIR, else <claude_home()>/state/workspaces, where
+    claude_home() is $CLAUDE_CONFIG_DIR, else ~/.claude, except that a lease on
+    an added Claude account reads $RICHOS_CLAUDE_HOME (machine_settings.py)
       sessions/<session_id>.json   every session records itself (point 12)
       agents/<key>.json            one agent: its workspaces and its facts
       refs/<key>/<call>.json       the refs its repositories held at the START
@@ -139,13 +140,29 @@ def realpath(p):
     return os.path.realpath(os.path.expanduser(p))
 
 
+def claude_home():
+    """The one Claude home of this machine: machine_settings.claude_home() (CLAUDE_CONFIG_DIR,
+    else ~/.claude; RICHOS_CLAUDE_HOME where CLAUDE_CONFIG_DIR is the added account's folder the
+    app gave this lease). Never for Claude Code's own records (sessions/,
+    projects/), which follow the account's CLAUDE_CONFIG_DIR. Loaded by its path rather than by
+    moving sys.path, because this module runs in a hook on every tool call."""
+    mod = sys.modules.get("machine_settings")
+    if mod is None or not hasattr(mod, "claude_home"):
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "scripts", "lib", "machine_settings.py")
+        spec = importlib.util.spec_from_file_location("machine_settings", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.modules.setdefault("machine_settings", mod)
+    return mod.claude_home()
+
+
 def state_dir():
     d = (os.environ.get("RICHOS_WORKSPACES_DIR") or "").strip()
     if d:
         return d
-    base = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() \
-        or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.path.join(base, "state", "workspaces")
+    return os.path.join(claude_home(), "state", "workspaces")
 
 
 # The app's data folder name under ~/Library/Application Support (Tauri's
@@ -182,7 +199,8 @@ def other_registries(errors=None):
     machine user whose registries these are; app state outside it is not."""
     own = realpath(state_dir())
     home = os.path.expanduser("~")
-    cands = [os.path.join(home, ".claude", "state", "workspaces")]
+    cands = [os.path.join(home, ".claude", "state", "workspaces"),
+             os.path.join(claude_home(), "state", "workspaces")]   # a terminal's, seen from a lease
     cfg = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
     if cfg:
         cands.append(os.path.join(cfg, "state", "workspaces"))
@@ -301,10 +319,45 @@ class Lock(object):
                 Lock._fd = None
 
 
+# A test must never leave a fixture in the app's LIVE registry. On 2026-10-28 a unit run from an app
+# shell wrote a record named "lead-fixture" (session "fixture") into the conversation's real registry
+# and stall-watch then reported an unreadable record for as long as it stayed. The record canary's
+# sandbox now removes the app's variables from a unit's environment; this is the registry's own
+# half, so a writer that still reaches the live registry (an absolute path, a missed variable)
+# is refused rather than trusted. "Live" is the account's own app data folder, found from the
+# password database and not from $HOME, because a sandbox HOME is exactly what a fixture runs
+# under; "fixture-shaped" is an identity field that carries the word fixture.
+_FIXTURE_WORD = re.compile(r"(?i)(?:^|[^a-z0-9])fixture(?:$|[^a-z0-9])")
+_IDENTITY_FIELDS = ("key", "name", "teammate", "session", "session_id", "agent_id", "agent", "ref")
+
+
+def _account_home():
+    try:
+        import pwd
+        return os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError, OSError):
+        return ""
+
+
+def _live_app_registry():
+    home = _account_home()
+    if not home:
+        return False
+    live = os.path.join(home, "Library", "Application Support", APP_IDENTIFIER, "engine-state", "workspaces")
+    here = realpath(state_dir())
+    return here == live or here.startswith(live + os.sep)
+
+
+def _fixture_shaped(fields):
+    return any(isinstance(fields.get(k), str) and _FIXTURE_WORD.search(fields[k]) for k in _IDENTITY_FIELDS)
+
+
 def event(what, **fields):
     """Append one fact to events.jsonl. The history, never the authority."""
     rec = {"ts": iso(), "event": what}
     rec.update(fields)
+    if _fixture_shaped(rec) and _live_app_registry():
+        return                                   # history only; the record write is what refuses
     try:
         _ensure_dirs()
         with open(_p("events.jsonl"), "a", encoding="utf-8") as f:
@@ -512,14 +565,16 @@ def land_locks_dir():
 
     Deliberately NOT `state_dir()` and NOT app.py's `state()`: those are the two
     partitions this lock exists to sit outside of. It is derived instead from
-    `CLAUDE_CONFIG_DIR` (else `~/.claude`) — the same machine-wide home the
-    workspace registry falls back to and the worktree ledger lives in — because
-    the app neither sets nor removes that variable for the engine it launches:
-    `EngineProfile::configure` strips every inherited `RICHOS_`/`LORO_`/`ECS_`/
-    `GIT_` name and re-adds its own list, and `CLAUDE_CONFIG_DIR` is in neither
-    (engine_profile.rs:156-210; the app reads it only to FIND the engine,
-    setup.rs:146 and engine.rs:95). One value for every thread of one app, and
-    for a terminal beside it.
+    `claude_home()` — the same machine-wide home the workspace registry falls
+    back to: `CLAUDE_CONFIG_DIR`, else `~/.claude`, and `RICHOS_CLAUDE_HOME`
+    (Account 1's folder) where `CLAUDE_CONFIG_DIR` is the added account's
+    folder the app gave this lease (`RICHOS_CLAUDE_ACCOUNT_DIR`;
+    `EngineProfile::configure`). On an added account the app points
+    `CLAUDE_CONFIG_DIR` at that account's folder, and a lock derived from that
+    split by account: a Work lease saw another lock than the installed fence's
+    (2026-10-28; this docstring had said the app never set the variable). One
+    value for every thread of one app, whichever account it spends, and for a
+    terminal beside it.
 
     `RICHOS_LAND_LOCKS_DIR` overrides it for tests. That override cannot reach
     an app-launched engine at all, because the strip above removes it — and so
@@ -531,9 +586,7 @@ def land_locks_dir():
     if override:
         base = realpath(override)
     else:
-        home = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() \
-            or os.path.join(os.path.expanduser("~"), ".claude")
-        base = os.path.join(realpath(home), "state", "land-locks")
+        base = os.path.join(realpath(claude_home()), "state", "land-locks")
     if not os.path.isabs(base):
         raise ValueError("the land lock home must be an absolute path")
     for name in ("RICHOS_APP_STATE", "RICHOS_WORKSPACES_DIR"):
@@ -794,6 +847,7 @@ def _ps_parent_and_comm(pid, timeout=10):
 
 
 def _platform_sessions_dir():
+    # Claude Code's own records, under the account's CLAUDE_CONFIG_DIR: never claude_home().
     return (os.environ.get("RICHOS_SESSIONS_DIR") or "").strip() or os.path.join(
         (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
         "sessions")
@@ -1060,6 +1114,10 @@ def load_agent(key):
 
 
 def save_agent(rec):
+    if _fixture_shaped(rec) and _live_app_registry():
+        raise SpecError("refused: %r looks like a test fixture and this is the app's live workspace "
+                        "registry (%s). A test builds a registry of its own (RICHOS_WORKSPACES_DIR in "
+                        "a temporary folder)." % (rec.get("key"), state_dir()))
     write_json(agent_path(rec["key"]), rec)
     if rec.get("agent_id"):
         _write_id(rec["agent_id"], rec["key"])
@@ -2519,21 +2577,45 @@ def record_end(session_id, agent_id, signal_name, detail=""):
 
 
 def _platform_projects_dir():
+    # Claude Code's own records, under the account's CLAUDE_CONFIG_DIR: never claude_home().
     return (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip() or os.path.join(
         (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
         "projects")
 
 
 def _platform_projects_dirs():
-    """Provider storage survives account moves. An explicit root stays isolated."""
+    """EVERY projects folder an agent's transcript can be in, this process's own first.
+    Provider storage survives account moves; an explicit root stays isolated.
+
+    2026-10-29 08:28Z: stall-watch called three live app workers SILENT, "no transcript
+    found for it", while each ran a command and wrote its transcript. Their lead's session
+    had started under the default account and writes ~/.claude/projects/...; the watcher,
+    after the switch to an added account, ran with CLAUDE_CONFIG_DIR=<app data>/claude-
+    accounts/2 and looked only there. A session keeps the folder it started in, so every
+    account's folder is looked in: the default ~/.claude, the app's added accounts, those
+    beside CLAUDE_CONFIG_DIR, and those of the app whose state RICHOS_APP_STATE names.
+    RICHOS_PROJECTS_DIR, when set, is the only one (a fixture's or a pinned home's)."""
     explicit = (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip()
     if explicit:
         return [explicit]
     home = os.path.expanduser("~")
     roots = [_platform_projects_dir(), os.path.join(home, ".claude", "projects")]
-    accounts = os.path.join(home, "Library", "Application Support", APP_IDENTIFIER, "claude-accounts")
-    roots += sorted(glob.glob(os.path.join(glob.escape(accounts), "*", "projects")))
-    return list(dict.fromkeys(roots))
+    accounts = [os.path.join(home, "Library", "Application Support", APP_IDENTIFIER, "claude-accounts")]
+    config = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
+    if config and os.path.basename(os.path.dirname(os.path.normpath(config))) == "claude-accounts":
+        accounts.append(os.path.dirname(os.path.normpath(config)))
+    state = (os.environ.get("RICHOS_APP_STATE") or "").strip()
+    if state:
+        accounts.append(os.path.join(os.path.dirname(os.path.normpath(state)), "claude-accounts"))
+    for folder in accounts:
+        roots += sorted(glob.glob(os.path.join(glob.escape(folder), "*", "projects")))
+    seen, dirs = set(), []
+    for d in roots:
+        real = os.path.realpath(d)
+        if real not in seen:
+            seen.add(real)
+            dirs.append(d)
+    return dirs
 
 
 def _platform_agent_paths(rec, suffix):
@@ -3398,9 +3480,7 @@ def _hold_time(value):
 
 def _review_ended(review_id):
     """None while review <id> runs; else why it counts as ended."""
-    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(
-        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
-        "state")
+    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(claude_home(), "state")
     try:
         with open(os.path.join(base, "reviews.jsonl"), encoding="utf-8") as f:
             for line in f:
@@ -3677,9 +3757,7 @@ def parse_iso_epoch(text):
 
 def _reviews_by_tip():
     """{tip: the newest second-review verdict row for it} from second-review's ledger."""
-    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(
-        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
-        "state")
+    base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(claude_home(), "state")
     out = {}
     for r in _fence_program().read_reviews(os.path.join(base,"reviews.jsonl")):
         if r.get("tip") and r.get("verdict"):

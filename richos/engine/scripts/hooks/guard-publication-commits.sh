@@ -713,6 +713,41 @@ case "$(printf '%s' "$DI_RESULT" | sed -n '1p' | cut -f1)" in
     exit 2 ;;
 esac
 
+# --- One machine's OWN figures ----------------------------------------------
+# A reviewed branch put one Mac's measurements into public code: its total RAM,
+# its free memory and its private memory floor in fixtures named for "this Mac"
+# and a nightly. Neither the device list nor the speech scanners look for a
+# measured value. scripts/lib/machine-figures.py reads the host's RAM size and
+# the private limits file NOW and judges only the lines this commit adds.
+# Wording that means the user's Mac ("only a restart of this Mac does") is kept.
+MF_RESULT="$(python3 -B "$SCRIPT_DIR/../lib/machine-figures.py" --scan-manifest "$WORK/manifest" --repo "$PB_REPO" 2>/dev/null || printf 'BROKEN\tthe machine-figures scanner could not run\n')"
+case "$(printf '%s' "$MF_RESULT" | sed -n '1p' | cut -f1)" in
+  CLEAN) ;;
+  BROKEN)
+    echo "=== MACHINE FIGURES: BROKEN — REFUSING ===" >&2
+    printf '  %s\n' "$(printf '%s' "$MF_RESULT" | sed -n '1p' | cut -f2-)" >&2
+    exit 2 ;;
+  FOUND)
+    {
+        echo "=== MACHINE FIGURES: BLOCKED ==="
+        echo "  Refusing this commit in $PB_REPO — it adds one machine's own figures or an"
+        echo "  incident label to public code:"
+        printf '%s\n' "$MF_RESULT" | tail -n +2 | while IFS="$(printf '\t')" read -r _l _r _w; do
+            [ -n "$_l" ] || continue
+            echo "    - $_l ($_r: $_w)"
+        done
+        echo ""
+        echo "  FIX: use a synthetic value (a size no real Mac is likely to have), name the"
+        echo "  fixture for what it tests rather than for a machine or a nightly, and keep the"
+        echo "  dated measurement in a private record. A user-facing \"this Mac\" with no"
+        echo "  figure beside it is fine."
+    } >&2
+    exit 2 ;;
+  *)
+    echo "ERROR: guard-publication-commits.sh: unexpected machine-figures scanner output — refusing (fail-closed)" >&2
+    exit 2 ;;
+esac
+
 JOB="$WORK/job.json"
 PB_MANIFEST="$WORK/manifest" PB_JOB="$JOB" \
   PB_MIN_SPEECH="$PB_MIN_SPEECH_LINES" PB_MIN_QUOTE="$PB_MIN_QUOTE_WORDS" \

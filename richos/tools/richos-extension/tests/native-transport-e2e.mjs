@@ -31,18 +31,28 @@
 
 import { exportBufferedArchive } from './buffered-export.mjs';
 import { trackChrome, stopChrome, stopAllChrome } from './chrome-process.mjs';
-import { removableVolumeRefusal } from './native-host-privacy.mjs';
-import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { removableVolumeRefusal, stageOffRemovable } from './native-host-privacy.mjs';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:https';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+// Every full Chrome a suite starts is quiet: headless, a throwaway profile, notifications and
+// permissions denied, never registered with macOS Notification Center. This file's launch is the
+// one that put "Google Chrome for Testing" notification prompts on the CEO's screen on 2026-10-29
+// (see the module's header).
+const quiet = createRequire(import.meta.url)('../../../app/ui/tests/lib/quiet-browser.js');
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = path.resolve(HERE, '..');
-const SERVICE_DIR = path.resolve(EXT_DIR, '..', 'richos-service');
-const HOST_JS = path.join(SERVICE_DIR, 'host', 'native-host.js');
+// Where the extension and the native host are read from. A checkout on a removable volume (the nightly's
+// state folder can be on the SSD) is copied under the scratch root by main() and these are pointed at
+// the copy, so neither Chrome nor the host it launches reads the volume.
+let EXT_DIR = path.resolve(HERE, '..');
+let SERVICE_DIR = path.resolve(EXT_DIR, '..', 'richos-service');
+let HOST_JS = path.join(SERVICE_DIR, 'host', 'native-host.js');
 const HEADED = process.argv.includes('--headed');
 const KEEP = process.argv.includes('--keep');
 const LEG = process.argv.find((arg) => arg.startsWith('--leg='))?.slice(6) || 'all';
@@ -238,9 +248,8 @@ function installHostManifest(profileDir, extId, launcher) {
 
 // --------------------------------------------------------------------------------------- launch
 async function launchChrome(profileDir, downloadDir, httpsPort, extraArgs = []) {
-  fs.mkdirSync(path.join(profileDir, 'Default'), { recursive: true });
-  fs.writeFileSync(path.join(profileDir, 'Default', 'Preferences'),
-    JSON.stringify({ download: { default_directory: downloadDir, prompt_for_download: false } }));
+  // The same Preferences file blocks notifications and every OS-reaching permission.
+  quiet.writeQuietPreferences(profileDir, { download: { default_directory: downloadDir, prompt_for_download: false } });
   const args = [
     `--user-data-dir=${profileDir}`, `--load-extension=${EXT_DIR}`, `--disable-extensions-except=${EXT_DIR}`,
     '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check',
@@ -254,9 +263,12 @@ async function launchChrome(profileDir, downloadDir, httpsPort, extraArgs = []) 
     '--autoplay-policy=no-user-gesture-required', '--ignore-certificate-errors',
     '--host-resolver-rules=MAP meet.google.com 127.0.0.1', '--no-proxy-server', '--window-size=1000,700',
     ...extraArgs,
+    // On the host a window is refused (quiet-browser); a real window belongs to the test VM.
+    ...(HEADED ? ['--headed'] : []),
   ];
-  if (!HEADED) args.push('--headless=new');
-  const chrome = trackChrome(spawn(CHROME, args, { stdio: ['ignore', 'pipe', 'pipe'] }));
+  // Adds --headless=new and the notification switches (merged into the one --disable-features
+  // Chrome keeps), and refuses anything not quiet.
+  const chrome = trackChrome(quiet.spawnQuietChrome(CHROME, args, { stdio: ['ignore', 'pipe', 'pipe'] }));
   const log = []; chrome.stderr.on('data', (d) => log.push(String(d))); chrome.stdout.on('data', (d) => log.push(String(d)));
   const portFile = path.join(profileDir, 'DevToolsActivePort');
   const devPort = await waitFor('DevToolsActivePort', () => {
@@ -581,17 +593,23 @@ async function main() {
   pinInternalTmpdir();
   if (!CHROME) throw new Error('no Chrome for Testing found; set CHROME_PATH');
   if (!fs.existsSync(HOST_JS)) throw new Error(`native host not found at ${HOST_JS}`);
-  // The host Chrome launches answers to macOS as itself; on a removable volume it would ask.
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'richos-nat-'));
+  const bail = (code) => { fs.rmSync(workDir, { recursive: true, force: true }); process.exit(code); };
+  // A checkout on a removable volume is read from a copy under the scratch root, off it.
+  ({ extension: EXT_DIR, service: SERVICE_DIR } = stageOffRemovable({
+    dirs: { service: SERVICE_DIR, extension: EXT_DIR }, into: path.join(workDir, 'staged') }));
+  HOST_JS = path.join(SERVICE_DIR, 'host', 'native-host.js');
+  // The host Chrome launches answers to macOS as itself; on a removable volume it would ask. What is
+  // still on one now (the model, a scratch root the caller forced there) is refused unchanged.
   const refusal = removableVolumeRefusal({
     paths: [SERVICE_DIR, EXT_DIR, os.tmpdir(), MODEL],
     subjects: [process.execPath, process.env.RICHOS_NATIVE_LAUNCHER_PYTHON],
   });
-  if (refusal) { console.error(refusal); process.exit(1); }
+  if (refusal) { console.error(refusal); bail(1); }
   if (!canSay || !haveWhisper || !MODEL) {
     console.error(`native-transport-e2e needs: say=${canSay} whisper=${haveWhisper} model=${MODEL || 'MISSING'} — all required for the speech-content proof.`);
-    process.exit(1);
+    bail(1);
   }
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'richos-nat-'));
   console.log(`\nRichOS native-transport E2E\n  chrome:  ${CHROME}\n  host:    ${HOST_JS}\n  model:   ${MODEL}\n  workdir: ${workDir}\n`);
   checkLauncherStderr(workDir);
 
