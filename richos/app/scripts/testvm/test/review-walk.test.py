@@ -116,6 +116,14 @@ class Verdict(unittest.TestCase):
         self.assertEqual(self.outcomes(reviews=ledger(replace={1: review('rv-recheck', 'e5' * 20, 'passed')}))['4'],
                          'FAIL')
 
+    def test_a_recheck_that_started_before_the_rejection_finished_fails_line_4(self):
+        first = dict(review('rv-first', FIRST, 'changes-requested'), at='2026-10-30T10:00:00Z',
+                     finished_at='2026-10-30T10:05:00Z')
+        late = dict(review('rv-recheck', SECOND, 'passed'), at='2026-10-30T10:01:00Z', finished_at='2026-10-30T10:02:00Z')
+        self.assertEqual(self.outcomes(reviews=[first, late])['4'], 'FAIL')
+        right = dict(late, at='2026-10-30T10:06:00Z', finished_at='2026-10-30T10:08:00Z')
+        self.assertEqual(self.outcomes(reviews=[first, right])['4'], 'PASS')
+
     def test_a_landing_without_the_fix_fails_line_5(self):
         self.assertEqual(self.outcomes(landed="'-hello-world-'")['5'], 'FAIL')
         rows = receipts()

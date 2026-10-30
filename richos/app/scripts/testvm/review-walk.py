@@ -352,7 +352,8 @@ def reviews_of(rows, ledger):
     rows (the app reviews a finished worker by itself), and the receipts of a reviewer a coordinator
     prepared (an explicit reviewer_id is still supported)."""
     out = [{'id': r['id'], 'tip': r.get('tip'), 'verdict': r.get('verdict'), 'trigger': r.get('trigger'),
-            'prompt': r.get('_prompt')} for r in ledger or []]
+            'prompt': r.get('_prompt'), 'at': r.get('at'), 'finished_at': r.get('finished_at')}
+           for r in ledger or []]
     for r in rows:
         if r['request']['role'] != 'reviewer':
             continue
@@ -405,8 +406,14 @@ def judge(rows, record, landed, presses, ledger=None):
     # it consumed, is that review.
     recheck = next((rv for rv in rechecks if rv['verdict'] == 'passed' and rv['tip'] == integration.get('commit')
                     and (not named or rv['id'] in named)), None)
-    line('4 the recheck of the continuation passed', bool(recheck),
-         'rechecks: %s' % json.dumps([short(rv) for rv in rechecks]))
+    # The loop's order: the review that asked for changes finished before the recheck of the
+    # continuation started (both are the watcher's own ISO times; a review without them, a prepared
+    # reviewer, is not ordered by them).
+    ordered = not (first_review and recheck and first_review.get('finished_at') and recheck.get('at')
+                   and first_review['finished_at'] > recheck['at'])
+    line('4 the recheck of the continuation passed', bool(recheck) and ordered,
+         'rechecks: %s%s' % (json.dumps([short(rv) for rv in rechecks]),
+                             '' if ordered else '; the recheck started before the review asked for changes finished'))
     integrated = bool(integration.get('verified'))
     line('5 integrate landed the continuation', integrated and landed == "'hello-world'",
          'integration verified %s; slugify on main gives %s' % (integrated, landed))
