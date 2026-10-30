@@ -2025,8 +2025,38 @@ fn record_on_account(profile: &crate::engine_profile::EngineProfile, scope: &cra
     let (Some(project), Some(name)) = (path.parent().and_then(Path::file_name), path.file_name()) else { return Ok(path) };
     let target = projects.join(project).join(name);
     carry_record(&path, &target)?;
+    carry_folder(&path.with_extension(""), &target.with_extension(""))?;
     crate::session_tools::record_moved(scope, session, &target).map_err(NativeError::Protocol)?;
     Ok(target)
+}
+
+/// **The session's own folder comes with its record** (second review rv-20261030T220254Z, P2):
+/// Claude Code keeps each helper's transcript in `<session>/subagents/` beside the record (and a
+/// tool's long output in `<session>/tool-results/`), and `transcript(worker=…)` reads it beside
+/// wherever the record lives now (`session_tools::call`). So every file under `from` is carried
+/// to the same place under `to`: a transcript (`.jsonl`) by [`carry_record`], so a helper's
+/// usage stays counted where it was spent, anything else copied as it is when `to` does not
+/// have it yet. A session with no such folder carries nothing.
+fn carry_folder(from: &Path, to: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(from) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            carry_folder(&source, &target)?;
+        } else if kind.is_file() && source.extension().is_some_and(|e| e == "jsonl") {
+            carry_record(&source, &target)?;
+        } else if kind.is_file() && !target.exists() {
+            std::fs::create_dir_all(to)?;
+            std::fs::copy(&source, &target)?;
+        }
+    }
+    Ok(())
 }
 
 /// The usage a row carries in a copy when it was spent on another account: none.
@@ -5596,6 +5626,67 @@ send({"type":"result","stop_reason":"end_turn"})
         assert_eq!((counted(&home),counted(&work)),(1600.0,500.0));
         // The same account again: nothing moves.
         assert_eq!(native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap().1,original);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **A session moved to another account keeps its helpers' transcripts readable** (second
+    /// review rv-20261030T220254Z, P2): only the record was carried, so after an account switch
+    /// `transcript(worker=…)` looked beside the new record and found nothing, and Rich or Stu could
+    /// no longer read what a helper had done. The session's folder comes with it, and a helper's
+    /// usage stays counted on the account that spent it, in both directions.
+    #[test]
+    fn a_session_moved_to_another_account_keeps_its_helpers_transcripts_readable() {
+        use crate::quota::tokens::{Episode, Track};
+        let root=fixture_root().join(format!("resume-helpers-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),&engine,&root.join("ecs")).unwrap();
+        let mut profile=fixture_profile(&root);
+        profile.work_scope=Some(("company".into(),"conversation".into()));
+        let scope=crate::status_tools::StatusToolScope{version:1,state_root:profile.state.clone(),entity_id:"company".into(),thread_id:"conversation".into()};
+        let session=uuid::Uuid::new_v4().to_string();
+        bridge.bind("company","conversation",&session,"original",Some("stu-thread:conversation"),"rich").unwrap();
+        crate::session_tools::bind(&root.join("stu-scope.json"),&scope,&session,"stu",None).unwrap();
+        let (home,work)=(root.join("accounts/home"),root.join("accounts/work"));
+        let account=|id:&str,folder:&Path| Some(crate::claude_accounts::Account{id:id.into(),label:id.into(),folder:Some(folder.to_path_buf())});
+        let now=crate::util::now_millis();
+        let at=time::OffsetDateTime::from_unix_timestamp_nanos((now as i128-1000)*1_000_000).unwrap();
+        let stamped=format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",at.year(),u8::from(at.month()),at.day(),
+            at.hour(),at.minute(),at.second(),at.millisecond());
+        let turn=|uuid:&str,tokens:u64| format!("{}\n",json!({"type":"assistant","uuid":uuid,"timestamp":stamped,
+            "message":{"id":format!("msg-{uuid}"),"model":"fixture-model","role":"assistant","content":[{"type":"text","text":uuid}],
+                "usage":{"input_tokens":tokens,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}));
+        let counted=|folder:&Path| { let mut track=Track::with_episodes(vec![Episode{points:1.0,tokens:[("fixture-model".to_string(),1)].into()}]);
+            track.scan(folder,now); track.points_since(0,now) };
+        let helper=|worker:&str| crate::session_tools::call(&scope,"transcript",json!({"session_id":session,"worker":worker,"offset":0}))
+            .map(|answer|answer["native_jsonl"].as_str().unwrap_or_default().to_string());
+        // Started on Home, with a helper that finished there and a tool's saved output.
+        let original=home.join("projects/-coordination").join(format!("{session}.jsonl"));
+        let folder=original.with_extension("");
+        std::fs::create_dir_all(folder.join("subagents")).unwrap();
+        std::fs::create_dir_all(folder.join("tool-results")).unwrap();
+        std::fs::write(&original,turn("a1",1000)).unwrap();
+        std::fs::write(folder.join("subagents/agent-helper1.jsonl"),turn("h1",700)).unwrap();
+        std::fs::write(folder.join("tool-results/output.txt"),"saved output").unwrap();
+        std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":original}}))).unwrap();
+        assert!(helper("helper1").unwrap().contains("msg-h1"));
+
+        // Resumed on Work: the helper Home ran is still readable, and still Home's to count.
+        profile.claude_account=account("2",&work);
+        let (_,on_work)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
+        assert!(helper("helper1").expect("the helper's transcript after the switch").contains("msg-h1"));
+        assert_eq!(std::fs::read_to_string(on_work.with_extension("").join("tool-results/output.txt")).unwrap(),"saved output");
+        assert_eq!((counted(&home),counted(&work)),(1700.0,0.0),"a helper's usage stays where it was spent");
+        // A helper that runs on Work is written beside the record there.
+        std::fs::write(on_work.with_extension("").join("subagents/agent-helper2.jsonl"),turn("h2",300)).unwrap();
+
+        // Back on Home: both helpers are readable, each counted once, where it ran.
+        profile.claude_account=account("1",&home);
+        native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
+        assert!(helper("helper1").unwrap().contains("msg-h1"));
+        assert!(helper("helper2").expect("the helper Work ran, back on Home").contains("msg-h2"));
+        assert_eq!((counted(&home),counted(&work)),(1700.0,300.0));
         std::fs::remove_dir_all(root).unwrap();
     }
 
