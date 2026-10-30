@@ -15,6 +15,8 @@
 [richos]   looked in {}
 [richos]   looked in {} ({})
 [richos]   passed over {} ({}) — {}
+[richos] App Management watch: not watching yet, the engine is not verified ({})
+[richos] App Management watch: the watcher could not start ({})
 [richos] Codex watch: an entry waits for Rich ({})
 [richos] Codex watch: an entry waits for a conversation to be open
 [richos] Codex watch: its sink was already set
@@ -48,6 +50,8 @@
 [richos] home field: {} object(s) of {} record(s) at {}, {} link(s), {} source(s), {} question(s) asked. Whether that replaces the demonstration is home.js's HOME_FIELD_MIN_OBJECTS, not this line.
 [richos] hop-trace +{} ms  spine RELEASED at {} after holding {} ms
 [richos] hop-trace +{} ms  spine TAKEN at {} after waiting {} ms
+[richos] idle sessions: could not start the check, every session stays running: {}
+[richos] idle sessions: ended {} conversation session(s) idle for {} minute(s): {}; each resumes on its next message
 [richos] incoming message: {}
 [richos] intake reconciliation at boot: {}
 [richos] launch record: could not mark a clean exit: {}
@@ -70,6 +74,7 @@
 [richos] queued reply: {}
 [richos] quit and stop the work: a job's stop could not be recorded: {}
 [richos] quit and stop the work: {} job(s) recorded as stopped by the user.
+[richos] quit: the App Management watcher {} ended.
 [richos] quit: the Codex watcher {} ended.
 [richos] quit: the second review's watcher(s) {} ended.
 [richos] quit: {} lease(s) ended their tool commands; {} stopped at the bound.
