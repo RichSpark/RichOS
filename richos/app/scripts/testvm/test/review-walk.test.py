@@ -3,6 +3,8 @@
 The live walk is its own proof; this pins the rules that read its evidence."""
 import importlib.util
 from pathlib import Path
+import threading
+import time
 import unittest
 
 HERE = Path(__file__).resolve().parent.parent
@@ -109,6 +111,37 @@ class Dispatching(unittest.TestCase):
         w, since = self.walker(False), {}
         w.stuck_dispatch(self.stuck('dispatching'), since, 0)
         self.assertIn('not on screen', w.stuck_dispatch(self.stuck('dispatching'), since, 301))
+
+
+class DeadlineOnItsOwnClock(unittest.TestCase):
+    """Follow-up 9: the stop on a stuck "dispatching" must not depend on the UI probe loop coming round."""
+
+    def test_a_hung_probe_still_stops_at_the_deadline(self):
+        rows = [worker('a')]
+        rows[0]['status'] = 'dispatching'
+        describe = lambda r, since, now: ('stuck' if walk.stuck_dispatching(r, since, now, limit=0.3) else None)
+        never = threading.Event()
+        with self.assertRaises(walk.StuckDispatch):
+            with walk.DispatchWatch(lambda: rows, describe, every=0.05):
+                never.wait(60)  # the probe that never returns; only the watch can end it
+
+    def test_a_worker_that_is_not_stuck_leaves_the_probe_alone(self):
+        rows = [worker('a')]
+        with walk.DispatchWatch(lambda: rows, lambda r, s, n: None, every=0.05):
+            time.sleep(0.3)
+
+    def test_a_failed_receipt_read_is_retried_not_fatal(self):
+        def read():
+            raise RuntimeError('guest busy')
+        with walk.DispatchWatch(read, lambda r, s, n: 'x', every=0.05):
+            time.sleep(0.3)
+
+    def test_a_probe_that_never_answers_counts_as_no_card(self):
+        w = object.__new__(walk.ReviewWalk)
+        never = threading.Event()
+        w.present = lambda title, role='AXButton', app=None: never.wait(60)
+        self.assertFalse(w.card_on_screen(wait=0.2))
+        never.set()
 
 
 class AnswersTheNameCard(unittest.TestCase):

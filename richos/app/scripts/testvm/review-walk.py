@@ -53,8 +53,10 @@ import importlib.util
 import json
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import sys
+import threading
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -107,6 +109,46 @@ def stuck_dispatching(rows, since, now, limit=DISPATCH_LIMIT):
     for i in workers:
         since.setdefault(i, now)
     return [workers[i] for i in workers if now - since[i] >= limit]
+
+
+class DispatchWatch:
+    """The stuck-"dispatching" deadline, on its own clock: a thread of its own reads the receipts every
+    `every` s and, when a worker has stayed "dispatching" for the limit, interrupts the walk's main thread
+    with StuckDispatch, wherever it is: inside a UI probe that never returns, in a sleep, or between steps.
+    (The check used to run inside the probe loop, so one hung probe let the walk sit past the deadline.)
+    `read()` returns the receipt rows; `describe(rows, since, now)` returns the stop line or None."""
+
+    def __init__(self, read, describe, every=30, clock=time.monotonic):
+        self.read, self.describe, self.every, self.clock = read, describe, every, clock
+        self.stop, self.line, self.since = threading.Event(), None, {}
+        self.thread = None
+        self.main = threading.main_thread().ident
+
+    def _raise(self, signum, frame):
+        raise StuckDispatch(self.line)
+
+    def _run(self):
+        while not self.stop.wait(self.every):
+            try:
+                line = self.describe(self.read(), self.since, self.clock())
+            except Exception:  # a failed read is retried at the next tick; it never ends the watch
+                continue
+            if line:
+                self.line = line
+                signal.pthread_kill(self.main, signal.SIGUSR1)
+                return
+
+    def __enter__(self):
+        self.previous = signal.signal(signal.SIGUSR1, self._raise)
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join(5)
+        signal.signal(signal.SIGUSR1, self.previous)
+        return False
 
 
 class ReviewWalk(command_walk.CommandWalk):
@@ -165,12 +207,21 @@ class ReviewWalk(command_walk.CommandWalk):
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 120))
 
+    def card_on_screen(self, wait=15):
+        """Whether the Git name card is on screen, asked of the UI for at most `wait` s (a probe may hang);
+        an unanswered probe counts as not on screen."""
+        found = []
+        probe = threading.Thread(target=lambda: found.append(self.present(command_walk.GIT_NAME_ANSWER)), daemon=True)
+        probe.start()
+        probe.join(wait)
+        return bool(found and found[0])
+
     def stuck_dispatch(self, rows, since, now):
         """One plain line when a worker has stayed "dispatching" for DISPATCH_LIMIT s, else None."""
         stuck = stuck_dispatching(rows, since, now)
         if not stuck:
             return None
-        card = self.present(command_walk.GIT_NAME_ANSWER)
+        card = self.card_on_screen()
         waiting = ('the Git name card, which is on screen and was not answered' if card else
                    'something that is not on screen (no Git name card); see the app log kept with this run')
         return ('worker %s stayed "dispatching" for %d s; the app is waiting for %s'
@@ -181,43 +232,46 @@ class ReviewWalk(command_walk.CommandWalk):
         if not sent:
             raise StepFailed('job must have run (no send time on record)')
         end = time.monotonic() + self.a.within
-        presses, record, misses, last_note, last_dispatch = [], None, 0, 0, 0
-        dispatching = {}
-        while time.monotonic() < end:
-            try:
-                self.answer_git_name_card()
-                if time.monotonic() - last_dispatch > 30:
-                    last_dispatch = time.monotonic()
-                    stop = self.stuck_dispatch(self.receipts(), dispatching, time.monotonic())
-                    if stop:
-                        self.facts['stuck_dispatch'] = stop
-                        self.save()
-                        raise StuckDispatch(stop)
-                record = self.ours(sent) or record
-                if record and record.get('state') not in OPEN:
-                    break
-                if record and len(presses) < self.a.approvals and self.approve_if_asked(record.get('title', '')):
-                    presses.append({'guest_ms': round(self.clock()), 'state': record.get('state')})
-                    self.facts['approvals'] = presses
-                    self.save()
-                if time.monotonic() - last_note > 120:
-                    last_note = time.monotonic()
-                    rows = self.receipts()
-                    print(json.dumps({'guest_ms': round(self.clock()), 'state': (record or {}).get('state'),
-                                      'receipts': [(r['request']['role'], r['request'].get('teammate'), r.get('status'),
-                                                    (r.get('review_observation') or {}).get('report', {}) and
-                                                    r['review_observation']['report'].get('verdict'))
-                                                   for r in rows]}), flush=True)
-                misses = 0
-            except StuckDispatch as exc:
-                raise StepFailed(str(exc))
-            except (StepFailed, RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
-                misses += 1
-                self.facts.setdefault('observe_misses', []).append(str(exc)[:500])
+        presses, record, misses, last_note = [], None, 0, 0
+
+        def stuck_line(rows, since, now):
+            line = self.stuck_dispatch(rows, since, now)
+            if line:
+                self.facts['stuck_dispatch'] = line
                 self.save()
-                if misses >= 10:
-                    break
-            time.sleep(15)
+            return line
+
+        try:
+            with DispatchWatch(self.receipts, stuck_line):
+                while time.monotonic() < end:
+                    try:
+                        self.answer_git_name_card()
+                        record = self.ours(sent) or record
+                        if record and record.get('state') not in OPEN:
+                            break
+                        if record and len(presses) < self.a.approvals and self.approve_if_asked(record.get('title', '')):
+                            presses.append({'guest_ms': round(self.clock()), 'state': record.get('state')})
+                            self.facts['approvals'] = presses
+                            self.save()
+                        if time.monotonic() - last_note > 120:
+                            last_note = time.monotonic()
+                            rows = self.receipts()
+                            print(json.dumps({'guest_ms': round(self.clock()), 'state': (record or {}).get('state'),
+                                              'receipts': [(r['request']['role'], r['request'].get('teammate'),
+                                                            r.get('status'),
+                                                            (r.get('review_observation') or {}).get('report', {}) and
+                                                            r['review_observation']['report'].get('verdict'))
+                                                           for r in rows]}), flush=True)
+                        misses = 0
+                    except (StepFailed, RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
+                        misses += 1
+                        self.facts.setdefault('observe_misses', []).append(str(exc)[:500])
+                        self.save()
+                        if misses >= 10:
+                            break
+                    time.sleep(15)
+        except StuckDispatch as exc:
+            raise StepFailed(str(exc))
         record = self.settled_read(record)
         self.facts['approvals'] = presses
         self.save()
