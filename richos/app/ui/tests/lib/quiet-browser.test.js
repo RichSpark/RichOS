@@ -305,7 +305,9 @@ function waitExit(child) {
   fs.rmSync(profileDir, { recursive: true, force: true });
   fs.rmSync(scratch, { recursive: true, force: true });
   console.log(`quiet-browser.test.js: ${failures ? `${failures} failed` : "all passed"}`);
-  process.exit(failures ? 1 : 0);
+  // Exit by letting the event loop empty, never process.exit(expression) (docs-claims.js says why;
+  // proof-for.test.sh K6 holds it).
+  process.exitCode = failures ? 1 : 0;
 })().catch((e) => {
   console.log(`  FAIL  quiet-browser.test.js threw: ${e.stack}`);
   process.exit(1);
