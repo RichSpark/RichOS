@@ -11,7 +11,7 @@ import { cacheDir, machineEnvironment } from '../cli/machine-settings.mjs';
 const require = createRequire(import.meta.url);
 const { createScratch, proofCache } = require('./storage.cjs');
 const target = process.argv[2];
-assert(['pwa', 'ios'].includes(target), 'Expected pwa or ios');
+assert(['client-ui', 'ios'].includes(target), 'Expected client-ui or ios');
 const label = `mobile-${target}`;
 function notRun(reason) { console.log(`  NOT RUN  ${label}: ${reason}`); process.exit(2); }
 function hostTool(bin, args) {
@@ -52,7 +52,7 @@ const storage = process.env.RICHOS_MOBILE_SIMULATOR_STORAGE || 'system';
 if (target === 'ios') process.env.RICHOS_MOBILE_SIMULATOR_STORAGE = storage;
 const cache = target === 'ios'
   ? proofCache(`${cacheDir("richos-mobile-ios-proof")}/${key}`, storage, process.env.RICHOS_MOBILE_IOS_TEST_CACHE)
-  : createScratch('pwa-proof');
+  : createScratch('client-ui-proof');
 process.env.RICHOS_MOBILE_CACHE = cache;
 // cacheDir already captured the private settings. Apply this suite's explicit
 // cache choice to in-process consumers as well as the child CLI environment.
@@ -62,8 +62,7 @@ const lock = join(cache, 'suite.lock');
 mkdirSync(lock); // Concurrent proofs may not reset one another's fixture.
 // This proof, rather than its long-lived editor session, owns the test simulator.
 process.env.RICHOS_TEST_DEVICE_OWNER_PID = String(process.pid);
-const env = { ...process.env, RICHOS_PWA_HEADED: '0' };
-let browserStarted = false;
+const env = { ...process.env };
 let passed = 0;
 function cli(...args) {
   const result = spawnSync(process.execPath, [join(mobile, 'cli/mobile.mjs'), ...args], {
@@ -78,10 +77,6 @@ function cli(...args) {
 function pass(message) { passed++; console.log(`  PASS  ${message}`); }
 function cleanup() {
   try {
-    if (browserStarted) {
-      cli('pwa', 'stop');
-      assert(!existsSync(join(cache, 'pwa/worker.json')), 'Browser worker must finish shutdown');
-    }
     if (target === 'ios' && existsSync(join(cache, 'device.json'))) {
       const { id, deviceSet } = JSON.parse(readFileSync(join(cache, 'device.json'), 'utf8'));
       const args = ['simctl', ...(deviceSet === 'system' ? [] : ['--set', deviceSet]), 'shutdown', id];
@@ -90,36 +85,12 @@ function cleanup() {
     }
   } finally {
     rmSync(lock, { recursive: true, force: true });
-    if (target === 'pwa' && !existsSync(join(cache, 'pwa/worker.json'))) rmSync(cache, { recursive: true, force: true });
+    if (target === 'client-ui') rmSync(cache, { recursive: true, force: true });
   }
 }
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { cleanup(); process.exit(130); });
 try {
-  if (target === 'pwa') {
-    browserStarted = true;
-    const prepared = cli('pwa', 'prepare');
-    assert.equal(prepared.state.secureContext, true);
-    assert.equal(prepared.state.serviceWorkerControlled, true);
-    pass('real PWA paired in a secure browser context');
-    const verified = cli('pwa', 'verify');
-    assert.equal(verified.visibleComposerVerified, true);
-    assert.equal(verified.offlineReloadPreservedOutbox, true);
-    assert.equal(verified.reconnectedExactlyOnce, true);
-    assert.deepEqual(verified.trace.map((s) => s.receipts.length), [0, 0, 1]);
-    assert(verified.trace.every((s) => s.errors.length === 0));
-    pass('visible send, offline reload and exactly-once reconnect');
-    const queued = cli('pwa', 'fixture', 'queued');
-    const restarted = cli('pwa', 'restart');
-    assert.equal(restarted.state.outbox[0].clientId, queued.state.outbox[0].clientId);
-    const refreshed = cli('pwa', 'refresh');
-    assert.equal(refreshed.state.online, true);
-    assert.equal(refreshed.state.revoked, false);
-    pass('page restart and source refresh retain the paired session');
-    const browserProof=spawnSync(process.execPath,[join(mobile,'../web/web-app/test/desktop-verify.js')],{env:{...env,PHONE_SHOTS_DIR:join(cache,'pwa-shots')},encoding:'utf8',timeout:180000,maxBuffer:8*1024*1024});
-    assert.ifError(browserProof.error);
-    assert.equal(browserProof.status,0,browserProof.stdout+'\n'+browserProof.stderr);
-    assert.match(browserProof.stdout,/ALL CHECKS PASSED/);
-    pass('actual PWA in Chromium and WebKit: notification settings, draft recovery, notification return, following and locked voice controls; WebKit microphone explicitly not run');
+  if (target === 'client-ui') {
     for(const engine of ['chromium','webkit']) {
       const client = await (await import('./client-ui.mjs')).clientUI({engine});
       assert(client.rapidTypingPreserved && client.bothThemesFitPhoneWidths);

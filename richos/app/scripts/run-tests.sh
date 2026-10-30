@@ -255,11 +255,11 @@
 #     sit there ready to drop the next suite that happens to take the name;
 #   * a row with no reason is refused, and so is an app other than ios or android;
 #   * a row whose suite CLAIMS a file the Mac app ships (its `# run-tests: covers` row names
-#     a path under richos/app/src-tauri, richos/app/crates, richos/app/ui, richos/web/web-app
-#     or richos/engine) is REFUSED. A suite that proves bytes the desktop app ships is a
-#     desktop suite whatever else it tests, and it cannot be moved out of the desktop build
-#     by a row in a list. That is why `mobile-pwa.test.sh` stays: the phone web app is
-#     compiled into the Mac executable (app/src-tauri/build.rs, `embed_phone`);
+#     a path under richos/app/src-tauri, richos/app/crates, richos/app/ui or richos/engine)
+#     is REFUSED. A suite that proves bytes the desktop app ships is a desktop suite whatever
+#     else it tests, and it cannot be moved out of the desktop build by a row in a list.
+#     (richos/web/web-app left that list on 2026-10-30, when the phone web page the Mac
+#     compiled in from it was retired.)
 #   * `--for` with a missing list is refused rather than read as "no phone suites".
 #
 # A NEW SUITE NOBODY LISTED RUNS IN THE DESKTOP BUILD. That is the direction to fail in:
@@ -513,7 +513,7 @@ if [ -n "$FOR_BUILD" ]; then
     # The one structural fact the list cannot override: a suite that claims a file the Mac
     # app ships is a desktop suite. `covers` is the claim (proof-for.sh reads the same row).
     shipped="$(sed -n 's/^# run-tests: covers[[:space:]]*//p' "$found" | head -1 | tr ' ' '\n' \
-               | grep -E '^richos/(app/(src-tauri|crates|ui)|web/web-app|engine)/' | head -3 | tr '\n' ' ')"
+               | grep -E '^richos/(app/(src-tauri|crates|ui)|engine)/' | head -3 | tr '\n' ' ')"
     if [ -n "$shipped" ]; then
       echo "run-tests.sh: $PHONE_LIST lists $l_suite as a phone-app suite, and its covers row claims" >&2
       echo "              files the Mac app ships: ${shipped% }." >&2

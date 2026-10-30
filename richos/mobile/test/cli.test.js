@@ -212,15 +212,15 @@ test('iOS proof selects its fresh cache before creating the suite lock or buildi
   assert.equal(readFileSync(join(selected, 'suite.lock/owner'), 'utf8'), 'another proof');
 });
 
-test('PWA proof reports NOT RUN when its browser executable is missing', (t) => {
+test('client UI proof reports NOT RUN when its browser executable is missing', (t) => {
   const { dir, env } = session(t);
   const modulePath = join(dir, 'playwright.cjs');
   writeFileSync(modulePath, 'module.exports = {chromium: {executablePath: () => __filename + ".missing"}};');
-  const result = spawnSync(process.execPath, [join(__dirname, 'proof-driver.mjs'), 'pwa'], {
+  const result = spawnSync(process.execPath, [join(__dirname, 'proof-driver.mjs'), 'client-ui'], {
     env: { ...env, RICHOS_PLAYWRIGHT: modulePath }, encoding: 'utf8', timeout: 15000
   });
   assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stdout, /NOT RUN.*mobile-pwa.*Chromium/);
+  assert.match(result.stdout, /NOT RUN.*mobile-client-ui.*Chromium/);
   assert.doesNotMatch(result.stdout, /PASS/);
 });
 

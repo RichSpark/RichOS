@@ -13,17 +13,18 @@
 # One row per suite: <suite><TAB><ios | android | ios,android><TAB><why it tests only that app>.
 # run-tests.sh refuses the whole list, before anything runs, if a row names no suite, has no
 # reason, names another app, or names a suite whose covers row claims a file the Mac app ships
-# (richos/app/src-tauri, richos/app/crates, richos/app/ui, richos/web/web-app, richos/engine).
+# (richos/app/src-tauri, richos/app/crates, richos/app/ui, richos/engine).
 #
 # NOT here, on purpose, though they read richos/mobile/ (the Mac side of the phone connection):
 #   mobile-mac.test.sh          the phone server compiled into the Mac app's own crate
 #                               (app/src-tauri/src/main.rs, mobile_mac_server), under cargo test
 #   native-conformance.test.sh  the Mac's production request verifier (app/src-tauri/src/phone)
 #                               against the corpus both phone apps must pass
-#   mobile-pwa.test.sh          the phone web app the Mac executable embeds and serves
-#                               (app/src-tauri/build.rs, embed_phone), in Chromium and WebKit
-#   mobile-headless.test.sh     covers web/web-app/lib/voice.js and lib/connection.js, which the
-#                               Mac embeds, as well as the shared mobile core
+#   mobile-headless.test.sh     the shared mobile core and the reference client modules in
+#                               web/web-app/lib that the conformance corpus is generated from
+#   mobile-client-ui.test.sh    the earlier iPhone app's bundled screens in Chromium and WebKit;
+#                               it ran in the desktop build as mobile-pwa.test.sh until the phone
+#                               web page it also drove was retired on 2026-10-30, and stays there
 # A suite nobody lists runs in the desktop build.
 native-ios-app.test.sh	ios	the native iPhone app built and driven on an iPhone simulator (A1-A8); nothing it builds ships in the Mac app
 native-ios-core.test.sh	ios	the native iPhone app's Swift core package and its rios command line

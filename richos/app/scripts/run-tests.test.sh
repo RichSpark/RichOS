@@ -1058,12 +1058,12 @@ else
   ok "B4 a row with no reason, no app, an unknown app, a stale name or a duplicate, and a missing list, are each refused"
 fi
 
-# B5 — the one structural fact a row cannot override. The phone web app is compiled into the
+# B5 — the one structural fact a row cannot override. The desktop UI is compiled into the
 # Mac executable, so a suite that claims one of its files is the desktop app's.
-printf '%s\n' '# run-tests: covers richos/web/web-app/app.js' \
+printf '%s\n' '# run-tests: covers richos/app/ui/main.js' \
   'echo "=== ios1 tests: all 1 passed ==="' 'exit 0' > "$BBOX/ios1.test.sh"
 brun --for desktop --list
-if [ "$CODE" = 2 ] && says "files the Mac app ships: richos/web/web-app/app.js"; then
+if [ "$CODE" = 2 ] && says "files the Mac app ships: richos/app/ui/main.js"; then
   ok "B5 a listed suite whose covers row claims a file the Mac app ships is refused"
 else
   bad "B5 a listed suite whose covers row claims a file the Mac app ships is refused" \
@@ -1092,13 +1092,13 @@ fi
 #   PHONE_ONLY  test only a phone app, and must not run in the desktop build.
 #   MAC_SIDE    read richos/mobile/ but test the Mac side of the phone connection, which the
 #               desktop app ships: the phone server compiled into its crate (mobile-mac), the
-#               Mac's request verifier (native-conformance), the phone web app the Mac embeds
-#               (mobile-pwa), and two of that web app's library files (mobile-headless).
+#               Mac's request verifier (native-conformance), and the shared mobile core with
+#               the reference client modules the corpus is generated from (mobile-headless).
 PHONE_ONLY="native-ios-app.test.sh native-ios-core.test.sh native-ios-share.test.sh \
 native-ios-ui.test.sh native-ios-physical-tool.test.sh mobile-ios.test.sh \
 native-android-app.test.sh native-android-core.test.sh native-android-ui.test.sh \
 native-android-pair-lab.test.sh native-release-policy.test.sh mobile-perf.test.sh review-mock.test.sh"
-MAC_SIDE="mobile-mac.test.sh native-conformance.test.sh mobile-pwa.test.sh mobile-headless.test.sh"
+MAC_SIDE="mobile-mac.test.sh native-conformance.test.sh mobile-headless.test.sh"
 build_check() {  # build_check <directory holding run-tests.sh>  -> sets BC_WHY ("" = right)
   local d="$1" desk phone all s
   BC_WHY=""
@@ -1155,12 +1155,12 @@ printf 'mobile-mac.test.sh\tios\ta mistaken row\n' >> "$MBOX/phone-app-suites.ts
 build_check "$MBOX"
 case "$BC_WHY" in *"mobile-mac.test.sh (the Mac side) is NOT in the desktop build"*) ;;
   *) B8_WHY="$B8_WHY; listing mobile-mac was not caught (checker said: ${BC_WHY:-nothing})" ;; esac
-# ...and for a suite that proves the Mac's embedded web app, run-tests.sh itself refuses.
+# ...and for a suite that proves the Mac's own frontend payload, run-tests.sh itself refuses.
 cp "$DIR/phone-app-suites.tsv" "$MBOX/phone-app-suites.tsv"
-printf 'mobile-pwa.test.sh\tios\ta mistaken row\n' >> "$MBOX/phone-app-suites.tsv"
+printf 'frontend-payload.test.sh\tios\ta mistaken row\n' >> "$MBOX/phone-app-suites.tsv"
 build_check "$MBOX"
 case "$BC_WHY" in *"belongs to the desktop build"*) ;;
-  *) B8_WHY="$B8_WHY; listing mobile-pwa was not refused (checker said: ${BC_WHY:-nothing})" ;; esac
+  *) B8_WHY="$B8_WHY; listing frontend-payload was not refused (checker said: ${BC_WHY:-nothing})" ;; esac
 if [ -n "$B8_WHY" ]; then
   bad "B8 B7's checker goes red in each direction" "${B8_WHY#; }"
 else
