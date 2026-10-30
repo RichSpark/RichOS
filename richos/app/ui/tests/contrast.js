@@ -1392,6 +1392,25 @@ const SURFACES = [
     },
   },
   {
+    name: "resources-card",
+    what: "the resource square's current-status card",
+    drive: async (p) => {
+      await p.hover("#res-square");
+      await p.waitForFunction(() => document.getElementById("res-card").classList.contains("is-open"));
+      await overlaySettled(p, "#res-card");
+    },
+  },
+  {
+    name: "resources-menu",
+    what: "the resource square's Ink and Readout choices",
+    drive: async (p) => {
+      await p.click("#res-square", { button: "right" });
+      await p.waitForSelector("#res-menu", { state: "visible" });
+      await p.waitForFunction(() => getComputedStyle(document.getElementById("res-card")).visibility === "hidden");
+      await overlaySettled(p, "#res-menu");
+    },
+  },
+  {
     name: "techy-scope",
     what: "§7.1's three-way scope choice — the three options the CEO picks between",
     drive: async (p) => {
@@ -2147,6 +2166,33 @@ async function main() {
   });
 
   // ---- 8. a sheet over the text is part of the answer -------------------------------------
+
+  await run.check("7.hidden  unpainted click-through layers do not obscure text; a visible veil stays unproven", async () => {
+    const page = await openApp(browser, "light");
+    const cases = await page.evaluate((script) => {
+      eval(script);
+      const host = document.createElement("div");
+      host.style.cssText = "position:fixed;left:20px;top:300px;width:180px;height:70px;z-index:99999;background:white";
+      host.innerHTML = '<p id="hidden-ghost-target" style="color:black;background:white;font-size:16px">Readable text</p><div id="hidden-ghost-veil"></div>';
+      document.body.appendChild(host);
+      const veil = host.lastElementChild;
+      const results = [];
+      for (const [kind, style] of [["display-none", "display:none"], ["hidden", "visibility:hidden"], ["transparent", "opacity:0"], ["visible", "opacity:0.25"]]) {
+        veil.style.cssText = "position:absolute;inset:0;background:white;pointer-events:none;" + style;
+        const out = window.__contrastProbe({ surface: "hidden-ghost", theme: "light" });
+        results.push({ kind,
+          measured: out.measuredPaths.includes("p#hidden-ghost-target"),
+          unproven: Object.values(out.unresolvable).some((v) => v.path === "p#hidden-ghost-target"),
+          obscured: Object.values(out.obscured).some((v) => v.path === "p#hidden-ghost-target") });
+      }
+      host.remove();
+      return results;
+    }, C.pageScript());
+    for (const c of cases.slice(0, 3)) assertEqual([c.measured, c.unproven, c.obscured], [true, false, false], c.kind + " has no painted layer");
+    assertEqual([cases[3].measured, cases[3].unproven], [false, true], "the visible click-through veil is still unproven");
+    await page.close();
+    return "display:none, visibility:hidden and zero opacity leave text measurable; the visible veil is refused";
+  });
 
   await run.check("8  a faint veil is measured THROUGH; only an aria-modal claim excuses", async () => {
     const page = await openApp(browser, "light");

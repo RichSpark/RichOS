@@ -313,7 +313,8 @@ function probeBody(options) {
     const e = everything[i];
     if (SKIP[e.tagName]) continue;
     const s = getComputedStyle(e);
-    if (s.pointerEvents !== "none") continue;
+    if (s.pointerEvents !== "none" || s.display === "none" || s.visibility !== "visible") continue;
+    if (cumulativeOpacity(e) <= 0.001) continue;
     const bgc = parseCssColor(s.backgroundColor) || { a: 0 };
     const painted = s.backgroundImage !== "none" || bgc.a > 0;
     if (!painted) continue;
