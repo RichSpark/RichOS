@@ -1917,6 +1917,10 @@ t "work-lease-walk: a failed keep fails the walk; after the kill, an ordinary re
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/work-lease-walk.test.py" >"$TMP/work-lease-walk.log" 2>&1; ok $? "$(cat "$TMP/work-lease-walk.log")"
 t_done
 
+t "review-walk: the verdict reads the records; the name card is answered once by the shared helper; a worker dispatching 5 minutes stops the walk with one line naming what it waits for"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/review-walk.test.py" >"$TMP/review-walk.log" 2>&1; ok $? "$(cat "$TMP/review-walk.log")"
+t_done
+
 t "asked-again-walk: two proposals for the entity with a torn answer between; a torn line is never read as a decline"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/asked-again-walk.test.py" >"$TMP/asked-again-walk.log" 2>&1; ok $? "$(cat "$TMP/asked-again-walk.log")"
 t_done

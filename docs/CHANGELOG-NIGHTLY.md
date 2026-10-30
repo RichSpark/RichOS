@@ -2,6 +2,26 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.5-nightly.20261030.82
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261030.82)
+
+- Changed a conversation you left more than 30 minutes ago to stop running in the background when nothing is going on in it; your next message there picks up where you left off, though Rich's first reply takes a little longer
+- Changed how your team's finished work is reviewed before it is merged: RichOS now reviews it once by itself, with Codex when "Let Codex review your team's work" is on and with Claude otherwise, instead of Stu starting a separate reviewer
+- Changed your team so it can no longer keep your Mac awake or change its sleep settings
+- Fixed RichOS asking you to set up its engine again when it was already installed and working
+- Fixed your team's browser work opening browser windows on your screen or making macOS ask you to allow Chrome's notifications; it now runs out of sight
+- Fixed your team's commands making macOS ask you to install the command line developer tools on a Mac without them; the step now stops and names the missing tool instead
+- Fixed teammates waiting on a long command using a large share of your Mac's processor; a waiting teammate now uses almost none
+- Fixed Stu putting work off because he read another Claude account's weekly use: when he checks usage he now gets the account the work runs on, by name and only its figures
+- Fixed RichOS moving your team off a Claude account with most of its week left when some of their work ran on a model that account had seldom used, such as Haiku
+- [technical] Added Rich, Stu and your teammates being able to read your Mac's current processor and memory use, with the last minute of history, when it matters to their work
+- [technical] Added your Mac's own memory figures, such as its total memory, to what your team is kept from committing to a repository marked public
+- [technical] Fixed the automatic Claude review of your team's work starting while their Claude usage was on hold; it now waits until the account it runs on has room
+- [technical] Fixed Stu being told about a waiting teammate from another conversation or told a teammate that was still working had gone quiet, such as after a switch between Claude accounts
+- [technical] Fixed your team being refused in a repository protected by a land fence while it ran on an added Claude account
+- [technical] Fixed the scheduled cleanup of a RichOS engine installed from Terminal treating a live app conversation's own folder as leftover and telling Stu about the same cleanup problem again each time its count changed
+
 ## 1.2.5-nightly.20261029.81
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261029.81)
