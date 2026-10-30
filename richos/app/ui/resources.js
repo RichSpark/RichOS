@@ -11,8 +11,9 @@
 // THE DATA IS THE APP'S OWN SAMPLER and nothing else: `system_resources` reads the one-second
 // native sampler's cache (`crates/richos-core/src/system_resources.rs`), the same snapshot every
 // agent's `system_resources` tool returns. There is no sampler, synthetic or otherwise, in this
-// file. Its figures are Activity Monitor's definitions (CPU user with nice and system as shares
-// of all cores; Memory Used = App + Wired + Compressed), pinned by that file's unit test.
+// file. CPU user includes nice ticks and is normalized across all cores. Used RAM excludes
+// file cache and includes wired pages and the physical compressor footprint. The native module
+// defines and tests that formula; it does not promise exact Activity Monitor accounting.
 //
 // EVERY STATE IS HONEST. Measuring (no interval yet) draws no value; Not current (no sample for
 // over three seconds) holds the history grayed under three dots; Unavailable holds it grayed

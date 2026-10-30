@@ -163,7 +163,7 @@ fn sample(
     })
 }
 
-/// The four `host_statistics64(HOST_VM_INFO64)` page counts Activity Monitor's figure is made of.
+/// The `host_statistics64(HOST_VM_INFO64)` page counts used by the resource snapshot.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct VmPages {
@@ -173,28 +173,12 @@ struct VmPages {
     compressor: u64,
 }
 
-/// ACTIVITY MONITOR'S "MEMORY USED", from the kernel's page counts.
-///
-/// Activity Monitor's Memory tab: Memory Used = App Memory + Wired Memory + Compressed, with
-/// Cached Files (file-backed and purgeable pages) shown beside it and NOT counted as used.
-/// Apple's guide defines each term but publishes no formula
-/// (https://support.apple.com/guide/activity-monitor/view-memory-usage-actmntr1004/mac); the
-/// counters are XNU's (osfmk/mach/vm_statistics.h): App Memory is the anonymous pages less the
-/// purgeable ones (`internal_page_count - purgeable_count`), Wired is `wire_count` and
-/// Compressed is the compressor's physical footprint, `compressor_page_count` (NOT
-/// `total_uncompressed_pages_in_compressor`, which is how much was squeezed into it).
-///
-/// The other formula in common use, `active + inactive + speculative - external - purgeable +
-/// wired + compressor` (the open-source Stats app), is the same number whenever the throttled
-/// queue is empty, because the pageable queues are exactly the internal and external pages:
-/// measured on an arm64 Mac on 2026-10-29, `vm_stat` gave active 649327 + inactive 590923 +
-/// speculative 63278 = 1303528 = anonymous 839419 + file-backed 464109, throttled 0.
-///
-/// What is deliberately NOT here: `top`'s "PhysMem used" and `hw.memsize - free`, both of which
-/// count the file cache as used and read gigabytes above Activity Monitor on any Mac that has
-/// been up for a while. The unit test below pins this on fixed counters.
+/// Anonymous pages less purgeable pages, plus wired pages and the physical compressor
+/// footprint. File cache and the compressor's uncompressed size are excluded. These are
+/// XNU's native page counters; the formula does not promise exact parity with Activity
+/// Monitor's private accounting. See osfmk/mach/vm_statistics.h in XNU.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn activity_monitor_memory_used(p: &VmPages, page_size: u64) -> Result<u64, String> {
+fn memory_used_from_vm_pages(p: &VmPages, page_size: u64) -> Result<u64, String> {
     let app = p
         .internal
         .checked_sub(p.purgeable)
@@ -276,7 +260,7 @@ mod platform {
             }
             let page = sysctl(b"hw.pagesize\0", 0u32)? as u64;
             let total = sysctl(b"hw.memsize\0", 0u64)?;
-            let used = activity_monitor_memory_used(
+            let used = memory_used_from_vm_pages(
                 &VmPages {
                     internal: vm.internal_page_count as u64,
                     purgeable: vm.purgeable_count as u64,
@@ -761,19 +745,16 @@ mod tests {
         bad.memory_used_bytes = 17;
         assert!(sample(&a, &bad, 1000, 2000, 4000).is_err());
     }
-    /// ACTIVITY MONITOR'S DEFINITIONS, on fixed kernel counters: the `vm_stat` of an arm64 Mac
-    /// (16 KiB pages, 24 GiB) read on 2026-10-29, and a one-second `HOST_CPU_LOAD_INFO` interval
-    /// with niced work in it. Fails on any "used" that counts the file cache (`top`'s PhysMem,
-    /// `memsize - free`), on one that forgets to take purgeable pages out of App Memory, on one
-    /// that uses the compressor's uncompressed size, and on a CPU User that drops nice ticks.
+    /// Fixed counters distinguish the defined used-memory formula from file-cache totals
+    /// and the compressor's uncompressed size. CPU user must include nice ticks.
     #[test]
-    fn memory_used_and_cpu_split_follow_activity_monitor() {
+    fn memory_used_excludes_cache_and_cpu_user_includes_nice() {
         const PAGE: u64 = 16_384;
         let pages = VmPages { internal: 839_419, purgeable: 1_063, wired: 125_953, compressor: 100_257 };
-        let used = activity_monitor_memory_used(&pages, PAGE).unwrap();
+        let used = memory_used_from_vm_pages(&pages, PAGE).unwrap();
         // App 838356 + Wired 125953 + Compressed 100257 = 1064566 pages = 17441849344 bytes.
         assert_eq!(used, 17_441_849_344);
-        // The figures that are NOT Activity Monitor's, from the same counters:
+        // Alternative totals from the same counters must remain distinguishable:
         let file_backed = 464_109u64;
         let free = 8_073u64 + 63_278; // free_count already holds speculative
         let stored_in_compressor = 271_673u64;
@@ -785,7 +766,7 @@ mod tests {
         ] {
             assert_ne!(used, wrong, "{what}");
         }
-        assert!(activity_monitor_memory_used(&VmPages { purgeable: 839_420, ..pages }, PAGE).is_err());
+        assert!(memory_used_from_vm_pages(&VmPages { purgeable: 839_420, ..pages }, PAGE).is_err());
 
         // CPU: ticks are [user, system, idle, nice] summed over every core, so the shares are of
         // the whole Mac (Activity Monitor's User/System/Idle add up to 100%), and niced user

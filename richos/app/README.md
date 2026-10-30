@@ -2145,15 +2145,12 @@ measures age; comparison with the awake clock discards sleep intervals. A stoppe
 or crashed sampler returns unavailable. Unsupported platforms do not report fake
 zeroes. There is no per-second disk log or process enumeration.
 
-The figures use Activity Monitor's definitions. CPU user (with nice), system and idle
-are shares of all cores together on a 0–100 scale, as in Activity Monitor's CPU tab.
-Used memory is Activity Monitor's Memory Used: App Memory (anonymous pages less
-purgeable pages) plus Wired Memory plus Compressed (the compressor's physical
-footprint); Cached Files are excluded. `system_resources.rs` cites the counters and
-its unit test pins the formula on fixed kernel counters. Pressure is the kernel's
-level, the one Activity Monitor's pressure graph colors by: `normal`, `warning`,
-`critical` or `unknown`. Activity Monitor refreshes every 5 seconds by default; set
-View > Update Frequency to 1 second before comparing histories.
+CPU user (including nice), system and idle are shares of all cores together on a
+0–100 scale. Used memory is anonymous pages less purgeable pages, plus wired pages
+and the physical compressor footprint; file cache is excluded. The native module's
+unit test pins that formula on fixed counters. This definition does not promise
+exact parity with Activity Monitor's accounting. Pressure is the kernel's level:
+`normal`, `warning`, `critical` or `unknown`.
 
 The desktop `system_resources` command reads the same cache. For a diagnostic read
 without opening a window, run the app executable with `--system-resources <absolute
