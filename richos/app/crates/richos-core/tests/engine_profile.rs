@@ -988,6 +988,52 @@ fn the_users_settings_json_adds_environment_and_hooks_and_never_the_apps_own_nam
     assert_eq!(profile.user.settings, Default::default());
 }
 
+/// **The user's commit attribution setting reaches every lease, exactly as in the terminal**
+/// (Hank's parity audit 2026-10-30, item 3). A lease starts Claude with `--setting-sources ''`,
+/// so `"attribution": {"commit": "", "pr": ""}` was dropped and Claude signed every commit with
+/// a co-author line the user had switched off. Its `--settings` carries the key as written.
+#[test]
+fn the_users_attribution_setting_reaches_every_lease_as_in_the_terminal() {
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    std::fs::create_dir_all(&folder).unwrap();
+    let off = serde_json::json!({"commit": "", "pr": ""});
+    std::fs::write(folder.join("settings.json"), serde_json::json!({"attribution": off, "model": "fixture-model"}).to_string()).unwrap();
+    let profile = prepare_for_user(&f, &folder);
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    let settings: serde_json::Value = serde_json::from_str(&args[args.iter().position(|a| a == "--settings").unwrap() + 1]).unwrap();
+    assert_eq!(settings["attribution"], off, "{settings}");
+    assert!(settings["model"].is_null(), "only the attribution keys are added");
+
+    // Set in the terminal's own settings file and not in the app's: the terminal's applies,
+    // the older key included. Set in both: the app's file wins.
+    let terminal = f.0.join("claude-home/settings.json");
+    std::fs::create_dir_all(terminal.parent().unwrap()).unwrap();
+    std::fs::write(&terminal, serde_json::json!({"attribution": off, "includeCoAuthoredBy": false, "model": "x"}).to_string()).unwrap();
+    std::fs::write(folder.join("settings.json"), "{}").unwrap();
+    let mut profile = prepare_for_user(&f, &folder);
+    assert!(profile.lease_settings()["attribution"].is_null(), "nothing set, nothing passed: Claude Code's own default");
+    profile.user.settings = profile.user.settings.clone().with_terminal_attribution(&terminal);
+    let settings = profile.lease_settings();
+    assert_eq!(settings["attribution"], off, "{settings}");
+    assert_eq!(settings["includeCoAuthoredBy"], false, "{settings}");
+    assert!(settings["model"].is_null(), "{settings}");
+    let mine = serde_json::json!({"commit": "Made with my team", "pr": ""});
+    std::fs::write(folder.join("settings.json"), serde_json::json!({"attribution": mine}).to_string()).unwrap();
+    let mut profile = prepare_for_user(&f, &folder);
+    profile.user.settings = profile.user.settings.clone().with_terminal_attribution(&terminal);
+    let settings = profile.lease_settings();
+    assert_eq!(settings["attribution"], mine, "{settings}");
+    assert!(settings["includeCoAuthoredBy"].is_null(), "the app's file wins as a whole: {settings}");
+    // A terminal file that is not there, or not JSON, adds nothing.
+    let none = richos_core::user_settings::LeaseSettings::default().with_terminal_attribution(&f.0.join("missing.json"));
+    assert!(none.attribution.is_empty());
+    std::fs::write(&terminal, "{ not json").unwrap();
+    assert!(richos_core::user_settings::LeaseSettings::default().with_terminal_attribution(&terminal).attribution.is_empty());
+}
+
 /// The digest that renews a session moves when any of the user's files is created, changed or
 /// removed, and with nothing else in the folder.
 #[test]
@@ -1058,6 +1104,129 @@ fn a_lease_carries_the_users_login_environment_under_the_apps_own_names() {
     // With no login environment the lease is today's: the runtime, the system folders.
     let today = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(today.lease_path(), today.runtime.path());
+}
+
+/// A program file that prints `says` and leaves a mark in `marks` when it runs.
+fn tool(folder: &Path, name: &str, says: &str, marks: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(folder).unwrap();
+    let path = folder.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\necho ran >> '{}'\necho {says}\n", marks.join(format!("{says}-{name}")).display())).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// What `names` run as in an agent's Bash command: Claude Code runs the file named by the lease's
+/// `CLAUDE_ENV_FILE` ahead of every Bash command (2.1.314), in the lease's own environment.
+fn agent_runs(environment: &BTreeMap<String, Option<String>>, names: &[&str]) -> Vec<String> {
+    let file = environment.get("CLAUDE_ENV_FILE").cloned().flatten()
+        .expect("the lease names no CLAUDE_ENV_FILE: an agent's commands get the lease's own PATH, runtime first");
+    let script = format!(". '{file}'\n{}", names.iter().map(|n| format!("{n}\n")).collect::<String>());
+    let out = std::process::Command::new("/bin/sh").arg("-c").arg(script).env_clear()
+        .env("PATH", environment["PATH"].clone().unwrap()).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
+}
+
+/// **An agent's own commands find the user's `python3`, `node` and `git` first** (Hank's parity
+/// audit 2026-10-30, item 2): `package-app.sh`'s icon check refused under the app's Python, which
+/// has no Pillow, and passed under the user's. The hooks keep the runtime first (the lease's
+/// `PATH`); a tool the user does not have is still the runtime's.
+#[test]
+fn an_agents_commands_find_the_users_own_tools_first() {
+    let f = Scratch::new();
+    let marks = f.0.join("marks");
+    std::fs::create_dir_all(&marks).unwrap();
+    let runtime = f.0.join("runtime/bin");
+    for name in ["python3", "node", "git"] { tool(&runtime, name, "runtime", &marks); }
+    let user = f.0.join("user/bin");
+    for name in ["python3", "git"] { tool(&user, name, "user", &marks); }
+    let login: BTreeMap<String, String> = [("PATH", format!("{}:/usr/bin:/bin", user.display()))].into_iter()
+        .map(|(k, v)| (k.to_string(), v)).collect();
+    let profile = EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(), richos_core::machine_settings::Settings::default(),
+        None, Some(std::sync::Arc::new(login))).unwrap();
+    let mut command = std::process::Command::new("/fictional/provider");
+    profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+    let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+    assert!(environment["PATH"].clone().unwrap().starts_with(&format!("{}:", runtime.display())), "the hooks keep the runtime first");
+    assert_eq!(agent_runs(&environment, &["python3", "git", "node"]), ["user", "user", "runtime"]);
+    // The app's own tools keep the runtime's Python (the yt-dlp launcher reads this name).
+    assert_eq!(environment["RICHOS_RUNTIME_PYTHON"].as_deref(), f.runtime().python.to_str());
+}
+
+/// **An agent's own commands have the user's Python packages, as in the terminal** (second review
+/// rv-20261030T220254Z, P2): the lease removes `PYTHONPATH`, `PYTHONUSERBASE` and the like and
+/// turns `pip --user` packages off for the app's own scripts, so the user's `python3`, found first,
+/// still could not import what it imports in the terminal. Ahead of every Bash command the user's
+/// values come back, and a name the user does not set stays unset. The hooks keep the isolation.
+#[test]
+fn an_agents_commands_have_the_users_python_packages_as_in_the_terminal() {
+    let f = Scratch::new();
+    let set = |login: &[(&str, &str)]| -> (BTreeMap<String, Option<String>>, Vec<String>) {
+        let login: BTreeMap<String, String> = login.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let profile = EngineProfile::prepare_for(&engine(), &f.0.join("data"), f.runtime(), richos_core::machine_settings::Settings::default(),
+            None, Some(std::sync::Arc::new(login))).unwrap();
+        let mut command = std::process::Command::new("/fictional/provider");
+        profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+        let environment: BTreeMap<_, _> = command.get_envs().map(|(k,v)| (k.to_string_lossy().to_string(),v.map(|v|v.to_string_lossy().to_string()))).collect();
+        // An agent's Bash command: the lease's whole environment, then the commands file.
+        let file = environment["CLAUDE_ENV_FILE"].clone().unwrap();
+        let mut shell = std::process::Command::new("/bin/sh");
+        shell.arg("-c").arg(format!(". '{file}'\nfor k in PYTHONPATH PYTHONUSERBASE PYTHONNOUSERSITE NODE_PATH; do eval \"echo $k=\\${{$k-unset}}\"; done"))
+            .env_clear().envs(environment.iter().filter_map(|(k, v)| Some((k, v.as_ref()?))));
+        let out = shell.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        (environment, String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect())
+    };
+    let (lease, agent) = set(&[("PATH", "/usr/bin:/bin"), ("PYTHONPATH", "/user/lib's"), ("PYTHONUSERBASE", "/user/base"), ("NODE_PATH", "/user/node")]);
+    // The hooks and the app's own scripts: isolated, as before.
+    assert_eq!(lease["PYTHONPATH"], None);
+    assert_eq!(lease["PYTHONNOUSERSITE"].as_deref(), Some("1"));
+    assert_eq!(agent, ["PYTHONPATH=/user/lib's", "PYTHONUSERBASE=/user/base", "PYTHONNOUSERSITE=unset", "NODE_PATH=/user/node"]);
+    // Nothing set by the user: nothing set for the agent, and `pip --user` packages on.
+    let (_, agent) = set(&[("PATH", "/usr/bin:/bin")]);
+    assert_eq!(agent, ["PYTHONPATH=unset", "PYTHONUSERBASE=unset", "PYTHONNOUSERSITE=unset", "NODE_PATH=unset"]);
+    // The user turned `pip --user` packages off in the terminal: off for the agent too.
+    let (_, agent) = set(&[("PATH", "/usr/bin:/bin"), ("PYTHONNOUSERSITE", "1")]);
+    assert_eq!(agent[2], "PYTHONNOUSERSITE=1");
+}
+
+/// **On a Mac without the developer tools nothing reaches Apple's stand-ins** (the CEO,
+/// 2026-10-29: "Most regular users aren't expected to be developers"). A fake Mac: its `/usr/bin`
+/// holds `python3` and `git` stand-ins that leave a mark when run, and its developer folders hold
+/// nothing, so the runtime's copies run and no mark is left. With the developer tools installed
+/// the same folder is the user's real Apple tools, and they run.
+#[test]
+fn an_agents_commands_never_reach_an_apple_stand_in() {
+    use richos_core::user_git::StandIns;
+    let f = Scratch::new();
+    let marks = f.0.join("marks");
+    std::fs::create_dir_all(&marks).unwrap();
+    let runtime = f.0.join("runtime/bin");
+    for name in ["python3", "node", "git"] { tool(&runtime, name, "runtime", &marks); }
+    let apple = f.0.join("usr-bin");
+    for name in ["python3", "git"] { tool(&apple, name, "stand-in", &marks); }
+    let user = f.0.join("user/bin");
+    tool(&user, "node", "user", &marks);
+    let runs = |path: &str| -> Vec<String> {
+        let out = std::process::Command::new("/bin/sh").arg("-c").arg("python3\ngit\nnode\n").env_clear()
+            .env("PATH", path).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
+    };
+    let login = format!("{}:{}:/bin", user.display(), apple.display());
+    let no_tools = StandIns { folder: apple.clone(), developer: vec![f.0.join("CommandLineTools")] };
+    let path = richos_core::runtime::commands_path(&runtime, &login, None, &no_tools);
+    assert_eq!(runs(&path), ["runtime", "runtime", "user"], "{path}");
+    assert!(std::fs::read_dir(&marks).unwrap().all(|m| !m.unwrap().file_name().to_string_lossy().starts_with("stand-in")),
+        "a stand-in ran: the developer-tools dialog would be on the user's screen ({path})");
+    // The stand-ins' folder not on the user's PATH at all: the system folders that add it come
+    // after the runtime.
+    let path = richos_core::runtime::commands_path(&runtime, &user.display().to_string(), None, &StandIns::installed());
+    let at = |folder: &str| path.split(':').position(|entry| entry == folder).unwrap();
+    assert!(at(&runtime.display().to_string()) < at("/usr/bin"), "{path}");
+    // The developer tools installed: the folder holds the user's real tools, first, as in the terminal.
+    let tools = f.0.join("CommandLineTools/usr/bin");
+    for name in ["python3", "git"] { tool(&tools, name, "developer", &marks); }
+    let path = richos_core::runtime::commands_path(&runtime, &login, None, &no_tools);
+    assert_eq!(runs(&path), ["stand-in", "stand-in", "user"], "{path}");
 }
 
 /// The login shell is read as a login, interactive shell, between marks, and a shell that does

@@ -274,7 +274,7 @@ fn a_launcher_or_version_file_that_was_changed_is_not_an_installed_copy() {
 
     let launcher = tools.join("yt-dlp");
     let text = std::fs::read_to_string(&launcher).unwrap();
-    std::fs::write(&launcher, text.replace("exec python3", "exec /tmp/elsewhere")).unwrap();
+    std::fs::write(&launcher, text.replace("RICHOS_RUNTIME_PYTHON", "ELSEWHERE")).unwrap();
     assert_eq!(installed(&tools), None, "a launcher that runs something else");
 }
 
@@ -301,7 +301,42 @@ fn the_launcher_runs_python3_on_the_current_version_with_the_arguments() {
         .unwrap();
     assert!(out.status.success());
     let file = installed(&tools).unwrap().file;
-    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("[{}]\n[--version]\n[two words]\n", file.display()));
+    // `-E -s`: the user's PYTHONPATH and `pip --user` packages, which an agent's commands carry,
+    // never reach the Python that runs yt-dlp.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("[-E]\n[-s]\n[{}]\n[--version]\n[two words]\n", file.display()));
+
+    // In a lease: the runtime's Python, named in RICHOS_RUNTIME_PYTHON, even with the user's
+    // `python3` first on PATH (Hank's parity audit 2026-10-30, item 2: an agent's own commands
+    // find the user's tools first, and Apple's Python 3.9 cannot run yt-dlp).
+    let runtime = root.join("runtime python3");
+    std::fs::write(&runtime, "#!/bin/sh\necho runtime \"$@\"\n").unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = std::process::Command::new(tools.join("yt-dlp"))
+        .arg("--version")
+        .env_clear()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env(richos_core::media_tools::RUNTIME_PYTHON, &runtime)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("runtime -E -s {} --version\n", file.display()));
+}
+
+/// A launcher written before the launcher ran the runtime's Python is not an installed copy, so
+/// the next check writes today's.
+#[test]
+fn a_launcher_from_before_the_runtime_python_is_rewritten_at_the_next_check() {
+    let root = scratch("old-launcher");
+    let tools = root.join("tools");
+    let net = FakeNightly::default();
+    net.publish("2026.09.27.232945", A);
+    refresh(&net, &net, &tools).unwrap();
+    let launcher = tools.join("yt-dlp");
+    let today = std::fs::read_to_string(&launcher).unwrap();
+    std::fs::write(&launcher, today.replace("\"${RICHOS_RUNTIME_PYTHON:-python3}\"", "python3")).unwrap();
+    assert_eq!(installed(&tools), None);
+    assert!(matches!(refresh(&net, &net, &tools).unwrap(), Refreshed::Installed { .. }));
+    assert_eq!(std::fs::read_to_string(&launcher).unwrap(), today);
 }
 
 /// m2: the tools folder is on Rich's PATH, and after every system folder.
