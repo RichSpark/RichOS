@@ -26,6 +26,7 @@
 //   14  collapsed sidebar stops UI reads/paint, restores fresh values and dismisses overlays
 //   15  long names wrap at all seven type sizes, both views; an open card follows reflow
 //   16  visible keyboard hint, Down Arrow menu access, saved choice and focus restoration
+//   17  hiding the window pauses work without losing a pin or the view menu's focus
 //
 // Run: node resources.js            (RICHOS_SHOTS_REGENERATE=shots-resources to rewrite shots)
 
@@ -887,6 +888,65 @@ async function main() {
         assertEqual(p.__errors, [], "no page errors");
         return "visible focus hint, no media/function key required, saved choice, focus restored, ordinary click and right-click preserved";
       } finally { await keyboardContext.close(); }
+    });
+
+    await run.check(`17 ${theme}  a hidden window preserves the pinned card and focused menu while pausing work`, async () => {
+      const hiddenContext = await newContext(browser, theme, { motion: true });
+      try {
+        const p = await openApp(hiddenContext, "live", { clock: true });
+        await p.click("#res-square");
+        await p.mouse.move(700, 450);
+        await p.evaluate(() => {
+          window.__resourceCounts = { reads: 0, paints: 0 };
+          const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+          window.RichBridge.invoke = (cmd, args) => {
+            if (cmd === "system_resources") window.__resourceCounts.reads++;
+            return invoke(cmd, args);
+          };
+          const fill = CanvasRenderingContext2D.prototype.fillRect;
+          CanvasRenderingContext2D.prototype.fillRect = function (...args) {
+            if (this.canvas.closest("#res-square, #res-card")) window.__resourceCounts.paints++;
+            return fill.apply(this, args);
+          };
+          Object.defineProperty(document, "hidden", { configurable: true, get: () => !!window.__resourceWindowHidden });
+          window.__setResourceWindowHidden = (hidden) => {
+            window.__resourceWindowHidden = hidden;
+            document.dispatchEvent(new Event("visibilitychange"));
+          };
+        });
+        await p.clock.fastForward(1000);
+        const active = await p.evaluate(() => ({ ...window.__resourceCounts }));
+        assert(active.reads > 0 && active.paints > 0, "visible activity is the positive control");
+        await p.evaluate(() => window.__setResourceWindowHidden(true));
+        const stopped = await p.evaluate(() => ({ ...window.__resourceCounts }));
+        await p.clock.fastForward(5000);
+        assertEqual(await p.evaluate(() => window.__resourceCounts), stopped, "window hiding pauses reads and painting");
+        await p.evaluate(() => window.__setResourceWindowHidden(false));
+        await p.clock.fastForward(1000);
+        assert((await facts(p)).cardOpen, "the card stays pinned when the window returns");
+        assertEqual(await p.getAttribute("#res-square", "aria-expanded"), "true", "the returned card is still pinned");
+        // Clicking pins without moving focus in this WebKit shell (also checked in case 10).
+        await p.focus("#res-square");
+        await p.keyboard.press("ArrowDown");
+        const focused = await p.evaluate(() => document.activeElement.dataset.view);
+        assert(!!focused, "the view menu owns focus before hiding");
+        await p.evaluate(() => window.__setResourceWindowHidden(true));
+        await p.clock.fastForward(5000);
+        await p.evaluate(() => window.__setResourceWindowHidden(false));
+        assert((await facts(p)).menuOpen, "the same menu is available when the window returns");
+        assertEqual(await p.evaluate(() => document.activeElement.dataset.view), focused, "window hiding preserves menu focus");
+        // A rail collapse still dismisses detached UI, even if the window was hidden first.
+        await p.evaluate(() => {
+          window.__setResourceWindowHidden(true);
+          document.documentElement.setAttribute("data-sidebar", "hidden");
+        });
+        await p.clock.fastForward(500);
+        assertEqual((await facts(p)).menuOpen, false, "a rail collapsed during the window pause dismisses its menu");
+        await p.evaluate(() => window.__setResourceWindowHidden(false));
+        assertEqual((await facts(p)).cardOpen, false, "showing a window with a collapsed rail keeps the card closed");
+        assertEqual(p.__errors, [], "no page errors");
+        return "controlled hidden-document pause preserves pin and menu focus; a later rail collapse still dismisses detached UI";
+      } finally { await hiddenContext.close(); }
     });
 
     await page.close();
