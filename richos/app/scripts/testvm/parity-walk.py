@@ -33,6 +33,7 @@ import json
 from pathlib import Path
 import shlex
 import sys
+import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -66,6 +67,20 @@ def seed_home(home):
 
 
 class ParityWalk(base.StuReminderWalk):
+    def decline_first_run_sheets(self, tries=5, seconds=150):
+        """stu-reminder-walk.py's, read again when a press lands as a sheet opens. Measured
+        2026-10-30 22:29Z: "Not now" was not on screen yet, so `Close` was pressed, and the memory
+        question ("Where should I keep what you tell me?") opened in between: ax.sh refused the
+        press as blocked by it. The screen is read again and the sheet's own "Not now" pressed."""
+        end = time.monotonic() + seconds
+        while True:
+            try:
+                return super().decline_first_run_sheets(tries, max(1.0, end - time.monotonic()))
+            except StepFailed as exc:
+                if '"error": "blocked"' not in str(exc) or time.monotonic() >= end:
+                    raise
+                time.sleep(2)
+
     def userpy(self):
         made = guest(self.vm, '/usr/bin/python3 -m venv %s/userpy && %s/userpy/bin/python3 -c %s' % (
             shlex.quote(self.home), shlex.quote(self.home),
