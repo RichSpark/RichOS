@@ -205,16 +205,18 @@ class Walk(cw.CommandWalk):
 
     def title_of(self, thread):
         """The conversation's title as the rail shows it (nav.rs `display_title`): his rename,
-        then Haiku's title, then the title it was created with."""
-        script = ('import glob,json,sys\n'
-                  'for p in glob.glob(sys.argv[1]+"/*nav.json"):\n'
-                  '    s=json.load(open(p))\n'
-                  '    t=(s.get("renamed_threads") or {}).get(sys.argv[2]) or (s.get("auto_titles") or {}).get(sys.argv[2])\n'
-                  '    if t: print(t); break\n')
-        shown = guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data) + ' '
-                      + shlex.quote(thread)).strip()
-        if shown:
-            return shown
+        then Haiku's title, then the title it was created with. The app keeps the first two in
+        navigation.json (reap-walk.py `shown_title`); reading any other file found neither, and
+        walk-14f83e95b656 then pressed "Onboarding" after Haiku had renamed the row."""
+        try:
+            nav = json.loads(guest(self.vm, 'cat ' + shlex.quote(self.data + '/navigation.json')
+                                   + ' 2>/dev/null || true') or '{}')
+        except ValueError:
+            nav = {}
+        for key in ('renamed_threads', 'auto_titles'):
+            shown = ((nav or {}).get(key) or {}).get(thread)
+            if shown:
+                return shown
         titles = [r.get('title') for r in self.ledger() if r.get('thread_id') == thread and r.get('title')]
         return titles[-1] if titles else self.facts.get('thread_title')
 
@@ -223,6 +225,8 @@ class Walk(cw.CommandWalk):
         if not word:
             raise StepFailed('remember must have run')
         title = self.title_of(thread)
+        # Waited for before it is pressed: a press is never asked again (axwait.py).
+        self.wait_for(title, seconds=30)
         self.press(title)
         self.wait_for('Message to Rich', role='AXTextArea', seconds=30)
         time.sleep(2)
