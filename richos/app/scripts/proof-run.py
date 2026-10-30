@@ -30,8 +30,8 @@
       --run-cap S          the whole run stops at S seconds: running checks are stopped with
                            their trees and waiting ones never start, all `cancelled` with the
                            reason, and the summary is written as for any other end. Time the
-                           run's engine units only wait for the engine slot does not count.
-                           Unset: none.
+                           run's engine units only wait for the engine slot, themselves or
+                           through another run's identical check, does not count. Unset: none.
       --sample-every S     how often the host is sampled for the run's summary (10)
       --log-dir DIR        an empty directory for evidence (default: per-checkout SSD storage
                            on macOS; retain failed/unfinished runs and the last 3 green runs)
@@ -281,6 +281,7 @@ class Item:
         self.refused_base = 0.0         # refused_wait when this attempt's limit began
         self.refusing = False           # the next scheduler interval is a counted refusal
         self.owner_wait_since = None    # waiting for another run's identical check (Pool)
+        self.owner_slot_wait = False    # ...whose owner is itself queued for the engine slot
         self.proc = None
         self.log = None
         self.notes = []
@@ -1925,6 +1926,15 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
                 if pool.claim(it):
                     it.owner_wait_since = None
                     owned.append(it)
+                elif it.state == "waiting" and it.owner_slot_wait:
+                    # The identical owner is itself queued for the engine slot (its row says so,
+                    # Pool.mark_slot_wait): that is a wait for the slot here too, so it spends
+                    # neither this run's cap nor its admission wait (review rv-20261030T193938Z).
+                    slot_blocked = True
+                    it.slot_wait += interval
+                    it.wait_reason = "engine-slot"
+                    if it.owner_wait_since is not None:
+                        it.owner_wait_since += interval
                 elif it.state == "waiting":
                     it.wait_reason = "identical-owner"
                     # Its own clock: time waiting for another run's identical check, never
@@ -1937,6 +1947,7 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
                         it.notes.append("identical owner did not finish within the admission wait")
             ready = owned
         gate = getattr(args, "engine_gate", None)
+        slot_queued = set()   # this run's own checks held back for the engine slot this pass
         if gate:
             engine_running = any(it.engine_unit for it in running)
             engine_ready = [it for it in ready if it.engine_unit]
@@ -1957,7 +1968,10 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
                     for it in engine_ready:
                         it.slot_wait += interval
                         it.wait_reason = "engine-slot"
+                    slot_queued = {it.label for it in engine_ready if it.state == "waiting"}
                     ready = [it for it in ready if not it.engine_unit]
+        if pool:
+            pool.mark_slot_wait(slot_queued)   # what a run joining these checks reads
         intent = getattr(args, 'integration_intent', None)
         if intent:
             if ready:
