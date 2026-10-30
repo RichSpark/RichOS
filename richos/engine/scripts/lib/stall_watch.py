@@ -821,9 +821,7 @@ def _transcript(src, rec):
     aid = str(rec.get("agent_id") or "")
     if not aid:
         return ""
-    path = src.transcripts.get(aid)
-    if path and os.path.isfile(path):
-        return path
+    # Resolve again: an account move can leave the cached file intact but stale.
     try:
         path = src.ws.platform_agent_transcript(rec) or ""
     except Exception:  # noqa: BLE001
@@ -874,6 +872,7 @@ def _silent(src, reg, now, session_id, th, waits):
     if not session_id:
         return [], "no session here, so no teammate of it can be named"
     out = []
+    unread = []
     cache = {}
     for rec in reg.recs:
         if rec.get("session_id") != session_id or rec.get("disposition"):
@@ -905,16 +904,26 @@ def _silent(src, reg, now, session_id, th, waits):
             marks.append(best[0][0])
             commit_line = "last commit %s %s on %s" % (hhmm(best[0][0]), best[0][1], best[1])
         path = _transcript(src, rec)
-        tline = "no transcript found for it"
-        transcript_read = False
-        if path:
-            try:
-                mt = os.path.getmtime(path)
-                marks.append(mt)
-                transcript_read = True
-                tline = "last transcript write %s (%s)" % (hhmm(mt), path)
-            except OSError:
-                pass
+        try:
+            mt = os.path.getmtime(path) if path else None
+        except OSError:
+            mt = None
+        if mt is None:
+            if now - max(marks) >= th["silent"]:
+                running = _running(src, rec, now)
+                # With NO transcript to read, a worker whose turn has not ended and whose own
+                # command still runs is taken as working (2026-10-29 08:28Z: three live workers,
+                # one of them in a 4-minute `git commit`, called SILENT with "no transcript
+                # found"). A transcript that WAS read is the stronger evidence: a foreground call
+                # returns within 600 s and a background one is waited on in steps of at most
+                # 270 s, so a working agent writes it well inside SILENT_MINUTES, and one
+                # unchanged that long is silent however long a command it left behind (a dev
+                # server, a watcher) keeps running.
+                if not (running and not _deferred_end(src, rec, running, marks)):
+                    unread.append(name)
+            continue  # missing evidence cannot prove inactivity
+        marks.append(mt)
+        tline = "last transcript write %s (%s)" % (hhmm(mt), path)
         last = max(marks)
         if now - last < th["silent"]:
             continue
@@ -926,16 +935,6 @@ def _silent(src, reg, now, session_id, th, waits):
         running = _running(src, rec, now)
         lines += running
         deferred = _deferred_end(src, rec, running, marks)
-        if running and not deferred and not transcript_read:
-            # With NO transcript to read, a worker whose turn has not ended and whose own
-            # command still runs is taken as working (2026-10-29 08:28Z: three live workers,
-            # one of them in a 4-minute `git commit`, called SILENT with "no transcript
-            # found"). A transcript that WAS read is the stronger evidence: a foreground call
-            # returns within 600 s and a background one is waited on in steps of at most
-            # 270 s, so a working agent writes it well inside SILENT_MINUTES, and one
-            # unchanged that long is silent however long a command it left behind (a dev
-            # server, a watcher) keeps running.
-            continue
         if deferred:
             # 2026-10-11, echo-opus-walk49fix1: its turn ended with its handover, but its
             # own endless wait loops kept its end deferred, and Rich looked up their pids.
@@ -957,7 +956,7 @@ def _silent(src, reg, now, session_id, th, waits):
         out.append(Stall("silent:%s" % rec.get("key"), "SILENT", name, last,
                          "no commit and no transcript activity" if not own_waits else
                          "no commit and no transcript activity (it has a recorded wait)", lines, action))
-    return out, ""
+    return out, ("worker activity not checked: no readable transcript for " + ", ".join(sorted(unread))) if unread else ""
 
 
 # ---------------------------------------------------------------------------
@@ -1004,11 +1003,12 @@ def _last_activity(src, rec):
             if c:
                 marks.append(c[0])
     path = _transcript(src, rec)
-    if path:
-        try:
-            marks.append(os.path.getmtime(path))
-        except OSError:
-            pass
+    try:
+        if not path:
+            return None
+        marks.append(os.path.getmtime(path))
+    except OSError:
+        return None
     return max(marks) if marks else None
 
 

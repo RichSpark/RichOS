@@ -2585,59 +2585,65 @@ def _platform_projects_dir():
 
 def _platform_projects_dirs():
     """EVERY projects folder an agent's transcript can be in, this process's own first.
+    Provider storage survives account moves; an explicit root stays isolated.
 
     2026-10-29 08:28Z: stall-watch called three live app workers SILENT, "no transcript
     found for it", while each ran a command and wrote its transcript. Their lead's session
     had started under the default account and writes ~/.claude/projects/...; the watcher,
     after the switch to an added account, ran with CLAUDE_CONFIG_DIR=<app data>/claude-
     accounts/2 and looked only there. A session keeps the folder it started in, so every
-    account's folder is looked in: the default ~/.claude, the added accounts beside
-    CLAUDE_CONFIG_DIR, and those of the app whose state RICHOS_APP_STATE names.
+    account's folder is looked in: the default ~/.claude, the app's added accounts, those
+    beside CLAUDE_CONFIG_DIR, and those of the app whose state RICHOS_APP_STATE names.
     RICHOS_PROJECTS_DIR, when set, is the only one (a fixture's or a pinned home's)."""
-    pinned = (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip()
-    if pinned:
-        return [pinned]
-    out = [_platform_projects_dir(), os.path.join(os.path.expanduser("~"), ".claude", "projects")]
-    homes = []
+    explicit = (os.environ.get("RICHOS_PROJECTS_DIR") or "").strip()
+    if explicit:
+        return [explicit]
+    home = os.path.expanduser("~")
+    roots = [_platform_projects_dir(), os.path.join(home, ".claude", "projects")]
+    accounts = [os.path.join(home, "Library", "Application Support", APP_IDENTIFIER, "claude-accounts")]
     config = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
     if config and os.path.basename(os.path.dirname(os.path.normpath(config))) == "claude-accounts":
-        homes.append(os.path.dirname(os.path.normpath(config)))
+        accounts.append(os.path.dirname(os.path.normpath(config)))
     state = (os.environ.get("RICHOS_APP_STATE") or "").strip()
     if state:
-        homes.append(os.path.join(os.path.dirname(os.path.normpath(state)), "claude-accounts"))
-    for home in homes:
-        out += sorted(glob.glob(os.path.join(home, "*", "projects")))
+        accounts.append(os.path.join(os.path.dirname(os.path.normpath(state)), "claude-accounts"))
+    for folder in accounts:
+        roots += sorted(glob.glob(os.path.join(glob.escape(folder), "*", "projects")))
     seen, dirs = set(), []
-    for d in out:
+    for d in roots:
         real = os.path.realpath(d)
-        if real not in seen and os.path.isdir(real):
+        if real not in seen:
             seen.add(real)
             dirs.append(d)
     return dirs
 
 
-def _agent_leaf_patterns(rec, leaf):
-    """Glob patterns for a per-agent file the platform writes: under the record's session in
-    every projects folder first, then under any session."""
+def _platform_agent_paths(rec, suffix):
+    aid = (rec.get("agent_id") or "").strip()
     sid = (rec.get("session_id") or "").strip()
-    bases = _platform_projects_dirs()
-    pats = [os.path.join(b, "*", sid, leaf) for b in bases] if sid and "/" not in sid else []
-    return pats + [os.path.join(b, "*", "*", leaf) for b in bases]
+    if not AGENT_ID_RE.match(aid) or (sid and ("/" in sid or sid in (".", ".."))):
+        return []
+    paths = []
+    for base in _platform_projects_dirs():
+        pattern = os.path.join(glob.escape(base), "*", glob.escape(sid) if sid else "*",
+                               "subagents", "agent-%s%s" % (aid, suffix))
+        for path in glob.glob(pattern):
+            try:
+                paths.append((os.path.getmtime(path), path))
+            except OSError:
+                pass
+    # An older account can retain a copy while the current worker writes elsewhere.
+    return [p for _, p in sorted(paths, reverse=True)]
 
 
 def platform_agent_record(rec):
     """The platform's OWN per-agent record, which it writes beside the agent's
     transcript as <projects>/<project>/<session>/subagents/agent-<id>.meta.json
     and updates at the moment a run ends. Read, never written."""
-    aid = (rec.get("agent_id") or "").strip()
-    if not AGENT_ID_RE.match(aid):
-        return None
-    leaf = os.path.join("subagents", "agent-%s.meta.json" % aid)
-    for pat in _agent_leaf_patterns(rec, leaf):
-        for p in sorted(glob.glob(pat)):
-            d = read_json(p)
-            if d is not None:
-                return d
+    for p in _platform_agent_paths(rec, ".meta.json"):
+        d = read_json(p)
+        if d is not None:
+            return d
     return None
 
 
@@ -2652,8 +2658,14 @@ def platform_agent_records(session_id):
         return []
     out = []
     seen = set()
-    for p in sorted(glob.glob(os.path.join(_platform_projects_dir(), "*", sid,
-                                           "subagents", "agent-*.meta.json"))):
+    paths = []
+    for base in _platform_projects_dirs():
+        for p in glob.glob(os.path.join(glob.escape(base), "*", glob.escape(sid), "subagents", "agent-*.meta.json")):
+            try:
+                paths.append((os.path.getmtime(p), p))
+            except OSError:
+                pass
+    for _, p in sorted(paths, reverse=True):
         aid = os.path.basename(p)[len("agent-"):-len(".meta.json")]
         if aid in seen or not AGENT_ID_RE.match(aid):
             continue
@@ -2670,14 +2682,9 @@ def platform_agent_transcript(rec):
     <projects>/<project>/<session>/subagents/agent-<id>.jsonl — the same
     directory platform_agent_record reads, and the same file the session's
     scratch `tasks/<id>.output` is a symlink to. Read, never written."""
-    aid = (rec.get("agent_id") or "").strip()
-    if not AGENT_ID_RE.match(aid):
-        return ""
-    leaf = os.path.join("subagents", "agent-%s.jsonl" % aid)
-    for pat in _agent_leaf_patterns(rec, leaf):
-        for p in sorted(glob.glob(pat)):
-            if os.path.isfile(p):
-                return p
+    for p in _platform_agent_paths(rec, ".jsonl"):
+        if os.path.isfile(p):
+            return p
     return ""
 
 
@@ -3662,11 +3669,42 @@ def due_set(me="", items=None, at=None, cache=None):
             continue
         rec, stopped = _stopped_record(it["key"])
         since = ((rec.get("end") or {}).get("at")) or now()
-        out.append({"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
+        item={"name": it["name"], "what": "the finished work of %s" % it["name"], "why": it["why"],
                     "since": float(since), "end": "", "state": "none", "detail": "finished, not landed or discarded",
                     "source": "finished", "key": it["key"], "review": "",
-                    "command": _stopped_command(it["name"]) if stopped else _finished_command(it["name"])})
+                    "command": _stopped_command(it["name"]) if stopped else _finished_command(it["name"])}
+        if this_conversation() and not stopped:
+            ready=_automatic_review_due(rec)
+            if ready:
+                item.update(source="automatic-review",review=ready,
+                            detail="automatic independent review passed; ready to integrate")
+        out.append(item)
     return out
+
+
+def _automatic_review_due(rec):
+    """The existing stall watcher wakes the lead when the automatic review becomes ready.
+
+    Its announce key changes with the verdict; no extra mailbox or polling loop is needed.
+    Only this worker's exact tips in every repository count, as at integration.
+    """
+    app=os.environ.get("RICHOS_APP_STATE")
+    if not app: return ""
+    F=_fence_program()
+    ledger=os.path.join(app,"second-review","reviews.jsonl")
+    work=recovery_work_key(rec)
+    rows=[r for r in F.read_reviews(ledger) if r.get("work")==work]
+    refs=[]
+    targets={(w["repo"],w["branch"]) for w in live_workspaces(rec)
+             if w.get("kind")=="cc" and w.get("repo") and w.get("branch")}
+    for repo,branch in sorted(targets):
+        tip=branch_tip(repo,branch)
+        row,_mid=F.review_of(rows,tip,repo,F.read_deferrals(ledger))
+        if (not row or row.get("verdict")!="passed" or not F.review_record(row).get("answer")
+                or F.review_gaps(ledger,[tip],repo)):
+            return ""
+        refs.append(row["id"])
+    return ":".join(refs)
 
 
 # THE APP NAMES ITS OWN TOOLS (CEO §138). A due notice is an instruction to act, so it
@@ -3678,10 +3716,9 @@ APP_WORK = "mcp__richos_work__"
 
 def _finished_command(name):
     if this_conversation():
-        return ("integrate it after a passing review (%sprepare a reviewer with review_of its worker receipt, "
+        return ("integrate it after its automatic independent review passes (no separate reviewer preparation; "
                 "then %sintegrate) or continue it (%sprepare with continue_of that receipt); %sinspect lists "
-                "the receipt named %s. The app has no tool that discards it" % (APP_WORK, APP_WORK, APP_WORK,
-                                                                             APP_WORK, name))
+                "the receipt named %s. The app has no tool that discards it" % (APP_WORK, APP_WORK, APP_WORK, name))
     return "land it (workspaces.sh land %s), discard it, or spawn its continuation" % name
 
 
@@ -3722,19 +3759,11 @@ def _reviews_by_tip():
     """{tip: the newest second-review verdict row for it} from second-review's ledger."""
     base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(claude_home(), "state")
     out = {}
-    try:
-        with open(os.path.join(base, "reviews.jsonl"), encoding="utf-8") as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(r, dict) and r.get("tip") and r.get("verdict"):
-                    prev = out.get(r["tip"])
-                    if prev is None or str(r.get("finished_at") or "") >= str(prev.get("finished_at") or ""):
-                        out[r["tip"]] = r
-    except OSError:
-        pass
+    for r in _fence_program().read_reviews(os.path.join(base,"reviews.jsonl")):
+        if r.get("tip") and r.get("verdict"):
+            prev=out.get(r["tip"])
+            if prev is None or str(r.get("finished_at") or "")>=str(prev.get("finished_at") or ""):
+                out[r["tip"]]=r
     return out
 
 

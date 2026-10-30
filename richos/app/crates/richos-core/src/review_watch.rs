@@ -10,10 +10,10 @@
 //! So the HOST runs it, as its own child, started at launch and ended at quit:
 //!
 //! * [`Mode::App`]: every install. `review_watch.py --app-state <engine-state>` reads the
-//!   app's own registry and starts MID-JOB reviews of running workers (the handover review is
-//!   the coordinator's reviewer, which `integrate` already requires). Its verdicts reach the
-//!   running worker through the app's hook (`scripts/app-engine-hook.py`), so nothing it prints
-//!   needs delivering; its output goes to a log. Each review runs on the Claude account the
+//!   app's own registry and starts independent mid-job and handover reviews. Integration
+//!   consumes that handover verdict without another reviewer agent. Its verdicts reach the
+//!   running worker through the app's hook (`scripts/app-engine-hook.py`); the existing stall
+//!   watcher tells the lead when a handover verdict is ready. Output goes to a log. Each review runs on the Claude account the
 //!   app's work runs on when its reviewer starts (`--accounts`, the app's account list).
 //!
 //! **Its process id is recorded** (`<state>/review-watch/host-child-<mode>.json`) while it
