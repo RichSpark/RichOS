@@ -23,6 +23,7 @@
 # IT IS A TEXT MATCH AND IT LEAKS (a script, `sh -c "$X"`, a Python rmtree). Its job is
 # the habitual cleanup command. Any error in the check is a pass.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _gss_in="$(cat)"
 _gss_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _UE_LIB="$_gss_dir/../lib/unevaluated-notice.sh"
@@ -41,7 +42,7 @@ case "$_gss_in" in
     *rm*|*unlink*|*trash*|*-delete*) ;;
     *) exit 0 ;;
 esac
-_gss_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+_gss_py=python3
 printf '%s' "$_gss_in" | "$_gss_py" "$_gss_dir/../lib/shared_scratchpad.py" bash-check
 _gss_rc=$?
 [ "$_gss_rc" = 2 ] && exit 2

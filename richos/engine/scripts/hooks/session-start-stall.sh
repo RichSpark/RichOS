@@ -18,6 +18,7 @@
 # never read (session-start-stdin.test.sh, case 9q: a SessionStart hook that
 # reads a stdin the host may never close hangs the session start).
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

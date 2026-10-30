@@ -37,6 +37,7 @@
 # It resolves no entity root itself: quota-watch.sh does, from the session's
 # CLAUDE_PROJECT_DIR and working directory, like every rooted engine script.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

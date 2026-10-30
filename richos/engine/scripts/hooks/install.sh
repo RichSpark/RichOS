@@ -80,6 +80,7 @@
 #   2  canonical `.claude/settings.local.json` missing/unreadable or missing a
 #      critical config key, or an unrecognized command-line argument
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 
 # The $CLAUDE_PROJECT_DIR substitution below shells out to python3's json

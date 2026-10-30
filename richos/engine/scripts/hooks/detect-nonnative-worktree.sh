@@ -56,6 +56,7 @@
 # worktrees on disk — is unaffected by the marker; it is about the FILESYSTEM's
 # current state, not this specific launch.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 # Payloads can exceed a pipe buffer. Matching pipelines must consume EOF:
 # grep -q or head can give the producer SIGPIPE and reverse the verdict.

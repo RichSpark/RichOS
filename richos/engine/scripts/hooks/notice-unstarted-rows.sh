@@ -54,6 +54,7 @@
 # the output must be identical on all four payloads. An undeclared silent hook
 # fails that suite; a falsely declared one fails it too.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 
 # --- ROOT RESOLUTION -------------------------------------------------------

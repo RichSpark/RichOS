@@ -41,6 +41,7 @@
 # event for hooks that want to be; this one never is. Env override for tests:
 # WORKER_EVENTS_TEAMS_DIR.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -o pipefail
 
 # Keep event JSON out of argv/environment; descriptor 3 carries its bytes.

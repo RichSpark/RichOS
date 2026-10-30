@@ -23,6 +23,7 @@
 # job is to stop the habitual launch. Any error in the check is a pass.
 # Suite: guard-headed-browser.test.sh.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _ghb_in="$(cat)"
 _ghb_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _UE_LIB="$_ghb_dir/../lib/unevaluated-notice.sh"
@@ -38,14 +39,9 @@ case "$_ghb_in" in
     *) exit 0 ;;
 esac
 # Never /usr/bin/python3: on a Mac without developer tools it is Apple's stub, and running it puts
-# the install dialog on the screen this rule protects (guard-toolchain.sh, §65). Take the first
-# python3 on PATH outside /usr/bin (the app's bundled runtime, Homebrew); with none, pass.
-_ghb_py=""
-_ghb_ifs="$IFS"; IFS=:
-for _ghb_d in $PATH; do
-    [ -n "$_ghb_d" ] && [ "$_ghb_d" != "/usr/bin" ] && [ -x "$_ghb_d/python3" ] && { _ghb_py="$_ghb_d/python3"; break; }
-done
-IFS="$_ghb_ifs"
+# the install dialog on the screen this rule protects (§65). hook-python.sh (sourced above) chose
+# the interpreter by path, the app's bundled runtime first; with none, pass.
+_ghb_py="${RICHOS_HOOK_PYTHON:-}"
 [ -n "$_ghb_py" ] || exit 0
 printf '%s' "$_ghb_in" | "$_ghb_py" -B "$_ghb_dir/../lib/headed_browser.py" check
 _ghb_rc=$?

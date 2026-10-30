@@ -28,6 +28,7 @@
 # says OPERATOR_FENCES_STATE="off" is skipped, and any error in the check is a
 # pass, because the Git fence decides anyway.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _gllc_in="$(cat)"
 _gllc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # A PAYLOAD THIS RULE COULD NOT READ IS SAID, NEVER PASSED IN SILENCE: the one
@@ -49,7 +50,7 @@ case "$_gllc_in" in
     *cherry-pick*|*revert*|*" am"*|*rebase*|*stash*|*commit*|*reset*|*--abort*|*--quit*) ;;
     *) exit 0 ;;
 esac
-_gllc_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+_gllc_py=python3
 printf '%s' "$_gllc_in" | "$_gllc_py" "$_gllc_dir/../lib/operator_fences.py" early-check
 _gllc_rc=$?
 [ "$_gllc_rc" = 2 ] && exit 2

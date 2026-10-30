@@ -25,6 +25,7 @@
 # The predicate, and why the lead-in is matched mechanically and never by a
 # prose classifier: scripts/lib/blocking_ask.py, `unanswered`.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -o pipefail
 
 # --- ROOT RESOLUTION -------------------------------------------------------

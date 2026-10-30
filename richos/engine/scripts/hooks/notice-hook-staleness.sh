@@ -157,6 +157,7 @@
 # not fire. TO ARM IT: re-run scripts/hooks/install.sh, then RESTART THE
 # SESSION. That is the operator's to do; no hook and no model can do it.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -o pipefail
 
 HOOK_TAG="(hook: scripts/hooks/notice-hook-staleness.sh)"

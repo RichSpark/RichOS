@@ -349,7 +349,24 @@ def one_envelope(text):
     return envelope
 
 
+def runtime_before_stubs(environ=os.environ):
+    """The bundled runtime's folder before Apple's stub folder on PATH, as scripts/lib/hook-python.sh
+    does for the bash hooks: on a Mac without developer tools /usr/bin/git and python3 open the
+    install dialog, and the git this process and the hooks it starts run is found by name."""
+    runtime = ENGINE / "runtime" / "bin"
+    if not (runtime / "python3").is_file():
+        return
+    stubs = {"/usr/bin", environ.get("RICHOS_TOOLCHAIN_ROOT", "").rstrip("/") + "/usr/bin"}
+    for entry in environ.get("PATH", "").split(os.pathsep):
+        if entry == str(runtime):
+            return
+        if entry in stubs:
+            break
+    environ["PATH"] = str(runtime) + os.pathsep + environ.get("PATH", "")
+
+
 def main(stdin=sys.stdin, stdout=sys.stdout):
+    runtime_before_stubs()
     payload = json.load(stdin)
     if payload.get("hook_event_name") == "PreToolUse" and payload.get("tool_name") == "Agent":
         captured = io.StringIO()

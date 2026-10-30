@@ -14,6 +14,7 @@
 # The rule and its shapes are in scripts/lib/host_sleep.py. It is a text match and leaks; its job
 # is to stop the habitual command. Any error in the check is a pass. Suite: guard-host-sleep.test.sh.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _ghs_in="$(cat)"
 _ghs_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _UE_LIB="$_ghs_dir/../lib/unevaluated-notice.sh"
@@ -28,7 +29,7 @@ case "$_ghs_in" in
     *caffeinate*|*pmset*|*systemsetup*|*PowerManagement*|*IOPMAssertion*|*Amphetamine*|*Caffeine*|*KeepingYouAwake*|*Lungo*|*Theine*) ;;
     *) exit 0 ;;
 esac
-_ghs_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+_ghs_py=python3
 printf '%s' "$_ghs_in" | "$_ghs_py" -B "$_ghs_dir/../lib/host_sleep.py" check
 _ghs_rc=$?
 [ "$_ghs_rc" = 2 ] && exit 2

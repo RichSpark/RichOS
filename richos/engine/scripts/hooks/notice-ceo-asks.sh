@@ -81,6 +81,7 @@
 # NEVER BLOCKS, ALWAYS EXIT 0. A witness that can fail a tool call is a witness
 # people remove.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -o pipefail
 
 # --- ROOT RESOLUTION -------------------------------------------------------

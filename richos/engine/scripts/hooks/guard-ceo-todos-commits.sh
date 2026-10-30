@@ -75,6 +75,7 @@
 #
 # PRECISION: fires only on a command that actually contains `git commit`.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: guard-ceo-todos-commits.sh: python3 is required for payload parsing — refusing (fail-closed)" >&2; exit 2; }

@@ -12,6 +12,7 @@
 # The rule and its shapes are in scripts/lib/unguarded_rm.py. It is a text match and leaks; its job is
 # to stop the habitual command. Any error in the check is a pass. Suite: guard-unguarded-rm.test.sh.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _gur_in="$(cat)"
 _gur_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _UE_LIB="$_gur_dir/../lib/unevaluated-notice.sh"
@@ -26,7 +27,7 @@ case "$_gur_in" in
     *rm*|*find*) ;;
     *) exit 0 ;;
 esac
-_gur_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+_gur_py=python3
 printf '%s' "$_gur_in" | "$_gur_py" "$_gur_dir/../lib/unguarded_rm.py" check
 _gur_rc=$?
 [ "$_gur_rc" = 2 ] && exit 2

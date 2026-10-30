@@ -226,6 +226,7 @@
 # as a file-capable teammate and must satisfy the full contract; an unparseable
 # Agent payload is blocked, not waved through.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 # Payloads can exceed a pipe buffer. Matching pipelines must consume EOF:
 # grep -q or head can give the producer SIGPIPE and reverse the verdict.

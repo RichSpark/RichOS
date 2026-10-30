@@ -65,6 +65,7 @@
 # shell) and calls nothing external: this is the one code path in the engine
 # that runs when the install is already known to be broken, so it must not
 # depend on python3, jq, or any file it has just failed to find.
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _RR_LIB="$SCRIPT_DIR/../lib/resolve-roots.sh"
 if [ ! -f "$_RR_LIB" ]; then
@@ -108,7 +109,7 @@ _OCL_MODE="$SCRIPT_DIR/../lib/operator-mode.sh"
 . "$_OCL_MODE"
 operator_mode_on "$ENTITY_ROOT" || exit 0
 
-_ocl_py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+_ocl_py=python3
 _ocl_out="$(printf '%s' "$INPUT" | OPERATOR_ENTITY_ROOT="$ENTITY_ROOT" "$_ocl_py" "$SCRIPT_DIR/../lib/operator_leads.py" claim-start 2>/dev/null)"
 _ocl_rc=$?
 if [ "$_ocl_rc" -ne 0 ]; then

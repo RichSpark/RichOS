@@ -54,6 +54,7 @@
 # the block cap and strands the session, and a notice people have to escape
 # from is a notice people remove.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -o pipefail
 
 # --- ROOT RESOLUTION -------------------------------------------------------
