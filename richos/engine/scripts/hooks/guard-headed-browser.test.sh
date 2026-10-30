@@ -37,6 +37,8 @@
 #   P9   review 2026-10-29: version-qualified Playwright packages (npx playwright@latest codegen)
 #   P10  review 2026-10-29: PWDEBUG / HEADED set behind env (env PWDEBUG=1 npx playwright test)
 #   P11  review 2026-10-29: a spec file named to playwright test is read (headless: false in it)
+#   P12  review 2026-10-30: with no spec named, the specs playwright test discovers under the
+#        config's testDir are read (node_modules skipped), and its name filters narrow them
 #   N6   the quiet full app (headless, both switches, a $TMPDIR profile), chrome-headless-shell,
 #        Puppeteer headless: 'shell', Playwright's default Chromium, playwright-cli with a config
 #        that carries the switches, npx playwright-cli@latest open (headless by default)
@@ -57,7 +59,7 @@ bad() { printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf '        %s\n' "$2
 FX="$(mktemp -d "${TMPDIR:-/tmp}/headed-browser-test.XXXXXX")"
 trap 'rm -rf "$FX"' EXIT
 FX="$(cd "$FX" && pwd -P)"
-mkdir -p "$FX/home" "$FX/proj/sub" "$FX/proj-headless" "$FX/proj-mcp"
+mkdir -p "$FX/home" "$FX/proj/sub" "$FX/proj-headless" "$FX/proj-mcp" "$FX/proj-specs/tests/e2e" "$FX/proj-specs/node_modules/pkg"
 unset CLAUDE_CONFIG_DIR
 
 # The 2026-10-28 shape: a review script that launches a visible Chromium.
@@ -93,14 +95,25 @@ import { chromium } from 'playwright';
 // headless: false would put a window on the screen; never on the host.
 const browser = await chromium.launch({ headless: true });
 EOF
-cat > "$FX/proj-headless/headed.spec.js" <<'EOF'
+# A project whose specs Playwright discovers itself (testDir below), one of them headed.
+cat > "$FX/proj-specs/playwright.config.ts" <<'EOF'
+export default { testDir: './tests', use: { headless: true } };
+EOF
+cat > "$FX/proj-specs/tests/e2e/headed.spec.js" <<'EOF'
 const { test, chromium } = require('@playwright/test');
 test('walk', async () => { const b = await chromium.launch({ headless: false }); });
 EOF
-cat > "$FX/proj-headless/quiet.spec.js" <<'EOF'
+cat > "$FX/proj-specs/tests/quiet.spec.js" <<'EOF'
 const { test } = require('@playwright/test');
 test('walk', async ({ page }) => { await page.goto('about:blank'); });
 EOF
+cat > "$FX/proj-specs/node_modules/pkg/vendored.spec.js" <<'EOF'
+const b = await chromium.launch({ headless: false });
+EOF
+cat > "$FX/proj-specs/package.json" <<'EOF'
+{ "scripts": { "test": "playwright test" } }
+EOF
+cp "$FX/proj-specs/tests/quiet.spec.js" "$FX/proj-headless/quiet.spec.js"
 cat > "$FX/proj-headless/plain.mjs" <<'EOF'
 const browser = await chromium.launch();
 EOF
@@ -203,8 +216,11 @@ check 2 P5 'python3 runs a script with headless=False' 'python3 check.py'
 check 2 P5 'npx tsx runs a script with "headless": false' 'npx tsx sub/walk.ts'
 check 2 P5 'cd into a folder, then node' 'cd sub && node review.mjs'
 check 2 P5 'playwright test with a headed config' 'npx playwright test'
-check 2 P11 'playwright test naming a spec that launches headed' 'npx playwright test headed.spec.js' "$FX/proj-headless"
-check 2 P11 'playwright test with the spec after options' 'npx playwright test --project=chromium ./headed.spec.js' "$FX/proj-headless"
+check 2 P11 'playwright test naming a spec that launches headed' 'npx playwright test tests/e2e/headed.spec.js' "$FX/proj-specs"
+check 2 P11 'playwright test with the spec after options' 'npx playwright test --project=chromium ./tests/e2e/headed.spec.js' "$FX/proj-specs"
+check 2 P12 'plain playwright test discovers the headed spec under testDir' 'npx playwright test' "$FX/proj-specs"
+check 2 P12 'npm test running playwright test' 'npm test' "$FX/proj-specs"
+check 2 P12 'a name filter that selects the headed spec' 'npx playwright test e2e' "$FX/proj-specs"
 check 2 P5 'playwright test --config naming a headed config' "npx playwright test --config $FX/proj/playwright.config.ts" "$FX/proj-headless"
 check 2 P5 'npm test into package.json' 'npm test'
 check 2 P5 'npm run <script> into package.json' 'npm run shots'
@@ -246,6 +262,8 @@ check 0 N1 'Selenium with --headless=new' 'python3 selenium_ok.py' "$FX/proj-hea
 check 0 N1 'Chrome with --headless=new, the notification switches and a temp profile' '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-features=NativeNotifications,SystemNotifications --disable-notifications --user-data-dir="$TMPDIR/p" --screenshot=/tmp/s.png http://localhost:3000'
 check 0 N1 'playwright test with a headless config' 'npx playwright test' "$FX/proj-headless"
 check 0 N1 'playwright test naming a spec with no launch, and a name filter' 'npx playwright test quiet.spec.js walk' "$FX/proj-headless"
+check 0 N1 'playwright test naming only the quiet spec where a headed one exists' 'npx playwright test tests/quiet.spec.js' "$FX/proj-specs"
+check 0 N1 'a name filter that selects only the quiet spec' 'npx playwright test quiet' "$FX/proj-specs"
 check 0 N1 'env CI=1 playwright test (a setting behind env that is not debug)' 'env CI=1 npx playwright test' "$FX/proj-headless"
 check 0 N1 'npm test of a headless script' 'npm test' "$FX/proj-headless"
 check 0 N1 'npm run of a script with no browser' 'npm run lint'

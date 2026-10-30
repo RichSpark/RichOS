@@ -21,8 +21,8 @@ sh -c scripts, behind sudo/env/nohup/exec/time/timeout/xargs), refuses:
   5. inline code (node -e, python -c, deno eval, a heredoc fed to an interpreter) that sets
      `headless: false` / `headless=False`, or starts a Selenium driver with no headless option
   6. a script the command runs (node x.mjs, python3 x.py, npx tsx x.ts, ...) whose source sets
-     `headless: false`, and `playwright test` whose playwright.config, or a spec file named on
-     its command line, sets it; `npm test`,
+     `headless: false`, and `playwright test` whose playwright.config, a spec file named on its
+     command line, or (none named) a spec it discovers under testDir sets it; `npm test`,
      `npm run <script>`, `pnpm <script>`, `yarn <script>` are followed one level into
      package.json. Paths resolve from the payload's cwd and any `cd` earlier in the command.
 
@@ -326,6 +326,59 @@ def _package_script(ctx, argv, depth):
         _scan_text(ctx, body, depth + 1)
 
 
+SPEC_FILE = re.compile(r"\.(?:spec|test)\.(?:c|m)?[jt]sx?$")
+TEST_DIR = re.compile(r"""\btestDir['"]?\s*:\s*['"]([^'"]+)['"]""")
+SKIP_DIRS = {"node_modules", ".git", "dist", "build", "target", "test-results", "playwright-report"}
+MAX_DISCOVERED = 400
+MAX_DIRS = 3000
+
+
+def _scan_discovered_specs(ctx, config, filters):
+    """The spec files `playwright test` would collect: Playwright's default testMatch
+    (*.spec.* / *.test.*) under the config's testDir (else the config's folder, else the cwd),
+    narrowed by the command's name filters. Bounded: at most MAX_DISCOVERED files are read and
+    MAX_DIRS folders walked (a text match that leaks past the bound, like the rest of this rule)."""
+    config_path = None
+    for candidate in ([config] if config else list(PLAYWRIGHT_CONFIGS)):
+        full = _resolve(ctx.cwd, candidate)
+        if full and os.path.isfile(full):
+            config_path = full
+            break
+    root = os.path.dirname(config_path) if config_path else ctx.cwd
+    if not root:
+        return
+    text = _read(config_path) if config_path else None
+    m = TEST_DIR.search(text or "")
+    if m:
+        root = os.path.normpath(os.path.join(root, m.group(1)))
+    if not os.path.isdir(root):
+        return
+    seen = 0
+    for visited, (here, dirs, files) in enumerate(os.walk(root)):
+        if visited > MAX_DIRS:
+            return
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+        for f in sorted(files):
+            if not SPEC_FILE.search(f):
+                continue
+            path = os.path.join(here, f)
+            rel = os.path.relpath(path, ctx.cwd or root)
+            if filters and not any(_filter_matches(x, path) for x in filters):
+                continue
+            seen += 1
+            if seen > MAX_DISCOVERED:
+                return
+            ctx.scan_file(path, rel)
+
+
+def _filter_matches(pattern, path):
+    """Playwright reads a positional as a regular expression over the file path."""
+    try:
+        return re.search(pattern, path) is not None
+    except re.error:
+        return pattern in path
+
+
 def judge(ctx, words, depth):
     env = _assignments(words)
     argv = _strip_prefix(words)
@@ -390,9 +443,20 @@ def judge(ctx, words, depth):
             # A spec file named on the command line is read too (review 2026-10-29: `npx playwright
             # test headed.spec.js` ran a spec with headless: false). A positional that is not an
             # existing script file is a name filter, and scan_file skips it.
+            named = False
+            filters = []
             for a in positional[1:]:
-                if SCRIPT_EXT.search(a):
+                full = _resolve(ctx.cwd, a)
+                if SCRIPT_EXT.search(a) and full and os.path.isfile(full):
+                    named = True
                     ctx.scan_file(a, a)
+                else:
+                    filters.append(a)
+            if not named:
+                # No spec named: the specs Playwright discovers itself are read (review
+                # 2026-10-30: a plain `npx playwright test` or `npm test` ran a discovered spec
+                # with headless: false).
+                _scan_discovered_specs(ctx, config, filters)
         return
     if BROWSER_BINARIES.match(name):
         if not any(a.startswith("--headless") and not HEADED_FLAG.match(a) for a in argv[1:]):
