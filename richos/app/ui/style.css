@@ -556,12 +556,12 @@ button {
   color: var(--ink-faint);
 }
 
-/* THE LIVE MAC RESOURCES SQUARE (round 47, `resources.js`): opposite the name on the footer's
-   row, 34px like the initials disc. Ink by default, Readout by the CEO's right-click choice.
-   The paints are round 47's, measured from rendered pixels against the ground they sit on by
+/* The live Mac resources square (`resources.js`): opposite the name on the footer's
+   row, 34px like the initials disc. Ink by default, Readout through the context menu.
+   The paints are measured from rendered pixels against the ground they sit on by
    `tests/resources.js` (floor 3:1), and every text pair by the same suite (floor 4.5:1).
 
-   DECLARED BELOW 3:1, ON PURPOSE (round 47's README): the held history under Not current and
+   Declared below 3:1 intentionally: the held history under Not current and
    Unavailable is grayed by the ground laid over it at 62%, so it cannot be read as current —
    the state is carried by the glyph over it, the card's status and its sentence, which clear
    their floors; the hatch of a gap and the card graph's quarter lines are texture, the gap's
