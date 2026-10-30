@@ -167,7 +167,7 @@ pub struct EngineProfile {
 
 /// **Account 1's Claude folder, the machine-wide home** a lease is given as `RICHOS_CLAUDE_HOME`:
 /// the app's own `CLAUDE_CONFIG_DIR`, else `~/.claude`, exactly as a terminal resolves it.
-fn machine_claude_home() -> Option<PathBuf> {
+pub(crate) fn machine_claude_home() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from).or_else(|| {
         std::env::var_os("HOME").filter(|home| !home.is_empty()).map(|home| PathBuf::from(home).join(".claude"))
     })
