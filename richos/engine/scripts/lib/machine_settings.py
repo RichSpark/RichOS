@@ -29,6 +29,18 @@ KEYS = (
 )
 RESOLVED = 'RICHOS_MACHINE_SETTINGS_RESOLVED'
 
+# NUMBERS, NOT PATHS, AND NEVER IN .env. Every reader of `.env`, the engine the app
+# has installed included, refuses a key it does not know (`parse` below), so a number written
+# there would stop every older engine on the machine from reading its paths at all. A machine's
+# limits live in a file of their own beside it, `limits.env`, read only by `limit()`. Its name
+# may be given in RICHOS_LIMITS_FILE; a limit's own name in the environment wins over the file.
+#   name: (smallest, largest) whole number accepted
+LIMITS = {
+    # testvm/slots.py: MB that must stay available for the Mac once a test guest has all its RAM.
+    'TESTVM_MEMORY_FLOOR_MB': (256, 65536),
+}
+LIMITS_FILE = 'RICHOS_LIMITS_FILE'
+
 
 def parse(text, source='<settings>'):
     result = {}
@@ -73,6 +85,60 @@ def load(environment=None, home=None):
     if 'RICHOS_NATIVE_ANDROID_CACHE' in result:
         result.setdefault('RANDROID_CACHE', result['RICHOS_NATIVE_ANDROID_CACHE'])
     return result
+
+
+def _limit_value(key, raw, source):
+    low, high = LIMITS[key]
+    if not re.fullmatch(r'[0-9]{1,9}', raw) or not low <= int(raw) <= high:
+        raise ValueError(f'{source}: {key} must be a whole number from {low} to {high}, not {raw!r}')
+    return int(raw)
+
+
+def parse_limits(text, source='<limits>'):
+    result = {}
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        key, separator, value = line.partition('=')
+        key, value = key.strip(), value.strip()
+        if not separator or key not in LIMITS or key in result:
+            raise ValueError(f'{source}:{number}: malformed, duplicate or unknown limit {key}')
+        result[key] = _limit_value(key, value, f'{source}:{number}')
+    return result
+
+
+def limits_file(environment=None, home=None):
+    env = os.environ if environment is None else environment
+    explicit = env.get(LIMITS_FILE)
+    if explicit is not None:
+        if not Path(explicit).is_absolute():
+            raise ValueError(f'{LIMITS_FILE} must be an absolute path')
+        return Path(explicit)
+    return Path(home or env.get('HOME') or Path.home()) / 'Library/Application Support/RichOS/limits.env'
+
+
+def limit(key, default, environment=None, home=None):
+    """(value, where it came from) for one of LIMITS: the environment, else this machine's
+    limits file, else `default`, which the caller states. A malformed value is an error, never
+    a silent default: a limit somebody set and nobody applies is worse than none."""
+    if key not in LIMITS:
+        raise ValueError(f'unknown limit {key}')
+    env = os.environ if environment is None else environment
+    if env.get(key) is not None:
+        return _limit_value(key, env[key], f'environment {key}'), f'environment {key}'
+    source = limits_file(env, home)
+    try:
+        values = parse_limits(source.read_text(encoding='utf-8'), str(source))
+    except FileNotFoundError:
+        if env.get(LIMITS_FILE) is not None:
+            raise ValueError(f'explicit limits file does not exist: {source}') from None
+        values = {}
+    except OSError as exc:
+        raise ValueError(f'cannot read limits file {source}: {exc}') from exc
+    if key in values:
+        return values[key], f'machine setting {key} in {source}'
+    return default, f'default; no {key} in {source}'
 
 
 def apply():

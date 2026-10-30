@@ -1085,20 +1085,19 @@ impl Spine {
     ///
     /// Never the one in the chair — it is not in this map — and never one mid-turn, which
     /// cannot happen: a turn runs on the chair's lease, and parking only ever happens at a
-    /// turn boundary (`select_connection`, reached with `turn_in_progress == false`).
+    /// turn boundary (`select_connection`, reached with `turn_in_progress == false`). Nor one
+    /// whose lease is still doing work between turns ([`Spine::desk_is_busy`]): past the cap
+    /// with every parked desk busy, the app holds one desk more until one is not.
     fn evict_beyond_the_cap(&mut self) {
         while self.resident.len() > MAX_RESIDENT_FRONT_DESKS {
             let Some(oldest) = self.resident.iter()
                 .filter(|(thread, resident)| self.control.for_thread(thread).active_turn().is_none()
-                    && std::sync::Arc::strong_count(&resident.lease)==1)
+                    && std::sync::Arc::strong_count(&resident.lease)==1
+                    && !Self::desk_is_busy(resident))
                 .min_by_key(|(_, resident)| resident.parked_at_ms)
                 .map(|(thread, _)| thread.clone()) else { break };
-            // Dropping the `Resident` drops its `Box<dyn Cognition>`, whose `Drop` kills the
-            // child. That is deliberate and it is the old behavior for this one thread.
-            self.resident.remove(&oldest);
-            let control=self.control.for_thread(&oldest);
-            control.set_cancel(None);
-            control.set_lease_session(None);
+            // That is deliberate and it is the old behavior for this one thread.
+            self.retire_front_desk(&oldest);
         }
     }
 
@@ -1262,6 +1261,96 @@ impl Spine {
     pub fn retire_idle_lease(&mut self) -> Result<(), String> {
         if self.control.has_active_turns() { return Err("A turn is still running.".into()); }
         self.clear_lease(); Ok(())
+    }
+
+    /// **RETIRE THE PARKED FRONT DESKS NOBODY HAS SPOKEN TO FOR `idle_after`** (follow-ups,
+    /// "a nightly's VM boot proof cannot get a guest slot", decision 3: *"Retire a session after
+    /// an idle timeout and revive it on demand."*).
+    ///
+    /// Before this the only things that ended a parked desk were the cap
+    /// ([`MAX_RESIDENT_FRONT_DESKS`], least recently spoken first) and `run_setup`'s
+    /// [`Spine::retire_idle_lease`], which ends the chair's desk and nothing else. So up to eight
+    /// `claude` children stayed open for as long as the app ran, whatever had been said to them.
+    ///
+    /// **Retiring is the cap's own action, applied by time instead of by count**: the desk is
+    /// dropped (its `Drop` kills the child) and the thread is back on the path every evicted
+    /// thread already takes — its next turn spawns a lease scoped to its binding, and the native
+    /// opener resumes the thread's own saved session (`native.rs`, `native_resume` → `--resume`).
+    /// Nothing about the conversation is lost; only the start of the next reply is slower.
+    ///
+    /// A desk is KEPT, whatever its age, when any of these holds:
+    ///
+    /// - it is the chair — the conversation on screen ([`Spine::active_thread`]);
+    /// - a turn or a priming turn is running for it, or a delivery still holds its lease;
+    /// - durable input for it is waiting in the intake log;
+    /// - its lease has input awaiting admission, a command running (supervised or in the
+    ///   provider's background) or a worker it cannot show to be finished;
+    /// - `held` says so — the shell's facts the spine does not own (an unanswered question,
+    ///   the app's own worker observations). An unbound thread is kept, never guessed at.
+    ///
+    /// Returns the threads retired, in no particular order. `idle_after` of zero retires
+    /// nothing: zero is the off switch, not "retire at once".
+    pub fn retire_idle_front_desks(&mut self, now_ms: u64, idle_after: std::time::Duration,
+        held: &dyn Fn(&ThreadBinding) -> bool) -> Vec<String> {
+        if idle_after.is_zero() || self.turn_in_progress { return Vec::new(); }
+        let idle_ms = u64::try_from(idle_after.as_millis()).unwrap_or(u64::MAX);
+        let chair = self.active_thread().map(str::to_string);
+        let pending = self.control.pending_intake();
+        let due: Vec<String> = self.resident.iter()
+            .filter(|(thread, _)| chair.as_deref() != Some(thread.as_str()))
+            .filter(|(_, desk)| now_ms.saturating_sub(desk.parked_at_ms) >= idle_ms)
+            .filter(|(thread, desk)| self.front_desk_is_retirable(thread, desk, &pending, held))
+            .map(|(thread, _)| thread.clone())
+            .collect();
+        for thread in &due { self.retire_front_desk(thread); }
+        due
+    }
+
+    /// Every hold [`Spine::retire_idle_front_desks`] names, for one parked desk.
+    fn front_desk_is_retirable(&self, thread: &str, desk: &Resident, pending: &[IntakeRecord],
+        held: &dyn Fn(&ThreadBinding) -> bool) -> bool {
+        let control = self.control.for_thread(thread);
+        if control.active_turn().is_some() || control.front_desk_priming().is_some() { return false; }
+        // A delivery or a priming call holds a clone of the slot while it uses it.
+        if std::sync::Arc::strong_count(&desk.lease) != 1 { return false; }
+        if pending.iter().any(|record| self.intake_is_for(record, thread)) { return false; }
+        let Ok(binding) = self.ledger.thread_binding(thread) else { return false };
+        // An empty slot has no child to end; it is left for the cap, as before.
+        if !desk.lease.try_lock().is_ok_and(|slot| slot.is_some()) { return false; }
+        !Self::desk_is_busy(desk) && !held(&binding)
+    }
+
+    /// **Would ending this desk's child end work?** Input awaiting admission, a command running
+    /// (supervised, or in the provider's own background, until its `task_notification` names it
+    /// ended), or a worker the lease cannot show to be finished — `work_gate`'s own reading,
+    /// so an `Unknown` keeps the desk exactly as it keeps an update waiting. A slot someone
+    /// else holds is in use. An empty slot is idle: there is nothing in it to end.
+    fn desk_is_busy(desk: &Resident) -> bool {
+        let Ok(slot) = desk.lease.try_lock() else { return true };
+        let Some(lease) = slot.as_ref() else { return false };
+        crate::cognition::account_resume_blocked(lease.as_ref())
+            || lease.background_commands().is_some_and(|commands| commands.iter().any(|c| c.ended.is_none()))
+            || lease.worker_status().is_some_and(|view| !crate::work_gate::workers(&view).0.permits_action())
+    }
+
+    fn intake_is_for(&self, record: &IntakeRecord, thread: &str) -> bool {
+        match record {
+            IntakeRecord::Steer { thread_id, .. }
+            | IntakeRecord::Channel { thread_id, .. }
+            | IntakeRecord::Desk { thread_id, .. } => thread_id == thread,
+            // A Stop names a turn; a turn the ledger cannot place keeps every desk.
+            IntakeRecord::Stop { turn_id, .. } => self.ledger.turn(turn_id).is_none_or(|turn| turn.thread_id == thread),
+            IntakeRecord::Drained { .. } => false,
+        }
+    }
+
+    /// End one parked desk: the cap's eviction and the idle retirement share this.
+    fn retire_front_desk(&mut self, thread: &str) {
+        // Dropping the `Resident` drops its `Box<dyn Cognition>`, whose `Drop` kills the child.
+        self.resident.remove(thread);
+        let control = self.control.for_thread(thread);
+        control.set_cancel(None);
+        control.set_lease_session(None);
     }
 
     pub fn clear_memory_wiring(&mut self) {

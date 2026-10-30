@@ -490,8 +490,8 @@
     },
     "scripts/lib/proc_tree.py": {
       "source": "scripts/lib/proc_tree.py",
-      "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-      "evidence": "Supervises the caller\u2019s command and samples owned processes. Its own inputs are the caller\u2019s arguments, environment, process identity and controller state, never orchestration settings. Since 1421cf76 the arguments include --guard-role, restricted to the literal choices session and release-build (anything else refuses before registration); it only names the role cpu_guard.register records for this supervisor.",
+      "sha256": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
+      "evidence": "Supervises the caller\u2019s command and samples owned processes. Its own inputs are the caller\u2019s arguments, environment, process identity and controller state, never orchestration settings. Since 1421cf76 the arguments include --guard-role, restricted to the literal choices session and release-build (anything else refuses before registration); it only names the role cpu_guard.register records for this supervisor. Renewal 2026-10-28 (zero-CPU waits): supervise() blocks between samples on the command's, the owner's and each member's exit or fork and on its stop signals (tree_watch, quiet_wait.py imported beside it; a lone copy samples every 0.2 s as before), sampling at most every 0.2 s and at least every second. No new input, key or execution.",
       "keys": [],
       "edges": [
         {
@@ -499,6 +499,9 @@
         },
         {
           "to": "scripts/lib/cpu_guard.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ]
     },
@@ -521,8 +524,8 @@
     },
     "scripts/lib/worker_tokens.py": {
       "source": "scripts/lib/worker_tokens.py",
-      "sha256": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-      "evidence": "Worker leases read their budget files, bind held inodes to native process generations and invoke the caller\u2019s separately declared command through process supervision and admission policy. Borrow validation follows a finite native ancestry and permit chain, never orchestration settings. Named native/compiler and simulator locks use the same kernel locks but do not grant worker capacity; their canonical paths remain governed.",
+      "sha256": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+      "evidence": "Worker leases read their budget files, bind held inodes to native process generations and invoke the caller\u2019s separately declared command through process supervision and admission policy. Borrow validation follows a finite native ancestry and permit chain, never orchestration settings. Named native/compiler and simulator locks use the same kernel locks but do not grant worker capacity; their canonical paths remain governed. Renewal 2026-10-28 (zero-CPU waits): lease_worker's supervision blocks on the release file's directory and the worker tree's forks and exits through proc_tree.tree_watch, sampling at most every POLL_SECONDS as before. Permit waits keep their 0.2 s look. No new input or execution.",
       "keys": [],
       "edges": [
         {
@@ -541,7 +544,7 @@
     },
     "scripts/lib/mutation-pool.sh": {
       "source": "scripts/lib/mutation-pool.sh",
-      "sha256": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
+      "sha256": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
       "evidence": "Runs the supplied mutation callback with worker leases; its own configuration is operational environment. Actual callback/helper relationships belong to each harness.",
       "keys": [],
       "edges": [
@@ -727,12 +730,15 @@
     },
     "scripts/lib/stop-at-line.py": {
       "source": "scripts/lib/stop-at-line.py",
-      "sha256": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
-      "evidence": "Runs the finite caller-supplied command and stops its owned process tree at a named output line. No config reads of its own; the caller declares the nested suite. --boundary only narrows the match to a caller's own word-boundary witness test.",
+      "sha256": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
+      "evidence": "Runs the finite caller-supplied command and stops its owned process tree at a named output line. No config reads of its own; the caller declares the nested suite. --boundary only narrows the match to a caller's own word-boundary witness test. Renewal 2026-10-28 (zero-CPU waits): the loop blocks on --out growing and the command's exit (quiet_wait.py) instead of a 0.1 s sleep. No new input or execution.",
       "keys": [],
       "edges": [
         {
           "to": "scripts/lib/proc_tree.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ]
     },
@@ -1211,8 +1217,8 @@
     },
     "scripts/lib/quota_weekly.py#weekly-fixture": {
       "source": "scripts/lib/quota_weekly.py",
-      "sha256": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
-      "evidence": "The weekly suite supplies readings, worker states and time as literals. Its reset_tick call patches subprocess.run; watcher cases patch reset_tick itself. No reset helper, live account or registry is contacted.",
+      "sha256": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
+      "evidence": "The weekly suite supplies readings, worker states and time as literals. Its reset_tick call patches subprocess.run; watcher cases patch reset_tick itself. No reset helper, live account or registry is contacted. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): reset_tick returns without running the reset helper when the environment variable RICHOS_APP_STATE is set (the app runs approved resets itself); the suites unset it unless a case sets it. No config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -1222,8 +1228,8 @@
     },
     "scripts/lib/quota_watch.py#weekly-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "8498598e1be7283d703d96fc260aac9398c999a6b17fa53aaa49cb02acc73c73",
-      "evidence": "The weekly suite calls _parse_reset, and (renewed 2026-09-28) poll_loop directly with an in-memory Out writer and literal threshold/config arguments; it patches read_source, workers, time.time, weekly.reset_tick and time.sleep, whose first call ends the case. Each reading triggers the weekly event before any sleep or five-hour path. No CLI wrapper, real config, usage API or registry code executes. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names).",
+      "sha256": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+      "evidence": "The weekly suite calls _parse_reset, and (renewed 2026-09-28) poll_loop directly with an in-memory Out writer and literal threshold/config arguments; it patches read_source, workers, time.time, weekly.reset_tick and time.sleep, whose first call ends the case. Each reading triggers the weekly event before any sleep or five-hour path. No CLI wrapper, real config, usage API or registry code executes. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop binds its per-window state to the account the reading names (read_app's account) and clears it on a switch; a hold left on the account switched from is released by _emit_switch_release once the account in use reads below the line. Same reads as before: no config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -1234,13 +1240,16 @@
         },
         {
           "to": "scripts/lib/host_child.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ]
     },
     "scripts/quota-weekly.test.sh": {
       "source": "scripts/quota-weekly.test.sh",
-      "sha256": "b4918636c26e322dcde3f091f212c20e0be9ea49cbe3e791e4fbcf6d9a211de7",
-      "evidence": "All settings and time originate in the inline Python fixture. Reviewed imports and mocked subprocess/registry boundaries are explicit helper edges.",
+      "sha256": "16a5f0e9e01d719bc51dd782272585af1a9e683d6ad05b238a36c1fc959556e6",
+      "evidence": "All settings and time originate in the inline Python fixture. Reviewed imports and mocked subprocess/registry boundaries are explicit helper edges. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): GateAdmission writes literal published files and pause settings into a private TemporaryDirectory app folder and calls gate_admission on it at the fixed clock; nothing else is read. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll driver moved to a module-level run_polls (same patches: read_source, workers, time.time, time.sleep, reset_tick) returning a Recorder, the real Out keeping each wake's kind and clock; AccountSwitch feeds it literal readings naming Home and Work.",
       "keys": [],
       "edges": [
         {
@@ -1317,7 +1326,7 @@
     },
     "scripts/lib/worker-priority.test.py": {
       "source": "scripts/lib/worker-priority.test.py",
-      "sha256": "8f0361232137a495bb47b4e63161351d039dfabeed18a872999a969d965de1af",
+      "sha256": "61f329518428ae5417778c2943e7bfd731ea9f698bbcd76c24f380fb2bdb6075",
       "evidence": "Generated Git checkouts and private worker/slot records drive actual lease and supervision APIs. Machine-command cleanup cases substitute testdevices. The shell keeper runs only the worker lease helper and generated checker. No test sources config.",
       "keys": [],
       "edges": [
@@ -1380,8 +1389,8 @@
     },
     "scripts/lib/quota_watch.py#message-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "8498598e1be7283d703d96fc260aac9398c999a6b17fa53aaa49cb02acc73c73",
-      "evidence": "The fixture calls only pause_message, resume_message and release_message with literal reset timestamps. hhmm uses UTC conversion, pause text uses pause_protocol; no config/source/watch/reset operation runs. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). WAIT branch: resume and release text is pause_protocol.render_resume, also a string render. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names).",
+      "sha256": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+      "evidence": "The fixture calls only pause_message, resume_message and release_message with literal reset timestamps. hhmm uses UTC conversion, pause text uses pause_protocol; no config/source/watch/reset operation runs. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). WAIT branch: resume and release text is pause_protocol.render_resume, also a string render. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop clears its per-window state on an account switch; _emit_release's wake lines moved unchanged into _wake_quota_paused, which _emit_switch_release shares. The message functions this fixture calls are unchanged. No config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -1392,6 +1401,9 @@
         },
         {
           "to": "scripts/lib/host_child.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ]
     },
@@ -1775,8 +1787,8 @@
     },
     "scripts/lib/quota_watch.py#notice": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "8498598e1be7283d703d96fc260aac9398c999a6b17fa53aaa49cb02acc73c73",
-      "evidence": "The main --notice path parses arguments and reads the explicitly supplied payload file and timestamp. It never invokes get_usage, reset_tick, workers or the watch loop. Module imports pause_protocol and quota_weekly, neither reading config. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names).",
+      "sha256": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+      "evidence": "The main --notice path parses arguments and reads the explicitly supplied payload file and timestamp. It never invokes get_usage, reset_tick, workers or the watch loop. Module imports pause_protocol and quota_weekly, neither reading config. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. The --notice path does not reach it. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): poll-loop and release-message changes only; the --notice path does not reach them. No config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -1787,6 +1799,9 @@
         },
         {
           "to": "scripts/lib/host_child.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ]
     },
@@ -1819,7 +1834,7 @@
     },
     "scripts/hooks/session-start-quota.test.sh": {
       "source": "scripts/hooks/session-start-quota.test.sh",
-      "sha256": "15479b2a748147c66b48a26654f819face7e0aabd9882241842e229ca9bbe855",
+      "sha256": "7fd4ac792164379ba56dce21865af72764b0f00fe04f22889084d7007406ee78",
       "evidence": "Creates private HOME/config before scratch allocation, a private entity config and literal payloads at a pinned clock. The absent watcher copy exits before root resolution. Scratch uses unsourced defaults, so no real config values are inherited.",
       "keys": [],
       "edges": [
@@ -2098,8 +2113,8 @@
     },
     "scripts/lib/mutation-focus.test.sh": {
       "source": "scripts/lib/mutation-focus.test.sh",
-      "sha256": "ea41a1b4f342d306d6ba359c9d3904af5d9ce7b784a5503edda89edca1749b4e",
-      "evidence": "Creates a tiny engine with literal PROTECTED_PATHS and feature variables, then executes generated sequential/named/parallel suites under the real mutation helper. Its only eval receives fixed RULE_A/RULE_B assertions. Copied helper directories are transport; discovered production scripts are not run. All worker and supervisor helpers are separately declared.",
+      "sha256": "cb902e151718b1f7f0fb4c3c00e4aa672218248aa822cb0b3b5f0b02fe847090",
+      "evidence": "Creates a tiny engine with literal PROTECTED_PATHS and feature variables, then executes generated sequential/named/parallel suites under the real mutation helper. Its only eval receives fixed RULE_A/RULE_B assertions. Copied helper directories are transport; discovered production scripts are not run. All worker and supervisor helpers are separately declared. Renewal 2026-10-28 (zero-CPU waits): the tiny engine also receives quiet_wait.py, which stop-at-line.py imports; transport only.",
       "keys": [],
       "edges": [
         {
@@ -2117,6 +2132,9 @@
         },
         {
           "to": "scripts/lib/stop-at-line.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ],
       "nonconfig_eval": true
@@ -8031,8 +8049,8 @@
     },
     "scripts/lib/quota_weekly.py#quota-fixture": {
       "source": "scripts/lib/quota_weekly.py",
-      "sha256": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
-      "evidence": "Reviewed all functions. The quota suite fixes QUOTA_RESET_HELPER to /usr/bin/false, so reset_tick cannot enter quota-reset.sh or a live reset service. Window data and messages are parsed/rendered, never executed.",
+      "sha256": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
+      "evidence": "Reviewed all functions. The quota suite fixes QUOTA_RESET_HELPER to /usr/bin/false, so reset_tick cannot enter quota-reset.sh or a live reset service. Window data and messages are parsed/rendered, never executed. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): reset_tick returns without running the reset helper when the environment variable RICHOS_APP_STATE is set (the app runs approved resets itself); the suites unset it unless a case sets it. No config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -8056,8 +8074,8 @@
     },
     "scripts/lib/quota_watch.py#quota-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "8498598e1be7283d703d96fc260aac9398c999a6b17fa53aaa49cb02acc73c73",
-      "evidence": "Reviewed CLI, all imports, file and subprocess operations, workers and watch loop. The suite supplies a missing or literal fake Claude transport and a false reset helper. It loads only fixed workspace, weekly, pause and login-alarm siblings. Payloads, messages and registry records are data. Real clocks and process identities remain runtime inputs. Renewed 2026-09-28 (ad9da4f8, 5d3621a3): --watch and --monitor now start a detached poller that is this same file (--poll) with its state, lock and event files under QUOTA_WATCH_STATE_DIR (private in the suite), read the session pid's start time with ps and poll until the session ends. The threshold still arrives as --threshold-raw from quota-watch.sh; no new engine program and no orchestration.config read. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names).",
+      "sha256": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+      "evidence": "Reviewed CLI, all imports, file and subprocess operations, workers and watch loop. The suite supplies a missing or literal fake Claude transport and a false reset helper. It loads only fixed workspace, weekly, pause and login-alarm siblings. Payloads, messages and registry records are data. Real clocks and process identities remain runtime inputs. Renewed 2026-09-28 (ad9da4f8, 5d3621a3): --watch and --monitor now start a detached poller that is this same file (--poll) with its state, lock and event files under QUOTA_WATCH_STATE_DIR (private in the suite), read the session pid's start time with ps and poll until the session ends. The threshold still arrives as --threshold-raw from quota-watch.sh; no new engine program and no orchestration.config read. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop binds its per-window state to the account the reading names and clears it on a switch; a hold left on the account switched from is released once the account in use reads below the line. Same reads as before: no config key, edge or program added.",
       "keys": [],
       "edges": [
         {
@@ -8074,6 +8092,9 @@
         },
         {
           "to": "scripts/lib/host_child.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ]
     },
@@ -8120,7 +8141,7 @@
     },
     "scripts/quota-watch.test.sh": {
       "source": "scripts/quota-watch.test.sh",
-      "sha256": "2a21d2247596b3cb310cc9b50fcb9971fb3cee12a714514ed667933f10918bdc",
+      "sha256": "6dbd41579c65d09364f3c38b5602d346e8a2da28e0e65a9d0ffbf59c3320d653",
       "evidence": "Full suite fixes private entity config, payload, registry, session, reset helper and fake Claude transport before watcher calls. Guard values are private; separate workspace edge retains actual engine cleanup readers. Historical replays and finite focused mutants share these dependencies. The fake Claude answers control JSON only; no model agent is launched. WAIT branch: E06 imports pause_protocol.py to recognize the generated RESUME; pauses sent through the fixture registry reach agent_hold.py through the workspace edge, with its state inside that registry. Renewed 2026-09-28: QUOTA_WATCH_STATE_DIR, the session pid and the test-device state are private; a poller the watcher starts is the same bound watcher file.",
       "keys": [],
       "edges": [
@@ -12044,32 +12065,39 @@
     },
     "scripts/lib/agent_hold.py": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+      "sha256": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
       "keys": [],
       "edges": [
         {
           "to": "mega-lander/workspaces.py#recipient"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
         }
       ],
-      "evidence": "Full program reviewed (hold, release, watchdog, wait and CLI). Inputs: the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), this user's ps table, recorded shell PID files, other processes' environments read through the kernel only to match the agent's own inherited tag (never printed), test-VM slot records under TESTVM_ROOT or HOME and lock-file paths through libproc. It signals only processes under the agent's recorded shells. hold() starts a detached watchdog, which runs the workspace recipient CLI as its one engine execution. No orchestration.config read. Renewal 2026-09-28 (b92c21f8..1b7aa978): a subagent's foreground Bash call now runs as a native background task with its record, job, output and status files in its shell directory; wait reads that host-owned result through the agent's own transcript (the payload's transcript_path, bound by session, agent and tool-use id, read as data) and the task output file named there; BASH_MAX_TIMEOUT_MS and RICHOS_AGENT_HOLD_WAIT_SECONDS bound the wait; wait notices live in the state directory; a held call's job is detached with SIGUSR1 and stopped. Still no orchestration.config read, and the watchdog's recipient CLI is still the one engine execution. Renewal 2026-10-11 (end_owned): before each signal it re-reads that process's start time through libproc (proc_pidinfo PROC_PIDTBSDINFO; a one-process ps elsewhere) and signals only the process recorded. No new input, no config read, no engine execution. Renewal 2026-10-16: generated wait command names this installed helper through realpath(__file__), with shell quoting. No new state or process read."
+      "evidence": "Full program reviewed (hold, release, watchdog, wait and CLI). Inputs: the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), this user's ps table, recorded shell PID files, other processes' environments read through the kernel only to match the agent's own inherited tag (never printed), test-VM slot records under TESTVM_ROOT or HOME and lock-file paths through libproc. It signals only processes under the agent's recorded shells. hold() starts a detached watchdog, which runs the workspace recipient CLI as its one engine execution. No orchestration.config read. Renewal 2026-09-28 (b92c21f8..1b7aa978): a subagent's foreground Bash call now runs as a native background task with its record, job, output and status files in its shell directory; wait reads that host-owned result through the agent's own transcript (the payload's transcript_path, bound by session, agent and tool-use id, read as data) and the task output file named there; BASH_MAX_TIMEOUT_MS and RICHOS_AGENT_HOLD_WAIT_SECONDS bound the wait; wait notices live in the state directory; a held call's job is detached with SIGUSR1 and stopped. Still no orchestration.config read, and the watchdog's recipient CLI is still the one engine execution. Renewal 2026-10-11 (end_owned): before each signal it re-reads that process's start time through libproc (proc_pidinfo PROC_PIDTBSDINFO; a one-process ps elsewhere) and signals only the process recorded. No new input, no config read, no engine execution. Renewal 2026-10-16: generated wait command names this installed helper through realpath(__file__), with shell quoting. No new state or process read. Renewal 2026-10-28 (zero-CPU waits): every wait (wait_resume, _collect, collect_native, watch) blocks on kernel events through quiet_wait.py, loaded by fixed path beside this file (a lone copy sleeps instead), and native_result indexes the host transcript once per process (only complete lines naming a tool_result are parsed; the same [offset, offset + 4 MiB) window). Same files read; no new configuration key, state or execution edge."
     },
     "scripts/lib/agent_hold.py#release": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+      "sha256": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
       "keys": [],
       "edges": [],
       "evidence": "release, records, release_session, release_orphans and describe_* only: read hold records in the agent-hold state directory, this user's ps table and recorded shell PID files, and continue recorded processes. No watchdog, engine execution or orchestration.config read. Renewed 2026-10-11 (zach-opus-heldwait1): release also appends one line per released hold to hold-history.jsonl in the same state directory (pruned to 14 days once over 256 KiB), and history() reads it back; nothing new is read or executed."
     },
     "scripts/lib/agent_hold.py#gate": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+      "sha256": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
       "keys": [],
-      "edges": [],
-      "evidence": "gate only (2026-10-04), run by shell-evidence.py before its rewrite: for a subagent's own wait call it reads that agent's hold record and wait-notice file in the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), sleeps one second between reads while the hold stands and returns when it is gone, when the notice is not this hold's or when its parent process is gone. It starts no process, signals nothing and never reaches the watchdog or the workspace recipient CLI (watch and _registry_finished are not called). No engine execution and no orchestration.config read."
+      "edges": [
+        {
+          "to": "scripts/lib/quiet_wait.py"
+        }
+      ],
+      "evidence": "gate only (2026-10-04), run by shell-evidence.py before its rewrite: for a subagent's own wait call it reads that agent's hold record and wait-notice file in the agent-hold state directory (RICHOS_AGENT_HOLD_DIR, else CLAUDE_CONFIG_DIR or HOME .claude/state/agent-hold), sleeps one second between reads while the hold stands and returns when it is gone, when the notice is not this hold's or when its parent process is gone. It starts no process, signals nothing and never reaches the watchdog or the workspace recipient CLI (watch and _registry_finished are not called). No engine execution and no orchestration.config read. Renewal 2026-10-28 (zero-CPU waits): gate also loads quiet_wait.py by fixed path and blocks on the hold and wait-notice directories and its parent's exit instead of a one-second sleep; still no process started, nothing signaled, no config read."
     },
     "scripts/lib/agent_hold.py#capture": {
       "source": "scripts/lib/agent_hold.py",
-      "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+      "sha256": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
       "keys": [],
       "edges": [],
       "evidence": "capture and rewrite (renewed 2026-09-28): for a Bash payload with valid session, agent and tool-use ids it creates call records in the agent-hold state directory, notes the size of the agent's transcript named by the payload, prunes records of ended calls (a signal-0 probe of recorded PIDs) and returns shell text or a deny as data. Pruning a dead call that carried a process identity takes this user's ps table and reads tagged processes' environments through the kernel, to keep ownership of live descendants. No engine execution and no orchestration.config read."
@@ -12516,8 +12544,8 @@
     },
     "scripts/provider-supervisor.py#fixture-providers": {
       "source": "scripts/provider-supervisor.py",
-      "sha256": "633f1fb02ae47e408f208f5d91230f94a5fb86484f80d465049dfdb2bd3ad640",
-      "evidence": "Called by provider-supervisor.test.py with generated Python provider/launcher scripts and fixed sleep commands. Supervisor imports stdlib and native libproc only, observes process tables and executes only caller fixture argv. No engine helper or orchestration config.",
+      "sha256": "8caf9cb9e1452292dc8f1cac1967e2a0f141645237d60dada2863cf9fa413023",
+      "evidence": "Called by provider-supervisor.test.py with generated Python provider/launcher scripts and fixed sleep commands. Supervisor imports stdlib and native libproc only, observes process tables and executes only caller fixture argv. No engine helper or orchestration config. Renewal 2026-10-28 (zero-CPU waits): operator_main blocks on a standard-library kqueue (the provider's and the owner's exit, the signal wakeup descriptor) between its once-a-second snapshots instead of waking every 100 ms; still standard library and native libproc only.",
       "keys": [],
       "edges": []
     },
@@ -12815,7 +12843,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+          "sha256": "fc31693078bc81e7145955a3ea2482189fb43960888cfabc735d2e6c8377a6b3",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -12923,7 +12951,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
+          "sha256": "fc31693078bc81e7145955a3ea2482189fb43960888cfabc735d2e6c8377a6b3",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -14169,7 +14197,7 @@
     },
     "scripts/lib/review_watch.py": {
       "source": "scripts/lib/review_watch.py",
-      "sha256": "e71c80114ef06137177b5d5a464f37769a63d4a41b96870b1007650df609e055",
+      "sha256": "7ca32ed18f84df233d306f14526b13ccb5c82636c0f15dd86dae5c5b409b9970",
       "evidence": "Added 2026-10-09 (second review slice 4; app.test.py's edge to it came with 8a433f70e and had no row). Module load: standard-library imports, the sibling imports stall_watch and app_review (app_paths), constants and HOST_JSON; nothing else runs. Configuration: only World (the operator monitor, review-watch.sh --config) reads SECOND_REVIEW_REPOS, as text from the file it is given, never executed; it is declared here though app.test.py's AppWorld passes no config and reads none. What app.test.py reaches: app_mode with tick sets REVIEW_WATCH_STATE_DIR, SECOND_REVIEW_STATE_DIR and RICHOS_PROJECTS_DIR under the fixture's private engine-state (app_paths); AppWorld loads mega-lander/workspaces.py by fixed path through stall_watch._load and, per private registry partition (RICHOS_WORKSPACES_DIR), calls all_agents, finished_state, _chain, integration_target and integration_for, reads the private work-receipts JSON and <id>.words beside them, runs git rev-parse/merge-base/log in the fixture's repositories and reads JSON/JSONL state, locks and the ledger under that private state. A due review runs bash on REVIEW_WATCH_SECOND_REVIEW, which the fixture sets to a literal fake script; scripts/second-review.sh is never run by the fixture. Watcher.stop_own reads its own locks, freezes its own child's process group (SIGSTOP; second-review keeps its reviewer in that group), reads the process table (ps -A -o pid=,ppid=,pgid=,stat=) for the process groups of every descendant of that group's processes, signals that group and those groups only, waits for them to be gone (killpg signal 0) and appends an attempts row. Environment read: REVIEW_WATCH_NOW, REVIEW_WATCH_STATE_DIR, REVIEW_WATCH_SECOND_REVIEW, SECOND_REVIEW_STATE_DIR, CLAUDE_CONFIG_DIR, RICHOS_PROJECTS_DIR, RICHOS_WORKSPACES_DIR (set per partition and restored), and in World only REVIEW_WATCH_TO_RICH/REVIEW_WATCH_TO_CODEX (Codex channel files, not reached by AppWorld). Renewed 2026-10-09 (echo-opus-review4c, second review of f14155545, finding 1): stop_all also stops and waits for the process groups of every descendant of a recorded review (second-review's reviewer leads its own session) and returns the reviews not seen gone, which stop_own never records as stopped; no new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4c, finding 2): spawn holds a SIGTERM or SIGHUP that arrives inside Popen until the child is in Watcher.children, and stop_own also stops every child of its own whose pid has not reached its lock, settling the lock start() was filling in; nothing new is read. Renewed 2026-10-09 (echo-opus-review4c, finding 3): owner_session and the lost-twice notice take the review's recorded session first and fall back to the registry only for an item of the same work; _who names an item at the reviewed tip only when it is the same work; nothing new is read. Renewed 2026-10-09 (echo-opus-review4d, second review of 783a8dba1, finding 1): stop_all reads the process table once more (the same ps -A -o pid=,ppid=,pgid=) before its SIGKILL, for the reviews still running after the SIGTERM grace, and signals the groups found below them too; nothing new is read. Renewed 2026-10-09 (echo-opus-review4d, finding 2): tell's repeated handover notice takes only verdicts of the item's own work and sends them through owner_session, on a told-state clock per work; in the plain monitor (run_loop sets MONITOR to the current session id) a block owned by another lead session is left to that session's monitor when its told.json under REVIEW_WATCH_STATE_DIR records a look and it holds its monitor.lock (a non-blocking flock probe, released at once). app.test.py's tick never sets MONITOR. No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4e, second review of b5ff41f02, finding 1): the process-table reads are gone (groups_below and both of its ps -A calls); stop_all signals each recorded review's process group, which now holds second-review's reviewer, waits until that whole group is gone, and sends SIGKILL again on each pass of its wait. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4e, second review of b5ff41f02, finding 2): tell reads and writes last-told.json under REVIEW_WATCH_STATE_DIR once per look, keeping in it, beside the shared `rows` cursor, a `delivered` map of review id to time (entries older than seven days dropped), written only for a verdict this monitor's own session owns or the operator host (--host-json) sends to its owner; a monitor's first look also tells its own session's undelivered verdicts of the last seven days. for_this_monitor no longer reads another session's told.json, only its monitor.lock (the same non-blocking flock probe). No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4e, the real second review of 4d99d0b7e): a verdict whose owner this watcher delivers to (its own monitor's session, or any owner for --host-json) is told whenever it is not in last-told.json's `delivered`, on any look; a monitor's verdicts stop at the BLOCK_CHARS cap, unmarked, and its cursor and the shared `rows` stop there too; the first look under this rule seeds `delivered` from the rows the shared cursor had passed. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4e, esc-20261009T054753Z-400c68b3): stop_all freezes each review's group with SIGSTOP until ps shows its processes stopped (FREEZE_SECONDS), reads the process table once, SIGKILLs the groups below it (Codex's own command groups), sends the review's group SIGTERM and SIGCONT, and freezes, reads and SIGKILLs once more whatever is left; QUIT_TERM_SECONDS is 1.0. Nothing else new is read. Renewed 2026-10-09 (echo-opus-review4e, the real second review of 6e8cc3f6d): `delivered` is no longer seeded from the old shared cursor and keeps every review id still in reviews.jsonl; an undelivered verdict no longer expires; the owner lookup for earlier rows runs only for rows whose repository and tip an attempt row or lock names with a session this watcher delivers to, or whose work a registry item of such a session has. Nothing new is read. Renewed 2026-10-09 (echo-opus-review4f, the real second review of 0d83e456d, findings 1 and 2): the process-table walk is gone (process_table, groups_below). spawn puts RICHOS_REVIEW_OWNER, 16 random bytes in hex, in the review's environment and keeps it in the lock as `mark`; a stop reads the process table once per pass (ps -A -o pid=,uid=,pgid=,stat=), calls os.getsid on this user's processes, and reads each one's environment as it was started (sysctl KERN_PROCARGS2 through ctypes on macOS, /proc/<pid>/environ on Linux) for that exact NAME=value; members of the session the review leads count while its leader is verified alive or one of them carries the mark. It signals only those processes and, while the leader is verified, the leader's group. reconcile ends what an exited launcher left carrying the mark before settling its lock. No new configuration key; the new environment variable is one this module writes for its children, never reads from its own environment. Renewed 2026-10-09 (echo-opus-review4f, the real second review of 0d83e456d, finding 3): tell no longer writes `delivered`; it leaves the review ids of the owned verdicts it printed in PRINTED, and tick records them in last-told.json (under the look lock) only once its output was written and flushed, or, when HOST_JSON is on and the environment variable RICHOS_REVIEW_WATCH_ACKS is \"1\" (set by richos-core review_watch.rs for the operator child), only once the host acknowledges them on this process's stdin as JSON lines {\"ack\": [ids]}, read without blocking at the start of each tick. --host-json lines carry a `keys` list of those ids. New environment read: RICHOS_REVIEW_WATCH_ACKS; new input: stdin acknowledgments in the operator host child only. No new configuration key. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 1): start records `own_session` in the lock (the leader verified alive right after spawn). stop_all owns the leader's session while the leader is verified alive, or, once it has exited, while the lock records own_session or the pid is this watcher's own child, unless os.getsid shows that pid leading a session again; it stops owning it once a read finds no member left. owned_processes' values carry each process's session id (pgid, stat, sid); its unreachable leftover after the return is removed. The same ps read, os.getsid and environment reads as before; nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4h, the real second review of 16c154f5a, finding 1): owned_processes returns None when the process table cannot be read (a ps timeout or error), and stop_all keeps such a review as left with its session still owned, so stop_own never records it stopped and its lock stays for the next look; nothing new is read. Renewed 2026-10-09 (echo-opus-review4h, finding 2): run_host_loop reads and removes RICHOS_REVIEW_WATCH_HOST (the host's own pid, set by richos-core review_watch.rs) from its own environment and returns before the first look when its parent is not that pid; without it, the parent at that point. New environment read: RICHOS_REVIEW_WATCH_HOST, in the host loop only (app.test.py's tick never reaches it). No new configuration key. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 2): the NO VERDICT TWICE notice for an owner this watcher delivers to carries the key lost:<repo>:<tip> (in PRINTED and the --host-json keys) and is recorded in last-told.json's `delivered` only once its output is accepted, like a verdict; `delivered` keeps such a key while attempts.jsonl still holds that commit's two losses. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): app mode takes --accounts (the app's Claude account list, a path) and AppWorld hands it to each app item's second-review arguments as --accounts; the watcher itself never opens it. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4m, the real second review of 0be50ade1, finding 1): tell builds PRINTED (the delivery keys) only from the blocks its output really carries, after the monitor's BLOCK_CHARS cap; the told-state marks of the notices without a delivery key (a NOT STARTED problem, a handover reminder, a block for another lead, a failed look) are written to the session's told.json under REVIEW_WATCH_STATE_DIR only after the output was written and flushed, under the look lock; an owned NOT CONVERGING notice carries the delivery key nc:<work>:<finding> and last-told.json's `delivered` keeps such a key seven days. Nothing new is read: no configuration key or environment variable. Renewed 2026-10-09 (echo-opus-review4m, merging main 2ec9241b1, the review land gate): the module also imports its sibling operator_fences (as F) at load; World reads SECOND_REVIEW_REPOS only through F.review_repos, which sources the given config in a clean bash (so the config is now executed by that reader, not parsed as text here), and matches repositories with F.review_listed; an unreadable value is told once per session (told_unreadable_repos in the session's told.json). app.test.py's AppWorld passes no config and reaches none of this. No new environment variable. Renewed 2026-10-09 (echo-opus-review4m, after that merge): AppWorld sets repos_error to \"\" beside its repos, which main's Watcher.look reads first; nothing new is read. Renewed 2026-10-09 (echo-opus-codexswitch1, the Codex review switch, round 20.2): app mode takes --codex-reviews, the app's codex-reviews.json, and Item.args reads it as JSON when an app review starts (app_reviewer: {\"on\": true} is --reviewer auto, anything else or no file is --reviewer claude); app.test.py passes none, so it reaches nothing new. No new configuration key or environment variable. Renewed 2026-10-09 (echo-opus-codexswitch1, merging main bb0e97920): main's change (the `blocks` field: not_converging compares rechecks repository by repository through _same_repo, by repo_id or real path, and counts only still-open findings that block) and the Codex switch above are both in the file; nothing new is read. Recovery integration (2026-10-11): now reaches the explicit recovery adapter/runner closure. Its normal private fixture entities have no declaration and remain off; focused recovery fixtures bind all state and fake provider inputs. No unchanged narrow-import claim covers this new closure. Renewed 2026-10-24 (zach-opus-oldlost1, narrowed by zach-opus-oldlost2): the NO VERDICT TWICE notice is not told for a commit already on its repository's main (git merge-base --is-ancestor <tip> refs/heads/main in the attempt's recorded repository, the same git as before); one shown for another session's lead is still marked only in the session's told.json, as before. Nothing new is read: no configuration key or environment variable.",
       "keys": [
         "SECOND_REVIEW_REPOS"
@@ -14253,7 +14281,7 @@
     },
     "scripts/lib/agent_hold.test.py": {
       "source": "scripts/lib/agent_hold.test.py",
-      "sha256": "dee27ea44974041ad5f8bd70a39961c022b6ab46e8bd01f267c2e2c0c076d804",
+      "sha256": "9716a1e51ee945a59cc23500a5f20bb84bde65390e8380957064c2a849816a6a",
       "evidence": "Fixed Python fixture imports only the bound helper and standard library. Subprocess work/registry programs are literal strings in this source; no config-provided command or discovered test executes. Preserve the real helper closure conservatively. Renewed 2026-10-04: HeldAgentMakesNoModelCalls reads hooks/hooks.json for the PreToolUse[Bash] hooks that act on a held agent's call (the rewriter) and runs them, then the command they leave. Renewed 2026-10-04 (holdleak3): the fixture worker takes an optional go file as a literal argument, a path in the test's own temporary directory that the test creates after its hold; no new configuration key, environment variable or outside file is read.",
       "keys": [],
       "edges": [
@@ -15002,18 +15030,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/lib/simulator_budget.py",
-          "sha256": "c63a923188aa52be893cf9ee11e4499049d42dc1bccbb0e7efe7b8925abba05c",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/app/scripts/testvm/reserve.py",
-          "sha256": "068796f18885ad8691711bf093a4ec40700ae40a005f5f5d655c4e5b43a61b7c",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/engine/scripts/ci-shard.sh",
           "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -15038,12 +15054,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/engine/scripts/lib/worker_tokens.py",
-          "sha256": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
           "path": "richos/engine/scripts/lib/cpu_guard.py",
           "sha256": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -15052,12 +15062,6 @@
           "root": "repository",
           "path": "richos/engine/scripts/lib/cpu_policy.py",
           "sha256": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/engine/scripts/lib/native-work.py",
-          "sha256": "38993b2e6b69b2064974d39eb4f34762429e1fb8aaa6fc9e0e4df2dffea77f12",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15076,12 +15080,6 @@
           "root": "repository",
           "path": "richos/mobile/native-ios/Release/simulator-tests.sh",
           "sha256": "f30c320722096a5aab894c8a09dfbee059b655e1335ececebace5c8c560871db",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/engine/scripts/lib/proc_tree.py",
-          "sha256": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15122,21 +15120,51 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "b435fa6c2e68f6cac2b37b3c7eebdbe85d23f660d83d9fb4ea0d74af64817ae2",
-          "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
-        },
-        {
-          "root": "repository",
           "path": "richos/mobile/native-android/bin/randroid",
           "sha256": "b49476409dd1c2aab9f574789e63ee541bdca2946e426c543bbe9a412f7fd064",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/worker_tokens.py",
+          "sha256": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/proc_tree.py",
+          "sha256": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/lib/simulator_budget.py",
+          "sha256": "0fa2cb40093d138564eddbf72e8a0008c31c12bfc26978c8d91a0fed12656298",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/testvm/reserve.py",
+          "sha256": "302f2b3537facfd326054bd9c53b65ed7443a72eba8e426f3c10ba158c881413",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/native-work.py",
+          "sha256": "f2c51021bb0597e92ad14f7cefd0a954a4587be2df2b0b90ebf78dd5dc1bd8d0",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/app/scripts/nightly-local.py",
+          "sha256": "b5c4f91ae3b2b59b9603c8c1c2a91408d3486305292c1284b6a5f7141c493cd3",
+          "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         }
       ]
     },
     "scripts/lib/native-work.py#cpu-fixtures": {
       "source": "scripts/lib/native-work.py",
-      "sha256": "38993b2e6b69b2064974d39eb4f34762429e1fb8aaa6fc9e0e4df2dffea77f12",
+      "sha256": "f2c51021bb0597e92ad14f7cefd0a954a4587be2df2b0b90ebf78dd5dc1bd8d0",
       "keys": [],
       "edges": [
         {
@@ -15228,7 +15256,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/testvm/reserve.py",
-          "sha256": "068796f18885ad8691711bf093a4ec40700ae40a005f5f5d655c4e5b43a61b7c",
+          "sha256": "302f2b3537facfd326054bd9c53b65ed7443a72eba8e426f3c10ba158c881413",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15781,22 +15809,6 @@
           "root": "environment",
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
-          "path": "mega-lander/workspaces.py",
-          "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
-          "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
-        },
-        {
-          "root": "environment",
-          "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
-          "default_engine": true,
-          "path": "scripts/lib/pause_protocol.py",
-          "sha256": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
-          "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
-        },
-        {
-          "root": "environment",
-          "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
-          "default_engine": true,
           "path": "scripts/lib/agent-liveness.py",
           "sha256": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
@@ -15830,7 +15842,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "scripts/lib/agent_hold.py",
-          "sha256": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+          "sha256": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
@@ -15855,6 +15867,14 @@
           "default_engine": true,
           "path": "mega-lander/workspaces.py",
           "sha256": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
+          "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
+        },
+        {
+          "root": "environment",
+          "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
+          "default_engine": true,
+          "path": "scripts/lib/pause_protocol.py",
+          "sha256": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         }
       ]
@@ -16412,8 +16432,8 @@
     },
     "scripts/lib/second_review.py": {
       "source": "scripts/lib/second_review.py",
-      "sha256": "be6dd160177c20dfacefae1599dcc6838a34f5605c909be7bb47bf5ef62f33b0",
-      "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle. The lead's follow-up ruling (--follow-up, --reopen) appends to the private review-deferrals.jsonl and review-follow-ups.jsonl beside the ledger, and reads RICHOS_AGENT_OWNER and the caller's Claude session record through operator_fences.claude_session; no orchestration setting. Renewed 2026-10-21 (zach-opus-folderfiles1): the input's repository instructions come from instruction_files.py (edge added), read at the reviewed tip in the reviewed repository through the same call as prepare; AGENTS.md left RULE_FILES. Renewed 2026-10-23 (zach-opus-reviewfix1): --follow-up keeps only later reviews of the finding's tip or a commit built on it, through operator_fences._own_history (git merge-base in the ledger row's own repository); no new key, setting or file.",
+      "sha256": "6026643504e37940a8ea2e424f5822ef5f9b490ef92289ad40e6b9ad4c4504e8",
+      "evidence": "Reviewed writer and outcome adapter: source execution claims, private JSONL/full verdict records and recovery claims. Test reviewers are literal fake executables with fixed quota/CPU controls. No production provider is invoked by the fixtures. Original authority is retained as data, not an executable configuration. Recovery-model fixtures reach its module constants, bounded subprocess runner, private quota-command override and literal provider decoder; they do not enter the review CLI or workspace lifecycle. The lead's follow-up ruling (--follow-up, --reopen) appends to the private review-deferrals.jsonl and review-follow-ups.jsonl beside the ledger, and reads RICHOS_AGENT_OWNER and the caller's Claude session record through operator_fences.claude_session; no orchestration setting. Renewed 2026-10-21 (zach-opus-folderfiles1): the input's repository instructions come from instruction_files.py (edge added), read at the reviewed tip in the reviewed repository through the same call as prepare; AGENTS.md left RULE_FILES. Renewed 2026-10-23 (zach-opus-reviewfix1): --follow-up keeps only later reviews of the finding's tip or a commit built on it, through operator_fences._own_history (git merge-base in the ledger row's own repository); no new key, setting or file. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): in App mode (--accounts) quota_hold gives its quota-watch child RICHOS_APP_STATE=<dirname of the accounts list>/engine-state, so the child reads the app's reading of the account in use; the private quota-command override is unchanged. No config key, edge or file added. Renewed 2026-10-29 (echo, second review rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): in App mode (--accounts) quota_hold no longer runs quota-watch. It imports its sibling quota_watch (module load: standard imports, pause_protocol, quota_weekly, host_child; nothing runs) and calls gate_admission, which reads <dirname of the accounts list>/engine-state/claude-quota.json and <that folder>/claude-quota-policy.json as JSON data: no subprocess, environment variable or orchestration.config key. The terminal path and its private quota-command override are unchanged; the RICHOS_APP_STATE it gave its child is gone.",
       "keys": [],
       "edges": [
         {
@@ -16471,8 +16491,8 @@
     },
     "scripts/lib/machine_settings.py": {
       "source": "scripts/lib/machine_settings.py",
-      "sha256": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e",
-      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader.",
+      "sha256": "fc31693078bc81e7145955a3ea2482189fb43960888cfabc735d2e6c8377a6b3",
+      "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader. Renewed 2026-10-29: limit() reads whole-number machine limits (TESTVM_MEMORY_FLOOR_MB) from the environment, else limits.env beside .env under the same HOME (or the absolute RICHOS_LIMITS_FILE), else the caller's stated default; .env parsing and KEYS are unchanged. Fixture callers supply HOME or RICHOS_LIMITS_FILE, the same boundary as RICHOS_ENV_FILE; no process.",
       "keys": [],
       "edges": []
     },
@@ -16981,6 +17001,75 @@
         }
       ],
       "evidence": "Runs the fixed toolchain.test.py with python3 -B; nothing else."
+    },
+    "scripts/lib/quiet_wait.py": {
+      "source": "scripts/lib/quiet_wait.py",
+      "sha256": "0920cf2953fb0c13987857bbc8c21e3aa247f4140108485f7c89d4447e3ba92f",
+      "evidence": "Standard library only (select.kqueue, os, errno, time): registers process-exit, process-fork, signal and file/directory-change events the caller names and blocks on them with a timeout. Reads no configuration key, environment variable or file contents and executes nothing.",
+      "keys": [],
+      "edges": []
+    },
+    "scripts/lib/wait-cpu.test.py": {
+      "source": "scripts/lib/wait-cpu.test.py",
+      "sha256": "af060e9b8242f775c17185845801ae75d4d38daa890d61ebae4f9fb5d81abb88",
+      "evidence": "Fixed Python fixture: each case runs one bound waiter (agent_hold.py wait, gate, watch; and, from the sweep, stop-at-line.py, proc_tree.py run, provider-supervisor.py, worker_tokens.py run and lease, quota_watch.mode_watch) for 60 s in a private temporary state directory, HOME, config and CPU-guard state in explicit fixture mode, and reads its CPU time from RUSAGE_CHILDREN of a literal measuring parent. The watchdog's registry is a literal stand-in script. setUpModule refuses to run with the app's live state variables set. No configuration key is read.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/agent_hold.py"
+        },
+        {
+          "to": "scripts/lib/quiet_wait.py"
+        },
+        {
+          "to": "scripts/lib/stop-at-line.py"
+        },
+        {
+          "to": "scripts/lib/proc_tree.py"
+        },
+        {
+          "to": "scripts/provider-supervisor.py#fixture-providers"
+        },
+        {
+          "to": "scripts/lib/worker_tokens.py"
+        },
+        {
+          "to": "scripts/lib/quota_watch.py#notice"
+        }
+      ]
+    },
+    "scripts/lib/wait-cpu.test.sh": {
+      "source": "scripts/lib/wait-cpu.test.sh",
+      "sha256": "a1df56df8dddfc9ea45647734050ddaf325078d3005ad2fba161c950c2a4f2df",
+      "evidence": "Executes exactly the adjacent fixed Python fixture, with no mutation driver.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/wait-cpu.test.py"
+        }
+      ]
+    },
+    "scripts/lib/quiet_wait.test.py": {
+      "source": "scripts/lib/quiet_wait.test.py",
+      "sha256": "bfdf66dba97b01ee94fa0125a718d39e0e5f1730c0d1f4b2807e1ce3d3cb0593",
+      "evidence": "Fixed Python fixture imports only the bound helper and the standard library; its events (a file written, a process that exits or forks, a signal to itself) are literal and confined to its own temporary directory and its own child processes. No configuration key is read.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/quiet_wait.py"
+        }
+      ]
+    },
+    "scripts/lib/quiet_wait.test.sh": {
+      "source": "scripts/lib/quiet_wait.test.sh",
+      "sha256": "90df146bfc7620ebbb7ea9fca6c256471f363a570c6360465bb707dbb7db65a1",
+      "evidence": "Executes exactly the adjacent fixed Python fixture, with no mutation driver.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/quiet_wait.test.py"
+        }
+      ]
     }
   },
   "units": {
@@ -17172,7 +17261,9 @@
     "scripts/hooks/guard-headed-browser.test.sh": "scripts/hooks/guard-headed-browser.test.sh",
     "scripts/lib/app-management-watch.test.sh": "scripts/lib/app-management-watch.test.sh",
     "scripts/lib/machine-figures.test.sh": "scripts/lib/machine-figures.test.sh",
-    "scripts/lib/toolchain.test.sh": "scripts/lib/toolchain.test.sh"
+    "scripts/lib/toolchain.test.sh": "scripts/lib/toolchain.test.sh",
+    "scripts/lib/wait-cpu.test.sh": "scripts/lib/wait-cpu.test.sh",
+    "scripts/lib/quiet_wait.test.sh": "scripts/lib/quiet_wait.test.sh"
   },
   "hook_readers": {
     "scripts/hooks/ceo-asks.test.sh": {
@@ -17201,9 +17292,9 @@
         "scripts/ceo-asks-status.sh": "bd01c8ce9d195b5c77cc0011b08b8ac983865d08c3a8f0e8feb31d103fb2a650",
         "scripts/hooks/ceo-asks.mutation.sh": "09fc96fa67926202392d60feaada0be0b21f0bc189cb43577ffc28d6969c0f9c",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -17244,9 +17335,9 @@
         "scripts/ceo-ruled-exempt.sh": "d763157b150db58cf30e87a25c6215e869e29eada3760b8b44295553657cab09",
         "scripts/hooks/ceo-ruled.mutation.sh": "33f9a7fee0e8e9dde356daa56a29d9682d7335d1111019ebc1fca5a6babeefdc",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -17284,14 +17375,14 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc"
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4"
       },
       "evidence": "8a parses the PreToolUse Agent groups for the stale-staging command. No JSON formatting or unrelated registration is asserted. Nested mutants execute the same assertion and all their executable helper sources are bound. Seated settings are observed only by assertion 8b, a grep for guard-stale-staging.sh. Comparing every complete line containing the guard-stale-staging prefix covers its unescaped-dot pattern and formatting changes. The bound mutation transport copies settings for the same assertion; no other reached reader consumes them.",
       "seated_text_needles": [
@@ -17356,11 +17447,11 @@
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "8498598e1be7283d703d96fc260aac9398c999a6b17fa53aaa49cb02acc73c73",
+        "scripts/lib/quota_watch.py": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
         "scripts/lib/pause_protocol.py": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
-        "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
+        "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a"
       }
     },
@@ -17397,14 +17488,14 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/lib/resolve-roots.test.sh": "d5d4f7b6dc49da7d8dbc216bd244cd41028297b4141b18586323c8f4bb5a02c8",
         "scripts/hooks/session-start-stdin.test.sh": "7fe7fa956e36b6d93e4ed748fd4c57a96199cbde01bbce0d12567513d2fecd5f",
         "scripts/hooks/session-start-escalations.sh": "25af57857b1dc4a1e4a61c6848753ede1d217f3a1037379e30cee4e64b206a5f",
@@ -17431,11 +17522,11 @@
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "8498598e1be7283d703d96fc260aac9398c999a6b17fa53aaa49cb02acc73c73",
+        "scripts/lib/quota_watch.py": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
         "scripts/lib/pause_protocol.py": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
-        "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
+        "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/left-off-report.sh": "d14ee9ceac38d7de2c7d04ba85eb11a4ab7d6610f3bc0d066db606dbc9090dee",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/host_child.py": "59fdb01f44f03ef847210ea9e55aa6b2adc226827c10f11805a2bc2335210b4a"
       }
     },
@@ -17525,11 +17616,11 @@
         "scripts/lib/mechanical-findings.sh": "1c67019e979adea3071d160882f26acb6bd14c032162ba31d7a1020ad06509bb",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/operator_fences_admin.py": "bf04cae2a5cb5425f157c64e93d1cab7ee02a5c6ea98d4d0e9bce5fd9e6f95e1",
         "scripts/lib/pause_protocol.py": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
@@ -17542,7 +17633,7 @@
         "scripts/lib/scratch-reaper.py": "28bff8c0ac1bb10d730c11613f69b73c0fea0ec6f11117bed32ecc4a4448e370",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/stop-session-recovery.py": "7f73be10acfee2d62a9f05115a20d8c64bfd63764a4fffb084675ca14a4d7ed2",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
@@ -17556,7 +17647,7 @@
         "scripts/lib/unstarted-rows.py": "80476a1bcc89496a0180bd5c5d773cda94989296bf9568997d6928e3d09de576",
         "scripts/lib/unstarted-rows.sh": "9e464447df24f370a6803610c9e0a7fafb336eda673dc2ff9527847cb79d3809",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/mechanical-findings-lint.sh": "e38128228771d66806eaa945f3711c609d2d9f56e124be9b1d1546b2b89e89f5",
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
         "scripts/row-currency-lint.sh": "47b26a433c2a96e69844fdca03b263c37bd0f80bbbbeeacd87dd4117feef1167",
@@ -17661,8 +17752,8 @@
         "scripts/hooks/session-start-escalations.sh": "25af57857b1dc4a1e4a61c6848753ede1d217f3a1037379e30cee4e64b206a5f",
         "scripts/hooks/session-start-quota.sh": "720bdd6c4c0e392f2be9f37368f0862e92d1504a2eb56851af8a4e083f817cf1",
         "scripts/quota-watch.sh": "32cbf111f898214ed3cf9dffba761c14f409cbf37af1c26c5825ae9b0a12d1f6",
-        "scripts/lib/quota_watch.py": "8498598e1be7283d703d96fc260aac9398c999a6b17fa53aaa49cb02acc73c73",
-        "scripts/lib/quota_weekly.py": "a9249313b2dfd3a349d09511ec089a5ac5aabb0122324aa8e0279efd54c2f52c",
+        "scripts/lib/quota_watch.py": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
+        "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/session-start-scratch.sh": "79d29353e5bac397e12c199142b200dd44d1ce9fdcb818db296606e27f6b345f",
         "scripts/hooks/shell-evidence.sh": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",
         "scripts/hooks/shell-evidence.py": "de4326ba4e1c9d8a415e27379efe3b4ecb15d4dd362419925628afe64c1cf240",
@@ -17677,7 +17768,7 @@
         "scripts/hooks/worker-started-handoff.sh": "f18675f4938cae746d536661b44e49e7a3425c15acff5c7cd3ad2e1bf7ee9919",
         "scripts/hooks/worker-updated-handoff.sh": "6cbcdd13306d482c8bfd9da1f6ccc68141a3091f9f9405bb52232cb14430ebf8",
         "scripts/hooks/contract-integrity-case7.mutation.sh": "71a90a5ab0d82a3e109d7f06924e6766135b106bd3581b291067efb4fa663866",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3",
@@ -17749,14 +17840,14 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960"
       },
       "evidence": "Full outer registration assertions resolve the row guard through real plugin and seated surfaces using registered-hooks. Inner mutation groups now omit registration and retain the same guard call surface. Probe and installer checks remain source-data scans in the outer suite, not dynamic inventory execution. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
@@ -17875,14 +17966,14 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/guard-bash-main-writes.sh": "86d87ebcda5e74dc0e0e728bbe5b3c1a198f13946714c326d8c0fe2ae7573884",
         "scripts/hooks/guard-ceo-todos-commits.sh": "d4ce06b9d6d3e6bcc741657e738bcbe3d227f0d5f370fc57121cd325cd808625",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
@@ -17919,7 +18010,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "scripts/hooks/scan-secrets.sh": "fd488d5b07748fd41c773c80ec133eed526869534f4f1324c847a33701ae1ab1",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "scripts/hooks/guard-shared-scratchpad.sh": "4c3cf896da287334a38a6f3be20fc7a25bba901756ea1de665b5e4c77421f2c4",
@@ -17975,7 +18066,7 @@
         "scripts/hooks/notice-waiver-repetition.sh": "db7a0e6b1e6a2603d93955f5624de15dd5a010112049f898c6dbb4379b7ce6e7",
         "scripts/hooks/release-land-leases.sh": "e8830da188b023fee309d4e712a7b099a339b63b56a720080d349ea9d709a19e",
         "scripts/hooks/turn-manifest.sh": "f5e92311f9896874e5294533673dd08160f3e4cfba4a262e161ae96e377331ae",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/hooks/ass-kicker.sh": "67958c5559f0271a699ee95462636009f5547ad1212124139137827b0a6006c1"
       }
     },
@@ -17995,9 +18086,9 @@
         "scripts/waiver-repetition-lint.sh": "03bba7c566c0b3348d91badad662f240b2da1085c80291bc34765418ce88adb0",
         "scripts/hooks/waiver-repetition.mutation.sh": "a767577b4b2a78dd280f9dd90a43359a1db4d0c19f3fb54a4f91351cd3df5403",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
@@ -18024,14 +18115,14 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960"
       },
       "evidence": "Only this guard registration is resolved on plugin and seated surfaces. Probe, installer and declaration-resolver source assertions are text data; no other hook registration is executed. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
@@ -18067,7 +18158,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
         "scripts/lib/publication-boundary-cache.test.py": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
-        "scripts/lib/machine_settings.py": "16a51977da6d138d85d39c1c512e067c98bc30f174b5c7829f95feee1eb47a4e"
+        "scripts/lib/machine_settings.py": "fc31693078bc81e7145955a3ea2482189fb43960888cfabc735d2e6c8377a6b3"
       },
       "evidence": "Only the two publication guard registrations are queried on plugin and seated surfaces. Probe and installer source are assertion data. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
@@ -18155,13 +18246,13 @@
         "scripts/hooks/operator-leads.mutation.sh": "9f08a3b3b487ed429c120190f73730964156f91a7ebd3b505759926f54cb2c5f",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "scripts/hooks/guard-shared-scratchpad.sh": "4c3cf896da287334a38a6f3be20fc7a25bba901756ea1de665b5e4c77421f2c4",
@@ -18261,14 +18352,14 @@
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/hooks/guard-host-display-power.sh": "30aaa9715ae20febc4e53283174b9b40abbff1870262486c72fb0af0bbf5a893",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "scripts/hooks/guard-idle-land.sh": "c65ff6beb940c15ff20cf5a7e54e2f8453c4f6594d2ed2a8d32cda662dc3efae",
@@ -18374,7 +18465,7 @@
         "scripts/hooks/guard-vendoring-commits.sh": "2f7d9f2973134d1d25bf9c8f8b83e803389d02c64e28bfe15acc6b2ce2c19f32",
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/hooks/guard-record-owner-memory.sh": "541c13b0091e5aa1f4be35f9619da7c0cb0a35a2fc07f6fdf99cc72a97cd1806",
         "scripts/lib/record_owner.py": "10f0983a12f686bcf462a63ec71ff8bed32507f5e3315395bf6dcf55eb20cfb1",
         "ass-kicker/brief-done.py": "db1fd5e6658db77631bbde3d54b0ca47bbad319c14cde21bb7a44e4135efb4f3",
@@ -18447,7 +18538,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa",
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -18469,7 +18560,7 @@
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
         "mega-lander/workspaces.py": "e249e1abbb585c720a4e4a84f0416c612fb0f5b314ce9bc18cb5904f58c8a099",
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -18506,7 +18597,7 @@
         "scripts/hooks/guard-worktree-removal.sh": "c0dbd7ca17627c11beeffa25b88a9fc3610fe7ff5131ae660a975dded87b2cfc",
         "scripts/hooks/observe-created-refs.sh": "6c1bcc7fc86608dace9465fdaef957468872b82906e4134382a98b5ab8085202",
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
@@ -18514,10 +18605,10 @@
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/pause_protocol.py": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -18525,7 +18616,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/scratch-reaper.py": "28bff8c0ac1bb10d730c11613f69b73c0fea0ec6f11117bed32ecc4a4448e370",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
@@ -18533,7 +18624,7 @@
         "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105",
         "scripts/unlanded-branches-lint.sh": "c65f6be6da126b18127b28f36860c213c9649e843831ae4c0ee1f393cc52971f"
@@ -18552,7 +18643,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "2977d670114080d0d4a7b171ea103773a6903d888fad0c587bb2b3f8d0a83aac",
         "scripts/hooks/observe-created-refs.sh": "6c1bcc7fc86608dace9465fdaef957468872b82906e4134382a98b5ab8085202",
         "scripts/hooks/workspace-lifecycle.sh": "e8a6bd193fe910eb22f76da44c81b04feaa04e2a7429b055823ea8efc8df72e8",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -18583,16 +18674,16 @@
         "scripts/hooks/guard-owned-state.sh": "2d886379c7d0b4335f7ba7942513af0da48613ad2062bb0fdc63397f8a64a563",
         "scripts/hooks/owned-state.mutation.sh": "4f81a9cb4d1671fa021327648e7194f1a8778b0e87378c94903d8001025eb0b2",
         "scripts/owned-state.sh": "313a26b975baf1005c6a86beaa03cc7910481b9e1d6754d45a0e4206b5b001a0",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/stop-at-line.py": "159fa146e159af513ac9bcdbacc515d3cb1700da4945916989215e266cdf9bcc",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "owned-systems.declaration": "a5f48969f23adfc3fc8e289ed29a4911d24bdb7bb19a486fc8b276ff2172374c",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
         "scripts/hooks/owned-state.test.sh": "487d91383cd87f56a5e0b7c5a186aa4ba31a167a3e6559661b1df7f8a6562a5a",
         "scripts/lib/escalations.py": "3e8ea177d23135dd2ebe4dd079bc09e82bc1a9610ad337e61b9ebe60882a4d28",
         "scripts/escalate.sh": "b3c8b3e5207d14ea166e6b39cf9bddf81895bd95374c472ecc62d7c6dad54b4a",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/owned-state-checks/registered-executables.py": "cc79f6eed01ccc73a862f201bfae2257d7f36e305c183a6d3095a3a2b6202421",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
@@ -18623,15 +18714,15 @@
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "scripts/lib/engine_pass.py": "e938e26782556e5cf5d703b02354071631aa012d819d793d556512bc88decc0b",
         "scripts/hooks/ceo-todos.mutation.sh": "b84e9b40ba67ff10767e38c451804c32d2789c99f8881a5d063bef590d954b25",
-        "scripts/lib/worker_tokens.py": "faa616261812b46b92cd8b3c6a8510f232ac2d7cf4d9c638229341872a4da478",
+        "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/operator_fences.py": "0fed0ead4dd5b2b016e3b18d817a63806a077ee56647529256ddd9b1a49c2187",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
         "scripts/hooks/ceo-todos.test.sh": "456edf169779e0b78ae8d3ffba553ded91e72bb0ff61573fccd1ec80ed648cc6",
         "scripts/ceo-todos-render.sh": "63b00d5fde2eb129df925749ae9967521d9251936f5f19db627bded6049fddc3",
-        "scripts/lib/mutation-pool.sh": "cdf900b6b2aedccdd04b40ca3499c33756282f6caf3e362560f8ef52fa532d1a",
-        "scripts/lib/proc_tree.py": "df57790608221addbc38777f3f4b2f619f4069544f78e4706b0c695304326c8e",
+        "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
+        "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/cold-open.sh": "8e6022432b0520e9027bcf328552baa555e8d27d4fc23f48ce2250e0c0f38c84",
         "scripts/ceo-todos-lint.sh": "cec21eee8a4d92b52d91d67df77ca120cc42fd33c686e3a3d79775c76ee91619",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960"
@@ -18655,7 +18746,7 @@
         "scripts/hooks/guard-resume-isolation.sh": "3995168d36694672fbb54a2256142f2a9ca553372c56d2c471d326bf91002a78",
         "scripts/hooks/guard-resume-isolation.test.sh": "2fc190fc539a183b423ac8ba7a22a23c56d6f8cd289aa341a67a7d6fd8f39a1d",
         "scripts/lib/agent-liveness.py": "c9835734770a40695afea6dbd6e5673cb35d5d732081a8a604fd85ccd94fc652",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/pause_protocol.py": "5c3b0c82d7025af9a01a7d79fe001d0cba3c6f95bd96301dc5b8c1feb66cafbe",
@@ -18730,7 +18821,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa",
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -18788,7 +18879,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa",
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },
@@ -18846,7 +18937,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/engine-status.sh": "fb2713b25845c04a35dffbea62873d306d93c96ead921925695647d3edb93e1d",
         "scripts/hooks/notice-unlanded-branches.sh": "3a1222731913dc06aecd5a9703403ae27b7d61a6f28c7fad00223c4ac6c5a90d",
-        "scripts/lib/agent_hold.py": "0d87e96df4541805787624bd6097f758c078fe1e0b3fc492036b27ce84199223",
+        "scripts/lib/agent_hold.py": "4b5ffb29cfd5c0016c9e8246e72f5c70ad10fae150c39f3e646ba175be992caf",
         "scripts/lib/by-reference-fixture.sh": "b44b7d4633e363ee01df644b14b6f443ae02fe68400d6ecba2c8631da94048fa",
         "scripts/hooks/dialect-guard.sh": "b7aea5e873d434daefb00a0a631c392660b17d6e753b0375c8d319e9afd9ce2a"
       },

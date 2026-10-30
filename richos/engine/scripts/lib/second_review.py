@@ -843,8 +843,29 @@ def admit(wait_seconds, say):
         time.sleep(min(ADMISSION_SAMPLE_SECONDS, max(0.0, deadline - time.monotonic())))
 
 
-def quota_hold(engine_root):
-    """(held, reading). His 93% rule, read through quota-watch's own --once."""
+def quota_hold(engine_root, accounts=""):
+    """(held, reading). His 93% rule.
+
+    In the app (`accounts`, the app's account list, --accounts): THE GATE'S OWN ADMISSION, read
+    from the file the app publishes beside that list (<app>/engine-state/claude-quota.json) for
+    the account the review runs on, by quota_watch.gate_admission, and nothing else. The app's
+    watcher starts with a cleared environment (review_watch.rs `environment`: no RICHOS_ENTITY_ROOT,
+    no CLAUDE_PROJECT_DIR), so quota-watch.sh found no QUOTA_PAUSE_PERCENT there, answered UNKNOWN,
+    and every app review started during a hold, on main as on the first version of this fix, which
+    only pointed quota-watch at the app's reading (richos-hq follow-ups.md, "app-launched reviews
+    never apply the usage hold"; rv-20261028T184535Z-d37b1f0d-e0d9). The app's pause setting, not a
+    terminal's config, decides an app review, as it decides every tool call of the app's work.
+
+    In a terminal: quota-watch's own --once (SECOND_REVIEW_QUOTA_CMD replaces it in tests)."""
+    if accounts:
+        import quota_watch  # sibling in scripts/lib: the app's published reading, read one way
+        state = os.path.join(os.path.dirname(os.path.abspath(accounts)), "engine-state")
+        # Judged on the account the review will run on (account_in_use, read again when it
+        # starts), as the gate judges every call on its own account: during a move the file's top
+        # level is still the account being left.
+        account = account_in_use(accounts)
+        gate = quota_watch.gate_admission(state, time.time(), (account or {}).get("id"))
+        return gate["held"], gate["line"]
     cmd = (os.environ.get("SECOND_REVIEW_QUOTA_CMD") or "").strip()
     argv = [cmd] if cmd else ["bash", os.path.join(engine_root, "scripts", "quota-watch.sh"), "--once"]
     try:
@@ -1503,9 +1524,12 @@ def _review_owned(a, w):
         return finish(None, raw)
 
     # Claude: the reviewer of Codex's work, and the fallback.
-    held, reading = quota_hold(a.engine_root)
+    held, reading = quota_hold(a.engine_root, a.accounts)
     row["quota"] = reading
     if held:
+        # Marked, so the watcher settles it as held, never as lost: a hold is not a crash and spends
+        # none of the commit's two retries (review_watch.py settle/due, HOLD_RETRY_SECONDS).
+        row["quota_held"] = True
         row["why"] = ("the quota hold is in force (his 93%% rule; %s), so no Claude review started; it waits "
                       "for the reset, as every teammate does" % reading)
         return finish(None, raw)
