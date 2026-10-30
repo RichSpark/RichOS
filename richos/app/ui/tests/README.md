@@ -34,7 +34,8 @@ anything on the user's screen. Not a window, not a dialog and not a notification
 notification permission prompt. A check that needs a real window runs in the test VM.
 
 The harness enforces it (`lib/quiet-browser.js`). Every browser it hands a suite is headless and
-a headed request is refused. Chromium runs as Playwright's headless shell, a plain binary that
+a headed request is refused and so is any launch while `PWDEBUG` puts Playwright in inspector
+mode (Playwright overrides headless there; `PWDEBUG=console` stays headless). Chromium runs as Playwright's headless shell, a plain binary that
 macOS never registers with Notification Center. A suite that needs the full Chrome app (the
 extension suites do) starts it through `spawnQuietChrome`, which adds
 `--disable-features=NativeNotifications,SystemNotifications`, `--disable-notifications` and fake

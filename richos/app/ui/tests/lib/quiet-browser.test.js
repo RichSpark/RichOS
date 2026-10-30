@@ -112,6 +112,32 @@ function waitExit(child) {
     const e = await refused(() => pw.chromium.launch({ args: ["--headed"] }));
     check("H2 the harness refuses --headed among a Chromium launch's args", e && calls.length === before, e ? e.message : "not refused");
   }
+  {
+    // Review 2026-10-29: in inspector mode Playwright overrides headless to false and picks the
+    // full browser, so a headless launch under PWDEBUG=1 still opens a window.
+    const saved = process.env.PWDEBUG;
+    try {
+      for (const value of ["1", "true"]) {
+        process.env.PWDEBUG = value;
+        const before = calls.length;
+        const e = await refused(() => pw.chromium.launch({ args: ["--mute-audio"] }));
+        check(
+          `H5 the harness refuses a launch under PWDEBUG=${value} (Playwright's inspector mode), and nothing is started`,
+          e && e.name === "QuietBrowserRefusal" && /PWDEBUG/.test(e.message) && calls.length === before,
+          e ? e.message : "the launch was not refused"
+        );
+      }
+      for (const value of ["console", "0", ""]) {
+        process.env.PWDEBUG = value;
+        const before = calls.length;
+        const e = await refused(() => pw.webkit.launch({}));
+        check(`H5 PWDEBUG=${JSON.stringify(value)} is not inspector mode and launches headless`, !e && calls.length === before + 1, e ? e.message : "");
+      }
+    } finally {
+      if (saved === undefined) delete process.env.PWDEBUG;
+      else process.env.PWDEBUG = saved;
+    }
+  }
 
   for (const [label, opts] of [
     ["channel chromium (the full Chrome for Testing app)", { channel: "chromium" }],

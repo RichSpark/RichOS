@@ -34,7 +34,8 @@
 //   * `spawnQuietChrome(executable, args, options)`: quietChromeArgs + assertQuietChromeLaunch +
 //     spawn. The only way a suite here starts a full Chrome binary itself.
 //   * `install(pw)`: called by the harness (`loadPlaywright`) for every suite's Playwright.
-//     Every engine's launch is forced headless and a headed request is refused. Chromium launches
+//     Every engine's launch is forced headless and a headed request is refused, and so is any
+//     launch under PWDEBUG's inspector mode (Playwright overrides headless there). Chromium launches
 //     stay on Playwright's headless SHELL (`chromium_headless_shell`, a plain binary with no app
 //     bundle and no notification bridge, on a profile Playwright creates in the temp folder and
 //     deletes), which is Playwright's default; a `channel` or
@@ -241,7 +242,19 @@ function spawnQuietChrome(executable, args, options = {}, { profileDir } = {}) {
   return spawn(executable, finalArgs, options);
 }
 
+/// Playwright's inspector mode: PWDEBUG set to anything but "", "0", "false" or "console". In it
+/// Playwright overrides `headless` to false and picks the full browser, whatever the launch asked
+/// (review 2026-10-29), so the quiet launch would still put a window on the screen.
+function inspectorMode(env = process.env) {
+  const v = env.PWDEBUG;
+  return v !== undefined && !["", "0", "false", "console"].includes(String(v));
+}
+
 function refuseHeaded(engine, options) {
+  if (inspectorMode())
+    throw new QuietBrowserRefusal(
+      `${engine}: PWDEBUG=${process.env.PWDEBUG} is Playwright's inspector mode, which opens a visible browser and inspector whatever headless says; unset PWDEBUG (PWDEBUG=console keeps the debug output headless)`
+    );
   if (options && (options.headless === false || options.devtools === true))
     throw new QuietBrowserRefusal(`${engine}: the headless option set to false (or devtools) asks for a visible window`);
   for (const a of (options && options.args) || []) {

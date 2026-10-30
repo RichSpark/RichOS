@@ -3738,6 +3738,7 @@
         "NODE_OPTIONS",
         "NODE_PATH",
         "PLAYWRIGHT_BROWSERS_PATH",
+        "PWDEBUG",
         "RICHOS_PLAYWRIGHT",
         "PW_TEST_SCREENSHOT_NO_FONTS_READY",
         "RUSTUP_HOME",
