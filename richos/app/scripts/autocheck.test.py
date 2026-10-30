@@ -1121,6 +1121,9 @@ class WorkerShell(Fixture):
         callers.mkdir()
         self.record_duration("suite", 2.5)
         self.env.update(RICHOS_BULK_ROOT=str(bulk), TMPDIR=str(callers))
+        # A worker's shell carries its agent id, which adds a per-worker folder under the hook's
+        # scratch; this test asks about the lead-shaped path, so the fixture carries none.
+        self.env.pop("RICHOS_AGENT_OWNER", None)
         self.git("checkout", "-q", "-b", "feature")
         self.write("richos/app/src/thing.txt", "fine, better\n")
         self.git("add", "-A")

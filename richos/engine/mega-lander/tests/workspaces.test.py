@@ -8157,6 +8157,59 @@ class AppDueNotice(Base):
                                      "names it; repair or remove it when convenient."), bad)
 
 
+class LiveAppRegistry_RefusesFixtureShapedWrites(unittest.TestCase):
+    """Follow-up 2026-10-28: record-canary.test.sh 7d'' wrote agents/wait-regression.json (name
+    lead-fixture, session fixture) and events.jsonl rows into the app conversation's live registry."""
+
+    def setUp(self):
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix="ws-live-"))
+        self.account_home = os.path.join(self.root, "account")
+        self.live = os.path.join(self.account_home, "Library", "Application Support", ws.APP_IDENTIFIER,
+                                 "engine-state", "workspaces", "partition")
+        self.elsewhere = os.path.join(self.root, "registry")
+        for d in (self.live, self.elsewhere):
+            os.makedirs(d)
+        self.saved = os.environ.get("RICHOS_WORKSPACES_DIR")
+        patcher = patch.object(ws, "_account_home", create=True, return_value=self.account_home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        if self.saved is None:
+            os.environ.pop("RICHOS_WORKSPACES_DIR", None)
+        else:
+            os.environ["RICHOS_WORKSPACES_DIR"] = self.saved
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    FIXTURE = {"key": "wait-regression", "name": "lead-fixture", "session_id": "fixture"}
+
+    def test_the_live_registry_refuses_the_incident_record_and_writes_nothing(self):
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.live
+        with self.assertRaises(ws.SpecError) as raised:
+            ws.save_agent(dict(self.FIXTURE))
+        self.assertIn("live workspace registry", str(raised.exception))
+        ws.event("wait", name="lead-fixture", session="fixture")
+        self.assertEqual(sorted(os.listdir(self.live)), [])        # no agent record, no event row, no dirs
+
+    def test_a_real_record_is_written_to_the_live_registry(self):
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.live
+        ws.save_agent({"key": "zach-opus-abc", "name": "zach-opus-abc", "session_id": "sess-1234"})
+        ws.event("spawn", name="zach-opus-abc")
+        self.assertTrue(os.path.isfile(os.path.join(self.live, "agents", "zach-opus-abc.json")))
+        self.assertTrue(os.path.isfile(os.path.join(self.live, "events.jsonl")))
+
+    def test_a_fixture_registry_of_its_own_still_takes_fixture_records(self):
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.elsewhere
+        ws.save_agent(dict(self.FIXTURE))
+        self.assertTrue(os.path.isfile(os.path.join(self.elsewhere, "agents", "wait-regression.json")))
+
+    def test_the_word_must_stand_alone(self):
+        os.environ["RICHOS_WORKSPACES_DIR"] = self.live
+        ws.save_agent({"key": "zach-opus-fixtures1", "name": "zach-opus-fixtures1", "session_id": "s"})
+        with self.assertRaises(ws.SpecError):
+            ws.save_agent({"key": "echo-opus-fixture", "name": "echo-opus-fixture", "session_id": "s"})
+
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a

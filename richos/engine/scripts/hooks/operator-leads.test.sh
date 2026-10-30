@@ -68,6 +68,10 @@ check() { # <case> <condition-rc> [detail]
 
 ofx_init || exit 1
 trap ofx_cleanup EXIT
+# A folder with a space leads PATH for the whole run, as the app's installed runtime folder does in
+# an app shell, so the quoting C0c depends on is exercised in every environment and not only there.
+mkdir -p "$OFX/bin with space"
+PATH="$OFX/bin with space:$PATH"
 export RICHOS_WORKSPACES_DIR="$OFX/workspaces"
 unset RICHOS_OPERATOR_LEAD CLAUDE_PROJECT_DIR 2>/dev/null
 CLAIM="$OFX/claude/state/operator-lead.json"
@@ -159,7 +163,12 @@ mkdir -p "$OFX/fakepy"
 printf '#!/bin/bash\ncase "$*" in *operator_leads.py*) echo started >> "%s/leads-started" ;; esac\nexec "%s" "$@"\n' \
     "$OFX" "$REALPY" > "$OFX/fakepy/python3"
 chmod +x "$OFX/fakepy/python3"
-FP="PATH=$OFX/fakepy:$PATH"
+# `hook` puts its extra arguments into a command line that is parsed again, so the value is quoted
+# for that parse. In an app shell PATH begins with the installed engine's runtime folder, whose
+# path has a space ("Application Support"); unquoted, `env` took the first half as PATH and the
+# second half as the command, no hook ran, and C0c failed on a clean main (off_started=0 only
+# because nothing ran, then no start once the fences were back on).
+FP="PATH=$(printf '%q' "$OFX/fakepy:$PATH")"
 hook T "$H_CLAIM" start "$FP"; hook T "$H_GUARD" agent "$FP"; hook T "$H_NAMES" agent "$FP"
 hook T "$H_SW" memw "$FP"; hook T "$H_REL" memw "$FP"
 off_started=0; [ -f "$OFX/leads-started" ] && off_started=1

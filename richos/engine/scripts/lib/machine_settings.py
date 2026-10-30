@@ -206,13 +206,32 @@ def agent_root(environment=None):
     return root
 
 
+WORKER_TAG = 'RICHOS_AGENT_OWNER'
+WORKER_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}')
+
+
 def scratch(name, environment=None):
+    """The named scratch folder for `name`, one subfolder per worker.
+
+    Every worker of one teammate asks for the same name ("zach"), so the folder itself used to be
+    shared: one worker's cleanup of "its own" scratch deleted another worker's files mid-run
+    (2026-10-29). A worker's shell carries RICHOS_AGENT_OWNER (its agent id, set by the engine's
+    shell wrapper for every subagent call), so the folder returned is <root>/<name>/<worker id>
+    and `rm -r` of it touches that worker alone. A caller with no worker id (the lead's own
+    session, a script) gets <root>/<name> as before.
+    """
+    env = os.environ if environment is None else environment
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', name) or name in ('.', '..'):
         raise ValueError('agent name must be one safe path component')
     root = agent_root(environment)
     target = root / name
+    worker = env.get(WORKER_TAG) or ''
+    if worker:
+        if not WORKER_ID.fullmatch(worker) or worker in ('.', '..'):
+            raise ValueError('worker id must be one safe path component')
+        target = target / worker
     resolved = target.resolve()
-    if not resolved.is_relative_to(root) or resolved == root:
+    if not resolved.is_relative_to(root) or resolved == root or resolved == (root / name).resolve() and worker:
         raise ValueError('named scratch escapes its configured root')
     resolved.mkdir(mode=0o700, parents=True, exist_ok=True)
     return resolved

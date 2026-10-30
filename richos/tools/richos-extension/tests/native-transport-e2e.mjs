@@ -31,7 +31,7 @@
 
 import { exportBufferedArchive } from './buffered-export.mjs';
 import { trackChrome, stopChrome, stopAllChrome } from './chrome-process.mjs';
-import { removableVolumeRefusal } from './native-host-privacy.mjs';
+import { removableVolumeRefusal, stageOffRemovable } from './native-host-privacy.mjs';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:https';
 import fs from 'node:fs';
@@ -40,9 +40,12 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = path.resolve(HERE, '..');
-const SERVICE_DIR = path.resolve(EXT_DIR, '..', 'richos-service');
-const HOST_JS = path.join(SERVICE_DIR, 'host', 'native-host.js');
+// Where the extension and the native host are read from. A checkout on a removable volume (the nightly's
+// state folder can be on the SSD) is copied under the scratch root by main() and these are pointed at
+// the copy, so neither Chrome nor the host it launches reads the volume.
+let EXT_DIR = path.resolve(HERE, '..');
+let SERVICE_DIR = path.resolve(EXT_DIR, '..', 'richos-service');
+let HOST_JS = path.join(SERVICE_DIR, 'host', 'native-host.js');
 const HEADED = process.argv.includes('--headed');
 const KEEP = process.argv.includes('--keep');
 const LEG = process.argv.find((arg) => arg.startsWith('--leg='))?.slice(6) || 'all';
@@ -581,17 +584,23 @@ async function main() {
   pinInternalTmpdir();
   if (!CHROME) throw new Error('no Chrome for Testing found; set CHROME_PATH');
   if (!fs.existsSync(HOST_JS)) throw new Error(`native host not found at ${HOST_JS}`);
-  // The host Chrome launches answers to macOS as itself; on a removable volume it would ask.
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'richos-nat-'));
+  const bail = (code) => { fs.rmSync(workDir, { recursive: true, force: true }); process.exit(code); };
+  // A checkout on a removable volume is read from a copy under the scratch root, off it.
+  ({ extension: EXT_DIR, service: SERVICE_DIR } = stageOffRemovable({
+    dirs: { service: SERVICE_DIR, extension: EXT_DIR }, into: path.join(workDir, 'staged') }));
+  HOST_JS = path.join(SERVICE_DIR, 'host', 'native-host.js');
+  // The host Chrome launches answers to macOS as itself; on a removable volume it would ask. What is
+  // still on one now (the model, a scratch root the caller forced there) is refused unchanged.
   const refusal = removableVolumeRefusal({
     paths: [SERVICE_DIR, EXT_DIR, os.tmpdir(), MODEL],
     subjects: [process.execPath, process.env.RICHOS_NATIVE_LAUNCHER_PYTHON],
   });
-  if (refusal) { console.error(refusal); process.exit(1); }
+  if (refusal) { console.error(refusal); bail(1); }
   if (!canSay || !haveWhisper || !MODEL) {
     console.error(`native-transport-e2e needs: say=${canSay} whisper=${haveWhisper} model=${MODEL || 'MISSING'} — all required for the speech-content proof.`);
-    process.exit(1);
+    bail(1);
   }
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'richos-nat-'));
   console.log(`\nRichOS native-transport E2E\n  chrome:  ${CHROME}\n  host:    ${HOST_JS}\n  model:   ${MODEL}\n  workdir: ${workDir}\n`);
   checkLauncherStderr(workDir);
 

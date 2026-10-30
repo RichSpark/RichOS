@@ -88,6 +88,28 @@ class Settings(unittest.TestCase):
    with self.assertRaises(ValueError):M.scratch('escape',env)
    nested=base/'richos-scratch';nested.mkdir()
    with self.assertRaises(ValueError):M.agent_root({**env,'RICHOS_BULK_ROOT':str(nested)})
+ def test_each_worker_of_one_teammate_gets_its_own_scratch_folder(self):
+  import shutil
+  with tempfile.TemporaryDirectory() as root:
+   base=pathlib.Path(root).resolve();bulk=base/'bulk';bulk.mkdir()
+   env={'HOME':str(base),'TMPDIR':str(base),'RICHOS_BULK_ROOT':str(bulk)}
+   first=M.scratch('zach',{**env,'RICHOS_AGENT_OWNER':'a1f684fad4d37879f'})
+   second=M.scratch('zach',{**env,'RICHOS_AGENT_OWNER':'b2e795be5e48980aa'})
+   self.assertNotEqual(first,second)
+   self.assertEqual(first,bulk/'tmp/claude/zach/a1f684fad4d37879f')
+   self.assertEqual(M.scratch('zach',{**env,'RICHOS_AGENT_OWNER':'a1f684fad4d37879f'}),first)
+   (first/'home').mkdir();(second/'home').mkdir();(second/'home'/'work').write_text('still working')
+   # One worker's cleanup of the folder it was given leaves the other worker's files alone.
+   shutil.rmtree(first)
+   self.assertTrue((second/'home'/'work').exists())
+   # A caller with no worker id (the lead, a script) keeps the plain per-name folder.
+   self.assertEqual(M.scratch('zach',env),bulk/'tmp/claude/zach')
+   for bad in ('../x','a/b','..','.'):
+    with self.assertRaises(ValueError):M.scratch('zach',{**env,'RICHOS_AGENT_OWNER':bad})
+   # The command line reads the same variable from the caller's environment.
+   cli=subprocess.run([sys.executable,str(pathlib.Path(sys.argv[1],'machine_settings.py')),'scratch','zach'],capture_output=True,text=True,check=True,
+                      env={**{k:v for k,v in os.environ.items() if not k.startswith('RICHOS_')},**env,'RICHOS_AGENT_OWNER':'c3d8a6cf6f59a91bb'})
+   self.assertEqual(pathlib.Path(cli.stdout.strip()),bulk/'tmp/claude/zach/c3d8a6cf6f59a91bb')
  def test_process_sweep_uses_job_tmp_and_never_named_root(self):
   import importlib.util
   spec=importlib.util.spec_from_file_location('fixture_reaper',pathlib.Path(sys.argv[1],'scratch-reaper.py'))
