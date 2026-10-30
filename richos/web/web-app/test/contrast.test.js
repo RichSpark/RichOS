@@ -14,9 +14,10 @@
 //
 // WHAT THIS FILE CAN AND CANNOT DO, said plainly because the difference matters: it checks the
 // PAIRS, against the palette as `styles.css` declares it, and it is fast enough to run on every
-// save. It cannot see a node whose background is painted by something this list forgot. That is
-// what `test/desktop-verify.js` is for — it walks every text node of the RUNNING app with the
-// shipped app's own contrast walker. Two checks, and the browser one is the authority.
+// save. It cannot see a node whose background is painted by something this list forgot. The
+// phone web page this stylesheet was written for was retired on 2026-10-30; the earlier iPhone
+// app in `richos/mobile/ios` still stages `styles.css` (`richos/mobile/cli/simulator.mjs`), and
+// `richos/mobile/test/client-ui.mjs` renders that app's screens in both themes.
 //
 // NO EXEMPTIONS ARE CLAIMED, here or in the stylesheet. Every string on this screen is meant to be
 // read, including the line that says a message is waiting — which is the one he most needs to

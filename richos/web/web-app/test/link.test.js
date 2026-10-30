@@ -517,27 +517,3 @@ test('a revoked event stream stops retries and reports the explicit refusal with
 	assert.strictEqual(p.Stub.made.length, 1);
 	assert.strictEqual(p.Stub.alive().length, 0);
 });
-
-test('the shipped phone app routes a stream revocation to its removed-phone screen', async () => {
-	const fs = require('node:fs');
-	const vm = require('node:vm');
-	const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');
-	const make = source.match(/function makeLink\(\) \{[\s\S]*?\n\}/)[0];
-	const handle = source.match(/function handleApiError\(err\) \{[\s\S]*?\n\}/)[0];
-	let removed = 0;
-	let handlers;
-	const context = vm.createContext({
-		RichOSLink: { createLink },
-		api: { refreshChallenge: async () => {}, openEvents: async (_thread, _cursor, h) => { handlers = h; return { close() {} }; } },
-		thread: { latestCursor: () => 0, view: () => [] }, currentThreadId: 't-1', threads: [], linkStateNow: 'opening',
-		setLinkState() {}, updateQueueBanner() {},
-		goRevoked: () => { removed += 1; }
-	});
-	vm.runInContext(make + '\n' + handle + '\nglobalThis.testLink = makeLink();', context);
-	context.testLink.connect();
-	await settle();
-	await settle();
-	handlers.error({ reason: 'revoked' });
-	assert.strictEqual(removed, 1);
-	assert.strictEqual(context.testLink.isPending(), false);
-});

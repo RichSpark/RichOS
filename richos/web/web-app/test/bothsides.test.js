@@ -24,10 +24,8 @@
 //      This is the positive control — it passed before the fix too, which is exactly what makes
 //      it worth keeping: it proves the rows were renderable and therefore that the page dropped
 //      them.
-//   2. THE WIRING. The shipped `app.js` merges `data.messages` in its `hello` handler. This is
-//      the one that fails on `05ab7a0c`. It is asserted on the bytes because this file is an IIFE
-//      that boots a browser app on load, and `test/desktop-verify.js` — the harness that drives
-//      the real thing — needs Playwright and is not part of `npm test`.
+//   2. THE WIRING, in the phone web page's `app.js`. That page was retired on 2026-10-30 and its
+//      checks went with it; the native apps' own tests hold their wiring.
 //   3. HIS OWN MESSAGE, BETWEEN THE SEND AND THE PROJECTION. The queue drops an item the moment
 //      the Mac takes it, and the Mac's own row for it only exists once the intake log is drained
 //      — which runs on its own thread, behind the spine. `thread.confirm` holds his words in
@@ -41,14 +39,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
-const path = require('node:path');
 
 const { createThread } = require('../lib/thread.js');
 const { createQueue } = require('../lib/queue.js');
 
-const ROOT = path.join(__dirname, '..');
-const appJs = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 
 /// A `hello` frame's `messages`, in the shape `rows_from_payload` actually emits: both roles,
 /// dense 1-based cursors, `client_id: null` on every row (`phone/rows.rs:82` and `:97`).
@@ -102,23 +96,6 @@ test('a hello frame renders BOTH sides — his message from the phone AND the on
 
 // --- 2. the wiring -----------------------------------------------------------------------------
 
-test('the shipped app merges the rows the Mac puts in every hello, rather than dropping them', () => {
-	const handler = appJs.match(/\n\t+hello\(data(?:, id)?\) \{[\s\S]*?\n\t+\},\n/);
-	assert.ok(handler, 'the hello handler is gone from app.js, and with it the one frame that carries his own words');
-
-	assert.match(
-		handler[0],
-		/thread\.merge\(data\.messages\)/,
-		'the hello handler does not merge `data.messages` — the Mac sends both sides and the page keeps Rich\'s half'
-	);
-
-	// And the merge happens in the handler, not somewhere a later edit can quietly reorder past
-	// the first paint.
-	const mergeAt = handler[0].indexOf('thread.merge(data.messages)');
-	const renderAt = handler[0].indexOf('scheduleRender()');
-	assert.ok(mergeAt !== -1 && renderAt > mergeAt, 'the rows are merged after the repaint that would have shown them');
-});
-
 // --- 2b. ONE PATH FOR BOTH ROLES — Ray's `.20260920.1` defect 1 ---------------------------------
 //
 // He typed on the Mac and the phone showed his sentence 1.3-6.1 s later on four of five turns,
@@ -135,41 +112,6 @@ test('the shipped app merges the rows the Mac puts in every hello, rather than d
 //
 // It does not and cannot measure the Mac's half; that is `phone::listen`'s
 // `his_own_message_and_richs_reply_reach_the_phone_within_one_bound`, over real TLS.
-
-test('a live message frame reaches the screen the same way whichever of them said it', () => {
-	const handler = appJs.match(/\n\t+message\(row(?:, id)?\) \{[\s\S]*?\n\t+\},\n/);
-	assert.ok(handler, 'the live `message` handler is gone from app.js');
-
-	const mergeAt = handler[0].indexOf('thread.merge(row)');
-	const renderAt = handler[0].indexOf('scheduleRender()');
-	assert.ok(mergeAt !== -1, 'the live handler does not merge the row it was given');
-	assert.ok(renderAt > mergeAt, 'the repaint is scheduled before the row it would show');
-
-	// NOTHING DECIDES ON THE ROLE IN FRONT OF THE MERGE. The one role test in this handler is
-	// the reconciliation below, and it sits after the repaint.
-	const beforeTheMerge = handler[0].slice(0, mergeAt);
-	assert.ok(
-		!/role/.test(beforeTheMerge),
-		`something now looks at the role before merging his row:\n${beforeTheMerge}`
-	);
-	const roleAt = handler[0].indexOf('row.role');
-	assert.ok(roleAt === -1 || roleAt > renderAt, 'a role test was moved in front of the repaint');
-
-	// AND THE PAGE MERGES BOTH ROLES OFF THE LIVE STREAM, not only the projection. Same frame
-	// shape the Mac builds in `phone/rows.rs` `event_from_live`, one row each, in the order they
-	// are published.
-	const thread = createThread();
-	thread.merge({
-		id: 't9:user', thread_id: 'thr_5c1e', cursor: 1, role: 'ceo', kind: 'text',
-		text: 'where are we on the proposal?', created_at: '2026-09-20T07:00:00.000Z',
-		client_id: null, has_audio: false, from_microphone: false, state: 'sent', complete: true
-	});
-	assert.deepStrictEqual(
-		thread.view([]).map((row) => [row.role, row.text]),
-		[['ceo', 'where are we on the proposal?']],
-		'a LIVE row for his own message does not reach the screen'
-	);
-});
 
 test('the Mac\'s stand-in for a sentence he just typed retires on the Mac\'s own row, never beside it', () => {
 	// THE ROAD THIS IS ON. He types on the Mac. `send_message` writes his words to the durable
@@ -228,23 +170,6 @@ test('the Mac\'s stand-in for a sentence he just typed retires on the Mac\'s own
 		client_id: null, has_audio: false, from_microphone: false, state: 'complete', complete: true
 	});
 	assert.strictEqual(echoed.view([]).length, 2, 'Rich repeating his words deleted his message');
-});
-
-test('a reply that arrives with no question in front of it makes the phone ask the Mac for one', () => {
-	// The fallback for the message he types ON THE MAC while watching the phone. It was written
-	// when no live event carried a CEO turn at all; `rich://ceo-message` (`102b7c07`) closed that,
-	// and this stays because a phone whose stream dropped during his sentence still comes back to
-	// a reply with no question in front of it.
-	assert.match(appJs, /function askForTheQuestion\(row\)/, 'the reconciliation is gone');
-	assert.match(
-		appJs,
-		/if \(row && row\.role === 'rich' && row\.complete\) askForTheQuestion\(row\);/,
-		'nothing triggers the reconciliation when a reply settles'
-	);
-	const body = appJs.match(/async function askForTheQuestion\(row\) \{[\s\S]*?\n\}/);
-	assert.ok(body, 'askForTheQuestion has no body');
-	assert.match(body[0], /api\.backfill\(/, 'the reconciliation does not actually ask the Mac');
-	assert.match(body[0], /reconciled\.(has|add)\(/, 'the reconciliation is unbounded — one request per reply is the whole budget');
 });
 
 // --- 3. his own message, between the send and the projection -------------------------------------

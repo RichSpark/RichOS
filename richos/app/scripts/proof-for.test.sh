@@ -763,7 +763,7 @@ docs/verification/compaction-notice-2026-09-06/raw/cellT1.jsonl compaction-notic
 docs/verification/inner-doctrine-opens-2026-09-06/raw/cellC0-control-no-doctrine.jsonl compaction-progress.js
 richos/app/crates/richos-core/src/machinery.rs compaction-progress.js
 richos/app/src-tauri/src/phone/attachments.rs no-home-network.js
-richos/web/web-app/index.html no-home-network.js
+richos/web/web-app/lib/api.js no-home-network.js
 richos/app/src-tauri/src/phone/mod.rs phone.js
 richos/tools/phone-probe/lib/qr.js phone.js
 richos/app/src-tauri/examples/timeline_payload.rs realbytes.js

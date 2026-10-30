@@ -7,7 +7,7 @@
 >
 > This file was written first, before either half was built, so the two would be built against one
 > document. The phone was then finished first and **landed** (`dfa7ed27`) against its own stub
-> (`richos/web/web-app/CONTRACT-STUB.md`), which had to invent several things this file had settled
+> (a contract stub beside it, removed with the page on 2026-10-30), which had to invent several things this file had settled
 > differently.
 >
 > **Every one of those differences is resolved in the phone's favor and this file now describes
