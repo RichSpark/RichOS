@@ -43,6 +43,8 @@
 #   T03  it writes its transcript: cleared after two looks, once
 #   L01-L03  slow steps: three agent_hold.py wait steps 4.5 min apart are told once (name,
 #        median, slowest command, since); 10-min run-tests.sh steps are exempt; clears once
+#   L04  long ordinary foreground steps (cargo test, proof-run.py) are never SLOW-STEPS:
+#        only the engine's own wait is the defect (2026-10-30)
 #   T11  an app worker whose transcript is under the account folder its session started
 #        in (not the watcher's CLAUDE_CONFIG_DIR), written a minute ago, is not SILENT
 #   T12  a worker whose transcript was read and is 25 min old is SILENT though a command
@@ -980,6 +982,13 @@ write_steps a0000000000fixw "git status" "ok" 5 3
 tick 120; tick 180
 check "L03  three 10-min run-tests.sh steps are exempt; the fast teammate clears once" \
     "$( [ "$(count "$OUT" "STALL-CLEARED")" -eq 1 ] && has "$OUT" "papa-opus-w1" && ! has "$OUT" "[SLOW-STEPS]"; echo $?)" "out=$OUT"
+# 2026-10-30: an app teammate's ordinary command now runs in the foreground, so honest work
+# such as a 4-min cargo test is a 4-min step. Only the engine's own wait is the defect.
+write_steps a0000000000fixw "cargo test -p richos-core" "test result: ok" 240 3
+write_steps a0000000000fixt "python3 richos/app/scripts/proof-run.py base..HEAD" "logs: /x" 300 3
+tick 240
+check "L04  three 4-min cargo test steps and three 5-min proof-run steps in the foreground are not SLOW-STEPS" \
+    "$( ! has "$OUT" "[SLOW-STEPS]"; echo $?)" "out=$OUT"
 
 # --- HD: due work (orchestration reliability R2, richos-hq docs/prds/2026-10-23-orchestration-reliability.md) ---
 # One calculation (workspaces.due_set): finished work with no wait, a hold or wait with no

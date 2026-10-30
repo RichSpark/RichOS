@@ -1127,15 +1127,16 @@ def idle_end(src, now, session_id, prev):
 # THE RULE: a live teammate whose last SLOW_STEPS_N tool results each came at
 # least SLOW_STEP_SECONDS after the call they answer. The step time is the
 # timestamp of the tool_result row minus the timestamp of its tool_use row in
-# the teammate's own transcript. A step whose command really ran that long (a
-# test run, a build, a phone measurement) is exempt: its command is a
-# reserve.py, run-tests.sh, perf, xcodebuild or gradle command, or its output
-# says it was still working. A "STILL RUNNING" or "STILL WAITING" from
-# `agent_hold.py wait` is never exempt: it is the defect itself.
+# the teammate's own transcript. Only a step that is the engine's own wait counts:
+# `agent_hold.py wait`, or a result saying "STILL RUNNING" or "STILL WAITING". That is
+# the defect itself. Any other step that took that long ran a command that really took
+# that long (a test run, a build, a proof run, a phone measurement). Since 2026-10-30 an
+# app teammate's ordinary command runs in the foreground as in the terminal, so its long
+# commands are long steps; the list of exempt command words this rule used to keep
+# (reserve.py, run-tests.sh, perf, xcodebuild, gradle) missed cargo test and proof-run.py.
 SLOW_STEPS_N = 3
 SLOW_STEP_SECONDS = 180
 SLOW_TAIL_BYTES = 4 * 1024 * 1024
-SLOW_EXEMPT_WORDS = ("reserve.py", "run-tests.sh", "perf", "xcodebuild", "gradle")
 
 
 def _row_epoch(text):
@@ -1196,11 +1197,7 @@ def _step_is_slow(step):
     _t0, secs, cmd, text = step
     if secs < SLOW_STEP_SECONDS:
         return False
-    if "agent_hold.py wait" in cmd or "STILL RUNNING" in text or "STILL WAITING" in text:
-        return True
-    if any(w in cmd for w in SLOW_EXEMPT_WORDS) or "still working" in text.lower():
-        return False
-    return True
+    return "agent_hold.py wait" in cmd or "STILL RUNNING" in text or "STILL WAITING" in text
 
 
 def _median(values):
