@@ -82,6 +82,8 @@ pub mod ecs;
 pub mod evidence;
 pub mod feedback;
 pub mod github_home;
+/// Host context blocks given to a lease once, then only as the lines that changed.
+pub mod given_context;
 pub mod home_field;
 pub mod journal;
 pub mod heard;
