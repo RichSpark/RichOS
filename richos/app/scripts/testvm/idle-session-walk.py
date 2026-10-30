@@ -23,6 +23,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   identity   the running app says it was built from --expect-sha
   first-run  adopt-walk.py's: company "Acme" and its first conversation (A)
   setting    config.json in the guest carries the seeded idle_session_minutes
+  settled    the guest's first-time setup is over before A's idle clock starts: the app logged its
+             background tools done and voice ready (speech model checked, benchmark run), and the
+             guest's CPU is then quiet on two samples (Rich's voice installs silently after that).
+             Without it the retirement and the revive overlap the setup, and walk-3eeee6e6e5ee's
+             61 s revive could not be told apart from the setup it ran beside
   remember   in A: a code word unique to this run, to be remembered. PASS on TurnCompleted; A's
              session id is read from the turn's TurnStarted row and a `claude` process carrying
              it is seen running
@@ -30,10 +35,14 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
              is parked
   retired    within --minutes*60 + 30 + --margin seconds of A's last reply: the app logs that it
              ended A's session, and no process carries A's session id any more
+  fresh      after the retirement, ⌘N and one message to a new conversation (C): a fresh start
+             under the same post-setup conditions as the revive that follows
   revive     A opened from the rail, asked for the code word. PASS needs TurnCompleted, the code
              word in the reply, the turn started on A's ORIGINAL session id (resumed, not a new
              session) and a process carrying that id running again. The seconds from send to the
-             first streamed reply are recorded beside the same figure for `remember`
+             first streamed reply are recorded beside the same figure for `remember` and `fresh`.
+             `fresh` and `revive` also record the app.log lines (conversation preparation, reply
+             timing) written between their first action and the turn's end
 Evidence: <out>/<step>.json, the guest logs (keep_logs) and report.json.
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
@@ -58,9 +67,13 @@ cw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cw)
 StepFailed = cw.StepFailed
 
-STEPS = ['identity', 'first-run', 'setting', 'remember', 'switch', 'retired', 'revive']
+STEPS = ['identity', 'first-run', 'setting', 'settled', 'remember', 'switch', 'retired', 'fresh', 'revive']
 ENDED = ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed')
 DATA = 'Library/Application Support/com.richos.app'
+# The app.log lines that say the first-time setup has finished (main.rs `voice_readiness`, setup.rs).
+SETUP_DONE = (re.compile(r'in the background (\d+)/\1 done'), re.compile(r'voice: ready on this machine'))
+TIMING = ('conversation preparation finished', 'next conversation ready', 'front desk', 'reply timing:',
+          'idle sessions:')
 
 
 def seed_config(home, minutes):
@@ -123,6 +136,20 @@ class Walk(cw.CommandWalk):
         return '\n'.join(guest(self.vm, 'cat ' + shlex.quote(self.payload + '/' + n) + ' 2>/dev/null || true', 60)
                          for n in names)
 
+    def app_log(self):
+        return guest(self.vm, 'cat ' + shlex.quote(self.payload + '/app.log') + ' 2>/dev/null || true', 60).splitlines()
+
+    def timing_since(self, start):
+        """The app.log timing lines after line `start` (0-based), with their 1-based line numbers."""
+        lines = self.app_log()
+        return [f'app.log:{n}: {l.strip()}' for n, l in enumerate(lines, 1) if n > start and any(t in l for t in TIMING)]
+
+    def guest_idle(self):
+        """The guest's idle CPU percent from the second of two `top` samples (the first is since boot)."""
+        text = guest(self.vm, 'top -l 2 -n 0 -s 3 | grep "CPU usage"', 60)
+        found = re.findall(r'([\d.]+)% idle', text)
+        return float(found[-1]) if found else None
+
     def record(self, name, evidence):
         (self.out / f'{name}.json').write_text(json.dumps(evidence, indent=2) + '\n')
 
@@ -134,6 +161,31 @@ class Walk(cw.CommandWalk):
             raise StepFailed(f'config.json in the guest says idle_session_minutes={value!r}, not {self.a.minutes}; '
                              'was the fixture home seeded with --seed-config?')
         return {'idle_session_minutes': value}
+
+    def settled(self):
+        end = time.monotonic() + self.a.settle_within
+        seen, idle, quiet = {}, [], 0
+        while time.monotonic() < end:
+            lines = self.app_log()
+            for marker in SETUP_DONE:
+                hit = next((f'app.log:{n}: {l.strip()}' for n, l in enumerate(lines, 1) if marker.search(l)), None)
+                if hit and marker.pattern not in seen:
+                    seen[marker.pattern] = {'line': hit, 'walk_s': round(time.monotonic() - end + self.a.settle_within)}
+            if len(seen) == len(SETUP_DONE):
+                value = self.guest_idle()
+                idle.append(value)
+                quiet = quiet + 1 if value is not None and value >= self.a.quiet_idle else 0
+                if quiet >= 2:
+                    break
+            time.sleep(10)
+        evidence = {'markers': seen, 'idle_samples': idle, 'quiet_idle_percent': self.a.quiet_idle,
+                    'waited_up_to_s': self.a.settle_within}
+        self.record('settled', evidence)
+        if len(seen) < len(SETUP_DONE):
+            raise StepFailed(f'the first-time setup did not log done within {self.a.settle_within} s; see settled.json')
+        if quiet < 2:
+            raise StepFailed(f'the guest did not go quiet (>= {self.a.quiet_idle}% idle twice); see settled.json')
+        return evidence
 
     def remember(self):
         thread = self.facts.get('thread')
@@ -177,6 +229,32 @@ class Walk(cw.CommandWalk):
         self.facts['thread_b'] = fresh[0]
         self.save()
         return {'thread_b': fresh[0]}
+
+    def fresh(self):
+        if not self.facts.get('thread_b'):
+            raise StepFailed('switch must have run')
+        start = len(self.app_log())
+        before = {t['thread_id'] for t in self.threads()}
+        self.keys('tell application "System Events" to keystroke "n" using command down')
+        time.sleep(3)
+        mark = '[idle-walk C]'
+        sent = self.send(f'{mark} This is a third conversation. Reply with just OK.')
+        end = time.monotonic() + 60
+        new = []
+        while time.monotonic() < end and not new:
+            new = [t['thread_id'] for t in self.threads() if t['thread_id'] not in before]
+            time.sleep(2)
+        if not new:
+            raise StepFailed('⌘N and a send made no new conversation')
+        turn = self.turn(new[0], mark, sent[0], self.a.within)
+        evidence = {'thread_c': new[0], 'turn': turn, 'app_log': self.timing_since(start)}
+        self.record('fresh', evidence)
+        if turn.get('ended') != 'TurnCompleted':
+            raise StepFailed(f"C's turn ended {turn.get('ended')}; see fresh.json")
+        self.facts.update(thread_c=new[0], fresh_first_reply_s=turn.get('first_reply_after_send_s'))
+        self.save()
+        return {'thread_c': new[0], 'first_reply_after_send_s': turn.get('first_reply_after_send_s'),
+                'app_log': evidence['app_log']}
 
     def threads(self):
         return [r for r in self.ledger() if r.get('event') == 'ThreadCreated']
@@ -225,6 +303,7 @@ class Walk(cw.CommandWalk):
         if not word:
             raise StepFailed('remember must have run')
         title = self.title_of(thread)
+        start = len(self.app_log())
         # Waited for before it is pressed: a press is never asked again (axwait.py).
         self.wait_for(title, seconds=30)
         self.press(title)
@@ -237,7 +316,9 @@ class Walk(cw.CommandWalk):
         alive = self.processes(session)
         evidence = {'title_pressed': title, 'turn': turn, 'original_session': session, 'processes': alive,
                     'first_reply_after_send_s': {'revive': turn.get('first_reply_after_send_s'),
-                                                 'remember': self.facts.get('remember_first_reply_s')}}
+                                                 'remember': self.facts.get('remember_first_reply_s'),
+                                                 'fresh': self.facts.get('fresh_first_reply_s')},
+                    'app_log': self.timing_since(start)}
         self.record('revive', evidence)
         failures = []
         if turn.get('ended') != 'TurnCompleted':
@@ -252,7 +333,7 @@ class Walk(cw.CommandWalk):
             raise StepFailed('; '.join(failures) + '; see revive.json')
         resumed = any(re.search(r'--resume\s', p['args']) for p in alive)
         return {'reply': turn['reply'][:200], 'session': session, 'resumed_flag_seen': resumed,
-                'first_reply_after_send_s': evidence['first_reply_after_send_s']}
+                'first_reply_after_send_s': evidence['first_reply_after_send_s'], 'app_log': evidence['app_log']}
 
 
 def main():
@@ -264,6 +345,9 @@ def main():
     p.add_argument('--minutes', type=int, default=1, help='idle_session_minutes seeded and expected')
     p.add_argument('--within', type=float, default=240, help='seconds for each turn to end')
     p.add_argument('--margin', type=float, default=90, help='seconds past timeout + one 30 s check to wait')
+    p.add_argument('--settle-within', type=float, default=1500,
+                   help='seconds for the first-time setup to log done and the guest to go quiet')
+    p.add_argument('--quiet-idle', type=float, default=75, help='guest idle CPU percent counted as quiet')
     p.add_argument('--relaunch-within', type=float, default=120)
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
