@@ -365,11 +365,15 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
-    p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
+    p.add_argument('--expect-sha', default='', help='the commit the bundle under test was built from (the build '
+                   'commit or the nightly\'s source commit); default: the newest release the nightly recorded')
     p.add_argument('--within', type=float, default=3600, help='seconds for the assignment to close')
     p.add_argument('--approvals', type=int, default=6, help='most Approve presses (each is counted)')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
+    a.expect_sha = a.expect_sha or command_walk.adopt_walk.latest_build_commit()
+    if not a.expect_sha:
+        p.error('--expect-sha is needed: the nightly recorded no release to default to')
     steps = a.steps.split(',')
     unknown = [s for s in steps if s not in STEPS]
     if unknown:

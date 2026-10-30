@@ -63,6 +63,47 @@ def command(argv, timeout=30):
     return r.stdout
 
 
+def release_records(state=None):
+    """The nightly's own build records, newest first: <state>/releases/*/build-info.json.
+    The state directory is the nightly command's default (~/.richos-nightly) unless
+    RICHOS_NIGHTLY_STATE_DIR names another."""
+    root = Path(state or os.environ.get('RICHOS_NIGHTLY_STATE_DIR') or Path.home() / '.richos-nightly') / 'releases'
+    records = []
+    for path in root.glob('*/build-info.json'):
+        try:
+            info = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(info, dict) and info.get('source_commit'):
+            records.append(info)
+    return sorted(records, key=lambda i: str(i.get('created_at') or ''), reverse=True)
+
+
+def built_from_matches(built, expect, records=None):
+    """Whether the build commit the app reports is the one under test. `expect` is either that
+    commit itself or the nightly's source commit: the app reports the commit the release was built
+    from (build_commit, the version bump on top of the source), and the nightly's own record names
+    both for a release, so either spelling finds the same release."""
+    if not expect or not built:
+        return False
+    if built.startswith(expect):
+        return True
+    for info in release_records() if records is None else records:
+        build = info.get('build_commit') or ''
+        if build and build.startswith(built) and (str(info.get('source_commit')).startswith(expect)
+                                                  or build.startswith(expect)):
+            return True
+    return False
+
+
+def latest_build_commit(records=None):
+    """The build commit of the newest release the nightly recorded, or '' when it recorded none."""
+    for info in release_records() if records is None else records:
+        if info.get('build_commit'):
+            return info['build_commit']
+    return ''
+
+
 class Walk:
     def __init__(self, a):
         self.a = a
@@ -187,7 +228,7 @@ class Walk:
     def identity(self):
         line = guest(self.vm, 'grep -m1 "this app: built from" ' + shlex.quote(self.payload + '/app.log'))
         built = line.rsplit(' ', 1)[-1]
-        if not built.startswith(self.a.expect_sha):
+        if not built_from_matches(built, self.a.expect_sha):
             raise StepFailed(f'the running app was built from {built}, not {self.a.expect_sha}')
         self.facts['built_from'] = built
         return {'built_from': built}

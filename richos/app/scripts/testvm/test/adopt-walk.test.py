@@ -125,6 +125,43 @@ class FirstRunSheets(unittest.TestCase):
         self.assertEqual(state['pressed'], [])
 
 
+class Identity(unittest.TestCase):
+    """The app reports the commit its release was built from (the version bump on top of the source);
+    the nightly's own records name both for a release."""
+
+    RECORDS = [{'source_commit': 'aaaa1111aaaa1111', 'build_commit': 'bbbb2222bbbb2222', 'created_at': '2'},
+               {'source_commit': 'cccc3333cccc3333', 'build_commit': 'dddd4444dddd4444', 'created_at': '1'}]
+
+    def test_the_source_commit_of_the_release_accepts_its_build_commit(self):
+        self.assertTrue(walk.built_from_matches('bbbb2222b', 'aaaa1111', self.RECORDS))
+
+    def test_the_build_commit_itself_is_accepted(self):
+        self.assertTrue(walk.built_from_matches('bbbb2222bbbb2222', 'bbbb2222', self.RECORDS))
+
+    def test_another_releases_build_commit_is_refused(self):
+        self.assertFalse(walk.built_from_matches('dddd4444d', 'aaaa1111', self.RECORDS))
+
+    def test_a_commit_no_record_names_is_refused(self):
+        self.assertFalse(walk.built_from_matches('eeee5555e', 'aaaa1111', self.RECORDS))
+        self.assertFalse(walk.built_from_matches('', 'aaaa1111', self.RECORDS))
+        self.assertFalse(walk.built_from_matches('bbbb2222b', '', self.RECORDS))
+
+    def test_the_default_is_the_newest_releases_build_commit(self):
+        self.assertEqual(walk.latest_build_commit(self.RECORDS[::-1][::-1]), 'bbbb2222bbbb2222')
+        self.assertEqual(walk.latest_build_commit([]), '')
+
+    def test_records_are_read_from_the_nightly_state_directory(self):
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        for name, created in (('v1', '1'), ('v2', '2')):
+            (root / 'releases' / name).mkdir(parents=True)
+            (root / 'releases' / name / 'build-info.json').write_text(json.dumps(
+                {'source_commit': 's' + name, 'build_commit': 'b' + name, 'created_at': created}))
+        (root / 'releases' / 'v0').mkdir()
+        (root / 'releases' / 'v0' / 'build-info.json').write_text('not json')
+        self.assertEqual([r['build_commit'] for r in walk.release_records(root)], ['bv2', 'bv1'])
+
+
 class OpenEnabled(unittest.TestCase):
     """wait_open_enabled against a scripted chooser: the click waits for Open to be enabled."""
 
