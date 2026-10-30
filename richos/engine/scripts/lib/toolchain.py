@@ -276,24 +276,6 @@ def effective(words, env):
     return argv, lookup
 
 
-_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n")
-
-
-def _command_level_heredocs(text):
-    """(command line, body) for each heredoc whose head is not inside another heredoc's body
-    (review 2026-10-30: `cat > notes.sh <<'SCRIPT'` holding `bash <<'BUILD'` only writes a file)."""
-    out, resume = [], 0
-    for m in _HEREDOC.finditer(text):
-        if m.start() < resume:
-            continue  # part of an earlier heredoc's body, which its own command decides about
-        start = m.end()
-        end = re.search(r"^\s*%s\s*$" % re.escape(m.group(2)), text[start:], re.M)
-        body = text[start:start + end.start()] if end else text[start:]
-        resume = start + end.end() if end else len(text)
-        out.append((text[text.rfind("\n", 0, m.start()) + 1:m.start()], body))
-    return out
-
-
 def _scan(text, env, found, depth=0):
     if depth > 6:
         return
@@ -333,7 +315,8 @@ def _scan(text, env, found, depth=0):
     # A heredoc fed to a shell is commands (review 2026-10-30: `bash <<'EOF'` running
     # /usr/bin/make passed). Written to a file or sent to the guest, it is text, and so is any
     # heredoc inside it: only heredocs whose head is at command level are read here.
-    for head, body in _command_level_heredocs(text):
+    from host_sleep import heredocs  # noqa: E402  (one heredoc scan for the Bash rules)
+    for head, body in heredocs(text):
         head_cmds, _ = tokenize(head)
         for words in head_cmds:
             argv, local = effective(words, env)

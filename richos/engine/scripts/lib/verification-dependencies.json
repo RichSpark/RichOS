@@ -17302,7 +17302,7 @@
     },
     "scripts/lib/host_sleep.py": {
       "source": "scripts/lib/host_sleep.py",
-      "sha256": "3b703ca2ad2192a698f1cb372cae5d13ae04732e176b13cf56dbdc616facf11e",
+      "sha256": "a45eaf6e727256b27e07f6035d483484d0243831942e336bef79afdcc8a8c59b",
       "keys": [],
       "edges": [
         {
@@ -17313,7 +17313,7 @@
     },
     "scripts/hooks/guard-host-sleep.test.sh": {
       "source": "scripts/hooks/guard-host-sleep.test.sh",
-      "sha256": "223ccbaffffced6c5433ad917ca15ae7e01f51b90a64f9b831346d256f770518",
+      "sha256": "184f11b46481ab7fa1a7e47ca274f5056cadb79340e98d9ea85c0a14006800ea",
       "keys": [],
       "edges": [
         {
@@ -17424,7 +17424,7 @@
     },
     "scripts/lib/toolchain.py": {
       "source": "scripts/lib/toolchain.py",
-      "sha256": "963141cf2e4435241765ec49d2316c4958ebd24f5b584d5a2d2a0f3fae6f3586",
+      "sha256": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0",
       "keys": [],
       "edges": [
         {
@@ -17438,7 +17438,7 @@
     },
     "scripts/lib/toolchain.test.py": {
       "source": "scripts/lib/toolchain.test.py",
-      "sha256": "051a8228349d41ad9aa29c51b5cd4b6a5754ff11983ded9470ff0df86b36b967",
+      "sha256": "ec023f9cee4e1c09ee474e8cc71debc41a69e3afe61d8b275d4aff1f992d587e",
       "keys": [],
       "edges": [
         {
@@ -18210,11 +18210,11 @@
         "scripts/hooks/ass-kicker.sh": "24831455bd0e065a668efa891a3d51061e9c8edf6ad9a91c86f2470165f9bc4d",
         "scripts/hooks/dialect-guard.sh": "1f11608bc4ee85f825a44997bec5b2ac261189e5e8448eceb26ef0afbee4a67a",
         "scripts/hooks/guard-host-sleep.sh": "d0106ddf90c083b368ca9f9aa3740b7fa98b8471e5650134614fc77e122a84cb",
-        "scripts/lib/host_sleep.py": "3b703ca2ad2192a698f1cb372cae5d13ae04732e176b13cf56dbdc616facf11e",
+        "scripts/lib/host_sleep.py": "a45eaf6e727256b27e07f6035d483484d0243831942e336bef79afdcc8a8c59b",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "963141cf2e4435241765ec49d2316c4958ebd24f5b584d5a2d2a0f3fae6f3586"
+        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
       }
     },
     "scripts/hooks/mechanical-findings.test.sh": {
@@ -18445,11 +18445,11 @@
         "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
         "scripts/hooks/guard-no-shell-c.sh": "aa16a1bfc430aeb3a5527d92d456cee023cf4c86018a81744cf0387156711e78",
         "scripts/hooks/guard-host-sleep.sh": "d0106ddf90c083b368ca9f9aa3740b7fa98b8471e5650134614fc77e122a84cb",
-        "scripts/lib/host_sleep.py": "3b703ca2ad2192a698f1cb372cae5d13ae04732e176b13cf56dbdc616facf11e",
+        "scripts/lib/host_sleep.py": "a45eaf6e727256b27e07f6035d483484d0243831942e336bef79afdcc8a8c59b",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "963141cf2e4435241765ec49d2316c4958ebd24f5b584d5a2d2a0f3fae6f3586"
+        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
       }
     },
     "scripts/hooks/stop-hook-visibility.test.sh": {
@@ -18686,11 +18686,11 @@
         "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838",
         "scripts/lib/shared_scratchpad.py": "3f246169938d8471e79b09b272118401d836fcd55f485397c8ba142bdd23adf3",
         "scripts/hooks/guard-host-sleep.sh": "d0106ddf90c083b368ca9f9aa3740b7fa98b8471e5650134614fc77e122a84cb",
-        "scripts/lib/host_sleep.py": "3b703ca2ad2192a698f1cb372cae5d13ae04732e176b13cf56dbdc616facf11e",
+        "scripts/lib/host_sleep.py": "a45eaf6e727256b27e07f6035d483484d0243831942e336bef79afdcc8a8c59b",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "963141cf2e4435241765ec49d2316c4958ebd24f5b584d5a2d2a0f3fae6f3586"
+        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
       },
       "evidence": "R1 checks event/matcher registrations of these five hooks. Dispatcher manifest is independently bound; no other hook registration runs."
     },
@@ -18904,11 +18904,11 @@
         "ass-kicker/ass-kicker.py": "1f866789c96ccffdb8d216cbe90cb3b17d405fe0b483ffa0dd7a51a8b07bbe61",
         "scripts/hooks/dialect-guard.sh": "1f11608bc4ee85f825a44997bec5b2ac261189e5e8448eceb26ef0afbee4a67a",
         "scripts/hooks/guard-host-sleep.sh": "d0106ddf90c083b368ca9f9aa3740b7fa98b8471e5650134614fc77e122a84cb",
-        "scripts/lib/host_sleep.py": "3b703ca2ad2192a698f1cb372cae5d13ae04732e176b13cf56dbdc616facf11e",
+        "scripts/lib/host_sleep.py": "a45eaf6e727256b27e07f6035d483484d0243831942e336bef79afdcc8a8c59b",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "963141cf2e4435241765ec49d2316c4958ebd24f5b584d5a2d2a0f3fae6f3586"
+        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
     },
