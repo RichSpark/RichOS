@@ -574,7 +574,12 @@ async function main() {
     tray = await readTray(page);
     assertEqual([tray.trayHidden, tray.chips.length], [true, 0], "the tray after Send");
     // ONE MENU: the interim menu S7 built for itself before S6's existed is gone.
-    const interim = await page.evaluate(() => document.querySelectorAll(".menu-item, .of-more, [data-dismiss=\"escape\"].op-menu").length);
+    // The shell also owns persistent resource choices. Only their closed menu is exempt;
+    // every legacy attachment menu node, and any visible resource menu, still counts.
+    const interim = await page.evaluate(() => [...document.querySelectorAll(".menu-item, .of-more, [data-dismiss=\"escape\"].op-menu")].filter((node) => {
+      const resourceMenu = node.closest("#res-menu");
+      return !resourceMenu || !resourceMenu.hidden;
+    }).length);
     assertEqual(interim, 0, "S7's interim menu or its ⋯ is still on the page");
     assertEqual(page.__errors, [], "the page logged errors");
     await page.close();
