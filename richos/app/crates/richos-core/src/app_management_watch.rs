@@ -192,12 +192,19 @@ mod tests {
         writer.flush().unwrap();
         let ledger = launch.ledger_path();
         let began = std::time::Instant::now();
-        // load-bound: hang guard only (the watcher writes the line as soon as it reads it).
-        while !ledger.is_file() && began.elapsed() < Duration::from_secs(60) {
+        // load-bound: hang guard only (the watcher writes the line as soon as it reads it). The
+        // wait ends on a complete line, not on the file: the watcher's `open(ledger, "a")` creates
+        // the file before its line is written at close (engine app_management_watch.py:116-117).
+        let mut text = String::new();
+        while began.elapsed() < Duration::from_secs(60) {
+            text = std::fs::read_to_string(&ledger).unwrap_or_default();
+            if text.ends_with('\n') {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
-        let text = std::fs::read_to_string(&ledger)
-            .unwrap_or_else(|_| panic!("nothing reached the ledger: {}", std::fs::read_to_string(launch.log_path()).unwrap_or_default()));
+        assert!(text.ends_with('\n'), "no complete line reached the ledger ({text:?}): {}",
+                std::fs::read_to_string(launch.log_path()).unwrap_or_default());
         let line: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
         assert_eq!(line["kind"], "kernel-deny");
         assert_eq!(line["paths"][0],
