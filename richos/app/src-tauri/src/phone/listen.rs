@@ -914,8 +914,8 @@ fn keepalive_comment() -> String {
 ///
 /// Written out rather than adding `percent-encoding` as a direct dependency: it is a dozen lines,
 /// and the only thing this needs is a path or one query value. **A malformed escape is left alone
-/// rather than guessed at** — and it does not matter either way, because the static route resolves
-/// by exact match against the app embedded in this binary (`phone::assets`), so a decode that
+/// rather than guessed at** — and it does not matter either way, because a credential-free `GET`
+/// resolves by exact match against two fixed paths (`routes::retired_page`), so a decode that
 /// produced a `..` component would name nothing and get the same flat 404.
 pub fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
@@ -961,14 +961,11 @@ mod tests {
         let decoded = percent_decode("/%2e%2e/private.txt");
         assert_eq!(decoded, "/../private.txt");
         assert!(decoded.split('/').any(|part| part == ".."));
-        // The app is a table compiled into this binary, so the decoded path is refused by not
-        // existing rather than by inspection (`phone::assets`). Asserted against the REAL
-        // embedded app, which is the one a request actually meets.
-        let app = super::super::assets::PhoneApp::embedded();
-        assert!(app.file("../private.txt").is_none());
-        assert!(app.file(decoded.trim_start_matches('/')).is_none());
-        // And a real one resolves, so the line above is not passing because everything fails.
-        assert!(app.file("app.js").is_some());
+        // A credential-free GET matches two fixed paths exactly (`routes::retired_page`), so the
+        // decoded path is refused by not existing rather than by inspection.
+        for path in ["/../private.txt", decoded.as_str()] {
+            assert!(!matches!(path, "/" | "/index.html" | "/sw.js"), "{path} names a served path");
+        }
     }
 
     #[test]
@@ -1008,7 +1005,7 @@ mod tests {
         let channel = Arc::new(Channel {
             devices: Arc::clone(&devices), rejected: StopSwitch::unwired(),
             api_base: Arc::new(ApiBaseDesk::only("https://example.invalid")), hub: PhoneHub::new(), bridge: Arc::new(Quiet),
-            assets: super::super::assets::PhoneApp::embedded(), vapid_public: String::new(), fingerprint_hex: String::new(),
+           vapid_public: String::new(), fingerprint_hex: String::new(),
             pairing_path: std::sync::Mutex::new(PairedVia::CONNECT),
         });
         let credential = |id: &str, body: &[u8]| {
@@ -1114,7 +1111,7 @@ mod tests {
             devices: Arc::clone(&devices), rejected: StopSwitch::unwired(),
             api_base: Arc::new(ApiBaseDesk::only("https://example.invalid")), hub: PhoneHub::new(),
             bridge: Arc::new(Held { entered: Arc::clone(&entered), gate: Arc::clone(&gate) }),
-            assets: super::super::assets::PhoneApp::embedded(), vapid_public: String::new(), fingerprint_hex: String::new(),
+           vapid_public: String::new(), fingerprint_hex: String::new(),
             pairing_path: std::sync::Mutex::new(PairedVia::CONNECT),
         });
         let mut listener = Listener::start_connect(Arc::clone(&channel), 0).expect("the Connect listener did not start");
@@ -1290,7 +1287,7 @@ mod tests {
         let channel = Arc::new(Channel {
             devices: Arc::new(DeviceDesk::open(&dir).unwrap()), rejected: StopSwitch::unwired(),
             api_base: Arc::new(ApiBaseDesk::only("https://example.invalid")), hub: PhoneHub::new(),
-            bridge: Arc::new(Quiet), assets: super::super::assets::PhoneApp::embedded(),
+            bridge: Arc::new(Quiet),
             vapid_public: String::new(), fingerprint_hex: String::new(),
             pairing_path: std::sync::Mutex::new(PairedVia::CONNECT),
         });
@@ -1357,7 +1354,7 @@ mod tests {
         let devices=Arc::new(DeviceDesk::open(&dir).unwrap());
         let channel=Arc::new(Channel {devices:Arc::clone(&devices),rejected:StopSwitch::unwired(),
             api_base:Arc::new(ApiBaseDesk::only("https://example.invalid")),hub:PhoneHub::new(),bridge:Arc::new(Quiet),
-            assets:super::super::assets::PhoneApp::embedded(),vapid_public:String::new(),fingerprint_hex:String::new(),
+           vapid_public:String::new(),fingerprint_hex:String::new(),
             pairing_path:std::sync::Mutex::new(super::super::device::PairedVia::CONNECT)});
         let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
@@ -1393,7 +1390,7 @@ mod tests {
         hub.set_live(true);
         let channel=Arc::new(Channel {devices:Arc::new(DeviceDesk::open(&dir).unwrap()),rejected:StopSwitch::unwired(),
             api_base:Arc::new(ApiBaseDesk::only("https://example.invalid")),hub:Arc::clone(&hub),bridge:Arc::new(Quiet),
-            assets:super::super::assets::PhoneApp::embedded(),vapid_public:String::new(),fingerprint_hex:String::new(),
+           vapid_public:String::new(),fingerprint_hex:String::new(),
             pairing_path:std::sync::Mutex::new(super::super::device::PairedVia::CONNECT)});
 
         hub.publish("message",1,"{\"n\":1}".into()).unwrap();
@@ -2069,7 +2066,7 @@ mod tests {
                 thread: thread.clone(),
                 entity,
             }) as Arc<dyn Bridge>,
-            assets: crate::phone::assets::PhoneApp::embedded(),
+           
             vapid_public: vapid.application_server_key(),
             fingerprint_hex: ca.fingerprint_hex(),
             pairing_path: std::sync::Mutex::new(crate::phone::device::PairedVia::HOME),
@@ -2213,7 +2210,7 @@ mod tests {
                 thread: thread.clone(),
                 entity,
             }) as Arc<dyn Bridge>,
-            assets: crate::phone::assets::PhoneApp::embedded(),
+           
             vapid_public: vapid.application_server_key(),
             fingerprint_hex: ca.fingerprint_hex(),
             pairing_path: std::sync::Mutex::new(crate::phone::device::PairedVia::HOME),
@@ -2235,36 +2232,34 @@ mod tests {
         let client = TlsClient::new(&ca.ca_der, https_port, &names.bonjour);
         let phone = crate::phone::device::tests::Phone::new();
 
-        // 0. THE APP LOADS — and it is numbered zero because it happens before everything else
-        //    below it: the phone fetches the app in order to have a pairing screen at all.
-        //
-        //    THIS IS THE STEP THE CHANNEL HAD NEVER HAD, and its absence is what let a bundle
-        //    ship with no phone app in it for a day. The channel here is built with
-        //    `PhoneApp::embedded()` — the real table this build compiled in, not a fixture — so
-        //    a build that embedded nothing, or embedded the wrong bytes, fails right here over
-        //    a real TLS socket.
+        // 0. THE PHONE WEB PAGE IS RETIRED (CEO, 2026-10-30), over a real TLS socket. A phone
+        //    camera that scans the pairing QR code opens this origin in a browser: it gets the
+        //    plain answer, never the old web app, and none of the web app's files are served.
+        //    On `main` before this change, `/` was the web app and every path below was a 200.
         let (status, headers, body) = client.request("GET", "/", &[], b"");
-        assert_eq!(status, 200, "the phone app did not load: {}", String::from_utf8_lossy(&body));
+        assert_eq!(status, 200, "the plain answer did not load: {}", String::from_utf8_lossy(&body));
         assert_eq!(header_of(&headers, "content-type"), Some("text/html; charset=utf-8"));
-        let shell = String::from_utf8_lossy(&body).into_owned();
-        assert!(shell.contains("<script src=\"/app.js\""), "what loaded is not the phone app: {shell}");
-        for (path, content_type) in [
-            ("/app.js", "text/javascript; charset=utf-8"),
-            ("/sw.js", "text/javascript; charset=utf-8"),
-            ("/styles.css", "text/css; charset=utf-8"),
-            ("/manifest.webmanifest", "application/manifest+json"),
-            ("/icons/icon-192.png", "image/png"),
+        let page = String::from_utf8_lossy(&body).into_owned();
+        assert!(page.contains("Use the RichConnect app"), "what loaded is not the plain answer: {page}");
+        assert!(!page.contains("<script"), "the plain answer carries a script: {page}");
+        for path in [
+            "/app.js",
+            "/styles.css",
+            "/manifest.webmanifest",
+            "/icons/icon-192.png",
+            "/lib/api.js",
+            "/README.md",
+            "/package.json",
+            "/test/api.test.js",
+            "/../private.txt",
         ] {
-            let (status, headers, body) = client.request("GET", path, &[], b"");
-            assert_eq!(status, 200, "{path} is not served");
-            assert_eq!(header_of(&headers, "content-type"), Some(content_type), "{path}");
-            assert!(!body.is_empty(), "{path} was served empty");
-        }
-        // And nothing that is not the app, over the same socket.
-        for path in ["/README.md", "/package.json", "/test/api.test.js", "/../private.txt"] {
             let (status, _h, _b) = client.request("GET", path, &[], b"");
             assert_eq!(status, 404, "{path} was served");
         }
+        let (status, headers, body) = client.request("GET", "/sw.js", &[], b"");
+        assert_eq!(status, 200, "a phone that installed the page gets no worker to remove it");
+        assert_eq!(header_of(&headers, "content-type"), Some("text/javascript; charset=utf-8"));
+        assert!(String::from_utf8_lossy(&body).contains("registration.unregister()"));
 
         // 1. PAIR. No signature: this is the request that establishes the credential.
         let pair_body = serde_json::json!({
@@ -2546,7 +2541,7 @@ mod tests {
                 thread: thread.clone(),
                 entity,
             }) as Arc<dyn Bridge>,
-            assets: crate::phone::assets::PhoneApp::embedded(),
+           
             vapid_public: vapid.application_server_key(),
             fingerprint_hex: ca.fingerprint_hex(),
             pairing_path: std::sync::Mutex::new(crate::phone::device::PairedVia::HOME),
@@ -2956,7 +2951,7 @@ mod tests {
                 thread: thread.clone(),
                 entity,
             }) as Arc<dyn Bridge>,
-            assets: crate::phone::assets::PhoneApp::embedded(),
+           
             vapid_public: vapid.application_server_key(),
             fingerprint_hex: ca.fingerprint_hex(),
             pairing_path: std::sync::Mutex::new(crate::phone::device::PairedVia::HOME),
@@ -3191,7 +3186,7 @@ mod tests {
             api_base: Arc::new(ApiBaseDesk::only(TEST_API_BASE)),
             hub: Arc::clone(&hub),
             bridge: Arc::new(NoBridge) as Arc<dyn Bridge>,
-            assets: crate::phone::assets::PhoneApp::embedded(),
+           
             vapid_public: vapid.application_server_key(),
             fingerprint_hex: ca.fingerprint_hex(),
             pairing_path: std::sync::Mutex::new(crate::phone::device::PairedVia::TAILNET),
@@ -3501,7 +3496,7 @@ mod tests {
             api_base: Arc::new(ApiBaseDesk::only(TEST_API_BASE)),
             hub: PhoneHub::new(),
             bridge,
-            assets: crate::phone::assets::PhoneApp::embedded(),
+           
             vapid_public: vapid.application_server_key(),
             fingerprint_hex: ca.fingerprint_hex(),
             pairing_path: StdMutex::new(crate::phone::device::PairedVia::TAILNET),

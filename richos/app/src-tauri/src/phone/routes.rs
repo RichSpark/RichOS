@@ -1,10 +1,11 @@
 //! **THE FOUR ROUTES, AND THE FLAT 404 EVERYTHING ELSE GETS.** Plan §2.5 item 5, and the wire
 //! contract `docs/architecture/phone-channel.md`.
 //!
-//! **RECONCILED 2026-09-18 with the landed phone app.** Every route name, header, field name and
-//! status code below comes from `richos/web/web-app/lib/api.js`, which shipped first (`dfa7ed27`).
-//! The phone is a tested artifact and this Rust was not yet reachable from anywhere, so this is
-//! the side that moved.
+//! **RECONCILED 2026-09-18 with the phone client.** Every route name, header, field name and
+//! status code below comes from the reference client module `richos/web/web-app/lib/api.js`,
+//! which shipped first (`dfa7ed27`) and which the conformance corpus both native apps pass is
+//! generated from (`richos/mobile/conformance`). This Rust was not yet reachable from anywhere
+//! then, so this is the side that moved.
 //!
 //! # Why this file has no socket in it
 //!
@@ -22,15 +23,16 @@
 //! | 2 | `GET /api/events` — the stream, or the backfill when `before=` is present | the same, in the query as `auth=` |
 //! | 3 | `GET /api/audio/<message_id>` | `Authorization: RichOS-Device …` |
 //! | 4 | `POST /api/pair` — pairing with a code, or the device record when authenticated | the code, or the signature |
-//! | — | `GET /` and the static shell | none, and none is possible — see below |
+//! | — | `GET /` and `GET /sw.js` | none — see below |
 //!
-//! **The static shell has no credential and cannot have one.** The phone loads the app in order to
-//! pair, so a lock here would be a lock whose key is behind the lock. It is safe because of what
-//! those files are: the shell only, with no conversation in it. Everything with his words in it is
-//! behind a signature.
+//! **THE PHONE WEB PAGE IS RETIRED** (CEO, 2026-10-30: *"yes, the phone web page needs to be
+//! retired now"*). This port used to serve a web app to the phone's browser. The native RichConnect
+//! apps replaced it, and they use only the four routes above. What is left without a credential is
+//! two fixed answers for a browser that still opens this address — the pairing link in the QR code
+//! is `<origin>/#pair=<code>`, which a phone camera opens in a browser — see [`RETIRED_PAGE`] and
+//! [`RETIRE_WORKER`]. Neither carries anything from the conversation.
 
 use super::api_base::ApiBaseDesk;
-use super::assets::PhoneApp;
 use super::device::{parse_authorization, platform_of_name, DeviceDesk, Platform, Presented, Refusal};
 use super::push::Subscription;
 use super::rows::rows_from_payload;
@@ -246,10 +248,6 @@ pub struct Channel {
     pub api_base: Arc<ApiBaseDesk>,
     pub hub: Arc<PhoneHub>,
     pub bridge: Arc<dyn Bridge>,
-    /// The static phone app, compiled into this executable by `build.rs` ([`super::assets`]).
-    /// An app with no files in it serves `/` as a 404 like anything else — never a
-    /// placeholder page, because a placeholder that looks like the app is worse than nothing.
-    pub assets: PhoneApp,
     pub vapid_public: String,
     /// The certificate authority's SHA-256 as colon-separated hex. **The Mac sends the hash and
     /// the phone renders the six words itself** (`web/web-app/lib/fingerprint.js`): *"if the Mac
@@ -305,7 +303,7 @@ pub fn dispatch(channel: &Channel, request: &Incoming) -> Outcome {
         ("GET", "/api/messages") => rich_file(channel, request),
         ("GET", "/api/events") => events(channel, request),
         ("GET", path) if path.starts_with("/api/audio/") => audio(channel, request, &path[11..]),
-        ("GET", path) => static_asset(channel, path),
+        ("GET", path) => retired_page(path),
         _ => Outcome::NotFound,
     }
 }
@@ -1130,33 +1128,55 @@ fn rich_file(channel: &Channel, request: &Incoming) -> Outcome {
 }
 
 // -------------------------------------------------------------------------------------
-// The static shell
+// The retired phone web page
 // -------------------------------------------------------------------------------------
 
-fn static_asset(channel: &Channel, path: &str) -> Outcome {
-    // `strip_prefix`, ONE slash, deliberately not `trim_start_matches`. Stripping every leading
-    // slash would make `//app.js` and `/app.js` the same request — two URLs for one resource.
-    let relative = if path == "/" {
-        "index.html"
-    } else {
-        match path.strip_prefix('/') {
-            Some(rest) => rest,
-            None => return Outcome::NotFound,
-        }
+/// **What a phone's browser gets at `/` now that the phone web page is retired** (CEO,
+/// 2026-10-30). A plain page, no script, nothing from the conversation, that says where to go
+/// instead. A phone camera that scans the pairing QR code opens `<origin>/#pair=<code>` in a
+/// browser; the fragment never reaches this Mac, so this is what that person sees.
+///
+/// Colors, computed rather than eyeballed (WCAG 2 relative luminance): `#1a1a1a` on `#ffffff`
+/// is 17.40:1 in light mode and `#f2f2f2` on `#141414` is 16.46:1 in dark mode, both far over
+/// the 4.5:1 floor for normal text.
+pub const RETIRED_PAGE: &str = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<meta name=\"color-scheme\" content=\"light dark\"><title>Use the RichConnect app</title>\
+<style>body{font:18px/1.5 -apple-system,system-ui,sans-serif;margin:0;padding:48px 24px;\
+background:#ffffff;color:#1a1a1a}main{max-width:32em;margin:0 auto}h1{font-size:24px}\
+@media (prefers-color-scheme:dark){body{background:#141414;color:#f2f2f2}}</style></head>\
+<body><main><h1>Use the RichConnect app</h1>\
+<p>RichOS no longer has a phone web page. To talk to Rich from your phone, use the RichConnect \
+app: open it and scan the code your Mac shows.</p></main></body></html>\n";
+
+/// **What a phone that once installed the web page gets when its browser asks for `/sw.js`.**
+///
+/// That page installed a service worker which kept its whole shell in the browser's cache, so
+/// a phone that had it would keep opening the old page from its own cache and never ask this
+/// Mac for `/` at all. A browser checks a registered worker's script for a newer version when
+/// the page opens; this is the newer version. It deletes the old caches, unregisters itself
+/// (which also ends the old page's push subscription) and reloads the open page, which then
+/// gets [`RETIRED_PAGE`] from this Mac. A browser that never had the page never asks for it.
+pub const RETIRE_WORKER: &str = "// RichOS retired its phone web page. This removes it from this browser.\n\
+self.addEventListener('install', () => self.skipWaiting());\n\
+self.addEventListener('activate', (event) => event.waitUntil((async () => {\n\
+  for (const key of await caches.keys()) await caches.delete(key);\n\
+  await self.registration.unregister();\n\
+  for (const client of await self.clients.matchAll({ type: 'window' })) client.navigate(client.url);\n\
+})()));\n";
+
+/// Every credential-free `GET`: the two fixed answers, and the flat 404 for everything else,
+/// including every file the retired page used to be made of.
+fn retired_page(path: &str) -> Outcome {
+    let (content_type, body) = match path {
+        "/" | "/index.html" => ("text/html; charset=utf-8", RETIRED_PAGE),
+        "/sw.js" => ("text/javascript; charset=utf-8", RETIRE_WORKER),
+        _ => return Outcome::NotFound,
     };
-    // ONE LOOKUP, EXACT, against the table this build compiled in. What used to be here was a
-    // `safe_join` against a directory on disk: it refused `..`, `.`, empty segments, null bytes
-    // and absolute paths by inspection, then canonicalized the result and required it to sit
-    // inside the canonicalized root, because a symbolic link could otherwise point out of the
-    // directory. None of that is needed against a fixed set of keys, and none of it is missing:
-    // every one of those probes is simply a name this build never embedded, so it misses here
-    // and gets the same flat 404 as any other unknown path. `PhoneApp::file` says the same
-    // thing from the other side, and the tests below still fire every probe at this route.
-    let Some((content_type, bytes)) = channel.assets.file(relative) else { return Outcome::NotFound };
     Outcome::Bytes {
         status: 200,
         content_type: content_type.to_string(),
-        body: bytes.to_vec(),
+        body: body.as_bytes().to_vec(),
         download_as: None,
     }
 }
@@ -1237,18 +1257,6 @@ mod tests {
         assert!(refusal_log_due(&mut last, start + std::time::Duration::from_secs(10)));
         assert!(!refusal_log_due(&mut last, start));
     }
-
-    /// A stand-in for the embedded phone app: two files, named as the real table names
-    /// them. These tests are about the ROUTE — which paths reach the app and which get a
-    /// flat 404 — so a two-entry table says everything a 31-entry one would, and says it
-    /// without tying the route's tests to the phone app's contents.
-    ///
-    /// That the REAL table holds the real files, byte for byte, is asserted in
-    /// `super::super::assets`, where it belongs.
-    const TEST_APP: &[(&str, &[u8])] = &[
-        ("index.html", b"<!doctype html><title>Rich</title>"),
-        ("app.js", b"// the phone app"),
-    ];
 
     struct TempDir(PathBuf);
     impl TempDir {
@@ -1393,7 +1401,6 @@ mod tests {
             api_base: Arc::new(ApiBaseDesk::only("https://mm1.tail9a3b2.ts.net:8443")),
             hub,
             bridge: Arc::clone(&bridge) as Arc<dyn Bridge>,
-            assets: PhoneApp::from_files(TEST_APP),
             vapid_public: "BExampleVapidKey".into(),
             fingerprint_hex: "3D:9C:A1".into(),
             pairing_path: Mutex::new(crate::phone::device::PairedVia::HOME),
@@ -2249,39 +2256,69 @@ mod tests {
         }
     }
 
-    // --- the static shell -----------------------------------------------------------------------
+    // --- the retired phone web page --------------------------------------------------------------
+
+    /// **THE PAGE IS RETIRED, AND A BROWSER THAT OPENS THE ADDRESS IS TOLD WHERE TO GO** (CEO,
+    /// 2026-10-30). `/` and `/index.html` give the plain page, with no credential; on `main` before
+    /// this change they gave the web app's own `index.html`.
+    #[test]
+    fn a_browser_at_the_old_address_gets_the_plain_answer_and_no_web_app() {
+        let f = fixture_with("retired", false, false, 4);
+        for path in ["/", "/index.html"] {
+            match dispatch(&f.channel, &plain("GET", path)) {
+                Outcome::Bytes { status, content_type, body, .. } => {
+                    assert_eq!(status, 200, "{path}");
+                    assert_eq!(content_type, "text/html; charset=utf-8", "{path}");
+                    let page = String::from_utf8(body).unwrap();
+                    assert!(page.contains("Use the RichConnect app"), "{path}: {page}");
+                    assert!(!page.contains("<script"), "{path} carries a script: {page}");
+                }
+                other => panic!("{path}: {other:?}"),
+            }
+        }
+    }
 
     #[test]
-    fn the_shell_is_served_without_a_credential_because_the_phone_needs_it_to_pair() {
-        let f = fixture_with("shell", false, false, 4);
-        match dispatch(&f.channel, &plain("GET", "/")) {
+    fn every_file_the_web_app_was_made_of_is_a_flat_404() {
+        let f = fixture("retired-files");
+        for path in [
+            "/app.js",
+            "/styles.css",
+            "/manifest.webmanifest",
+            "/lib/api.js",
+            "/lib/oxford-comma.js",
+            "/icons/icon-192.png",
+            "/icons/apple-touch-icon.png",
+            "/not-a-file.js",
+            "/assets/",
+        ] {
+            assert_eq!(dispatch(&f.channel, &plain("GET", path)), Outcome::NotFound, "{path} was served");
+        }
+    }
+
+    /// A phone that installed the page has a service worker serving it from the browser's cache;
+    /// its browser checks `/sw.js` for a newer version, and the newer version removes it.
+    #[test]
+    fn the_old_service_worker_is_replaced_by_one_that_removes_the_page() {
+        let f = fixture("retire-worker");
+        match dispatch(&f.channel, &plain("GET", "/sw.js")) {
             Outcome::Bytes { status, content_type, body, .. } => {
                 assert_eq!(status, 200);
-                assert_eq!(content_type, "text/html; charset=utf-8");
-                assert!(String::from_utf8(body).unwrap().contains("<title>Rich</title>"));
+                assert_eq!(content_type, "text/javascript; charset=utf-8");
+                let worker = String::from_utf8(body).unwrap();
+                for step in ["skipWaiting()", "caches.delete(key)", "registration.unregister()", "client.navigate(client.url)"] {
+                    assert!(worker.contains(step), "the worker does not {step}: {worker}");
+                }
+                assert!(!worker.contains("importScripts"), "it must not load anything from the retired page");
+                assert!(!worker.contains("cache.put"), "it must not cache anything");
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(dispatch(&f.channel, &plain("GET", "/app.js")).status(), 200);
     }
 
     #[test]
-    fn an_unknown_path_is_a_404_and_never_the_app_shell() {
-        // No catch-all. A phone that asks for a file we do not have must be told so, not handed
-        // an app shell that then fails in a way nobody can read.
-        let f = fixture("no-catchall");
-        assert_eq!(dispatch(&f.channel, &plain("GET", "/not-a-file.js")), Outcome::NotFound);
-        assert_eq!(dispatch(&f.channel, &plain("GET", "/assets/")), Outcome::NotFound);
-    }
-
-    #[test]
-    fn nothing_outside_the_embedded_app_can_be_reached() {
-        // **THE ATTACK SURFACE IS GONE, AND THE PROBES STAY.** These paths used to be
-        // refused by `safe_join`'s inspection and by a canonicalized-root containment
-        // check; the app is a table in the binary now, so each one is simply a key this
-        // build never compiled in. The symbolic-link case that used to sit here is NOT
-        // listed as passing — it was a property of a directory, there is no directory, and
-        // a test that writes a link nothing reads would be a green line proving nothing.
+    fn nothing_outside_the_two_fixed_answers_can_be_reached() {
+        // The probes the embedded-table route was held to, kept: every one is still a 404.
         let f = fixture("traversal");
         let outside = f.dir.0.join("private.txt");
         std::fs::write(&outside, "the CEO's conversation").unwrap();
@@ -2289,26 +2326,15 @@ mod tests {
         for probe in [
             "/../private.txt",
             "/../../etc/passwd",
-            "/./app.js",
-            "//app.js",
+            "/./index.html",
+            "//index.html",
+            "//sw.js",
             "/assets/../../private.txt",
             "/lib//api.js",
             &format!("/{}", outside.display()),
         ] {
             assert_eq!(dispatch(&f.channel, &plain("GET", probe)), Outcome::NotFound, "{probe} was served");
         }
-        assert_eq!(dispatch(&f.channel, &plain("GET", "/app.js")).status(), 200);
-    }
-
-    #[test]
-    fn a_build_with_no_phone_app_serves_nothing_rather_than_a_placeholder() {
-        // Unreachable in a shipped build — `build.rs` refuses to compile one that embedded
-        // nothing — and the route still has to answer for it, because "serve a placeholder
-        // that looks like the app" must stay a thing this code cannot do.
-        let mut f = fixture("no-assets");
-        f.channel.assets = PhoneApp::from_files(&[]);
-        assert_eq!(dispatch(&f.channel, &plain("GET", "/")), Outcome::NotFound);
-        assert_eq!(dispatch(&f.channel, &plain("GET", "/index.html")), Outcome::NotFound);
     }
 
     // --- photos and files ------------------------------------------------------------------------
