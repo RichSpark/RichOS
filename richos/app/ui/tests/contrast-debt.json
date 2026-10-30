@@ -232,6 +232,16 @@
       "checkedOverShell": 8,
       "consideredOverShell": 6
     },
+    "resources-card": {
+      "checkedOverShell": 22,
+      "consideredOverShell": 0,
+      "//": "The resource card adds eleven measured text nodes per theme. Its hidden markup is already present in the shell. Measured in an isolated calibration; later full contrast walks enforce this floor."
+    },
+    "resources-menu": {
+      "checkedOverShell": 6,
+      "consideredOverShell": 0,
+      "//": "The two view choices and the selected checkmark add three measured text nodes per theme. The hidden menu already exists in the shell. Measured in an isolated calibration; later full contrast walks enforce this floor."
+    },
     "techy-nothing-recorded": {
       "checkedOverShell": 34,
       "consideredOverShell": 22

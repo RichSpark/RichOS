@@ -1392,6 +1392,25 @@ const SURFACES = [
     },
   },
   {
+    name: "resources-card",
+    what: "the resource square's current-status card",
+    drive: async (p) => {
+      await p.hover("#res-square");
+      await p.waitForFunction(() => document.getElementById("res-card").classList.contains("is-open"));
+      await overlaySettled(p, "#res-card");
+    },
+  },
+  {
+    name: "resources-menu",
+    what: "the resource square's Ink and Readout choices",
+    drive: async (p) => {
+      await p.click("#res-square", { button: "right" });
+      await p.waitForSelector("#res-menu", { state: "visible" });
+      await p.waitForFunction(() => getComputedStyle(document.getElementById("res-card")).visibility === "hidden");
+      await overlaySettled(p, "#res-menu");
+    },
+  },
+  {
     name: "techy-scope",
     what: "§7.1's three-way scope choice — the three options the CEO picks between",
     drive: async (p) => {
@@ -1913,6 +1932,7 @@ async function main() {
     canvasInHome: 0,
     canvasInPhone: 0,
     canvasSpeckle: 0,
+    canvasResources: 0,
     svgText: 0,
     /// Which of the shell's DECLARED panels any walk actually put on screen — see check 10c.
     panelsReached: new Map(),
@@ -2147,6 +2167,33 @@ async function main() {
 
   // ---- 8. a sheet over the text is part of the answer -------------------------------------
 
+  await run.check("7.hidden  unpainted click-through layers do not obscure text; a visible veil stays unproven", async () => {
+    const page = await openApp(browser, "light");
+    const cases = await page.evaluate((script) => {
+      eval(script);
+      const host = document.createElement("div");
+      host.style.cssText = "position:fixed;left:20px;top:300px;width:180px;height:70px;z-index:99999;background:white";
+      host.innerHTML = '<p id="hidden-ghost-target" style="color:black;background:white;font-size:16px">Readable text</p><div id="hidden-ghost-veil"></div>';
+      document.body.appendChild(host);
+      const veil = host.lastElementChild;
+      const results = [];
+      for (const [kind, style] of [["display-none", "display:none"], ["hidden", "visibility:hidden"], ["transparent", "opacity:0"], ["visible", "opacity:0.25"]]) {
+        veil.style.cssText = "position:absolute;inset:0;background:white;pointer-events:none;" + style;
+        const out = window.__contrastProbe({ surface: "hidden-ghost", theme: "light" });
+        results.push({ kind,
+          measured: out.measuredPaths.includes("p#hidden-ghost-target"),
+          unproven: Object.values(out.unresolvable).some((v) => v.path === "p#hidden-ghost-target"),
+          obscured: Object.values(out.obscured).some((v) => v.path === "p#hidden-ghost-target") });
+      }
+      host.remove();
+      return results;
+    }, C.pageScript());
+    for (const c of cases.slice(0, 3)) assertEqual([c.measured, c.unproven, c.obscured], [true, false, false], c.kind + " has no painted layer");
+    assertEqual([cases[3].measured, cases[3].unproven], [false, true], "the visible click-through veil is still unproven");
+    await page.close();
+    return "display:none, visibility:hidden and zero opacity leave text measurable; the visible veil is refused";
+  });
+
   await run.check("8  a faint veil is measured THROUGH; only an aria-modal claim excuses", async () => {
     const page = await openApp(browser, "light");
     const r = await page.evaluate(async (script) => {
@@ -2287,6 +2334,7 @@ async function main() {
         seen.canvasInHome += out.canvasInHome || 0;
         seen.canvasInPhone += out.canvasInPhone || 0;
         seen.canvasSpeckle += out.canvasSpeckle || 0;
+        seen.canvasResources += out.canvasResources || 0;
         seen.svgText += out.svgTextCount;
         seen.totals.considered += out.nodesConsidered;
         seen.totals.checked += out.nodesChecked;
@@ -2951,6 +2999,9 @@ async function main() {
       seen.canvasSpeckle + " speckled-ground <canvas> element(s) (`body > canvas.speckle`) were EXCLUDED and ARE " +
       "covered, elsewhere: it carries no text, it sits behind the shell, and `tests/speckled-ground.js` proves every " +
       "text node drawn over it keeps 4.5:1 against the strongest point the engine can paint.\n          " +
+      seen.canvasResources + " <canvas> element(s) of the Mac resources square and its card (`#res-square`, " +
+      "`#res-card`) were EXCLUDED and ARE covered, elsewhere: `tests/resources.js` reads both back with " +
+      "`getImageData` and holds every paint to 3:1 against the ground it is drawn on, in both themes.\n          " +
       seen.canvasInHome + " <canvas> element(s) inside #home were EXCLUDED and are not covered here: the " +
       "home screen is round-11.1/v1 \"Constellation\", a canvas composition the CEO chose, and it is " +
       "measured from the pixels by tests/home.js instead — 16 elements, worst 4.23:1, on the rendered " +

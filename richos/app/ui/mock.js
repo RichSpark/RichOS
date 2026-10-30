@@ -222,7 +222,8 @@
   const mockConfig = (function () {
     // `rich_model`/`stu_model` stand in for config.rs's §119 pair: absent reads as Opus.
     // `oxford_comma` stands in for config.rs's Oxford comma setting: absent reads as off (CEO, 2026-10-19).
-    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false };
+    // `resources_view` stands in for config.rs's resources square view: absent reads as Ink (round 47).
+    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false, resources_view: "ink" };
     try {
       const raw = window.localStorage.getItem(MOCK_CONFIG_KEY);
       if (!raw) return fresh;
@@ -234,6 +235,7 @@
         rich_model: parsed.rich_model === "fable" ? "fable" : "opus",
         stu_model: parsed.stu_model === "fable" ? "fable" : "opus",
         oxford_comma: parsed.oxford_comma === true,
+        resources_view: parsed.resources_view === "readout" ? "readout" : "ink",
       };
     } catch (e) {
       // A corrupt or unavailable store degrades to the shipped defaults rather than
@@ -3453,6 +3455,29 @@
           mockConfig.oxford_comma = args.keep === true;
           persistMockConfig();
           return null;
+        // The resources square's view (round 47), refused rather than coerced as config.rs does.
+        case "get_resources_view":
+          return mockConfig.resources_view;
+        case "set_resources_view": {
+          const v = String(args.view);
+          if (v !== "ink" && v !== "readout") throw new Error(`unknown resources view: ${v}`);
+          mockConfig.resources_view = v;
+          persistMockConfig();
+          return null;
+        }
+        // THE SAMPLER IS THE MAC'S AND THIS HARNESS HAS NONE. A browser reads no counters, so the
+        // honest answer is the one the app gives when its sampler is not running. A walk that
+        // needs a reading hands one in as `window.__RICHOS_MOCK_RESOURCES__`, a snapshot in
+        // `system_resources.rs`'s shape or a function returning one (throwing is a failed read).
+        case "system_resources": {
+          const given = window.__RICHOS_MOCK_RESOURCES__;
+          const snap = typeof given === "function" ? given() : given;
+          if (snap) return JSON.parse(JSON.stringify(snap));
+          return {
+            version: 1, instance_id: "", status: "unavailable", age_ms: null, observed_monotonic_ms: 0,
+            current: null, history: [], detail: "The resource sampler is not running.",
+          };
+        }
         case "set_theme": {
           const t = String(args.theme);
           // Refused, not coerced, exactly as the real command refuses it: quietly writing

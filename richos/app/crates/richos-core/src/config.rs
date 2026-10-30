@@ -522,6 +522,14 @@ struct StoredConfig {
     /// never has it, whatever this says.
     #[serde(default)]
     oxford_comma: bool,
+    /// How the Mac resources square is drawn. An absent value reads as Ink,
+    /// including on installations from before the square existed.
+    ///
+    /// A plain `String`, not a closed enum, for the reason `entity` above is one: a view a later
+    /// build adds is kept verbatim rather than flattened, and [`ConfigStore::resources_view`]
+    /// answers Ink for anything this build cannot draw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resources_view: Option<String>,
     /// HOW LONG ANOTHER CONVERSATION'S RICH STAYS RUNNING WITH NOTHING TO DO, in minutes
     /// (follow-ups, "a nightly's VM boot proof cannot get a guest slot", decision 3). Past it
     /// the conversation's `claude` process is ended; his next message resumes the same session
@@ -540,6 +548,9 @@ pub const IDLE_SESSION_MINUTES_DEFAULT: u32 = 30;
 fn idle_session_minutes_default() -> u32 {
     IDLE_SESSION_MINUTES_DEFAULT
 }
+
+/// The views the resources square can be drawn in. The first is the default.
+pub const RESOURCES_VIEWS: [&str; 2] = ["ink", "readout"];
 
 impl Default for StoredConfig {
     fn default() -> Self {
@@ -563,6 +574,7 @@ impl Default for StoredConfig {
             rich_model: ModelChoice::default(),
             stu_model: ModelChoice::default(),
             oxford_comma: false,
+            resources_view: None,
             idle_session_minutes: IDLE_SESSION_MINUTES_DEFAULT,
         }
     }
@@ -1081,6 +1093,27 @@ impl ConfigStore {
             return Ok(());
         }
         self.config.oxford_comma = keep;
+        self.persist()
+    }
+
+    // ---- the Mac resources square (round 47) ---------------------------------------
+
+    /// `"ink"` or `"readout"`. Ink when nothing was chosen or the stored word is one this build
+    /// does not draw.
+    pub fn resources_view(&self) -> &'static str {
+        let stored = self.config.resources_view.as_deref();
+        RESOURCES_VIEWS.into_iter().find(|v| Some(*v) == stored).unwrap_or(RESOURCES_VIEWS[0])
+    }
+
+    /// Save his choice. A word that is not a view is refused rather than coerced.
+    pub fn set_resources_view(&mut self, view: &str) -> io::Result<()> {
+        if !RESOURCES_VIEWS.contains(&view) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unknown resources view: {view}")));
+        }
+        if self.config.resources_view.as_deref() == Some(view) {
+            return Ok(());
+        }
+        self.config.resources_view = Some(view.to_string());
         self.persist()
     }
 
@@ -2317,6 +2350,45 @@ mod tests {
         assert_eq!(store.font_scale(), 135);
         assert_eq!(store.theme(), Theme::System, "and the untouched preference is untouched");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_resources_square_is_ink_by_default_and_readout_survives_a_reopen() {
+        let path = tmp_path("resources-view-durable");
+        if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+        {
+            let mut store = ConfigStore::open(&path).unwrap();
+            assert_eq!(store.resources_view(), "ink", "a first run draws Ink");
+            assert!(store.set_resources_view("dock").is_err(), "a word that is not a view is refused");
+            store.set_idle_session_minutes(0).unwrap();
+            store.set_resources_view("readout").unwrap();
+        }
+        {
+            let mut store = ConfigStore::open(&path).unwrap();
+            assert_eq!(store.resources_view(), "readout", "his choice survives a reopen");
+            assert_eq!(store.idle_session_minutes(), 0, "saving the view keeps the idle-session choice");
+            store.set_resources_view("ink").unwrap();
+        }
+        assert_eq!(ConfigStore::open(&path).unwrap().resources_view(), "ink");
+
+        // A returning user's file from before the square (no key) reads as Ink, and a view a
+        // later build wrote is drawn as Ink here and kept verbatim when something else is saved.
+        let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("resources_view");
+        std::fs::write(&path, json.to_string()).unwrap();
+        assert_eq!(ConfigStore::open(&path).unwrap().resources_view(), "ink", "no key reads as Ink");
+        json["resources_view"] = serde_json::json!("sparkline");
+        std::fs::write(&path, json.to_string()).unwrap();
+        {
+            let mut store = ConfigStore::open(&path).unwrap();
+            assert_eq!(store.resources_view(), "ink");
+            store.set_oxford_comma(true).unwrap();
+        }
+        let kept: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(kept["resources_view"], "sparkline", "a later build's view is not flattened");
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

@@ -2145,10 +2145,12 @@ measures age; comparison with the awake clock discards sleep intervals. A stoppe
 or crashed sampler returns unavailable. Unsupported platforms do not report fake
 zeroes. There is no per-second disk log or process enumeration.
 
-CPU percentages describe the whole Mac on a 0–100 scale. Used memory is anonymous
-pages less purgeable pages, plus wired pages and the physical compressor footprint;
-file cache is excluded. This definition does not promise exact parity with Activity
-Monitor's accounting. Pressure is `normal`, `warning`, `critical` or `unknown`.
+CPU user (including nice), system and idle are shares of all cores together on a
+0–100 scale. Used memory is anonymous pages less purgeable pages, plus wired pages
+and the physical compressor footprint; file cache is excluded. The native module's
+unit test pins that formula on fixed counters. This definition does not promise
+exact parity with Activity Monitor's accounting. Pressure is the kernel's level:
+`normal`, `warning`, `critical` or `unknown`.
 
 The desktop `system_resources` command reads the same cache. For a diagnostic read
 without opening a window, run the app executable with `--system-resources <absolute

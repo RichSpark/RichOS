@@ -163,6 +163,35 @@ fn sample(
     })
 }
 
+/// The `host_statistics64(HOST_VM_INFO64)` page counts used by the resource snapshot.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct VmPages {
+    internal: u64,
+    purgeable: u64,
+    wired: u64,
+    compressor: u64,
+}
+
+/// Anonymous pages less purgeable pages, plus wired pages and the physical compressor
+/// footprint. File cache and the compressor's uncompressed size are excluded. These are
+/// XNU's native page counters; the formula does not promise exact parity with Activity
+/// Monitor's private accounting. See osfmk/mach/vm_statistics.h in XNU.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn memory_used_from_vm_pages(p: &VmPages, page_size: u64) -> Result<u64, String> {
+    let app = p
+        .internal
+        .checked_sub(p.purgeable)
+        .ok_or("macOS returned inconsistent memory counters.")?;
+    let pages = app
+        .checked_add(p.wired)
+        .and_then(|n| n.checked_add(p.compressor))
+        .ok_or("Memory counter overflow.")?;
+    pages
+        .checked_mul(page_size)
+        .ok_or_else(|| "Memory counter overflow.".to_string())
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
@@ -231,15 +260,15 @@ mod platform {
             }
             let page = sysctl(b"hw.pagesize\0", 0u32)? as u64;
             let total = sysctl(b"hw.memsize\0", 0u64)?;
-            // Anonymous pages less purgeable, plus wired and the physical compressor footprint.
-            // File cache is excluded. XNU vm_statistics.h counts speculative pages within free_count.
-            // https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/vm_statistics.h
-            let pages = (vm.internal_page_count as u64
-                + vm.wire_count as u64
-                + vm.compressor_page_count as u64)
-                .checked_sub(vm.purgeable_count as u64)
-                .ok_or("macOS returned inconsistent memory counters.")?;
-            let used = pages.checked_mul(page).ok_or("Memory counter overflow.")?;
+            let used = memory_used_from_vm_pages(
+                &VmPages {
+                    internal: vm.internal_page_count as u64,
+                    purgeable: vm.purgeable_count as u64,
+                    wired: vm.wire_count as u64,
+                    compressor: vm.compressor_page_count as u64,
+                },
+                page,
+            )?;
             let pressure = match sysctl(b"kern.memorystatus_vm_pressure_level\0", 0i32).ok() {
                 Some(1) => "normal",
                 Some(2) => "warning",
@@ -715,6 +744,40 @@ mod tests {
         let mut bad = b.clone();
         bad.memory_used_bytes = 17;
         assert!(sample(&a, &bad, 1000, 2000, 4000).is_err());
+    }
+    /// Fixed counters distinguish the defined used-memory formula from file-cache totals
+    /// and the compressor's uncompressed size. CPU user must include nice ticks.
+    #[test]
+    fn memory_used_excludes_cache_and_cpu_user_includes_nice() {
+        const PAGE: u64 = 16_384;
+        let pages = VmPages { internal: 839_419, purgeable: 1_063, wired: 125_953, compressor: 100_257 };
+        let used = memory_used_from_vm_pages(&pages, PAGE).unwrap();
+        // App 838356 + Wired 125953 + Compressed 100257 = 1064566 pages = 17441849344 bytes.
+        assert_eq!(used, 17_441_849_344);
+        // Alternative totals from the same counters must remain distinguishable:
+        let file_backed = 464_109u64;
+        let free = 8_073u64 + 63_278; // free_count already holds speculative
+        let stored_in_compressor = 271_673u64;
+        for (wrong, what) in [
+            ((839_419 + file_backed + 125_953 + 100_257) * PAGE, "file cache counted as used"),
+            (25_769_803_776 - free * PAGE, "memsize less free"),
+            ((839_419 + 125_953 + 100_257) * PAGE, "purgeable pages left in App Memory"),
+            ((839_419 - 1_063 + 125_953 + stored_in_compressor) * PAGE, "uncompressed size as Compressed"),
+        ] {
+            assert_ne!(used, wrong, "{what}");
+        }
+        assert!(memory_used_from_vm_pages(&VmPages { purgeable: 839_420, ..pages }, PAGE).is_err());
+
+        // CPU: ticks are [user, system, idle, nice] summed over every core, so the shares are of
+        // the whole Mac (Activity Monitor's User/System/Idle add up to 100%), and niced user
+        // work is User. 10 cores x 100 ticks = 1000 ticks in the second.
+        let a = counters([1_000, 2_000, 3_000, 4_000]);
+        let b = counters([1_000 + 250, 2_000 + 100, 3_000 + 600, 4_000 + 50]);
+        let s = sample(&a, &b, 1_000, 1_000, 0).unwrap();
+        assert_eq!(
+            (s.cpu_user_percent, s.cpu_system_percent, s.cpu_idle_percent, s.cpu_busy_percent),
+            (30.0, 10.0, 60.0, 40.0)
+        );
     }
     #[test]
     fn short_sleep_is_a_gap_even_with_a_sub_three_second_interval() {
