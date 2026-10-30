@@ -34,15 +34,16 @@ mutant no-lock "EP05" "$P" \
 
 # 2. THE LINE BETWEEN A SCOPED RUN AND A FULL PASS.
 mutant threshold-moved "EP01" "$P" \
-    'FULL_PASS_UNITS = 20{NL}MAIN_WAIT' \
-    'FULL_PASS_UNITS = 30{NL}MAIN_WAIT' \
+    'FULL_PASS_UNITS = 20{NL}' \
+    'FULL_PASS_UNITS = 30{NL}' \
     "A 29-unit selection would run beside the integration pass without the required slot."
 
-# 3. THE BOUND. A teammate that waits forever is a run nobody can see the end of.
+# 3. AN EXPLICIT BOUND IS HONORED. There is no default bound (a queued run waits its turn), but
+# a caller that names one (--wait) is refused with its units when it runs out.
 mutant wait-unbounded "EP04" "$P" \
-    '            if now - start >= wait:' \
+    '            if wait is not None and now - start >= wait:' \
     '            if False:' \
-    "A teammate's pass would wait with no end instead of being refused with its units."
+    "A pass given an explicit --wait would wait with no end instead of being refused with its units."
 
 # 4. THE LAND RUN GOES FIRST.
 mutant no-priority "EP07b" "$P" \

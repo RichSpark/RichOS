@@ -29,7 +29,9 @@
                            (TIMED-OUT, "stopped at its S s cap"). The merge gate passes 600.
       --run-cap S          the whole run stops at S seconds: running checks are stopped with
                            their trees and waiting ones never start, all `cancelled` with the
-                           reason, and the summary is written as for any other end. Unset: none.
+                           reason, and the summary is written as for any other end. Time the
+                           run's engine units only wait for the engine slot does not count.
+                           Unset: none.
       --sample-every S     how often the host is sampled for the run's summary (10)
       --log-dir DIR        an empty directory for evidence (default: per-checkout SSD storage
                            on macOS; retain failed/unfinished runs and the last 3 green runs)
@@ -1772,6 +1774,7 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
     previous_loop = time.monotonic()
     backoff_reason = "ready"
     backoff_refusing = False
+    slot_blocked = False  # the last pass held engine units back for the engine slot
     heartbeat = time.monotonic() + 30
     while True:
         now = time.monotonic()
@@ -1780,11 +1783,16 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
         heartbeat += held
         run_cap = getattr(args, "run_cap", None)
         if run_cap:
-            # A pause is nobody's time here either: the run's clock moves with it.
+            # A pause is nobody's time here either: the run's clock moves with it. So is a wait
+            # for the engine slot (CEO, 2026-10-30): attempt __c3r0s4 of a land gate was ended at
+            # its 900 s cap after its engine units had queued 285 s for the slot.
             args.run_started = getattr(args, "run_started", now) + held
+            if slot_blocked:
+                args.run_started += max(0.0, interval - held)
             if now - args.run_started >= run_cap:
                 end_run_at_cap(items, running, args, logdir, run_cap)
                 break
+        slot_blocked = False
         for it in order:
             if it.state == "waiting":
                 it.wait_times[it.wait_reason] = it.wait_times.get(it.wait_reason, 0.0) + interval
@@ -1945,6 +1953,7 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
                             it.state, it.rc = "not-admitted", engine_pass.REFUSED
                             it.notes.append(exc.message())
                 if not allowed:
+                    slot_blocked = True
                     for it in engine_ready:
                         it.slot_wait += interval
                         it.wait_reason = "engine-slot"
@@ -2849,7 +2858,8 @@ def run_main(argv, run_state):
     p.add_argument("--as-printed", action="store_true")
     p.add_argument("--capacity", type=int, default=max(2, int((os.cpu_count() or 4) * 0.8)))
     p.add_argument("--engine-shards", type=int, default=max(1, (os.cpu_count() or 4) // 2))
-    p.add_argument("--engine-slot-wait", type=float, help="bounded wait for the existing large engine-plan slot")
+    p.add_argument("--engine-slot-wait", type=float,
+                   help="an explicit bound on the wait for the large engine-plan slot (default: none, a run waits its turn)")
     p.add_argument("--admission-wait", type=float, default=1800)
     p.add_argument("--slot-wait", type=float, default=proof_slots.DEFAULT_WAIT_SECONDS)
     p.add_argument("--max-cpu", type=float, default=reserve.DEFAULT_MAX_CPU)

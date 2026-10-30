@@ -19,8 +19,12 @@ import hashlib
 import machine_settings as M
 
 FULL_PASS_UNITS = 20
-MAIN_WAIT = 3600
-TEAMMATE_WAIT = 1800
+# No default bound on the wait for the slot (CEO, 2026-10-30): a queued run waits its turn for as
+# long as the queue really takes. On 2026-10-30 the old 1800 s teammate bound failed P1-B's 76
+# engine units as "not-admitted" while they were only queued. The slot is a kernel-held flock that
+# frees when its holder dies, so a wait cannot outlive a dead holder. An explicit wait (--wait,
+# proof-run.py --engine-slot-wait) is still honored as a bound.
+SLOT_WAIT = None
 POLL_SECONDS = float(os.environ.get("RICHOS_ENGINE_PASS_POLL") or 2.0)   # a suite seam; never tuned
 REPORT_EVERY = 60
 REFUSED = 75
@@ -279,7 +283,7 @@ class PlanGate:
     def __init__(self, count, label, checkout, units=(), wait=None):
         self.count, self.label, self.checkout, self.units = count, label, checkout, tuple(units)
         self.main = is_main_checkout(checkout)
-        self.wait = (MAIN_WAIT if self.main else TEAMMATE_WAIT) if wait is None else wait
+        self.wait = SLOT_WAIT if wait is None else wait
         self.root = directory()
         self.slot = None
         self.priority_fd = None
@@ -317,7 +321,7 @@ class PlanGate:
             self.slot = acquire(self.count, self.label, self.checkout, self.units, wait=0,
                                 out=io.StringIO())
         except Refused as exc:
-            if self.waited + elapsed >= self.wait:
+            if self.wait is not None and self.waited + elapsed >= self.wait:
                 self.close()
                 raise Refused(self.waited, exc.rec, self.count, self.units, self.main)
             return False
@@ -443,11 +447,11 @@ class Admission:
 
 
 def acquire(count, label, checkout, units=(), wait=None, out=None):
-    """Wait for the slot, bounded and reported; return a Slot or raise Refused."""
+    """Wait for the slot, reported, bounded only by an explicit `wait`; return a Slot or raise Refused."""
     out = out or sys.stderr
     d = directory()
     main = is_main_checkout(checkout)
-    wait = (MAIN_WAIT if main else TEAMMATE_WAIT) if wait is None else float(wait)
+    wait = SLOT_WAIT if wait is None else float(wait)
     slot = os.open(os.path.join(d, "slot.lock"), os.O_RDWR | os.O_CREAT, 0o600)
     priority = os.path.join(d, "priority.lock")
     prio_fd = None
@@ -470,7 +474,7 @@ def acquire(count, label, checkout, units=(), wait=None, out=None):
                 except BlockingIOError:
                     pass
             now = time.monotonic()
-            if now - start >= wait:
+            if wait is not None and now - start >= wait:
                 os.close(slot)
                 raise Refused(now - start, holder(), count, units, main)
             if now >= next_report:
@@ -478,8 +482,10 @@ def acquire(count, label, checkout, units=(), wait=None, out=None):
                     with open(marker, "w") as fh:
                         json.dump({"pid": os.getpid(), "label": label, "checkout": checkout, "main": main,
                                    "count": count, "since": time.time()}, fh)
-                print("engine-pass: waiting %.0f s of at most %.0f s for the one-full-engine-pass slot "
-                      "(%d units); held by %s%s" % (now - start, wait, count, describe(holder()),
+                print("engine-pass: waiting %.0f s %s for the one-full-engine-pass slot "
+                      "(%d units); held by %s%s" % (now - start, "(no limit: it runs when the slot is free)"
+                                                    if wait is None else "of at most %.0f s" % wait,
+                                                    count, describe(holder()),
                                                     "" if main or not _locked(priority)
                                                     else "; a land run is waiting and goes first"),
                       file=out, flush=True)

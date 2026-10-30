@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 import subprocess
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -160,6 +162,57 @@ class FailurePolicy(unittest.TestCase):
                 self.assertTrue(all(i.admission_wait >= .5 for i in items[:-1]))
             finally:
                 holder.communicate("\n", timeout=5)
+
+    def engine_slot_fixture(self, release_after):
+        """Two engine units (FULL_PASS_UNITS patched to 2, so they need the slot) and a live holder
+        of the slot that frees it `release_after` real seconds from now. A teammate run."""
+        (self.root / "scripts").mkdir()
+        (self.root / "scripts" / "ci-shard.sh").write_text("exit 0\n")
+        slot_root = self.root / "engine-slot"
+        code = ("import sys, time; sys.path.insert(0,sys.argv[1]); import engine_pass; "
+                "s=engine_pass.acquire(20,'fixture holder',sys.argv[2],wait=0); "
+                "print('ready',flush=True); time.sleep(float(sys.argv[3]))")
+        for change in (patch.dict(os.environ, {"RICHOS_ENGINE_PASS_DIR": str(slot_root)}),
+                       patch.object(pr.engine_pass, "FULL_PASS_UNITS", 2),
+                       patch.object(pr.engine_pass, "is_main_checkout", return_value=False)):
+            change.start()
+            self.addCleanup(change.stop)
+        holder = subprocess.Popen([sys.executable, "-c", code, str(Path(pr.engine_pass.__file__).parent),
+                                   str(self.root), str(release_after)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        self.addCleanup(holder.wait, 30)
+        self.assertEqual(holder.stdout.readline().strip(), "ready")
+        holder.stdout.close()
+        return [pr.Item("engine-%d" % i, str(self.root), ["bash", "scripts/ci-shard.sh", "--only-units", str(i)])
+                for i in range(2)]
+
+    def test_engine_units_queued_past_the_old_teammate_bound_still_run(self):
+        # 2026-10-30: P1-B's teammate proof run waited its 1800 s (engine_pass.TEAMMATE_WAIT) for
+        # the engine slot and failed all 76 engine units "not-admitted" for only waiting its turn.
+        # The holder here is alive for 2 s of real time; engine_pass's clock jumps 1801 s after
+        # 0.5 s, so the run has queued past the old bound while the slot is still held.
+        units = self.engine_slot_fixture(release_after=2)
+        offset = [0.0]
+        clock = SimpleNamespace(monotonic=lambda: time.monotonic() + offset[0], time=time.time, sleep=time.sleep)
+        jump = threading.Timer(.5, lambda: offset.__setitem__(0, 1801.0))
+        jump.start()
+        self.addCleanup(jump.cancel)
+        with patch.object(pr.engine_pass, "time", clock):
+            self.run_items(units)
+        self.assertEqual([i.state for i in units], ["passed", "passed"], [i.notes for i in units])
+        self.assertTrue(all(i.slot_wait > 1 for i in units), [i.slot_wait for i in units])
+
+    def test_engine_slot_wait_does_not_consume_the_run_cap(self):
+        # 2026-10-30: land-gate attempt __c3r0s4 was ended at its run cap after its engine units
+        # had queued 285 s for the slot. Here the slot is held for 4 s and the run cap is 2.5 s:
+        # only execution counts, so the two quick units still run once the slot frees.
+        units = self.engine_slot_fixture(release_after=4)
+        self.args.engine_slot_wait = 60
+        self.args.run_cap = 2.5
+        started = time.monotonic()
+        self.run_items(units)
+        self.assertEqual([i.state for i in units], ["passed", "passed"], [i.notes for i in units])
+        self.assertGreater(time.monotonic() - started, 3.5)
 
     def test_lane_refill_avoids_global_delay_but_new_lane_still_ramps(self):
         items = [self.item("slow", "import time; time.sleep(4)", lane="a", weight=3),
