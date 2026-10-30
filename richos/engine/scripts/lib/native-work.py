@@ -165,7 +165,7 @@ def capped(command, cores=1, daemon=None):
 def wait_for_headroom(reserve, timeout=1800):
     """Wait for admission; return the total CPU percent of the admitting sample."""
     deadline = time.monotonic() + timeout
-    announced = False
+    announced = None
     while True:
         try:
             # macOS can return identical cached counters for a subsecond read.
@@ -173,13 +173,18 @@ def wait_for_headroom(reserve, timeout=1800):
             sample = reserve.host_sample()
         except BlockingIOError:
             sample = None
-        if sample is not None and not reserve._refusal(sample, reserve.DEFAULT_MAX_CPU, 16):
+        why = reserve._refusal(sample, reserve.DEFAULT_MAX_CPU, 16) if sample is not None else ''
+        if sample is not None and not why:
             return sample['cpu_user_percent'] + sample['cpu_system_percent']
+        # A nightly waiting for its test-VM guest holds every admission (reserve.py) and says so.
+        held = (sample or {}).get('held_for_nightly', '')
         if time.monotonic() >= deadline:
-            raise TimeoutError('native build admission timed out waiting for measurable CPU/memory headroom')
-        if not announced:
-            print('native-work: waiting for measurable CPU/memory headroom', file=sys.stderr, flush=True)
-            announced = True
+            raise TimeoutError('native build admission timed out waiting for measurable CPU/memory headroom'
+                               + (f'; last refusal: {why}' if why else ''))
+        if announced != (held or 'headroom'):
+            print('native-work: ' + (f'held: {held}' if held else
+                                     'waiting for measurable CPU/memory headroom'), file=sys.stderr, flush=True)
+            announced = held or 'headroom'
         time.sleep(3)
 
 

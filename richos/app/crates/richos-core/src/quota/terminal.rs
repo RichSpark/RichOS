@@ -75,12 +75,12 @@ pub fn execute(args: &[String]) -> Result<Value, String> {
     }
     if operation != "revoke" { super::reset_transport::System::validate_environment()?; }
     let service = Service::new(&data_dir()?);
-    if operation == "revoke" { return Ok(json!({"resets": service.revoke()?})); }
+    if operation == "revoke" { return Ok(json!({"resets": printed(&service.revoke()?)})); }
     let bin = std::env::var_os("QUOTA_CLAUDE_BIN").map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("claude"));
     if operation == "tick" {
         let view = service.tick(&bin, || true);
-        return Ok(json!({"actionError": if view.state == "unknown" { view.message.clone() } else { None }, "resets":view}));
+        return Ok(json!({"actionError": if view.state == "unknown" { view.message.clone() } else { None }, "resets":printed(&view)}));
     }
     let mut view = service.refresh(&bin, false);
     if operation == "approve" {
@@ -94,7 +94,21 @@ pub fn execute(args: &[String]) -> Result<Value, String> {
         view = service.approve(&offer)?;
     }
     let action_error: Option<String> = None;
-    Ok(json!({"resets":view,"actionError":action_error}))
+    Ok(json!({"resets":printed(&view),"actionError":action_error}))
+}
+
+/// **The reset record as printed, without its weekly figure** (richos-hq follow-ups.md,
+/// 7fed0bef). The record is shared by every app and terminal on this Mac and its weekly figure
+/// is whichever account last refreshed it, named nowhere; a terminal reader took it for the
+/// account in use. `quota-watch.sh` reports the weekly usage of the account it reads; the record
+/// keeps its own copy for the prepared reset action only.
+fn printed(view: &super::resets::View) -> Value {
+    let mut value = json!(view);
+    if let Some(fields) = value.as_object_mut() {
+        fields.remove("weeklyUsed");
+        fields.remove("weeklyResetsAt");
+    }
+    value
 }
 
 pub fn run(args: Vec<String>) -> i32 {

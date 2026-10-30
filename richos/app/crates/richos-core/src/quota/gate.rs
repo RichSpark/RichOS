@@ -188,6 +188,48 @@ pub struct Handoff {
     /// service from the tokens it saw (`Service::track_tokens`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub points: Option<f64>,
+    /// **What the order acted on** (richos-hq follow-ups.md:305 item 3, 7fed0bef: "a deferral
+    /// states its account and figure"): the account's label, its weekly use and the weekly point
+    /// it was left at, as the published file said them when the order went out. `None` where the
+    /// file did not say (an older app, or no weekly reading).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly_used: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly_point: Option<f64>,
+}
+
+/// `account`'s label, weekly use and weekly point in the published `view`: its own row with two
+/// or more accounts; the top level (the account in use) when it is that account.
+fn figures_of(view: &View, account: &str) -> (Option<String>, Option<f64>, Option<f64>) {
+    let week = |windows: &[super::Window]| windows.iter().find(|w| w.id == "seven_day").map(|w| w.used_percent);
+    if let Some(row) = view.accounts.iter().find(|a| a.id == account) {
+        return (Some(row.label.clone()), week(&row.windows), row.weekly_point);
+    }
+    match view.in_use.as_ref() {
+        Some(in_use) if in_use.id == account => {
+            (Some(in_use.label.clone()), week(&view.windows), view.act_at.get("seven_day").copied())
+        }
+        _ => (None, None, None),
+    }
+}
+
+/// The account a hold on `account` was judged on, for a refusal: "Work (account 2)". The same
+/// choice [`decide`] makes: `account`'s own row with two or more accounts, else the top level,
+/// which names its account in `in_use`. During a move a call can run on another account than the
+/// top level's (`View::moving`), so the top level's name alone would name the wrong one.
+pub(super) fn held_named(state: &Path, account: &str) -> String {
+    let Ok(view) = read_json::<View>(&state.join("claude-quota.json")) else {
+        return "the account in use".into();
+    };
+    if let Some(row) = view.accounts.iter().find(|a| a.id == account) {
+        return format!("{} (account {})", row.label, row.id);
+    }
+    match view.in_use {
+        Some(a) => format!("{} (account {})", a.label, a.id),
+        None => "the account in use".into(),
+    }
 }
 
 /// The call that makes the handoff commit [`HANDOFF_ORDER`] asks for: a shell command whose
@@ -246,7 +288,7 @@ fn marker_path(state: &Path, agent: &str) -> Option<std::path::PathBuf> {
 /// with its marker now written. `Some(Ok)`: already ordered, so the call is admitted without
 /// the hold — the last points of the week are for exactly this. A revoked grant still says the
 /// work ended, as it does everywhere below.
-fn handoff(payload: &Value, state: &Path, scope: &Path, account: &str) -> Option<io::Result<()>> {
+pub(super) fn handoff(payload: &Value, state: &Path, scope: &Path, account: &str) -> Option<io::Result<()>> {
     let agent = payload.get("agent_id").and_then(Value::as_str).filter(|id| !id.is_empty())?;
     let view = read_json::<View>(&state.join("claude-quota.json")).ok()?;
     if !view.leaving.iter().any(|id| id == account) {
@@ -259,7 +301,11 @@ fn handoff(payload: &Value, state: &Path, scope: &Path, account: &str) -> Option
     fs::create_dir_all(path.parent()?).ok()?;
     match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(mut file) => {
+            let (label, weekly_used, weekly_point) = figures_of(&view, account);
             let marker = Handoff {
+                label,
+                weekly_used,
+                weekly_point,
                 agent: agent.to_string(),
                 session: payload.get("session_id").and_then(Value::as_str).unwrap_or_default().to_string(),
                 account: account.to_string(),
@@ -345,9 +391,12 @@ fn wait(
             }
         }
         if started.elapsed() >= budget {
-            return Err(io::Error::other(
-                "Still waiting for a current allowance reading. No tool action was run.",
-            ));
+            // Named (follow-ups 7fed0bef item 3): the hold is this call's account's, and a reader
+            // of this refusal must not take it for another account's.
+            return Err(io::Error::other(format!(
+                "Still waiting for a current allowance reading on {}. No tool action was run.",
+                held_named(state, account),
+            )));
         }
         std::thread::sleep(tick);
     }
@@ -756,6 +805,9 @@ mod tests {
         assert_eq!(refusal(&ordered), HANDOFF_ORDER, "the order, word for word, with no quota prefix");
         let marker: Handoff = read_json(&state.join(HANDOFFS_DIR).join("helper-a.json")).unwrap();
         assert_eq!((marker.agent.as_str(), marker.session.as_str(), marker.account.as_str()), ("helper-a", "session-1", "1"));
+        // The order states the account and the figure it acted on (follow-ups 7fed0bef item 3).
+        assert_eq!((marker.label.as_deref(), marker.weekly_used), (Some("Account 1"), Some(99.)), "{marker:?}");
+        assert!(marker.weekly_point.is_some_and(|p| p > 0. && p <= 99.), "{marker:?}");
         for _ in 0..2 {
             wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO)
                 .expect("an ordered helper is admitted, never ordered twice");
@@ -765,6 +817,7 @@ mod tests {
         let other = json!({"agent_id":"helper-b","session_id":"session-2","tool_name":"Bash"});
         let held = refusal(&wait(&other, &state, &scope, "2", Duration::ZERO, Duration::ZERO).unwrap_err());
         assert!(held.starts_with("RichOS desktop quota: Still waiting"), "{held}");
+        assert!(held.contains("on Account 1 (account 1)"), "the hold names whose figure it is: {held}");
         assert!(!state.join(HANDOFFS_DIR).join("helper-b.json").exists());
 
         wait(&json!({"tool_name":"Bash","session_id":"session-1"}), &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap();

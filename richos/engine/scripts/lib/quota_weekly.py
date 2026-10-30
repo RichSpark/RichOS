@@ -61,8 +61,18 @@ def describe(reading, now):
     return "; ".join(parts) or "weekly quota: UNKNOWN (not reported)"
 
 
+APP_RUNS_RESET = "the RichOS app runs any user-approved reset itself; this watcher does not tick it"
+
+
 def reset_tick(engine):
-    helper = os.environ.get("QUOTA_RESET_HELPER") or os.path.join(engine, "scripts", "quota-reset.sh")
+    # FOR THE APP (RICHOS_APP_STATE set) NO TICK (richos-hq follow-ups.md, 7fed0bef). The tick
+    # refreshes the reset record every app and terminal on this Mac shares, under whichever account
+    # this process's environment names: from a Work lease it rewrote the record under Work's key and
+    # cleared the user's approval (resets.rs `update`). The desktop app's own monitor already runs
+    # the approved action (quota.rs `run_approved_weekly_reset`).
+    if (os.environ.get("RICHOS_APP_STATE") or "").strip():
+        return {"status": APP_RUNS_RESET}
+    helper =os.environ.get("QUOTA_RESET_HELPER") or os.path.join(engine, "scripts", "quota-reset.sh")
     try:
         result = subprocess.run([helper, "tick"], capture_output=True, text=True, timeout=120)
         if result.returncode:
@@ -81,7 +91,7 @@ def handle(args, reading, now, workers, reset_status, five_verdict):
             print("WEEKLY-QUOTA-THRESHOLD: overall weekly usage reached 99%; pause until allowance is confirmed.")
             print("  " + describe(reading, now))
             print("  Reset status: " + (reset_status.get("error") or reset_status.get("actionError") or
-                  "no successful reset has produced available weekly quota"))
+                  reset_status.get("status") or "no successful reset has produced available weekly quota"))
             print("  Send the standard message unchanged to: " + (", ".join(names) or "every working agent"))
             reset = datetime.datetime.fromtimestamp(w["resets_at"], datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if w["resets_at"] and w["resets_at"] > now else None
             print("  First, for each agent, run: python3 %s --to <agent> --reason weekly-quota%s"

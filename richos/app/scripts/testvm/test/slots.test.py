@@ -61,9 +61,14 @@ class Slots(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / 'testvm'
-        self.env = patch.dict(os.environ, {'TESTVM_ROOT': str(self.root)})
+        # The machine's own limits file never decides a floor a test asserts (the default is used).
+        limits = Path(self.tmp.name) / 'limits.env'
+        limits.write_text('')
+        self.env = patch.dict(os.environ, {'TESTVM_ROOT': str(self.root), 'RICHOS_LIMITS_FILE': str(limits)})
         self.env.start()
         os.environ.pop('TESTVM_SLOTS', None)
+        os.environ.pop('TESTVM_MEMORY_FLOOR_MB', None)
+        os.environ.pop('TESTVM_NIGHTLY_WAIT', None)
         os.environ.pop(slots.ENV, None)
         os.environ.pop('RICHOS_AGENT_OWNER', None)  # these tests wait on runs of one owner (this agent's)
 
@@ -137,18 +142,20 @@ class Slots(unittest.TestCase):
         self.assertEqual(seen[0][1], [False, False], 'no slot is held while this caller waits for the CPU')
 
     def test_a_guest_is_admitted_only_if_its_whole_ram_fits_beside_the_running_guests(self):
-        """The 2026-09-27 18:56Z numbers: 71% of 24 GB available, guest A just booting."""
-        total, ram = 24576, 7168
+        """Two guests admitted back to back must not both pass on the same free-memory reading: a
+        guest booting takes its RAM only gradually, so each running guest is still owed the rest
+        of its RAM, and the new guest's whole RAM must fit beside that plus the floor."""
+        total, ram = 16384, 5120
         fits = slots.memory_refusal({'memory_free_percent': 71}, [], resident=[], total_mb=total, ram_mb=ram)
-        self.assertEqual(fits, '', 'one guest on a 71%-available Mac fits')
+        self.assertEqual(fits, '', 'one guest on a mostly-free Mac fits')
         second = slots.memory_refusal({'memory_free_percent': 71}, ['walk-a'], resident=[50], total_mb=total,
                                       ram_mb=ram)
         self.assertIn('still owed to 1 running guest', second)
         self.assertIn('floor 4096 MB', second)
         unseen = slots.memory_refusal({'memory_free_percent': 70}, ['walk-a'], resident=[], total_mb=total,
                                       ram_mb=ram)
-        self.assertIn('7168 MB still owed', unseen, 'a guest with no visible process is owed all of its RAM')
-        settled = slots.memory_refusal({'memory_free_percent': 55}, ['walk-a'], resident=[7000], total_mb=total,
+        self.assertIn('5120 MB still owed', unseen, 'a guest with no visible process is owed all of its RAM')
+        settled = slots.memory_refusal({'memory_free_percent': 60}, ['walk-a'], resident=[5000], total_mb=total,
                                        ram_mb=ram)
         self.assertEqual(settled, '', 'a settled guest already counted in the available memory owes little')
 
@@ -161,15 +168,16 @@ class Slots(unittest.TestCase):
                      ('/Applications/WebStorm.app/Contents/MacOS/webstorm', 5300),
                      ('/Applications/Slack.app/Contents/MacOS/Slack', 900), (vm, 9000), ('/bin/ls', 5)]
         self.assertEqual(slots.top_apps(processes), [('Google Chrome', 13100), ('WebStorm', 5300), ('Slack', 900)])
-        text = slots.memory_refusal({'memory_free_percent': 40}, ['walk-a'], resident=[50], total_mb=24576,
+        text = slots.memory_refusal({'memory_free_percent': 40}, ['walk-a'], resident=[50], total_mb=16384,
                                     ram_mb=5120, processes=processes)
-        left = 40 / 100 * 24576 - (5120 - 50) - 5120
+        left = 40 / 100 * 16384 - (5120 - 50) - 5120
         self.assertIn(f'{4096 - left:.0f} MB more must be free', text)
         self.assertIn('largest apps by memory: Google Chrome 13100 MB, WebStorm 5300 MB, Slack 900 MB', text)
 
     def test_only_a_test_guest_s_own_vm_process_counts_not_docker_s_listed_first(self):
-        """2026-10-14: Docker's VM (429 MB, 11 days old) came before the guest (3,562 MB) in `ps`,
-        so the guest was charged Docker's size and a second guest was refused every time."""
+        """Docker's VM can be listed before the test guest in `ps`. Only the VM process that holds
+        the guest's own files open is the guest, so a guest is never charged Docker's (smaller)
+        size, which would make every later guest look as if it fit or be refused wrongly."""
         vm = '/System/Library/Frameworks/Virtualization.framework/x/com.apple.Virtualization.VirtualMachine'
         ps = f'  1271  439296 {vm}\n 44996 3647488 {vm}\n   99    1000 /bin/zsh\n'
         lsof = ('p1271\nn/Users/a/Library/Containers/com.docker.docker/Docker.raw\n'
@@ -216,7 +224,7 @@ class Slots(unittest.TestCase):
             self.assertEqual(slots.guest_ram_mb(), 4096)
 
     def test_a_memory_refusal_releases_the_slot_and_waits_like_a_cpu_refusal(self):
-        seen, answers = [], iter(['a guest needs 7168 MB: ...', ''])
+        seen, answers = [], iter(['a guest needs 5120 MB: ...', ''])
         now = iter(range(0, 1000, 1))
 
         def sleep(seconds):
@@ -226,7 +234,7 @@ class Slots(unittest.TestCase):
                                                        sleep=sleep, clock=lambda: next(now)):
             pass
         self.assertEqual(seen, [(30, [False, False])])
-        self.assertIn('slot waiting: a guest needs 7168 MB', err.getvalue())
+        self.assertIn('slot waiting: a guest needs 5120 MB', err.getvalue())
 
     def test_a_dead_stderr_reader_cannot_stop_a_release_halfway(self):
         class Dead(io.StringIO):
@@ -390,7 +398,7 @@ class Slots(unittest.TestCase):
         self.assertEqual(slot.read_text(), '')
 
     def test_admission_comes_first_and_a_caller_being_sampled_holds_no_slot(self):
-        """2026-10-05: the slot was taken before the CPU sample, so with the other slot running a
+        """If the slot were taken before the CPU sample, with the other slot running a
         walk, a second walk arriving during that sample was refused as if both slots ran. Now the
         slot is taken only once the run is admitted: while the CPU and memory are sampled, every
         slot is free and another walk takes one at once."""

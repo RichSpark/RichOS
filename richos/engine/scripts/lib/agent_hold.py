@@ -80,8 +80,9 @@ restores forced background execution. This is a handoff grace, not a process
 execution deadline; the host's own background limits still apply. A directly
 delivered result needs
 no collector call and is marked consumed at the next tool boundary.
-The agent waits with this module's foreground `wait` command, which checks for
-new holds every half second. A hold freezes the native task's entire owned tree;
+The agent waits with this module's foreground `wait` command, which blocks in the
+kernel until a hold appears, a running shell exits or the host appends a result
+(2026-10-28: it used to look every half second, at about 75% of a core). A hold freezes the native task's entire owned tree;
 the wait returns promptly so the queued WAIT message reaches the agent. The next
 wait stays inside the same run until release, returning at most every 270 s to
 retain the prompt cache. Native task completion retains the original output and
@@ -155,7 +156,14 @@ WAIT_MARGIN_SECONDS = 15       # the wait returns this long before its call's ti
 WAIT_CACHE_SECONDS = 270
 FOREGROUND_GRACE_MS = 6000
 FOREGROUND_DELIVERED = object()  # Host already delivered the result; no invented exit code.
-GATE_POLL_SECONDS = 1.0
+# Every wait below blocks in the kernel on what it waits for (quiet_wait.py: a process's exit,
+# a change in the hold or call-record directory, an append to the host's transcript or output
+# file) and looks again only when one happens. This is the longest it goes without looking
+# when nothing woke it: a safety net for an event no watch covers, never the way it notices.
+# 2026-10-28: the wait's 0.05 s and 0.5 s loops, each re-reading up to 4 MB of transcript per
+# call record, held about 4.6 of the Mac's 10 cores while ten agents only waited.
+WAIT_RECHECK_SECONDS = 30.0
+GATE_POLL_SECONDS = WAIT_RECHECK_SECONDS
 HOW_TO_WAIT = ("To wait, run this command with the Bash tool's timeout input set to 600000 (do not type a shell timeout prefix), and run it again each time it prints "
                "STILL WAITING: " + WAIT_COMMAND)
 REFUSED_TEXT = ("WAIT: the orchestrator has told you to wait, so this command did not run. Run it again after "
@@ -163,6 +171,48 @@ REFUSED_TEXT = ("WAIT: the orchestrator has told you to wait, so this command di
 DETACHED_TEXT = ("WAIT: the orchestrator has told you to wait while this command was running. The command is "
                  "frozen, not ended: it continues from the same point when you are resumed. " + HOW_TO_WAIT
                  + ". When you are resumed, the wait prints this command's output and exit status.")
+
+
+class _SleepWatch:
+    """quiet_wait.Watch's interface when quiet_wait.py is not beside this file (a lone copy):
+    it notices nothing and sleeps at most a second at a time, still about 0% CPU."""
+
+    def __init__(self, paths=(), pids=()):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def add_paths(self, paths):
+        pass
+
+    def add_pids(self, pids):
+        pass
+
+    def wait(self, seconds):
+        time.sleep(max(0.0, min(float(seconds), 1.0)))
+        return False
+
+
+_QUIET = []
+
+
+def _watch(paths=(), pids=()):
+    """A quiet_wait.Watch, loaded by fixed path from beside this file (realpath)."""
+    if not _QUIET:
+        here = os.path.join(os.path.dirname(os.path.realpath(__file__)), "quiet_wait.py")
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("richos_quiet_wait", here)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _QUIET.append(module.Watch)
+        except (OSError, ImportError, AttributeError):
+            _QUIET.append(_SleepWatch)
+    return _QUIET[0](paths, pids)
 
 
 # ---------------------------------------------------------------------------
@@ -976,14 +1026,14 @@ def hold(session_id, agent_id, name="", sample=0.5, session_pid=None):
         if rounds >= STOP_ROUNDS and not pending:
             break
         if pending:
-            time.sleep(0.05)
+            time.sleep(0.05)   # short on purpose: bounded by DETACH_GRACE (1.5 s) and STOP_ROUNDS, never a long wait
         # A process forked between the snapshot and the signal is caught by the next round.
         table = snapshot()
     held = {p: b for p, b in held.items() if table.get(p, {}).get("birth") == b}
     deadline = time.monotonic() + SETTLE_SECONDS
     running = sorted(p for p in held if not table[p]["stat"].startswith("T"))
     while running and time.monotonic() < deadline:
-        time.sleep(0.05)
+        time.sleep(0.05)   # short on purpose: bounded by SETTLE_SECONDS (2 s); a stop has no kernel event to block on
         table = snapshot()
         running = sorted(p for p in held if p in table and not table[p]["stat"].startswith("T"))
     stopped_seconds = time.monotonic() - t0
@@ -1043,7 +1093,7 @@ def ensure_watchdog(session_id, agent_id, current=None):
         row = snapshot().get(p.pid)
         if row:
             break
-        time.sleep(0.05)
+        time.sleep(0.05)   # short on purpose: at most 20 looks (1 s) for a process just started
     return {"pid": p.pid, "birth": row["birth"] if row else None}
 
 
@@ -1067,25 +1117,39 @@ def _registry_finished(rec):
 
 
 def watch(session_id, agent_id, registry_every=6):
-    """Poll until this hold is released by anyone; release it ourselves when every
-    recorded session process is gone or the registry records the agent finished."""
-    polls = 0
+    """Wait until this hold is released by anyone; release it ourselves when every
+    recorded session process is gone or the registry records the agent finished.
+
+    It blocks on the hold directory (a release moves the record) and on the exit of each
+    recorded session process; only the registry, which has no event, is asked on a clock
+    (every registry_every x RICHOS_AGENT_HOLD_WATCH_SECONDS, 30 s by default, as before)."""
     path = _held_path(session_id, agent_id)
+    every = _watch_seconds() * registry_every
+    next_registry = time.monotonic() + every
     while True:
-        rec = _read_json(path)
-        if not rec:
-            return 0
-        parents = rec.get("parents") or {}
-        if parents:
-            table = snapshot()
-            if not any(table.get(int(p), {}).get("birth") == b for p, b in parents.items()):
-                if _watch_release(session_id, agent_id, rec, "its session process is gone"):
-                    return 0
-        polls += 1
-        if polls % registry_every == 0 and _registry_finished(rec):
-            if _watch_release(session_id, agent_id, rec, "the registry records it finished"):
+        with _watch(paths=[os.path.dirname(path)]) as w:
+            rec = _read_json(path)
+            if not rec:
                 return 0
-        time.sleep(_watch_seconds())
+            retry = False
+            parents = rec.get("parents") or {}
+            if parents:
+                table = snapshot()
+                live = [int(p) for p, b in parents.items() if table.get(int(p), {}).get("birth") == b]
+                if not live:
+                    if _watch_release(session_id, agent_id, rec, "its session process is gone"):
+                        return 0
+                    retry = True
+                w.add_pids(live)
+            if time.monotonic() >= next_registry:
+                next_registry = time.monotonic() + every
+                if _registry_finished(rec):
+                    if _watch_release(session_id, agent_id, rec, "the registry records it finished"):
+                        return 0
+                    retry = True
+            left = max(0.0, next_registry - time.monotonic())
+            # A release that failed is tried again after the old poll gap, not at the next registry look.
+            w.wait(min(left, _watch_seconds()) if retry else left)
 
 
 def _watch_release(session_id, agent_id, rec, why):
@@ -1140,28 +1204,31 @@ def _collect(stem, rec, deadline, poll, out):
     label = "The command that was frozen%s" % (" (%s)" % what if what else "")
     status = None
     while True:
-        try:
-            with open(stem + ".status") as f:
-                status = f.read().strip()
-        except OSError:
-            status = None
-        if status:
-            break
-        row = snapshot().get(job) if isinstance(job, int) else None
-        if not row or row["birth"] != birth or row["stat"].startswith("Z"):
-            # Ended without recording a status (killed); one last look for a late status.
+        # Blocks on the job's exit and on its status file's write (the call directory), never a clock.
+        with _watch(paths=[os.path.dirname(stem)]) as w:
             try:
                 with open(stem + ".status") as f:
-                    status = f.read().strip() or None
+                    status = f.read().strip()
             except OSError:
                 status = None
-            break
-        if time.monotonic() >= deadline:
-            out.write("STILL RUNNING at %s: %s is running again and has not finished yet. Run this same "
-                      "command again, with the Bash timeout 600000, to get its output and exit status.\n"
-                      % (_clock(), label))
-            return False
-        time.sleep(poll)
+            if status:
+                break
+            row = snapshot().get(job) if isinstance(job, int) else None
+            if not row or row["birth"] != birth or row["stat"].startswith("Z"):
+                # Ended without recording a status (killed); one last look for a late status.
+                try:
+                    with open(stem + ".status") as f:
+                        status = f.read().strip() or None
+                except OSError:
+                    status = None
+                break
+            if time.monotonic() >= deadline:
+                out.write("STILL RUNNING at %s: %s is running again and has not finished yet. Run this same "
+                          "command again, with the Bash timeout 600000, to get its output and exit status.\n"
+                          % (_clock(), label))
+                return False
+            w.add_pids([job])
+            w.wait(min(poll, deadline - time.monotonic()))
     try:
         with open(stem + ".out", "rb") as f:
             body = f.read()
@@ -1181,13 +1248,17 @@ def _collect(stem, rec, deadline, poll, out):
     return True
 
 
-def native_pending_ids(session, agent):
+def native_pending_ids(session, agent, found=None):
     """Tool ids of this agent's native calls whose shell is still running or still starting.
 
-    Only mode "native" counts: the wait's own call is "exempt" and never waits on itself."""
+    Only mode "native" counts: the wait's own call is "exempt" and never waits on itself.
+    `found`, a dict, also receives what a wait blocks on: "pids", the running shells, and
+    "starting_until", the epoch time the earliest startup grace below runs out."""
     table = snapshot()
-    pending = {c["tid"] for c in calls(session, agent, table)
-               if c["mode"] == "native" and not table[c["pid"]]["stat"].startswith("Z")}
+    running = [c for c in calls(session, agent, table)
+               if c["mode"] == "native" and not table[c["pid"]]["stat"].startswith("Z")]
+    pending = {c["tid"] for c in running}
+    starting = []
     # The native tool can return its task id before the shell has started.
     # Do not let a subsequent wait race through that startup interval. A refused
     # call never writes its PID, so this grace is bounded rather than indefinite.
@@ -1200,8 +1271,12 @@ def native_pending_ids(session, agent):
                 if (meta.get("mode") == "native" and not os.path.exists(stem + ".pid")
                         and 0 <= time.time() - float(meta.get("at", 0)) < 10):
                     pending.add(name[:-5])
+                    starting.append(float(meta.get("at", 0)) + 10)
     except OSError:
         pass
+    if isinstance(found, dict):
+        found["pids"] = [c["pid"] for c in running]
+        found["starting_until"] = min(starting) if starting else None
     return pending
 
 
@@ -1248,6 +1323,78 @@ NATIVE_HANDOFF = re.compile(
     r"|Command was manually backgrounded by user with ID: (?P<manual>[A-Za-z0-9_-]+)\. )"
     r"Output is being written to: (?P<path>.+?\.output)(?:\. |\n|$)")
 
+# THE HOST'S TRANSCRIPT IS READ ONCE PER PROCESS, NOT ONCE PER CALL RECORD PER LOOK (2026-10-28).
+# native_result used to read up to 4 MB of the agent's transcript from each record's offset and
+# parse every line, for every uncollected record, at every look of a wait (every 0.5 s, and every
+# 0.05 s for up to 2 s per record once nothing ran). In the app's SDK sessions no record ever
+# binds (the host writes task output under a different session directory than the transcript's
+# sessionId), so they stayed uncollected: one agent had 222 records over an 8.5 MB transcript,
+# about 0.7 GB of JSON parsed per look. Now each transcript is indexed once: only a complete line
+# that names a tool_result is parsed (the api-request rows that fill most of it never are), and
+# a later look reads only what the host appended since. A transcript that shrank, was replaced or
+# no longer ends with the bytes this index last read is indexed again from the start.
+_TRANSCRIPTS = {}
+_BOUND = {}       # tool_use_id -> the bound host output file, so a wait can watch it change
+_TAIL = 64
+
+
+def _tool_result_rows(path, tool_use_id, start, end):
+    """Rows of the transcript at `path` carrying a tool_result for tool_use_id whose whole line
+    (newline included) lies in [start, end), in file order: exactly the lines a read of that
+    window would parse, less those that cannot match. Raises OSError as that read would."""
+    st = os.stat(path)
+    ix = _TRANSCRIPTS.get(path)
+    if ix is not None and (ix["ino"] != st.st_ino or st.st_size < ix["pos"] or start < ix["base"]):
+        ix = None
+    if ix is not None and ix["tail"]:
+        with open(path, "rb") as stream:
+            stream.seek(ix["pos"] - len(ix["tail"]))
+            if stream.read(len(ix["tail"])) != ix["tail"]:
+                ix = None
+    if ix is None:
+        ix = _TRANSCRIPTS[path] = {"ino": st.st_ino, "base": start, "pos": start, "tail": b"", "rows": {}}
+    if st.st_size > ix["pos"]:
+        with open(path, "rb") as stream:
+            stream.seek(ix["pos"])
+            raw = stream.read(st.st_size - ix["pos"])
+        complete = raw[:raw.rfind(b"\n") + 1]
+        at = ix["pos"]
+        for line in complete.split(b"\n")[:-1]:
+            line_end = at + len(line) + 1
+            if b"tool_result" in line:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    row = None
+                content = row.get("message") if isinstance(row, dict) else None
+                content = content.get("content") if isinstance(content, dict) else None
+                ids = []
+                for item in content if isinstance(content, list) else ():
+                    tid = item.get("tool_use_id") if isinstance(item, dict) else None
+                    if isinstance(tid, str) and tid not in ids:
+                        ids.append(tid)
+                for tid in ids:
+                    ix["rows"].setdefault(tid, []).append((at, line_end, row))
+            at = line_end
+        if complete:
+            ix["tail"] = complete[-_TAIL:] if len(complete) >= _TAIL else (ix["tail"] + complete)[-_TAIL:]
+            ix["pos"] = at
+    return [row for s, e, row in ix["rows"].get(tool_use_id, ()) if s >= start and e <= end]
+
+
+def _result_paths(session, agent, pending):
+    """The host files whose change can make a finished, uncollected call's result ready."""
+    paths = []
+    for _path, meta in _native_uncollected(session, agent):
+        source = meta.get("result_source")
+        if meta.get("tool_use_id") in pending or not isinstance(source, dict):
+            continue
+        for p in (source.get("transcript"), (meta.get("native_result") or {}).get("path"),
+                  _BOUND.get(meta.get("tool_use_id"))):
+            if isinstance(p, str) and p not in paths:
+                paths.append(p)
+    return paths
+
 
 def consume_foreground(session, agent):
     """A later tool boundary consumes direct delivery without another model/tool round.
@@ -1284,15 +1431,10 @@ def native_result(meta, binding_only=False):
     source = meta["result_source"]
     binding = meta.get("native_result")
     if not binding:
-        with open(source["transcript"], "rb") as stream:
-            stream.seek(source["offset"])
-            raw = stream.read(NATIVE_TRANSCRIPT_LIMIT)
-        # Ignore a trailing partial line; the host may still be appending it.
-        for line in raw.split(b"\n")[:-1]:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
+        # Only complete lines inside [offset, offset + NATIVE_TRANSCRIPT_LIMIT), as a read of
+        # that window would see them: a trailing partial line may still be being appended.
+        for row in _tool_result_rows(source["transcript"], meta["tool_use_id"], source["offset"],
+                                     source["offset"] + NATIVE_TRANSCRIPT_LIMIT):
             if (not isinstance(row, dict) or row.get("type") != "user" or
                     row.get("agentId") != source["agent"] or row.get("sessionId") != source["session"]):
                 continue
@@ -1343,6 +1485,8 @@ def native_result(meta, binding_only=False):
                 binding = meta["native_result"] = {"task": task, "path": path}
         if not binding:
             return None
+    if isinstance(binding, dict) and isinstance(binding.get("path"), str):
+        _BOUND[meta["tool_use_id"]] = binding["path"]   # only so a wait can watch this output file
     if binding_only:
         return None
     fd = os.open(binding["path"], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -1389,20 +1533,26 @@ def collect_native(session, agent, deadline, out, pending=frozenset()):
             continue
         result = None
         bound = min(deadline, time.monotonic() + 2)
+        held = _held_path(session, agent)
         while True:
-            if os.path.exists(_held_path(session, agent)):
-                notice_hold(session, agent)
-                out.write("WAIT: running work is held. " + HOW_TO_WAIT + "\n")
-                return result_code
-            try:
-                result = native_result(meta)
-            except (OSError, ValueError, TypeError) as error:
-                reason = type(error).__name__
-            else:
-                reason = "host task binding or terminal output is not available"
-            if result is not None or time.monotonic() >= bound:
-                break
-            time.sleep(0.05)
+            # Blocks on the hold directory and on the host's transcript and output file, where
+            # the result appears; it used to look again every 0.05 s, re-reading the transcript.
+            source = meta["result_source"] if isinstance(meta["result_source"], dict) else {}
+            with _watch(paths=[os.path.dirname(held), source.get("transcript")]) as w:
+                if os.path.exists(held):
+                    notice_hold(session, agent)
+                    out.write("WAIT: running work is held. " + HOW_TO_WAIT + "\n")
+                    return result_code
+                try:
+                    result = native_result(meta)
+                except (OSError, ValueError, TypeError) as error:
+                    reason = type(error).__name__
+                else:
+                    reason = "host task binding or terminal output is not available"
+                if result is not None or time.monotonic() >= bound:
+                    break
+                w.add_paths([_BOUND.get(meta.get("tool_use_id"))])
+                w.wait(bound - time.monotonic())
         if result is None:
             out.write("NATIVE RESULT UNAVAILABLE for %s: %s. No task success is established; "
                       "check its native completion notification.\n" % (meta["tool_use_id"], reason))
@@ -1461,24 +1611,32 @@ def gate(payload, poll=GATE_POLL_SECONDS):
             return 0
         path = _held_path(session, agent)
         notice = os.path.join(state_dir(), "wait-notices", "%s__%s.json" % (session, agent))
+        parent = os.getppid()
         while True:
-            held = _read_json(path)
-            if not isinstance(held, dict):
-                return 0
-            if (_read_json(notice) or {}).get("at") != held.get("at"):
-                return 0
-            if os.getppid() == 1:
-                return 0
-            time.sleep(poll)
+            # Blocks on the hold and notice directories (a release moves the record) and on the
+            # exit of the process that ran this hook; `poll` is only the longest gap between looks.
+            with _watch(paths=[os.path.dirname(path), os.path.dirname(notice)], pids=[parent]) as w:
+                held = _read_json(path)
+                if not isinstance(held, dict):
+                    return 0
+                if (_read_json(notice) or {}).get("at") != held.get("at"):
+                    return 0
+                if os.getppid() == 1:
+                    return 0
+                w.wait(poll)
     except Exception:  # a broken gate must never keep a call from running
         return 0
 
 
-def wait_resume(max_seconds=None, poll=2.0, out=sys.stdout):
+def wait_resume(max_seconds=None, poll=WAIT_RECHECK_SECONDS, out=sys.stdout):
     """Returns once this agent's hold is released, printing RESUMED and then the result of
     any foreground command the hold froze; at the bound it prints STILL WAITING (or STILL
     RUNNING) so the agent runs it again. Native task output and exit status are
-    delivered here even when no pause happened. Never ends anything."""
+    delivered here even when no pause happened. Never ends anything.
+
+    Every wait in it blocks on what it waits for (see WAIT_RECHECK_SECONDS): the hold
+    directory, the call-record directory, the exit of each running shell, the host's
+    transcript and output files. `poll` is only the longest it goes without looking."""
     agent, session = os.environ.get(TAG, ""), os.environ.get(SESSION_TAG, "")
     if not _valid_ids(session, agent):
         out.write("PAUSE-WAIT: this shell carries no agent identity (%s, %s), so there is no hold to wait "
@@ -1488,15 +1646,19 @@ def wait_resume(max_seconds=None, poll=2.0, out=sys.stdout):
         max_seconds = _wait_bound_seconds()[1]
     deadline = time.monotonic() + max_seconds
     path = _held_path(session, agent)
-    while os.path.exists(path):
-        if notice_hold(session, agent):
-            out.write("WAIT: running work is held. " + HOW_TO_WAIT + "\n")
-            return 0
-        if time.monotonic() >= deadline:
-            out.write("STILL WAITING at %s: run this same command again, with the Bash timeout 600000.\n"
-                      % _clock())
-            return 0
-        time.sleep(poll)
+    held_dir, shells = os.path.dirname(path), _shell_dir(session, agent)
+    while True:
+        with _watch(paths=[held_dir]) as w:
+            if not os.path.exists(path):
+                break
+            if notice_hold(session, agent):
+                out.write("WAIT: running work is held. " + HOW_TO_WAIT + "\n")
+                return 0
+            if time.monotonic() >= deadline:
+                out.write("STILL WAITING at %s: run this same command again, with the Bash timeout 600000.\n"
+                          % _clock())
+                return 0
+            w.wait(min(poll, deadline - time.monotonic()))
     notice_path = os.path.join(state_dir(), "wait-notices", "%s__%s.json" % (session, agent))
     notice = _read_json(notice_path)
     if notice and not notice.get("resumed"):
@@ -1507,19 +1669,27 @@ def wait_resume(max_seconds=None, poll=2.0, out=sys.stdout):
     # queued SendMessage can be delivered at this tool boundary, and as soon as
     # any finished call's result is ready, even while another call still runs.
     while True:
-        pending = native_pending_ids(session, agent)
-        if not pending or _native_ready(session, agent, pending):
-            break
-        if os.path.exists(path):
-            notice_hold(session, agent)
-            out.write("WAIT: running work is held. " + HOW_TO_WAIT + "\n")
-            return 0
-        if time.monotonic() >= deadline:
-            out.write("STILL RUNNING at %s: repeat this wait to collect the native task's completion.\n" % _clock())
-            return 0
-        time.sleep(min(poll, 0.5))
+        with _watch(paths=[held_dir, shells]) as w:
+            found = {}
+            pending = native_pending_ids(session, agent, found)
+            if not pending or _native_ready(session, agent, pending):
+                break
+            if os.path.exists(path):
+                notice_hold(session, agent)
+                out.write("WAIT: running work is held. " + HOW_TO_WAIT + "\n")
+                return 0
+            if time.monotonic() >= deadline:
+                out.write("STILL RUNNING at %s: repeat this wait to collect the native task's completion.\n" % _clock())
+                return 0
+            # A running shell's exit, a new record or .pid, a hold, or the host appending a result.
+            w.add_pids(found.get("pids") or ())
+            w.add_paths(_result_paths(session, agent, pending))
+            gap = min(poll, deadline - time.monotonic())
+            if found.get("starting_until"):
+                gap = min(gap, max(0.0, found["starting_until"] - time.time()) + 0.05)
+            w.wait(gap)
     for stem, rec in _detached_calls(session, agent):
-        if not _collect(stem, rec, deadline, min(poll, 0.5), out):
+        if not _collect(stem, rec, deadline, poll, out):
             break
     return collect_native(session, agent, deadline, out, pending)
 
@@ -1569,7 +1739,7 @@ def release(session_id, agent_id):
     since = float(rec.get("at") or 0) - BIRTH_SLACK
     for scan in range(RELEASE_SCANS):
         if scan:
-            time.sleep(RELEASE_SCAN_GAP)
+            time.sleep(RELEASE_SCAN_GAP)   # bounded: RELEASE_SCANS (4) looks, 0.75 s in all, never a wait
             table = snapshot()
         for pid, _ppid, at in owned_shells(rec["session_id"], rec["agent_id"], table):
             if at >= since and pid not in continued and table[pid]["stat"].startswith("T"):
@@ -1788,12 +1958,12 @@ def end_owned(session_id, agent_id, name="", why="", spare_foreign=False):
                 pass
             except PermissionError:
                 signaled.pop(pid, None)
-        time.sleep(0.05)
+        time.sleep(0.05)   # bounded: STOP_ROUNDS (10) rounds, 0.5 s in all; a fork has no event to block on
         table = snapshot()
     deadline = time.monotonic() + END_GRACE
     remaining = [p for p, b in signaled.items() if not _gone(p, b, table)]
     while remaining and time.monotonic() < deadline:
-        time.sleep(0.05)
+        time.sleep(0.05)   # bounded: END_GRACE (2 s) between SIGTERM and SIGKILL, never a long wait
         table = snapshot()
         remaining = [p for p, b in signaled.items() if not _gone(p, b, table)]
     killed = []

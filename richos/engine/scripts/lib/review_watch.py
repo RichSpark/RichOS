@@ -170,6 +170,11 @@ FREEZE_SECONDS = 0.5
 # review's own session (it leads one from spawn) counts too, which those keep unless they setsid.
 MARK_ENV = "RICHOS_REVIEW_OWNER"
 MAX_LOSSES = 2
+# A review that ended because the quota hold was in force (second_review.py's quota_held row) is
+# "held", not lost: it spends none of MAX_LOSSES and is started again no sooner than this, the
+# quota poll's own five minutes, so a hold of any length neither ends the commit's automatic
+# reviews nor starts one every look (the second review of 3331a349416c, finding 1).
+HOLD_RETRY_SECONDS = 300
 KEEP_SECONDS = 7 * 86400
 SESSION_KEEP_SECONDS = 2 * 86400
 BLOCK_CHARS = 2000
@@ -869,12 +874,17 @@ class Book(object):
                 self.verdicts.setdefault((os.path.realpath(r.get("repo") or ""), r.get("tip")), []).append(r)
                 self.by_work.setdefault(r.get("work"), []).append(r)
         self.losses = {}
+        self.held = {}                              # {(repo, tip): the newest held attempt still owed a retry}
         for a in attempts:
             k = (a.get("repo"), a.get("tip"))
             if a.get("outcome") == "lost":
                 self.losses.setdefault(k, []).append(a)
+                self.held.pop(k, None)
+            elif a.get("outcome") == "held":
+                self.held[k] = a
             elif a.get("outcome") == "verdict":
                 self.losses.pop(k, None)
+                self.held.pop(k, None)
 
     def handover_verdict(self, key):
         return [r for r in self.verdicts.get(key, []) if r.get("trigger") in HANDOVER_KINDS]
@@ -919,6 +929,10 @@ def due(items, book, now, seen, long_seconds, handover=True):
         if len(lost) >= MAX_LOSSES:
             continue                                # told once; nothing more starts by itself
         running = book.running.get(key)
+        held = book.held.get(key)
+        if held and not running and now - float(held.get("ended_at") or 0) < HOLD_RETRY_SECONDS:
+            continue                                # held by the quota: asked again at the next poll
+
         if it.state == "ended":
             if book.handover_verdict(key) or it.stopped_early:
                 continue                            # stopped early: its continuation's handover covers these commits
@@ -933,6 +947,9 @@ def due(items, book, now, seen, long_seconds, handover=True):
             continue
         if lost:
             out.append((it, lost[-1].get("trigger") or "long-job", None))   # a lost review, started once more
+            continue
+        if held:
+            out.append((it, held.get("trigger") or "long-job", None))       # a held review, asked again
             continue
         anchor = book.last_review_at(it.work)
         start = it.started if it.started is not None else seen.get(it.work, now)
@@ -1202,6 +1219,9 @@ class Watcher(object):
             got = [r for r in mine if r.get("verdict")]
             if got or self.joined_verdict(info,rows):
                 outcome = "verdict"
+            elif mine and mine[-1].get("quota_held"):
+                outcome = "held"
+                why = why or mine[-1].get("why") or "the quota hold is in force"
             else:
                 outcome = "lost"
                 why = why or (mine[-1].get("why") if mine else "") or self.log_tail(info) or \

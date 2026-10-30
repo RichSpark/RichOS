@@ -89,10 +89,13 @@
 #   C30  C27's exact-tip rule holds only for findings raised in the land's own range: a branch that
 #        merged main, carrying a landed work's finding ruled fixed only at the landed commit, is
 #        admitted without re-ruling it
-#   C31  under a Work lease (CLAUDE_CONFIG_DIR and RICHOS_CLAUDE_ACCOUNT_DIR at the account's
+#   C32  under a Work lease (CLAUDE_CONFIG_DIR and RICHOS_CLAUDE_ACCOUNT_DIR at the account's
 #        folder, RICHOS_CLAUDE_HOME at the machine-wide home) the ledger row is written in
 #        RICHOS_CLAUDE_HOME's state and every reader finds it there; without RICHOS_CLAUDE_HOME
 #        all follow CLAUDE_CONFIG_DIR as before, and so does a sandbox's own CLAUDE_CONFIG_DIR
+#   C31  an app review takes the app gate's own hold, in review-watch's real (cleared)
+#        environment, through the watcher's own spawn: the account in use published held,
+#        no Claude review starts; another account in use with room, it runs on that one
 #
 
 # Exit 0 = every case passed; exit 1 = at least one failed.
@@ -648,6 +651,139 @@ check "C19 an app review runs Claude on the account in use when the reviewer sta
 [ "$(( $(wc -l <"$SB/state/reviews.jsonl" | tr -d ' ') - ROWS0 ))" = "2" ]
 check "C19 both reviews are in the same ledger: the account's folder moves only the reviewer" $? "rows before=$ROWS0"
 
+# --- C31 ---------------------------------------------------------------------
+# The second review of the usage-readings fix (rv-20261028T184535Z-d37b1f0d-e0d9, its blocking
+# finding; richos-hq follow-ups.md "app-launched reviews never apply the usage hold"): the app's
+# watcher starts with a cleared environment, so an app review's quota hold ran quota-watch, found
+# no QUOTA_PAUSE_PERCENT, answered UNKNOWN, and a Claude review started while the account in use
+# was held. Main had the same hole. The whole chain runs here in review-watch's REAL environment:
+# exactly the keys review_watch.rs `environment` and `app_environment` pass, read from that source
+# so the two cannot drift, a runtime PATH with no `claude` on it, a fixture HOME, and no other
+# variable but this file's fake-reviewer and fixture-state seams. No entity root, project folder,
+# app state or quota command, and the review's working directory (the watcher's state) holds no
+# orchestration.config. The app publishes Work, the account in use, as held: no Claude review may
+# start. Then Home is in use with room while Work's row is at 99%: the review runs, on Home.
+APP31="$SB/app31"
+mkdir -p "$APP31/engine-state" "$SB/runtime-bin" "$SB/home31" "$SB/account-two-31"
+# Each by its full path: a delivered runtime's bin/python3 and bin/git are wrappers that find their
+# real program beside themselves, so a link to one from elsewhere finds nothing.
+for tool in python3 git bash; do
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v "$tool")" >"$SB/runtime-bin/$tool"
+    chmod +x "$SB/runtime-bin/$tool"
+done
+TMPDIR="$RUN_TMP" python3 - "$SCRIPT_DIR" "$REPO" "$BASE" "$SB/brief.txt" "$APP31" "$SB/bin/fake-reviewer" \
+    "$SB/account-two-31" "$SB/rw31" "$SB/runtime-bin" "$SB/home31" "$RUN_CFG" <<'PY' >"$SB/c31.out" 2>&1
+import json, os, re, shutil, subprocess, sys, time
+scripts, repo, base, words, app, reviewer, folder, rwstate, runtime, home, cfg = sys.argv[1:]
+source = open(os.path.join(scripts, "..", "..", "app", "crates", "richos-core", "src", "review_watch.rs")).read()
+inherited = re.search(r"pub fn environment\(.*?for key in \[([^\]]*)\]", source, re.S)
+search = re.search(r'pub const SEARCH_ENV: &str = "([A-Z_]+)"',
+                   open(os.path.join(scripts, "..", "..", "app", "crates", "richos-core", "src", "codex_reviews.rs")).read())
+assert inherited and search, "review_watch.rs no longer builds its environment as this test reads it"
+path = runtime + ":/usr/bin:/bin:/usr/sbin:/sbin"
+assert shutil.which("claude", path=path) is None, "a claude on the runtime PATH would let main's path probe a real account"
+values = {"HOME": home, "TMPDIR": os.environ["TMPDIR"], "CLAUDE_CONFIG_DIR": cfg,
+          "USER": os.environ.get("USER", "fixture"), "LOGNAME": os.environ.get("LOGNAME", "fixture"),
+          "LANG": os.environ.get("LANG", "en_US.UTF-8")}
+env = {"PATH": path, search.group(1): path}
+for key in re.findall(r'"([A-Z_]+)"', inherited.group(1)):
+    env[key] = values[key]
+seams = {k: os.environ[k] for k in ("SECOND_REVIEW_STATE_DIR", "SECOND_REVIEW_CPU_BUSY", "RICHOS_WORKSPACES_DIR",
+                                    "RICHOS_PROJECTS_DIR", "FAKE_LOG")}
+seams.update(SECOND_REVIEW_CLAUDE=reviewer, SECOND_REVIEW_CODEX=reviewer)
+quota_sources = [k for k in list(env) + list(seams)
+                 if k in ("RICHOS_ENTITY_ROOT", "CLAUDE_PROJECT_DIR", "RICHOS_APP_STATE", "SECOND_REVIEW_QUOTA_CMD")
+                 or k.startswith("QUOTA_")]
+assert not quota_sources, "not review-watch's environment: %s" % quota_sources
+env.update(seams)
+
+now = int(time.time())
+def publish(in_use, label, five, other, other_five):
+    windows = lambda used, reset: [{"id": "five_hour", "label": "Five-hour", "usedPercent": used,
+                                    "resetsAt": reset * 1000, "durationMs": 18000000},
+                                   {"id": "seven_day", "label": "Weekly", "usedPercent": 20,
+                                    "resetsAt": (now + 300000) * 1000, "durationMs": 604800000}]
+    held = five >= 93
+    view = {"state": "fresh", "windows": windows(five, now + 4740), "checkedAt": (now - 30) * 1000,
+            "retryAt": None, "nextCheckAt": None, "refreshIntervalMs": 300000, "message": None,
+            "policy": {"enabled": True, "pausePercent": 93},
+            "admission": {"state": "held", "resetsAt": (now + 4740) * 1000} if held else {"state": "ready"},
+            "inUse": {"id": in_use, "label": label}, "heldUntil": None,
+            # Each row with its own check time, as the app publishes them: the gate judges a call
+            # on its own account's row (gate::decide), and so does the review.
+            "accounts": [{"id": in_use, "label": label, "inUse": True, "windows": windows(five, now + 4740),
+                          "checkedAt": (now - 30) * 1000},
+                         {"id": other[0], "label": other[1], "inUse": False, "windows": windows(other_five, now + 900),
+                          "checkedAt": (now - 30) * 1000}]}
+    with open(os.path.join(app, "engine-state", "claude-quota.json"), "w") as f:
+        json.dump(view, f)
+    with open(os.path.join(app, "claude-quota-policy.json"), "w") as f:
+        json.dump({"enabled": True, "pausePercent": 93}, f)
+    with open(os.path.join(app, "claude-accounts.json"), "w") as f:
+        json.dump({"accounts": [{"id": "1", "label": "Home"}, {"id": "2", "label": "Work", "folder": folder}],
+                   "inUse": in_use}, f)
+
+# The chain the app runs: the watcher's own spawn of an app item, second-review.sh, the reviewer.
+drive = r'''
+import json, os, sys, subprocess
+from types import SimpleNamespace
+scripts, repo, base, words, accounts, claude, rwstate, case = sys.argv[1:]
+sys.path.insert(0, os.path.join(scripts, "lib"))
+import review_watch as rw, second_review as sr
+os.environ["REVIEW_WATCH_SECOND_REVIEW"] = os.path.join(scripts, "second-review.sh")
+os.environ["REVIEW_WATCH_STATE_DIR"] = rwstate
+os.makedirs(rwstate, exist_ok=True)
+subprocess.check_call(["git", "-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Author",
+                       "-c", "user.email=author@example.invalid", "-c", "commit.gpgsign=false",
+                       "commit", "--allow-empty", "-qm", "usage hold fixture " + case])
+tip = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+ws = sr.load_workspaces(os.path.dirname(scripts))
+work = ws.recovery_work_key(sr.find_teammate(ws, "echo-sonnet-x1"))
+it = rw.Item(work, "echo-sonnet-x1", repo, tip, base, "running", ref="echo-sonnet-x1", source="app", words=[words])
+it.claude, it.accounts = claude, accounts
+log = os.environ["FAKE_LOG"]
+before = len(os.listdir(log))
+watcher = rw.Watcher(os.path.dirname(scripts), "", world=SimpleNamespace())
+pid, _start = watcher.spawn(it, "long-job", os.path.join(rwstate, "review-%s.log" % case))
+watcher.children[pid].wait()
+calls = [json.load(open(os.path.join(log, c, "call.json"))) for c in sorted(os.listdir(log))[before:]]
+ledger = os.path.join(os.environ["SECOND_REVIEW_STATE_DIR"], "reviews.jsonl")
+row = json.loads(open(ledger).read().splitlines()[-1])
+print(json.dumps({"reviewers": [(c["kind"], c["account"]) for c in calls], "tip": row.get("tip") == tip,
+                  "quota": row.get("quota"), "why": row.get("why"), "verdict": row.get("verdict"),
+                  "quota_held": row.get("quota_held")}))
+'''
+got = {}
+os.makedirs(rwstate)
+for case, args in (("work held", ("2", "Work", 99, ("1", "Home"), 10)),
+                   ("home in use, work at 99", ("1", "Home", 10, ("2", "Work"), 99))):
+    publish(*args)
+    p = subprocess.run([os.path.join(runtime, "python3"), "-c", drive, scripts, repo, base, words,
+                        os.path.join(app, "claude-accounts.json"), reviewer, rwstate, case],
+                       env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=rwstate)
+    lines = p.stdout.strip().splitlines()
+    got[case] = json.loads(lines[-1]) if p.returncode == 0 and lines else {"failed": p.stdout}
+print(json.dumps(got, indent=1))
+held, room = got["work held"], got["home in use, work at 99"]
+bad = []
+if held.get("reviewers") != [] or not held.get("tip"):
+    bad.append("a reviewer ran while Work, the account in use, was published held: %s" % held)
+if "quota hold is in force" not in (held.get("why") or "") or "Work (account 2)" not in (held.get("quota") or ""):
+    bad.append("the held row does not say the gate's hold on Work: %s" % held)
+# The watcher settles a marked row as held, never lost (review-watch.test.sh W39; the second review
+# of 3331a349416c, finding 1), so the mark is what keeps a hold from spending the commit's retries.
+if held.get("quota_held") is not True or room.get("quota_held"):
+    bad.append("only the held row carries quota_held: held %s, room %s" % (held, room))
+if room.get("reviewers") != [["claude", "1"]] or room.get("verdict") != "passed":
+    bad.append("Home in use with room: the review did not run on Home: %s" % room)
+if "Home (account 1)" not in (room.get("quota") or ""):
+    bad.append("the review on Home does not name Home's reading: %s" % room)
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+PY
+check "C31 an app review in review-watch's own environment takes the gate's hold: Work published held, no Claude review starts; Home in use with room, it runs on Home" \
+    $? "$(cat "$SB/c31.out")"
+
 # --- C16 ---------------------------------------------------------------------
 # The Codex review switch in the app's Settings (round 20.2; his words, §114: "we should give
 # the user a toggle/switch to manually enable that"). The app saves it as codex-reviews.json
@@ -1167,7 +1303,7 @@ check "C30 a merge of main carrying a landed work's finding, ruled fixed only at
 [ -z "${OUT10%%|*}" ]
 check "C30 and the reviewer of the merge is not handed that landed finding" $? "out=$OUT10"
 
-# --- C31 ---------------------------------------------------------------------
+# --- C32 ---------------------------------------------------------------------
 # A review written under a Work lease (2026-10-28): the app points CLAUDE_CONFIG_DIR at the
 # account's folder (and RICHOS_CLAUDE_ACCOUNT_DIR at the same folder) and RICHOS_CLAUDE_HOME at the
 # machine-wide home. The ledger is written in the machine-wide home, and every reader finds it
@@ -1180,7 +1316,7 @@ OUT="$(env -u SECOND_REVIEW_STATE_DIR TMPDIR="$RUN_TMP" CLAUDE_CONFIG_DIR="$ACCO
        RICHOS_CLAUDE_HOME="$MACHINE" FAKE_MODE=pass bash "$SR" --repo "$REPO" --tip "$TIP1" --base "$BASE" --words-file "$SB/codex-words.txt" 2>&1)"; RC=$?
 [ "$RC" -eq 0 ] && [ "$(field "$(tail -1 "$MACHINE/state/reviews.jsonl" 2>/dev/null)" 'r["tip"]')" = "$TIP1" ] \
   && [ ! -e "$ACCOUNT/state/reviews.jsonl" ]
-check "C31 a review under a Work lease writes its ledger row in RICHOS_CLAUDE_HOME's state, not the account's" $? \
+check "C32 a review under a Work lease writes its ledger row in RICHOS_CLAUDE_HOME's state, not the account's" $? \
   "rc=$RC out=$OUT"
 readers() { # <expected state dir> <tip>: every reader of the ledger, in the caller's environment
     python3 - "$SCRIPT_DIR" "$1" "$2" <<'PY'
@@ -1209,15 +1345,15 @@ PY
 R="$(unset SECOND_REVIEW_STATE_DIR; export CLAUDE_CONFIG_DIR="$ACCOUNT" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" RICHOS_CLAUDE_HOME="$MACHINE"
       readers "$MACHINE/state" "$TIP1" 2>&1)"
 [ -z "$R" ]
-check "C31 under a Work lease every reader reads that row from RICHOS_CLAUDE_HOME's state" $? "$R"
+check "C32 under a Work lease every reader reads that row from RICHOS_CLAUDE_HOME's state" $? "$R"
 R="$(unset SECOND_REVIEW_STATE_DIR RICHOS_CLAUDE_HOME; export CLAUDE_CONFIG_DIR="$ACCOUNT"
       readers "$ACCOUNT/state" "" 2>&1)"
 [ -z "$R" ]
-check "C31 without RICHOS_CLAUDE_HOME every reader and the writer follow CLAUDE_CONFIG_DIR, as before" $? "$R"
+check "C32 without RICHOS_CLAUDE_HOME every reader and the writer follow CLAUDE_CONFIG_DIR, as before" $? "$R"
 R="$(unset SECOND_REVIEW_STATE_DIR; export CLAUDE_CONFIG_DIR="$WL/sandbox" RICHOS_CLAUDE_ACCOUNT_DIR="$ACCOUNT" RICHOS_CLAUDE_HOME="$MACHINE"
       readers "$WL/sandbox/state" "" 2>&1)"
 [ -z "$R" ]
-check "C31 a sandbox inside a Work lease (its own CLAUDE_CONFIG_DIR) keeps its own ledger for every reader" $? "$R"
+check "C32 a sandbox inside a Work lease (its own CLAUDE_CONFIG_DIR) keeps its own ledger for every reader" $? "$R"
 
 echo
 echo "second-review.test.sh: $PASS passed, $FAIL failed"

@@ -339,6 +339,33 @@ def reap(record, provider_running):
     return left
 
 
+SNAPSHOT_SECONDS = 1.0   # the reap's process snapshot, as before (every tenth 100 ms tick)
+
+
+def _exit_watch(provider, parent, wake_read):
+    """A kqueue that fires when the provider or the owner exits or a signal's wakeup byte
+    arrives, or None where there is no kqueue. Standard library only, like the rest of this file."""
+    import select
+    if not hasattr(select, "kqueue"):
+        return None
+    try:
+        kq = select.kqueue()
+    except OSError:
+        return None
+    for pid in (provider, parent):
+        try:
+            kq.control([select.kevent(pid, select.KQ_FILTER_PROC, select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                                      select.KQ_NOTE_EXIT)], 0, 0)
+        except OSError:
+            pass   # already gone: the loop's own checks see it at once
+    try:
+        kq.control([select.kevent(wake_read, select.KQ_FILTER_READ, select.KQ_EV_ADD | select.KQ_EV_CLEAR)], 0, 0)
+    except OSError:
+        kq.close()
+        return None
+    return kq
+
+
 def operator_main(parent, argv):
     import select
     terminate = []
@@ -366,21 +393,31 @@ def operator_main(parent, argv):
             os._exit(127)
     record = Record(provider, os.getpgrp())
     running = True
+    # 2026-10-28: the watch blocks in the kernel until the provider or the owner exits or a
+    # SIGTERM arrives (kqueue), waking only for the once-a-second snapshot; it used to wake every
+    # 100 ms to ask. Where kqueue is missing it keeps the 100 ms select on the wakeup descriptor.
+    kq = _exit_watch(provider, parent, wake_read)
     try:
-        tick = 0
+        next_snapshot = time.monotonic()
         while os.getppid() == parent and not terminate:
             ended, _ = os.waitpid(provider, os.WNOHANG)
             if ended:
                 running = False           # G9: reap from the last snapshot
                 break
-            if tick % 10 == 0:
+            if time.monotonic() >= next_snapshot:
+                next_snapshot = time.monotonic() + SNAPSHOT_SECONDS
                 try:
                     table = record.snapshot()
                     _write_state(record, table, parent)
                 except Exception as error:   # noqa: BLE001  never let a read end the watch
                     _log("process table read failed: %s" % error)
-            tick += 1
-            select.select([wake_read], [], [], 0.1)
+            if kq is None:
+                select.select([wake_read], [], [], 0.1)
+                continue
+            try:
+                kq.control(None, 4, max(0.0, next_snapshot - time.monotonic()))
+            except OSError:
+                select.select([wake_read], [], [], 0.1)
         cause = "the provider exited" if not running else ("SIGTERM" if terminate else "the owner died")
         _log("ending: %s" % cause)
         try:
