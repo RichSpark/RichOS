@@ -637,6 +637,15 @@ struct Snapshot {
 pub const FIRST_READING_RETRY_MS: u64 = 30_000;
 pub const FIRST_READING_RETRY_MAX_MS: u64 = 120_000;
 
+/// **A check at a window's reset that still gets the old window back is asked again in
+/// seconds** (follow-ups of 2026-10-29; the CEO, after the 20:50Z reset: *"it took 5 fucking
+/// minutes for the refresh to show up."*). The check is already taken at `resets_at`; when
+/// Claude still answers with the window that just ended, the next one is 10 seconds later, not
+/// the full interval, for at most [`REFRESH_INTERVAL_MS`] after that reset: 300 000 / 10 000 =
+/// at most 30 extra checks per reset, after which a window that keeps its old reset time is
+/// asked on the normal schedule, as before.
+pub const RESET_RETRY_MS: u64 = 10_000;
+
 /// One window's reading as a speed base: used percent, its reset time, when it was first read
 /// (`at`) and last read (`last`) at that value, and whether its rise into that value was seen
 /// (`rose`: a lower reading came just before it).
@@ -962,6 +971,12 @@ impl Snapshot {
                 let wait = if self.checked_at.is_none() && self.error.is_none() && self.empties > 0 {
                     (FIRST_READING_RETRY_MS << (self.empties - 1).min(8)).min(FIRST_READING_RETRY_MAX_MS)
                 } else { interval };
+                // The last check came after a window's reset, within the interval after it, and
+                // that window is still the one held: Claude has not rolled it over yet
+                // (`RESET_RETRY_MS`).
+                let old_window_back = self.windows.iter().filter_map(|w| w.resets_at)
+                    .any(|r| r <= t && t < r.saturating_add(REFRESH_INTERVAL_MS));
+                let wait = if old_window_back { wait.min(RESET_RETRY_MS) } else { wait };
                 self.windows
                     .iter()
                     .filter_map(|w| w.resets_at)
@@ -4123,6 +4138,65 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         let view = service.view();
         assert_eq!(view.moving, None, "the move is over");
         assert!(view.accounts.iter().any(|a| a.id == work.id && a.in_use));
+    }
+
+    /// **The new window shows within seconds of the reset** (follow-ups of 2026-10-29: after
+    /// Work's 20:50Z reset "it took 5 fucking minutes for the refresh to show up"; Sage's test).
+    /// The window read at 95% resets 2 seconds ago. The check at the reset is taken, and Claude
+    /// still answers with the window that ended. On main the next check was the full 5 minutes
+    /// later, and the file and the gate kept the ended window that long. Now it is 10 seconds
+    /// later (`RESET_RETRY_MS`): once Claude answers with the new window, the published file and
+    /// the gate have it. The retry stops 5 minutes after the reset: a window that still keeps
+    /// its old reset time then is asked on the normal schedule.
+    #[test]
+    fn a_check_at_the_reset_that_gets_the_old_window_back_is_asked_again_in_seconds() {
+        struct Flips(std::sync::Arc<Mutex<Vec<Window>>>, std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl Source for Flips {
+            fn read(&mut self, _: &Path, _: &Path) -> Result<Vec<Window>, ReadError> {
+                self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(self.0.lock().unwrap().clone())
+            }
+        }
+        let five = |used: f64, resets_at: u64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(),
+            used_percent: used, resets_at: Some(resets_at), duration_ms: 18_000_000 }];
+        let dir = Scratch::new();
+        let service = Service::open(dir.path()).unwrap();
+        service.set_policy(policy()).unwrap();
+        let state = dir.path().join("engine-state");
+        let reset = crate::util::now_millis() - 2_000;
+        let answer = std::sync::Arc::new(Mutex::new(five(95., reset)));
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        *service.source.lock().unwrap() = Box::new(Flips(answer.clone(), calls.clone()));
+        service.snapshot.lock().unwrap().accept(five(95., reset), reset - 60_000);
+
+        // The check at the reset: Claude still says the window that ended.
+        service.refresh(Path::new("unused"), false);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the check at the reset is taken");
+        let view = service.view();
+        let checked = view.checked_at.unwrap();
+        assert_eq!(view.next_check_at, Some(checked + RESET_RETRY_MS),
+            "asked again in seconds, not after {} ms", REFRESH_INTERVAL_MS);
+
+        // Claude rolls the window over; 10 seconds pass.
+        let new_reset = crate::util::now_millis() + 5 * 3_600_000;
+        *answer.lock().unwrap() = five(3., new_reset);
+        service.snapshot.lock().unwrap().checked_at = Some(checked - RESET_RETRY_MS);
+        service.refresh(Path::new("unused"), false);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "the retry is due 10 seconds later");
+        let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+        let shown = published.windows.iter().find(|w| w.id == "five_hour").unwrap();
+        assert_eq!((shown.used_percent, shown.resets_at), (3., Some(new_reset)), "the file has the new window");
+        assert_eq!(gate::admission(&state, crate::util::now_millis()), Admission::Ready, "and so has the gate");
+        assert_eq!(service.view().next_check_at, published.checked_at.map(|t| t + REFRESH_INTERVAL_MS),
+            "a new window: the normal schedule again");
+
+        // Bounded: a check 5 minutes after the reset that still gets the old window back waits
+        // the normal interval.
+        let mut late = Snapshot::default();
+        late.accept(five(95., NOW), NOW + REFRESH_INTERVAL_MS);
+        assert_eq!(late.view(policy(), NOW + REFRESH_INTERVAL_MS).next_check_at, Some(NOW + 2 * REFRESH_INTERVAL_MS));
+        late.accept(five(95., NOW), NOW + REFRESH_INTERVAL_MS - 1);
+        assert_eq!(late.view(policy(), NOW + REFRESH_INTERVAL_MS).next_check_at, Some(NOW + REFRESH_INTERVAL_MS - 1 + RESET_RETRY_MS));
     }
 
     #[test]
