@@ -10390,8 +10390,8 @@
     },
     "scripts/hooks/shell-evidence.py": {
       "source": "scripts/hooks/shell-evidence.py",
-      "sha256": "16180da82a321c7cd0b78b5e9aef8f29074c3b3c5b8b3912e7cf11681f0ad7a7",
-      "evidence": "Full program reviewed: stdlib JSON/text parsing and command wrapping as returned data, plus agent_hold.rewrite for a subagent's call (renewed 2026-09-28: the call becomes a native background task, a held call is denied, the wait call stays foreground): private call records in the agent-hold state directory and shell text. No command execution or config read. Renewed 2026-10-04: before the rewrite it runs agent_hold.gate, which holds a held subagent's wait call until its hold record is gone (reads that record and the agent's wait-notice file in the agent-hold state directory); the rewrite itself is bounded by a 5 s alarm.",
+      "sha256": "1b9c06660fa2ca7e565cc39ebedbd87967af3a355d3b5bc0451535039daf63ef",
+      "evidence": "Full program reviewed: stdlib JSON/text parsing and command wrapping as returned data, plus agent_hold.rewrite for a subagent's call (renewed 2026-09-28: the call becomes a native background task, a held call is denied, the wait call stays foreground): private call records in the agent-hold state directory and shell text. No command execution or config read. Renewed 2026-10-04: before the rewrite it runs agent_hold.gate, which holds a held subagent's wait call until its hold record is gone (reads that record and the agent's wait-notice file in the agent-hold state directory); the rewrite itself is bounded by a 5 s alarm. Renewed 2026-10-31 (zach-opus-hooks3): the errexit notice is said once per context. It reads and atomically writes one private record per session and agent under ${CLAUDE_CONFIG_DIR:-~/.claude}/state/shell-evidence/ (records untouched for 7 days are removed when a new one is made), and reads the payload's transcript_path (a subagent's own subagents/agent-<id>.jsonl, as agent_hold.py maps it) from the recorded byte offset only, looking for the host's compaction line. Transcript text is data; no command execution or config read.",
       "keys": [],
       "edges": [
         {
@@ -12979,7 +12979,7 @@
     },
     "scripts/hooks/shell-evidence.test.py": {
       "source": "scripts/hooks/shell-evidence.test.py",
-      "sha256": "9763f4142bc0154c2dcbd499ef38e53e10b895780775e0ce5dbdc4fec6c7ffcf",
+      "sha256": "18eac765e2fa6884dccbf40e699297cc3d7f5a0fbcaa4c6cbb25a0aaf7f7b572",
       "evidence": "Calls fixed shell-evidence hook with literal payloads and private agent-hold state; executes returned wrappers only around literal echo/printf/false commands. The bound hook and capture helper do not read config.",
       "keys": [],
       "edges": [
@@ -18171,7 +18171,7 @@
         "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/session-start-scratch.sh": "ec65aa22fcd926498c154a8a20f7477d4678c4c6aaf586eae341b576d6858598",
         "scripts/hooks/shell-evidence.sh": "3df2704fd0ba1f8788fee3d61a8196e1d3a4aeedff7f92bb3c76fbc91eb2dfd5",
-        "scripts/hooks/shell-evidence.py": "16180da82a321c7cd0b78b5e9aef8f29074c3b3c5b8b3912e7cf11681f0ad7a7",
+        "scripts/hooks/shell-evidence.py": "1b9c06660fa2ca7e565cc39ebedbd87967af3a355d3b5bc0451535039daf63ef",
         "scripts/hooks/snapshot-enforcing-hooks.sh": "b86f95a4ad2d2ff8442f4775d1b9a52c84eb1beb5ef3b484683ea2663c1eb509",
         "scripts/hooks/task-completed-handoff.sh": "285b845f27400588fd3beb3c79c5dea01aa06c37b67311e84ce7d6e40a066c1c",
         "scripts/hooks/teammate-idle-handoff.sh": "e95532825a3d051ae27bb44cb374686bf0e025a956157dfd28a461b3b1fb074b",
@@ -18855,7 +18855,7 @@
         "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/hooks/release-land-leases.sh": "1a1822b5d4b615962ff9d418141d5002e264bd7200c701f1588aa6217202fef5",
         "scripts/hooks/shell-evidence.sh": "3df2704fd0ba1f8788fee3d61a8196e1d3a4aeedff7f92bb3c76fbc91eb2dfd5",
-        "scripts/hooks/shell-evidence.py": "16180da82a321c7cd0b78b5e9aef8f29074c3b3c5b8b3912e7cf11681f0ad7a7",
+        "scripts/hooks/shell-evidence.py": "1b9c06660fa2ca7e565cc39ebedbd87967af3a355d3b5bc0451535039daf63ef",
         "scripts/hooks/turn-manifest.sh": "614b8ab071bb6c3796d19d33623fc31cb79773328522fd394804f45dd570dc79",
         "scripts/hooks/verify-agent-prompt.sh": "79ab33badfb5d9de69e392ee050a1509a4d6aba0a50ab7dc52c0c93195bb2a3c",
         "scripts/hooks/guard-bash-main-writes.sh": "452ce577e516beb68b1fb02fa5b955f31374549179d6531741a48ed13cb810de",
