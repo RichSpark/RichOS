@@ -10404,10 +10404,13 @@
     },
     "scripts/hooks/shell-evidence.sh": {
       "source": "scripts/hooks/shell-evidence.sh",
-      "sha256": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",
+      "sha256": "3df2704fd0ba1f8788fee3d61a8196e1d3a4aeedff7f92bb3c76fbc91eb2dfd5",
       "evidence": "Full wrapper reviewed: fixed Python helper invocation only.",
       "keys": [],
       "edges": [
+        {
+          "to": "scripts/lib/hook-python.sh"
+        },
         {
           "to": "scripts/hooks/shell-evidence.py"
         }
@@ -18167,7 +18170,7 @@
         "scripts/lib/quota_watch.py": "ca1f59e894af2527968f809b770ad1428ae81d73ff134c480a33dcddadbb7cda",
         "scripts/lib/quota_weekly.py": "4a2581061e6c021606e36457437d7584528811f6843a973da8b81cfaaa114a71",
         "scripts/hooks/session-start-scratch.sh": "ec65aa22fcd926498c154a8a20f7477d4678c4c6aaf586eae341b576d6858598",
-        "scripts/hooks/shell-evidence.sh": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",
+        "scripts/hooks/shell-evidence.sh": "3df2704fd0ba1f8788fee3d61a8196e1d3a4aeedff7f92bb3c76fbc91eb2dfd5",
         "scripts/hooks/shell-evidence.py": "16180da82a321c7cd0b78b5e9aef8f29074c3b3c5b8b3912e7cf11681f0ad7a7",
         "scripts/hooks/snapshot-enforcing-hooks.sh": "b86f95a4ad2d2ff8442f4775d1b9a52c84eb1beb5ef3b484683ea2663c1eb509",
         "scripts/hooks/task-completed-handoff.sh": "285b845f27400588fd3beb3c79c5dea01aa06c37b67311e84ce7d6e40a066c1c",
@@ -18851,7 +18854,7 @@
         "scripts/hooks/notice-waiver-repetition.sh": "492e6039220508a4862908ce8a93c9c7f82e042e84b55e11cc0e6ab8a2f92dac",
         "scripts/hooks/notice-waiver-repetition.py": "ee6cc173719ce6ec2647f21dab9a7d35a69a42876c51805a8288fd67c9a386db",
         "scripts/hooks/release-land-leases.sh": "1a1822b5d4b615962ff9d418141d5002e264bd7200c701f1588aa6217202fef5",
-        "scripts/hooks/shell-evidence.sh": "01d511155b7df5a4be0ab6cb25aaac934a467e086d5c31f2afd6ee9c7bcc370a",
+        "scripts/hooks/shell-evidence.sh": "3df2704fd0ba1f8788fee3d61a8196e1d3a4aeedff7f92bb3c76fbc91eb2dfd5",
         "scripts/hooks/shell-evidence.py": "16180da82a321c7cd0b78b5e9aef8f29074c3b3c5b8b3912e7cf11681f0ad7a7",
         "scripts/hooks/turn-manifest.sh": "614b8ab071bb6c3796d19d33623fc31cb79773328522fd394804f45dd570dc79",
         "scripts/hooks/verify-agent-prompt.sh": "79ab33badfb5d9de69e392ee050a1509a4d6aba0a50ab7dc52c0c93195bb2a3c",
