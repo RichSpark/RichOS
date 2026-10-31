@@ -218,6 +218,12 @@ impl EngineRuntime {
         let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
         search_path_with(&self.root.join("bin"), user, home.map(|h| crate::media_tools::tools_dir(&h)).as_deref())
     }
+
+    /// [`commands_path`] for this runtime: the PATH an agent's own commands run with.
+    pub fn commands_path(&self, user: &str, stand_ins: &crate::user_git::StandIns) -> String {
+        let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+        commands_path(&self.root.join("bin"), user, home.map(|h| crate::media_tools::tools_dir(&h)).as_deref(), stand_ins)
+    }
 }
 
 /// The PATH for a runtime `bin` folder and, if there is one, the tools folder. A folder whose
@@ -239,15 +245,48 @@ pub fn search_path_with(runtime_bin: &Path, user: Option<&str>, tools: Option<&P
     entries.join(":")
 }
 
+/// **The PATH an agent's own commands run with** (Hank's parity audit 2026-10-30, item 2): each
+/// folder of the user's `PATH` in its order, so `python3`, `node` and `git` are the ones the
+/// user's terminal runs, with their packages; the runtime `bin` folder just before the first
+/// folder that holds an Apple stand-in (`user_git::StandIns`), so a Mac without the developer
+/// tools gets the runtime's copy and never the dialog, otherwise after the user's folders, so a
+/// tool the user does not have is still found; then the system folders and the tools folder, as
+/// in [`search_path_with`]. Each folder once, at its first place.
+pub fn commands_path(runtime_bin: &Path, user: &str, tools: Option<&Path>, stand_ins: &crate::user_git::StandIns) -> String {
+    let runtime = runtime_bin.display().to_string();
+    let tools = tools.map(|t| t.display().to_string()).filter(|t| !t.contains(':'));
+    let mut entries: Vec<&str> = Vec::new();
+    let mut placed = false;
+    for entry in user.split(':').filter(|entry| !entry.is_empty()) {
+        if !placed && stand_ins.holds_one(Path::new(entry)) {
+            if !entries.contains(&runtime.as_str()) { entries.push(&runtime); }
+            placed = true;
+        }
+        if !entries.contains(&entry) { entries.push(entry); }
+    }
+    if !entries.contains(&runtime.as_str()) { entries.push(&runtime); }
+    for entry in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].into_iter().chain(tools.as_deref()) {
+        if !entries.contains(&entry) { entries.push(entry); }
+    }
+    entries.join(":")
+}
+
 /// Delivered interpreters must not import a launching terminal's modules or
 /// startup scripts. Credentials and ordinary OS settings are not copied here.
 pub fn isolate_interpreter_environment(command: &mut std::process::Command) {
-    for key in ["PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
-        "NODE_PATH", "NODE_OPTIONS", "BASH_ENV", "ENV"] {
+    for key in INTERPRETER_KEYS {
         command.env_remove(key);
     }
-    command.env("PYTHONNOUSERSITE", "1").env("PYTHONDONTWRITEBYTECODE", "1");
+    command.env(NO_USER_SITE, "1").env("PYTHONDONTWRITEBYTECODE", "1");
 }
+
+/// The user's interpreter settings [`isolate_interpreter_environment`] removes. An agent's own
+/// commands get the user's back (`EngineProfile::commands_env`).
+pub const INTERPRETER_KEYS: [&str; 8] = ["PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
+    "NODE_PATH", "NODE_OPTIONS", "BASH_ENV", "ENV"];
+
+/// Set to `1` by [`isolate_interpreter_environment`]: Python skips the user's `pip --user` packages.
+pub const NO_USER_SITE: &str = "PYTHONNOUSERSITE";
 pub fn interpreter_command(path: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let mut command = std::process::Command::new(path);
     isolate_interpreter_environment(&mut command);

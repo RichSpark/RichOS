@@ -22,6 +22,8 @@ from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
+sys.path.insert(0, str(HERE.parent.parent / "engine" / "scripts" / "lib"))
+import machine_settings as M  # noqa: E402
 import runtime_cache  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("proof_run", HERE / "proof-run.py")
@@ -59,10 +61,14 @@ class Fixture(unittest.TestCase):
         self.log = self.root / "stub.log"
         self.log.write_text("")
         self.saved = {k: os.environ.get(k) for k in ("STUB_LOG", "RICHOS_RUNTIME_BUILDER", "STUB_BUILD_RC", "STUB_VERIFY_RC",
-                                                     "RICHOS_RUNTIME_DIR", "RICHOS_GUI_SPEECH_MODELS", "HOME", "STUB_BUILD_SECONDS")}
+                                                     "RICHOS_RUNTIME_DIR", "RICHOS_GUI_SPEECH_MODELS", "HOME", "STUB_BUILD_SECONDS",
+                                                     M.RESOLVED, *M.KEYS)}
         os.environ["STUB_LOG"] = str(self.log)
         os.environ["RICHOS_RUNTIME_BUILDER"] = str(self.scripts / "stub-build-runtimes.py")
-        for name in ("STUB_BUILD_RC", "STUB_VERIFY_RC", "RICHOS_RUNTIME_DIR", "RICHOS_GUI_SPEECH_MODELS", "STUB_BUILD_SECONDS"):
+        # The machine's own storage settings (a bulk root on the runner) must not decide where the
+        # fixture's runtime goes; each test that wants one sets it.
+        for name in ("STUB_BUILD_RC", "STUB_VERIFY_RC", "RICHOS_RUNTIME_DIR", "RICHOS_GUI_SPEECH_MODELS", "STUB_BUILD_SECONDS",
+                     M.RESOLVED, *M.KEYS):
             os.environ.pop(name, None)
 
     def tearDown(self):
@@ -171,6 +177,19 @@ class ProofRun(Fixture):
         self.assertEqual(len(self.builds()), 1, line)
         self.assertEqual(needing.env.get("RICHOS_RUNTIME_DIR"), str(self.want()))
         self.assertIn("RICHOS_RUNTIME_DIR=%s" % self.want(), line)
+
+    def test_the_runtime_is_built_in_the_configured_storage(self):
+        """Follow-up 5 (2026-10-30): the automatic build wrote to ~/.richos-nightly whatever the bulk
+        root said, so a configured Mac filled its home volume."""
+        bulk = self.root / "bulk"
+        bulk.mkdir()
+        configured = bulk / "state" / "richos"
+        needing = self.item(NEEDING_SUITE, name="make-engine-asset.test.sh")
+        with patch.dict(os.environ, {"RICHOS_BULK_ROOT": str(bulk)}):
+            line = self.supply([needing], build=True)
+        want = runtime_cache.cache_path(configured, self.recipe)
+        self.assertEqual(self.builds(), ["build %s" % want], line)
+        self.assertEqual(needing.env.get("RICHOS_RUNTIME_DIR"), str(want))
 
     def test_planning_never_builds(self):
         needing = self.item(NEEDING_SUITE, name="make-engine-asset.test.sh")

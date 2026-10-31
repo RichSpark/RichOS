@@ -16,8 +16,8 @@
 //! - [`INSTRUCTIONS`]: the user's own standing instructions, created empty on first run.
 //! - [`ORCHESTRATION_CONFIG`]: the user's values for the engine's checks. The coordination
 //!   folder's generated config is that file plus the app's own keys ([`orchestration_config`]).
-//! - [`SETTINGS`]: the user's own environment additions and hooks, in Claude Code's settings
-//!   format ([`LeaseSettings`]).
+//! - [`SETTINGS`]: the user's own environment additions, hooks and commit attribution, in
+//!   Claude Code's settings format ([`LeaseSettings`]).
 //!
 //! The user's teammates, the rest of what a terminal keeps in `.claude/agents`, already load
 //! from `<app data>/team/` as written (`engine_profile::active_team`).
@@ -217,28 +217,66 @@ pub fn orchestration_config(folder: Option<&Path>, engine: &str, teams: &str) ->
     Ok(out)
 }
 
-/// **What the user's `settings.json` adds to a lease**: its `env` (strings only) and its
-/// `hooks`, as Claude Code's own settings file would. Every other key is Claude Code's or the
-/// app's to set and is not read. A file that is not a JSON object is reported and adds
-/// nothing, as Claude Code itself skips a settings file it cannot parse.
+/// **What the user's `settings.json` adds to a lease**: its `env` (strings only), its
+/// `hooks` and its commit and pull-request attribution ([`ATTRIBUTION`]), as Claude Code's own
+/// settings file would. Every other key is Claude Code's or the app's to set and is not read. A
+/// file that is not a JSON object is reported and adds nothing, as Claude Code itself skips a
+/// settings file it cannot parse.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LeaseSettings {
     pub env: BTreeMap<String, String>,
     pub hooks: Option<serde_json::Value>,
+    /// The [`ATTRIBUTION`] keys the user set, as written: every lease's `--settings` carries
+    /// them (`EngineProfile::lease_settings`).
+    pub attribution: serde_json::Map<String, serde_json::Value>,
+}
+
+/// **The keys that say whether Claude signs the user's commits and pull requests**: Claude
+/// Code's `attribution` (`{"commit": "", "pr": ""}` turns both lines off) and the older
+/// `includeCoAuthoredBy` it replaced, which Claude Code still reads. A lease starts Claude with
+/// `--setting-sources ''`, so a key not passed in its `--settings` is Claude Code's default,
+/// and the default signs every commit (Hank's parity audit 2026-10-30, item 3: 160 of 280
+/// richos commits since 10-27 carried the line the user had switched off in his terminal).
+pub const ATTRIBUTION: [&str; 2] = ["attribution", "includeCoAuthoredBy"];
+
+/// A settings file as a JSON object; `None` when it is not there, or not an object (reported).
+fn settings_object(path: &Path) -> Result<Option<serde_json::Map<String, serde_json::Value>>, RuntimeError> {
+    let Some(text) = read_optional(path)? else { return Ok(None) };
+    match serde_json::from_str(&text) {
+        Ok(serde_json::Value::Object(value)) => Ok(Some(value)),
+        Ok(_) => { eprintln!("[richos] {} is not a JSON object; nothing in it was applied", path.display()); Ok(None) }
+        Err(e) => { eprintln!("[richos] {} is not valid JSON ({e}); nothing in it was applied", path.display()); Ok(None) }
+    }
+}
+
+fn attribution_of(value: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+    ATTRIBUTION.iter().filter_map(|key| value.get(*key).map(|v| (key.to_string(), v.clone()))).collect()
 }
 
 pub fn lease_settings(folder: &Path) -> Result<LeaseSettings, RuntimeError> {
-    let path = folder.join(SETTINGS);
-    let Some(text) = read_optional(&path)? else { return Ok(LeaseSettings::default()) };
-    let value: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(value @ serde_json::Value::Object(_)) => value,
-        Ok(_) => { eprintln!("[richos] {} is not a JSON object; nothing in it was applied", path.display()); return Ok(LeaseSettings::default()) }
-        Err(e) => { eprintln!("[richos] {} is not valid JSON ({e}); nothing in it was applied", path.display()); return Ok(LeaseSettings::default()) }
-    };
+    let Some(value) = settings_object(&folder.join(SETTINGS))? else { return Ok(LeaseSettings::default()) };
     let env = value.get("env").and_then(|env| env.as_object()).map(|env| env.iter()
         .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string()))).collect()).unwrap_or_default();
     let hooks = value.get("hooks").filter(|hooks| hooks.is_object()).cloned();
-    Ok(LeaseSettings { env, hooks })
+    Ok(LeaseSettings { env, hooks, attribution: attribution_of(&value) })
+}
+
+impl LeaseSettings {
+    /// **The attribution the user set in the terminal, when the app's file sets none.**
+    /// `terminal` is the terminal's own user settings file (`settings.json` in the Claude folder
+    /// a terminal reads, `EngineProfile::prepare`), where a user who switched the co-author line
+    /// off did it. Only the [`ATTRIBUTION`] keys are taken, and only when the user's
+    /// `settings.json` in the app's folder sets neither: that file is the app's and wins. An
+    /// unreadable terminal file adds nothing.
+    pub fn with_terminal_attribution(mut self, terminal: &Path) -> Self {
+        if !self.attribution.is_empty() { return self; }
+        match settings_object(terminal) {
+            Ok(Some(value)) => self.attribution = attribution_of(&value),
+            Ok(None) => {}
+            Err(e) => eprintln!("[richos] the terminal's attribution setting was not read: {}", e.0),
+        }
+        self
+    }
 }
 
 /// **The digest of the user's files** ([`FILES`]): it moves exactly when one of them is

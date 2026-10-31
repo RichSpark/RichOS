@@ -94,11 +94,14 @@
 #           sweeps exits 0; a lease that deletes exits 1; no sweep anywhere exits 2; no binary
 #           is refused; a lease start that dies before system/init exits 2, against a
 #           scripted claude
+#   SP1-SP4 stop-probe: an interrupt that also ends the worker and a stop_task that ends only
+#           the foreground command are each reported as measured, exit 0; a lead that never
+#           starts the command and a missing binary are refused, exit 2, against a scripted claude
 #   X1      the committed fixtures still match their generator
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -147,7 +150,7 @@ python3 -c 'import PIL' >/dev/null 2>&1 && HAVE_PIL=1
 echo ""
 echo "=== H. every tool answers for itself ==="
 for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
-         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh lease-retention-probe.py fixtures/make-fixtures.py; do
+         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh lease-retention-probe.py stop-probe.py fixtures/make-fixtures.py; do
   if [ ! -x "$QA/$t" ]; then
     bad "H $t is executable" "not present or not executable at $QA/$t"
     continue
@@ -1711,6 +1714,62 @@ run "$LR" --claude "$TMP/no-such-claude"
 expect "LR4 no claude binary is refused, exit 2" 2 "is not an executable"
 run "$LR" --claude "$TMP/fake-retention-claude-no-init"
 expect "LR5 a lease start that dies before system/init measured nothing, exit 2" 2 "that start measured nothing"
+
+echo "=== SP. stop-probe: what one Stop does to the command, the turn and a worker ==="
+SP="$QA/stop-probe.py"
+# A scripted claude in the frame shapes 2.1.314 sent (2026-10-30): a background worker whose
+# child is `sleep 30`, a foreground call whose child is `sleep 60` with its own local_bash task;
+# `interrupt` ends both, `stop_task` ends only the foreground one and the worker then answers.
+# FAKE_STOP_MODE=never makes a lead that never calls the tools.
+cat > "$TMP/fake-stop-claude" <<'FAKE'
+#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+if sys.argv[1:2] == ["--version"]:
+    print("9.9.9 (scripted)"); sys.exit(0)
+def send(v): print(json.dumps(v), flush=True)
+def read():
+    line = sys.stdin.readline()
+    if not line: sys.exit(0)
+    return json.loads(line)
+read(); send({"type": "control_response", "response": {"subtype": "success", "request_id": "probe_init"}})
+read()
+if os.environ.get("FAKE_STOP_MODE") == "never":
+    send({"type": "result", "subtype": "success", "result": "I did nothing."}); read()
+worker = subprocess.Popen(["sleep", "30"]); fg = subprocess.Popen(["sleep", "60"])
+send({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_use", "id": "t_agent", "name": "Agent", "input": {}}]}})
+send({"type": "system", "subtype": "task_started", "task_id": "aw", "tool_use_id": "t_agent", "is_backgrounded": True})
+send({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_use", "id": "t_bash", "name": "Bash", "input": {"command": "bash ./long-task.sh 60"}}]}})
+send({"type": "system", "subtype": "task_started", "task_id": "bf", "tool_use_id": "t_bash", "is_backgrounded": False, "task_type": "local_bash"})
+while True:
+    req = read().get("request", {})
+    if req.get("subtype") == "interrupt":
+        worker.kill(); fg.kill()
+        send({"type": "system", "subtype": "task_notification", "task_id": "aw", "status": "stopped", "summary": "probe worker"})
+        send({"type": "system", "subtype": "task_notification", "task_id": "bf", "status": "stopped", "summary": "probe foreground"})
+        send({"type": "user", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_result", "tool_use_id": "t_bash", "content": "stopped", "is_error": True}]}})
+        send({"type": "result", "subtype": "error_during_execution", "terminal_reason": "aborted_tools"})
+    elif req.get("subtype") == "stop_task" and req.get("task_id") == "bf":
+        fg.kill()
+        send({"type": "system", "subtype": "task_notification", "task_id": "bf", "status": "stopped", "summary": "probe foreground"})
+        send({"type": "user", "parent_tool_use_id": None, "message": {"content": [{"type": "tool_result", "tool_use_id": "t_bash", "content": "Exit code 137", "is_error": True}]}})
+        send({"type": "result", "subtype": "success", "terminal_reason": "completed"})
+        time.sleep(3.5); worker.kill()
+        send({"type": "system", "subtype": "task_notification", "task_id": "aw", "status": "completed", "summary": "WORKER-STILL-HERE"})
+FAKE
+chmod 755 "$TMP/fake-stop-claude"
+run "$SP" --mode interrupt --out "$TMP/sp-interrupt" --claude "$TMP/fake-stop-claude" --stop-after 0.3 --observe 5
+expect "SP1 an interrupt that also ends the worker is reported as such, exit 0" 0 '"worker_final_status": "stopped"'
+run "$SP" --mode stop_task --out "$TMP/sp-stop-task" --claude "$TMP/fake-stop-claude" --stop-after 0.3 --observe 8
+expect "SP2 stop_task ends the foreground command and the worker still answers, exit 0" 0 '"worker_answer_in_stream": true'
+if printf '%s' "$OUT" | grep -Fq '"foreground_ended_within_3s_of_stop": true'; then
+  ok "SP2b the foreground command's own process was gone 3 s after stop_task"
+else
+  bad "SP2b the foreground command's own process was gone 3 s after stop_task" "$(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-240)"
+fi
+FAKE_STOP_MODE=never run "$SP" --mode stop_task --out "$TMP/sp-never" --claude "$TMP/fake-stop-claude" --start-within 2 --observe 1
+expect "SP3 a lead that never starts the foreground call measured nothing, exit 2" 2 "the foreground call never started"
+run "$SP" --mode none --out "$TMP/sp-none" --claude "$TMP/no-such-claude"
+expect "SP4 no claude binary is refused, exit 2" 2 "is not an executable claude"
 
 echo ""
 echo "=== X. the fixtures are still the fixtures ==="

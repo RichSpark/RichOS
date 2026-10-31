@@ -6021,6 +6021,110 @@ read -r keep_alive
         assert_eq!(stopped.detail, "The job's recorded work stopped. Stu has been notified.");
     }
 
+    /// **Stop on Stu's FOREGROUND command leaves an unrelated worker running** (§129 question,
+    /// 2026-10-30). The stand-in `claude` replays what 2.1.314 did on the real provider
+    /// (`scripts/qa/stop-probe.py`): Stu's Bash runs in the foreground, as it would with the
+    /// §129 forced background switched off, and its own `local_bash` task arrives
+    /// (`is_backgrounded: false`); `stop_task` for that task ends only that command; and an
+    /// `interrupt` ends every task of the session, the other job's background worker included
+    /// (measured: the worker was `stopped` 8 ms after the interrupt). So the worker survives
+    /// only if the app's Stop reaches the command by its own task and never interrupts Stu.
+    #[test]
+    fn a_jobs_stop_of_stus_foreground_command_leaves_another_jobs_worker_running() {
+        use sha2::Digest;
+        let h = harness(0);
+        let other = assignment::register(&h.state, &Registration { obligation_id: "obligation-70".into(), ..registration(&h) }).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &other.id, AssignmentState::Running, "Working.").unwrap();
+        let job = assignment::register(&h.state, &registration(&h)).unwrap();
+        // The other job's helper, as the engine's receipt records it, on Stu's own session.
+        let folder = h.state.join("work-receipts").join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]")));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("other-helper.json"), serde_json::json!({"schema":1,"id":"other-helper",
+            "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"stu-session"},
+            "request":{"obligation_id":"obligation-70","role":"worker","title":"Fictional","repo":"/fictional/project"},
+            "status":"running","agent_id":"aworker","tool_use_id":"toolu_worker"}).to_string()).unwrap();
+        let (client, dir) = crate::native::native_driver_tests::fixture_client("stop-fg-keeps-worker", r#"
+here=$(dirname "$0")
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r prompt
+sleep 300 &
+worker=$!
+echo "$worker" > "$here/worker.pid"
+printf '%s\n' '{"type":"assistant","message":{"id":"msg_w","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_worker","name":"Agent","input":{"description":"obligation-70: build","prompt":"p","subagent_type":"general-purpose","run_in_background":true}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":null}'
+printf '%s\n' '{"type":"system","subtype":"task_started","task_id":"aworker","tool_use_id":"toolu_worker","description":"obligation-70: build","subagent_type":"general-purpose","is_backgrounded":true}'
+printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_worker","type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"parent_tool_use_id":null}'
+sleep 300 &
+command=$!
+echo "$command" > "$here/command.pid"
+printf '%s\n' '{"type":"assistant","message":{"id":"msg_fg","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"toolu_fg","name":"Bash","input":{"command":"bash ./long-task.sh 60","description":"obligation-7: run the long task","timeout":120000}}],"usage":{"input_tokens":0,"output_tokens":1}},"parent_tool_use_id":null}'
+sleep 0.2
+printf '%s\n' '{"type":"system","subtype":"task_started","task_id":"bforeground","tool_use_id":"toolu_fg","description":"obligation-7: run the long task","is_backgrounded":false,"task_type":"local_bash"}'
+while read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"subtype":"interrupt"'*)
+      kill "$command" "$worker"
+      printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$id\"}}"
+      printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"aworker","tool_use_id":"toolu_worker","status":"stopped","summary":"obligation-70: build"}'
+      printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"bforeground","tool_use_id":"toolu_fg","status":"stopped","summary":"obligation-7: run the long task"}'
+      printf '%s\n' '{"type":"result","subtype":"error_during_execution","terminal_reason":"aborted_tools"}' ;;
+    *'"subtype":"stop_task","task_id":"bforeground"'*)
+      kill "$command"
+      printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$id\",\"response\":{}}}"
+      printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"bforeground","tool_use_id":"toolu_fg","status":"stopped","summary":"obligation-7: run the long task"}'
+      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Exit code 137\n\n[killed]","is_error":true,"tool_use_id":"toolu_fg"}]},"parent_tool_use_id":null}'
+      printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn"}' ;;
+    *'"subtype":"stop_task","task_id":"aworker"'*)
+      kill "$worker"
+      printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$id\",\"response\":{}}}"
+      printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"aworker","tool_use_id":"toolu_worker","status":"stopped","summary":"obligation-70: build"}' ;;
+  esac
+done
+"#);
+        let handle = client.cancel_handle();
+        let turn = std::thread::spawn(move || {
+            let ended = client.prompt("run the job's commands", &mut |_| {});
+            (client, ended)
+        });
+        until("Stu's foreground command never got its task", || {
+            let own = handle.own_commands();
+            own.len() == 1 && own[0].task_id == "bforeground"
+        });
+        let pid = |name: &str| -> i32 { std::fs::read_to_string(dir.join(name)).unwrap().trim().parse().unwrap() };
+        let (command, worker) = (pid("command.pid"), pid("worker.pid"));
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        assert!(alive(command) && alive(worker), "the stand-in command and worker must be running before Stop");
+        assert_eq!(handle.worker_status().unwrap().active, 1, "the other job's worker is running before Stop");
+        let stopper: Arc<dyn TurnCancel> = handle.clone();
+        let backend = Backend::new();
+        {
+            let mut inner = backend.inner.lock().unwrap();
+            inner.lease_session = Some("stu-session".into());
+            inner.peer_stopper = Some(("stu-session".into(), stopper));
+        }
+        h.host.backends.lock().unwrap().insert("thread-one".into(), backend);
+        let pressed = std::time::Instant::now();
+        h.host.stop_assignment("depot", "thread-one", &job.id).unwrap();
+        while alive(command) && pressed.elapsed() < std::time::Duration::from_millis(2000) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let command_ran = alive(command);
+        // Anything that would reach the worker has had its chance by now.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let worker_ran = alive(worker);
+        let (_client, ended) = turn.join().unwrap();
+        for pid in [command, worker] { unsafe { libc::kill(pid, libc::SIGKILL) }; }
+        assert!(!command_ran, "Stu's foreground command was still running {:?} after Stop", pressed.elapsed());
+        assert!(worker_ran, "the other job's worker died when Stu's foreground command was stopped");
+        assert_eq!(ended.unwrap(), "end_turn", "Stu's turn goes on past the stopped command; it is not interrupted");
+        assert_eq!(assignment::read(&h.state, "depot", "thread-one", &job.id).unwrap().state, AssignmentState::Interrupted);
+        assert_eq!(assignment::read(&h.state, "depot", "thread-one", &other.id).unwrap().state, AssignmentState::Running,
+            "the other job is untouched by this job's Stop");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
     /// Which commands a job's Stop takes. A command naming the job is its, one naming another
     /// job never is, whatever else is open; one naming no job is its only when no other job
     /// could be running it.

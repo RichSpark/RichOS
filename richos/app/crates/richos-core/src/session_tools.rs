@@ -68,6 +68,17 @@ fn sessions(scope: &StatusToolScope) -> Result<Vec<Session>, String> {
     Ok(found)
 }
 
+/// **Where a session's record lives after it was carried to another account's folder**
+/// (`native::record_on_account`): `{"transcript_path": …}` in the session's evidence folder. The
+/// provider's callbacks name the first path, which is then the old account's.
+pub(crate) const RECORD: &str = "record.json";
+
+pub(crate) fn record_moved(scope: &StatusToolScope, session: &str, path: &Path) -> Result<(), String> {
+    if !component(session) {return Err("Invalid native session identity".into())}
+    let text=json!({"transcript_path":path}).to_string();
+    crate::doctrine::write_verified(&scope.state_root.join("evidence").join(session).join(RECORD),&text).map_err(|e|e.to_string())
+}
+
 pub(crate) fn native_path(scope: &StatusToolScope, session: &str) -> Result<PathBuf,String> {
     if !component(session) {return Err("Invalid native session identity".into())}
     let record:Session=serde_json::from_slice(&std::fs::read(scope.state_root.join("evidence").join(session).join("binding.json"))
@@ -75,6 +86,11 @@ pub(crate) fn native_path(scope: &StatusToolScope, session: &str) -> Result<Path
     if record.session_id!=session || record.entity_id!=scope.entity_id || record.thread_id!=scope.thread_id {
         return Err("That native session does not belong to this company and conversation".into());
     }
+    let moved=std::fs::read(scope.state_root.join("evidence").join(session).join(RECORD)).ok()
+        .and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|record|record["transcript_path"].as_str().map(PathBuf::from))
+        .filter(|path|path.is_absolute() && path.file_name().is_some_and(|n|n==format!("{session}.jsonl").as_str()));
+    if let Some(path)=moved {return Ok(path)}
     let file=std::fs::File::open(scope.state_root.join("evidence").join(session).join("callbacks.jsonl")).map_err(|e|e.to_string())?;
     // SessionStart is near the beginning. Do not scan an entire live transcript to locate it.
     for line in BufReader::new(file.take(1024*1024)).lines() {

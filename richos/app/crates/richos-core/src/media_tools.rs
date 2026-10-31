@@ -150,12 +150,22 @@ fn version_name(sha256: &str) -> String {
 }
 
 /// The launcher, byte for byte. Line 2 is the record of what is installed; [`installed`] accepts
-/// a launcher only if it is exactly this text for the tag and hash it names. `python3` is found on
-/// PATH, which for Rich puts the delivered runtime's Python first.
+/// a launcher only if it is exactly this text for the tag and hash it names. It runs the delivered
+/// runtime's Python, which every lease names in [`RUNTIME_PYTHON`]: an agent's own commands find
+/// the user's `python3` first (`runtime::commands_path`), and yt-dlp no longer runs on the Python
+/// 3.9 that Apple's developer tools put in `/usr/bin` (measured 2026-10-30: a traceback before
+/// `--version` printed). Outside a lease, `python3`
+/// from PATH. `-E -s`: an agent's commands carry the user's own `PYTHONPATH`, `PYTHONHOME` and
+/// `pip --user` packages (`EngineProfile::commands_env`), which are for the user's Python and
+/// never reach this one. A launcher written before this text is not an installed copy, so the
+/// next check writes this one.
 fn launcher_text(tag: &str, sha256: &str) -> String {
-    format!("#!/bin/sh\n# yt-dlp nightly {tag} sha256 {sha256}\nexec python3 \"$(dirname \"$0\")/{}\" \"$@\"\n",
+    format!("#!/bin/sh\n# yt-dlp nightly {tag} sha256 {sha256}\nexec \"${{{RUNTIME_PYTHON}:-python3}}\" -E -s \"$(dirname \"$0\")/{}\" \"$@\"\n",
         version_name(sha256))
 }
+
+/// The name every lease gives the delivered runtime's Python under (`EngineProfile::configure`).
+pub const RUNTIME_PYTHON: &str = "RICHOS_RUNTIME_PYTHON";
 
 fn is_sha256(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
