@@ -109,13 +109,13 @@ theme() {  # theme Light|Dark; the press is retried only while the menu is still
   menu closed
 }
 sheet_open() { ax find --title 'Close Claude accounts' --first >/dev/null 2>&1; }
-# The Settings row is an AXMenuItem whose title runs on into its line ("Claude accounts Using Work,
+# The Settings row is an AXButton (an AXMenuItem before the start screen) whose title runs on into its line ("Claude accounts Using Work,
 # switched 2:35 PM"). Pressed by role: the first node titled Claude accounts is an empty AXGroup
 # named after the closed sheet, and pressing it did nothing (the 2026-10-06 14:38Z find).
 open_sheet() {
   for try in 1 2; do
     menu open
-    ax click --title 'Claude accounts' --role AXMenuItem --contains --first >/dev/null 2>&1 || note "no Claude accounts row"
+    ax click --title 'Claude accounts' --role AXButton --contains --first >/dev/null 2>&1 || note "no Claude accounts row"
     sleep 3
     sheet_open && return 0
     note "accounts sheet not open after try $try"
@@ -162,11 +162,14 @@ field() {  # field <label> <text>: type into the input a label names
 usage /Users/admin/fill-first/usage-1.json 20 86 || setup_failed "the one account's usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
 relaunch_app || setup_failed "relaunching the app with the fake claude"
 
-wait_for 'Not now' || true
-# Since the setup essentials (e0a346d76) a guest without the video tools first gets the setup
-# sheet, then the memory question; each says Not now (main.js, WHAT A FIRST RUN ASKS), so one
-# press is not enough (handoff-walk.sh, walk walk-7de64f57aafc, candidate 43).
-for _ in 1 2 3; do
+# This build opens on the start screen, with its door into the conversation: "Talk to Rich" (as
+# github-move-walk.sh and output-walk.py press it). First-run questions then sit
+# over the conversation (setup sheet, memory question; each says Not now, main.js WHAT A FIRST RUN
+# ASKS) and the company question after them; the composer is off until a company is added.
+wait_for 'Talk to Rich' || setup_failed "no start screen with Talk to Rich"
+for _ in 1 2 3; do ax click --title 'Talk to Rich' --first >/dev/null 2>&1 && break; sleep 3; done
+sleep 5
+for _ in 1 2 3 4 5; do
   ax find --title 'Add this company' --first >/dev/null 2>&1 && break
   ax click --title 'Not now' --first >/dev/null 2>&1 || true
   sleep 4
@@ -181,6 +184,7 @@ for attempt in 1 2 3; do
   ax find --title 'Add this company' --first >/dev/null 2>&1 || break
   note "company not added yet (attempt $attempt)"
 done
+ax find --role AXTextArea --first >/dev/null 2>&1 || note "no composer after the company was added"
 
 # The guest starts on the system theme (light); the shots named -dark are taken in Dark.
 theme Dark
@@ -295,7 +299,7 @@ menu open
 quota_open=0
 for try in 1 2 3; do
   menu open
-  ax click --title 'Claude Code quota' --role AXMenuItem --contains --first >/dev/null 2>&1 || note "no Claude Code quota row (try $try)"
+  ax click --title 'Claude Code quota' --role AXButton --contains --first >/dev/null 2>&1 || note "no Claude Code quota row (try $try)"
   sleep 4
   if ax find --title 'Close Claude Code quota' --first >/dev/null 2>&1; then quota_open=1; break; fi
 done
@@ -336,7 +340,7 @@ sleep 2
 quota_sheet() {  # open the Technical view's Claude Code quota sheet from the Settings menu
   for try in 1 2 3; do
     menu open
-    ax click --title 'Claude Code quota' --role AXMenuItem --contains --first >/dev/null 2>&1 || note "no Claude Code quota row (try $try)"
+    ax click --title 'Claude Code quota' --role AXButton --contains --first >/dev/null 2>&1 || note "no Claude Code quota row (try $try)"
     sleep 4
     ax find --title 'Close Claude Code quota' --first >/dev/null 2>&1 && return 0
   done
@@ -504,7 +508,7 @@ for t in Light Dark; do
   theme "$t"
   menu open
   has 'Using Work, switched' "11 the row's line at 1024x700 ($lower)"
-  ax find --title 'Claude accounts' --role AXMenuItem --contains --json > "$S/11-row-$lower.json" 2>&1 || true
+  ax find --title 'Claude accounts' --role AXButton --contains --json > "$S/11-row-$lower.json" 2>&1 || true
   shot "11-menu-1024-$lower"
   menu closed
 done
