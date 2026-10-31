@@ -1939,49 +1939,6 @@ class DesktopWork(unittest.TestCase):
         self.assertFalse(target.exists())
         self.assertFalse((self.repo/"unfinished.txt").exists())
 
-    def test_a_handoff_commit_message_goes_into_the_continuation_brief(self):
-        """Weekly-switch plan section 2, step 4 (slice 4). The worker the quota gate
-        ordered made its work commit, then its `RichOS handoff:` commit, and ended.
-        Its continuation starts at that commit, and the handoff is in the new brief:
-        nobody copies it."""
-        worker=self.call("prepare",self.args)
-        target=self.start_fixture_worker(worker,"handoff-worker")
-        who=["-c","user.name=Fixture","-c","user.email=fixture@example.invalid"]
-        (target/"result.txt").write_text("FICTIONAL")
-        self.app.git(target,"add","result.txt")
-        self.app.git(target,*who,"commit","-qm","Half of the fictional result")
-        handoff="RichOS handoff: result.txt is written. Left: its second line. Next: add FICTIONAL TWO."
-        self.app.git(target,*who,"commit","--allow-empty","-qm",handoff)
-        saved=self.app.git(target,"rev-parse","HEAD")
-        self.finish_fixture_worker("handoff-worker")
-        continued=self.call("prepare",{**self.args,"request_id":"continue-handoff","continue_of":worker["id"]})
-        self.assertIn("Handoff from the previous teammate:\n"+handoff,self.stored_call(continued)["prompt"])
-        next_target=self.start_fixture_worker(continued,"successor-worker")
-        self.assertEqual(self.app.git(next_target,"rev-parse","HEAD"),saved)
-
-    def test_a_dirty_ordered_worker_is_saved_and_continued_and_a_dirty_unordered_one_is_still_refused(self):
-        """Weekly-switch plan section 3 (slice 4). A worker that ended with
-        uncommitted files is refused continuation, as before, unless the quota gate
-        ordered it to hand off (its marker, named for its run). Then its leftover
-        files are committed as one commit and the work continues from them."""
-        for name,value in (("user.name","Fixture"),("user.email","fixture@example.invalid")):
-            self.app.git(self.repo,"config",name,value)   # the repository's own identity, as for every engine commit
-        worker=self.call("prepare",self.args)
-        target=self.start_fixture_worker(worker,"ordered-worker")
-        (target/"unfinished.txt").write_text("KEEP UNFINISHED BYTES")
-        self.finish_fixture_worker("ordered-worker")
-        follow={**self.args,"request_id":"continue-ordered","continue_of":worker["id"]}
-        with self.assertRaisesRegex(self.app.W.SpecError,"uncommitted|dirty"):
-            self.call("prepare",follow)
-        self.assertEqual(self.app.git(target,"status","--porcelain","--untracked-files=all"),"?? unfinished.txt")
-        handoffs=self.root/"engine-state/handoffs";handoffs.mkdir(parents=True)
-        (handoffs/"ordered-worker.json").write_text(json.dumps({"agent":"ordered-worker","session":self.session,"account":"1","at":1}))
-        continued=self.call("prepare",follow)
-        next_target=self.start_fixture_worker(continued,"successor-worker")
-        self.assertEqual((next_target/"unfinished.txt").read_text(),"KEEP UNFINISHED BYTES")
-        self.assertEqual(self.app.git(next_target,"log","-1","--format=%s"),"RichOS: work in progress saved at the account switch")
-        self.assertNotIn("Handoff from the previous teammate",self.stored_call(continued)["prompt"])
-
     # The user's own turn, as the host writes it into the scope since the second review's slice 4
     # (richos-core ecs::UserInstruction::text): marker-like lines and a trailing space included, so
     # "verbatim" is tested on bytes a fence or a strip would change.

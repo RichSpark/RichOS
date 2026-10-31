@@ -428,38 +428,6 @@ def target_workspaces(record, canonical=None):
     return out
 
 
-# The weekly switch handoff (richos-hq docs/plans/2026-10-07-weekly-switch-handoff.md).
-# The app's quota gate orders a helper on a Claude account being left to commit, make
-# one more commit whose message starts with HANDOFF_PREFIX, and end; it records the
-# order as a marker named for the helper's run (`quota::gate`, HANDOFFS_DIR).
-HANDOFF_PREFIX = "RichOS handoff:"
-LEFTOVERS_SAVED = "RichOS: work in progress saved at the account switch"
-
-
-def handed_off(record):
-    """True when the quota gate ordered this receipt's run to hand off: its marker
-    exists under the app's state, named for the agent id the engine joined to it."""
-    agent = record.get("agent_id")
-    return (isinstance(agent, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", agent) is not None
-            and (state() / "handoffs" / (agent + ".json")).is_file())
-
-
-def save_leftovers(record):
-    """Commit what an ordered worker left uncommitted, in every repository of its
-    work, so the continuation can start from it. The author is whoever each
-    repository's own Git configuration names, as for every commit the engine makes."""
-    for repo, target in target_workspaces(record).items():
-        if not git(target["path"], "status", "--porcelain", "--untracked-files=all"):
-            continue
-        try:
-            git(target["path"], "add", "-A")
-            git(target["path"], "commit", "-q", "-m", LEFTOVERS_SAVED)
-        except RunFailure as error:
-            raise ValueError("The work left at the account switch in %s could not be saved, so it was not "
-                             "continued. If Git names no user, set this repository's user.name and user.email. %s"
-                             % (repo, str(error).strip()[-2000:]))
-
-
 def review_identity(worker_id, commits, primary):
     """What a review is OF: the worker and its exact commit, plus, for a job in
     several repositories, the exact commit in every one of them."""
@@ -1453,12 +1421,6 @@ def prepare(scope_path, scope, args):
             if previous["status"] not in ("run-ended", "interrupted"):
                 raise ValueError("the previous execution must be settled before continuation")
             prior = W.load_agent(previous["workspace_ref"])
-            # A worker the quota gate ordered to hand off at the weekly switch that
-            # did not commit everything before it ended: its leftover files are
-            # saved as one commit, and the sentence below has the successor
-            # reconcile them (richos-hq weekly-switch plan section 3).
-            if handed_off(previous):
-                save_leftovers(previous)
             # Canonical continuation deletes the old workspaces when the new run
             # starts. Refuse before creation unless every old byte is reconciled.
             W._require_clean(prior, "continue saved work; inspect and reconcile retained uncommitted files first")
@@ -1474,11 +1436,6 @@ def prepare(scope_path, scope, args):
             brief = f"continues: {previous['workspace_ref']}\n" + brief + (
                 "\nContinue from the saved commit. Reconcile its existing implementation against the assignment; do not repeat completed side effects. "
                 "The prior worker did not establish assignment completion. A fresh independent review is required before integration.")
-            # The handoff the previous teammate wrote as its last commit, carried
-            # into this brief so nobody has to copy it (weekly-switch plan section 2).
-            message = git(target_workspaces(previous)[str(repo)]["path"], "log", "-1", "--format=%B", commit)
-            if message.startswith(HANDOFF_PREFIX):
-                brief += "\n\nHandoff from the previous teammate:\n" + message
         if role == "reviewer":
             worker = refresh(read_record(root, args.get("review_of")))
             if worker["request"]["role"] != "worker" or worker["request"]["obligation_id"] != obligation or worker["request"]["repo"] != str(repo):
