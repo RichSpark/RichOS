@@ -4838,7 +4838,8 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                     Ok(StopOutcome::Requested { turn_id, .. }) => eprintln!(
                         "[richos] voice: he went on before Rich answered; stopped {turn_id} so his whole thought is one request"
                     ),
-                    Ok(StopOutcome::NothingRunning) => {
+                    // `request_stop` never reaches a continuation; the arm only keeps the match whole.
+                    Ok(StopOutcome::NothingRunning | StopOutcome::ContinuationStopped { .. }) => {
                         eprintln!("[richos] voice: he went on before Rich answered; nothing was running to stop")
                     }
                     Err(e) => eprintln!("[richos] voice: the partial turn could not be stopped: {e}"),
@@ -8185,12 +8186,16 @@ fn stop_turn(state: State<AppState>, expected_turn_id: Option<String>, expected_
     let control=thread.map(|thread|state.control.for_thread(thread));
     let outcome=match (control,expected_turn_id.as_deref()) {
         (Some(control),Some(expected))=>control.request_stop_for(expected),
-        (Some(control),None)=>control.request_stop(),
+        (Some(control),None)=>control.request_stop_or_continuation(),
         (None,_)=>Ok(StopOutcome::NothingRunning),
     }.map_err(|e|e.to_string())?;
     match outcome {
         StopOutcome::NothingRunning => {
             Ok(StopReport { stopped: false, turn_id: None, requested_at: None, reached_lease: false })
+        }
+        // Rich carrying on after his own background command ended: no app turn to name.
+        StopOutcome::ContinuationStopped { reached_lease } => {
+            Ok(StopReport { stopped: true, turn_id: None, requested_at: None, reached_lease })
         }
         StopOutcome::Requested { turn_id, requested_at, reached_lease } => Ok(StopReport {
             stopped: true,
