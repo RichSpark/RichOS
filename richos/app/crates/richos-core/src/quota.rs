@@ -172,13 +172,24 @@ impl Reading {
     pub fn reaches_weekly(&self, window: &Window) -> bool {
         window.used_percent >= self.weekly_point(window)
     }
-    /// **Is this account being left for its week?** (`View::leaving`.) Its weekly window has
-    /// reached its point, and that window has not reset since: a reset that has passed is a
-    /// fresh week, exactly as `claude_accounts::gone` reads it.
+    /// **Is this account being left for its week?** (`View::leaving`.) One of its weekly windows
+    /// ([`is_weekly`]: its own week or one model's) has reached its point, and that window has
+    /// not reset since: a reset that has passed is a fresh week, exactly as
+    /// `claude_accounts::gone` reads it.
     pub fn leaving(&self, now: u64) -> bool {
-        self.windows.iter().any(|w| w.id == "seven_day" && self.reaches_weekly(w)
+        self.windows.iter().any(|w| is_weekly(&w.id) && self.reaches_weekly(w)
             && w.resets_at.is_none_or(|t| t > now))
     }
+}
+/// **A weekly window**: the account's own week (`seven_day`) or one model's week
+/// (`model:<name>`, and the older `seven_day_opus` and `seven_day_sonnet`). A model's week at its
+/// point leaves the account as its own week does (richos-hq
+/// `docs/plans/2026-10-04-multi-subscription-fill-first.md`, "When an account counts as gone":
+/// the agents run on fixed models, so a model's week used up is the account's). Before, only
+/// `seven_day` decided `leaving`, the switch and the weekly hold, and a model's week ran to its
+/// usage-limit refusal (follow-ups of 2026-10-29, `model:Fable`).
+pub fn is_weekly(id: &str) -> bool {
+    id.starts_with("seven_day") || id.starts_with("model:")
 }
 /// **The 93% rule's window before a five-hour reset** (his §87/§108). Inside it a held team is
 /// released staggered, judged on the speed measured before the hold, and only while the account
@@ -887,7 +898,7 @@ impl Snapshot {
         } else if self.checked_at.is_none() {
             if answered_empty { Admission::NoReading } else { Admission::Unknown }
         } else if let Some(until) = reading.windows.iter() // moved forward while old (`reading_with`)
-            .filter(|w| w.id == "seven_day" && reading.reaches_weekly(w))
+            .filter(|w| is_weekly(&w.id) && reading.reaches_weekly(w))
             .filter_map(|w| w.resets_at.filter(|t| *t > now)).max() {
             // Weekly exhaustion never inherits the five-hour 20-minute exception.
             // An approval is not allowance: hold until a fresh post-reset reading.

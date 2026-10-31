@@ -828,6 +828,37 @@ mod tests {
         assert_eq!(fs::read_dir(state.join(HANDOFFS_DIR)).unwrap().count(), 1, "only the helper on the leaving account was ordered");
     }
 
+    /// **A model's own week at its point is the account's week at its point** (follow-ups of
+    /// 2026-10-29, `model:Fable`). Account 1 alone, its week at 40% and its Fable week at 99%:
+    /// the published file names it leaving, the gate holds a new call until the Fable week's
+    /// reset, and a helper on it gets the handoff order. On main only `seven_day` was read: not
+    /// leaving, admitted, and the work ran on to Fable's usage-limit refusal.
+    #[test]
+    fn a_models_own_week_at_its_point_leaves_and_holds_the_account() {
+        let (_root, service, state, scope) = setup();
+        let now = crate::util::now_millis();
+        let fable_reset = now + 48 * 3_600_000;
+        *service.snapshot.lock().unwrap() = Snapshot {
+            checked_at: Some(now),
+            windows: vec![
+                Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: 10.,
+                    resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 },
+                Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: 40.,
+                    resets_at: Some(now + 72 * 3_600_000), duration_ms: 604_800_000 },
+                Window { id: "model:Fable".into(), label: "Weekly · Fable".into(), used_percent: 99.,
+                    resets_at: Some(fable_reset), duration_ms: 604_800_000 },
+            ],
+            ..Default::default()
+        };
+        service.publish().unwrap();
+        let view: View = read_json(&state.join("claude-quota.json")).unwrap();
+        assert_eq!(view.leaving, vec!["1".to_string()], "the Fable week decides `leaving`");
+        assert_eq!(admission(&state, now), Admission::Held { resets_at: fable_reset });
+        let helper = json!({"agent_id":"helper-a","session_id":"session-1","tool_name":"Bash"});
+        let ordered = wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err();
+        assert_eq!(refusal(&ordered), HANDOFF_ORDER);
+    }
+
     /// **One account, automatic pause off: no order at the weekly point.** The fast-use alert
     /// says "Automatic pause is off in Settings, so nothing acts before it reaches 100%", so a
     /// helper on Account 1 at 99% of its week keeps working: not leaving, no order, no marker.
