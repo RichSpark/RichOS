@@ -2017,6 +2017,10 @@ t "asked-again-walk: two proposals for the entity with a torn answer between; a 
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/asked-again-walk.test.py" >"$TMP/asked-again-walk.log" 2>&1; ok $? "$(cat "$TMP/asked-again-walk.log")"
 t_done
 
+t "toolchain-ask-walk: Rich's completed turns after a send, an ask about installing, and a run of make told from the install command"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/toolchain-ask-walk.test.py" >"$TMP/toolchain-ask-walk.log" 2>&1; ok $? "$(cat "$TMP/toolchain-ask-walk.log")"
+t_done
+
 t "reap: WALL 2 admits the walk-* and probes-* clone names the harnesses create (R53)"
   # The stub-tart route is closed: reap.sh refuses an unsigned tart at its launch preflight, so
   # the wall is read from source, the way the claude-login tests above read theirs.
