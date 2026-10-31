@@ -3599,6 +3599,32 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert_eq!(view.last_switch.as_ref().map(|s| s.why.as_str()), Some("weekly"));
     }
 
+    /// **A five-hour hold in place ends when the window disappears** (mid-job review
+    /// rv-20261031T192316Z-d2322984-98af, the app's side of it). At 95% the separate-process gate
+    /// holds work; the next reading carries only the week, and from that reading the gate admits
+    /// work: there is no five-hour limit left to wait for. Nothing waits for the old reset.
+    #[test]
+    #[cfg(unix)]
+    fn a_five_hour_hold_in_place_ends_when_the_window_disappears() {
+        let root = Scratch::new();
+        let bin = fake_claude(root.path());
+        let service = Service::open(root.path()).unwrap();
+        let one = root.path().join("usage-1.json");
+        let state = root.path().join("engine-state");
+        usage(&one, 95., 40., "2099-01-05T00:00:00Z");
+        service.set_policy(policy()).unwrap();
+        let view = service.refresh(&bin, true);
+        assert!(matches!(view.admission, Admission::Held { .. }), "{:?}", view.admission);
+        assert!(!gate::admission(&state, crate::util::now_millis()).allows_work(), "the gate holds at 95%");
+
+        usage_weekly_only(&one, 40., "2099-01-05T00:00:00Z");
+        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() - 10_000);
+        let view = service.refresh(&bin, true);
+        assert_eq!(view.admission, Admission::Ready, "no five-hour window: the hold is over");
+        assert!(view.release.is_none());
+        assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "the gate admits the held work now");
+    }
+
     /// **Feedback item 8 (the CEO 2026-10-06), on readings taken by the real probe under each
     /// folder.** Account 1 is at 30% of its week; Work is at 97%. He picks Work: it is in use and
     /// the published reading is Work's. The pick survives a relaunch of the service. At 99% the
