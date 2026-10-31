@@ -8173,6 +8173,28 @@ class NoSilentHolds(Base):
         ws.release("zach-opus-r6", ceo_word="ship it as it is", session_id=self.sid)
         self.assertEqual([h for h in ws.holds(self.sid) if h["source"] == "review"], [])
 
+    def test_holds_o1_1_a_held_receipt_with_an_open_review_is_quiet_until_its_hold_ends(self):
+        """2026-10-29 13:38Z (richos-hq follow-ups.md:407): Stu held four handed-over receipts
+        `--until at:2026-10-29T20:00:00Z`, and stall-watch told all four again as "[DUE] nothing
+        checkable ends it": their changes-requested review item was made with no end."""
+        aid, npath = self.spawn("zach-opus-r7")
+        self.commit(npath)
+        tip = run("git", "-C", npath, "rev-parse", "HEAD").stdout.strip()
+        state = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "state")
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "reviews.jsonl"), "a") as f:
+            f.write(json.dumps({"id": "rv-fixture-held", "tip": tip, "verdict": "changes-requested", "findings": 1,
+                                "trigger": "handover", "finished_at": ws.iso()}) + "\n")
+        self.finish(aid)
+        until = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+        ws.hold("zach-opus-r7", "superseded by its continuation", until="at:" + until, session_id=self.sid)
+        items = ws.pending(self.sid, self.entity, auto=False, dry=True)
+        self.assertEqual([d for d in ws.due_set(self.sid, items) if d["name"] == "zach-opus-r7"], [],
+                         "held work was told as due while its hold stands")
+        later = time.time() + 3601
+        due = [d for d in ws.due_set(self.sid, items, at=later) if d["name"] == "zach-opus-r7"]
+        self.assertIn("review", [d["source"] for d in due], "the review is due again once the hold has ended")
+
 class OrchestrationR2Waits(Base):
     """Orchestration reliability R2 (richos-hq docs/prds/2026-10-23-orchestration-
     reliability.md): a wait names an end the engine can check; a self-wait or an agent:
