@@ -33,8 +33,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   installed  within --install-within seconds the Command Line Tools' make exists
   continued  within --within seconds a Bash run of the app printed `make --version`'s "GNU Make"
              line, and Rich said it in the conversation
-  once       the same task again: it runs straight away with no ask, no installer window and no
-             second install; the guest's install log holds one Command Line Tools install
+  once       the same task again: make runs again with no ask and no installer process the walk
+             had not already pressed Install in; across every Claude session of the guest, one
+             tool result opened Apple's installer; the ask ledger says make is found
 
 Evidence in --out: report.json, facts.json, screenshots, Rich's words, the ask ledger, the app
 log, the hook callbacks and every refused tool call word for word (refusals.txt). Exit 0 when
@@ -67,6 +68,9 @@ AGAIN = ('Thanks. Please run the same command once more yourself, in my Acme fol
          'first line it printed: make --version')
 YES = 'Yes, please install it.'
 INSTALLER = 'Install Command Line Developer Tools'
+# What toolchain.py prints when, and only when, it opens Apple's installer. No quotation marks: a
+# transcript stores the result as JSON, where they are escaped.
+INSTALL_OPENED = 'window is open on this Mac'
 CLT = '/Library/Developer/CommandLineTools'
 HIDDEN = CLT + '.walk-hidden'
 
@@ -122,9 +126,25 @@ class ToolchainAskWalk(command_walk.CommandWalk):
         """Apple's installer processes running now (pgrep is not a developer-tools stub)."""
         return [l for l in guest(self.vm, 'pgrep -fl ' + shlex.quote(INSTALLER) + ' || true').splitlines() if l.strip()]
 
-    def installs_logged(self):
-        return [l for l in guest(self.vm, "grep -a 'Installed \"Command Line Tools' /var/log/install.log || true", 60)
-                .splitlines() if l.strip()]
+    def installer_opens(self):
+        """The tool results, in every Claude session of the guest home, that opened Apple's installer:
+        toolchain.py prints INSTALL_OPENED only when it starts `xcode-select --install`. Counted by
+        tool_use_id, so a result kept twice in a transcript counts once. (The guest's install.log
+        was tried first: its "Installed ..." lines are the base image's, and this install wrote
+        none in that shape, run 3 of 2026-10-31.)"""
+        script = ('import glob,json,sys\n'
+                  'ids=set()\n'
+                  'for p in glob.glob(sys.argv[1]+"/.claude/projects/*/*.jsonl")+glob.glob(sys.argv[1]+"/.claude/projects/*/*/*.jsonl"):\n'
+                  '    for line in open(p, errors="replace"):\n'
+                  '        if sys.argv[2] not in line: continue\n'
+                  '        try: row=json.loads(line)\n'
+                  '        except ValueError: continue\n'
+                  '        for part in (row.get("message") or {}).get("content") or []:\n'
+                  '            if isinstance(part,dict) and part.get("type")=="tool_result" and sys.argv[2] in json.dumps(part):\n'
+                  '                ids.add(part.get("tool_use_id"))\n'
+                  'print(json.dumps(sorted(i for i in ids if i)))\n')
+        return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.home) + ' '
+                                + shlex.quote(INSTALL_OPENED), 60))
 
     def bash_runs(self):
         script = ('import json,glob,sys\n'
@@ -175,9 +195,7 @@ class ToolchainAskWalk(command_walk.CommandWalk):
             raise StepFailed('the guest still has developer tools: ' + resolved)
         if '/walk-bin/' not in harness_python:
             raise StepFailed('the harness python3 is still ' + harness_python + ' (Apple\'s stub without tools)')
-        self.facts['walk_start_install_log'] = len(self.installs_logged())
-        self.save()
-        return {'resolve': found, 'harness_python3': harness_python, 'installs_logged_before': self.facts['walk_start_install_log']}
+        return {'resolve': found, 'harness_python3': harness_python}
 
     def ask(self):
         sent = self.facts.get('sent_ms')
@@ -297,21 +315,26 @@ class ToolchainAskWalk(command_walk.CommandWalk):
         sent = self.send(AGAIN)
         hit, _ = self.wait_turn(sent[0], lambda text: 'GNU Make' in text, self.a.within, 'answering the second request')
         asks = self.asks()
-        logged = self.installs_logged()
+        opens = self.installer_opens()
+        # Apple's window stays open on "The software was installed" until Done: the process the
+        # walk pressed Install in may still be there. Only a process it never saw is a second one.
+        pressed_in = {l.split()[0] for l in self.facts.get('installer_running') or []}
+        running = self.installers()
         evidence = {'rich_said': hit['text'], 'make_runs_before': before, 'make_runs_after': len(make_runs(self.bash_runs())),
-                    'installers': self.installers(), 'asks': asks, 'installs_logged': logged,
-                    'installs_logged_before_walk': self.facts.get('walk_start_install_log')}
+                    'installers': running, 'installer_pressed_in': sorted(pressed_in), 'asks': asks,
+                    'installer_opened_by_tool_results': opens}
         (self.out / 'once.json').write_text(json.dumps(evidence, indent=2) + '\n')
         failures = []
         if asks_to_install(hit['text']) and '?' in hit['text']:
             failures.append('Rich asked about installing again')
-        if evidence['installers']:
-            failures.append('an installer is running again')
-        if ((asks.get('tools') or {}).get('make') or {}).get('state') != 'found':
-            failures.append('the ask ledger does not record make as found')
-        new_installs = len(logged) - (self.facts.get('walk_start_install_log') or 0)
-        if new_installs != 1:
-            failures.append('the install log holds %d Command Line Tools installs from this walk, not 1' % new_installs)
+        if evidence['make_runs_after'] <= before:
+            failures.append('make was not run again')
+        if [l for l in running if l.split()[0] not in pressed_in]:
+            failures.append('a second installer started: %s' % json.dumps(running))
+        if ((asks.get('tools') or {}).get('make') or {}).get('state') != 'found' or 'install' in asks:
+            failures.append('the ask ledger does not record make as found with no install open')
+        if len(opens) != 1:
+            failures.append('Apple\'s installer was opened %d times, not once: %s' % (len(opens), json.dumps(opens)))
         if failures:
             raise StepFailed('; '.join(failures))
         return evidence
