@@ -1085,17 +1085,16 @@ impl WorkHost {
         }
     }
 
-    /// **A turn of Stu's that failed wakes Rich only when it was on input of Rich's or the
-    /// user's** (richos-hq `docs/research/2026-10-31-app-token-burn`, 1e). Stu's automatic turns
-    /// and RichOS's own notices to him (stall watch, overload retry, account switch, team reload,
-    /// the user's Stop, Codex entries) are input Rich never gave and cannot act on: the notice
-    /// stays in Stu's inbox, or the stall watch tells Stu, either way without Rich. During the
-    /// account refusal of 2026-10-30, 79 of the 96 failure notices that woke Rich were Stu's turns
-    /// on such notices and 14 were his automatic turns; 3 were on Rich's own messages.
+    /// **A turn of Stu's that failed on a stall-watch notice wakes no turn of Rich's** (richos-hq
+    /// `docs/research/2026-10-31-app-token-burn`, 1e). The stall watch tells Stu again while the
+    /// stall lasts, so each such failure repeats one Rich cannot act on: during the account
+    /// refusal of 2026-10-30, 78 of the 96 failure notices that woke Rich were Stu's turns on
+    /// stall-watch notices. Every other failure still reaches him, once per input as before,
+    /// including the final one of a recovery whose one retry is spent.
     fn observe_turn_result(&self, binding: &ThreadBinding, message: Option<&crate::session_tools::Message>,
         input: Option<&str>, session: &str, result: &Result<String,String>) -> Result<(),String> {
         if result.as_ref().is_ok_and(|reason| matches!(reason.as_str(), "end_turn" | crate::native::STOP_REASON_CANCELLED | crate::native::STOP_REASON_CANCEL_UNACKNOWLEDGED))
-            || !message.is_some_and(|message| matches!(message.from.as_str(), "rich" | "user"))
+            || message.is_some_and(|message| message.from == "stall-watch")
             || *self.closing.lock().unwrap() || match message {Some(message)=>self.handoff_stopped(binding,message)?,None=>false} { return Ok(()); }
         crate::session_tools::observe_work_status(&self.message_scope(binding), serde_json::json!({
             "event":"upstream_turn","input_id":input,"session_id":session,"work":message.and_then(|message|message.work.as_ref()),
@@ -5343,12 +5342,12 @@ mod tests {
         std::fs::remove_dir_all(h.root).unwrap();
     }
 
-    /// **A turn of Stu's that fails on RichOS's own notice to him wakes no turn of Rich's**
-    /// (richos-hq `docs/research/2026-10-31-app-token-burn`, 1e: during an account refusal each
-    /// stall-watch notice Stu could not take woke Rich, 78 times in one night). The notice stays
-    /// in Stu's inbox. A failed turn on Rich's own message still reaches him, once.
+    /// **A turn of Stu's that fails on a stall-watch notice wakes no turn of Rich's** (richos-hq
+    /// `docs/research/2026-10-31-app-token-burn`, 1e: during an account refusal each stall-watch
+    /// notice Stu could not take woke Rich, 78 times in one night). The notice stays in Stu's
+    /// inbox. A failed turn on Rich's own message still reaches him, once.
     #[test]
-    fn a_turn_refused_on_a_host_notice_to_stu_wakes_no_turn_of_richs() {
+    fn a_turn_refused_on_a_stall_watch_notice_wakes_no_turn_of_richs() {
         struct Refused;
         impl LeaseFactory for Refused {
             fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
@@ -5361,16 +5360,14 @@ mod tests {
         let scope=host.message_scope(&h.binding);
         let path=h.state.join("rich-status.json");
         crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
-        crate::session_tools::observe_stall(&scope,"Stu has shown no progress on the website job").unwrap();
-        crate::session_tools::observe_codex(&scope,"CODEX-WATCH channel/to-rich.md\n## 2026-10-31 09:00Z — READY TO LAND").unwrap();
         let mut after=0;
-        while let Some((notice,through))=crate::session_tools::pending_after(&scope,"stu",after).unwrap() {
+        for text in ["Stu has shown no progress on the website job","Still no progress on the website job"] {
+            crate::session_tools::observe_stall(&scope,text).unwrap();
+            let (notice,through)=crate::session_tools::pending_after(&scope,"stu",after).unwrap().expect("the stall-watch notice was not saved for Stu");
             assert!(host.run_message(&Backend::new(),&h.binding,&notice,&format!("peer:{through}")).is_err());
-            assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),
-                "Stu's refused turn on a {} notice woke Rich",notice.from);
+            assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"Stu's refused turn on a stall-watch notice woke Rich");
             after=through;
         }
-        assert!(after>0,"no host notice was saved for Stu");
         assert_eq!(crate::session_tools::pending(&scope,"stu").unwrap().unwrap().0.from,"stall-watch","the refused notice left Stu's inbox");
         crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Prepare the report"})).unwrap();
         let (mine,through)=crate::session_tools::pending_after(&scope,"stu",after).unwrap().unwrap();

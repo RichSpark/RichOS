@@ -9654,7 +9654,7 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
 
 
 #[test]
-fn worker_triggered_turns_that_fail_wake_no_turn_of_richs_even_when_a_new_app_input_is_queued() {
+fn worker_triggered_turns_report_once_even_when_a_new_app_input_is_queued() {
     for queued in [false, true] {
         let root = std::env::temp_dir().join(format!("richos-worker-turn-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -9723,10 +9723,17 @@ while True:read()
             completed.recv_timeout(Duration::from_secs(10)).expect("app input result absent");
         }
         assert!(host.wait_for_completed(1,Duration::from_secs(10)));
-        // The two automatic turns that failed (503, then max_tokens) were on no input of Rich's
-        // or the user's, so neither woke Rich (richos-hq docs/research/2026-10-31-app-token-burn, 1e).
-        let woke = crate::session_tools::pending(&scope,"rich").unwrap().map(|(message,_)|message.text);
-        assert!(woke.is_none(),"an automatic turn of Stu's woke Rich: {woke:?}");
+        let mut facts = Vec::new();
+        while let Some((message,through)) = crate::session_tools::pending(&scope,"rich").unwrap() {
+            assert_eq!(message.from,"work-status");
+            let fact:Value = serde_json::from_str(&message.text).unwrap();
+            assert_eq!(fact["event"],"upstream_turn");assert!(fact["input_id"].is_null());
+            facts.push(fact);
+            crate::session_tools::acknowledge(&scope,"rich",through).unwrap();
+        }
+        assert_eq!(facts.len(),2,"missing or duplicate terminal failure: {facts:?}");
+        assert!(facts[0]["error"].as_str().unwrap().contains("503"));
+        assert_eq!(facts[1]["stop_reason"],"max_tokens");
         assert!(crate::session_tools::pending(&scope,"stu").unwrap().is_none());
         host.shutdown();
         assert!(crate::session_tools::pending(&scope,"rich").unwrap().is_none(),"Quit produced an unwanted reply");
