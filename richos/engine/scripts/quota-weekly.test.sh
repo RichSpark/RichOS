@@ -452,6 +452,19 @@ class NoFiveHour(unittest.TestCase):
         self.assertEqual([k for k, _ in out.woken], ['THRESHOLD'], out.woken)
         last = out.lines.getvalue().strip().splitlines()[-1]
         self.assertIn('no five-hour window', last)
+    def test_a_five_hour_hold_releases_the_moment_its_window_disappears(self):
+        # Second review rv-20261031T192316Z-d2322984-98af: 95% at t=0 paused the worker; at t=300
+        # the reading has only the week. The hold releases then, not at the old window's release
+        # (t=6300) and reset (t=7200), which are never announced after it.
+        both = reading(40, 95, NOW + 7200)
+        both['source'] = 'get_usage'
+        rows = [workers(['worker']), workers(paused=['worker'])]
+        out = run_polls([both, week_only(40)], rows, 25, out_cls=Recorder)
+        self.assertEqual([(k, t - NOW) for k, t in out.woken], [('THRESHOLD', 0), ('RELEASE', 300)], out.woken)
+        self.assertIn('no longer has a five-hour limit', out.events.getvalue())
+        # A weekly hold is not released by it: at 99% of the week the weekly rule still holds.
+        out = run_polls([both, week_only(99)], rows, 3, out_cls=Recorder)
+        self.assertEqual([k for k, _ in out.woken], ['THRESHOLD', 'WEEKLY-THRESHOLD'], out.woken)
     def test_the_apps_gate_admits_a_weekly_only_reading_as_ready_and_holds_it_at_99(self):
         import os, tempfile
         with tempfile.TemporaryDirectory() as root:

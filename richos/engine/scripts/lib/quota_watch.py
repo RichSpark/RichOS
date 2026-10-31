@@ -1303,6 +1303,15 @@ def _emit_release(a, reset_at, now, w):
     print(KEEPS_POLLING + " Inside the last 20 minutes it pauses nobody, and it wakes you at the reset.")
 
 
+def _emit_five_gone(a, now, w):
+    print("QUOTA-RELEASE at %s" % hhmm(now))
+    print("  The current reading has no five-hour window: this account no longer has a five-hour limit, so"
+          " the quota hold releases now. The weekly limit applies as before.")
+    print("  The CEO, 2026-10-31: \"If no 5-hour-limit data, then don't show/don't handle it.\"")
+    _wake_quota_paused(w, None)
+    print(KEEPS_POLLING)
+
+
 def _wake_quota_paused(w, reset_at):
     print("  %s" % worker_line(w))
     if w["known"]:
@@ -1863,6 +1872,16 @@ def _poll_loop(a, out, alive, health=None):
             _poll_completed(health)
             _nap(a.poll, alive)
             continue
+        if window_end is not None and not has_five(r) and classify(r, a.threshold, a.stale)[0] == "below":
+            # THE FIVE-HOUR WINDOW WENT AWAY (second review rv-20261031T192316Z-d2322984-98af): a
+            # current reading no longer carries the window this watcher was following, so its hold
+            # ends now, not at that window's old reset 100 minutes on. A weekly hold is untouched:
+            # it was decided above and continues there.
+            w = workers(a.engine_root)
+            if not w["known"] or w["quota_paused"]:
+                out.wake("RELEASE", _capture(_emit_five_gone, a, now, w), now)
+            window_end = released = None
+            threshold_named = {}
         if first and r["state"] == "ok" and r["ended"]:
             # Started after a reset had already passed: the agents it held
             # still need waking, and nothing else does.
