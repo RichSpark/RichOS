@@ -304,7 +304,10 @@ def _set_state(env, name, state):
 
 
 def _commands(name):
-    me = "%s %s" % (sys.executable, os.path.abspath(__file__))
+    # Quoted: a fetched engine lives under ~/Library/Application Support (review
+    # rv-20261031T104540Z-1d6c4328-0287), and the agent runs these through a shell.
+    import shlex
+    me = "%s %s" % (shlex.quote(sys.executable), shlex.quote(os.path.abspath(__file__)))
     return {"yes_command": "%s answer %s yes" % (me, name), "no_command": "%s answer %s no" % (me, name),
             "install_command": "%s install %s" % (me, name)}
 

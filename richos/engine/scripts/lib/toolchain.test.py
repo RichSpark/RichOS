@@ -443,6 +443,14 @@ class FakeMac(unittest.TestCase):
         self.assertIn(data["yes_command"], message)
         self.assertIn(data["no_command"], message)
         self.assertFalse(toolchain.general_permission(env), "the general permission is off by default")
+        # The commands survive a shell where the engine is fetched to: ~/Library/Application Support.
+        import shlex
+        spaced = ("/Users/x/Library/Application Support/RichOS/engine/runtime/bin/python3",
+                  "/Users/x/Library/Application Support/RichOS/engine/scripts/lib/toolchain.py")
+        with unittest.mock.patch.object(toolchain.sys, "executable", spaced[0]), \
+                unittest.mock.patch.object(toolchain, "__file__", spaced[1]):
+            for key, tail in toolchain._commands("make").items():
+                self.assertEqual(shlex.split(tail)[:2], list(spaced), key)
         rc, said = self.run_install(env, "make")
         self.assertEqual(rc, 3, said)
         self.assertIn("has not given permission", said)
