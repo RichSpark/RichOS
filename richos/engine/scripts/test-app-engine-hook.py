@@ -30,7 +30,12 @@ class DesktopHooks(unittest.TestCase):
             "RICHOS_SA_TEAMS_DIR": str(self.root / "teams"),
             "RICHOS_WORKSPACES_DIR": str(self.root / "workspaces"),
             "STALL_WATCH_STATE_DIR": str(self.root / "stall-watch"),
-            "CLAUDE_PROJECT_DIR": str(self.coordination), "PYTHONDONTWRITEBYTECODE": "1"}
+            "CLAUDE_PROJECT_DIR": str(self.coordination), "PYTHONDONTWRITEBYTECODE": "1",
+            # The turn end runs every registered Stop check, and some read machine-wide stores
+            # (the escalation ledger, the land leases): the engine's own sandbox convention keeps
+            # them in the fixture (machine_settings.claude_home).
+            "CLAUDE_CONFIG_DIR": str(self.root / "claude-home"), "HOME": str(self.root / "home")}
+        (self.root / "home").mkdir()
         subprocess.run(["git", "init", "-q", str(self.coordination)], check=True, capture_output=True)
 
     def hook(self, event, **fields):
@@ -371,6 +376,39 @@ class DesktopHooks(unittest.TestCase):
                       "guard-no-home-network-phone.sh", "guard-reference-ledger.sh", "guard-public-record-repo.sh"):
             self.assertIn(guard, ran)
         self.assertNotIn("guard-brief-verification-scope.sh", ran)
+
+    def test_stus_turn_end_runs_every_check_the_terminal_registers_except_the_terminal_only_ones(self):
+        """The terminal ends a lead's turn with every Stop command in hooks/hooks.json; on 47e314bb6
+        the app ran the deferral notice and ass-kicker.py, and nothing else."""
+        hook = self._hook_in_process("app_engine_hook_turn_end")
+        ran = []
+        import types
+        def fake(argv, **kwargs):
+            ran.append(Path(argv[1]).name)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        hook.subprocess = types.SimpleNamespace(run=fake, TimeoutExpired=subprocess.TimeoutExpired)
+        (self.root / "state/evidence/fictional-session").mkdir(parents=True)
+        (self.root / "state/evidence/fictional-session/binding.json").write_text('{"role": "stu"}')
+        with contextlib.redirect_stdout(io.StringIO()):
+            hook.handle({"hook_event_name": "Stop", "session_id": "fictional-session", "cwd": str(self.coordination),
+                         "last_assistant_message": "Done.", "stop_hook_active": False})
+        registered = [entry["command"].split("/")[-1].split()[0]
+                      for group in json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"]["Stop"]
+                      for entry in group["hooks"]]
+        for name in hook.TERMINAL_ONLY_TURN_END:
+            self.assertIn(name, registered, "a terminal-only check that is no longer registered")
+        self.assertEqual(sorted(ran), sorted(n for n in registered if n not in hook.TERMINAL_ONLY_TURN_END))
+
+    def test_a_turn_end_check_the_terminal_runs_refuses_stus_false_claim_in_the_app(self):
+        """guard-unresolved-claims.sh refuses a reply that says a role is working when none was ever
+        dispatched. It reads the session's team folder; the app's are under RICHOS_SA_TEAMS_DIR."""
+        (self.root / "teams/session-fictiona").mkdir(parents=True)
+        self.env["RICHOS_SA_TEAMS_DIR"] = str(self.root / "teams")
+        result = self.hook("Stop", last_assistant_message="Worker is fixing the login page now.",
+                           stop_hook_active=False)
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("A CLAIM IN THE FINAL MESSAGE CONTRADICTS THE REPOSITORY", result.stderr)
+        self.assertIn("Worker is fixing", result.stderr)
 
 
 if __name__ == "__main__":

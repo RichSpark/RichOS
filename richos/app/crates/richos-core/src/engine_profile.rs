@@ -632,8 +632,10 @@ impl EngineProfile {
         // root?"). What was wrong was that its reach was written down nowhere, so every
         // reader had to infer it and one inferred it narrow.
         for event in ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop", "Stop"] {
-            // Agent dispatch includes Pierce's bounded five-minute inspection.
-            let timeout = if event == "PreToolUse" { 330 } else { 25 };
+            // Agent dispatch includes Pierce's bounded five-minute inspection. The turn end runs
+            // the terminal's Stop checks together, each inside its own registered budget (the
+            // longest, guard-workspace-gate.sh, is 60 s), so the app's Stop gives them 90.
+            let timeout = match event { "PreToolUse" => 330, "Stop" => 90, _ => 25 };
             hooks.insert(event.into(), json!([{"hooks":[{"type":"command","command":command,"timeout":timeout}]}]));
         }
         hooks.get_mut("PreToolUse").unwrap().as_array_mut().unwrap().push(json!({

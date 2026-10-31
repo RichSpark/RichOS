@@ -43,6 +43,13 @@ fn app_profile_keeps_app_scope_on_every_tool_and_reuses_terminal_bash_hooks() {
         assert!(hook["command"].as_str().unwrap().contains(engine().join("scripts/hooks").join(name).to_str().unwrap()));
     }
     assert_eq!(registered.len(), 5);
+    // The app's turn end runs the terminal's Stop checks together (scripts/app-engine-hook.py), so
+    // its budget covers the longest one the engine registers.
+    let terminal: serde_json::Value = serde_json::from_slice(&std::fs::read(engine().join("hooks/hooks.json")).unwrap()).unwrap();
+    let longest = terminal["hooks"]["Stop"].as_array().unwrap().iter()
+        .flat_map(|group| group["hooks"].as_array().unwrap().iter())
+        .map(|hook| hook["timeout"].as_u64().unwrap_or(60)).max().unwrap();
+    assert!(hooks["Stop"][0]["hooks"][0]["timeout"].as_u64().unwrap() > longest);
     // **NO `matcher`, SO `PreToolUse` COVERS EVERY TOOL.** Asserted rather than left to be
     // inferred: two escalations and one brief on 2026-09-18 were built on the belief that
     // this registration gated only the two continuity tools, and deferring the app's action
