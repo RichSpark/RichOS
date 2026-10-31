@@ -17,8 +17,6 @@
 [richos]   passed over {} ({}) — {}
 [richos] App Management watch: not watching yet, the engine is not verified ({})
 [richos] App Management watch: the watcher could not start ({})
-[richos] Codex watch: an entry waits for Rich ({})
-[richos] Codex watch: an entry waits for a conversation to be open
 [richos] Codex watch: its sink was already set
 [richos] Codex watch: no Codex channel is set
 [richos] Codex watch: not watching yet, the engine is not verified ({})
