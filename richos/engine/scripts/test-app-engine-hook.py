@@ -39,9 +39,18 @@ class DesktopHooks(unittest.TestCase):
         return subprocess.run([sys.executable, str(ENGINE / "scripts/app-engine-hook.py")],
             input=json.dumps(payload), text=True, capture_output=True, env=self.env, timeout=25)
 
+    def native_transcript(self, prompt):
+        """Claude Code's own transcript of this turn, the one the guards read."""
+        transcript = self.root / "transcript.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "isSidechain": False, "promptId": "fictional-turn",
+                                          "message": {"role": "user", "content": prompt}}) + "\n")
+        return str(transcript)
+
     def test_stop_refuses_a_claim_of_dispatch_without_dispatch(self):
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="Please delegate this work.").returncode, 0)
-        result = self.hook("Stop",
+        transcript = self.native_transcript("Please delegate this work.")
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="Please delegate this work.",
+                                   transcript_path=transcript).returncode, 0)
+        result = self.hook("Stop", transcript_path=transcript,
             last_assistant_message="I'm dispatching Worker now.", stop_hook_active=False)
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
         self.assertIn("dispatch", result.stderr.lower())
@@ -70,13 +79,12 @@ class DesktopHooks(unittest.TestCase):
     def test_a_reply_holding_work_reaches_the_lead_at_the_apps_turn_end_and_records_nothing(self):
         """Orchestration reliability R1 on the app host: the deferral check is report only,
         and reaches Rich as Stop additionalContext, in one JSON answer."""
-        transcript = self.root / "transcript.jsonl"
-        transcript.write_text(json.dumps({"type": "user", "isSidechain": False,
-                                          "message": {"role": "user", "content": "How is it going?"}}) + "\n")
-        # The app's Stop reads its own projection of the turn, which its UserPromptSubmit opens.
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="How is it going?").returncode, 0)
+        # The app's Stop reads Claude Code's own transcript of the turn, as the terminal's does.
+        transcript = self.native_transcript("How is it going?")
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="How is it going?",
+                                   transcript_path=transcript).returncode, 0)
         result = self.hook("Stop", last_assistant_message="Spelling work is on hold, deliberately.",
-                           transcript_path=str(transcript), stop_hook_active=False)
+                           transcript_path=transcript, stop_hook_active=False)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(sorted((self.root / "workspaces" / "holds").glob("held-*.json")), [])
         answer = json.loads(result.stdout)["hookSpecificOutput"]
@@ -167,14 +175,20 @@ class DesktopHooks(unittest.TestCase):
         self.scope.unlink()
         self.assertEqual(self.hook("PreToolUse", tool_name="Read", tool_use_id="tool-1").returncode, 2)
 
-    def test_provider_callbacks_preserve_identity_and_do_not_attest_user_authority(self):
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="Fictional request").returncode, 0)
-        self.assertEqual(self.hook("PreToolUse", tool_name="Read", tool_use_id="tool-7", tool_input={"file_path":"fixture"}).returncode, 0)
-        path = self.root / "state/evidence/fictional-session/guard-transcript.jsonl"
-        rows = [json.loads(line) for line in path.read_text().splitlines()]
-        self.assertEqual(rows[0]["promptSource"], "runtime")
-        self.assertEqual(rows[1]["message"]["content"][0]["id"], "tool-7")
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+    def test_provider_callbacks_are_kept_whole_and_no_second_transcript_is_written(self):
+        """Fails on main 47e314bb6, whose hook wrote guard-transcript.jsonl beside callbacks.jsonl
+        (richos-hq docs/research/2026-10-31-app-terminal-differences.md finding 10)."""
+        transcript = self.native_transcript("Fictional request")
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="Fictional request", transcript_path=transcript).returncode, 0)
+        self.assertEqual(self.hook("PreToolUse", tool_name="Read", tool_use_id="tool-7", transcript_path=transcript,
+                                   tool_input={"file_path":"fixture"}).returncode, 0)
+        folder = self.root / "state/evidence/fictional-session"
+        self.assertFalse((folder / "guard-transcript.jsonl").exists(), "a second copy of the transcript was written")
+        rows = [json.loads(line)["callback"] for line in (folder / "callbacks.jsonl").read_text().splitlines()]
+        self.assertEqual([(row["hook_event_name"], row["transcript_path"]) for row in rows],
+                         [("UserPromptSubmit", transcript), ("PreToolUse", transcript)])
+        self.assertEqual(rows[1]["tool_use_id"], "tool-7")
+        self.assertEqual((folder / "callbacks.jsonl").stat().st_mode & 0o777, 0o600)
 
     def test_malformed_dispatch_is_refused_by_canonical_guard(self):
         result = self.hook("PreToolUse", tool_name="Agent", tool_use_id="tool-8",

@@ -180,15 +180,11 @@ def handle(payload):
                 and not a_worker_this_lease_already_dispatched(active, payload):
             raise ValueError("This app turn is stopped or is supplying context. New actions are unavailable. " + closure_of(active))
     evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")
-    instruction = None
-    if event in ("UserPromptSubmit", "PreToolUse"):
-        active = scope()
-        if active.get("actions_allowed") is True and active.get("binding", {}).get("session_id") == payload.get("session_id"):
-            instruction = active.get("user_instruction")
     # `root` is <data>/engine-state; its parent is the app's data directory, which the output
     # record's command witness never lists (Output side panel PRD §4.1 (c)) -- except the worker
-    # worktrees under it, where every back-end worker works (the carve-out, slice S2b).
-    payload = evidence.capture(payload, root / "evidence", instruction, app_data=root.parent,
+    # worktrees under it, where every back-end worker works (the carve-out, slice S2b). The
+    # guards below get the payload as Claude Code sent it, its own transcript_path included.
+    payload = evidence.capture(payload, root / "evidence", app_data=root.parent,
                                worktrees=root / "target-worktrees")
     # Local response formatting performs no work and grants no tool authority.
     if presentation:

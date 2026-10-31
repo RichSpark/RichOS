@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Project native hook callbacks into the transcript shape engine guards read.
+"""Keep the app's own record of native hook callbacks; the guards read Claude Code's transcript.
 
-The app owns the raw conversation ledger. These private files are a disposable
-guard-evidence projection, not conversation history or organizational memory.
-No callback is inferred from an attempted action. In particular, PreToolUse does
-not establish execution and SubagentStop does not establish successful work.
+Every hook call is appended whole to `<state>/<session>/callbacks.jsonl`, the app's own event
+feed (read by steering.rs, output.rs, work_host.rs and app_workers.rs), and the output record's
+witnesses go to `writes.jsonl`. The payload goes on to the guards unchanged, with Claude Code's
+own `transcript_path`, as in the terminal.
+
+Until 2026-10-31 each call was also projected into a second transcript, `guard-transcript.jsonl`,
+and the guards were handed that file instead (e94b7a2c2): 262 MB on the CEO's Mac, and a guard
+reading the projection missed what only Claude Code's transcript holds, the host's compaction
+lines (3dd003945). The projection's one addition was marking which input the app's ledger
+attests as the user's words; the guards that need his words read that ledger directly
+(pierce.py `desktop_messages`, under the app's `RICHOS_APP_SCOPE`). richos-hq
+docs/research/2026-10-31-app-terminal-differences.md finding 10.
 """
 import argparse
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,54 +26,6 @@ import stat
 import subprocess
 import sys
 import time
-
-
-def project(payload, instruction=None):
-    """Preserve actual prompt/tool identities and separate worker sidechains."""
-    record = {
-        "promptId": payload.get("prompt_id"),
-        "cwd": payload.get("cwd"),
-        "isSidechain": bool(payload.get("agent_id")),
-        "agentId": payload.get("agent_id"),
-        "evidenceSource": "richos-native-hook-v1",
-    }
-    event = payload.get("hook_event_name")
-    if event == "UserPromptSubmit":
-        # Runtime input can also be hidden priming or quoted context. Only the
-        # app ledger can attest that a given message is a user instruction.
-        record.update(type="user", promptSource="runtime",
-                      message={"content": payload.get("prompt", "")})
-        if (not payload.get("agent_id") and isinstance(instruction, dict)
-                and isinstance(payload.get("prompt"), str)
-                and instruction.get("sha256") == hashlib.sha256(payload["prompt"].encode()).hexdigest()
-                and str(instruction.get("ledger_ref", "")).startswith("ledger:")):
-            record.update(promptSource="sdk", origin={"kind":"human"},
-                          ledgerReference=instruction["ledger_ref"],
-                          evidenceSource="richos-ledger-attested-hook-v1")
-    elif event == "PreToolUse":
-        if not payload.get("tool_use_id") or not payload.get("tool_name"):
-            raise ValueError("Tool callback has no tool identity")
-        record.update(type="assistant", message={"content": [{
-            "type": "tool_use", "id": payload["tool_use_id"],
-            "name": payload["tool_name"], "input": payload.get("tool_input", {}),
-        }]})
-    elif event in ("PostToolUse", "PostToolUseFailure"):
-        if not payload.get("tool_use_id"):
-            raise ValueError("Tool result has no tool identity")
-        response = payload.get("tool_response", payload.get("error", ""))
-        # Native transcript tool_result content is a string or content blocks,
-        # whereas hook tool_response may be an object. Preserve its structure.
-        if not isinstance(response, (str, list)):
-            response = json.dumps(response, ensure_ascii=False)
-        record.update(type="user", message={"content": [{
-            "type": "tool_result", "tool_use_id": payload["tool_use_id"],
-            "content": response, "is_error": event == "PostToolUseFailure",
-        }]})
-    else:
-        return None
-    if not record["promptId"]:
-        raise ValueError("Callback has no prompt identity; refusing session-wide evidence")
-    return record
 
 
 def append(path, value):
@@ -355,15 +314,11 @@ def append_land_rows(state_root, session_id, rows):
     return len(out)
 
 
-def capture(payload, state_root, instruction=None, app_data=None, worktrees=None):
+def capture(payload, state_root, app_data=None, worktrees=None):
     session = payload.get("session_id", "")
     with _session_folder(state_root, session) as folder:
         root = folder.parent
-        transcript = folder / "guard-transcript.jsonl"
-        record = project(payload, instruction)
         append(folder / "callbacks.jsonl", {"schema": 1, "callback": payload})
-        if record is not None:
-            append(transcript, record)
         # The output record's witnesses. Never the app's own data, never this evidence, except
         # the worker worktrees under the data directory (§4.1 (c)'s carve-out). The evidence
         # root (`engine-state/evidence`) is not under `engine-state/target-worktrees`, so the
@@ -375,17 +330,7 @@ def capture(payload, state_root, instruction=None, app_data=None, worktrees=None
                 append(folder / WRITES_FILE, row)
         except (OSError, ValueError, TypeError) as error:
             print(f"RichOS output witness skipped this callback: {error}", file=sys.stderr)
-        # SessionStart/Stop may arrive without a tool event. An empty projection
-        # is valid; a missing or unwritable projection is an explicit failure.
-        fd = os.open(transcript, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
-        os.close(fd)
-    out = {**payload, "transcript_path": str(transcript)}
-    # The provider's own transcript stays readable beside it: only it carries the host's
-    # compaction lines, which tell app.py's worker_context to say a worker's assignment again
-    # (notice_once; the second review of bb08b88e0).
-    if isinstance(payload.get("transcript_path"), str) and "native_transcript_path" not in payload:
-        out["native_transcript_path"] = payload["transcript_path"]
-    return out
+    return payload
 
 
 def main():

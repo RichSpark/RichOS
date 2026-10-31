@@ -4101,9 +4101,9 @@ pub fn resolve_claude_bin_checked() -> Result<std::path::PathBuf, NativeError> {
 type ScopePreparation = Box<dyn FnOnce() -> Result<Option<PreparedContext>, CognitionError> + Send>;
 
 /// One input's host context from its scope preparation, kept in two parts because they are
-/// given differently: the executive-continuity block once per session and then as its changed
-/// lines ([`crate::given_context`]), the records after it (Loro receipts, open questions) as
-/// they are.
+/// given differently ([`crate::given_context`]): the executive-continuity block once per
+/// session and after a compaction, the records after it (Loro receipts, open questions) when
+/// they changed.
 #[derive(Default)]
 struct PreparedContext {
     continuity: String,
@@ -4824,9 +4824,9 @@ impl Cognition for NativeCognition {
             // input really gives (a later refusal of its batch forgets them all, in `dispatch`).
             let mut context_data={
                 let mut state=reader_state.lock().unwrap();
-                let mut context=state.given_context.render("executive-continuity",&prepared.continuity);
-                context.push_str(&prepared.records);
-                if let Some(company)=&company { context.push_str(&state.given_context.render("company material from the host",company)); }
+                let mut context=state.given_context.once("executive-continuity",&prepared.continuity);
+                context.push_str(&state.given_context.when_changed("records",&prepared.records));
+                if let Some(company)=&company { context.push_str(&state.given_context.when_changed("company material from the host",company)); }
                 context
             };
             let (classifier, path, continuity, session, context) = routing;
@@ -5588,13 +5588,13 @@ send({"type":"result","stop_reason":"end_turn"})
         assert_eq!(scope.user_instruction.unwrap().text.as_deref(),Some("My exact original words."));
     }
 
-    /// **An idle notice adds under 1k tokens of context; a compaction or a new session gets
-    /// the full blocks once again** (follow-up "Rich's context fills with the same injected
-    /// blocks on every message", 2026-10-30). Measured on main before this: every input carried
-    /// the whole continuity block and the whole company material, 9,300 characters per notice
-    /// on his session. Tokens are chars/4, the measure the follow-up used.
+    /// **Host context goes with the session's first input and the first after a compaction,
+    /// as in the terminal; a later input carries none of it unless a record changed**
+    /// (richos-hq `docs/research/2026-10-31-app-terminal-differences.md` finding 6). On main
+    /// `47e314bb6` every later input still carried a note or the changed lines of the
+    /// continuity block, a note for the company material, and the open questions in full.
     #[test]
-    fn an_idle_notice_adds_under_1k_tokens_and_a_compaction_or_new_session_gets_the_full_blocks_again() {
+    fn host_context_goes_at_session_start_and_after_a_compaction_and_a_record_only_when_it_changed() {
         let script=write_script("given-context-once",r#"
 exec python3 -u -c '
 import json,os,sys
@@ -5630,10 +5630,25 @@ while True:
             "Owner-operators who run their own business and are not engineers. ".repeat(46));
         let binding=crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),
             crate::entity::EntityId::parse("depot").unwrap(),"thread-given",1);
+        // His open questions, as Rich's own ask leaves them in the store the turn reads.
+        let questions=root.join("engine-state");
+        let ask=|text:&str| {
+            crate::questions::Store::new(&questions).ask(&crate::questions::AskScope {
+                root:questions.clone(),entity_id:"depot".into(),thread_id:"thread-given".into(),turn_id:"his-message".into(),
+                asker:"front_desk".into(),obligation_id:None,session_id:"s".into(),engine:None,entity_root:None,app_run:None,
+            },vec![crate::questions::QuestionInput {text:text.into(),options:vec![
+                crate::questions::OptionInput {label:"Yes".into(),description:"Go ahead.".into()},
+                crate::questions::OptionInput {label:"No".into(),description:"Hold it.".into()}],
+                multiple:false,free_answer:true,recommended:None}]).unwrap();
+        };
+        ask("first-question-marker");
+        // The question scope's grandparent is the store's folder's parent (`prepare_question_scope`).
+        std::fs::create_dir_all(root.join("scopes")).unwrap();
         let start=|scope:&str| {
             let mut cognition=NativeCognition::start(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
             let bridge=crate::ecs::EcsBridge::new(&python,&engine,&root.join("ecs-state")).unwrap();
             cognition.continuity=Some((bridge,root.join(scope)));
+            cognition.client.reader_state.lock().unwrap().question_scope=Some(root.join("scopes").join(format!("questions-{scope}")));
             cognition
         };
         let turn=|cognition:&mut NativeCognition,prompt:&str,source:crate::ledger::Source| {
@@ -5642,7 +5657,11 @@ while True:
             assert_eq!(cognition.prompt(prompt,&mut |_|{}).unwrap(),"end_turn");
             std::fs::read_to_string(root.join(format!("context-{prompt}"))).unwrap()
         };
-        let full=|context:&str| context.contains("</executive-continuity>") && context.contains("company-notes-end-marker");
+        let full=|context:&str| context.contains("</executive-continuity>") && context.contains("company-notes-end-marker")
+            && context.contains("first-question-marker");
+        // Nothing of the three: no block, no note that it is unchanged, no changed lines.
+        let none=|context:&str| !context.contains("executive-continuity") && !context.contains("company")
+            && !context.contains("question_records");
 
         let mut rich=start("rich-scope.json");
         let his=turn(&mut rich,"his-message",crate::ledger::Source::Text);
@@ -5650,10 +5669,19 @@ while True:
 
         for notice in ["first-notice","second-notice"] {
             let added=turn(&mut rich,notice,crate::ledger::Source::Internal);
-            assert!(added.len()/4<1000,"an idle notice added {} tokens (chars/4) of context:\n{added}",added.len()/4);
-            assert!(!added.contains("</executive-continuity>"),"the notice repeated the continuity block:\n{added}");
-            assert!(!added.contains("company-notes-end-marker"),"the notice repeated the company notes:\n{added}");
+            assert!(none(&added),"a later input carried host context again:\n{added}");
         }
+
+        // Rich asks him another question: the records changed, so the next input gives them,
+        // and only them; the input after it gives nothing again.
+        ask("second-question-marker");
+        let asked=turn(&mut rich,"after-a-new-question",crate::ledger::Source::Internal);
+        assert!(asked.contains("first-question-marker") && asked.contains("second-question-marker"),
+            "a changed record was not given: {asked}");
+        assert!(!asked.contains("executive-continuity") && !asked.contains("company"),
+            "a changed record brought the other blocks back: {asked}");
+        let quiet=turn(&mut rich,"quiet-notice",crate::ledger::Source::Internal);
+        assert!(none(&quiet),"an unchanged record was given again: {quiet}");
 
         // The provider compacts while taking this notice in: its own copy and every earlier one
         // are summarized away, so the next input carries the full blocks again, once.
@@ -5661,7 +5689,7 @@ while True:
         let after=turn(&mut rich,"after-compaction",crate::ledger::Source::Internal);
         assert!(full(&after),"the first input after a compaction lacks the full blocks: {after}");
         let next=turn(&mut rich,"next-notice",crate::ledger::Source::Internal);
-        assert!(!full(&next) && next.len()/4<1000,"the full blocks were given twice after one compaction: {next}");
+        assert!(none(&next),"host context was given twice after one compaction: {next}");
 
         // A new session (a rotation, or the app started again) holds no earlier copy.
         drop(rich);

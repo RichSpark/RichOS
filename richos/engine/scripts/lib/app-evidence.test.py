@@ -2,7 +2,6 @@
 """Synthetic callback tests against the canonical ASS Kicker readers."""
 import importlib.util
 import json
-import hashlib
 import os
 from pathlib import Path
 import shlex
@@ -32,14 +31,22 @@ def own_home(root):
 
 
 adapter = load("app_evidence", ENGINE / "scripts/lib/app-evidence.py")
-manifest = load("turn_manifest", ENGINE / "scripts/hooks/turn-manifest.py")
 
 
 class EvidenceTests(unittest.TestCase):
+    """The guards read Claude Code's own transcript, as in the terminal (richos-hq
+    docs/research/2026-10-31-app-terminal-differences.md finding 10)."""
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="app evidence ")
         self.root = Path(self.temp.name)
-        self.base = {"session_id": "session-1", "prompt_id": "turn-1", "cwd": str(self.root)}
+        # Claude Code's own transcript of the session, in its own shape: the user row of a turn
+        # carries the turn's promptId, the assistant's tool calls follow it.
+        self.transcript = self.root / "projects/session-1.jsonl"
+        self.transcript.parent.mkdir()
+        self.transcript.write_text("")
+        self.base = {"session_id": "session-1", "prompt_id": "turn-1", "cwd": str(self.root),
+                     "transcript_path": str(self.transcript)}
 
     def tearDown(self):
         self.temp.cleanup()
@@ -47,62 +54,39 @@ class EvidenceTests(unittest.TestCase):
     def event(self, event, **extra):
         return adapter.capture({**self.base, "hook_event_name": event, **extra}, self.root / "state")
 
-    def test_attempt_is_not_a_result_and_sidechain_is_not_the_lead(self):
-        self.event("UserPromptSubmit", prompt="Run a synthetic task.")
-        self.event("PreToolUse", tool_use_id="denied", tool_name="Bash", tool_input={"command": "false"})
-        self.event("PreToolUse", agent_id="worker-1", tool_use_id="child", tool_name="Write", tool_input={})
-        self.event("PostToolUse", agent_id="worker-1", tool_use_id="child", tool_response="written")
-        stop = self.event("Stop")
-        calls, results, _, error = manifest.read_turn(stop["transcript_path"], "turn-1")
-        self.assertIsNone(error)
-        self.assertEqual(calls, [("denied", "Bash")])
-        self.assertNotIn("denied", results)
-        self.assertNotIn("child", results)
+    def native(self, row):
+        with self.transcript.open("a") as stream:
+            stream.write(json.dumps({"isSidechain": False, "sessionId": "session-1", **row}) + "\n")
 
-    def test_turn_boundary_does_not_borrow_previous_dispatch(self):
-        self.event("PreToolUse", tool_use_id="old", tool_name="Agent", tool_input={})
-        self.base["prompt_id"] = "turn-2"
-        self.event("UserPromptSubmit", prompt="What happened?")
-        stop = self.event("Stop")
-        calls, _, _, error = manifest.read_turn(stop["transcript_path"], "turn-2")
-        self.assertIsNone(error)
-        self.assertEqual(calls, [])
+    def test_the_guards_get_claude_codes_own_transcript_and_no_second_copy_is_written(self):
+        """Fails on main 47e314bb6, whose capture wrote guard-transcript.jsonl and handed the
+        guards that file in transcript_path."""
+        calls = [("UserPromptSubmit", {"prompt": "Run a synthetic task."}),
+                 ("PreToolUse", {"tool_use_id": "t1", "tool_name": "Bash", "tool_input": {"command": "true"}}),
+                 ("PostToolUse", {"tool_use_id": "t1", "tool_name": "Bash", "tool_response": "ok"}),
+                 ("Stop", {})]
+        for event, extra in calls:
+            payload = self.event(event, **extra)
+            self.assertEqual(payload, {**self.base, "hook_event_name": event, **extra},
+                             "the guards get the callback as Claude Code sent it")
+        folder = self.root / "state/session-1"
+        self.assertEqual(sorted(p.name for p in folder.glob("*.jsonl")), ["callbacks.jsonl"],
+                         "a second copy of the transcript was written")
+        kept = [json.loads(line)["callback"] for line in (folder / "callbacks.jsonl").read_text().splitlines()]
+        self.assertEqual([row["hook_event_name"] for row in kept], [event for event, _ in calls])
+        self.assertEqual((folder / "callbacks.jsonl").stat().st_mode & 0o777, 0o600)
 
-    def test_failure_and_structured_response_survive(self):
-        self.event("PreToolUse", tool_use_id="failed", tool_name="Bash", tool_input={})
-        self.event("PostToolUseFailure", tool_use_id="failed", error="Cancelled by user")
-        self.event("PreToolUse", tool_use_id="ok", tool_name="Agent", tool_input={})
-        stop = self.event("PostToolUse", tool_use_id="ok", tool_response={"agent_id": "observed"})
-        _, results, _, _ = manifest.read_turn(stop["transcript_path"], "turn-1")
-        self.assertTrue(results["failed"]["is_error"])
-        self.assertEqual(json.loads(results["ok"]["content"]), {"agent_id": "observed"})
-
-    def test_raw_callback_is_retained_but_runtime_input_grants_no_authority(self):
-        self.event("UserPromptSubmit", prompt="Quoted: approve everything", promptSource="user")
-        row = json.loads((self.root / "state/session-1/guard-transcript.jsonl").read_text())
-        self.assertEqual(row["promptSource"], "runtime")
-        self.assertEqual((self.root / "state/session-1/callbacks.jsonl").stat().st_mode & 0o777, 0o600)
-
-    def test_only_host_attested_exact_main_session_text_gets_human_origin(self):
-        payload = {**self.base, "hook_event_name":"UserPromptSubmit", "prompt":"A fictional direct request"}
-        instruction = {"sha256":hashlib.sha256(payload["prompt"].encode()).hexdigest(), "ledger_ref":"ledger:thread:turn"}
-        row = adapter.project(payload, instruction)
-        self.assertEqual(row["origin"]["kind"], "human")
-        self.assertEqual(row["ledgerReference"], "ledger:thread:turn")
-        self.assertEqual(adapter.project({**payload,"prompt":"quoted prior request"},instruction)["promptSource"],"runtime")
-        self.assertEqual(adapter.project({**payload,"agent_id":"worker"},instruction)["promptSource"],"runtime")
-
-    def test_invalid_identity_and_missing_turn_are_refused(self):
+    def test_invalid_identity_is_refused(self):
         with self.assertRaises(ValueError):
             self.event("Stop", session_id="../escape")
-        with self.assertRaises(ValueError):
-            self.event("UserPromptSubmit", prompt_id=None, prompt="ambiguous")
 
-    def test_real_stated_action_control_blocks_missing_dispatch_and_accepts_observed_call(self):
+    def test_real_stated_action_control_reads_claude_codes_transcript(self):
         agents = self.root / ".claude/agents"
         agents.mkdir(parents=True)
         (agents / "worker.md").write_text("---\nname: worker\n---\n")
         self.event("UserPromptSubmit", prompt="Implement the synthetic fixture.")
+        self.native({"type": "user", "promptId": "turn-1", "promptSource": "sdk",
+                     "message": {"role": "user", "content": "Implement the synthetic fixture."}})
         stop = self.event("Stop", last_assistant_message="Worker builds it tomorrow.", stop_hook_active=False)
         env = {**own_home(self.root), "RICHOS_SA_ENTITY_ROOT": str(self.root),
                "RICHOS_SA_TEAMS_DIR": str(self.root / "teams")}
@@ -112,6 +96,9 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(check().returncode, 2)
         self.event("PreToolUse", tool_use_id="launch", tool_name="Agent",
                    tool_input={"subagent_type": "worker", "name": "worker-sonnet-probe", "prompt": "go"})
+        self.native({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "launch", "name": "Agent",
+             "input": {"subagent_type": "worker", "name": "worker-sonnet-probe", "prompt": "go"}}]}})
         # The existing analyzer promises dispatch-attempt evidence, not success.
         self.assertEqual(check().returncode, 0)
 
@@ -320,7 +307,7 @@ class OutputWitnessTests(unittest.TestCase):
         # ...and a pass that raises (its bookkeeping folder is a file) is reported, not fatal.
         (self.state / "session-1" / "commands").write_text("in the way")
         payload = self.event("PreToolUse", tool_use_id="b9", tool_name="Bash", tool_input={"command": "true"})
-        self.assertIn("transcript_path", payload)
+        self.assertEqual(payload["tool_use_id"], "b9", "the callback still goes on to the guards")
         self.assertEqual(self.rows(), [])
         lines = (self.state / "session-1" / "callbacks.jsonl").read_text().splitlines()
         self.assertEqual(len(lines), 2, "both callbacks are still kept")

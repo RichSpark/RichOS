@@ -69,7 +69,7 @@ class DesktopWork(unittest.TestCase):
         self.call("prepare",self.args)
         with self.assertRaisesRegex(ValueError,"unresolved execution"):
             self.call("report",{"obligation_id":"fixture-task","state":"failed","detail":"Cannot finish"})
-        self.assertEqual(self.call("inspect")["records"][0]["status"],"prepared")
+        self.assertEqual(self.records()[0]["status"],"prepared")
 
     def test_independent_stu_closes_reviewed_work_and_an_answer_on_their_own_records(self):
         words={"fixture-task":"Create the fictional result without publication.","answer-task":"What is five plus five?"}
@@ -175,23 +175,23 @@ class DesktopWork(unittest.TestCase):
         self.assertNotEqual(first["id"],second["id"])
         self.start_fixture_worker(first,"independent-one")
         self.start_fixture_worker(second,"independent-two")
-        rows=self.call("inspect")["records"]
+        rows=self.records()
         self.assertEqual({row["request"]["obligation_id"] for row in rows},{"fixture-task","fixture-two"})
         self.assertEqual({row["binding"]["audience"] for row in rows},{"rich"})
         self.assertEqual({row["binding"]["turn_id"] for row in rows},{"peer:1"})
         self.assertEqual({row["agent_id"] for row in rows},{"independent-one","independent-two"})
         with self.assertRaises(self.app.ECS.ScopeError):
             self.call("prepare",{**self.args,"request_id":"invented","obligation_id":"invented"})
-        self.assertEqual(len(self.call("inspect")["records"]),2)
+        self.assertEqual(len(self.records()),2)
 
     def test_pierce_findings_leave_dispatch_retryable_and_allow_revised_preparation(self):
         ready = self.call("prepare", self.args)
         envelope = {"session_id": self.session, "tool_use_id": "pierce-call",
                     "tool_input": ready["agent_call"]}
         self.app.dispatch_intent(self.scope, envelope, inspect_only=True)
-        self.assertEqual(self.call("inspect", {})["records"][0]["status"], "prepared")
+        self.assertEqual(self.records()[0]["status"], "prepared")
         self.app.dispatch_intent(self.scope, envelope, review_refused=True)
-        self.assertEqual(self.call("inspect", {})["records"][0]["status"], "prepared")
+        self.assertEqual(self.records()[0]["status"], "prepared")
         # A changed brief uses a new request. Only this provably never-dispatched
         # preparation is withdrawn, through the existing clean-workspace checks.
         replacement = self.call("prepare", {**self.args, "request_id": "revised-brief",
@@ -199,7 +199,7 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(replacement["status"], "prepared")
         self.app.dispatch_intent(self.scope, {"session_id": self.session, "tool_use_id": "revised-call",
                                              "tool_input": replacement["agent_call"]})
-        records = self.call("inspect", {})["records"]
+        records = self.records()
         self.assertEqual(next(row for row in records if row["id"] == replacement["id"])["status"], "dispatching")
 
     def test_pierce_dismissal_can_retry_the_exact_prepared_payload(self):
@@ -208,7 +208,7 @@ class DesktopWork(unittest.TestCase):
                     "tool_input": ready["agent_call"]}
         self.app.dispatch_intent(self.scope, envelope, review_refused=True)
         self.app.dispatch_intent(self.scope, {**envelope, "tool_use_id": "dismissed-call"})
-        self.assertEqual(self.call("inspect", {})["records"][0]["status"], "dispatching")
+        self.assertEqual(self.records()[0]["status"], "dispatching")
 
     def setUp(self):
         self.scratch=tempfile.TemporaryDirectory(prefix="app work fixture ");self.addCleanup(self.scratch.cleanup)
@@ -262,6 +262,15 @@ class DesktopWork(unittest.TestCase):
         self.args={"request_id":"prepare-one","obligation_id":"fixture-task","repo":str(self.repo),"title":"Create fictional result","brief":"Create result.txt with FICTIONAL in the assigned target worktree. Commit only that file. Do not publish.","role":"worker","teammate":"mark","integration":"main"}
 
     def call(self,name,args=None):return self.app.call(self.scope_path,name,args or {})
+    def records(self,scope_path=None,read_only=False):
+        """Every receipt in scope, each in full as `inspect` returns it by id, after the
+        reconciliation a lookup runs. Since 2026-10-31 a lookup without an id answers the
+        terminal's status lines (`jobs`), not records."""
+        path=scope_path or self.scope_path
+        ask=(lambda args:self.app.call_read_only(path,"inspect",args)) if read_only else (lambda args:self.app.call(path,"inspect",args))
+        ask({})
+        root=self.app.folder(json.loads(Path(path).read_text()))
+        return [record for receipt in sorted(root.glob("*.json")) for record in ask({"id":receipt.stem})["records"]]
     def record_of(self,ready):
         """The receipt prepare stored; its answer names it by id (app token burn finding 4)."""
         return json.loads((self.app.folder(self.scope)/(ready["id"]+".json")).read_text())
@@ -274,12 +283,14 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(tools["team"]["inputSchema"]["properties"]["action"]["enum"], ["list", "show"])
         ready = self.call("prepare", self.args)
         root = self.app.folder(self.scope)
-        expected = self.call("inspect", {})["records"]
+        expected = self.call("inspect", {})["jobs"]
         before = {p.name: p.read_bytes() for p in root.glob("*.json")}
-        actual = self.app.call_read_only(self.scope_path, "inspect", {})["records"]
+        actual = self.app.call_read_only(self.scope_path, "inspect", {})["jobs"]
         self.assertEqual(actual, expected)
-        self.assertEqual(actual[0]["id"], ready["id"])
-        self.assertNotIn("brief", actual[0]["request"])
+        self.assertEqual([line.split()[1] for line in actual], [ready["name"]])
+        self.assertEqual({p.name: p.read_bytes() for p in root.glob("*.json")}, before)
+        self.assertEqual(self.records(read_only=True), self.records())
+        before = {p.name: p.read_bytes() for p in root.glob("*.json")}
         full = self.app.call_read_only(self.scope_path, "inspect", {"id": ready["id"]})["records"]
         self.assertEqual(full[0]["request"]["brief"], self.args["brief"])
         self.assertEqual({p.name: p.read_bytes() for p in root.glob("*.json")}, before)
@@ -310,14 +321,14 @@ class DesktopWork(unittest.TestCase):
         for extra in ({"message":"End your test"},{"reason":"quota"},{"reset":"15:30Z"},{"to":""}):
             with self.assertRaises(ValueError):
                 self.call("resume_message",{"to":"worker-fixture",**extra})
-        self.assertEqual(self.call("inspect")["records"],[])
+        self.assertEqual(self.records(),[])
 
     def test_preparation_is_idempotent_and_is_not_dispatch(self):
         first=self.call("prepare",self.args);again=self.call("prepare",self.args)
         self.assertEqual(first["id"],again["id"]);self.assertEqual(first["agent_call"],again["agent_call"])
         self.assertEqual(first["status"],"prepared");self.assertFalse(first.get("assignment_completed"))
         self.assertFalse((self.repo/"result.txt").exists())
-        self.assertEqual(len(self.call("inspect")["records"]),1)
+        self.assertEqual(len(self.records()),1)
         with self.assertRaisesRegex(ValueError,"different work"):self.call("prepare",{**self.args,"brief":"Different task"})
     def test_prepare_starts_the_named_teammate_on_its_own_model_with_its_duty_on_top(self):
         """Slice 2 of the proto-teammate shelf plan (richos-hq
@@ -338,7 +349,7 @@ class DesktopWork(unittest.TestCase):
         (self.coord/".claude/agents/olga.md").write_text("---\nname: olga-dev\nmodel: sonnet\n---\n")
         with self.assertRaisesRegex(ValueError,"names itself 'olga-dev'"):
             self.call("prepare",{**self.args,"request_id":"wrong-name","teammate":"olga"})
-        self.assertEqual(self.call("inspect")["records"],[],"a refused teammate left a receipt")
+        self.assertEqual(self.records(),[],"a refused teammate left a receipt")
 
         ready=self.call("prepare",{**self.args,"teammate":"frank"})
         self.assertRegex(ready["name"],r"^frank-opus-[0-9a-f]{12}$")
@@ -368,7 +379,7 @@ class DesktopWork(unittest.TestCase):
                                                        'MODEL_TIERS="fable > opus > sonnet > haiku"\nMODEL_CEILING="opus"\n')
         with self.assertRaisesRegex(ValueError,"model must be one of fable, opus, sonnet, haiku"):
             self.call("prepare",{**self.args,"request_id":"unknown-model","model":"gpt"})
-        self.assertEqual(self.call("inspect")["records"],[],"a model nobody allows left a receipt")
+        self.assertEqual(self.records(),[],"a model nobody allows left a receipt")
         # Above the default and within the ceiling: Mark (sonnet) on Opus for this one job.
         ready=self.call("prepare",{**self.args,"request_id":"stronger","model":"opus"})
         self.assertEqual(ready["status"],"prepared")
@@ -381,7 +392,7 @@ class DesktopWork(unittest.TestCase):
         # Above the user's ceiling: refused at the spawn, nothing created.
         with self.assertRaisesRegex(Exception,"more expensive model"):
             self.call("prepare",{**self.args,"request_id":"above","model":"fable","title":"Above the ceiling"})
-        above=next(r for r in self.call("inspect")["records"] if r["request"].get("model")=="fable")
+        above=next(r for r in self.records() if r["request"].get("model")=="fable")
         self.assertNotIn("agent_call",above)
         self.assertIn("more expensive model",above["problem"])
         # Below the definition's default: with its reason stated, it starts.
@@ -504,22 +515,54 @@ class DesktopWork(unittest.TestCase):
             self.assertNotIn("error",reply,repr(unit))
             self.assertIn("65,537 bytes as sent",reply["result"]["content"][0]["text"],repr(unit))
 
-    def test_inspect_page_carries_no_brief_and_one_record_by_id_carries_it_in_full(self):
+    def test_inspect_lists_the_jobs_as_workspaces_status_does_and_one_record_by_id_in_full(self):
+        """The CEO, 2026-10-31: the app looks up the jobs it handed to workers the way the
+        terminal lead does. The terminal's overview is `workspaces.sh status`, one line per job:
+        its state and why. The app's page is those same lines for this conversation's jobs, and a
+        brief is one lookup by id away, as before."""
         brief = self.args["brief"]
         said = "Fictional user words that every record would repeat."
         self.scope["user_instruction"] = {"ledger_ref": "ledger:thread-a:turn-a",
             "sha256": hashlib.sha256(said.encode()).hexdigest(), "text": said}
         self.scope_path.write_text(json.dumps(self.scope))
-        ready = self.call("prepare", self.args)
-        page = self.call("inspect")["records"]
-        self.assertEqual(len(page), 1)
-        self.assertNotIn("brief", page[0]["request"])
+        ready = self.call("prepare", self.args)                              # never dispatched
+        running = self.call("prepare", {**self.args, "request_id": "status-running", "brief": brief + " Second job."})
+        self.start_fixture_worker(running, "status-running")
+        ended = self.call("prepare", {**self.args, "request_id": "status-ended", "brief": brief + " Third job."})
+        self.start_fixture_worker(ended, "status-ended")
+        self.finish_fixture_worker("status-ended")
+        names = {self.record_of(r)["name"] for r in (ready, running, ended)}
+        page = self.call("inspect")
+        status = subprocess.run(["/bin/bash", str(ENGINE / "mega-lander/workspaces.sh"), "--session", self.session,
+                                 "status"], capture_output=True, text=True, check=True).stdout.splitlines()
+        # A job's lines in the terminal's output: the line that names it, and the workspace lines
+        # printed under it.
+        expected, mine = [], False
+        for line in status:
+            if not line.startswith(" "):
+                parts = line.split()
+                mine = len(parts) > 1 and parts[1] in names
+            if mine:
+                expected.append(line)
+        self.assertEqual({line.split()[1] for line in expected if not line.startswith(" ")}, names)
+        self.assertEqual(page["jobs"], expected)
+        self.assertNotIn("records", page)
         self.assertNotIn(brief, json.dumps(page))
         words = self.call("inspect", {"id": ready["id"]})["records"][0]["original_user_instruction"].get("text")
         self.assertTrue(words)
         self.assertNotIn(words, json.dumps(page))
-        self.assertNotIn("text", page[0]["original_user_instruction"])
-        self.assertEqual(page[0]["status"], "prepared")
+        self.assertEqual(self.app.call_read_only(self.scope_path, "inspect", {})["jobs"], expected)
+        # A name read off the overview opens that job's full record, as the terminal lead names it.
+        briefs = {ready["id"]: brief, running["id"]: brief + " Second job.", ended["id"]: brief + " Third job."}
+        for line in page["jobs"]:
+            if line.startswith(" "):
+                continue
+            listed = line.split()[1]
+            for ask in (lambda args: self.call("inspect", args),
+                        lambda args: self.app.call_read_only(self.scope_path, "inspect", args)):
+                one = ask({"id": listed})["records"]
+                self.assertEqual([r["name"] for r in one], [listed])
+                self.assertEqual(one[0]["request"]["brief"], briefs[one[0]["id"]])
         for key in (ready["id"], ready["request_id"]):
             one = self.call("inspect", {"id": key})["records"]
             self.assertEqual([r["request"]["brief"] for r in one], [brief])
@@ -531,7 +574,7 @@ class DesktopWork(unittest.TestCase):
         ready = self.call("prepare", {**self.args, "request_id": "commit-facts", "repos": [str(second)]})
         paths = self.workspaces_of(ready)
         commits = self.commit_in_each(paths, "finished.txt", "Implemented fixture")
-        row = self.app.call_read_only(self.scope_path, "inspect", {})["records"][0]
+        row = self.records(read_only=True)[0]
         self.assertEqual(row["uncommitted_files"], "")
         self.assertEqual(row["head_commit"]["sha"], commits[str(self.repo)])
         self.assertFalse(row["assignment_completed"])
@@ -543,7 +586,7 @@ class DesktopWork(unittest.TestCase):
             self.assertIn("finished.txt", observation["head_commit"]["changed_files"])
             self.assertRegex(observation["head_commit"]["committed_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         (Path(paths[str(self.repo)]) / "finished.txt").write_text("Another edit, not committed")
-        changed = self.app.call_read_only(self.scope_path, "inspect", {})["records"][0]
+        changed = self.records(read_only=True)[0]
         self.assertIn("finished.txt", changed["uncommitted_files"])
         self.assertEqual(changed["head_commit"]["sha"], commits[str(self.repo)])
         for path in (self.root / "missing", self.root):
@@ -563,8 +606,9 @@ class DesktopWork(unittest.TestCase):
         with self.app.locked(self.scope) as root:
             before = {path: path.read_bytes() for path in root.glob("*.json")}
             with patch.object(self.app.fcntl, "flock", side_effect=refuse_a_contended_lock):
-                observed = self.app.call_read_only(self.scope_path, "inspect", {})
+                observed = self.app.call_read_only(self.scope_path, "inspect", {"id": ready["id"]})
                 self.assertEqual([row["id"] for row in observed["records"]], [ready["id"]])
+                self.assertIn("jobs", self.app.call_read_only(self.scope_path, "inspect", {}))
                 # Stu's mutating inspection must still acquire the writer lock.
                 with self.assertRaises(BlockingIOError):
                     self.app.inspect_receipts(self.scope, {})
@@ -607,7 +651,7 @@ class DesktopWork(unittest.TestCase):
         # The final message is the deliverable, handed back on the receipt.
         answer="The fictional CSV fixture is older than the fictional JSON one, by the dates in their headers."
         self.finish_fixture_worker("consult-clark",answer)
-        record=self.call("inspect")["records"][0]
+        record=self.records()[0]
         self.assertEqual(record["status"],"run-ended")
         self.assertEqual((record["consult_answer"]["message"],record["consult_answer"]["answered"],record["consult_answer"]["source"]),
                          (answer,True,"SubagentStop"))
@@ -714,7 +758,7 @@ class DesktopWork(unittest.TestCase):
         missing = {k:v for k,v in self.args.items() if k != "integration"}
         with self.assertRaisesRegex(ValueError, "will not guess the branch"):
             self.call("prepare", missing)
-        refused = self.call("inspect")["records"][0]
+        refused = self.records()[0]
         self.assertEqual(refused["status"], "blocked")
         self.assertTrue(refused["preparation_refused"])
         self.assertNotIn("agent_call", refused)
@@ -730,14 +774,14 @@ class DesktopWork(unittest.TestCase):
         command = [sys.executable, "-c", "import sys; print('spawn: refused - NOTHING WAS CREATED.'); sys.exit(1)"]
         with patch.object(self.app, "build_spawn_command", return_value=command):
             with self.assertRaises(ValueError): self.call("prepare", self.args)
-        record = self.call("inspect")["records"][0]
+        record = self.records()[0]
         self.assertEqual(record["status"], "unknown")
         # The same request is still only its receipt: nothing is replayed.
         self.assertNotIn("agent_call", self.call("prepare", self.args))
         replacement = self.call("prepare", {**self.args, "request_id":"replacement"})
         self.assertEqual(replacement["status"], "prepared")
         self.assertIn("agent_call", replacement)
-        settled = [r for r in self.call("inspect")["records"] if r["id"] == record["id"]][0]
+        settled = [r for r in self.records() if r["id"] == record["id"]][0]
         self.assertEqual(settled["status"], "blocked")
         self.assertEqual(settled["settled"]["withdrawn"], [])
         self.assertIn("never dispatched", settled["settled"]["reason"])
@@ -755,7 +799,7 @@ class DesktopWork(unittest.TestCase):
             raise TimeoutError("synthetic uncertainty after the workspace was created")
         with patch.object(self.app, "run", side_effect=created_then_uncertain):
             with self.assertRaises(TimeoutError): self.call("prepare", self.args)
-        stuck = self.call("inspect")["records"][0]
+        stuck = self.records()[0]
         self.assertEqual(stuck["status"], "unknown")
         key = self.app.W.named_key(self.session, stuck["name"])
         workspace = [w for w in self.app.W.load_agent(key)["workspaces"] if w.get("kind") == "cc"][0]
@@ -778,7 +822,7 @@ class DesktopWork(unittest.TestCase):
         self.assertFalse(Path(workspace["path"]).exists())
         self.assertEqual(self.app.git(self.repo, "branch", "--list", workspace["branch"]), "")
         self.assertIsNone(self.app.W.load_agent(key))
-        settled = [r for r in self.call("inspect")["records"] if r["id"] == stuck["id"]][0]
+        settled = [r for r in self.records() if r["id"] == stuck["id"]][0]
         self.assertEqual(settled["status"], "blocked")
         self.assertEqual(settled["settled"]["withdrawn"], [workspace["path"]])
         self.assertNotIn("workspace_problem", settled, "a settled receipt read as an open problem")
@@ -792,7 +836,7 @@ class DesktopWork(unittest.TestCase):
             raise TimeoutError("synthetic uncertainty after the workspace was created")
         with patch.object(self.app, "run", side_effect=created_then_uncertain):
             with self.assertRaises(TimeoutError): self.call("prepare", self.args)
-        stuck = self.call("inspect")["records"][0]
+        stuck = self.records()[0]
         key = self.app.W.named_key(self.session, stuck["name"])
         workspace = [w for w in self.app.W.load_agent(key)["workspaces"] if w.get("kind") == "cc"][0]
         (Path(workspace["path"]) / "keep.txt").write_text("KEEP")
@@ -800,7 +844,7 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(replacement["status"], "prepared")
         self.assertEqual((Path(workspace["path"]) / "keep.txt").read_text(), "KEEP")
         self.assertIsNotNone(self.app.W.load_agent(key))
-        settled = [r for r in self.call("inspect")["records"] if r["id"] == stuck["id"]][0]
+        settled = [r for r in self.records() if r["id"] == stuck["id"]][0]
         self.assertEqual(settled["status"], "blocked")
         self.assertEqual(settled["settled"]["withdrawn"], [])
         self.assertEqual([r["path"] for r in settled["settled"]["retained"]], [workspace["path"]])
@@ -835,7 +879,7 @@ class DesktopWork(unittest.TestCase):
         return self.root/"engine-state/target-worktrees"/self.app.folder(self.scope).name/ready["name"]
 
     def receipt_of(self, ready):
-        return next(r for r in self.call("inspect",{"limit":50})["records"] if r["id"]==ready["id"])
+        return next(r for r in self.records() if r["id"]==ready["id"])
 
     def branch_exists(self, branch):
         return subprocess.run(["git","-C",str(self.repo),"rev-parse","--verify","--quiet","refs/heads/"+branch],
@@ -1169,7 +1213,7 @@ class DesktopWork(unittest.TestCase):
         self.assertIn("gates/check-0",said);self.assertIn("and 2 more",said)
         self.assertIn("continue_of %s"%worker["id"],said)
         self.assertNotIn("separate copy",said)
-        self.assertEqual([r["id"] for r in self.call("inspect",{"limit":50})["records"]],[worker["id"]],"a refused review left a receipt")
+        self.assertEqual([r["id"] for r in self.records()],[worker["id"]],"a refused review left a receipt")
         # A report of another commit is not this handover's: the review is prepared as before.
         report("0"*40)
         self.assertEqual(self.call("prepare",{**review,"request_id":"review-2"})["status"],"prepared")
@@ -1274,10 +1318,10 @@ class DesktopWork(unittest.TestCase):
             raise TimeoutError("fixture interruption after workspace creation")
         with patch.object(self.app, "run", side_effect=created_then_uncertain):
             with self.assertRaises(TimeoutError): self.call("prepare", self.args)
-        old = self.call("inspect")["records"][0]
+        old = self.records()[0]
         self.assertEqual(old["status"], "unknown")
         self.app.W.record_session_end(self.session, "fixture provider session ended")
-        old = self.call("inspect")["records"][0]
+        old = self.records()[0]
         self.assertNotEqual(old["status"], "interrupted", "a receipt that never dispatched was interrupted")
         self.assertFalse(old.get("tool_use_id") or old.get("agent_id"))
         self.app.W.record_session_start(self.session, str(self.coord), source="resume")
@@ -1285,7 +1329,7 @@ class DesktopWork(unittest.TestCase):
         self.assertTrue(self.call("integrate", pair)["work_integrated"])
         done = self.call("complete", {"obligation_id":"fixture-task", "worker_ids":[pair["worker_id"]]})
         self.assertTrue(done["obligation_closed"])
-        settled = [r for r in self.call("inspect")["records"] if r["id"] == old["id"]][0]
+        settled = [r for r in self.records() if r["id"] == old["id"]][0]
         self.assertEqual(settled["status"], "blocked")
 
     def test_v2_01_a_receipt_an_older_build_marked_interrupted_is_settled_too(self):
@@ -1298,7 +1342,7 @@ class DesktopWork(unittest.TestCase):
             raise TimeoutError("fixture interruption after workspace creation")
         with patch.object(self.app, "run", side_effect=created_then_uncertain):
             with self.assertRaises(TimeoutError): self.call("prepare", self.args)
-        old = self.call("inspect")["records"][0]
+        old = self.records()[0]
         path = self.app.folder(self.scope) / (old["id"] + ".json")
         stored = json.loads(path.read_text())
         stored.update(status="interrupted", interruption="the owning provider process ended without an "
@@ -1325,7 +1369,7 @@ class DesktopWork(unittest.TestCase):
         self.assertIsNone(self.app.W.load_agent(key).get("end"))
         self.app.W.record_session_start(self.session,str(self.coord),source="resume")
         self.assertEqual(self.app.W.session_state(self.session)[0],"running")
-        record=self.call("inspect")["records"][0]
+        record=self.records()[0]
         self.assertEqual(record["status"],"interrupted","resuming Stu resurrected a canonically retired worker")
         work=self.app.ecs(self.scope,{"protocol":1,"command":"inspect","binding":self.scope["binding"],
             "query":{"section":"work","include_closed":True}})["records"]
@@ -1426,7 +1470,7 @@ class DesktopWork(unittest.TestCase):
         self.app.dispatch_intent(self.scope, call)
         self.app.W.register_spawn(call, str(self.coord))
         self.app.W.record_session_end(self.session, "fixture provider session ended")
-        rec = [r for r in self.call("inspect")["records"] if r["id"] == prepared["id"]][0]
+        rec = [r for r in self.records() if r["id"] == prepared["id"]][0]
         self.assertEqual(rec["status"], "interrupted")
 
     def test_build_spawn_command_one_repository_is_byte_identical_to_todays_command(self):
@@ -1484,7 +1528,7 @@ class DesktopWork(unittest.TestCase):
         # repository's line is checked against.
         self.assertTrue(any(self.repo.name in l for l in lines))
         self.assertTrue(any(second.name in l for l in lines))
-        self.assertEqual(self.call("inspect")["records"][0]["request"]["repos"],[str(self.repo),str(second)])
+        self.assertEqual(self.records()[0]["request"]["repos"],[str(self.repo),str(second)])
 
     def test_a_repository_connected_to_two_companies_is_listed_and_dispatched_for_the_second(self):
         """Plan item 11 (CEO 2026-10-21): the shared repository is in ONE company's roots
@@ -1701,7 +1745,7 @@ class DesktopWork(unittest.TestCase):
         every allowed worker tool call (10,323 copies of 529 characters in two days). It is said once
         per worker context, again after the host compacts that context, and every call stays fenced.
         Every call goes through the app's own evidence capture first, as scripts/app-engine-hook.py
-        does: capture puts its guard projection in transcript_path (second review of bb08b88e0)."""
+        does; capture hands Claude Code's own transcript_path on unchanged."""
         evidence=self.app.load("notice_capture",ENGINE/"scripts/lib/app-evidence.py")
         state=self.root/"engine-state"
         seen=lambda e: self.app.worker_context(self.scope,evidence.capture(
@@ -1771,7 +1815,7 @@ class DesktopWork(unittest.TestCase):
         with patch.object(self.app,"build_spawn_command",return_value=command):
             with self.assertRaises(ValueError): self.call("prepare",self.args)
         worker=self.call("prepare",{**self.args,"request_id":"replacement"})   # settles the first: two receipts
-        self.assertEqual(len(self.call("inspect")["records"]),2)
+        self.assertEqual(len(self.records()),2)
         real=self.app.save
         saved=[]
         def counting(path,value):
@@ -1813,7 +1857,7 @@ class DesktopWork(unittest.TestCase):
             if seen["lock"] == "free":      # only then is it safe to do what other workers do meanwhile
                 self.app.observe(self.scope, {"hook_event_name": "PostToolUse", "session_id": self.session,
                                               "agent_id": "nobody", "tool_name": "Bash"})
-                seen["records"] = len(self.call("inspect")["records"])
+                seen["records"] = len(self.records())
                 with self.assertRaisesRegex(ValueError, "unresolved work"):
                     self.call("prepare", {**self.args, "request_id": "second-request"})
                 seen["same-request"] = self.call("prepare", self.args)["status"]
@@ -1824,7 +1868,7 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(seen["records"], 1)
         self.assertEqual(seen["same-request"], "preparing")          # the same request is told it is underway
         self.assertEqual(ready["status"], "prepared")
-        self.assertNotIn("preparing_by", self.call("inspect")["records"][0])
+        self.assertNotIn("preparing_by", self.records()[0])
         # the workspace the command created was not withdrawn by the second request
         self.assertTrue(Path(self.app.target_workspace(self.record_of(ready))["path"]).is_dir())
 
@@ -1840,7 +1884,7 @@ class DesktopWork(unittest.TestCase):
                 second = self.call("prepare", {**args, "request_id": role + "-second",
                     "title": "Answer the independent question", "brief": "Read the independent fictional source and report its date."})
                 self.start_fixture_worker(second, role + "-second-agent")
-                records = {r["id"]: r for r in self.call("inspect")["records"]}
+                records = {r["id"]: r for r in self.records()}
                 self.assertEqual([records[r["id"]]["status"] for r in (first, second)], ["running", "running"])
                 retry = self.call("prepare", args)
                 self.assertEqual(retry["id"], first["id"])
@@ -1926,7 +1970,7 @@ class DesktopWork(unittest.TestCase):
         with self.assertRaisesRegex(self.app.W.SpecError,"uncommitted|dirty"):
             self.call("prepare",follow)
         self.assertEqual((target/"unfinished.txt").read_text(),"KEEP UNFINISHED BYTES")
-        self.assertEqual(len(self.call("inspect")["records"]),1)
+        self.assertEqual(len(self.records()),1)
         # Explicit fictional reconciliation before continuation. The adapter never
         # resets, deletes or silently commits the old dirty files itself.
         self.app.git(target,"add","unfinished.txt")
@@ -1991,7 +2035,7 @@ class DesktopWork(unittest.TestCase):
         for role,extra in (("reviewer",{"review_of":worker["id"]}),("worker",{})):
             with self.assertRaisesRegex(ValueError,"do not match the turn the app attested"):
                 self.call("prepare",{**self.args,"request_id":"mismatch-"+role,"role":role,**extra})
-        self.assertEqual(len(self.call("inspect")["records"]),1,"a refused preparation left a receipt")
+        self.assertEqual(len(self.records()),1,"a refused preparation left a receipt")
         # No words at all is the stated fallback, not a refusal: the brief says so plainly.
         del self.scope["user_instruction"]["text"];self.scope_path.write_text(json.dumps(self.scope))
         reviewer=self.call("prepare",{**self.args,"request_id":"no-words","role":"reviewer","review_of":worker["id"]})
@@ -2114,7 +2158,7 @@ class DesktopWork(unittest.TestCase):
         worker,reviewer=(self.delivered_prompts["house-rules-"+role] for role in ("worker","reviewer"))
         # The same files and text; each names the commit its agent starts at, the reviewer's the
         # exact commit it reviews.
-        reviewed=self.call("inspect")["records"]
+        reviewed=self.records()
         reviewed=next(r for r in reviewed if r["id"]==pair["reviewer_id"])["review_target"]["commit"]
         same=lambda text:re.sub(r"as committed at [0-9a-f]{12}","as committed at <commit>",text)
         section=self.instruction_section(reviewer,after="lands-pending: ")
@@ -2373,7 +2417,7 @@ class DesktopWork(unittest.TestCase):
         # unresolved work (Tom's review of c2ad4fb8c); the refused completion settles nothing,
         # and it can still be dispatched.
         with self.assertRaisesRegex(ValueError,"unresolved execution"):self.call("complete",args)
-        self.assertEqual(self.call("inspect")["records"][0]["status"],"prepared")
+        self.assertEqual(self.records()[0]["status"],"prepared")
         self.start_fixture_worker(worker,"unfinished")
         self.finish_fixture_worker("unfinished")
         with self.assertRaisesRegex(ValueError,"cleanup"):self.call("complete",args)
@@ -2418,7 +2462,7 @@ class DesktopWork(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,"synthetic crash"):self.call("prepare",self.args)
         binding=original(self.root/"ecs",{"protocol":1,"command":"bind","scope":{**{k:v for k,v in self.scope["binding"].items() if k!="revision"},"turn_id":"turn-b"},"expected_revision":self.scope["binding"]["revision"],"source_ref":"ledger:thread-a:turn-b","request_id":"bind-second"})["binding"]
         self.scope["binding"]=binding;self.scope_path.write_text(json.dumps(self.scope))
-        result=self.call("inspect")["records"][0]
+        result=self.records()[0]
         self.assertEqual(result["status"],"unknown");self.assertNotIn("ecs_pending",result)
         work=original(self.root/"ecs",{"protocol":1,"command":"inspect","binding":binding,"query":{"section":"work"}})
         self.assertEqual(len(work["records"]),1)
@@ -2454,15 +2498,17 @@ class DesktopWork(unittest.TestCase):
     def test_reused_work_lease_cannot_inspect_or_land_another_assignment(self):
         ready=self.call("prepare",self.args)
         current,_=self.work_lease()
-        self.assertEqual(self.app.call(current,"inspect",{})["records"][0]["id"],ready["id"])
+        self.assertEqual([r["id"] for r in self.records(current)],[ready["id"]])
+        self.assertEqual([line.split()[1] for line in self.app.call(current,"inspect",{})["jobs"]],[ready["name"]])
         other,_=self.work_lease("another-assignment")
-        self.assertEqual(self.app.call(other,"inspect",{}),{"records":[],"next_offset":None})
+        self.assertEqual(self.app.call(other,"inspect",{}),{"jobs":[]})
+        self.assertEqual(self.app.call(other,"inspect",{"id":ready["id"]}),{"records":[]})
         with patch.object(self.app,"land_lock") as lock:
             with self.assertRaisesRegex(ValueError,"another assignment"):
                 self.app.call(other,"integrate",{"worker_id":ready["id"],"reviewer_id":"unread"})
             lock.assert_not_called()
         # The conversation still owns the combined history.
-        self.assertEqual(len(self.call("inspect")["records"]),1)
+        self.assertEqual(len(self.records()),1)
 
     def test_a_background_assignment_still_reports_after_three_ceo_turns(self):
         """Acceptance 7.2, and the half that fails is the REPORT, not the read.
@@ -2485,7 +2531,7 @@ class DesktopWork(unittest.TestCase):
         before=len(self.events(store,"work_unit.upserted"))
         # The assignment speaks. This appends work_unit.upserted, which is fenced
         # against the row belonging to the event's own person.
-        self.assertEqual(self.app.call(work,"inspect",{})["records"][0]["status"],"dispatching")
+        self.assertEqual(self.records(work)[0]["status"],"dispatching")
         wrote=self.events(store,"work_unit.upserted")
         self.assertEqual(len(wrote),before+1)
         self.assertEqual(wrote[-1]["person_id"],seat)
@@ -2552,14 +2598,14 @@ class DesktopWork(unittest.TestCase):
         first = self.app.call(work, "prepare", {key: value for key, value in self.args.items()
                                                 if key != "obligation_id"})
         self.assertEqual(first["status"], "prepared")
-        self.assertEqual(self.call("inspect")["records"][0]["request"]["obligation_id"], "fixture-task")
+        self.assertEqual(self.records()[0]["request"]["obligation_id"], "fixture-task")
 
         # B. The lease names the WRONG one, which is exactly what happened. The
         #    scope wins and the invented id is nowhere in the receipt.
         again = self.app.call(work, "prepare", {**self.args, "obligation_id": "obl-add-notes-line"})
         self.assertEqual(again["id"], first["id"])
         self.assertEqual(self.record_of(again)["request"]["obligation_id"], "fixture-task")
-        self.assertNotIn("obl-add-notes-line", json.dumps(self.call("inspect")["records"]))
+        self.assertNotIn("obl-add-notes-line", json.dumps(self.records()))
 
         # C. CONTROL -- a conversation scope carries no obligation in its binding
         #    (its turn_id is a TURN), so there the argument is still required and
@@ -2577,7 +2623,7 @@ class DesktopWork(unittest.TestCase):
         absent, _ = self.work_lease(assignment="no-such-assignment")
         with self.assertRaises(Exception):
             self.app.call(absent, "prepare", {**self.args, "request_id": "absent-one"})
-        self.assertEqual(len(self.call("inspect")["records"]), 1)
+        self.assertEqual(len(self.records()), 1)
 
     def test_a_work_lease_completes_the_obligation_its_scope_carries(self):
         """The same derivation on the call that CLOSES the assignment.

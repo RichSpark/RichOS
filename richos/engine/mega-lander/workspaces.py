@@ -8911,26 +8911,36 @@ def current_session():
     return str((rec or {}).get("sessionId") or "")
 
 
-def _print_status(me, entity):
+def status_lines(me, entity):
+    """`workspaces.sh status`, as (job, line) pairs in the order it prints them.
+    `job` is the registry key of the job the line is about, and "" for a line
+    about no registered job: the session, the integration branches, an
+    unregistered workspace, a damaged record.
+
+    ONE READER FOR THE TERMINAL AND THE APP (CEO, 2026-10-31). The terminal
+    prints every line (_print_status); the app's `inspect` answers the lines of
+    its own conversation's jobs from this same function, so the app looks up
+    its jobs exactly as the terminal lead does and the two cannot drift."""
     # A status is a question: it lands nothing, deletes nothing, stops nothing
     # and claims nothing (hunt part 4, finding 29). What the next gate or land
     # WOULD land is shown as LANDABLE instead.
     items = pending(me, entity, scan=True, dry=True)
-    print("session: %s" % (me or "(none)"))
+    out = [("", "session: %s" % (me or "(none)"))]
     for repo in sorted(all_integration_records()):
         r = all_integration_records()[repo]
-        print("integrates on: %s  %s  (%s)" % (r.get("branch"), repo, r.get("source")))
+        out.append(("", "integrates on: %s  %s  (%s)" % (r.get("branch"), repo, r.get("source"))))
     if not items:
-        print("pending: none")
+        out.append(("", "pending: none"))
     for i in items:
         label = "LANDABLE" if i.get("would_land") else ("UNREGISTERED" if i.get("unregistered") else
                                                        ("DAMAGED " if i.get("damaged") else "PENDING "))
         note = ("  [lands at the next gate, or: workspaces.sh land %s]" % i["name"]) if i.get("would_land") else ""
-        print("%s %s  %s%s%s%s" % (label, i["name"], i["why"],
-                                    ("  [waiting %s: %s]" % (i["waiting"], i["waiting_on"])) if i["waiting"] else "",
-                                    "  [independent spawns allowed]", note))
+        out.append((i.get("key") or "", "%s %s  %s%s%s%s" % (
+            label, i["name"], i["why"],
+            ("  [waiting %s: %s]" % (i["waiting"], i["waiting_on"])) if i["waiting"] else "",
+            "  [independent spawns allowed]", note)))
         for p, b in i["workspaces"]:
-            print("           %s  %s" % (p, b or ""))
+            out.append((i.get("key") or "", "           %s  %s" % (p, b or "")))
     elsewhere = {}
     for r in all_agents():
         if held_elsewhere(r, elsewhere):
@@ -8938,13 +8948,20 @@ def _print_status(me, entity):
         if r.get("disposition") or any(i["key"] == r["key"] for i in items):
             if r.get("deletion"):
                 d = r["deletion"]
-                print("RETRYING %s  deletion attempt %d failed: %s" % (r.get("name"), d.get("attempts"),
-                                                                     d.get("last_error")))
+                out.append((r["key"], "RETRYING %s  deletion attempt %d failed: %s" % (
+                    r.get("name"), d.get("attempts"), d.get("last_error"))))
             continue
         # The same read-only view the dry pending used (V2-05): a stopped
         # worker of another session prints FINISHED, not WORKING.
         fin, paused_, why = finished_state(platform_view(r))
-        print("%-8s %s  %s" % ("PAUSED" if paused_ else ("FINISHED" if fin else "WORKING"), r.get("name"), why))
+        out.append((r["key"], "%-8s %s  %s" % ("PAUSED" if paused_ else ("FINISHED" if fin else "WORKING"),
+                                              r.get("name"), why)))
+    return out
+
+
+def _print_status(me, entity):
+    for _job, line in status_lines(me, entity):
+        print(line)
     return 0
 
 

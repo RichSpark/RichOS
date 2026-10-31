@@ -115,8 +115,8 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
  let binding=bridge.request("current",serde_json::json!({}))?["binding"].clone();
  let records=bridge.request("inspect",serde_json::json!({"binding":binding,"query":{"section":"work"}}))?;
  let observed=records["records"].as_array().unwrap().iter().find(|r|r["external_id"]==receipt["id"]).expect("worker observation");assert_ne!(observed["status"],"completed");
- let transcript=std::fs::read_to_string(data.join("engine-state/evidence").join(receipt["binding"]["session_id"].as_str().unwrap()).join("guard-transcript.jsonl"))?;
- assert!(transcript.lines().filter_map(|line|serde_json::from_str::<serde_json::Value>(line).ok()).any(|row|row["evidenceSource"]=="richos-ledger-attested-hook-v1"),"visible user instruction was not attested from the ledger");
+ // The guards read Claude Code's own transcript; the app writes no second copy of it.
+ assert!(!data.join("engine-state/evidence").join(receipt["binding"]["session_id"].as_str().unwrap()).join("guard-transcript.jsonl").exists(),"a second copy of the transcript was written");
  // Replace the reasoning process while retaining the scoped obligation and work receipt.
  let mut replacement=richos_core::engine_profile::EngineProfile::prepare(&engine,&data,runtime.clone())?;
  replacement.scope_to(&spine.ledger().thread_binding(&thread)?)?;
