@@ -101,6 +101,7 @@
   root.addEventListener("focusout",event=>{if(event.target.id!=="cleaner-note")return;clearTimeout(saveTimer);if(dirty())saveNote(event.target).catch(tell);});
   if(!panel && native.window?.getCurrentWindow){const win=native.window.getCurrentWindow();let closing=false;win.onCloseRequested(async event=>{if(closing || !dirty() && !saveBusy)return;event.preventDefault();try{await flushEdits();closing=true;await win.close();}catch(e){tell(e);}}).catch(tell);}
   document.body.className=panel ? "cleaner-panel" : "cleaner-library";
+  document.documentElement.classList.toggle("cleaner-panel",panel);
   native.event.listen("rich://cleaner",event=>{const view=event.payload;if(panel){if(view.stage!=="library-changed")paintPanel(view);}else if(!saveBusy && !dirty() && !document.getElementById("cleaner-note")?.matches(":focus"))load(false);}).catch(tell);
   native.event.listen("cleaner-level",event=>{const level=Math.max(0,Math.min(1,event.payload/100));const pill=root.querySelector(".rf-panel");if(pill)pill.style.setProperty("--lvl",level);root.querySelectorAll(".dh-meter i").forEach((bar,i)=>bar.style.transform=`scaleY(${Math.max(.08,level*[.5,.8,1,.8,.5][i])})`);}).catch(tell);
   if(panel){let last="";new ResizeObserver(()=>{const pill=root.querySelector(".rf-panel");if(!pill)return;const w=630,h=Math.ceil(pill.getBoundingClientRect().height+48),key=`${w}:${h}`;if(key!==last){last=key;call("cleaner_panel_size",{w,h}).catch(tell);}}).observe(root);}

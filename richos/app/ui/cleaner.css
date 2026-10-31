@@ -208,4 +208,5 @@ body.cleaner-library { display: block; padding: 0; background:var(--surface-rais
 #cleaner-settings-title {font:400 2rem/1.15 var(--font-serif);margin:0;color:var(--ink);}
 #cleaner-settings .dict-close {border:0;background:none;color:var(--ink);font-size:1.75rem;cursor:pointer;}
 .cleaner-library .rf-win-bar {padding-right:4rem;}
-.cleaner-panel .setwrap {display:none;}
+html.cleaner-panel {background:transparent;}
+.cleaner-panel #settings {display:none;}
