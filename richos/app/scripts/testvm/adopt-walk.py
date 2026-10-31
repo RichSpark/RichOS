@@ -406,7 +406,9 @@ class Walk:
 
     def pair(self):
         self.press('Settings', role='AXPopUpButton')
-        self.press('Use Rich from your phone', role='AXMenuItem')
+        # The settings menu's row is a button (#set-phone-open), not a menu item: pressed as an
+        # AXMenuItem it is "blocked ... nothing matched" (phone-card-walk run 1, 2026-10-31).
+        self.press('Use Rich from your phone')
         # The route chooser shows while RichOS Connect is offered; this walk is the Tailscale path.
         # Its two choices are toggles (AXCheckBox), not buttons.
         if self.present('Use Tailscale', role='AXCheckBox'):

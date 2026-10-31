@@ -57,11 +57,11 @@ class Walk(adopt.Walk):
         """Reopens the phone sheet (a settled card does not poll) and returns its words, after
         waiting for round 49's words for STATE and photographing the screen."""
         try:
-            self.press('Close')
+            self.press('Close', contains=False)
         except StepFailed:
             pass  # the sheet was already closed
         self.press('Settings', role='AXPopUpButton')
-        self.press('Use Rich from your phone', role='AXMenuItem')
+        self.press('Use Rich from your phone')  # the settings menu's row is a button
         end = time.monotonic() + 30
         text = ''
         while time.monotonic() < end:
