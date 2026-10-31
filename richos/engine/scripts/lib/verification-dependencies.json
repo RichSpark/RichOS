@@ -12823,14 +12823,14 @@
     },
     "scripts/provider-supervisor.py#fixture-providers": {
       "source": "scripts/provider-supervisor.py",
-      "sha256": "182c4b5c8a20f0b797d295fe4b9437271a7e49b72c127ca454259fa68590fef9",
-      "evidence": "Called by provider-supervisor.test.py with generated Python provider/launcher scripts and fixed sleep commands. Supervisor imports stdlib and native libproc only, observes process tables and executes only caller fixture argv. No engine helper or orchestration config. Renewal 2026-10-28 (zero-CPU waits): operator_main blocks on a standard-library kqueue (the provider's and the owner's exit, the signal wakeup descriptor) between its once-a-second snapshots instead of waking every 100 ms; still standard library and native libproc only. Renewal 2026-10-31 (Tom's P0 finding 1, a nohup command): each snapshot also reads, in process (KERN_PROCARGS2 through libc sysctl on macOS, /proc/<pid>/environ on Linux), the environment of processes reparented to launchd since the provider started, to find its own RICHOS_SESSION_PID tag; no file, configuration or engine helper is read.",
+      "sha256": "fb6d761e3570c96eb8bcf89e8bd508f6b43bdaedecaa080c87cd1d9043d5ca23",
+      "evidence": "Called by provider-supervisor.test.py with generated Python provider/launcher scripts and fixed sleep commands. Supervisor imports stdlib and native libproc only, observes process tables and executes only caller fixture argv. No engine helper or orchestration config. Renewal 2026-10-28 (zero-CPU waits): operator_main blocks on a standard-library kqueue (the provider's and the owner's exit, the signal wakeup descriptor) between its once-a-second snapshots instead of waking every 100 ms; still standard library and native libproc only. Renewal 2026-10-31 (Tom's P0 finding 1, a nohup command): each snapshot also reads, in process (KERN_PROCARGS2 through libc sysctl on macOS, /proc/<pid>/environ on Linux), the environment of processes reparented to launchd since the provider started, to find its own RICHOS_SESSION_PID tag; no file, configuration or engine helper is read. Renewal 2026-10-31 (review rv-20261031T063529Z-4ca7addc-9ce9): the kqueue also watches the provider's forks (NOTE_FORK) and takes a snapshot at once and twice more within 30 ms; a recorded group stays the provider's while it still has a member and its leader id is not reused. Still standard library and native libproc only.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/provider-supervisor.test.py": {
       "source": "scripts/lib/provider-supervisor.test.py",
-      "sha256": "20b15091cbd89ef8a5a569bfb5b56049b82bc35efb1fe756085b70d145cb97b5",
+      "sha256": "00b29e9994052c9e6787c022f102ce6699fe4068cceb974d96203bf2765fc5e0",
       "evidence": "Loads/calls supervisor with private generated provider/desktop scripts and native sleep/ps. Tests process identity, signals and private JSON logs, no config or live provider command.",
       "keys": [],
       "edges": [

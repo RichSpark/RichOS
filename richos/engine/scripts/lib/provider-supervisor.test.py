@@ -76,6 +76,20 @@ open(receipt, "w").write(json.dumps({"provider": os.getpid(), "shell": shell.pid
 time.sleep(300)
 '''
 
+# Review rv-20261031T063529Z-4ca7addc-9ce9: the same, with a detached command macOS shows no
+# environment for (its own /bin/sleep), so no session tag can find it. The shell first lives a
+# little, as a login shell sourcing its snapshot does (a login zsh alone lives 18-30 ms, measured
+# 2026-10-31).
+PROVIDER_WITH_SYSTEM_NOHUP = r'''
+import json, os, subprocess, sys, time
+receipt, beat, out = sys.argv[1], sys.argv[2], sys.argv[3]
+shell = subprocess.Popen(["/bin/sh", "-c", 'sleep 0.1; nohup /bin/sleep 300 >/dev/null 2>&1 & echo $! > "$0"', out],
+                         start_new_session=True)
+shell.wait()
+open(receipt, "w").write(json.dumps({"provider": os.getpid(), "shell": shell.pid}))
+time.sleep(300)
+'''
+
 
 def without_operator_names():
     """This process's environment minus the operator's three supervisor names, so a product
@@ -265,10 +279,18 @@ class ReapDescendants(unittest.TestCase):
         that exits at once. The lease's state file, which the update gate and the quit question
         read (lease_commands.rs `read`: any group listed is a running command), must list the
         command's group, and the reap must end it with its lead."""
+        self.nohup_case(PROVIDER_WITH_NOHUP)
+
+    def test_R15_a_detached_system_command_whose_environment_macos_hides_is_tracked_too(self):
+        """Review rv-20261031T063529Z-4ca7addc-9ce9: `nohup /bin/sleep` shows no environment, so
+        the session tag never found it, and it was neither counted nor reaped."""
+        self.nohup_case(PROVIDER_WITH_SYSTEM_NOHUP)
+
+    def nohup_case(self, provider):
         with tempfile.TemporaryDirectory(prefix="supervisor nohup ") as root:
             root = Path(root)
             receipt, beat, out, state = root/"pids.json", root/"beat", root/"nohup.pid", root/"state.json"
-            fake = root/"provider.py"; fake.write_text(PROVIDER_WITH_NOHUP)
+            fake = root/"provider.py"; fake.write_text(provider)
             launcher = root/"desktop.py"
             launcher.write_text("import subprocess,sys,time\np=subprocess.Popen(sys.argv[2:],start_new_session=True)\n"
                                 "open(sys.argv[1],'w').write(str(p.pid))\ntime.sleep(120)\n")
@@ -280,7 +302,7 @@ class ReapDescendants(unittest.TestCase):
             detached = None
             try:
                 for _ in range(100):
-                    if receipt.exists() and out.exists() and out.read_text() and (root/"sup.pid").exists():
+                    if receipt.exists() and out.exists() and out.read_text().strip() and (root/"sup.pid").exists():
                         break
                     time.sleep(0.05)
                 detached = int(out.read_text())
@@ -293,7 +315,8 @@ class ReapDescendants(unittest.TestCase):
                 for _ in range(40):                  # the snapshot runs once a second
                     time.sleep(0.1)
                     reading = json.loads(state.read_text()) if state.exists() else {}
-                    if group in (reading.get("outside_provider_groups") or []):
+                    if group in (reading.get("outside_provider_groups") or []) \
+                            and detached in (reading.get("outside_provider_group") or []):
                         break
                 self.assertIn(group, reading.get("outside_provider_groups") or [],
                               "the update gate would read no running command: %s" % reading)
