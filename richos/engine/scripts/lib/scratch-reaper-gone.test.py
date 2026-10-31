@@ -26,10 +26,10 @@ class AlreadyGone(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def apply(self, paths, rmtree=None):
+    def apply(self, paths, rmtree=None, klass="scratch"):
         r = object.__new__(reaper.Reaper)
         r.scope = None
-        r.entries = [reaper.Entry(p, "scratch", 10, reaper.DELETE, "test") for p in paths]
+        r.entries = [reaper.Entry(p, klass, 10, reaper.DELETE, "test") for p in paths]
         recorded = []
         r.named_scratch = lambda p: False
         r.collect_test_instances = lambda paths, stamp: []
@@ -69,6 +69,33 @@ class AlreadyGone(unittest.TestCase):
         (deleted, freed, failures), rec = self.apply([victim], rmtree=deny)
         self.assertEqual(len(failures), 1)
         self.assertIn("Permission denied", failures[0])
+
+    def test_gone_during_the_permission_retry_is_gone_not_failed(self):
+        victim = os.path.join(self.tmp, "locked-then-gone")
+        os.mkdir(victim)
+        calls = []
+
+        def deny_then_vanish(path, *a, **k):
+            calls.append(path)
+            if len(calls) == 1:
+                raise PermissionError(13, "Permission denied", path)
+            os.rmdir(path)               # the owner removed it before the retry ...
+            raise FileNotFoundError(2, "No such file or directory", path)
+        (deleted, freed, failures), rec = self.apply([victim], rmtree=deny_then_vanish, klass="scratch-alloc")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(failures, [])
+        self.assertEqual(rec[1], [])
+        self.assertTrue(any(" GONE " in l for l in rec[0]), rec[0])
+        self.assertFalse(any("FAILED" in l for l in rec[0]))
+
+    def test_other_error_during_the_permission_retry_is_still_a_failure(self):
+        victim = os.path.join(self.tmp, "locked-twice")
+        os.mkdir(victim)
+
+        def deny(path, *a, **k):
+            raise PermissionError(13, "Permission denied", path)
+        (deleted, freed, failures), rec = self.apply([victim], rmtree=deny, klass="scratch-alloc")
+        self.assertEqual(len(failures), 1)
 
 
 if __name__ == "__main__":
