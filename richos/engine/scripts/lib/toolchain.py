@@ -49,8 +49,11 @@ report (his instruction file says how; nothing here writes the question), then r
   install <tool>         only with the user's yes for that tool or the general permission;
                          first checks the tool is really missing (present: nothing installed),
                          never starts the installer while an install is already running (one
-                         lock, one record), then opens Apple's installer (`xcode-select
-                         --install`, where the user presses Install) and waits for the tool
+                         lock, one record), opens Apple's installer (`xcode-select --install`,
+                         where the user presses Install) and returns at once so the user can be
+                         told; run again, each run waits up to CALL_WAIT seconds for the tool.
+                         The agent waits in its own turn: a background command's end cannot
+                         continue the work (the app grants actions only inside its own turns)
   permission [yes|no]    the general permission, `INSTALL_MISSING_TOOLS` in the user's own
                          settings file, the orchestration.config in their central folder
                          (RICHOS_USER_FOLDER, from the app; off unless it says yes). With it on,
@@ -229,6 +232,12 @@ PERMISSION_COMMENT = ("# Install a tool that work needs and this Mac does not ha
 # How long an install may take before a second request may start the installer again: the
 # Command Line Tools are a download of 1 to 2 GB.
 INSTALL_WAIT = 3600
+# How long one `install` call waits before it says "still installing, run me again": under Claude
+# Code's default Bash timeout of 120 s, so the agent's call is never cut off or moved to the
+# background. A background command's end cannot continue the work in a conversation turn: the
+# app allows actions only inside a turn it granted (app-engine-hook.py), and the provider reports
+# a late ending in a turn of its own (measured on the test VM 2026-10-31, walk-f50bafc2bb48).
+CALL_WAIT = 100
 
 
 def settings_file(env):
@@ -319,20 +328,34 @@ def _present(env, name):
     return directory, tool_path(directory, name)
 
 
-def install(env, name, wait=INSTALL_WAIT, poll=5.0, out=sys.stdout):
+def _arrived(env, name, where, state, out):
+    """`name` is on this Mac. With an install of ours on record, that install has finished; with
+    none, it was already here and nothing was installed."""
+    record_found(env, name, where)
+    path, data = _ledger(env)
+    if not data.pop("install", None):
+        out.write("ALREADY-INSTALLED `%s` is on this Mac at %s. Nothing was installed.\n" % (name, where))
+        return 0
+    _save(path, data)
+    told = " Tell the user once, in one line, that it was installed." if state != "approved" else ""
+    out.write("INSTALLED `%s` at %s. Carry on with the work that needed it.%s\n" % (name, where, told))
+    return 0
+
+
+def install(env, name, wait=CALL_WAIT, poll=5.0, out=sys.stdout):
     """Install the developer tools that carry `name`, ONCE, and only with the user's permission
     (their yes for this tool, or the general permission). -> exit code.
       0  the tool is there (it already was: nothing installed; or the install finished)
       3  no permission: the user has not said yes (ask them first), or said no to this tool
-      4  the installer ran and the tool is not there yet after `wait` seconds
+      4  not there yet: this call opened Apple's installer and returns at once, so the user can
+         be told to press Install; or it waited `wait` seconds. Run it again to keep waiting: an
+         install already running is never started again (for INSTALL_WAIT seconds)
       5  it cannot be installed from here (only the full Xcode app carries it; not macOS; the
          installer refused)"""
+    state = tool_state(env, name)
     directory, where = _present(env, name)
     if where:  # really missing? never install what is already here
-        record_found(env, name, where)
-        out.write("ALREADY-INSTALLED `%s` is on this Mac at %s. Nothing was installed.\n" % (name, where))
-        return 0
-    state = tool_state(env, name)
+        return _arrived(env, name, where, state, out)
     if state == "declined":
         out.write("NOT-INSTALLED: the user said no to installing `%s`. Nothing was installed; do not ask "
                   "again.\n" % name)
@@ -353,12 +376,11 @@ def install(env, name, wait=INSTALL_WAIT, poll=5.0, out=sys.stdout):
         out.write("CANNOT-INSTALL: `%s` is installed with Apple's developer tools, which exist only on "
                   "macOS. Nothing was installed.\n" % name)
         return 5
+    again = _commands(name)["install_command"]
     lock = _locked(env)
     try:
         path, data = _ledger(env)
-        running = data.get("install") or {}
-        started = int(running.get("started") or 0)
-        if not (started and time.time() - started < wait):
+        if not install_running(env):
             proc = subprocess.run([installer, "--install"], capture_output=True, text=True,
                                   stdin=subprocess.DEVNULL)
             said = (proc.stdout + proc.stderr).strip()
@@ -369,32 +391,24 @@ def install(env, name, wait=INSTALL_WAIT, poll=5.0, out=sys.stdout):
             data["install"] = {"started": int(time.time()), "tool": name}
             _save(path, data)
             out.write("INSTALLING `%s`: Apple's \"Install Command Line Developer Tools\" window is open on "
-                      "this Mac; the user presses Install there and agrees to Apple's license. Waiting for "
-                      "it to finish (up to %d minutes).\n" % (name, wait // 60))
-        else:
-            out.write("INSTALLING `%s`: the developer tools are already being installed (started %d s ago); "
-                      "not starting the installer again. Waiting for it to finish.\n"
-                      % (name, int(time.time() - started)))
-        out.flush()
+                      "this Mac. The user presses Install there and agrees to Apple's license; it then "
+                      "takes a few minutes. Tell the user that now, then run `%s` until it says INSTALLED: "
+                      "each run waits up to %d s and never opens the installer again.\n"
+                      % (name, again, wait))
+            return 4
+        started = int(data["install"]["started"])
     finally:
         lock.close()
     deadline = time.time() + wait
     while True:
         directory, where = _present(env, name)
         if where:
-            record_found(env, name, where)
-            path, data = _ledger(env)
-            data.pop("install", None)
-            _save(path, data)
-            told = " Tell the user once, in one line, that it was installed." if state != "approved" else ""
-            out.write("INSTALLED `%s` at %s. The work that needed it can continue.%s\n" % (name, where, told))
-            return 0
+            return _arrived(env, name, where, state, out)
         if time.time() >= deadline:
-            path, data = _ledger(env)
-            data.pop("install", None)  # a later request may open the installer again
-            _save(path, data)
-            out.write("NOT-INSTALLED-YET: `%s` is still not on this Mac after %d minutes. The installer "
-                      "window may have been closed, or the download is still running.\n" % (name, wait // 60))
+            out.write("STILL-INSTALLING `%s`: Apple's install, started %d s ago, has not finished. Run `%s` "
+                      "again to keep waiting; it does not open the installer again. (If the user closed "
+                      "Apple's window, a request after %d minutes from the start opens it again.)\n"
+                      % (name, int(time.time() - started), again, INSTALL_WAIT // 60))
             return 4
         time.sleep(poll)
 
@@ -568,8 +582,8 @@ RICHOS-MISSING-TOOL {payload}
 """
 ASK_NEW = ("Stop this step and report the missing tool to whoever gave you the work. "
            "The lead asks the user in the conversation, in plain words, whether to install it; the "
-           "work on this step waits for the answer. On yes: `{yes_command}` (it installs it once); "
-           "on no: `{no_command}`.")
+           "work on this step waits for the answer. On yes: `{yes_command}` (it opens the installer "
+           "once), then `{install_command}` until it says INSTALLED; on no: `{no_command}`.")
 ASK_DONE = ("Stop this step and report the missing tool to whoever gave you the work. "
             "The user has ALREADY been asked about `{tool}` (do not ask again); wait for the answer, "
             "or carry on with work that does not need it.")
@@ -577,9 +591,9 @@ ASK_DECLINED = ("Stop this step and report the missing tool to whoever gave you 
                 "The user said NO to installing `{tool}`: do not ask again and do not install it; "
                 "carry on with work that does not need it.")
 ASK_PERMITTED = ("The user has already given permission to install it, so do not ask and do not stop: "
-                 "install it once with `{install_command}` (it does nothing if `{tool}` is already "
-                 "there and waits until the install finishes), report that it was installed so the "
-                 "user is told once, then run this step again.")
+                 "run `{install_command}` until it says INSTALLED (it does nothing if `{tool}` is "
+                 "already there and never opens the installer twice), report that it was installed "
+                 "so the user is told once, then run this step again.")
 ASK_INSTALLING = ("Stop this step and report the missing tool to whoever gave you the work. "
                   "Apple's developer tools, which carry `{tool}`, are being installed right now: do not "
                   "ask and do not start another install; run this step again once it is installed.")

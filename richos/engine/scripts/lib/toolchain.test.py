@@ -30,11 +30,12 @@ exits 1. That marker is the install dialog; no case may ever leave one. Nothing 
   T16 a shell heredoc after a here-string (<<<), a comment or quoted text naming `<<EOF` is still
       read as commands; one inside "$( ... )" too
   T17 a missing tool with no permission: the ask (with the yes and no commands) and no install
-  T18 the user's yes installs once and the step runs; a repeated yes or install installs nothing
+  T18 the user's yes opens the installer once and returns (so the user is told to press Install);
+      the next run waits for it and the step runs; a repeated yes or install installs nothing
   T19 a general permission stored in the user's orchestration.config (off by default, other
       lines kept): no ask, one install; switched off again, it asks
-  T20 a second request for the same tool: after a no it neither asks nor installs; while an
-      install runs, a second one waits for it (one installer run)
+  T20 a second request for the same tool: after a no it neither asks nor installs; two requests
+      at once and waits that run out before the download ends open the installer once
 The fake installer at the fake Mac's /usr/bin/xcode-select counts its runs; nothing real installs.
 """
 import json
@@ -453,6 +454,9 @@ class FakeMac(unittest.TestCase):
         env = self.user_env()
         self.assertEqual(self.guard("make all", env)[0], 2)
         rc, said = self.run_install(env, "make", said="yes")
+        self.assertEqual(rc, 4, "the yes opens the installer and returns, so the user can be told: " + said)
+        self.assertIn("presses Install", said)
+        rc, said = self.run_install(env, "make")
         self.assertEqual(rc, 0, said)
         self.assertIn("INSTALLED `make`", said)
         self.assertEqual(self.install_count(), 1)
@@ -488,6 +492,7 @@ class FakeMac(unittest.TestCase):
         self.assertNotIn("Stop this step", message)
         self.assertIn(data["install_command"], message)
         self.assertNotIn("make", self.asks(), "nobody was asked")
+        self.assertEqual(self.run_install(env, "make")[0], 4)
         rc, said = self.run_install(env, "make")
         self.assertEqual(rc, 0, said)
         self.assertIn("Tell the user once", said)
@@ -516,21 +521,25 @@ class FakeMac(unittest.TestCase):
         self.assertEqual(self.install_count(), 0)
         # While one install runs, a second request for the same tool (or another tool of the same
         # package) waits for it: one installer run.
-        self.installer(delay=0.5)
+        # Two requests at once, and a wait that runs out before the download ends: one installer.
+        self.installer(delay=1.5)
         toolchain.set_general_permission(env, True)
         results = []
-        threads = [threading.Thread(target=lambda: results.append(self.run_install(env, "git"))) for _ in range(2)]
-        threads[0].start()
-        deadline = time.time() + 5
-        while not toolchain.install_running(env) and time.time() < deadline:
-            time.sleep(0.02)
+        threads = [threading.Thread(target=lambda: results.append(self.run_install(env, "git", wait=0.2)))
+                   for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(sorted(r[0] for r in results), [4, 4], results)
+        self.assertTrue(any("STILL-INSTALLING" in r[1] for r in results), results)
         rc, message = self.guard("git status", env)
         self.assertEqual((rc, self.payload(message)["ask"]), (2, False))
         self.assertIn("being installed right now", message)
-        threads[1].start()
-        for t in threads:
-            t.join(10)
-        self.assertEqual(sorted(r[0] for r in results), [0, 0], results)
+        rc, said = self.run_install(env, "git", wait=0.2)
+        self.assertEqual(rc, 4, "a wait that ran out never opens the installer again: " + said)
+        rc, said = self.run_install(env, "git", wait=10)
+        self.assertEqual(rc, 0, said)
         self.assertEqual(self.install_count(), 1, "the installer started twice: %r" % results)
         self.no_stub()
 
