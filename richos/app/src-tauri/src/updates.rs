@@ -1044,14 +1044,6 @@ fn work_verdict(app: &AppHandle) -> WorkVerdict {
         return work_gate::decide(&WorkSources::all_clear());
     };
 
-    // 1. THE ACTIVE TURN — the spine's own mirror, read without the spine's mutex. Never
-    //    inferred from silence (continuity §5.2).
-    let turn = if state.control.has_active_turns() {
-        Liveness::Busy
-    } else {
-        Liveness::Clear
-    };
-
     // 2. WHETHER THE SPINE IS BEING DRIVEN AT ALL. `try_lock`, never `lock`: `send_message`
     //    holds this mutex for the entire length of a turn, so blocking here would answer
     //    after the turn it means to protect had ended. A lock we cannot take is UNKNOWN, and
@@ -1061,11 +1053,28 @@ fn work_verdict(app: &AppHandle) -> WorkVerdict {
         Ok(_guard) => Liveness::Clear,
         Err(_) => Liveness::Unknown,
     };
+    verdict_from(&state.control, spine, &state.data_dir.join("engine-state"), &state.work)
+}
+
+/// [`work_verdict`]'s readings from the handles it reads, so a test drives the update gate end to
+/// end over a real work host (Tom's review of P0, follow-up 3). `spine` is reading 2.
+fn verdict_from(
+    control: &richos_core::steering::TurnControl,
+    spine: Liveness,
+    engine_state: &std::path::Path,
+    work: &richos_core::work_host::WorkHost,
+) -> WorkVerdict {
+    // 1. THE ACTIVE TURN — the spine's own mirror, read without the spine's mutex. Never
+    //    inferred from silence (continuity §5.2).
+    let turn = if control.has_active_turns() {
+        Liveness::Busy
+    } else {
+        Liveness::Clear
+    };
 
     // Every conversation keeps its own session, including while parked.
-    let engine_state = state.data_dir.join("engine-state");
-    let views:Vec<_>=state.control.lease_sessions().iter()
-        .map(|session|richos_core::app_workers::status(&engine_state,Some(session))).collect();
+    let views:Vec<_>=control.lease_sessions().iter()
+        .map(|session|richos_core::app_workers::status(engine_state,Some(session))).collect();
     let (workers, worker_gap) = work_gate::all_workers(&views);
 
     // 4. **BACKGROUND WORK — the second lease** (background-work spec §6.4, which calls this
@@ -1083,16 +1092,15 @@ fn work_verdict(app: &AppHandle) -> WorkVerdict {
     //    The counting is `WorkHost::background_work`'s, in `richos-core`, for the reason
     //    this function's own doc gives: a decision made in the shell is a decision the spine
     //    suite cannot reach. This function stays the part that touches handles.
-    let background_work = state.work.background_work();
+    let background_work = work.background_work();
     //    **EVERY back end, not "the" one.** The CEO's Two Riches spec puts one back-end Rich
     //    behind each conversation thread, so there is no single work session to read: an
     //    update that installed over the second thread's work would destroy it exactly as
     //    surely as over the first's.
-    let work_lease_views: Vec<_> = state
-        .work
+    let work_lease_views: Vec<_> = work
         .lease_sessions()
         .iter()
-        .map(|session| richos_core::app_workers::status(&engine_state, Some(session)))
+        .map(|session| richos_core::app_workers::status(engine_state, Some(session)))
         .collect();
     let (background, background_gap) = work_gate::worst(
         work_gate::background(&background_work, &work_lease_views),
@@ -1787,5 +1795,58 @@ mod tests {
         let (got, asked) = install_from(local, &[true]);
         assert_eq!(got.as_deref(), Ok(local));
         assert_eq!(asked, [local]);
+    }
+
+    /// **The update gate and the quit question, end to end, over an idle open record** (Tom's
+    /// review of P0, follow-up 3: the P0 tests call `background_work()` directly, and nothing
+    /// drove the gate or `registered_work` through the shell's own composition). A real work host
+    /// over a real disk state, read by the same two functions the app reads: `verdict_from` (the
+    /// update panel's five-second poll) and `registered_from` (the quit question and the
+    /// windowless close). The record is open and its one helper ran and finished, with Stu never
+    /// reporting it: the 2026-10-28 23:00Z panel said "6 assignments still running in the
+    /// background" for six records like it. It holds neither. The same record with a helper whose
+    /// end nobody has witnessed holds both.
+    #[test]
+    fn an_idle_open_record_holds_neither_the_update_nor_the_quit_and_a_live_one_holds_both() {
+        use richos_core::assignment::{self, Registration};
+        let root = std::env::temp_dir().join(format!("richos-update-gate-e2e-{}-{}",
+            std::process::id(), richos_core::util::now_millis()));
+        let engine_state = root.join("engine-state");
+        std::fs::create_dir_all(&engine_state).unwrap();
+        let work = richos_core::work_host::WorkHost::new(&engine_state,
+            Box::new(richos_core::cognition::MockLeaseFactory::new(vec![])),
+            std::sync::Arc::new(richos_core::work_host::SilentNotifier));
+        let control = richos_core::steering::TurnControl::detached();
+        let record = assignment::register(&engine_state, &Registration {
+            entity_id: "depot".into(), thread_id: "thread-one".into(), obligation_id: "obligation-7".into(),
+            instruction_ledger_ref: "ledger:thread-one:turn-7".into(),
+            instruction_sha256: "7".repeat(64),
+            title: "landing the three branches".into(), repositories: vec!["/fictional/project".into()], needs_screen: false,
+        }).unwrap();
+        // The conversation's receipt partition, made by the engine's own receipt lock.
+        drop(richos_core::work_status::lock_receipts(&engine_state, "depot", "thread-one").unwrap());
+        let receipts = std::fs::read_dir(engine_state.join("work-receipts")).unwrap().next().unwrap().unwrap().path();
+        let helper = |status: &str| std::fs::write(receipts.join("helper.json"), serde_json::json!({"schema":1,"id":"helper",
+            "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"work-session-one"},
+            "request":{"obligation_id":"obligation-7","role":"worker","title":"Fictional","repo":"/fictional/project"},
+            "status":status,"agent_id":"agent-one","tool_use_id":"call-one"}).to_string()).unwrap();
+        let read = || (verdict_from(&control, Liveness::Clear, &engine_state, &work), crate::registered_from(&work, &control));
+
+        // The idle open record: its helper's run ended, and nothing else of it is live.
+        helper("run-ended");
+        assert!(assignment::open(&engine_state).unwrap().iter().any(|open| open.id == record.id), "the record must stay open");
+        let (verdict, registered) = read();
+        assert!(!verdict.busy, "an idle open record held the update: {verdict:?}");
+        assert_eq!(verdict.reason, None);
+        assert!(!registered.anything(), "an idle open record held the quit question: {registered:?}");
+
+        // The same record, its helper's end not witnessed: both wait, with the panel's sentence.
+        helper("running");
+        let (verdict, registered) = read();
+        assert!(verdict.busy, "a live assignment did not hold the update: {verdict:?}");
+        assert_eq!(verdict.reason.as_deref(), Some("1 assignment is still running in the background."));
+        assert_eq!((registered.running, registered.anything()), (1, true), "a live assignment did not hold the quit question");
+        work.shutdown();
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
