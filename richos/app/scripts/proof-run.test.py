@@ -848,7 +848,7 @@ try:
     k_dir = os.path.join(tmp, "p16-k")
     os.makedirs(k_dir)
     k_app = os.path.join(pr.ROOT, "richos/app")
-    k_items = [pr.Item("k-first", k_app, ["bash", "-c", "touch %s/k.first; %s" % (mark, held("k"))], "k-lane", 30.0),
+    k_items = [pr.Item("k-first", k_app, ["bash", "-c", "touch %s/kk.first; %s" % (mark, held("kk"))], "k-lane", 30.0),
                pr.Item("k-second", k_app, ["bash", "-c", "true"], "k-lane", 2.0),
                pr.Item("k-third", k_app, ["bash", "-c", "true"], "k-lane", 1.0)]
     k_items.append(pr.Item("k-receipts", k_app, ["bash", "-c", "true"], None, 1.0,
@@ -857,13 +857,13 @@ try:
 
     def k_second_run():
         try:
-            until(lambda: exists(os.path.join(mark, "k.first")))
+            until(lambda: exists(os.path.join(mark, "kk.first")))
             # The holder publishes again within a scheduler pass (0.2 s); this is what it says now.
             time.sleep(1.0)
             k_seen["status"] = json.loads(slots("status", "--json").stdout)
             cmds = os.path.join(tmp, "p16-k-b.cmds")
             with open(cmds, "w") as fh:
-                fh.write("cd richos/app && bash -c %s\n" % shlex_quote("touch %s/k.b" % mark))
+                fh.write("cd richos/app && bash -c %s\n" % shlex_quote("touch %s/kk.b" % mark))
             env = {**os.environ, "RICHOS_PROOF_RUN_SLOTS_DIR": slots_dir, "RICHOS_WAITER": "p16-k-b",
                    "RICHOS_RUNTIME_DIR": os.path.join(tmp, "no-runtime")}
             env.pop("RICHOS_PROOF_RUN_SLOT_HELD", None)
@@ -875,9 +875,9 @@ try:
                      "--log-dir", os.path.join(tmp, "p16-k-b.log")], stdout=out, stderr=subprocess.STDOUT,
                     env=env).returncode
             k_seen["took"] = time.time() - t
-            k_seen["b_before_release"] = exists(os.path.join(mark, "k.b"))
+            k_seen["b_before_release"] = exists(os.path.join(mark, "kk.b"))
         finally:
-            release("k")
+            release("kk")
 
     pr.SLOT, _k_wait = pr.proof_slots.acquire({"waiter": "p16-k-a"}, 5, checks=len(k_items))
     k_thread = threading.Thread(target=k_second_run, daemon=True)
