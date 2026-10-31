@@ -337,9 +337,9 @@ fn ensure_app_review_watch(engine: &Path, data_dir: &Path, claude: &Path, at_lau
 /// Where the Codex watcher's entries go: set once at launch, before the watcher first starts.
 static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sync::OnceLock::new();
 
-/// **EACH NEW ENTRY CODEX WRITES TO RICH REACHES HIM, IN THE CONVERSATION ON SCREEN** (gap X):
-/// saved in Rich's inbox of the active conversation, where `peer_messages` hands it to him as it
-/// hands him Stu's messages. One attempt: with no conversation open yet (or the state not yet
+/// **EACH NEW ENTRY CODEX WRITES REACHES STU, IN THE CONVERSATION ON SCREEN** (gap X): saved in
+/// Stu's inbox of the active conversation, where `peer_messages` wakes him as it does for Rich's
+/// messages; Stu acts on Codex's entries, so none costs a turn of Rich's. One attempt: with no conversation open yet (or the state not yet
 /// managed) it says why, and the entry stays pending on disk, tried again every five seconds
 /// with the entries after it behind it, through a quit (`richos_core::codex_watch::pending_path`).
 fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
@@ -350,7 +350,7 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
     })
 }
 
-/// **CODEX'S ENTRIES REACH RICH BY THEMSELVES** (gap X): the engine's codex-watch, the app's own
+/// **CODEX'S ENTRIES REACH STU BY THEMSELVES** (gap X): the engine's codex-watch, the app's own
 /// child (`richos_core::codex_watch`), on the user's Codex channels. Started at launch when the
 /// engine verifies, and again (a no-op while it runs on the same channels) whenever a session
 /// opens, which covers an engine set up after launch and a changed `CODEX_CHANNELS` setting.
@@ -3257,7 +3257,7 @@ fn main() {
             if let Some(dir) = boot_engine.as_deref() {
                 ensure_app_review_watch(dir, &data_dir, &claude_bin, true);
             }
-            // Codex's entries to Rich, the app's own child from launch to quit (gap X).
+            // Codex's entries, for Stu, the app's own child from launch to quit (gap X).
             if CODEX_SINK.set(codex_sink(app.handle().clone())).is_err() {
                 eprintln!("[richos] Codex watch: its sink was already set");
             }

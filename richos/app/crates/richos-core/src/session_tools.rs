@@ -161,10 +161,12 @@ pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String>
     append(scope,"stu",&Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None})
 }
 
-/// Codex wrote a new entry to Rich in one of the user's Codex channels (`codex_watch.rs`): the
-/// engine watcher's block, as written, for Rich. A host observation, like the stall watch's.
+/// Codex wrote a new entry in one of the user's Codex channels (`codex_watch.rs`): the engine
+/// watcher's block, as written, for Stu, who acts on it. Given to Rich, he passed most of them
+/// on to Stu, so each cost a turn of Rich's as well (richos-hq
+/// `docs/research/2026-10-31-app-token-burn`, 1d). A host observation, like the stall watch's.
 pub(crate) fn observe_codex(scope:&StatusToolScope,text:&str)->Result<(),String> {
-    append(scope,"rich",&Message {handoff:false,from:"codex-watch".into(),text:text.into(),instruction:None,work:None})
+    append(scope,"stu",&Message {handoff:false,from:"codex-watch".into(),text:text.into(),instruction:None,work:None})
 }
 
 pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<(),String> {
@@ -845,6 +847,20 @@ mod tests {
         let other=StatusToolScope {entity_id:"other".into(),..scope.clone()};
         assert!(call(&other,"transcript",json!({"session_id":"native-stu"})).is_err());
         assert!(call(&scope,"transcript",json!({"session_id":"../outside"})).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **A Codex entry goes to Stu, who acts on it, and wakes no turn of Rich's** (richos-hq
+    /// `docs/research/2026-10-31-app-token-burn`, 1d: Rich passed 9 of 16 on to Stu).
+    #[test]
+    fn a_codex_entry_is_saved_for_stu_and_never_for_rich() {
+        let root=std::env::temp_dir().join(format!("richos-codex-entry-{}",uuid::Uuid::new_v4()));
+        let scope=StatusToolScope {version:1,state_root:root.clone(),entity_id:"company".into(),thread_id:"thread".into()};
+        observe_codex(&scope,"CODEX-WATCH channel/to-rich.md\n## 2026-10-31 09:00Z — READY TO LAND").unwrap();
+        assert!(pending(&scope,"rich").unwrap().is_none(),"a Codex entry woke Rich");
+        let (message,_)=pending(&scope,"stu").unwrap().expect("the Codex entry never reached Stu");
+        assert_eq!((message.from.as_str(),message.handoff),("codex-watch",false));
+        assert!(message.text.ends_with("READY TO LAND") && message.instruction.is_none() && message.work.is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,5 +1,7 @@
-//! **Codex's entries reach Rich in the app, by themselves, once each** (gap X of richos-hq
-//! `docs/plans/2026-10-21-switching-to-the-app.md`, item 5d).
+//! **Codex's entries reach Stu in the app, by themselves, once each** (gap X of richos-hq
+//! `docs/plans/2026-10-21-switching-to-the-app.md`, item 5d). They went to Rich until
+//! 2026-10-31; he passed most of them on to Stu, who acts on them, so each cost a turn of
+//! Rich's as well (richos-hq `docs/research/2026-10-31-app-token-burn`, 1d).
 //!
 //! Codex writes to Rich through append-only `to-rich.md` files, one per channel folder, and Rich
 //! answers in the `to-codex.md` beside each. In the terminal the engine's `codex-watch` plugin
@@ -16,10 +18,10 @@
 //!   data ([`state_dir`]): an app's first start replays no backlog, and a later one tells what
 //!   was written while it was closed. Each entry comes back as one JSON line, is kept on disk at
 //!   once ([`pending_path`]: the watcher has marked it told), and goes to the sink the shell
-//!   gives ([`Launch::sink`]), which saves it for Rich in the conversation on screen
+//!   gives ([`Launch::sink`]), which saves it for Stu in the conversation on screen
 //!   ([`deliver`]); only then is it removed from the pending entries. With no conversation open
 //!   it waits there, through a quit, until one is. The shell's peer-input watch hands it to him
-//!   as it hands him Stu's messages.
+//!   as it hands him Rich's messages.
 //! * **Rich and Stu can answer**: each channel folder that exists is one of their sessions'
 //!   folders (`engine_profile.rs` `configure`), so either can write its `to-codex.md`.
 //! * **Its process id is recorded** (`<state>/codex-watch/host-child.json`) while it runs, and
@@ -89,8 +91,8 @@ pub fn installed_channel_folders() -> Vec<PathBuf> {
     channel_folders(crate::company::install_central_root().as_deref(), home.as_deref())
 }
 
-/// **Save one entry for Rich in `binding`'s conversation** (`<state>/messages/…/rich.jsonl`),
-/// where the shell's peer-input watch hands it to him as it hands him Stu's messages.
+/// **Save one entry for Stu in `binding`'s conversation** (`<state>/messages/…/stu.jsonl`),
+/// where the shell's peer-input watch hands it to him as it hands him Rich's messages.
 pub fn deliver(state: &Path, binding: &crate::entity::ThreadBinding, text: &str) -> Result<(), String> {
     let scope = crate::status_tools::StatusToolScope {
         version: 1, state_root: state.to_path_buf(),
@@ -99,7 +101,7 @@ pub fn deliver(state: &Path, binding: &crate::entity::ThreadBinding, text: &str)
     crate::session_tools::observe_codex(&scope, text)
 }
 
-/// **One attempt to save an entry for Rich**: `Ok` once it is saved, `Err` with the reason it
+/// **One attempt to save an entry for Stu**: `Ok` once it is saved, `Err` with the reason it
 /// cannot be yet (no conversation open). Called on the delivery thread, oldest entry first; an
 /// entry that cannot be saved is tried again every [`RETRY`], and the entries after it wait
 /// behind it ([`pending_path`]).
@@ -108,11 +110,11 @@ pub type Sink = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 /// How long an entry that could not be saved waits before the next attempt.
 pub const RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// **The entries read from the watcher and not yet saved for Rich**, one JSON string per line,
+/// **The entries read from the watcher and not yet saved for Stu**, one JSON string per line,
 /// oldest first (follow-ups of 2026-10-28: "a waiting Codex entry is lost if the app quits
 /// before any conversation opens"). The watcher marks an entry told as it hands it over
 /// (`codex_watch.py` `tick`), so the app keeps it on disk the moment it reads it, and removes it
-/// only once it is saved in Rich's inbox. Before, an entry waiting for a conversation was held
+/// only once it is saved in Stu's inbox. Before, an entry waiting for a conversation was held
 /// on the reader thread, the entries after it waited unread in the pipe, and a quit lost all of
 /// them. A later launch delivers what is left here first.
 pub fn pending_path(state: &Path) -> PathBuf {
@@ -142,7 +144,7 @@ fn oldest(path: &Path) -> Option<Result<String, String>> {
     Some(serde_json::from_str::<String>(line).map_err(|e| e.to_string()))
 }
 
-/// Remove the oldest pending entry (it was saved for Rich), on disk before this returns.
+/// Remove the oldest pending entry (it was saved for Stu), on disk before this returns.
 fn drop_oldest(path: &Path) -> io::Result<()> {
     let _one = PENDING.lock().unwrap();
     let text = std::fs::read_to_string(path)?;
@@ -265,7 +267,7 @@ impl CodexWatch {
         };
         let told = wake.clone();
         // Reads every line as it comes and keeps it on disk at once, never waiting for it to be
-        // saved for Rich: an entry left in the pipe is lost at a quit.
+        // saved for Stu: an entry left in the pipe is lost at a quit.
         let reader = std::thread::Builder::new().name("richos-codex-watch".into()).spawn(move || {
             for line in BufReader::new(output).lines() {
                 let text = line.map_err(|e| e.to_string()).and_then(|line| {
@@ -406,14 +408,14 @@ mod tests {
 
     /// **Entries waiting for a conversation survive a quit** (follow-ups of 2026-10-28, second
     /// review rv-20261028T095119Z-32768ffd-e1eb#1; STATUS-2026-10-31 row 11). No conversation is
-    /// open (first-run setup, company selection), so nothing can be saved for Rich. Codex writes
+    /// open (first-run setup, company selection), so nothing can be saved for Stu. Codex writes
     /// two entries and the watcher tells both, marking them told. The app quits. On main the first
     /// waited in memory on the reader thread and the second unread in the pipe behind it; both
     /// went with the quit, and the next launch's watcher had already told them. Now each is kept
-    /// on disk as it is read, and the next launch, with a conversation open, saves both for Rich,
+    /// on disk as it is read, and the next launch, with a conversation open, saves both for Stu,
     /// in order and once each.
     #[test]
-    fn entries_waiting_for_a_conversation_survive_a_quit_and_reach_rich_at_the_next_launch() {
+    fn entries_waiting_for_a_conversation_survive_a_quit_and_reach_stu_at_the_next_launch() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let _one_watcher = ONE_WATCHER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = scratch("quit");
@@ -446,9 +448,9 @@ mod tests {
         let pending = pending_path(&state);
         let kept = || std::fs::read_to_string(&pending).map_or(0, |text| text.lines().count());
         assert!(until(30, || kept() == 2), "the two told entries are not kept on disk ({} kept)", kept());
-        assert!(until(30, || attempts.load(Ordering::SeqCst) > 0), "the first entry was never offered to Rich");
+        assert!(until(30, || attempts.load(Ordering::SeqCst) > 0), "the first entry was never offered to Stu");
 
-        // The quit, with nothing saved for Rich.
+        // The quit, with nothing saved for Stu.
         assert_eq!(stop_all(), Some(pid));
         assert!(!alive(pid), "the recorded pid {pid} is still running after quit");
         assert_eq!(kept(), 2, "a quit keeps what was not saved");
@@ -464,7 +466,7 @@ mod tests {
             ..closed.clone()
         };
         let pid = ensure(&open).unwrap().expect("a watcher on one channel");
-        let next = || heard.recv_timeout(Duration::from_secs(30)).unwrap_or_else(|_| panic!("an entry never reached Rich: {}", log()));
+        let next = || heard.recv_timeout(Duration::from_secs(30)).unwrap_or_else(|_| panic!("an entry never reached Stu: {}", log()));
         let (first, second) = (next(), next());
         assert!(first.contains("## 2026-10-28 09:00Z — FIRST ENTRY") && first.contains("first-line") && !first.contains("SECOND"), "{first}");
         assert!(second.contains("## 2026-10-28 09:01Z — SECOND ENTRY") && second.contains("second-line"), "{second}");
@@ -473,7 +475,7 @@ mod tests {
         let recorded = std::time::SystemTime::now();
         let later_look = || std::fs::metadata(&looked).and_then(|m| m.modified()).is_ok_and(|at| at > recorded);
         assert!(until(60, later_look), "the watcher never looked again: {}", log());
-        assert!(heard.try_recv().is_err(), "an entry reached Rich twice");
+        assert!(heard.try_recv().is_err(), "an entry reached Stu twice");
 
         assert_eq!(stop_all(), Some(pid));
         std::fs::remove_dir_all(&root).unwrap();
@@ -506,13 +508,13 @@ mod tests {
                 "codex_watch.py's DEFAULT_CHANNELS differs from the app's");
     }
 
-    /// **A NEW ENTRY IN THE USER'S CODEX CHANNEL REACHES RICH, BY ITSELF AND ONCE** (gap X). The
+    /// **A NEW ENTRY IN THE USER'S CODEX CHANNEL REACHES STU, BY ITSELF AND ONCE** (gap X). The
     /// real engine watcher as the app's child, on a fixture channel folder the user's setting
     /// names: the backlog is not told, an appended entry reaches the sink once with every line,
-    /// the sink's [`deliver`] saves it in Rich's inbox of the conversation, and quit ends the
+    /// the sink's [`deliver`] saves it in Stu's inbox of the conversation, and quit ends the
     /// watcher and removes its record.
     #[test]
-    fn a_new_entry_in_the_users_codex_channel_reaches_rich_once_and_the_watcher_ends_at_quit() {
+    fn a_new_entry_in_the_users_codex_channel_reaches_stu_once_and_the_watcher_ends_at_quit() {
         let _one_watcher = ONE_WATCHER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = scratch("child");
         let (user, channel, state) = (root.join("central"), root.join("my codex channel"), root.join("engine-state"));
@@ -560,7 +562,7 @@ mod tests {
             .write_all("## 2026-10-28 08:11Z — READY TO LAND: codex/fixture-branch\nBranch tip 0123abc.\nline-three\n".as_bytes()).unwrap();
         // load-bound: hang guard only (told at the look after the file has settled).
         let text = heard.recv_timeout(Duration::from_secs(30))
-            .unwrap_or_else(|_| panic!("the entry never reached Rich: {}", std::fs::read_to_string(launch.log_path()).unwrap_or_default()));
+            .unwrap_or_else(|_| panic!("the entry never reached Stu: {}", std::fs::read_to_string(launch.log_path()).unwrap_or_default()));
         assert!(text.starts_with("CODEX-WATCH ") && text.contains("my codex channel/to-rich.md"), "{text}");
         assert!(text.contains("## 2026-10-28 08:11Z — READY TO LAND: codex/fixture-branch")
                 && text.contains("Branch tip 0123abc.") && text.ends_with("line-three"), "{text}");
@@ -568,10 +570,10 @@ mod tests {
 
         let scope = crate::status_tools::StatusToolScope {
             version: 1, state_root: state.clone(), entity_id: "company".into(), thread_id: thread.clone() };
-        let (message, through) = crate::session_tools::pending(&scope, "rich").unwrap().expect("nothing saved for Rich");
+        let (message, through) = crate::session_tools::pending(&scope, "stu").unwrap().expect("nothing saved for Stu");
         assert_eq!((message.from.as_str(), message.text.as_str(), message.handoff), ("codex-watch", text.as_str(), false));
         assert!(message.instruction.is_none(), "a Codex entry is never the user's instruction");
-        crate::session_tools::acknowledge(&scope, "rich", through).unwrap();
+        crate::session_tools::acknowledge(&scope, "stu", through).unwrap();
         // Told once, by the watcher's own record: it has told up to the file's end, and a look
         // finished after that told nothing more. The bounds only catch a hang.
         let end = std::fs::metadata(channel.join(TO_RICH)).unwrap().len();
@@ -590,7 +592,7 @@ mod tests {
         }
         assert!(later_look(), "the watcher never looked again: {}", std::fs::read_to_string(launch.log_path()).unwrap_or_default());
         assert!(heard.try_recv().is_err(), "the entry was told twice");
-        assert!(crate::session_tools::pending(&scope, "rich").unwrap().is_none());
+        assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_none());
 
         assert_eq!(stop_all(), Some(pid));
         assert!(!alive(pid), "the recorded pid {pid} is still running after quit");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""codex-watch-walk.py — in the regular app, Codex's entries reach Rich by themselves, once each.
+"""codex-watch-walk.py — in the regular app, Codex's entries reach Stu by themselves, once each.
 
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
@@ -10,8 +10,10 @@ THE QUESTION (gap X of richos-hq docs/plans/2026-10-21-switching-to-the-app.md, 
 writes to Rich in `to-rich.md` of a channel folder and Rich answers in the `to-codex.md` beside it.
 The app runs the engine's codex-watch as its own child (richos-core `codex_watch.rs`) on the user's
 channel folders (the CODEX_CHANNELS setting; unset, the conventional
-`~/.richos-coordination/rich-codex` and `rich-codex-questions`) and saves each new entry for Rich in
-the conversation on screen. This walk shows that in the real app, on fixture data in a guest.
+`~/.richos-coordination/rich-codex` and `rich-codex-questions`) and saves each new entry for Stu in
+the conversation on screen. Stu acts on them; until 2026-10-31 they went to Rich, who passed most of
+them on to Stu at the cost of a turn of his own (richos-hq docs/research/2026-10-31-app-token-burn,
+1d). This walk shows that in the real app, on fixture data in a guest.
 
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65). The channel is the
 conventional folder in the GUEST's home (the setting is unset, as on a new install):
@@ -22,18 +24,19 @@ conventional folder in the GUEST's home (the setting is unset, as on a new insta
              RICHOS_ENTITY naming no registered company, so it opens on no conversation; an
              entry is written and the watcher marks it told; the app is quit and opened again
              as usual (Acme, its conversation open). PASS needs exactly one row from codex-watch
-             carrying it in THIS conversation's inbox for Rich
+             carrying it in THIS conversation's inbox for Stu
   channel    the channel's to-rich.md is written with one entry while the app runs: PASS needs
-             exactly one row from codex-watch carrying it in THIS conversation's inbox for Rich
-             (<app state>/messages/<company>/<conversation>/rich.jsonl)
+             exactly one row from codex-watch carrying it in THIS conversation's inbox for Stu
+             (<app state>/messages/<company>/<conversation>/stu.jsonl)
   relaunch   the app quit and opened again (command-walk.py's): its sessions now have the
              channel folder, and the watcher starts again where it stopped
   append     a second entry is appended: PASS needs exactly one inbox row carrying it, the first
-             entry still told once only, and Rich's own turn on it in the conversation ledger (a
-             prompt from codex-watch carrying it, ended with a reply)
+             entry still told once only, Stu's native transcript carrying it (his turn on it) and
+             no turn of Rich's carrying it in the conversation ledger
   answer     typed to Rich: add one line to the to-codex.md beside that to-rich.md. PASS needs the
              line in the guest's to-codex.md
-  context    what each input added to Rich's context, from the guest's native transcripts: a
+  context    what each input added to its session's context (the entries' are Stu's), from the
+             guest's native transcripts: a
              session's first input carries the full blocks; every later one, the second entry's
              included, under 1,000 tokens (chars/4) with neither the full continuity block nor
              the company material. For one session, run it without relaunch:
@@ -109,10 +112,10 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
             shlex.quote(self.channel), shlex.quote(text), '>>' if append else '>', shlex.quote(self.channel)), 60)
 
     def inbox(self):
-        """THIS conversation's inbox rows for Rich from codex-watch."""
+        """THIS conversation's inbox rows for Stu from codex-watch."""
         script = ('import glob,json,sys\n'
                   'out=[]\n'
-                  'for p in glob.glob(sys.argv[1]+"/engine-state/messages/*/"+sys.argv[2]+"/rich.jsonl"):\n'
+                  'for p in glob.glob(sys.argv[1]+"/engine-state/messages/*/"+sys.argv[2]+"/stu.jsonl"):\n'
                   '    for l in open(p):\n'
                   '        try: r=json.loads(l)\n'
                   '        except Exception: continue\n'
@@ -186,7 +189,7 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
         if early:
             raise StepFailed('the entry was saved while no conversation was open, so the quit proves nothing; see unopened.json')
         if len(rows) != 1:
-            raise StepFailed('the entry written with no conversation open reached Rich\'s inbox %d time(s) after the relaunch, '
+            raise StepFailed('the entry written with no conversation open reached Stu\'s inbox %d time(s) after the relaunch, '
                              'not once; see unopened.json' % len(rows))
         return {'mark': mark, 'row': rows[0]}
 
@@ -198,7 +201,7 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
         rows = self.told(mark, self.a.within)
         (self.out / 'channel.json').write_text(json.dumps({'mark': mark, 'rows': rows}, indent=2) + '\n')
         if len(rows) != 1:
-            raise StepFailed('the first entry reached Rich\'s inbox %d time(s), not once; see channel.json' % len(rows))
+            raise StepFailed('the first entry reached Stu\'s inbox %d time(s), not once; see channel.json' % len(rows))
         return {'mark': mark, 'row': rows[0]}
 
     def append(self):
@@ -210,35 +213,53 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
         self.write(text, append=True)
         rows = self.told(mark, self.a.within)
         again = [r for r in self.inbox() if first in r['text']]
-        turn, reply, ended = None, '', None
+        heard = []
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
-            ledger = self.ledger()
-            prompts = [r for r in ledger if r.get('event') == 'PromptReceived' and r.get('thread_id') == self.facts['thread']
-                       and mark in str(r.get('text', '')) and r.get('at', 0) >= sent - 5000]
-            if prompts:
-                turn = prompts[0]
-                reply = ''.join(str(r.get('text', '')) for r in ledger
-                                if r.get('event') == 'AssistantDelta' and r.get('turn_id') == turn.get('turn_id'))
-                ended = next((r.get('event') for r in ledger if r.get('turn_id') == turn.get('turn_id') and r.get('event')
-                              in ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed')), None)
-                if ended:
-                    break
+            heard = self.stu_heard(mark)
+            if heard:
+                break
             time.sleep(5)
+        rich = [{'turn_id': r.get('turn_id'), 'source': r.get('source'), 'prompt': str(r.get('text', ''))[:2000]}
+                for r in self.ledger() if r.get('event') == 'PromptReceived' and r.get('thread_id') == self.facts['thread']
+                and mark in str(r.get('text', '')) and r.get('at', 0) >= sent - 5000]
         evidence = {'mark': mark, 'rows': rows, 'first_entry_rows_after_relaunch': again,
-                    'rich_turn': {'turn_id': turn.get('turn_id'), 'source': turn.get('source'),
-                                  'prompt': str(turn.get('text', ''))[:2000]} if turn else None,
-                    'turn_ended': ended, 'reply': reply[:4000]}
+                    'stu_transcripts_carrying_it': heard, 'rich_turns_carrying_it': rich}
         (self.out / 'append.json').write_text(json.dumps(evidence, indent=2) + '\n')
         if len(rows) != 1:
-            raise StepFailed('the appended entry reached Rich\'s inbox %d time(s), not once; see append.json' % len(rows))
+            raise StepFailed('the appended entry reached Stu\'s inbox %d time(s), not once; see append.json' % len(rows))
         if len(again) != 1:
             raise StepFailed('the first entry was told %d time(s) after the relaunch, not once; see append.json' % len(again))
-        if not turn:
-            raise StepFailed('no turn of Rich\'s carried the appended entry within %g s; see append.json' % self.a.within)
-        if ended != 'TurnCompleted' or not reply.strip():
-            raise StepFailed('Rich\'s turn on the entry ended %s with %d characters of reply; see append.json' % (ended, len(reply)))
-        return {'mark': mark, 'turn_id': turn.get('turn_id'), 'source': turn.get('source'), 'reply_characters': len(reply)}
+        if not heard:
+            raise StepFailed('no transcript of Stu\'s carried the appended entry within %g s; see append.json' % self.a.within)
+        if rich:
+            raise StepFailed('%d turn(s) of Rich\'s carried the appended entry; see append.json' % len(rich))
+        return {'mark': mark, 'stu_transcripts': heard}
+
+    def stu_heard(self, mark):
+        """The native transcripts of THIS conversation's Stu sessions that carry `mark`: each
+        session bound as Stu (`<state>/evidence/<session>/binding.json`), its transcript the path its
+        callbacks name (richos-core `session_tools::native_path`)."""
+        script = ('import glob,json,os,sys\n'
+                  'out=[]\n'
+                  'for b in glob.glob(sys.argv[1]+"/engine-state/evidence/*/binding.json"):\n'
+                  '    try: s=json.load(open(b))\n'
+                  '    except Exception: continue\n'
+                  '    if s.get("role")!="stu" or s.get("thread_id")!=sys.argv[2]: continue\n'
+                  '    paths=set()\n'
+                  '    try:\n'
+                  '        for l in open(os.path.join(os.path.dirname(b),"callbacks.jsonl")):\n'
+                  '            try: p=(json.loads(l).get("callback") or {}).get("transcript_path")\n'
+                  '            except Exception: continue\n'
+                  '            if p: paths.add(p)\n'
+                  '    except OSError: pass\n'
+                  '    for p in sorted(paths):\n'
+                  '        try:\n'
+                  '            if sys.argv[3] in open(p,errors="replace").read(): out.append({"session":s.get("session_id"),"transcript":p})\n'
+                  '        except OSError: pass\n'
+                  'print(json.dumps(out))\n')
+        return json.loads(guest(self.vm, 'python3 -c %s %s %s %s' % (
+            shlex.quote(script), shlex.quote(self.data), shlex.quote(self.facts['thread']), shlex.quote(mark)), 120) or '[]')
 
     def answer(self):
         mark = self.marks.get('second')
@@ -260,8 +281,8 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
         return {'line': line, 'to_codex_bytes': len(text.encode())}
 
     def context(self):
-        """What each input of the conversation added to Rich's context: every UserPromptSubmit
-        `hook_additional_context` in the guest's native transcripts, beside the input it came
+        """What each input of the conversation added to its session's context (the entries' are
+        Stu's): every UserPromptSubmit `hook_additional_context` in the guest's native transcripts, beside the input it came
         with ([`judge_context`]: each later input of a session under 1,000 tokens, chars/4, with
         neither the full continuity block nor the company material; follow-up "Rich's context
         fills with the same injected blocks on every message", 2026-10-30). Run it without
@@ -308,7 +329,7 @@ def main():
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
-    p.add_argument('--within', type=float, default=300, help="seconds for an entry to reach Rich and his turn on it")
+    p.add_argument('--within', type=float, default=300, help="seconds for an entry to reach Stu and his turn on it")
     p.add_argument('--answer-within', type=float, default=300, help='seconds for the line to reach to-codex.md')
     p.add_argument('--relaunch-within', type=float, default=120)
     p.add_argument('--steps', default=','.join(DEFAULT_STEPS))
