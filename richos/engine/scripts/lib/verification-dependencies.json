@@ -17361,7 +17361,7 @@
     },
     "scripts/hooks/guard-headed-browser.test.sh": {
       "source": "scripts/hooks/guard-headed-browser.test.sh",
-      "sha256": "36e842d13578eeab01711fc9dfe190dada142699353db284919c397104462e3f",
+      "sha256": "239241233612d00e721c91a1608b3b7384fcdb4609f67d4d59a818aa2bb0751b",
       "keys": [],
       "edges": [
         {
