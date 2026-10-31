@@ -1291,64 +1291,6 @@ impl ActionGrant {
     }
 }
 
-/// **The grants a turn Claude Code starts itself gets when the lead's own background command
-/// ends with no turn of ours running** — the same grants, opened and closed the same way, as
-/// the turn an input starts (`enqueue_prompt`'s prepare and turn-end completion).
-///
-/// Opened only over a scope whose grant an ordinary turn end closed
-/// ([`crate::ecs::closed_by_turn_end`]): a Stop, an input not started yet and the closed scope
-/// context-only priming runs under stay closed, so the hook still refuses those turns. Taken
-/// under the lock a Stop revokes under, so a Stop cannot land between the check and the write.
-/// Closed again when that turn ends with nothing awaited ([`NativeClient::signal_turn_end`]).
-/// `open` is shared with the lease's cancel handle, so the user's Stop reaches that turn
-/// ([`crate::steering::TurnCancel::continuation_running`]).
-#[derive(Clone)]
-struct WokenTurn {
-    grants: Vec<ActionGrant>,
-    operation: Arc<Mutex<OperationCancellation>>,
-    open: Arc<AtomicBool>,
-}
-
-impl WokenTurn {
-    fn open(&self) {
-        let _stop = self.operation.lock().unwrap();
-        let Some(ActionGrant::Continuity(gate)) = self.grants.iter().find(|g| matches!(g, ActionGrant::Continuity(_))) else { return };
-        if self.open.load(Ordering::SeqCst) || !crate::ecs::closed_by_turn_end(gate) { return; }
-        for (index, grant) in self.grants.iter().enumerate() {
-            if let Err(error) = grant.set(true) {
-                eprintln!("[richos] the turn your background command started could not open its tools: {error}");
-                Self::shut(&self.grants[..index]);
-                return;
-            }
-        }
-        self.open.store(true, Ordering::SeqCst);
-    }
-
-    fn close(&self) {
-        let _stop = self.operation.lock().unwrap();
-        if !self.open.swap(false, Ordering::SeqCst) { return; }
-        // A Stop during that turn already revoked the lot; its record is kept, not rewritten.
-        let stopped = self.grants.iter().any(|g| matches!(g, ActionGrant::Continuity(path)
-            if std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<crate::ecs::ToolScope>(&b).ok())
-                .is_some_and(|scope| !scope.actions_allowed)));
-        if !stopped { Self::shut(&self.grants); }
-    }
-
-    /// The turn-end completion's close: a grant that cannot be shut is removed (fails closed).
-    fn shut(grants: &[ActionGrant]) {
-        for grant in grants {
-            let closed = match grant {
-                ActionGrant::Continuity(path) => crate::ecs::set_actions_allowed(path, false).map_err(|e| e.to_string()),
-                _ => grant.set(false),
-            };
-            if let Err(error) = closed {
-                eprintln!("[richos] a tool grant could not be closed and was removed: {error}");
-                drop(std::fs::remove_file(grant.path()));
-            }
-        }
-    }
-}
-
 /// **The turn-end signal of Stu's lease, for stall-watch's unfinished-work reminder.** The lease
 /// runs with `--print`, whose transcript never records a turn's end (0 of 794 `sdk-cli`
 /// transcripts did, richos-hq `6864034d0`), so the monitor takes the host's word instead
@@ -1492,9 +1434,6 @@ pub struct NativeClient {
     current_prompt: Arc<Mutex<Vec<PendingTurn>>>,
     operation_cancel: Arc<Mutex<OperationCancellation>>,
     action_grants: Vec<ActionGrant>,
-    /// True while the turn Claude Code started for this lead's own ended background command
-    /// runs with its grants open ([`WokenTurn`]); the cancel handle reads it, so Stop reaches it.
-    continuation: Arc<AtomicBool>,
     reader_closed: Arc<AtomicBool>,
     /// §1.5's machinery sink INDEPENDENT of the prompt channel.
     between: Arc<Mutex<BetweenTurn>>,
@@ -1651,13 +1590,13 @@ struct ReaderState {
     /// reported them ([`crate::cognition::BackgroundCommand`]). Bounded by
     /// [`BACKGROUND_COMMANDS_KEPT`]; an ended one is the first to go.
     background: Vec<crate::cognition::BackgroundCommand>,
-    /// **The conversation lease's turn grants, for the turn Claude Code starts when the lead's
-    /// own background command ends** (CEO §154; Hank's app-terminal finding 2, 2026-10-31). In
-    /// the terminal that ending wakes the lead and the lead carries on. Here the turn-end
-    /// completion had closed every grant, so the engine's hook refused each tool he called in
-    /// that turn ("This app turn is stopped or is supplying context"; test VM, `958f4a277`).
-    /// `None` on every lease but the conversation's, whose grants stay open between turns.
-    woken_turn: Option<WokenTurn>,
+    /// The host's notice for a provider turn that follows this lead's own ended background
+    /// command, with the notification's summary ([`CONTINUATION_CHANNEL`]). `None` on every
+    /// lease the host did not wire, whose such turns run unadopted.
+    continuation_notice: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// That turn's `UserPromptSubmit` callback, held unanswered until it is adopted or
+    /// [`CONTINUATION_ADOPTION_WAIT`] passes: (request id, prompt).
+    held_continuation: Option<(String, String)>,
 }
 
 /// **Whether a provider task of `task_type` is one the back end started and the provider will
@@ -1683,6 +1622,23 @@ fn a_task_the_back_end_awaits(task_type: &str) -> bool {
     !matches!(task_type, "local_agent" | "in_process_teammate" | "dream" | "auto_mode_scan" | "")
 }
 
+/// **The input channel of the turn Rich carries on in after his own background command ends**
+/// (CEO §154; Hank's app-terminal finding 2, 2026-10-31). In the terminal the turn that follows
+/// a background command's completion is an ordinary turn: the CEO sees the lead's words and can
+/// stop it. Here Claude Code starts that turn itself, and the app makes it one of its own: the
+/// reader holds the turn's `UserPromptSubmit` callback and tells the host
+/// ([`crate::steering::TurnCancel::on_continuation`]); the host files it as a turn from this
+/// channel, and its delivery ADOPTS the provider's turn ([`NativeClient::adopt_continuation`])
+/// instead of sending a second message. So it is a ledger turn with his words in the
+/// conversation, its grants opened and closed like any turn's, and stopped like any turn.
+pub const CONTINUATION_CHANNEL: &str = "background-command";
+
+/// How long the provider's own turn waits for the app to adopt it before it runs unadopted
+/// (its tools refused, as before this channel existed). Adoption is a ledger write and the
+/// turn's preparation, well under a second; the bound only keeps a missing host from holding
+/// the provider.
+const CONTINUATION_ADOPTION_WAIT: Duration = Duration::from_secs(20);
+
 /// How many background commands one session remembers. A back end that has started this many
 /// is a loop, not a job; past it the oldest ENDED entry is forgotten first, so a running
 /// command is never dropped while an ended one is kept.
@@ -1691,8 +1647,7 @@ const BACKGROUND_COMMANDS_KEPT: usize = 64;
 impl ReaderState {
     /// Read one of the three task frames (see [`crate::cognition::BackgroundCommand`]).
     /// `ours_running`: a turn this client sent was running when the frame arrived.
-    /// True when the frame ended a background command this reader saw start.
-    fn note_background(&mut self, frame: &Value, ours_running: bool) -> bool {
+    fn note_background(&mut self, frame: &Value, ours_running: bool) {
         let field = |value: &Value, name: &str| value.get(name).and_then(Value::as_str).unwrap_or("").to_string();
         match frame.get("subtype").and_then(Value::as_str).unwrap_or("") {
             // `is_backgrounded` is present only where a task can be either (a shell command:
@@ -1723,12 +1678,10 @@ impl ReaderState {
                         summary: field(frame, "summary"),
                         during_a_turn_of_ours: ours_running,
                     });
-                    return true;
                 }
             }
             _ => {}
         }
-        false
     }
 
     fn note_running(&mut self, id: String, description: String) {
@@ -1784,7 +1737,8 @@ impl Default for ReaderState {
             tool_residency: None,
             turns_named_by_the_child: false,
             background: Vec::new(),
-            woken_turn: None,
+            continuation_notice: None,
+            held_continuation: None,
             streamed_usage: None,
             token_sink: None,
             token_tally: Default::default(),
@@ -2488,7 +2442,6 @@ impl NativeClient {
                 // could be left open by a path that forgot it would be worse than no deferral.
                 .chain(continuity_tools.map(|path| ActionGrant::ContinuityTools(path.into())))
                 .collect(),
-            continuation: Arc::new(AtomicBool::new(false)),
             reader_closed,
             between,
             stderr_tail,
@@ -2496,11 +2449,6 @@ impl NativeClient {
             _reader: reader_handle,
             _stderr: stderr_handle,
         };
-        if role == LeaseRole::Conversation {
-            client.reader_state.lock().unwrap().woken_turn = Some(WokenTurn {
-                grants: client.action_grants.clone(), operation: Arc::clone(&client.operation_cancel),
-                open: Arc::clone(&client.continuation) });
-        }
         client.handshake_cancellable(control)?;
         client.stall_watch=StallWatch::start(profile,role,&command,&client.session_id,lease_pid,Arc::clone(&client.reader_closed))?;
         if let Some(watch)=&client.stall_watch {client.reader_state.lock().unwrap().lead=Some(Arc::clone(&watch.lead));}
@@ -2732,6 +2680,16 @@ impl NativeClient {
                 let preparations:Vec<_>=indices.into_iter().filter_map(|index|inputs[index].prepare.take()).collect();
                 (commands,preparations)
             };
+            // The provider's own turn for this lead's ended background command, with no input
+            // of ours in it: held for the host to adopt as an app turn (CONTINUATION_CHANNEL).
+            if commands.is_empty() {
+                if let (Some(id), Some(prompt)) = (request_id, text.filter(|t| t.trim_start().starts_with("<task-notification>"))) {
+                    if Self::hold_continuation(id, prompt, stdin, state) {
+                        Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg);
+                        return;
+                    }
+                }
+            }
             let contexts=preparations.into_iter().map(|prepare|prepare()).collect::<Result<Vec<_>,_>>();
             let body = match contexts {
                 Ok(contexts) => {
@@ -2930,16 +2888,7 @@ impl NativeClient {
                     .unwrap()
                     .iter()
                     .any(|pending| !pending.not_yet_ours());
-                let ended = state.lock().unwrap().note_background(&msg, ours_running);
-                // The lead's own background command ended after his turn: Claude Code starts a
-                // turn of its own for it (its `init` follows this frame, measured 28 ms later in
-                // richos-hq `docs/verification/2026-09-27-background-command-finish/cap-plain.jsonl`),
-                // and that turn may act, as the terminal's lead does. An input of ours still
-                // queued runs after it, under its own grant.
-                if ended && !ours_running {
-                    let woken = state.lock().unwrap().woken_turn.clone();
-                    if let Some(woken) = woken { woken.open(); }
-                }
+                state.lock().unwrap().note_background(&msg, ours_running);
             }
         }
 
@@ -3136,13 +3085,86 @@ impl NativeClient {
         finish_native_turn(ready, result);
     }
 
+    /// Hold a continuation turn's callback and tell the host, when the host wired a notice
+    /// and nothing is held already. Unadopted after [`CONTINUATION_ADOPTION_WAIT`], it is
+    /// answered empty and runs as it did before. False: nothing was held.
+    fn hold_continuation(id: &str, prompt: &str, stdin: &Arc<Mutex<ChildStdin>>, state: &Arc<Mutex<ReaderState>>) -> bool {
+        let notice = {
+            let mut st = state.lock().unwrap();
+            let Some(notice) = st.continuation_notice.clone() else { return false };
+            if st.held_continuation.is_some() { return false; }
+            st.held_continuation = Some((id.to_string(), prompt.to_string()));
+            notice
+        };
+        let summary = prompt.split_once("<summary>").and_then(|(_, rest)| rest.split_once("</summary>"))
+            .map_or_else(|| "A background command finished.".to_string(), |(summary, _)| summary.trim().to_string());
+        let (pipe, held, id) = (Arc::clone(stdin), Arc::clone(state), id.to_string());
+        let timer = std::thread::Builder::new().name("richos-continuation-wait".into()).spawn(move || {
+            std::thread::sleep(CONTINUATION_ADOPTION_WAIT);
+            let unadopted = held.lock().unwrap().held_continuation.take_if(|(waiting, _)| *waiting == id).is_some();
+            if unadopted {
+                eprintln!("[richos] the turn after a background command was not adopted within {}s; it runs unadopted",
+                    CONTINUATION_ADOPTION_WAIT.as_secs());
+                drop(Self::write_line(&pipe, &json!({"type":"control_response","response":{
+                    "subtype":"success","request_id":id,"response":{}}})));
+            }
+        });
+        if let Err(error) = timer {
+            // No bound, no hold: the provider is never left waiting on nothing.
+            eprintln!("[richos] the continuation wait could not start: {error}");
+            state.lock().unwrap().held_continuation = None;
+            return false;
+        }
+        notice(summary);
+        true
+    }
+
+    /// **Adopt the provider's held continuation turn as this input's turn** — what
+    /// [`Self::enqueue_prepared`] does for a typed input, except that nothing is written: the
+    /// provider already has the turn. It is parked as running, `prepare` runs now (it opens the
+    /// grants and begins the app turn, as at any input's hook) and its context answers the held
+    /// callback, so the turn's frames, its end and a Stop reach this input like any other.
+    pub(crate) fn adopt_continuation(&self, prepare: NativePreparation, complete: Option<NativeCompletion>) -> Result<NativeResponse, NativeError> {
+        let (tx, rx): (Sender<ChunkMsg>, Receiver<ChunkMsg>) = channel();
+        let command_uuid = uuid::Uuid::new_v4().to_string();
+        let response = NativeResponse { rx, command_uuid: command_uuid.clone(),
+            current_prompt: self.current_prompt.clone(), session_id: self.session_id.clone() };
+        let held = self.reader_state.lock().unwrap().held_continuation.take();
+        let Some((request_id, prompt)) = held else {
+            return Err(NativeError::Protocol("The turn after your background command already ran without the app.".into()));
+        };
+        {
+            let mut current = self.current_prompt.lock().unwrap();
+            if self.reader_closed.load(Ordering::SeqCst) { return Err(NativeError::Closed); }
+            current.push(PendingTurn {
+                sink: TurnSink::Prompt(tx), command_uuid: command_uuid.clone(), prompt_text: prompt,
+                hook_request_id: Some(request_id.clone()), prepare: None, complete,
+                preparation_error: None, phase: TurnPhase::Running, child_names_turns: false,
+                awaiting_connection: false, continued_as: None,
+            });
+            let lead = self.reader_state.lock().unwrap().lead.clone();
+            if let Some(lead) = lead { lead.began(); }
+        }
+        let body = match prepare() {
+            Ok(Some(context)) => json!({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":context}}),
+            Ok(None) => json!({}),
+            Err(error) => {
+                self.reader_state.lock().unwrap().given_context.forget();
+                if let Some(input) = self.current_prompt.lock().unwrap().iter_mut().find(|input| input.command_uuid == command_uuid) {
+                    input.preparation_error = Some(error.clone());
+                }
+                json!({"decision":"block","reason":error})
+            }
+        };
+        Self::write_line(&self.stdin, &json!({"type":"control_response","response":{
+            "subtype":"success","request_id":request_id,"response":body}}))?;
+        Ok(response)
+    }
+
     /// Tell Stu's stall-watch the turn is over (a no-op on a lease without a monitor).
     fn signal_turn_end(state: &Arc<Mutex<ReaderState>>) {
         let lead = state.lock().unwrap().lead.clone();
         if let Some(lead) = lead { lead.ended(); }
-        // A turn a background command's ending started closes the grants it opened.
-        let woken = state.lock().unwrap().woken_turn.clone();
-        if let Some(woken) = woken { woken.close(); }
     }
 
     /// The inputs named in `held` that still wait for the connection, taken off the parked list.
@@ -3489,7 +3511,6 @@ impl NativeClient {
             current_prompt: Arc::clone(&self.current_prompt),
             operation_cancel: Arc::clone(&self.operation_cancel),
             action_grants: self.action_grants.clone(),
-            continuation: Arc::clone(&self.continuation),
             process_fence: self.child.fence(),
             settle_workers_on_stop: self.settle_workers_on_stop,
             next_id: self.next_id.clone(),
@@ -3797,8 +3818,6 @@ pub struct NativeCancelHandle {
     current_prompt: Arc<Mutex<Vec<PendingTurn>>>,
     operation_cancel: Arc<Mutex<OperationCancellation>>,
     action_grants: Vec<ActionGrant>,
-    /// [`NativeClient::continuation`]: the woken turn a Stop also interrupts.
-    continuation: Arc<AtomicBool>,
     process_fence: crate::owned_process::ProcessFence,
     settle_workers_on_stop: bool,
     next_id: Arc<AtomicI64>,
@@ -3875,6 +3894,10 @@ impl TurnCancel for NativeCancelHandle {
         self.process_fence.kill();
     }
 
+    fn on_continuation(&self, notice: Arc<dyn Fn(String) + Send + Sync>) {
+        self.reader_state.lock().unwrap().continuation_notice = Some(notice);
+    }
+
     fn begin_operation(&self) {
         *self.operation_cancel.lock().unwrap() = OperationCancellation { active: true, requested: false };
     }
@@ -3886,9 +3909,6 @@ impl TurnCancel for NativeCancelHandle {
     fn cancel(&self) -> bool {
         let mut operation = self.operation_cancel.lock().unwrap();
         if operation.active { operation.requested = true; }
-        // The turn Claude Code started for his own ended background command is his running
-        // turn too: read under the lock its grants open under, before they are revoked below.
-        let continuation = self.continuation.load(Ordering::SeqCst);
         // Production Stop ends this provider to settle its workers. Reject new input now,
         // before the asynchronous EOF, so the ordinary opener reaps and resumes it once.
         if self.settle_workers_on_stop { self.reader_closed.store(true, Ordering::SeqCst); }
@@ -3924,7 +3944,7 @@ impl TurnCancel for NativeCancelHandle {
             }).collect();
             (sinks, running)
         };
-        if !running && !continuation {
+        if !running {
             if self.settle_workers_on_stop { self.process_fence.kill(); }
             return operation.active;
         }
@@ -3942,15 +3962,10 @@ impl TurnCancel for NativeCancelHandle {
         // Completion may need this same lock to revoke scopes, so never wait holding it.
         drop(operation);
         if self.settle_workers_on_stop {
-            // Only an input of ours has a completion to wait for; a continuation has none.
-            if wrote && running {let _completed=completion.recv_timeout(cancel_grace());}
+            if wrote {let _completed=completion.recv_timeout(cancel_grace());}
             self.process_fence.kill();
         }
         wrote && woke
-    }
-
-    fn continuation_running(&self) -> bool {
-        self.continuation.load(Ordering::SeqCst)
     }
 
     /// `control_request{stop_task}` for one of the provider's own background tasks, the frame
@@ -4890,6 +4905,8 @@ impl Cognition for NativeCognition {
         let app_message_ids=self.client.app_message_ids.clone();
         let onboarding = self.pending_onboarding.take().zip(self.onboarding_scope.clone());
         let channel = self.pending_channel.take();
+        // The provider already started this turn; its delivery adopts it (CONTINUATION_CHANNEL).
+        let adopts = channel.as_deref() == Some(CONTINUATION_CHANNEL);
         let question_scope = self.client.reader_state.lock().unwrap().question_scope.clone();
         let grants = self.client.action_grants.clone();
         let operation = self.client.operation_cancel.clone();
@@ -4965,7 +4982,11 @@ impl Cognition for NativeCognition {
                 Ok(())
             }) as NativeCompletion)
         } else { None };
-        let reply = self.client.enqueue_prepared(text, Some(prepare), complete)?;
+        let reply = if adopts {
+            self.client.adopt_continuation(prepare, complete)?
+        } else {
+            self.client.enqueue_prepared(text, Some(prepare), complete)?
+        };
         Ok(crate::cognition::PendingReply::new(move |on_item| reply.wait(on_item).map_err(CognitionError::from)))
     }
 
@@ -8335,31 +8356,43 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// **Rich's turn after his own background command ends may act; a stopped turn still may
-    /// not** (CEO §154; Hank's app-terminal finding 2, 2026-10-31). The frames are in the order
-    /// 2.1.283 sent them (richos-hq `docs/verification/2026-09-27-background-command-finish/
-    /// cap-plain.jsonl`): his turn starts a background command and ends; the command's
-    /// `task_notification` arrives; Claude Code's own turn for it speaks and ends. The engine's
-    /// hook refuses every tool while `RICHOS_APP_SCOPE` (the continuity scope) reads closed.
-    /// RED on `47e314bb6`: the notification turn's grant stayed closed, as measured on the test
-    /// VM in `958f4a277` ("This app turn is stopped or is supplying context").
-    fn woken_turn_grant(tag: &str, between_turns: impl FnOnce(&Path)) -> (crate::ecs::ToolScope, crate::ecs::ToolScope) {
-        let marks = fixture_root().join(format!("woken-{tag}-{}", uuid::Uuid::new_v4().simple()));
+    /// **The turn that follows Rich's own background command is an app turn like any other:
+    /// his words reach the conversation, its tools are open, and Stop ends it** (CEO §154;
+    /// Hank's app-terminal finding 2, 2026-10-31; the lead's ruling on
+    /// esc-20261031T190646Z-390688f7). The frames are in the order Claude Code sent them on the
+    /// test VM (walk of `0feb47130`): his turn starts a background command and ends; the
+    /// command's `task_notification`; the provider's own turn, whose `UserPromptSubmit` callback
+    /// carries `<task-notification>`. The callback is held unanswered, the host is told, and
+    /// the delivery the host files adopts that turn. On `47e314bb6` the callback is answered at
+    /// once, no host is told, and the turn's words reach no input.
+    fn continuation_turn(tag: &str, stop: bool) -> (String, String, crate::ecs::ToolScope, crate::ecs::ToolScope, String) {
+        use crate::steering::{ActiveTurn, StopOutcome, TurnControl};
+        let marks = fixture_root().join(format!("continuation-{tag}-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&marks).unwrap();
-        let (ended, finish) = (marks.join("command-ended"), marks.join("turn-may-end"));
+        let (ended, answered, finish, interrupted) =
+            (marks.join("command-ended"), marks.join("answered"), marks.join("may-end"), marks.join("interrupted"));
+        // The provider's own answer to an interrupt is the turn's `result` with its stop reason.
+        let stopped_result = format!("{{\"type\":\"result\",\"stop_reason\":\"{STOP_REASON_CANCELLED}\",\"queued_turn_count\":0}}");
+        let ending = if stop {
+            format!("read -r request\nprintf '%s' \"$request\" > '{}'\nprintf '%s\\n' '{stopped_result}'", interrupted.display())
+        } else {
+            format!("while [ ! -e '{}' ]; do sleep 0.02; done\nprintf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"stop_reason\":\"end_turn\",\"queued_turn_count\":0}}'", finish.display())
+        };
         let body = format!(r#"
 read -r init
 printf '%s\n' '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_init","response":{{}}}}}}'
 read -r prompt
-printf '%s\n' '{{"type":"system","subtype":"task_started","task_id":"bk-install","task_type":"local_bash","is_backgrounded":true,"description":"toolchain.py install make"}}'
+printf '%s\n' '{{"type":"system","subtype":"task_started","task_id":"bk-job","task_type":"local_bash","is_backgrounded":true,"description":"the job"}}'
 printf '%s\n' '{{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}}'
 while [ ! -e '{ended}' ]; do sleep 0.02; done
-printf '%s\n' '{{"type":"system","subtype":"task_notification","task_id":"bk-install","status":"completed","summary":"toolchain.py install make completed (exit code 0)"}}'
-printf '%s\n' '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"woken-turn-speaks"}}}}}}'
-while [ ! -e '{finish}' ]; do sleep 0.02; done
-printf '%s\n' '{{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0,"result":"woken-turn-ended"}}'
+printf '%s\n' '{{"type":"system","subtype":"task_notification","task_id":"bk-job","status":"completed","summary":"the job completed (exit code 0)"}}'
+printf '%s\n' '{{"type":"control_request","request_id":"continuation-hook","request":{{"subtype":"hook_callback","callback_id":"richos-input-context","input":{{"hook_event_name":"UserPromptSubmit","prompt_id":"provider-own","prompt":"<task-notification>\n<task-id>bk-job</task-id>\n<summary>Background command \"the job\" completed (exit code 0)</summary>\n</task-notification>"}}}}}}'
+read -r answer
+printf '%s' "$answer" > '{answered}'
+printf '%s\n' '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"continued-words"}}}}}}'
+{ending}
 read -r keep_alive
-"#, ended = ended.display(), finish = finish.display());
+"#, ended = ended.display(), answered = answered.display());
         let (mut lease, root) = lease_with_production_grants(tag, LeaseRole::Conversation, &body);
         crate::onboarding_tools::write_scope(lease.onboarding_scope.as_ref().unwrap(), &crate::onboarding_tools::OnboardingToolScope {
             version: 1, entity_id: "qa-test-co".into(), actions_allowed: false,
@@ -8367,126 +8400,77 @@ read -r keep_alive
         }).unwrap();
         let gate = lease.continuity.as_ref().unwrap().1.clone();
         let read = || -> crate::ecs::ToolScope { serde_json::from_slice(&std::fs::read(&gate).unwrap()).unwrap() };
-        assert_eq!(crate::cognition::Cognition::prompt(&mut lease, "Install make and carry on", &mut |_| {}).unwrap(), "end_turn");
-        assert_eq!(read().closed.map(|c| c.by), Some(crate::ecs::closed_by::TURN_END.to_string()), "his own turn's end did not close the grant");
-        between_turns(&gate);
-        // Each wait is on the frame after the one under test, which the reader handles in order.
-        let lane_has = |needle: &str| lease.client.between.lock().unwrap().queue.iter()
-            .any(|item| matches!(item, BetweenItem::Frame(f) if f.to_string().contains(needle)));
+        let control = TurnControl::open(marks.join("intake.jsonl")).unwrap();
+        let (told, notices) = channel();
+        control.set_continuation_notice(Arc::new(move |thread: &str, summary: &str| {
+            drop(told.send((thread.to_string(), summary.to_string())));
+        }));
+        let conversation = control.for_thread("thr_one");
+        conversation.set_cancel(Some(lease.client.cancel_handle()));
+        assert_eq!(crate::cognition::Cognition::prompt(&mut lease, "Run the job in the background", &mut |_| {}).unwrap(), "end_turn");
         std::fs::write(&ended, "").unwrap();
-        // load-bound: hang guard only; the loop waits for the fact, the deadline decides no verdict
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !lane_has("woken-turn-speaks") {
-            assert!(std::time::Instant::now() < deadline, "the woken turn's words were never read");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        // load-bound: hang guard only; the host's notice is the fact waited for
+        let (thread, summary) = notices.recv_timeout(Duration::from_secs(10)).expect("the host was never told of the turn after his background command");
+        assert!(!answered.exists(), "the provider's turn was let go before the app adopted it");
+
+        // What the host's filed delivery does: the continuation channel, then the turn's input.
+        crate::cognition::Cognition::set_input_channel(&mut lease, Some(CONTINUATION_CHANNEL)).unwrap();
+        let begin = conversation.clone();
+        let reply = crate::cognition::Cognition::enqueue_prompt(&mut lease, &summary, Box::new(move || {
+            begin.begin_turn(ActiveTurn { turn_id: "continuation".into(), thread_id: "thr_one".into(), entity_id: None, started_at: None });
+            Ok(())
+        })).unwrap();
+        let (spoke, words) = channel();
+        let waiter = std::thread::spawn(move || {
+            let mut said = String::new();
+            let reason = reply.wait(&mut |item| if let TurnItem::Text { text, .. } = item {
+                said.push_str(text);
+                spoke.send(()).ok();
+            });
+            (reason, said)
+        });
+        // load-bound: hang guard only; his words reaching this input are the fact waited for
+        words.recv_timeout(Duration::from_secs(10)).expect("the continued turn's words never reached the app's turn");
         let during = read();
-        std::fs::write(&finish, "").unwrap();
-        // load-bound: hang guard only; the loop waits for the fact, the deadline decides no verdict
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !lane_has("woken-turn-ended") {
-            assert!(std::time::Instant::now() < deadline, "the woken turn's end was never read");
-            std::thread::sleep(Duration::from_millis(5));
+        if stop {
+            assert!(matches!(conversation.request_stop().unwrap(), StopOutcome::Requested { reached_lease: true, .. }),
+                "the user's Stop did not reach the turn after his background command");
+        } else {
+            std::fs::write(&finish, "").unwrap();
+        }
+        let (reason, said) = waiter.join().unwrap();
+        let reason = reason.unwrap();
+        let held = std::fs::read_to_string(&answered).unwrap_or_default();
+        if stop {
+            let sent: Value = serde_json::from_str(&std::fs::read_to_string(&interrupted).unwrap()).unwrap();
+            assert_eq!(sent["request"]["subtype"], "interrupt", "the child was not interrupted: {sent}");
         }
         let after = read();
+        assert_eq!(thread, "thr_one");
+        assert!(summary.contains("completed"), "{summary}");
+        assert!(held.contains("continuation-hook"), "the held callback was never answered: {held}");
         drop(lease);
         drop(std::fs::remove_dir_all(&root));
         drop(std::fs::remove_dir_all(&marks));
-        (during, after)
+        (reason, said, during, after, held)
     }
 
     #[test]
-    fn the_turn_his_own_background_command_starts_may_act_and_closes_at_its_end() {
-        let (during, after) = woken_turn_grant("woken", |_| {});
-        assert!(during.actions_allowed, "the turn Claude Code started for his background command was refused every tool");
-        assert_eq!(during.closed, None);
-        assert!(!after.actions_allowed, "the woken turn's grant outlived the turn");
+    fn the_turn_after_his_background_command_is_his_app_turn_with_his_words_and_open_tools() {
+        let (reason, said, during, after, _) = continuation_turn("words", false);
+        assert_eq!(reason, "end_turn");
+        assert_eq!(said, "continued-words", "his words in the turn after his background command never reached the app");
+        assert!(during.actions_allowed, "the turn after his background command was refused every tool");
+        assert!(!after.actions_allowed, "its grant outlived the turn");
         assert_eq!(after.closed.map(|c| c.by), Some(crate::ecs::closed_by::TURN_END.to_string()));
     }
 
     #[test]
-    fn a_stop_is_never_undone_by_a_background_command_ending() {
-        let (during, after) = woken_turn_grant("stopped", |gate| crate::ecs::revoke(gate).unwrap());
-        assert!(!during.actions_allowed, "a command's ending reopened the grant the user's Stop had closed");
-        assert_eq!(during.closed.map(|c| c.by), Some(crate::ecs::closed_by::STOP.to_string()));
-        assert_eq!(after.closed.map(|c| c.by), Some(crate::ecs::closed_by::STOP.to_string()), "the Stop's record was rewritten");
-    }
-
-    /// **The user's Stop ends the turn Rich carries on in** (second review of `f734404ea`,
-    /// finding 1). No app turn is active then (the turn-end completion ended his), so Stop
-    /// used to answer "nothing running" and leave the continuation's tools open. Through the
-    /// same `stop_turn` path: the grants are revoked as a Stop, the child is sent the interrupt
-    /// and the turn ends.
-    #[test]
-    fn the_users_stop_ends_the_turn_his_background_command_started() {
-        use crate::steering::{StopOutcome, TurnControl};
-        let marks = fixture_root().join(format!("woken-stop-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&marks).unwrap();
-        let (ended, interrupted) = (marks.join("command-ended"), marks.join("interrupted"));
-        let body = format!(r#"
-read -r init
-printf '%s\n' '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_init","response":{{}}}}}}'
-read -r prompt
-printf '%s\n' '{{"type":"system","subtype":"task_started","task_id":"bk-long","task_type":"local_bash","is_backgrounded":true,"description":"long job"}}'
-printf '%s\n' '{{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0}}'
-while [ ! -e '{ended}' ]; do sleep 0.02; done
-printf '%s\n' '{{"type":"system","subtype":"task_notification","task_id":"bk-long","status":"completed","summary":"long job completed (exit code 0)"}}'
-printf '%s\n' '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"woken-turn-speaks"}}}}}}'
-read -r request
-printf '%s' "$request" > '{interrupted}'
-printf '%s\n' '{{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0,"result":"woken-turn-stopped"}}'
-read -r keep_alive
-"#, ended = ended.display(), interrupted = interrupted.display());
-        let (mut lease, root) = lease_with_production_grants("woken-stop", LeaseRole::Conversation, &body);
-        crate::onboarding_tools::write_scope(lease.onboarding_scope.as_ref().unwrap(), &crate::onboarding_tools::OnboardingToolScope {
-            version: 1, entity_id: "qa-test-co".into(), actions_allowed: false,
-            central_root: root.join("corpus"), record_path: root.join("onboarding.json"),
-        }).unwrap();
-        let control = TurnControl::open(marks.join("intake.jsonl")).unwrap();
-        let conversation = control.for_thread("thr_one");
-        conversation.set_cancel(Some(lease.client.cancel_handle()));
-        let gate = lease.continuity.as_ref().unwrap().1.clone();
-        let read = || -> crate::ecs::ToolScope { serde_json::from_slice(&std::fs::read(&gate).unwrap()).unwrap() };
-        assert_eq!(crate::cognition::Cognition::prompt(&mut lease, "Run the long job", &mut |_| {}).unwrap(), "end_turn");
-        let lane_has = |needle: &str| lease.client.between.lock().unwrap().queue.iter()
-            .any(|item| matches!(item, BetweenItem::Frame(f) if f.to_string().contains(needle)));
-        std::fs::write(&ended, "").unwrap();
-        // load-bound: hang guard only; the loop waits for the fact, the deadline decides no verdict
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !lane_has("woken-turn-speaks") {
-            assert!(std::time::Instant::now() < deadline, "the woken turn's words were never read");
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(read().actions_allowed, "the continuation never opened");
-        assert_eq!(conversation.request_stop_or_continuation().unwrap(), StopOutcome::ContinuationStopped { reached_lease: true },
-            "the user's Stop did not reach the turn Rich carries on in");
-        let stopped = read();
-        assert!(!stopped.actions_allowed, "the continuation kept its tools after the Stop");
-        assert_eq!(stopped.closed.map(|c| c.by), Some(crate::ecs::closed_by::STOP.to_string()));
-        // load-bound: hang guard only; the loop waits for the fact, the deadline decides no verdict
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !lane_has("woken-turn-stopped") {
-            assert!(std::time::Instant::now() < deadline, "the stopped continuation never ended");
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let sent: Value = serde_json::from_str(&std::fs::read_to_string(&interrupted).unwrap()).unwrap();
-        assert_eq!(sent["request"]["subtype"], "interrupt", "the child was not interrupted: {sent}");
-        assert!(!lease.client.continuation.load(Ordering::SeqCst), "the continuation still reads running after its end");
-        assert_eq!(read().closed.map(|c| c.by), Some(crate::ecs::closed_by::STOP.to_string()), "its end rewrote the Stop's record");
-        drop(lease);
-        drop(std::fs::remove_dir_all(&root));
-        drop(std::fs::remove_dir_all(&marks));
-    }
-
-    #[test]
-    fn a_scope_written_closed_before_any_turn_stays_closed_when_a_command_ends() {
-        // Context-only priming runs under a scope written closed with no closure record.
-        let (during, _) = woken_turn_grant("priming", |gate| {
-            let mut scope: crate::ecs::ToolScope = serde_json::from_slice(&std::fs::read(gate).unwrap()).unwrap();
-            scope.closed = None;
-            crate::ecs::write_scope(gate, &scope).unwrap();
-        });
-        assert!(!during.actions_allowed, "a command's ending opened a scope no turn had opened");
+    fn the_users_stop_ends_the_turn_after_his_background_command() {
+        let (reason, said, _, after, _) = continuation_turn("stop", true);
+        assert_eq!(reason, STOP_REASON_CANCELLED, "the turn after his background command ran on past his Stop");
+        assert_eq!(said, "continued-words");
+        assert!(!after.actions_allowed, "the stopped turn kept its tools");
     }
 
     /// One turn of a front desk that hands work over, as the wire actually carries it.

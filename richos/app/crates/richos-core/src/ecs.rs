@@ -321,19 +321,6 @@ pub fn grant_open_for(path: &Path, session_id: &str) -> bool {
     scope_of_session(path, session_id).is_some_and(|scope| scope.actions_allowed)
 }
 
-/// **Was this grant closed by nothing but an ordinary turn end?** True only for a scope whose
-/// grant is shut with [`closed_by::TURN_END`]: a Stop, the end of an assignment, a crash sweep,
-/// a failed turn start, an input not started yet, and a scope with no closure record (one
-/// written closed before any turn, which context-only priming runs under) all answer false.
-/// The turn Claude Code starts when the lead's own background command ends reopens only this
-/// (`native.rs`, `ReaderState::woken_turn`), so a Stop is never undone by a command's ending.
-pub fn closed_by_turn_end(path: &Path) -> bool {
-    std::fs::read(path).ok()
-        .and_then(|bytes| serde_json::from_slice::<ToolScope>(&bytes).ok())
-        .is_some_and(|scope| !scope.actions_allowed
-            && scope.closed.is_some_and(|closed| closed.by == closed_by::TURN_END))
-}
-
 /// **EVERYTHING this scope grants, withdrawn in one write** — the turn's actions and the
 /// standing permission its already-dispatched background workers hold.
 ///

@@ -805,10 +805,10 @@ pub trait TurnCancel: Send + Sync {
     /// means the lease had nothing to cancel (no prompt in flight, or the child is gone),
     /// which the caller reports rather than hides.
     fn cancel(&self) -> bool;
-    /// Is a turn the provider started itself for this lead's own ended background command
-    /// running with its tools open? No app turn is active then, and a Stop still reaches it
-    /// (`request_stop`), as the terminal's Esc reaches a woken lead.
-    fn continuation_running(&self) -> bool { false }
+    /// Wire the host's notice for the turn the provider starts when this lead's own background
+    /// command ends (`native::CONTINUATION_CHANNEL`), with the notification's summary. A lease
+    /// that cannot hold such a turn ignores it.
+    fn on_continuation(&self, _notice: Arc<dyn Fn(String) + Send + Sync>) {}
     /// Settle owned processes on app exit even when no turn is in flight.
     fn shutdown(&self) { let _ = self.cancel(); }
     /// Ask the lease to stop ONE command its provider is running in the background, by the
@@ -923,10 +923,6 @@ pub enum StopOutcome {
     /// Nothing was running. Not an error and not a failure — the honest answer, and the
     /// UI's cue to leave the composer exactly as it was.
     NothingRunning,
-    /// No app turn was running, but the turn the provider started for the lead's own ended
-    /// background command was, and the lease was told ([`TurnCancel::continuation_running`]).
-    /// Nothing is recorded: there is no app turn to record a Stop against.
-    ContinuationStopped { reached_lease: bool },
     /// The request is on disk and the lease was told.
     Requested {
         turn_id: String,
@@ -957,7 +953,14 @@ struct Inner {
     /// durable intake writes. Lock order is SPINE then claims, or claims then INTAKE;
     /// no path takes SPINE while holding claims or holds INTAKE while taking claims.
     priming: Mutex<std::collections::HashSet<String>>,
+    /// The host's notice (conversation, summary) for a turn a lead's own ended background
+    /// command started; wired into every lease handle registered here ([`TurnCancel::on_continuation`]).
+    continuation: Mutex<Option<ContinuationNotice>>,
 }
+
+/// The host's answer to "Rich's own background command ended and the provider started his next
+/// turn": file it as an app turn of that conversation (`native::CONTINUATION_CHANNEL`).
+pub type ContinuationNotice = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 /// The shared, lock-free-with-respect-to-the-spine control surface for §9.2 and §9.3.
 ///
@@ -989,6 +992,7 @@ impl TurnControl {
                 intake: Mutex::new(Some(log)),
                 conversations: Mutex::new(std::collections::HashMap::new()),
                 priming: Mutex::new(Default::default()),
+                continuation: Mutex::new(None),
             }),
         })
     }
@@ -1003,6 +1007,7 @@ impl TurnControl {
                 intake: Mutex::new(None),
                 conversations: Mutex::new(std::collections::HashMap::new()),
                 priming: Mutex::new(Default::default()),
+                continuation: Mutex::new(None),
             }),
         }
     }
@@ -1025,6 +1030,19 @@ impl TurnControl {
     /// A view of the same durable intake and controls for one conversation.
     pub fn for_thread(&self, thread: &str) -> ConversationControl {
         ConversationControl {shared:self.clone(),thread:thread.to_string()}
+    }
+
+    /// Set the host's continuation notice, and wire it into every lease handle already here.
+    pub fn set_continuation_notice(&self, notice: ContinuationNotice) {
+        *self.inner.continuation.lock().unwrap() = Some(notice.clone());
+        let handles: Vec<_> = self.inner.conversations.lock().unwrap().iter()
+            .filter_map(|(thread, state)| state.cancel.clone().map(|cancel| (thread.clone(), cancel))).collect();
+        for (thread, cancel) in handles { cancel.on_continuation(Self::notice_for(&notice, &thread)); }
+    }
+
+    fn notice_for(notice: &ContinuationNotice, thread: &str) -> Arc<dyn Fn(String) + Send + Sync> {
+        let (notice, thread) = (notice.clone(), thread.to_string());
+        Arc::new(move |summary: String| notice(&thread, &summary))
     }
 
     pub fn active_turn_count(&self) -> usize {
@@ -1378,6 +1396,8 @@ impl ConversationControl {
     }
 
     pub fn set_cancel(&self, cancel: Option<Arc<dyn TurnCancel>>) {
+        let notice=self.shared.inner.continuation.lock().unwrap().clone();
+        if let (Some(notice),Some(handle))=(notice,cancel.as_ref()) {handle.on_continuation(TurnControl::notice_for(&notice,self.key()));}
         let mut states=self.shared.inner.conversations.lock().unwrap();
         let state=states.entry(self.key().to_string()).or_default();
         if let Some(turn)=state.active.as_ref() {
@@ -1418,33 +1438,17 @@ impl ConversationControl {
     }
 
     pub fn request_stop(&self) -> Result<StopOutcome, SteeringError> {
-        self.request_stop_matching(None,false)
-    }
-
-    /// The user's Stop (`stop_turn`): the running app turn, or with none, the turn the lead
-    /// carries on in after his own background command ended. Voice's withdraw of a partial
-    /// turn uses [`Self::request_stop`] and never reaches that continuation.
-    pub fn request_stop_or_continuation(&self) -> Result<StopOutcome, SteeringError> {
-        self.request_stop_matching(None,true)
+        self.request_stop_matching(None)
     }
 
     pub fn request_stop_for(&self, expected_turn_id: &str) -> Result<StopOutcome, SteeringError> {
-        self.request_stop_matching(Some(expected_turn_id),false)
+        self.request_stop_matching(Some(expected_turn_id))
     }
 
-    fn request_stop_matching(&self,expected:Option<&str>,continuation:bool)->Result<StopOutcome,SteeringError> {
+    fn request_stop_matching(&self,expected:Option<&str>)->Result<StopOutcome,SteeringError> {
         let mut states=self.shared.inner.conversations.lock().unwrap();
         let Some(state)=states.get_mut(self.key()) else {return Ok(StopOutcome::NothingRunning)};
-        let Some(active)=state.active.as_ref() else {
-            // No app turn, but the lead carries on after his own background command ended.
-            // There is no turn to record a Stop against; the lease is told, and its grants
-            // are revoked by the cancel itself.
-            if continuation && expected.is_none() && state.cancel.as_ref().is_some_and(|cancel|cancel.continuation_running()) {
-                let reached_lease=state.cancel.as_ref().is_some_and(|cancel|cancel.cancel());
-                return Ok(StopOutcome::ContinuationStopped{reached_lease});
-            }
-            return Ok(StopOutcome::NothingRunning)
-        };
+        let Some(active)=state.active.as_ref() else {return Ok(StopOutcome::NothingRunning)};
         if expected.is_some_and(|id|id!=active.turn_id) {return Ok(StopOutcome::NothingRunning)}
         let (turn_id,requested_at)=self.shared.record_stop(state)?;
         let reached_lease=state.cancel.as_ref().is_some_and(|cancel|cancel.cancel());
@@ -1605,29 +1609,6 @@ mod tests {
         ctl.request_stop().unwrap();
         assert!(*saw.lock().unwrap(), "the stop request must be durable BEFORE the lease is cancelled");
         let _ = std::fs::remove_file(&path);
-    }
-
-    /// The user's Stop reaches the turn the lead carries on in after his own background
-    /// command ended, though no app turn is active; voice's withdraw of a partial turn never does.
-    #[test]
-    fn the_users_stop_reaches_the_continuation_after_his_background_command() {
-        struct Continuing(Arc<Mutex<usize>>);
-        impl TurnCancel for Continuing {
-            fn cancel(&self) -> bool { *self.0.lock().unwrap() += 1; true }
-            fn continuation_running(&self) -> bool { true }
-        }
-        let path = tmp("continuation");
-        let ctl = TurnControl::open(&path).unwrap().for_thread("thr_1");
-        let calls = Arc::new(Mutex::new(0));
-        ctl.set_cancel(Some(Arc::new(Continuing(calls.clone()))));
-        assert_eq!(ctl.request_stop().unwrap(), StopOutcome::NothingRunning, "voice's withdraw stopped his continuation");
-        assert_eq!(ctl.request_stop_for("turn_1").unwrap(), StopOutcome::NothingRunning);
-        assert_eq!(*calls.lock().unwrap(), 0);
-        assert_eq!(ctl.request_stop_or_continuation().unwrap(), StopOutcome::ContinuationStopped { reached_lease: true });
-        assert_eq!(*calls.lock().unwrap(), 1, "the Stop never reached the lease");
-        ctl.set_cancel(Some(Arc::new(RecordingCancel(calls.clone(), true))));
-        assert_eq!(ctl.request_stop_or_continuation().unwrap(), StopOutcome::NothingRunning, "a lease with no continuation was stopped");
-        drop(std::fs::remove_file(&path));
     }
 
     #[test]

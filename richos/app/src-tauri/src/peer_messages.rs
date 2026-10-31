@@ -47,7 +47,28 @@ fn watch(root:&std::path::Path,tx:mpsc::SyncSender<()>)->notify::Result<notify::
     Ok(watcher)
 }
 
+/// **Rich's own background command ended after his turn, and Claude Code started his next one**
+/// (CEO §154: in the terminal that turn is an ordinary turn the CEO sees and can stop). It is
+/// filed here as a turn of that conversation from `CONTINUATION_CHANNEL`, through the same
+/// agent-input road peer messages take, and its delivery adopts the provider's turn rather than
+/// sending a second message (`NativeClient::adopt_continuation`).
+fn wire_continuations(app:&AppHandle) {
+    let handle=app.clone();
+    app.state::<AppState>().control.set_continuation_notice(std::sync::Arc::new(move |thread:&str,summary:&str| {
+        let state=handle.state::<AppState>();
+        let entity=state.reader.snapshot().ledger().thread_binding(thread).ok().map(|b|b.entity_id().clone());
+        let id=format!("continuation:{thread}:{}",std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0,|d|d.as_nanos()));
+        match state.control.submit_agent_message(thread,entity,summary,richos_core::native::CONTINUATION_CHANNEL,&id) {
+            Ok(_)=>if let Err(error)=crate::dispatch_incoming_messages(&handle,thread) {
+                eprintln!("[richos] the turn after a background command could not be started: {error}");
+            },
+            Err(error)=>eprintln!("[richos] the turn after a background command could not be filed: {error}"),
+        }
+    }));
+}
+
 pub fn start(app:AppHandle)->Result<(),Box<dyn std::error::Error>> {
+    wire_continuations(&app);
     let root=app.state::<AppState>().data_dir.join("engine-state");
     std::fs::create_dir_all(root.join("messages"))?;
     let (tx,rx)=mpsc::sync_channel(1);

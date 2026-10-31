@@ -632,7 +632,7 @@ impl EngineProfile {
         // shuts it at the start of a turn, the reader opens it at his first words, and an app
         // turn that is stopped or is only supplying context genuinely may take no action of
         // any kind. The turn Claude Code starts when the lead's own background command ends
-        // is neither, and the reader opens it for that turn too (`native.rs`, `WokenTurn`). Nothing in it reads a development session — it is not the guard-audience
+        // is adopted as an app turn and opens it like any other (`native::CONTINUATION_CHANNEL`). Nothing in it reads a development session — it is not the guard-audience
         // defect wearing another costume (see
         // docs/verification/guard-audience-2026-09-18.md, "Is RICHOS_APP_SCOPE the same
         // root?"). What was wrong was that its reach was written down nowhere, so every
