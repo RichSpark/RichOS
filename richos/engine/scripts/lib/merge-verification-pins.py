@@ -15,7 +15,9 @@ So this driver merges the two documents as JSON, three ways, and then regenerate
   1. Every entry from both sides is kept. A key one side added is added; a value one side changed
      and the other did not takes the change; a key one side removed and the other left as it was
      is removed (a key one side removed and the other changed is kept, changed). Lists are merged
-     as sets in order: what either side added is kept, what one side removed is removed.
+     the same way, in order, each entry matched across the sides by what it is without its pins
+     and notes (an `external` entry both sides renewed is one entry, merged as a dict, its pin
+     taken by rule 2): what either side added is kept, what one side removed is removed.
   2. A pin both sides changed to different values is taken from the merged FILE: the pinned
      file's three versions (merge base, ours, theirs) are merged with `git merge-file`, and the
      pin becomes the sha256 of that result, which is what renew-verification-pins.py would write
@@ -122,6 +124,28 @@ class Conflict(Exception):
 MISSING = object()
 
 
+def identity(value):
+    """What a list entry is with its pins and review notes left out: the same entry renewed on
+    two branches has one identity. A `sources` map is named by its keys (its values are pins)."""
+    if isinstance(value, dict):
+        return {k: sorted(v) if k == "sources" and isinstance(v, dict) else identity(v)
+                for k, v in value.items() if k != "sha256" and k not in NOTES}
+    if isinstance(value, list):
+        return [identity(v) for v in value]
+    return value
+
+
+def identities(values):
+    """[(key, value)] for a list, the key being the entry's identity and its occurrence among
+    entries of that identity, so two entries that are alike are two slots, never one."""
+    seen, out = {}, []
+    for value in values:
+        name = json.dumps(identity(value), sort_keys=True)
+        seen[name] = seen.get(name, -1) + 1
+        out.append(((name, seen[name]), value))
+    return out
+
+
 def merge(base, ours, theirs, where, pins):
     if ours == theirs:
         return ours
@@ -150,16 +174,28 @@ def merge(base, ours, theirs, where, pins):
             result[key] = value
         return result
     if isinstance(ours, list) and isinstance(theirs, list):
+        # An entry is matched across the three sides by what it IS, not by its pin: an entry of
+        # an `external` list that both sides renewed is one entry with two pins, merged as a dict
+        # (its pin taken from the merged file), never two entries side by side. Matched as whole
+        # values, the two renewals of mega-lander/workspaces.py's external pin in
+        # lifecycle-payload-transport.test.py were both kept, each stale, and main refused every
+        # land after it (b19b5c8f4, 2026-10-31).
         base = base if isinstance(base, list) else []
-        key = lambda v: json.dumps(v, sort_keys=True)
-        removed = {key(v) for v in base} - {key(v) for v in theirs}
-        removed |= {key(v) for v in base} - {key(v) for v in ours}
-        seen, result = set(), []
-        for value in ours + theirs:
-            k = key(value)
-            if k in seen or k in removed:
-                continue
-            seen.add(k)
+        slots = [dict(identities(side)) for side in (base, ours, theirs)]
+        order = [k for k, _ in identities(ours)] + [k for k, _ in identities(theirs) if k not in slots[1]]
+        result = []
+        for k in order:
+            b, o, t = (side.get(k, MISSING) for side in slots)
+            if o is MISSING:
+                if t == b:
+                    continue            # ours removed it, theirs left it alone
+                value = t               # ours removed it, theirs changed or added it: kept
+            elif t is MISSING:
+                if o == b:
+                    continue
+                value = o
+            else:
+                value = merge(None if b is MISSING else b, o, t, where + [len(result)], pins)
             result.append(value)
         return result
     if isinstance(ours, str) and isinstance(theirs, str) and PIN.fullmatch(ours) and PIN.fullmatch(theirs):
