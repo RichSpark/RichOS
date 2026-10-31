@@ -33,9 +33,28 @@ pub(super) fn admission(state: &Path, now: u64) -> Admission {
 /// reading only when there is no row for it (one account, or `None`). With the admission comes
 /// what a release inside the twenty-minute window is judged on (`stagger::Release`).
 pub(super) fn decide(state: &Path, account: Option<&str>, now: u64) -> (Admission, Option<super::stagger::Release>) {
+    decide_call(state, account, false, now)
+}
+
+/// [`decide`] for one tool call; `helper` when a running helper makes it (the payload's
+/// `agent_id`).
+///
+/// **A helper running on an account being left for its week carries on** (the CEO's §153,
+/// 2026-10-31, replacing his weekly handoff order of 2026-10-07): the weekly switch is handled
+/// exactly as the five-hour one. Nobody is told to stop, commit or hand off; Stu moves once
+/// nothing of his runs (`work_host.rs`, `Renewal::Waits`), and a helper's next Claude call goes
+/// on, on the account it runs on, using the room the weekly point leaves before 100%
+/// (`Reading::weekly_point`). So while another account is there to move to, the weekly hold
+/// does not judge a helper's call: only the five-hour line can hold it, as it holds any call. A
+/// new agent's dispatch is not a helper's call and is still held there, so no new work starts on
+/// the account being left. With no account to move to (one account, or every account used up)
+/// there is no switch, and the weekly hold holds the helper as the five-hour one does.
+fn decide_call(state: &Path, account: Option<&str>, helper: bool, now: u64) -> (Admission, Option<super::stagger::Release>) {
     let Ok(view) = read_json::<View>(&state.join("claude-quota.json")) else {
         return (Admission::Unknown, None);
     };
+    let carries_on = helper && view.accounts.len() > 1
+        && account.is_some_and(|id| view.leaving.iter().any(|left| left == id));
     // Read the persisted switch separately: a publication failure must not leave
     // an old disabled snapshot admitting work after the policy was enabled.
     let policy = state
@@ -48,10 +67,13 @@ pub(super) fn decide(state: &Path, account: Option<&str>, now: u64) -> (Admissio
     }
     let row = account.and_then(|id| view.accounts.iter().find(|a| a.id == id));
     let exhausted_until = row.and_then(|a| a.exhausted_until);
-    let (windows, checked_at, message, speeds, pre_hold, empty_at) = match row {
+    let (mut windows, checked_at, message, speeds, pre_hold, empty_at) = match row {
         Some(a) => (a.windows.clone(), a.checked_at, a.message.clone(), a.speeds.clone(), a.pre_hold.clone(), a.empty_at),
         None => (view.windows, view.checked_at, view.message, view.speeds, view.pre_hold, view.empty_at),
     };
+    if carries_on {
+        windows.retain(|w| !super::is_weekly(&w.id));
+    }
     let judged = (policy.enabled && policy.validate().is_ok() && checked_at.is_none_or(|t| t <= now)).then(|| Snapshot {
         windows,
         checked_at,
@@ -168,66 +190,6 @@ fn account_of_this_process() -> String {
         .unwrap_or_else(|| crate::claude_accounts::ACCOUNT_ONE.to_string())
 }
 
-/// Where the handoff markers live, under the app's `engine-state`: one per ordered helper.
-pub const HANDOFFS_DIR: &str = "handoffs";
-
-/// **The order** a helper on an account being left gets (weekly-switch plan §1), once, as
-/// the refusal of one tool call. His words, 2026-10-07: *"tell all running teammates to
-/// commit everything they have now and then write and commit a handoff and finish/end."*
-pub const HANDOFF_ORDER: &str = "RichOS: the Claude account this work runs on is being left before its weekly limit. Stop the task now. 1. Commit everything you have changed, as it is. 2. Then make one more commit with no file changes (`git commit --allow-empty`) whose message starts with `RichOS handoff:` and says what is done, what is left and the exact next step. 3. Then end, with one line saying you handed off. A fresh teammate on the next account continues from your commits. Do no more of the task.";
-
-/// **One ordered helper's marker**, `engine-state/handoffs/<agent_id>.json`, created once when
-/// it is given the order. While it exists the helper's calls are admitted without the quota
-/// hold, and the host continues its work from it when it has ended.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Handoff {
-    pub agent: String,
-    /// The session the helper runs in (the payload's `session_id`): the back end's own.
-    pub session: String,
-    pub account: String,
-    pub at: u64,
-    /// When the host chose the continuation that carries this helper's work on (weekly-switch
-    /// plan §2, 1a). A marker counts once: it is updated, never removed, so the gate still
-    /// sees it and never orders the same helper twice.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub continued_at: Option<u64>,
-    /// **When the helper made its handoff commit** (the CEO, 2026-10-07: *"I would hope that
-    /// when the teammates get their handoff message, they'd get to a full finish within a few
-    /// minutes"*): the first call of this ordered helper whose command carries `RichOS
-    /// handoff:` ([`is_handoff_commit`]). `committed_at - at` is what a handoff really took.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub committed_at: Option<u64>,
-    /// The weekly points the account spent from the order to that commit, counted by the quota
-    /// service from the tokens it saw (`Service::track_tokens`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub points: Option<f64>,
-    /// **What the order acted on** (richos-hq follow-ups.md:305 item 3, 7fed0bef: "a deferral
-    /// states its account and figure"): the account's label, its weekly use and the weekly point
-    /// it was left at, as the published file said them when the order went out. `None` where the
-    /// file did not say (an older app, or no weekly reading).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub weekly_used: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub weekly_point: Option<f64>,
-}
-
-/// `account`'s label, weekly use and weekly point in the published `view`: its own row with two
-/// or more accounts; the top level (the account in use) when it is that account.
-fn figures_of(view: &View, account: &str) -> (Option<String>, Option<f64>, Option<f64>) {
-    let week = |windows: &[super::Window]| windows.iter().find(|w| w.id == "seven_day").map(|w| w.used_percent);
-    if let Some(row) = view.accounts.iter().find(|a| a.id == account) {
-        return (Some(row.label.clone()), week(&row.windows), row.weekly_point);
-    }
-    match view.in_use.as_ref() {
-        Some(in_use) if in_use.id == account => {
-            (Some(in_use.label.clone()), week(&view.windows), view.act_at.get("seven_day").copied())
-        }
-        _ => (None, None, None),
-    }
-}
-
 /// The account a hold on `account` was judged on, for a refusal: "Work (account 2)". The same
 /// choice [`decide`] makes: `account`'s own row with two or more accounts, else the top level,
 /// which names its account in `in_use`. During a move a call can run on another account than the
@@ -245,103 +207,13 @@ pub(super) fn held_named(state: &Path, account: &str) -> String {
     }
 }
 
-/// The call that makes the handoff commit [`HANDOFF_ORDER`] asks for: a shell command whose
-/// text carries `RichOS handoff:`.
-pub fn is_handoff_commit(payload: &Value) -> bool {
-    payload["tool_input"]["command"].as_str().is_some_and(|c| c.contains("RichOS handoff:"))
-}
-
-/// Record, once, when the helper of the marker at `path` made its handoff commit. Read again
-/// first, so nothing the host or the quota service wrote meanwhile is lost. Best effort: a
-/// commit that cannot be recorded leaves the handoff time at its default.
-fn record_commit(path: &Path, at: u64) {
-    if let Ok(marker) = read_json::<Handoff>(path) {
-        if marker.committed_at.is_none() {
-            drop(super::atomic_write(path, &Handoff { committed_at: Some(at), ..marker }));
-        }
-    }
-}
-
-/// Record, once, the points the account spent during this marker's handoff (the quota
-/// service's count), read again first like [`record_commit`].
-pub fn record_points(path: &Path, points: f64) -> io::Result<()> {
-    let marker = read_json::<Handoff>(path)?;
-    if marker.points.is_some() { return Ok(()); }
-    super::atomic_write(path, &Handoff { points: Some(points), ..marker })
-}
-
-/// Every handoff marker on disk, with its file. One that cannot be read is left out.
-pub fn handoffs(state: &Path) -> Vec<(std::path::PathBuf, Handoff)> {
-    let Ok(entries) = fs::read_dir(state.join(HANDOFFS_DIR)) else { return Vec::new() };
-    let mut found: Vec<_> = entries.flatten().map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|e| e == "json"))
-        .filter_map(|path| read_json::<Handoff>(&path).ok().map(|marker| (path, marker)))
-        .collect();
-    found.sort_by(|a, b| a.0.cmp(&b.0));
-    found
-}
-
-/// Record that the host chose the continuation for this marker's helper (plan §2, 1a).
-pub fn mark_continued(path: &Path, marker: &Handoff, at: u64) -> io::Result<()> {
-    // The file as it is now: the gate and the quota service write to it too.
-    let current = read_json::<Handoff>(path).unwrap_or_else(|_| marker.clone());
-    super::atomic_write(path, &Handoff { continued_at: Some(at), ..current })
-}
-
-/// The marker's file for `agent`, or `None` for an id that is not a plain name (a path must
-/// never come from a payload).
-fn marker_path(state: &Path, agent: &str) -> Option<std::path::PathBuf> {
-    (!agent.is_empty() && agent.len() <= 128 && agent.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
-        .then(|| state.join(HANDOFFS_DIR).join(format!("{agent}.json")))
-}
-
-/// **The order to a helper on an account being left** (weekly-switch plan §1), decided before
-/// the quota hold. `None`: not a helper, its account is not being left, or no marker could be
-/// written, so the call goes on to the ordinary hold. `Some(Err)`: the order, this one time,
-/// with its marker now written. `Some(Ok)`: already ordered, so the call is admitted without
-/// the hold — the last points of the week are for exactly this. A revoked grant still says the
-/// work ended, as it does everywhere below.
-pub(super) fn handoff(payload: &Value, state: &Path, scope: &Path, account: &str) -> Option<io::Result<()>> {
-    let agent = payload.get("agent_id").and_then(Value::as_str).filter(|id| !id.is_empty())?;
-    let view = read_json::<View>(&state.join("claude-quota.json")).ok()?;
-    if !view.leaving.iter().any(|id| id == account) {
-        return None;
-    }
-    if !authorized(scope, true) {
-        return Some(Err(work_ended(scope)));
-    }
-    let path = marker_path(state, agent)?;
-    fs::create_dir_all(path.parent()?).ok()?;
-    match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(mut file) => {
-            let (label, weekly_used, weekly_point) = figures_of(&view, account);
-            let marker = Handoff {
-                label,
-                weekly_used,
-                weekly_point,
-                agent: agent.to_string(),
-                session: payload.get("session_id").and_then(Value::as_str).unwrap_or_default().to_string(),
-                account: account.to_string(),
-                at: crate::util::now_millis(),
-                continued_at: None,
-                committed_at: None,
-                points: None,
-            };
-            let written = serde_json::to_vec(&marker).map_err(io::Error::other)
-                .and_then(|bytes| file.write_all(&bytes)).and_then(|()| file.sync_all());
-            if written.is_err() {
-                // A marker that could not be written orders nobody: the next call is ordered.
-                drop(fs::remove_file(&path));
-                return None;
-            }
-            Some(Err(io::Error::other(HANDOFF_ORDER)))
-        }
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            if is_handoff_commit(payload) { record_commit(&path, crate::util::now_millis()); }
-            Some(Ok(()))
-        }
-        Err(_) => None,
-    }
+/// One tool call of helper `agent` on `account` through the gate, answered at once (no wait):
+/// what the call is told when refused. For the work host's tests.
+#[cfg(test)]
+pub(crate) fn helper_call(state: &Path, scope: &Path, account: &str, agent: &str) -> Result<(), String> {
+    let payload = serde_json::json!({"hook_event_name": "PreToolUse", "agent_id": agent, "session_id": "stu-session",
+        "tool_name": "Bash", "tool_input": {"command": "cargo test"}});
+    wait(&payload, state, scope, account, Duration::ZERO, Duration::ZERO).map_err(|e| refusal(&e))
 }
 
 fn wait(
@@ -356,11 +228,6 @@ fn wait(
         .get("agent_id")
         .and_then(Value::as_str)
         .is_some_and(|id| !id.is_empty());
-    if worker {
-        if let Some(answer) = handoff(payload, state, scope, account) {
-            return answer;
-        }
-    }
     if !worker && payload["tool_name"] != "Agent" {
         return Ok(());
     }
@@ -382,7 +249,7 @@ fn wait(
             return Err(work_ended(scope));
         }
         let now = crate::util::now_millis();
-        let (admission, release) = decide(state, Some(account), now);
+        let (admission, release) = decide_call(state, Some(account), worker, now);
         if admission.allows_work() {
             if let Some(guard) = observation.take() { guard.release(); }
             return Ok(());
@@ -582,10 +449,6 @@ const WORK_ENDED: &str = "This app work has ended or was stopped. New actions ar
 /// the one prefix this wrapper put on every refusal blamed an allowance nobody had read.
 fn refusal(error: &io::Error) -> String {
     let text = error.to_string();
-    // The order speaks for itself and is about the account, not a quota reading.
-    if text == HANDOFF_ORDER {
-        return text;
-    }
     if text.starts_with(WORK_ENDED) {
         format!("RichOS desktop: {text}")
     } else {
@@ -715,7 +578,7 @@ mod tests {
         // An expired weekly figure must not mask a still-current five-hour hold.
         *service.snapshot.lock().unwrap()=Snapshot {checked_at:Some(now),windows:vec![weekly,five(95.,now+3_600_000)],..Default::default()};
         service.publish().unwrap();assert!(matches!(admission(&state,now),Admission::Held {..}));
-        assert!(service.view().leaving.is_empty(),"an expired weekly window ordered an account handoff");
+        assert!(service.view().leaving.is_empty(),"an expired weekly window left the account");
         assert!(wait(&dispatch,&state,&scope,"1",Duration::ZERO,Duration::ZERO).is_err());
         atomic_write(&scope,&json!({"version":1,"actions_allowed":false})).unwrap();
         assert!(wait(&dispatch,&state,&scope,"1",Duration::ZERO,Duration::ZERO).unwrap_err().to_string().starts_with(WORK_ENDED));
@@ -816,63 +679,66 @@ mod tests {
         assert!(waiting.starts_with("RichOS desktop quota: "), "{waiting}");
     }
 
-    /// **Weekly-switch plan §1, slice 2's proof (§7).** Account 1 in use at 99% of its week: it
-    /// is leaving, and the weekly hold stands. A helper on it gets the order once, with its
-    /// marker written (its session and account), and from then on every call of its is
-    /// admitted although the hold still stands. A helper on another account is untouched: the
-    /// ordinary hold, no order, no marker. So is the back end (no `agent_id`): its own tools
-    /// pass as before and its new `Agent` dispatch is refused with the hold's reason, never ordered.
+    /// **A weekly switch tells no helper to stop: a helper running on the account being left
+    /// carries on** (the CEO's §153, 2026-10-31). Account 1 at 99% of its week is being left for
+    /// Work (3%), with automatic pause on, so the weekly hold stands on Account 1's row. On main a
+    /// helper on Account 1 was refused with the order to commit, hand off and end
+    /// (`HANDOFF_ORDER`), and a marker was written for it. Now its calls are admitted, every
+    /// time, with no order, no refusal and nothing written. Exactly as anywhere, the five-hour
+    /// hold still judges it: Account 1 at its five-hour line holds the helper's next call there
+    /// too. A new agent's dispatch on Account 1 is not a helper's call: it is refused with the
+    /// hold's reason, so nothing new starts on the account being left. With one account there is
+    /// nowhere to move to and no switch: the weekly hold holds the helper, with no order.
     #[test]
-    fn a_helper_on_a_leaving_account_is_ordered_once_then_admitted_while_the_weekly_hold_stands() {
+    fn a_weekly_switch_orders_no_helper_and_a_helper_on_the_account_being_left_carries_on() {
         let (_root, service, state, scope) = setup();
         let now = crate::util::now_millis();
-        *service.snapshot.lock().unwrap() = Snapshot {
-            checked_at: Some(now),
-            windows: vec![
-                Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: 10.,
-                    resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 },
-                Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: 99.,
-                    resets_at: Some(now + 48 * 3_600_000), duration_ms: 604_800_000 },
-            ],
-            ..Default::default()
-        };
+        let windows = |five: f64, weekly: f64| vec![
+            Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: five,
+                resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 },
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly,
+                resets_at: Some(now + 48 * 3_600_000), duration_ms: 604_800_000 },
+        ];
+        // One account first: no switch is possible, so the weekly hold holds the helper.
+        *service.snapshot.lock().unwrap() = Snapshot { checked_at: Some(now), windows: windows(10., 99.), ..Default::default() };
         service.publish().unwrap();
+        let helper = json!({"agent_id":"helper-a","session_id":"session-1","tool_name":"Bash"});
+        let alone = refusal(&wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(alone.starts_with("RichOS desktop quota: Still waiting"), "one account: held, never ordered: {alone}");
+
+        let work = service.accounts.add("Work").unwrap();
+        service.observe_for_test(&work.id, windows(10., 3.), now);
+        service.observe_for_test("1", windows(10., 99.), now);
+        assert_eq!(service.accounts.in_use().id, work.id, "Account 1 at 99% of its week is left for Work");
         let view: View = read_json(&state.join("claude-quota.json")).unwrap();
         assert_eq!(view.leaving, vec!["1".to_string()]);
-        assert!(matches!(admission(&state, now), Admission::Held { .. }));
+        assert!(matches!(decide(&state, Some("1"), now).0, Admission::Held { .. }), "the weekly hold stands on Account 1");
 
-        let helper = json!({"agent_id":"helper-a","session_id":"session-1","tool_name":"Bash"});
-        let ordered = wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err();
-        assert_eq!(refusal(&ordered), HANDOFF_ORDER, "the order, word for word, with no quota prefix");
-        let marker: Handoff = read_json(&state.join(HANDOFFS_DIR).join("helper-a.json")).unwrap();
-        assert_eq!((marker.agent.as_str(), marker.session.as_str(), marker.account.as_str()), ("helper-a", "session-1", "1"));
-        // The order states the account and the figure it acted on (follow-ups 7fed0bef item 3).
-        assert_eq!((marker.label.as_deref(), marker.weekly_used), (Some("Account 1"), Some(99.)), "{marker:?}");
-        assert!(marker.weekly_point.is_some_and(|p| p > 0. && p <= 99.), "{marker:?}");
-        for _ in 0..2 {
+        for _ in 0..3 {
             wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO)
-                .expect("an ordered helper is admitted, never ordered twice");
+                .expect("a helper on the account being left carries on: no order, no hold");
         }
-        assert!(matches!(admission(&state, crate::util::now_millis()), Admission::Held { .. }), "the weekly hold still stands");
-
+        assert!(!state.join("handoffs").exists(), "nothing was written for a handoff");
         let other = json!({"agent_id":"helper-b","session_id":"session-2","tool_name":"Bash"});
-        let held = refusal(&wait(&other, &state, &scope, "2", Duration::ZERO, Duration::ZERO).unwrap_err());
-        assert!(held.starts_with("RichOS desktop quota: Still waiting"), "{held}");
-        assert!(held.contains("on Account 1 (account 1)"), "the hold names whose figure it is: {held}");
-        assert!(!state.join(HANDOFFS_DIR).join("helper-b.json").exists());
+        wait(&other, &state, &scope, &work.id, Duration::ZERO, Duration::ZERO).expect("a helper on Work goes on");
 
-        wait(&json!({"tool_name":"Bash","session_id":"session-1"}), &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap();
+        // The five-hour line holds it exactly as it holds any call.
+        service.before_turn("1", Some((windows(95., 99.), crate::util::now_millis())));
+        let five = refusal(&wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(five.starts_with("RichOS desktop quota: Still waiting") && five.contains("(account 1)"), "{five}");
+        service.before_turn("1", Some((windows(10., 99.), crate::util::now_millis())));
+        wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).expect("under the five-hour line it carries on again");
+
         atomic_write(&scope, &json!({"version":1,"actions_allowed":true})).unwrap();
         let dispatch = refusal(&wait(&json!({"tool_name":"Agent","session_id":"session-1"}), &state, &scope, "1",
             Duration::ZERO, Duration::ZERO).unwrap_err());
         assert!(dispatch.starts_with("RichOS desktop quota: No new agent was started"), "{dispatch}");
-        assert_eq!(fs::read_dir(state.join(HANDOFFS_DIR)).unwrap().count(), 1, "only the helper on the leaving account was ordered");
     }
 
     /// **A model's own week at its point is the account's week at its point** (follow-ups of
     /// 2026-10-29, `model:Fable`). Account 1 alone, its week at 40% and its Fable week at 99%:
     /// the published file names it leaving, the gate holds a new call until the Fable week's
-    /// reset, and a helper on it gets the handoff order. On main only `seven_day` was read: not
+    /// reset, and so does a helper's next call on it (one account: no switch). On main only `seven_day` was read: not
     /// leaving, admitted, and the work ran on to Fable's usage-limit refusal.
     #[test]
     fn a_models_own_week_at_its_point_leaves_and_holds_the_account() {
@@ -896,8 +762,8 @@ mod tests {
         assert_eq!(view.leaving, vec!["1".to_string()], "the Fable week decides `leaving`");
         assert_eq!(admission(&state, now), Admission::Held { resets_at: fable_reset });
         let helper = json!({"agent_id":"helper-a","session_id":"session-1","tool_name":"Bash"});
-        let ordered = wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err();
-        assert_eq!(refusal(&ordered), HANDOFF_ORDER);
+        let held = refusal(&wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(held.starts_with("RichOS desktop quota: Still waiting"), "one account: held, never ordered: {held}");
     }
 
     /// **The switch path gets the staggered release too** (STATUS-2026-10-31 row 7, E1 / G12;
@@ -962,7 +828,7 @@ mod tests {
     /// says "Automatic pause is off in Settings, so nothing acts before it reaches 100%", so a
     /// helper on Account 1 at 99% of its week keeps working: not leaving, no order, no marker.
     #[test]
-    fn one_account_with_automatic_pause_off_orders_no_handoff_at_the_weekly_point() {
+    fn one_account_with_automatic_pause_off_keeps_a_helper_working_at_the_weekly_point() {
         let (_root, service, state, scope) = setup();
         service.set_policy(Policy { enabled: false, pause_percent: 93 }).unwrap();
         let now = crate::util::now_millis();
@@ -981,64 +847,7 @@ mod tests {
         assert!(view.leaving.is_empty(), "one account with the pause off is not left: {:?}", view.leaving);
         let helper = json!({"agent_id":"helper-a","session_id":"session-1","tool_name":"Bash"});
         wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO)
-            .expect("the helper keeps working, with no handoff order");
-        assert!(!state.join(HANDOFFS_DIR).join("helper-a.json").exists(), "no marker: nobody was ordered");
-    }
-
-    /// **What a handoff really takes replaces the 10-minute guess** (the CEO, 2026-10-07: *"I
-    /// would hope that when the teammates get their handoff message, they'd get to a full
-    /// finish within a few minutes. Hopefully no more than 3-5 minutes or so."*).
-    ///
-    /// The gate: an ordered helper's ordinary call records nothing; its handoff commit (a
-    /// command carrying `RichOS handoff:`) records when, once, on its marker.
-    ///
-    /// The service: that account's last handoff took 2 minutes from the order to the commit and
-    /// spent 3,000,000 Opus tokens at 1,000,000 a point, 3 points. The weekly window gains 0.5
-    /// a minute, checked every 5. The room the switch leaves is the wait for the next check
-    /// plus the handoff, whichever of its time at this speed and its measured points is more:
-    /// 0.5 x 5 + max(0.5 x 2, 3) = 5.5 points, so the point is 99 - (6 - 1) = 94. The 10-minute
-    /// guess gave 0.5 x 15 = 7.5, so 92; the 5-minute default before any measurement gives
-    /// 0.5 x 10 = 5, so 95.
-    #[test]
-    fn a_handoff_is_measured_from_the_order_to_its_commit_and_its_cost_sets_the_switch_point() {
-        let (_root, service, state, scope) = setup();
-        let now = crate::util::now_millis();
-        let (minute, hour) = (60_000, 3_600_000);
-        let both = |weekly: f64| vec![
-            Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: 10.,
-                resets_at: Some(now + hour), duration_ms: 18_000_000 },
-            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly,
-                resets_at: Some(now + 48 * hour), duration_ms: 604_800_000 },
-        ];
-        *service.snapshot.lock().unwrap() = Snapshot { checked_at: Some(now), windows: both(99.), ..Default::default() };
-        service.publish().unwrap();
-        let call = |command: &str| json!({"agent_id":"helper-a","session_id":"s","tool_name":"Bash","tool_input":{"command":command}});
-        wait(&call("cargo test"), &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err();
-        let path = state.join(HANDOFFS_DIR).join("helper-a.json");
-        wait(&call("git add -A && git commit -m 'parser'"), &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap();
-        assert!(read_json::<Value>(&path).unwrap()["committed_at"].is_null(), "an ordinary commit is not the handoff");
-        wait(&call("git commit --allow-empty -m 'RichOS handoff: parser done; next: its tests'"), &state, &scope, "1",
-            Duration::ZERO, Duration::ZERO).unwrap();
-        let marker: Value = read_json(&path).unwrap();
-        assert!(marker["committed_at"].as_u64().is_some_and(|c| c >= marker["at"].as_u64().unwrap()), "{marker}");
-
-        // The account's last handoff: ordered 12 minutes ago, committed 10 minutes ago.
-        atomic_write(&path, &json!({"agent":"helper-a","session":"s","account":"1","at":now - 12 * minute,
-            "committed_at":now - 10 * minute})).unwrap();
-        let mut track = crate::quota::tokens::Track::with_episodes(vec![crate::quota::tokens::Episode {
-            points: 1., tokens: [("claude-opus-5-5".to_string(), 1_000_000)].into() }]);
-        track.add("msg_handoff", now - 11 * minute, "claude-opus-5-5", 3_000_000, 1_000);
-        service.tokens.lock().unwrap().insert("1".into(), track);
-        let mut reading = Snapshot::default();
-        reading.accept(both(60.), now - minute);
-        reading.accept(both(60.5), now);
-        *service.snapshot.lock().unwrap() = reading;
-        service.track_tokens();
-        let view = service.view();
-        assert_eq!(view.refresh_interval_ms, crate::quota::REFRESH_INTERVAL_MS);
-        assert!((view.act_at["seven_day"] - 94.).abs() < 1e-9, "{:?}", view.act_at);
-        assert!(read_json::<Value>(&path).unwrap()["points"].as_f64().is_some_and(|p| (p - 3.).abs() < 1e-9),
-            "the handoff's points are kept on its marker");
+            .expect("the helper keeps working");
     }
 
     /// **Item 1 of 2026-10-29 (Work's 09:50Z limit).** Ten workers held at 95%, 19 minutes before

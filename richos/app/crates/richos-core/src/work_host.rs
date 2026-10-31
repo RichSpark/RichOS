@@ -3045,11 +3045,17 @@ mod tests {
         commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
         sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
         prompts: Arc<Mutex<Vec<(String, String)>>>,
+        /// Helpers of his still running in this session (`worker_status`); none by default.
+        helpers: Arc<AtomicUsize>,
     }
     impl Cognition for Driven {
         fn session_id(&self)->&str {&self.session}
         fn account(&self)->Option<&str> {Some(&self.account)}
         fn running_commands(&self)->Option<crate::lease_commands::CommandReading> {Some(*self.commands.lock().unwrap())}
+        fn worker_status(&self)->Option<crate::worker_status::WorkerStatusView> {
+            let active=self.helpers.load(Ordering::SeqCst);
+            (active>0).then(||crate::worker_status::WorkerStatusView {active,..Default::default()})
+        }
         fn set_between_turn_sink(&mut self,sink:crate::cognition::BetweenTurnSink) {*self.sink.lock().unwrap()=Some(sink);}
         fn refresh_team(&mut self)->Result<bool,CognitionError> {Ok(true)}
         fn prompt(&mut self,text:&str,_:&mut dyn FnMut(TurnItem))->Result<String,CognitionError> {
@@ -3066,6 +3072,7 @@ mod tests {
         sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
         prompts: Arc<Mutex<Vec<(String, String)>>>,
         team: Arc<Mutex<TeamScript>>,
+        helpers: Arc<AtomicUsize>,
     }
     impl LeaseFactory for OnAccountInUse {
         fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
@@ -3073,7 +3080,7 @@ mod tests {
         fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
             let n=self.spawns.fetch_add(1,Ordering::SeqCst);
             Ok(Box::new(Driven {session:format!("stu-session-{n}"),account:self.quota.lease_account().id,
-                commands:self.commands.clone(),sink:self.sink.clone(),prompts:self.prompts.clone()}))
+                commands:self.commands.clone(),sink:self.sink.clone(),prompts:self.prompts.clone(),helpers:self.helpers.clone()}))
         }
     }
     struct Moving {
@@ -3085,6 +3092,7 @@ mod tests {
         commands: Arc<Mutex<crate::lease_commands::CommandReading>>,
         sink: Arc<Mutex<Option<crate::cognition::BetweenTurnSink>>>,
         prompts: Arc<Mutex<Vec<(String, String)>>>,
+        helpers: Arc<AtomicUsize>,
     }
     /// Stu started on Account 1 by a message in his inbox (the run loop opens his lease), then
     /// the switch from Account 1 (99% of its week) to Home is decided while a command of his runs.
@@ -3114,14 +3122,15 @@ mod tests {
         let (spawns,prompts)=(Arc::new(AtomicUsize::new(0)),Arc::new(Mutex::new(Vec::new())));
         let commands=Arc::new(Mutex::new(crate::lease_commands::CommandReading::Clear));
         let sink=Arc::new(Mutex::new(None));
+        let helpers=Arc::new(AtomicUsize::new(0));
         let host=WorkHost::new(&h.state,Box::new(OnAccountInUse {quota:quota.clone(),spawns:spawns.clone(),
-            commands:commands.clone(),sink:sink.clone(),prompts:prompts.clone(),team:h.team.clone()}),Arc::new(SilentNotifier));
+            commands:commands.clone(),sink:sink.clone(),prompts:prompts.clone(),team:h.team.clone(),helpers:helpers.clone()}),Arc::new(SilentNotifier));
         host.set_quota(quota.clone());
         crate::session_tools::observe_stall(&host.message_scope(&h.binding),"the website job").unwrap();
         host.wake_messages(&h.binding);
         until("Stu's first turn on Account 1",||prompts.lock().unwrap().len()==1);
         assert_eq!(prompts.lock().unwrap()[0].0,"1");
-        Moving {h,quota,home,host,spawns,commands,sink,prompts}
+        Moving {h,quota,home,host,spawns,commands,sink,prompts,helpers}
     }
     /// Claude Code starts an automatic turn of Stu's on its own (a task notification) and he
     /// takes his first step in it; the turn's result comes later ([`automatic_turn_ends`]).
@@ -3181,6 +3190,57 @@ mod tests {
         let working=|id:&str|view["accounts"].as_array().unwrap().iter().find(|a|a["id"]==id).map(|a|a["working"].clone());
         assert_eq!(working(&m.home.id),Some(serde_json::json!(["team"])));
         assert_eq!(working("1"),Some(serde_json::Value::Null),"nobody is left on Account 1");
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
+    /// **A weekly switch while a helper runs: the helper is told nothing and carries on, and Stu
+    /// moves once it has finished** (the CEO's §153, 2026-10-31: the weekly switch is handled
+    /// exactly as the five-hour one). Stu is on Account 1 with a helper of his running; automatic
+    /// pause is on; Account 1 reaches 99% of its week and the switch to Home is decided. On main
+    /// the helper's next tool call was refused with the order to commit, hand off and end
+    /// (`quota::gate` `HANDOFF_ORDER`). Now every call of the helper on Account 1 goes through
+    /// the gate with no order and no hold. While it runs Stu keeps his session (told once,
+    /// `account_switch`); when it has finished, the turn its end brings moves him to Home, where
+    /// he is told so (`account_moved`). Nothing the app sent him speaks of a handoff.
+    #[test]
+    fn a_weekly_switch_while_a_helper_runs_gives_it_no_stop_order_and_stu_moves_once_it_finishes() {
+        let m=stu_on_account_one();
+        m.helpers.store(1,Ordering::SeqCst);
+        m.quota.set_policy(crate::quota::Policy {enabled:true,pause_percent:93}).unwrap();
+        let now=crate::util::now_millis();
+        let windows=|weekly:f64|vec![
+            crate::quota::Window {id:"five_hour".into(),label:"Five-hour".into(),used_percent:10.,
+                resets_at:Some(now+3_600_000),duration_ms:18_000_000},
+            crate::quota::Window {id:"seven_day".into(),label:"Weekly".into(),used_percent:weekly,
+                resets_at:Some(now+48*3_600_000),duration_ms:604_800_000}];
+        m.quota.observe_for_test(&m.home.id,windows(3.),now);
+        m.quota.observe_for_test("1",windows(99.),now);
+        assert_eq!(m.quota.accounts.in_use().id,m.home.id,"the switch to Home is decided");
+        let state=m.h.root.join("quota").join("engine-state");
+        let published:serde_json::Value=serde_json::from_slice(&std::fs::read(state.join("claude-quota.json")).unwrap()).unwrap();
+        assert_eq!(published["leaving"],serde_json::json!(["1"]),"Account 1 is being left for its week: {published}");
+        let scope=m.h.root.join("helper-scope.json");
+        std::fs::write(&scope,r#"{"version":1,"actions_allowed":false,"background_work_allowed":true}"#).unwrap();
+        for step in 0..3 {
+            crate::quota::gate::helper_call(&state,&scope,"1","helper-1")
+                .unwrap_or_else(|said|panic!("step {step} of the helper on Account 1 was refused: {said}"));
+        }
+        assert!(!state.join("handoffs").exists(),"something was written for a handoff");
+
+        automatic_turn(&m);
+        until("Stu is told the switch is coming",||!told(&m,"account_switch").is_empty());
+        settled(&m);
+        assert_eq!(m.spawns.load(Ordering::SeqCst),1,"Stu's session was ended while his helper ran");
+        crate::quota::gate::helper_call(&state,&scope,"1","helper-1").expect("the helper still carries on after Stu was told");
+
+        m.helpers.store(0,Ordering::SeqCst);
+        automatic_turn(&m);
+        until("Stu is on Home",||m.spawns.load(Ordering::SeqCst)==2);
+        until("Stu is told he moved, on Home",||told(&m,"account_moved").iter().any(|(account,_)|account==&m.home.id));
+        assert_eq!(told(&m,"account_switch").len(),1,"told again: {:?}",told(&m,"account_switch"));
+        let prompts=m.prompts.lock().unwrap().clone();
+        assert!(prompts.iter().all(|(_,text)|!text.contains("RichOS handoff")&&!text.to_lowercase().contains("hand off")),
+            "a message to Stu speaks of a handoff: {prompts:?}");
         m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
     }
 
