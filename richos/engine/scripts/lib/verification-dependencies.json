@@ -16200,14 +16200,6 @@
           "path": "scripts/lib/testdevices.py",
           "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
-        },
-        {
-          "root": "environment",
-          "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
-          "default_engine": true,
-          "path": "mega-lander/workspaces.py",
-          "sha256": "13539e8a4d85ec6722c793a4cc2351d742d7a3105ac7c955e6c132ffc008713a",
-          "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         }
       ]
     },
