@@ -70,7 +70,10 @@ def registered(event):
     out = []
     for group in json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"].get(event, []):
         for entry in group["hooks"]:
-            argv = shlex.split(entry["command"].replace("${CLAUDE_PLUGIN_ROOT}", str(ENGINE)))
+            # Split first, then put the engine's path into each word: the app installs the engine
+            # under ~/Library/Application Support/, and a path with a space substituted before the
+            # split became two words (the second review of b9e7662d75af, P1).
+            argv = [word.replace("${CLAUDE_PLUGIN_ROOT}", str(ENGINE)) for word in shlex.split(entry["command"])]
             if argv and argv[0] == "bash":
                 argv[0] = "/bin/bash"
             out.append((audience.guard_file_name(entry["command"]), argv, entry.get("timeout", 60)))

@@ -399,6 +399,22 @@ class DesktopHooks(unittest.TestCase):
             self.assertIn(name, registered, "a terminal-only check that is no longer registered")
         self.assertEqual(sorted(ran), sorted(n for n in registered if n not in hook.TERMINAL_ONLY_TURN_END))
 
+    def test_a_registered_command_keeps_an_engine_path_with_a_space_in_one_word(self):
+        """The app installs its engine under ~/Library/Application Support/RichOS/engine. On
+        b9e7662d75af the path was substituted before the command was split, so every check ran as
+        bash .../Library/Application and failed (the second review of that commit, P1)."""
+        hook = self._hook_in_process("app_engine_hook_spaces")
+        installed = self.root / "Library/Application Support/RichOS"
+        installed.mkdir(parents=True)
+        (installed / "engine").symlink_to(ENGINE)
+        hook.ENGINE = installed / "engine"
+        checks = hook.registered("Stop")
+        self.assertTrue(checks)
+        for name, argv, _timeout in checks:
+            self.assertEqual(argv[1], str(hook.ENGINE / "scripts/hooks" / name), argv)
+        disk = [argv for name, argv, _timeout in checks if name == "notice-disk-alert.sh"]
+        self.assertEqual(disk[0][2:], ["--event", "Stop"])
+
     def test_a_turn_end_check_the_terminal_runs_refuses_stus_false_claim_in_the_app(self):
         """guard-unresolved-claims.sh refuses a reply that says a role is working when none was ever
         dispatched. It reads the session's team folder; the app's are under RICHOS_SA_TEAMS_DIR."""
