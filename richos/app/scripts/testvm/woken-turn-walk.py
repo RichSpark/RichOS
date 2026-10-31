@@ -25,8 +25,10 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
              Bash run that printed MARKER-carried-on. No tool call of the guest was refused with
              the turn gate's sentence. And his words are in the conversation: a completed turn of
              his in the ledger after the send says MARKER-carried-on (woken.json)
-  stop       the same, except the follow-up is a long foreground command (`sleep 600; echo
-             MARKER-stop-late`). Once his session has started it, the walk presses Stop on screen
+  stop       the same, except the follow-up is a long foreground command (`ping -c 600
+             127.0.0.1 > /dev/null; echo MARKER-stop-late`; not `sleep 600`, which Claude Code
+             itself refuses to run in the foreground, seen in the guest at 2b19585de). Once his
+             session has started it, the walk presses Stop on screen
              ("Stop Rich", shown because that turn is a live turn); within --within seconds the
              ledger records a turn of his stopped, and MARKER-stop-late is never printed
              (stop.json)
@@ -64,7 +66,7 @@ STOP_TASK = ('Please do this yourself with your own shell tool, in my Acme folde
              'command with run_in_background set to true, so you do not wait for it, and end your turn right '
              'away with one short sentence saying it has started: sleep {seconds}; echo {marker}-done '
              'When it has finished, run this yourself with your shell tool in the foreground, not in the '
-             'background, and wait for it: sleep 600; echo {marker}-late')
+             'background, and wait for it: ping -c 600 127.0.0.1 > /dev/null; echo {marker}-late')
 GATE = 'This app turn is stopped or is supplying context'
 
 
