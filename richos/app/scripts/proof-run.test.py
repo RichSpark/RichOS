@@ -845,6 +845,16 @@ try:
     # in that lane and one waits for all three. A second run started meanwhile starts at once.
     slots("set", "2")
     import threading
+    from unittest import mock as mock16
+
+    def background_run():
+        """The runs P16k and P16l start in this process are background runs too, like every fixture
+        run started through runner_boot above. In a main checkout (the land gate's) they were
+        otherwise a land holding integration priority, which never gives way to an older run, so
+        P16l's run did not give way there (2026-10-31, the land gate of cc/zach-opus-queue3, attempts
+        veyze98q and ygith22l) while it passed in every worktree."""
+        return mock16.patch.object(pr.engine_pass, "is_main_checkout", lambda *a: False)
+
     k_dir = os.path.join(tmp, "p16-k")
     os.makedirs(k_dir)
     k_app = os.path.join(pr.ROOT, "richos/app")
@@ -883,7 +893,7 @@ try:
     k_thread = threading.Thread(target=k_second_run, daemon=True)
     k_thread.start()
     try:
-        with contextlib.redirect_stdout(io.StringIO()):
+        with background_run(), contextlib.redirect_stdout(io.StringIO()):
             pr.run(k_items, Args(), k_dir, sampler=idle)
     finally:
         pr.SLOT.release()
@@ -938,7 +948,7 @@ try:
     l_thread.start()
     l_buf = io.StringIO()
     try:
-        with contextlib.redirect_stdout(l_buf):
+        with background_run(), contextlib.redirect_stdout(l_buf):
             pr.run([l_item], Args(admission_wait=1), l_dir, sampler=idle)
     finally:
         pr.SLOT.release()
