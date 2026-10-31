@@ -1267,7 +1267,6 @@ SHARED_DEVICE_SUITES = {
     "native-ios-app.test.sh": "the iPhone simulator",
     "native-ios-share.test.sh": "the iPhone simulator",
     "native-ios-ui.test.sh": "the iPhone simulator",
-    "mobile-ios.test.sh": "the iPhone simulator",
 }
 HOST_SCREEN = (re.compile(r"^[ \t]*(\.|source)[ \t]+\S*lib/gui-launch\.sh", re.M),
                re.compile(r"^# run-tests: host-screen", re.M))

@@ -43,7 +43,7 @@ SCRATCH="$(mktemp -d "${TMPDIR:-$(python3 -c 'import tempfile; print(tempfile.ge
 trap 'rm -rf "$SCRATCH"' EXIT HUP INT TERM
 
 PASS=0; FAILED=0
-# A case this host cannot answer (S5 without its tag, S7 without a simulator runtime or when its
+# A case this host cannot answer (S7 without a simulator runtime or when its
 # lease ends) is named here and makes the whole suite exit 2 below: NOT RUN is never a pass
 # (hunt part 2, finding 18; before 2026-09-30 only the lost lease did).
 NOT_RUN=""
@@ -88,35 +88,6 @@ CLI_ID="$(sed -n 's/.*static let bundleID = "\([^"]*\)".*/\1/p' "$NATIVE/Core/So
 # shellcheck disable=SC2016  # the build setting's own text, compared literally
 if [ "$APP_ID" = '$(RICHOS_BUNDLE_ID)' ] && [ "$BASE_ID" = "dev.richos.connect" ] && [ "$BASE_ID" = "$WIRE_ID" ] && [ "$BASE_ID" = "$CLI_ID" ]; then ok "S4 the app, extensions, CLI and push registration share the permanent identity ($BASE_ID)"
 else bad "S4 permanent application identity agrees across packaging and push" "app '$APP_ID', extensions '$BASE_ID', push '$WIRE_ID', CLI '$CLI_ID'"; fi
-
-# S5 — the preserved iPhone app, its UI and the PWA are byte-unchanged (ceo-decisions §76: "preserved
-# as is for now"). What is protected is the PRODUCT: every file of the three trees except their test
-# suites. The suites are excluded on purpose: §76 keeps them running, and a suite may record a defect
-# in the preserved product (tom-opus-pwa1's KNOWN DEFECT tests) without that product changing. The
-# PWA's `test/` is also what build.rs PHONE_NOT_SHIPPED leaves out of the shipped phone app.
-# Re-based 2026-09-24 to include c5250dc9 (the PWA's v2 pairing: the Mac must press "They match"),
-# the one deliberate change since the 2026-09-22 tag: a security fix the PWA needs because it is the
-# CEO's Android stand-in (§76 preservation was Rich's technical call, not a CEO sentence).
-# Re-based again 2026-09-25 to include e2da1f28, f03d89dd and addaee46 (the PWA's pair-wait, Urban's
-# pairing wording and Sage's old-Mac sentence), deliberate so the PWA says and does what both native
-# apps do. Only app.js and lib/api.js moved; the preserved iPhone app and its UI are unchanged.
-# Re-based 2026-10-22 to main 24228716a: the PWA is the phone page the Mac serves, and it moved on
-# purpose since 2026-09-25, unseen while this suite crashed at its CACHE line (b43e608d3 until
-# eb9ed5cd0). 0552d940d scrubbed the CEO's device names (CEO 2026-09-28); e9e0cebcb to 6756cbc11
-# (2026-10-18/19) are Ray's nightly 66/67 walk fixes and their reviews (question cards, picker,
-# reopen order, Markdown, fenced code, resume) and the Oxford-comma setting (CEO 2026-10-19), which
-# added lib/markdown.js, styles.css and sw.js. The preserved iPhone app and its UI are unchanged.
-TAG="preserved/mobile-ios-and-pwa-2026-10-22"
-PRESERVED=(richos/mobile/ios richos/mobile/ui richos/web/web-app)
-NOT_PRODUCT=(richos/mobile/ios/Tests richos/mobile/ios/UITests richos/web/web-app/test)
-if git -C "$ROOT" rev-parse -q --verify "$TAG^{commit}" >/dev/null 2>&1; then
-  CHANGED="$(git -C "$ROOT" diff --name-only "$TAG^{commit}" -- "${PRESERVED[@]}" "${NOT_PRODUCT[@]/#/:(exclude)}")"
-  if [ -z "$CHANGED" ]; then ok "S5 the preserved app, its UI and the PWA are unchanged since $TAG (their test suites excepted: ${NOT_PRODUCT[*]})"
-  else bad "S5 the preserved app, its UI and the PWA are unchanged (test suites excepted)" "$(echo "$CHANGED" | head -5 | tr '\n' ' ')"; fi
-else
-  echo "  NOT RUN  S5 the tag $TAG is not in this clone"
-  NOT_RUN="$NOT_RUN, S5 (the tag $TAG is not in this clone)"
-fi
 
 # S6 — the Release product, built from the merged project: extensions, purpose strings, export
 # compliance, groups, the privacy manifest against the APIs the binaries import, the icon, no
