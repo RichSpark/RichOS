@@ -217,7 +217,7 @@ class DesktopWork(unittest.TestCase):
         for repo in (self.coord,self.repo):
             repo.mkdir();subprocess.run(["git","init","--template=","-q","-b","main",str(repo)],check=True)
             subprocess.run(["git","-C",str(repo),"-c","core.hooksPath=/dev/null","-c","commit.gpgSign=false","-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","--allow-empty","-qm","Fixture"],check=True)
-        # Every land is a merge commit (land_merge), and its committer is the one the repository's
+        # Every land is a merge commit (the terminal's merge_and_land), and its committer is the one the repository's
         # own Git configuration names; nothing supplies one.
         for key,value in (("user.name","Fixture"),("user.email","fixture@example.invalid")):
             subprocess.run(["git","-C",str(self.repo),"config",key,value],check=True)
