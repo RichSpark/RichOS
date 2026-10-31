@@ -207,11 +207,13 @@ class ToolchainAskWalk(command_walk.CommandWalk):
         """Whether Apple's installer shows button NAME (pressing it when PRESS). Through System
         Events, by the process's full name: ax.py finds a named app with `pgrep -x`, which matches
         only the kernel's 16-character process name and so never this one."""
+        # Measured in the guest (2026-10-31): one AXWindow whose own UI elements are the two
+        # static texts, the icon and the buttons Install and Cancel.
         script = ('tell application "System Events"\n'
                   '  if not (exists process "%(app)s") then return "no"\n'
                   '  tell process "%(app)s"\n'
                   '    repeat with w in windows\n'
-                  '      repeat with e in (entire contents of w)\n'
+                  '      repeat with e in (UI elements of w)\n'
                   '        try\n'
                   '          if role of e is "AXButton" and name of e is "%(name)s" then\n'
                   '            %(act)s\n'
@@ -223,7 +225,9 @@ class ToolchainAskWalk(command_walk.CommandWalk):
                   '  end tell\n'
                   'end tell\n'
                   'return "no"' % {'app': INSTALLER, 'name': name, 'act': 'click e' if press else 'set x to 1'})
-        return command_walk.adopt_walk.command([HERE / 'ax.sh', self.vm, script], 90).strip().endswith('yes')
+        # ax.sh prints its own timing lines (JSON) around the script's answer.
+        out = command_walk.adopt_walk.command([HERE / 'ax.sh', self.vm, script], 90)
+        return 'yes' in [line.strip() for line in out.splitlines()]
 
     def wait_installer_button(self, name, seconds):
         end = time.monotonic() + seconds
