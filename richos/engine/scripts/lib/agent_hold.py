@@ -1654,7 +1654,9 @@ def wait_resume(max_seconds=None, poll=WAIT_RECHECK_SECONDS, out=sys.stdout):
     """Returns once this agent's hold is released, printing RESUMED and then the result of
     any foreground command the hold froze; at the bound it prints STILL WAITING (or STILL
     RUNNING) so the agent runs it again. Native task output and exit status are
-    delivered here even when no pause happened. Never ends anything.
+    delivered here even when no pause happened. A wait that sat out a hold returns at its
+    release and only names a native call still running, so the agent carries on at once.
+    Never ends anything.
 
     Every wait in it blocks on what it waits for (see WAIT_RECHECK_SECONDS): the hold
     directory, the call-record directory, the exit of each running shell, the host's
@@ -1669,10 +1671,12 @@ def wait_resume(max_seconds=None, poll=WAIT_RECHECK_SECONDS, out=sys.stdout):
     deadline = time.monotonic() + max_seconds
     path = _held_path(session, agent)
     held_dir, shells = os.path.dirname(path), _shell_dir(session, agent)
+    was_held = False
     while True:
         with _watch(paths=[held_dir]) as w:
             if not os.path.exists(path):
                 break
+            was_held = True
             if notice_hold(session, agent):
                 out.write("WAIT: running work is held. " + HOW_TO_WAIT + "\n")
                 return 0
@@ -1686,11 +1690,18 @@ def wait_resume(max_seconds=None, poll=WAIT_RECHECK_SECONDS, out=sys.stdout):
     if notice and not notice.get("resumed"):
         out.write("RESUMED at %s: carry on from where you were.\n" % _clock())
         _write_json(notice_path, dict(notice, resumed=True))
+    # RESUMED MEANS CARRY ON NOW (2026-10-31). A wait that sat out a hold returns at the
+    # release with what is ready and names each native call still running; it never keeps
+    # the agent waiting on one. Its command was refused or its wait was ended by the hold, so
+    # carrying on is retrying that command, not sitting here until an unrelated long call ends
+    # or the bound runs out (pause-acceptance A4: the resumed agent did nothing for 180 s while
+    # its 20-minute counter ran on). An agent that was collecting a call runs the wait again.
+    pending = native_pending_ids(session, agent) if was_held else set()
     # Native tasks keep their output/status in the harness. Keep this agent's
     # run active while it waits, but return as soon as a new hold appears so a
     # queued SendMessage can be delivered at this tool boundary, and as soon as
     # any finished call's result is ready, even while another call still runs.
-    while True:
+    while not was_held:
         with _watch(paths=[held_dir, shells]) as w:
             found = {}
             pending = native_pending_ids(session, agent, found)

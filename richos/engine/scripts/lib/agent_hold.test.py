@@ -658,6 +658,35 @@ class Wait(Base):
         self.assertEqual(call.returncode, 0)
         self.assertIn("RESUMED at", stdout)
 
+    def test_a_resumed_wait_returns_at_once_while_a_long_native_call_still_runs(self):
+        # 2026-10-31, pause-acceptance A4 (red about one run in four under load): an agent whose
+        # command was refused under the hold waits, is resumed, and must carry on at once. The
+        # wait kept it until its long native call (the counter, 20 minutes) ended or the bound ran
+        # out, so the agent did nothing for up to 270 s after RESUME.
+        long_call, _ = self.start_rewritten("sleep 60", tuid="toolu_long")
+        long_pid = Path(agent_hold._shell_dir(self.session, self.agent), "toolu_long.pid")
+        self.assertTrue(wait_for(long_pid.exists), "the long native call recorded its shell")
+        agent_hold.hold(self.session, self.agent, "fixture")
+        first, _ = self.start_rewritten(agent_hold.WAIT_COMMAND, tuid="toolu_notice")
+        notice, _ = first.communicate(timeout=60)
+        self.assertIn("WAIT:", notice)
+        os.environ["BASH_MAX_TIMEOUT_MS"] = "30000"  # a 15 s bound, so the old behavior fails fast
+        try:
+            waiter, _ = self.start_rewritten(agent_hold.WAIT_COMMAND, tuid="toolu_wait")
+            time.sleep(1.0)
+            self.assertIsNone(waiter.poll(), "the wait waits while held")
+            self.assertTrue(agent_hold.release(self.session, self.agent)["ok"])
+            output, _ = waiter.communicate(timeout=60)
+        finally:
+            os.environ.pop("BASH_MAX_TIMEOUT_MS", None)
+        self.assertIn("RESUMED at", output)
+        self.assertNotIn("STILL RUNNING", output)
+        # The old wait blocked on the running call until its bound and said STILL RUNNING; this one
+        # returns at the release and names the call, which is still running when it does.
+        self.assertIn("NOT FINISHED YET: tool toolu_long", output, "the running call is named for a later wait")
+        self.assertIsNone(long_call.poll(), "the long call continues; the wait never ends it")
+        self.assertFalse(state(long_call.pid).startswith("T"), "it was continued at the release")
+
     def test_the_wait_bound_follows_the_tool_ceiling(self):
         keep = {k: os.environ.get(k) for k in ("BASH_MAX_TIMEOUT_MS", "RICHOS_AGENT_HOLD_WAIT_SECONDS")}
         try:
