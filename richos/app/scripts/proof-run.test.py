@@ -796,6 +796,47 @@ try:
     check(waited, "P16i naming the holder's slot in the environment does not let an unrelated run skip the line",
           output("p16-fake")[-400:])
 
+    # P16j — a free slot is not a reason to start while a running run's checks still wait for the
+    # CPU (2026-10-29, work-6ec9b429: slots set to 6, six runs at once, one ran 46 min and 30 of its
+    # 37 checks were never admitted). Two runs started together under a limit of 2 on a host that
+    # refuses the first run's second check (its sampler reads busy while a flag file exists): the
+    # second run waits, names the run it waits behind, and starts only after that check was
+    # admitted; the first finishes with no check not admitted.
+    slots("set", "2")
+    flag = os.path.join(mark, "j.busy")
+    busy_boot = runner_boot.replace(
+        "reserve.host_sample=lambda: " + repr(idle()),
+        "import os; reserve.host_sample=lambda: " + repr(busy()) + " if os.path.exists(" + repr(flag) + ") else " + repr(idle()))
+    cmds = os.path.join(tmp, "p16-j-a.cmds")
+    with open(cmds, "w") as fh:
+        fh.write("cd richos/app && bash -c %s\n" % shlex_quote("touch %s; touch %s/j.a1; %s" % (flag, mark, held("j"))))
+        fh.write("cd richos/app && bash -c %s\n" % shlex_quote("touch %s/j.a2" % mark))
+    a_out = open(os.path.join(tmp, "p16-j-a.out"), "w")
+    a_env = {**os.environ, "RICHOS_PROOF_RUN_SLOTS_DIR": slots_dir, "RICHOS_WAITER": "p16-j-a",
+             "RICHOS_RUNTIME_DIR": os.path.join(tmp, "no-runtime")}
+    a_env.pop("RICHOS_PROOF_RUN_SLOT_HELD", None)
+    a = subprocess.Popen([sys.executable, "-c", busy_boot, "--commands", cmds, "--log-dir", os.path.join(tmp, "p16-j-a.log")],
+                         stdout=a_out, stderr=subprocess.STDOUT, env=a_env)
+    until(lambda: exists(os.path.join(mark, "j.a1")), a)
+    b = start_run("p16-j-b", "touch %s/j.b" % mark)
+    behind = until(lambda: "waiting behind p16-j-a" in output("p16-j-b"), b)
+    b_early = exists(os.path.join(mark, "j.b"))
+    os.unlink(flag)           # the Mac frees up: the first run's second check is admitted
+    until(lambda: exists(os.path.join(mark, "j.a2")), a)
+    until(lambda: exists(os.path.join(mark, "j.b")), b)
+    release("j")
+    a_rc, b_rc = a.wait(), b.wait()
+    a2 = os.path.getmtime(os.path.join(mark, "j.a2")) if exists(os.path.join(mark, "j.a2")) else None
+    jb = os.path.getmtime(os.path.join(mark, "j.b")) if exists(os.path.join(mark, "j.b")) else None
+    with open(os.path.join(tmp, "p16-j-a.log", "summary.json")) as fh:
+        a_states = [row.get("result") for row in json.load(fh).get("checks", [])]
+    check(behind and not b_early and a_rc == 0 and b_rc == 0 and a2 is not None and jb is not None and jb >= a2
+          and "not-admitted" not in a_states,
+          "P16j under a limit of 2, a second run waits behind a run whose checks still wait for the CPU, "
+          "and starts only once they were admitted; the first has no check not admitted",
+          (behind, b_early, a_rc, b_rc, a2, jb, a_states, output("p16-j-b")[-500:]))
+    slots("set", "1")
+
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine
     # units included, whatever a dated weight predicts (`workspace-spec-fourteen` was planned
     # at 2812 s and ran in 172-554 s); --run-cap ends the run on its own clock and ends, never
