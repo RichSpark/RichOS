@@ -308,6 +308,70 @@ class DesktopHooks(unittest.TestCase):
             if guard in registered and guard != "guard-pierce.sh":
                 self.assertGreaterEqual(timeout, registered[guard], guard)
 
+    # --- §154: the app runs the terminal's own dispatch guards and turn-end checks ----------------
+    # (Hank's audit, richos-hq docs/research/2026-10-31-app-terminal-differences.md, findings 7, 8)
+
+    def _hook_in_process(self, name):
+        """The production hook, loaded here, with the app's evidence capture and dispatch adapter
+        stubbed so only the engine guards and checks it starts are real."""
+        import importlib.util, types
+        spec = importlib.util.spec_from_file_location(name, ENGINE / "scripts/app-engine-hook.py")
+        hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
+        work = types.SimpleNamespace(
+            validate_shell_target=lambda payload: None, worker_context=lambda active, payload: None,
+            dispatch_intent=lambda *args, **kwargs: None,
+            W=types.SimpleNamespace(fallback_notice=lambda *args: "", _recovery_adapter=lambda: (
+                types.SimpleNamespace(cancellation_notice=lambda host, session: None), None)))
+        real_load = hook.load
+        def load(module, path):
+            if path.name == "app-evidence.py":
+                return types.SimpleNamespace(capture=lambda payload, *args, **kwargs: payload)
+            if path.name == "app.py":
+                return work
+            return real_load(module, path)
+        hook.load, hook.mid_job_notice = load, lambda *args: False
+        saved = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
+        os.environ.update(self.env)
+        return hook
+
+    def test_a_dispatch_the_terminal_refuses_is_refused_in_the_app_with_the_same_message(self):
+        """A brief that rebuilds a surface the adoption ledger answered, with no `reference:` line, is
+        refused by guard-reference-ledger.sh in the terminal (§66). On 47e314bb6 the app never ran
+        that guard (spawn-guard-audience.declaration had it operator-session), so the same dispatch
+        went through. Every other guard is passed through here so the one under test is reached."""
+        tool_input = {"subagent_type": "worker", "name": "worker-sonnet-1", "description": "Fix the link",
+                      "prompt": "## Scope\nFix `richos/web/web-app/lib/link.js` outbox reconnect.\n"}
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "session_id": "fictional-session",
+                   "tool_use_id": "fictional-call", "cwd": str(self.coordination), "tool_input": tool_input}
+        terminal = subprocess.run(["/bin/bash", str(ENGINE / "scripts/hooks/guard-reference-ledger.sh")],
+                                  input=json.dumps(payload), text=True, capture_output=True, env=self.env, timeout=30)
+        self.assertEqual(terminal.returncode, 2, terminal.stderr + terminal.stdout)
+        self.assertIn("ALREADY ANSWERED", terminal.stderr)
+
+        hook = self._hook_in_process("app_engine_hook_reference")
+        ran, real_run = [], hook.run
+        def run(command, payload, timeout=20):
+            ran.append(Path(command[-1]).name)
+            if Path(command[-1]).name == "guard-reference-ledger.sh":
+                return real_run(command, payload, timeout)
+        hook.run = run
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            with self.assertRaises(RuntimeError):
+                hook.handle(dict(payload))
+        self.assertIn(terminal.stderr.strip(), err.getvalue(), "the app's refusal is not the terminal's message")
+        # With every guard passing, the terminal's other dispatch guards are run too, and femcboost's
+        # own proof-scope guard, which the CEO ruled off in the app (§146 #3), is not.
+        ran.clear()
+        hook.run = lambda command, payload, timeout=20: ran.append(Path(command[-1]).name)
+        with contextlib.redirect_stdout(io.StringIO()):
+            hook.handle(dict(payload))
+        for guard in ("guard-stale-staging.sh", "guard-owned-state.sh", "guard-brief-scope.sh",
+                      "guard-no-home-network-phone.sh", "guard-reference-ledger.sh", "guard-public-record-repo.sh"):
+            self.assertIn(guard, ran)
+        self.assertNotIn("guard-brief-verification-scope.sh", ran)
+
 
 if __name__ == "__main__":
     unittest.main()

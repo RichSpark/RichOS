@@ -384,16 +384,16 @@ fn bypass_permissions_match_the_terminal_and_keep_company_and_thread_read_roots(
 }
 
 // =======================================================================================
-// WHOSE GUARDS JUDGE A DISPATCH THE APP MAKES — Rich's ruling, 2026-09-18, on CEO §57
+// WHOSE GUARDS JUDGE A DISPATCH THE APP MAKES — the CEO's §154 (2026-10-31)
 // =======================================================================================
 //
-// *"The app's prepare/spawn path is judged only by guards whose reason protects the app
-// user's own work on the app user's own machine."* Three facts have to hold together for
-// that to be true of the shipped app, and each of them was wrong in a different way before
-// this slice:
+// The app's prepare/spawn path is judged by the dispatch guards the terminal runs, except the
+// few that need a terminal-only thing (spawn-guard-audience.declaration's operator-session
+// side). Three facts have to hold together for that to be true of the shipped app:
 //
 //   1. the preflight the app writes is DERIVED from the declaration, not typed;
-//   2. no operator-session guard is on it (`guard-brief-scope.sh` was);
+//   2. no operator-session guard is on it, and the terminal's own design-spec, ledger,
+//      phone-path and staging guards are (Hank's audit finding 7: they were left out);
 //   3. `RICHOS_SPAWN_HOOK_SOURCES` points `spawn.py` at that preflight — the lease always
 //      set it and the probe never did, which is the whole of the "refused by 1 of 9
 //      guard(s)" finding of 2026-09-18.
@@ -416,8 +416,12 @@ fn the_app_preflight_is_the_declared_user_work_list_and_nothing_else() {
         "the preflight must BE the declared user-work list, in order, with nothing added");
     assert!(!written.is_empty(), "an empty preflight is an unguarded dispatch");
 
+    // The terminal's guards that were left out of the app until 2026-10-31 are on it now.
+    for guard in ["guard-brief-scope.sh", "guard-reference-ledger.sh", "guard-no-home-network-phone.sh",
+                  "guard-stale-staging.sh", "guard-owned-state.sh", "guard-public-record-repo.sh"] {
+        assert!(written.contains(&guard.to_string()), "{guard} is a terminal dispatch guard missing from the app");
+    }
     // The operator-session side, named rather than inferred from the absence of a name.
-    // `guard-brief-scope.sh` is the one that was on this list until 2026-09-18.
     let text = std::fs::read_to_string(engine().join(
         richos_core::engine_profile::GUARD_AUDIENCE_DECLARATION)).unwrap();
     let mut operator = Vec::new();
@@ -426,8 +430,8 @@ fn the_app_preflight_is_the_declared_user_work_list_and_nothing_else() {
         let audience = record.lines().find_map(|l| l.strip_prefix("audience: ")).map(str::trim);
         if let (Some(id), Some("operator-session")) = (id, audience) { operator.push(id.to_string()); }
     }
-    assert!(operator.contains(&"guard-brief-scope.sh".to_string()),
-        "the guard this slice removed from the app must still be CLASSIFIED, not deleted");
+    assert!(operator.contains(&"guard-operator-claim.sh".to_string()),
+        "a guard that needs a terminal-only thing must still be CLASSIFIED, not deleted");
     for guard in &operator {
         assert!(!written.contains(guard), "{guard} is operator-session and is on the app's preflight");
     }

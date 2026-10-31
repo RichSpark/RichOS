@@ -59,17 +59,12 @@ fn app_rules(engine: &Path, chain: &str, rules: &[&str]) -> String {
 /// **The guards that judge a dispatch the APP makes, read from the engine's own
 /// declaration rather than typed here.**
 ///
-/// The CEO's §57 is that RichOS is a free app for non-technical people and that nothing the
-/// user runs depends on our operator setup; §55 is that the work happens after "On it!", and
-/// that work is a background dispatch. Rich ruled on 2026-09-18 that such a dispatch is
-/// judged only by guards whose reason protects the user's own work on the user's own Mac.
-///
-/// **This used to be two script paths typed into [`EngineProfile::prepare`] below**, with an
-/// identical pair typed into `scripts/app-engine-hook.py`, and one of the two —
-/// `guard-brief-scope.sh` — is an operator-session guard: it judges a dispatch against a
-/// design-round specification recorded in the DEVELOPMENT project, and its way out is a line
-/// only an operator can write. Nothing said why those two, and nothing tied the two copies
-/// together. So the classification is data now, and this reads it.
+/// The CEO's §154 (2026-10-31) is that the app does the terminal's jobs with the terminal's own
+/// code: the declaration's `user-work` side is every dispatch guard the terminal's registration
+/// (`hooks/hooks.json`) runs, except the few that need a terminal-only thing. Each reads the
+/// user's own configuration through the coordination folder and stands down where its rule is
+/// not declared. This used to be two script paths typed here, with an identical pair typed into
+/// `scripts/app-engine-hook.py`; the classification is data now, and this reads it.
 ///
 /// Returns the `user-work` rows in declaration order. A declaration that is missing,
 /// unreadable or self-contradictory is an ERROR and never an empty list: the app's guard
@@ -662,8 +657,7 @@ impl EngineProfile {
         // additionally enters the desktop scope/evidence gate at dispatch time.
         // WHICH guards is [`user_work_guards`]'s answer, read from the engine's
         // declaration — never a list typed here, which is what it was until
-        // 2026-09-18 and how an operator-session guard came to be judging a
-        // user's assignment.
+        // 2026-09-18.
         let preflight: Vec<_> = user_work_guards(&engine)?.into_iter()
             .map(|guard| json!({"type":"command",
                 "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks").join(guard)))}))
