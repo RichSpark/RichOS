@@ -4236,6 +4236,39 @@ class Reaper(object):
                     shutil.rmtree(e.path)
                 else:
                     os.unlink(e.path)
+            except FileNotFoundError as exc:
+                # ALREADY GONE IS NOT A FAILED DELETION. A short-lived probe its owner
+                # removed itself between the plan and this loop raised ENOENT here and
+                # the run alarmed the lead (esc-20261031T105739Z-738019a9). The wanted
+                # end state, the path absent, is what is on disk.
+                if not os.path.lexists(e.path):
+                    lines.append("%s GONE %s class=%s why=already removed since the plan"
+                                 % (stamp, e.path, e.klass))
+                    continue
+                # Something UNDER it vanished mid-walk: finish the removal, treating a
+                # vanished child as removed. Any other error is a real failure.
+                try:
+                    def _ignore_enoent(func, path, exc_info):
+                        if not isinstance(exc_info[1], FileNotFoundError):
+                            raise exc_info[1]
+                    shutil.rmtree(e.path, onerror=_ignore_enoent)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc2:
+                    failures.append("%s: %s" % (e.path, exc2))
+                    lines.append("%s FAILED %s bytes=%d class=%s why=%s error=%s"
+                                 % (stamp, e.path, e.size, e.klass, e.why, exc2))
+                    continue
+                if os.path.lexists(e.path):
+                    failures.append("%s: %s" % (e.path, exc))
+                    lines.append("%s FAILED %s bytes=%d class=%s why=%s error=%s"
+                                 % (stamp, e.path, e.size, e.klass, e.why, exc))
+                    continue
+                deleted += 1
+                freed += e.size
+                lines.append("%s DELETED %s bytes=%d class=%s why=%s"
+                             % (stamp, e.path, e.size, e.klass, e.why))
+                continue
             except OSError as exc:
                 # ONE RETRY, AFTER MAKING THE TREE WRITABLE. Measured on the
                 # first real run of the widened sweep: 5 of 37,146 deletions
