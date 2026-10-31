@@ -23,7 +23,13 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   woken      within --within + N seconds, in Rich's own session (no agent_id), in this order: the
              background launch (run_in_background), the end of his turn (a Stop callback), then a
              Bash run that printed MARKER-carried-on. No tool call of the guest was refused with
-             the turn gate's sentence. Rich's words since the send are kept (woken.json).
+             the turn gate's sentence. And his words are in the conversation: a completed turn of
+             his in the ledger after the send says MARKER-carried-on (woken.json)
+  stop       the same, except the follow-up is a long foreground command (`sleep 600; echo
+             MARKER-stop-late`). Once his session has started it, the walk presses Stop on screen
+             ("Stop Rich", shown because that turn is a live turn); within --within seconds the
+             ledger records a turn of his stopped, and MARKER-stop-late is never printed
+             (stop.json)
 
 Evidence in --out: report.json, woken.json, screenshots, the app log, the hook callbacks and every
 refused tool call word for word (refusals.txt). Exit 0 when every step passes. Every app instance
@@ -48,13 +54,30 @@ toolchain_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(toolchain_walk)
 StepFailed = toolchain_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'connect', 'task', 'woken']
+STEPS = ['identity', 'first-run', 'connect', 'task', 'woken', 'stop']
 TASK = ('Please do this yourself with your own shell tool, in my Acme folder: start this harmless test '
         'command with run_in_background set to true, so you do not wait for it, and end your turn right '
         'away with one short sentence saying it has started: sleep {seconds}; echo {marker}-done '
         'When it has finished, run this yourself with your shell tool and tell me the line it printed: '
         'echo {marker}-carried-on')
+STOP_TASK = ('Please do this yourself with your own shell tool, in my Acme folder: start this harmless test '
+             'command with run_in_background set to true, so you do not wait for it, and end your turn right '
+             'away with one short sentence saying it has started: sleep {seconds}; echo {marker}-done '
+             'When it has finished, run this yourself with your shell tool in the foreground, not in the '
+             'background, and wait for it: sleep 600; echo {marker}-late')
 GATE = 'This app turn is stopped or is supplying context'
+
+
+def stop_verdict(runs, ledger, marker, pressed_ms):
+    """runs: Rich's Bash calls [{'event', 'command', 'stdout'}]; ledger: the conversation ledger's
+    rows. -> failures. Passes when a turn was recorded stopped at or after the press and the long
+    command never printed its line."""
+    failures = []
+    if not any(r.get('event') == 'TurnStopped' and (r.get('at') or 0) >= pressed_ms - 1000 for r in ledger):
+        failures.append('no turn of his was recorded stopped after Stop was pressed')
+    if any(marker + '-late' in (r.get('stdout') or '') for r in runs):
+        failures.append('the long command ran on past Stop and printed %s-late' % marker)
+    return failures
 
 
 def verdict(rows, marker):
@@ -142,7 +165,15 @@ class WokenTurnWalk(toolchain_walk.ToolchainAskWalk):
             if not failures:
                 break
             time.sleep(5)
-        turns = toolchain_walk.turns_after(self.ledger_rows(), sent[0])
+        turns, said = [], False
+        while time.monotonic() < end + self.a.within and not failures:
+            turns = toolchain_walk.turns_after(self.ledger_rows(), sent[0])
+            said = any(marker + '-carried-on' in t['text'] for t in turns)
+            if said:
+                break
+            time.sleep(5)
+        if not failures and not said:
+            failures = ['his words from the turn after his background command are not in the conversation']
         refused = self.gate_refusals()
         evidence = {'marker': marker, 'order': facts, 'gate_refusals': refused,
                     'rich_turns_since_send': [t['text'][:600] for t in turns]}
@@ -150,6 +181,52 @@ class WokenTurnWalk(toolchain_walk.ToolchainAskWalk):
         self.shot('woken.png')
         if refused:
             failures = [f for f in failures if f != 'not read yet'] + ['%d tool call(s) refused with "%s"' % (refused, GATE)]
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return evidence
+
+    def bash_calls(self):
+        """Rich's own Bash calls (no agent_id), started and finished, in file order."""
+        script = ('import json,glob,sys\n'
+                  'out=[]\n'
+                  'for p in sorted(glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl")):\n'
+                  '    for l in open(p, errors="replace"):\n'
+                  '        try: c=json.loads(l).get("callback",{})\n'
+                  '        except ValueError: continue\n'
+                  '        if c.get("tool_name")!="Bash" or c.get("agent_id"): continue\n'
+                  '        r=c.get("tool_response")\n'
+                  '        out.append({"event":c.get("hook_event_name"),"command":(c.get("tool_input") or {}).get("command",""),\n'
+                  '                    "stdout":str(r.get("stdout","")) if isinstance(r,dict) else ""})\n'
+                  'print(json.dumps(out))\n')
+        return json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
+
+    def stop(self):
+        marker = self.facts['marker'] + '-stop'
+        sent = self.send(STOP_TASK.format(seconds=self.a.command_seconds, marker=marker))
+        end = time.monotonic() + self.a.within + self.a.command_seconds
+        started = False
+        while time.monotonic() < end and not started:
+            started = any(r['event'] == 'PreToolUse' and marker + '-late' in r['command'] for r in self.bash_calls())
+            if not started:
+                time.sleep(3)
+        if not started:
+            raise StepFailed('his session never started the follow-up %s-late after the background command' % marker)
+        self.wait_for('Stop Rich', seconds=30)
+        self.shot('stop-shown.png')
+        pressed = self.clock()
+        self.press('Stop Rich')
+        failures = ['not read yet']
+        end = time.monotonic() + self.a.within
+        while time.monotonic() < end:
+            failures = stop_verdict(self.bash_calls(), self.ledger_rows(), marker, pressed)
+            if not failures:
+                break
+            time.sleep(5)
+        self.shot('stopped.png')
+        turns = toolchain_walk.turns_after(self.ledger_rows(), sent[0])
+        evidence = {'marker': marker, 'pressed_guest_ms': round(pressed), 'failures': failures,
+                    'rich_turns_since_send': [t['text'][:600] for t in turns]}
+        (self.out / 'stop.json').write_text(json.dumps(evidence, indent=2) + '\n')
         if failures:
             raise StepFailed('; '.join(failures))
         return evidence

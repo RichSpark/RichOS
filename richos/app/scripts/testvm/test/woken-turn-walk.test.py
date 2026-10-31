@@ -48,5 +48,23 @@ class Verdict(unittest.TestCase):
         self.assertEqual(len(failures), 1)
 
 
+class StopVerdict(unittest.TestCase):
+    RUN = {'event': 'PreToolUse', 'command': 'sleep 600; echo %s-late' % M, 'stdout': ''}
+
+    def test_a_turn_stopped_after_the_press_and_no_late_line_passes(self):
+        ledger = [{'event': 'TurnStopped', 'turn_id': 't2', 'at': 5000}]
+        self.assertEqual(walk.stop_verdict([self.RUN], ledger, M, 4800), [])
+
+    def test_a_stop_recorded_long_before_the_press_does_not_count(self):
+        ledger = [{'event': 'TurnStopped', 'turn_id': 't1', 'at': 1000}]
+        self.assertEqual(walk.stop_verdict([self.RUN], ledger, M, 9000),
+                         ['no turn of his was recorded stopped after Stop was pressed'])
+
+    def test_the_late_line_printed_fails_even_with_a_stop_recorded(self):
+        ran = {'event': 'PostToolUse', 'command': 'sleep 600; echo %s-late' % M, 'stdout': '%s-late\n' % M}
+        failures = walk.stop_verdict([self.RUN, ran], [{'event': 'TurnStopped', 'at': 5000}], M, 4800)
+        self.assertEqual(failures, ['the long command ran on past Stop and printed %s-late' % M])
+
+
 if __name__ == '__main__':
     unittest.main()
