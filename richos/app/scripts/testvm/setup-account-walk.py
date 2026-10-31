@@ -11,8 +11,8 @@ removes the clone:
 
 STEPS, in the guest, never on the host's screen (CEO ruling 65):
   identity   the running app says it was built from --expect-sha (skipped without one)
-  sentence   the setup sheet is up; its text says "an Ultra subscription" and "pick the Ultra tier"
-             and never "Max"; one frame in the guest's light appearance, one in its dark one
+  sentence   the setup sheet is up; its accessibility text says "an Ultra subscription there",
+             carries the link "pick the Ultra tier" and never names "Max"; one frame in the guest's light appearance, one in its dark one
   link       the link "sign up there first and pick the Ultra tier" pressed once; Safari's current
              page is claude.com/pricing
 
@@ -43,15 +43,15 @@ LINK_TEXT = 'sign up there first and pick the Ultra tier'
 PRICING_HOST, PRICING_PATH = 'claude.com', '/pricing'
 
 
-def sentence_verdict(text):
-    """None when the sheet's OCR TEXT carries the new plan wording and no old one, else why not.
-    Whitespace is folded: OCR keeps the sheet's line breaks."""
-    flat = re.sub(r'\s+', ' ', text or '')
-    if not re.search(r'Anthropic account and an Ultra subscription there', flat):
+def sentence_verdict(ultra, link, max_named):
+    """None when the sheet's accessibility text carries the new plan wording and no old one, else
+    why not. The frame's OCR is not judged: it garbles the sheet's grey sentence (guest walk,
+    2026-10-31), while the accessibility text is the app's own words."""
+    if not ultra:
         return 'the sheet does not say "an Ultra subscription there"'
-    if not re.search(r'pick the Ultra tier', flat):
-        return 'the sheet does not say "pick the Ultra tier"'
-    if re.search(r'\bMax\b', flat):
+    if not link:
+        return 'the sheet has no link "%s"' % LINK_TEXT
+    if max_named:
         return 'the sheet still names Max'
     return None
 
@@ -68,26 +68,27 @@ class AccountWalk(new_user_walk.NewUserWalk):
                        "to set dark mode to %s'" % ('true' if dark else 'false'))
         time.sleep(2)
 
-    def sheet_text(self, name):
+    def judge(self, name):
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
-            text = self.frame(name)
-            if 'Anthropic account' in re.sub(r'\s+', ' ', text):
-                return text
+            if re.search(r'setting up to do\s+first', self.frame(name)):
+                break
             time.sleep(3)
-        raise StepFailed('the setup sheet never showed its account sentence within %g s' % self.a.within)
+        else:
+            raise StepFailed('the setup sheet never came up within %g s' % self.a.within)
+        return sentence_verdict(self.shows_text('an Ultra subscription there'),
+                                self.present(LINK_TEXT, 'AXLink'), self.shows_text('Max'))
 
     def sentence(self):
         self.appearance(False)
-        light = self.sheet_text('setup-sheet-light')
-        why = sentence_verdict(light)
+        why = self.judge('setup-sheet-light')
         if why:
             raise StepFailed('light: ' + why)
         self.appearance(True)
-        dark = sentence_verdict(self.frame('setup-sheet-dark'))
+        why = self.judge('setup-sheet-dark')
         self.appearance(False)
-        if dark:
-            raise StepFailed('dark: ' + dark)
+        if why:
+            raise StepFailed('dark: ' + why)
         return {'light': 'setup-sheet-light.png', 'dark': 'setup-sheet-dark.png'}
 
     def link(self):

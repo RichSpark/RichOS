@@ -10,21 +10,18 @@ spec = importlib.util.spec_from_file_location('setup_account_walk', HERE / 'setu
 walk = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(walk)
 
-NEW = ("You need your own Anthropic account and an Ultra subscription there. You can sign in through\n"
-       "your browser after setup; I never see your password. If you don't already have that subscription,\n"
-       "sign up there first and pick the Ultra tier.")
-
-
 class SentenceVerdict(unittest.TestCase):
     def test_new_wording_passes(self):
-        self.assertIsNone(walk.sentence_verdict(NEW))
+        self.assertIsNone(walk.sentence_verdict(True, True, False))
 
     def test_old_wording_fails(self):
-        old = NEW.replace('an Ultra subscription', 'a Max subscription').replace('the Ultra tier', 'the Max/Max 20x tier')
-        self.assertIn('Ultra', walk.sentence_verdict(old))
+        self.assertIn('Ultra', walk.sentence_verdict(False, True, False))
+
+    def test_missing_link_fails(self):
+        self.assertIn('link', walk.sentence_verdict(True, False, False))
 
     def test_stray_max_fails(self):
-        self.assertIn('Max', walk.sentence_verdict(NEW + ' Max 20x.'))
+        self.assertIn('Max', walk.sentence_verdict(True, True, True))
 
 
 class PricingPage(unittest.TestCase):
