@@ -43,8 +43,7 @@ node richos/mobile/cli/mobile.mjs client scenario voice-gestures
 The client scenarios use replaceable transport/recording ports and execute the actual
 client actions. They cannot prove microphone permission or hardware behavior.
 
-The external JSON has `pairLink` and `words` for an isolated test server. It is copied only
-into the test bundle. `lab serve` starts an expiring loopback protocol server with its own
+`lab serve` starts an expiring loopback protocol server with its own
 identity, pairing and synthetic replies; it never opens the user's real Mac identity or
 conversation store. `RICHOS_LAB_PORT` optionally fixes its loopback port. For a phone,
 expose that loopback port through a private HTTPS test route such as Tailscale Serve.
@@ -56,15 +55,13 @@ process with SIGTERM and stop its separately started Serve process after testing
 
 The repository runner discovers these suites under `richos/app/scripts`:
 
-- `mobile-headless.test.sh`: `npm test` runs the core and CLI tests in disposable external sessions. It verifies persistence across real CLI processes, structured errors, locking, resource selection and the unpaired Release bootstrap. It needs Node and npm, with no simulator or browser.
+- `mobile-headless.test.sh`: `npm test` runs the core and CLI tests in disposable external sessions. It verifies persistence across real CLI processes, structured errors, locking, resource selection and the unpaired Release bootstrap. It needs Node and npm, with no browser.
 
 ```sh
 bash richos/app/scripts/run-tests.sh --no-host-screen --only mobile-headless.test.sh
 ```
 
 The suite chooses unique scratch on the mounted external SSD and passes a scoped `TMPDIR` to its descendants. An existing external `TMPDIR` is respected; an unset or non-external value uses `/Volumes/E1TB/tmp/codex/`. The caller's environment and nightly configuration are unchanged. Scratch is removed after child processes finish. An absent SSD reports `NOT RUN`, exit 2, consistently.
-
-An unavailable host never earns a passing proof. `run-tests.sh` refuses undeclared exit-2 gaps. To record a known missing runtime without treating it as a product failure, set `RUN_TESTS_DECLARED_GAPS='mobile-ios.test.sh: <actual host reason>'`. A stale declaration on a capable host is rejected too. Both missing-runtime and missing-browser paths have regression tests.
 
 Each suite has dependency `inputs` and exact-file `covers` rows. Coverage describes the assertions above, not all behavior in a directory. A new unproved module remains `UNCOVERED` even if an input directory selects a suite. On an integration merge, `bash richos/app/scripts/proof-for.sh HEAD^1..HEAD` must exit 0; that command selects proofs but does not execute them.
 
@@ -78,9 +75,9 @@ Each CLI invocation locks its checkout's target session to prevent overlapping r
 
 ## Storage and measurements
 
-Projects, DerivedData, generated resources, command results and screenshots are kept under `/Volumes/E1TB/caches/richos-mobile/<checkout-hash>/`. `RICHOS_MOBILE_CACHE` can select another directory on that volume. The CLI refuses an absent volume and never redirects build output into the repository. By default the CLI uses a separate simulator device set on the external SSD. Some macOS installations deny CoreSimulator access to external volumes. It never silently falls back: where the workspace owner permits Apple's default system-managed device storage, choose a fresh cache and set `RICHOS_MOBILE_SIMULATOR_STORAGE=system` for the first simulator command. The choice is then saved in that cache. Existing devices and global Simulator preferences are untouched. Build output remains external under either policy. Xcode UI-test destination discovery for an external device set is not assumed; verify it on the development machine.
+Generated resources, command results and screenshots are kept under `/Volumes/E1TB/caches/richos-mobile/<checkout-hash>/`. `RICHOS_MOBILE_CACHE` can select another directory on that volume. The CLI refuses an absent volume and never redirects build output into the repository.
 
-Keep measured timings and private verification reports in `richos-hq`. Measure these separately: a fresh Node process running a focused scenario, direct core execution, JavaScript screen refresh, Swift incremental build, cold build/install/boot and native UI automation. Cold simulator boot and UI automation are not part of a routine application-logic edit. Establish budgets from measured results; a green fixture is not evidence about real microphone permissions, radio transitions, APNs or App Store installation.
+Keep measured timings and private verification reports in `richos-hq`. Measure these separately: a fresh Node process running a focused scenario and direct core execution. Establish budgets from measured results; a green fixture is not evidence about real microphone permissions, radio transitions, APNs or App Store installation.
 
 For new platform behavior, add a narrow adapter and controllable outcomes without importing platform APIs into the core. Update-policy evaluation runs in `core/updates.js` and is exercised through the same client actions in Node. Validate actual store availability and installation separately on real devices.
 

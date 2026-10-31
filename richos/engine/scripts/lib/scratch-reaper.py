@@ -4319,6 +4319,13 @@ class Reaper(object):
                                         "%d uchg flag(s); first attempt: %s"
                                         % (cleared, exc)))
                         continue
+                    except FileNotFoundError as exc2:
+                        # Gone during the retry is gone, as on the first attempt.
+                        if not os.path.lexists(e.path):
+                            lines.append("%s GONE %s class=%s why=already removed "
+                                         "since the plan" % (stamp, e.path, e.klass))
+                            continue
+                        retry_exc = exc2
                     except OSError as exc2:
                         retry_exc = exc2
                 failures.append("%s: %s" % (e.path, retry_exc or exc))
