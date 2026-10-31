@@ -6,8 +6,8 @@
 The same control-only child the app's quota reader starts (no prompt, no tools, no settings, no
 MCP, no session): `initialize`, then `get_usage`. Prints one JSON line: whether it answered, the
 answer row (usage figures only), and the end of stderr. It reads and prints no credential.
-Used by handoff-real-walk.py when an account shows no reading, to tell a sign-in that does not
-work from an app that never asked.
+For a walk where an account shows no reading, to tell a sign-in that does not work from an app
+that never asked.
 """
 import json
 import os

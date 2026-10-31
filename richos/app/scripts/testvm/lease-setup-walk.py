@@ -260,7 +260,7 @@ class LeaseSetupWalk(command_walk.CommandWalk):
 
     def started_model(self, agent_id):
         """The model the worker's own start record names: Claude Code's subagents/agent-<id>.meta.json
-        under the account folder it ran on (handoff-real-walk.py's agent_transcript)."""
+        under the account folder it ran on."""
         found = guest(self.vm, 'find ' + shlex.quote(self.home) + ' -name ' + shlex.quote('agent-' + agent_id + '.meta.json')
                       + ' -not -path "*/Library/Caches/*" 2>/dev/null | head -1', 120).strip()
         if not found:

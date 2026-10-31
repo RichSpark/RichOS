@@ -24,19 +24,17 @@
 # of that file on the first user turn (SubagentStart and PostToolUse[Agent] "async_launched",
 # the rows app_workers.rs reads). /Users/admin/fill-first/reply.txt, when present, is the answer. # machine-path-exempt: isolated guest fixture documentation; no customer default
 #
-# HELPER STEPS (weekly-switch handoff plan 2026-10-07, slice 6). While the agents file lists
-# helpers, each user turn (and each second of a held turn) is one step of every helper that has
-# not ended: the fake runs the gate command from the lease's <plugin-dir>/hooks/hooks.json
-# (PreToolUse), with a helper payload (agent_id walk-agent-N) on stdin and the lease's own
-# environment, as Claude Code would. When the gate refuses with the order (exit 2, "Stop the task
-# now" on stderr), the fake writes that helper's SubagentStop row; an admitted step writes
-# nothing. Every step is a line in calls.log ("gate <agent> exit <n>"). Without helpers, or
+# HELPER STEPS. While the agents file lists helpers, each user turn (and each second of a held
+# turn) is one step of every helper that has not ended: the fake runs the gate command from the
+# lease's <plugin-dir>/hooks/hooks.json (PreToolUse), with a helper payload (agent_id
+# walk-agent-N) on stdin and the lease's own environment, as Claude Code would. A held step waits
+# as long as the gate holds it; a refused step ends nothing. Every step is a line in calls.log
+# ("gate <agent> exit <n>", with the gate's first words when it said any). Without helpers, or
 # without a hooks.json, no step runs and nothing here changes.
 #
-# THE BACK END'S JOB (round 1 of the weekly-switch handoff test, 2026-10-07). The handoff
-# continuation lives in the work host (work_host.rs continuation_after_a_helper_ended), which
-# runs only for a job the front desk wrote down; helpers on the front desk's own lease never
-# reach it. Two files make a job with a helper on the back end, with no model:
+# THE BACK END'S JOB. A helper of Stu's runs only for a job the front desk wrote down; helpers
+# on the front desk's own lease are not his. Two files make a job with a helper on the back end,
+# with no model:
 #   register      while it exists, the front desk's user turn whose text carries the file's
 #                 text (a lease whose --mcp-config has richos_assignments; never the app's own
 #                 priming turn) calls that server's `record` tool with the file's text as the
@@ -61,6 +59,11 @@
 #                 turn ends, so after that turn a stepper child steps every open work-agent
 #                 every 2 s (the same gate step as above) until each has ended, for at most 10
 #                 minutes, and ends with this process.
+#   work-agents-finish  while it exists, a work-agent's next step the gate admits (exit 0) is its
+#                 last: it finishes on its own, its SubagentStop row is written and calls.log
+#                 says "gate work-agent-N exit 0 finished". A step the gate holds or refuses
+#                 never finishes it (weekly switch, the CEO's §153: a helper on the account
+#                 being left carries on to its own end).
 # Nothing here reaches a network.
 use strict; use warnings; use JSON::PP; use Fcntl qw(:flock O_CREAT O_EXCL O_WRONLY); use File::Path qw(make_path);
 use IPC::Open2 qw(open2); use POSIX qw(WNOHANG);
@@ -130,7 +133,7 @@ sub gate_command {  # the PreToolUse command of the lease's hooks.json, or undef
   my $m = eval { $json->decode($text) } or return undef;
   return $m->{hooks}{PreToolUse}[0]{hooks}[0]{command};
 }
-sub step_one {  # one gate step of one helper; true when the gate ordered it to stop and it ended
+sub step_one {  # one gate step of one helper; true when that step was its last (it finished)
   my ($command, $id, $type) = @_;
   my $payload = $json->encode({ hook_event_name => 'PreToolUse', session_id => $session, agent_id => $id,
     agent_type => $type, tool_name => 'Bash', tool_input => { command => 'true' } });
@@ -140,14 +143,12 @@ sub step_one {  # one gate step of one helper; true when the gate ordered it to 
   my $code = $? >> 8;
   my $said = ''; if (open(my $e, '<', $err)) { local $/; $said = <$e> // ''; close $e; }
   unlink $in, $err;
-  # The order is named as such; any other refusal carries the gate's first words, because an
-  # exit 2 alone cannot tell the order from the hook refusing for another reason (walk
-  # walk-1db6a7b8afee: every step exited 2, from before the cut-off on).
-  my $ordered = $code == 2 && $said =~ /Stop the task now/;
+  # A refusal carries the gate's first words: an exit 2 alone does not say why.
   my ($first) = split /\n/, $said; $first //= '';
+  my $finished = $code == 0 && $id =~ /\Awork-agent-\d+\z/ && -e "$dir/work-agents-finish";
   if (open(my $l, '>>', "$dir/calls.log")) { print $l join(' ', time(), ($folder || 'account-1'), 'gate', $id, 'exit', $code,
-    $ordered ? 'order' : length $first ? ('said:', substr($first, 0, 200)) : ()), "\n"; close $l; }
-  return 0 unless $ordered;
+    $finished ? 'finished' : length $first ? ('said:', substr($first, 0, 200)) : ()), "\n"; close $l; }
+  return 0 unless $finished;
   journal({ hook_event_name => 'SubagentStop', agent_id => $id, agent_type => $type });
   return 1;
 }

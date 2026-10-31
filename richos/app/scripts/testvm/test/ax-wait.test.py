@@ -71,7 +71,7 @@ WALKS = {
     'adopt-walk.py': 'Walk', 'reap-walk.py': 'Walk', 'command-walk.py': 'CommandWalk',
     'folders-walk.py': 'Walk', 'netcut-walk.py': 'NetcutWalk', 'lease-setup-walk.py': 'LeaseSetupWalk',
     'setup-walk.py': 'SetupWalk', 'voice-walk.py': 'VoiceWalk', 'update-relaunch-walk.py': 'Walk',
-    'hire-walk.py': 'HireWalk', 'stu-reminder-walk.py': 'StuReminderWalk', 'handoff-real-walk.py': 'HandoffWalk',
+    'hire-walk.py': 'HireWalk', 'stu-reminder-walk.py': 'StuReminderWalk',
     'dictation-sheet-walk.py': 'SheetWalk', 'output-walk.py': 'OutputWalk', 'first-send-walk.py': 'FirstSendWalk',
     'video-watch-walk.py': 'VideoWatchWalk', 'worker-approve-walk.py': 'WorkerApproveWalk',
     'work-lease-walk.py': 'WorkLeaseWalk',

@@ -12,9 +12,9 @@ Three things the 2026-10-05 round-16 walk needed and did not have:
      line, in the rows app_workers.rs reads, and answers with reply.txt.
 The journal is checked the way app_workers.rs status() reads it: schema 1, this session's
 id on every row, three SubagentStart rows each with an async_launched PostToolUse.
-Section 7 (round 1 of the weekly-switch handoff test): the front desk writes the job down through
-the register in --mcp-config, and the back end's work-agent keeps stepping through the gate after
-the back end's turn ended, until the gate's order ends it."""
+Section 7: the front desk writes the job down through the register in --mcp-config, and the
+back end's work-agent keeps stepping through the gate after the back end's turn ended, until it
+finishes on its own (work-agents-finish) with a step the gate admits."""
 import json
 import os
 import subprocess
@@ -129,9 +129,9 @@ with tempfile.TemporaryDirectory() as root:
     check(null == {'rate_limits_available': True, 'rate_limits': None},
           'with {"null": true}, get_usage answers rate_limits: null beside rate_limits_available: true', null)
 
-    # 6: helper steps (weekly-switch handoff plan, slice 6). The fake calls the gate command of
-    # the lease's hooks.json for each listed helper; a refusal with the order ends that helper
-    # (SubagentStop row), an admitted step writes nothing, and with no helpers listed nothing runs.
+    # 6: helper steps. The fake calls the gate command of the lease's hooks.json for each listed
+    # helper; a refusal ends nothing and is logged with the gate's words, an admitted step writes
+    # nothing, and with no helpers listed nothing runs.
     def stops_for(gate_body, agents, session):
         """Run one lease whose hooks.json names a stub gate; the SubagentStop agent ids it journaled."""
         gate = root / f'gate-{session}.sh'
@@ -156,14 +156,10 @@ with tempfile.TemporaryDirectory() as root:
         path = data / 'engine-state' / 'evidence' / session / 'callbacks.jsonl'
         return sorted(r['callback']['agent_id'] for r in map(json.loads, path.read_text().splitlines())
                       if r['callback'].get('hook_event_name') == 'SubagentStop')
-    refuse = 'cat > /dev/null\necho "RichOS: the Claude account is being left. Stop the task now." >&2\nexit 2\n'
+    refuse = 'cat > /dev/null\necho "Refused: some reason." >&2\nexit 2\n'
     allow = 'cat > /dev/null\nexit 0\n'
-    check(stops_for(refuse, 'Mark\nAndy\n', 'gate-refuses') == ['walk-agent-1', 'walk-agent-2'],
-          'a gate that refuses with the order ends each helper with a SubagentStop row')
-    check('gate walk-agent-1 exit 2 order' in (walk / 'calls.log').read_text(), 'the gate step is a line in calls.log, the order named')
-    other = 'cat > /dev/null\necho "Refused: some other reason." >&2\nexit 2\n'
-    check(stops_for(other, 'Mark\n', 'gate-other') == [] and 'gate walk-agent-1 exit 2 said: Refused: some other reason.' in (walk / 'calls.log').read_text(),
-          'another refusal ends nothing and is logged with its words, never as the order')
+    check(stops_for(refuse, 'Mark\nAndy\n', 'gate-refuses') == [] and 'gate walk-agent-1 exit 2 said: Refused: some reason.' in (walk / 'calls.log').read_text(),
+          'a refusal ends no helper and is a line in calls.log with its words')
     check(stops_for(allow, 'Mark\nAndy\n', 'gate-allows') == [], 'a gate that admits the step ends no helper')
     check(stops_for(refuse, '', 'no-helpers') == [] and 'gate' not in (walk / 'calls.log').read_text(),
           'with no helpers listed the gate is never called and nothing ends (as on main)')
@@ -173,9 +169,10 @@ with tempfile.TemporaryDirectory() as root:
     check('turn Keep going.' in (walk / 'calls.log').read_text(), 'with log-turns present a user turn is a "turn <text>" line in calls.log')
     (walk / 'log-turns').unlink()
 
-    # 7: the back end's job (round 1 of the handoff test). The front desk writes the job down
-    # through the register named in --mcp-config; the back end launches the work-agents once,
-    # and they keep stepping through the gate after its turn ended, until the gate orders them.
+    # 7: the back end's job. The front desk writes the job down through the register named in
+    # --mcp-config; the back end launches the work-agents once, and they keep stepping through
+    # the gate after its turn ended, until one admitted step with work-agents-finish present is
+    # their last.
     register = root / 'register-server.py'
     register.write_text(
         'import json, sys\n'
@@ -195,9 +192,9 @@ with tempfile.TemporaryDirectory() as root:
         (walk / name).unlink(missing_ok=True)
     (walk / 'register').write_text('Start the Northwind job and keep Mark on it.\n')
     (walk / 'work-agents').write_text('Mark\n')
-    flag = root / 'leaving'
+    flag = walk / 'work-agents-finish'
     gate = root / 'gate-work.sh'
-    gate.write_text(f'#!/bin/sh\ncat > /dev/null\nif [ -e {flag} ]; then echo "Stop the task now." >&2; exit 2; fi\nexit 0\n')
+    gate.write_text('#!/bin/sh\ncat > /dev/null\nexit 0\n')
     gate.chmod(0o755)
 
     def lease(session, config):
@@ -247,9 +244,10 @@ with tempfile.TemporaryDirectory() as root:
     deadline = time.time() + 20
     while events(back_journal, 'SubagentStop') == [] and time.time() < deadline:
         time.sleep(0.2)
-    check(events(back_journal, 'SubagentStop') == ['work-agent-1'], 'the order ends the helper between turns (SubagentStop)')
+    check(events(back_journal, 'SubagentStop') == ['work-agent-1'], 'with work-agents-finish the helper finishes between turns (SubagentStop)')
+    check('gate work-agent-1 exit 0 finished' in (walk / 'calls.log').read_text(), 'its last step is named in calls.log')
     second, second_journal = lease('back-end-2', back_config)
-    second.stdin.write(user('Helpers you started were stopped. RichOS handoff: continue.'))
+    second.stdin.write(user('{"event":"account_moved","from":"Home","to":"Work"}'))
     second.stdin.flush()
     answers(second)
     check(events(second_journal, 'SubagentStart') == [], 'a later back-end lease launches no second set (once per walk)')
