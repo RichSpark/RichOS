@@ -41,24 +41,17 @@ pub(super) fn decide(state: &Path, account: Option<&str>, now: u64) -> (Admissio
         .parent()
         .and_then(|p| read_json::<Policy>(&p.join("claude-quota-policy.json")).ok())
         .unwrap_or(view.policy.clone());
-    // **Every account exhausted** (fill-first, Frank's finding 2): held until the soonest
-    // reset among them, whatever the pause switch says, because there is no account left for
-    // the work to run on. Never set with one account.
-    if let Some(until) = view.held_until.filter(|t| *t > now) {
-        return (Admission::Held { resets_at: until }, None);
-    }
-    if !policy.enabled {
+    let held = view.held_until.filter(|t| *t > now);
+    if held.is_none() && !policy.enabled {
         return (Admission::Disabled, None);
     }
     let row = account.and_then(|id| view.accounts.iter().find(|a| a.id == id));
+    let exhausted_until = row.and_then(|a| a.exhausted_until);
     let (windows, checked_at, message, speeds, pre_hold, empty_at) = match row {
         Some(a) => (a.windows.clone(), a.checked_at, a.message.clone(), a.speeds.clone(), a.pre_hold.clone(), a.empty_at),
         None => (view.windows, view.checked_at, view.message, view.speeds, view.pre_hold, view.empty_at),
     };
-    if policy.validate().is_err() || checked_at.is_some_and(|t| t > now) {
-        return (Admission::Unknown, None);
-    }
-    let decided = Snapshot {
+    let judged = (policy.enabled && policy.validate().is_ok() && checked_at.is_none_or(|t| t <= now)).then(|| Snapshot {
         windows,
         checked_at,
         retry_at: view.retry_at,
@@ -71,8 +64,27 @@ pub(super) fn decide(state: &Path, account: Option<&str>, now: u64) -> (Admissio
         rise_log: pre_hold.into_iter().map(|(id, speed)| (id, vec![(0., speed)])).collect(),
         ..Default::default()
     }
-    .view(policy, now);
-    (decided.admission, decided.release)
+    .view(policy, now));
+    // **Every account exhausted** (fill-first, Frank's finding 2): held until the soonest
+    // reset among them, whatever the pause switch says, because there is no account left for
+    // the work to run on. Never set with one account.
+    //
+    // **The switch path is released staggered too** (STATUS-2026-10-31 row 7, E1): with the
+    // setting on Switch an account at its five-hour line is used up (`claude_accounts::gone`), so
+    // with every account there this hold returned before the call's own row was read, and nobody
+    // went until the reset, where Pause on the same readings releases one at a time inside the
+    // twenty minutes. A call whose own account is used up by that five-hour window alone (its
+    // `exhaustedUntil` is that window's reset) gets the same release as on the hold path; a
+    // weekly limit keeps the hold with no release.
+    if let Some(until) = held {
+        let release = judged.and_then(|v| v.release)
+            .filter(|r| exhausted_until.is_some_and(|t| super::same_reset(t, r.resets_at)));
+        return (Admission::Held { resets_at: until }, release);
+    }
+    match judged {
+        Some(decided) => (decided.admission, decided.release),
+        None => (Admission::Unknown, None),
+    }
 }
 
 fn authorized(scope: &Path, worker: bool) -> bool {
@@ -859,6 +871,64 @@ mod tests {
         assert_eq!(refusal(&ordered), HANDOFF_ORDER);
     }
 
+    /// **The switch path gets the staggered release too** (STATUS-2026-10-31 row 7, E1 / G12;
+    /// follow-ups of 2026-10-29: "with Switch set and another account free, nothing bursts onto
+    /// the old account in the 20-minute window"). Work at 95% of its five hours, 19 minutes before
+    /// its reset, the team measured at 1.4 points a minute before the hold (the frame math of the
+    /// ten-worker test above: one is 95 + 0.14 x 19 = 97.66, two are 100.32), ten workers held on
+    /// Work, the setting on Switch.
+    /// - Home free (10%): one goes, the rest wait. This already held on 1986736c0: since
+    ///   e4bdd8383 each call is judged on its own account's row, so the old account is staggered
+    ///   whatever the setting says. Kept as the follow-up's own test.
+    /// - Home at its line too (95%): with Switch, an account at its five-hour line is used up
+    ///   (`claude_accounts::gone`), so every account was, and the "every account used up" hold
+    ///   returned before Work's row was read: nobody went until the reset, where Pause on the
+    ///   same readings releases one at a time. Now one goes, as with Pause.
+    /// - Work's week at 99% as well: a weekly limit keeps the hold with no release; only an
+    ///   account used up by its five-hour window alone is released.
+    #[test]
+    fn on_the_switch_path_the_twenty_minute_window_is_released_staggered_as_on_the_hold_path() {
+        use crate::claude_accounts::AtThreshold;
+        struct Unread;
+        impl super::super::Source for Unread {
+            fn read(&mut self, _bin: &Path, _cwd: &Path) -> Result<Vec<super::super::Window>, ReadError> { Err(ReadError::Failed) }
+        }
+        let released = |at_threshold: AtThreshold, home: f64, work_week: f64| -> usize {
+            let (_root, service, state, scope) = setup();
+            service.accounts.rename("1", "Home").unwrap();
+            let work = service.accounts.add("Work").unwrap();
+            service.set_at_threshold(at_threshold).unwrap();
+            let (now, minute) = (crate::util::now_millis(), 60_000);
+            let five = |used: f64, resets_at: u64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(),
+                used_percent: used, resets_at: Some(resets_at), duration_ms: 18_000_000 }];
+            let reset = now + 19 * minute;
+            let mut climbing = Snapshot::default();
+            let work_windows = |used: f64| {
+                let mut windows = five(used, reset);
+                windows.push(Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: work_week,
+                    resets_at: Some(now + 48 * 3_600_000), duration_ms: 604_800_000 });
+                windows
+            };
+            climbing.accept(work_windows(80.), now - 15 * minute);
+            climbing.accept(work_windows(95.), now - 5 * minute);
+            climbing.accept(work_windows(95.), now);
+            service.extra.lock().unwrap().insert(work.id.clone(),
+                (std::sync::Arc::new(std::sync::Mutex::new(Box::new(Unread) as Box<dyn super::super::Source>)), climbing));
+            *service.snapshot.lock().unwrap() = Snapshot { checked_at: Some(now), windows: five(home, now + 3 * 3_600_000),
+                ..Default::default() };
+            service.publish().unwrap();
+            let workers: Vec<String> = (0..10).map(|i| format!("worker-{i}")).collect();
+            let _waiting: Vec<_> = workers.iter().map(|id| super::super::holds::Guard::begin(&state, serde_json::from_value(json!({
+                "kind": "agent", "id": id, "entityId": "", "threadId": "", "sessionId": "", "name": id,
+                "task": null, "sinceAt": now, "releasedAt": null})).unwrap()).unwrap()).collect();
+            workers.iter().filter(|id| wait(&json!({"agent_id": id, "tool_name": "Bash"}), &state, &scope, &work.id,
+                Duration::ZERO, Duration::ZERO).is_ok()).count()
+        };
+        assert_eq!(released(AtThreshold::Switch, 10., 20.), 1, "Home free: Work's held team is staggered, never all at once");
+        assert_eq!(released(AtThreshold::Pause, 95., 20.), 1, "Pause, both at their line: one at a time");
+        assert_eq!(released(AtThreshold::Switch, 95., 20.), 1, "Switch, both at their line: the same staggered release as Pause");
+        assert_eq!(released(AtThreshold::Switch, 95., 99.), 0, "Work at its weekly limit: held, nobody released");
+    }
     /// **One account, automatic pause off: no order at the weekly point.** The fast-use alert
     /// says "Automatic pause is off in Settings, so nothing acts before it reaches 100%", so a
     /// helper on Account 1 at 99% of its week keeps working: not leaving, no order, no marker.
