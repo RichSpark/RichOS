@@ -556,50 +556,177 @@ pub struct Launches {
     /// `running`, `unknown`: the same statuses as [`WorkTrail::stop_targets`]). A receipt with
     /// no session is recorded as `""`, which no worker reading can clear.
     pub unresolved: std::collections::BTreeSet<String>,
+    /// One of this assignment's receipts could not be read. What it says is unknown, so the
+    /// assignment counts as live (fail toward waiting); no other assignment is affected.
+    pub damaged: bool,
 }
 
-/// [`Launches`] by obligation id. **An unreadable record is an error, never an empty map**, for
-/// the reason [`trail`] gives; a partition never written is the honest empty.
-pub fn launches(state: &Path, entity: &str, thread: &str) -> Result<std::collections::HashMap<String, Launches>, String> {
-    let identity = serde_json::to_vec(&[entity, thread]).map_err(|e| e.to_string())?;
-    let parent = state.join("work-receipts");
-    let root = parent.join(format!("{:x}", Sha256::digest(identity)));
-    if parent.is_symlink() || root.is_symlink() {
-        return Err("Work records have been redirected.".into());
+/// **What one conversation's receipts say, by obligation id.** A partition never written is the
+/// honest empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Receipts {
+    pub by_obligation: std::collections::HashMap<String, Launches>,
+    /// A damaged receipt whose assignment is unknown: not even JSON naming an obligation, and
+    /// never read whole by this index. It could be any assignment's, so every open one of this
+    /// conversation counts as live (fail toward waiting).
+    pub unattributed_damage: bool,
+}
+
+/// A receipt changed when any of these did. The engine writes each receipt to a fresh file and
+/// renames it over the old one (`mega-lander/app.py` `save`), so every write has a new inode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: u64,
+}
+impl Stamp {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        let inode = std::os::unix::fs::MetadataExt::ino(meta);
+        #[cfg(not(unix))]
+        let inode = 0;
+        Stamp { len: meta.len(), modified: meta.modified().ok(), inode }
     }
-    let entries = match std::fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
-        Err(_) => return Err("Saved work could not be read.".into()),
-    };
-    let mut out: std::collections::HashMap<String, Launches> = Default::default();
-    for (n, entry) in entries.enumerate() {
-        if n > 10000 {
-            return Err("There are too many saved work records.".into());
+}
+
+/// What one receipt said when it was last read.
+#[derive(Clone)]
+enum Seen {
+    Receipt { obligation: Option<String>, dispatched: bool, unresolved: Option<String> },
+    Damaged { obligation: Option<String> },
+}
+impl Seen {
+    fn obligation(&self) -> Option<&String> {
+        match self {
+            Seen::Receipt { obligation, .. } | Seen::Damaged { obligation } => obligation.as_ref(),
         }
-        let path = entry.map_err(|_| "Saved work could not be listed.")?.path();
-        if path.extension().is_none_or(|e| e != "json") {
-            continue;
+    }
+}
+
+struct Indexed {
+    stamp: Stamp,
+    /// When the stamp was taken, just before the read.
+    read_at: std::time::SystemTime,
+    seen: Seen,
+}
+
+/// A receipt modified this recently when it was read is read again at the next poll, whatever its
+/// stamp: a write in the same tick of a coarse file clock leaves the stamp unchanged (git's
+/// "racily clean" files). Two seconds covers a one-second clock.
+const RACY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// **The update gate poll's memory of each receipt** (Tom's review of P0, follow-up 2: every
+/// five-second poll re-parsed every receipt, 77 of them and 2.4 MB measured, and one damaged
+/// receipt made every open record count as live, which stuck the gate on busy). A poll now lists
+/// the partition and reads only the receipts whose stamp changed. A damaged receipt is put under
+/// the obligation it named, or the one this index last read in it, and affects only that
+/// assignment.
+#[derive(Default)]
+pub struct ReceiptIndex {
+    files: std::collections::HashMap<std::path::PathBuf, Indexed>,
+    /// Receipt bytes read since this index was made: what the polls have cost.
+    read_bytes: u64,
+}
+
+impl ReceiptIndex {
+    #[cfg(test)]
+    pub(crate) fn read_bytes(&self) -> u64 {
+        self.read_bytes
+    }
+
+    /// [`Receipts`] for this conversation. **A partition that cannot be listed is an error, never
+    /// an empty answer**, for the reason [`trail`] gives; one damaged receipt is not.
+    pub fn launches(&mut self, state: &Path, entity: &str, thread: &str) -> Result<Receipts, String> {
+        let identity = serde_json::to_vec(&[entity, thread]).map_err(|e| e.to_string())?;
+        let parent = state.join("work-receipts");
+        let root = parent.join(format!("{:x}", Sha256::digest(identity)));
+        if parent.is_symlink() || root.is_symlink() {
+            return Err("Work records have been redirected.".into());
         }
-        let meta = std::fs::symlink_metadata(&path).map_err(|_| "A saved work record could not be read.")?;
+        let entries = match std::fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.files.retain(|path, _| path.parent() != Some(root.as_path()));
+                return Ok(Default::default());
+            }
+            Err(_) => return Err("Saved work could not be read.".into()),
+        };
+        let mut present = std::collections::HashSet::new();
+        let mut out = Receipts::default();
+        for (n, entry) in entries.enumerate() {
+            if n > 10000 {
+                return Err("There are too many saved work records.".into());
+            }
+            let path = entry.map_err(|_| "Saved work could not be listed.")?.path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let Some(seen) = self.read(&path, entity, thread) else { continue };
+            present.insert(path);
+            match seen {
+                // A receipt naming no obligation belongs to no assignment, as in [`trail`].
+                Seen::Receipt { obligation: None, .. } => {}
+                Seen::Receipt { obligation: Some(obligation), dispatched, unresolved } => {
+                    let launched = out.by_obligation.entry(obligation).or_default();
+                    launched.dispatched |= dispatched;
+                    launched.unresolved.extend(unresolved);
+                }
+                Seen::Damaged { obligation: Some(obligation) } => out.by_obligation.entry(obligation).or_default().damaged = true,
+                Seen::Damaged { obligation: None } => out.unattributed_damage = true,
+            }
+        }
+        self.files.retain(|path, _| path.parent() != Some(root.as_path()) || present.contains(path));
+        Ok(out)
+    }
+
+    /// One receipt, from this index when its stamp has not changed. `None` when it is gone.
+    fn read(&mut self, path: &Path, entity: &str, thread: &str) -> Option<Seen> {
+        let earlier = self.files.get(path).and_then(|indexed| indexed.seen.obligation().cloned());
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(_) => return Some(Seen::Damaged { obligation: earlier }),
+        };
         if !meta.is_file() || meta.len() > 1024 * 1024 {
-            return Err("A saved work record is too large or redirected.".into());
+            return Some(Seen::Damaged { obligation: earlier });
         }
-        let bytes = std::fs::read(&path).map_err(|_| "A saved work record could not be read.")?;
-        let row: Value = serde_json::from_slice(&bytes).map_err(|_| "A saved work record is damaged.")?;
-        if row["schema"] != 1 || row["binding"]["entity_id"] != entity || row["binding"]["thread_id"] != thread {
-            return Err("A saved work record has an unsupported schema or different scope.".into());
+        let stamp = Stamp::of(&meta);
+        if let Some(indexed) = self.files.get(path) {
+            let settled = stamp.modified.is_some_and(|at| indexed.read_at.duration_since(at).is_ok_and(|age| age >= RACY));
+            if indexed.stamp == stamp && settled {
+                return Some(indexed.seen.clone());
+            }
         }
-        // A receipt naming no obligation belongs to no assignment, as in [`trail`].
-        let Some(obligation) = row["request"]["obligation_id"].as_str() else { continue };
-        let launched = out.entry(obligation.to_string()).or_default();
-        let named = |key: &str| row[key].as_str().is_some_and(|s| !s.is_empty());
-        launched.dispatched |= named("tool_use_id") || named("agent_id");
-        if matches!(row["status"].as_str(), Some("dispatching" | "running" | "unknown")) {
-            launched.unresolved.insert(row["binding"]["session_id"].as_str().unwrap_or("").to_string());
-        }
+        let read_at = std::time::SystemTime::now();
+        let seen = match std::fs::read(path) {
+            Ok(bytes) => {
+                self.read_bytes += bytes.len() as u64;
+                parse_launch(&bytes, entity, thread, earlier)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(_) => Seen::Damaged { obligation: earlier },
+        };
+        self.files.insert(path.to_path_buf(), Indexed { stamp, read_at, seen: seen.clone() });
+        Some(seen)
     }
-    Ok(out)
+}
+
+/// One receipt's bytes. A receipt that parses but has another schema or scope still names its
+/// obligation, so its damage is put there; one that does not parse keeps `earlier`'s.
+fn parse_launch(bytes: &[u8], entity: &str, thread: &str, earlier: Option<String>) -> Seen {
+    let Ok(row) = serde_json::from_slice::<Value>(bytes) else { return Seen::Damaged { obligation: earlier } };
+    let obligation = row["request"]["obligation_id"].as_str().map(str::to_string);
+    if row["schema"] != 1 || row["binding"]["entity_id"] != entity || row["binding"]["thread_id"] != thread {
+        return Seen::Damaged { obligation: obligation.or(earlier) };
+    }
+    let named = |key: &str| row[key].as_str().is_some_and(|s| !s.is_empty());
+    Seen::Receipt {
+        obligation,
+        dispatched: named("tool_use_id") || named("agent_id"),
+        unresolved: matches!(row["status"].as_str(), Some("dispatching" | "running" | "unknown"))
+            .then(|| row["binding"]["session_id"].as_str().unwrap_or("").to_string()),
+    }
 }
 
 /// **What a provider session's canonical record says of its end** — the record the engine keeps

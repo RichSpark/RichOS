@@ -462,13 +462,88 @@ pub(crate) fn undelivered(scope:&StatusToolScope,role:&str)->Result<bool,String>
     }
 }
 
-/// **Was the saved handoff for this request given to Stu?** Accepted by his cursor, which
-/// happens only once a delivery reached a turn of his (`acknowledge`, `accept_live_handoff`).
-/// `false` when no handoff for it is saved at all.
-pub(crate) fn handoff_given(scope:&StatusToolScope,instruction:&crate::ecs::UserInstruction)->Result<bool,String> {
-    let Some((_,through))=saved_handoff(scope,instruction)? else {return Ok(false)};
-    let cursor=cursor_state(&inbox(scope,"stu")?)?;
-    Ok(through<=cursor["through"].as_u64().unwrap() || cursor["accepted"].get(through.to_string()).is_some())
+/// **Stu's inboxes as far as the update gate poll has read them** (Tom's review of P0, follow-up
+/// 2: every five-second poll re-scanned the inbox from its start for each open record, 232 KB
+/// measured, and nothing prunes it). An inbox only grows, record by record (`append_record`;
+/// its one truncation drops an incomplete last line, which this never reads past), so a poll
+/// reads only the records appended since the last one. A different file at the path, or one
+/// shorter than what was read, is read again from its start.
+#[derive(Default)]
+pub(crate) struct HandoffIndex {
+    inboxes:std::collections::HashMap<PathBuf,ScannedInbox>,
+    /// Inbox bytes read since this index was made: what the polls have cost.
+    read_bytes:u64,
+}
+
+#[derive(Default)]
+struct ScannedInbox {
+    inode:u64,
+    /// The end of the last complete record read.
+    through:u64,
+    /// The first handoff saved for each request (`ledger_ref`): its digest and where it ends.
+    handoffs:std::collections::HashMap<String,(String,u64)>,
+    /// The record that could not be read. Nothing after it is read, as in [`find_record`].
+    failed:Option<String>,
+}
+
+impl HandoffIndex {
+    #[cfg(test)]
+    pub(crate) fn read_bytes(&self)->u64 {self.read_bytes}
+
+    /// **Was the saved handoff for this request given to Stu?** Accepted by his cursor, which
+    /// happens only once a delivery reached a turn of his (`acknowledge`, `accept_live_handoff`).
+    /// `false` when no handoff for it is saved at all. The same answer as reading the inbox from
+    /// its start ([`saved_handoff`]), including its refusals.
+    pub(crate) fn given(&mut self,scope:&StatusToolScope,instruction:&crate::ecs::UserInstruction)->Result<bool,String> {
+        let path=inbox(scope,"stu")?;
+        let Some(through)=self.saved(&path,instruction)? else {return Ok(false)};
+        let cursor=cursor_state(&path)?;
+        Ok(through<=cursor["through"].as_u64().unwrap() || cursor["accepted"].get(through.to_string()).is_some())
+    }
+
+    fn saved(&mut self,path:&Path,instruction:&crate::ecs::UserInstruction)->Result<Option<u64>,String> {
+        let file=match std::fs::File::open(path) {
+            Ok(file)=>file,
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{self.inboxes.remove(path);return Ok(None)}
+            Err(e)=>return Err(e.to_string()),
+        };
+        let meta=file.metadata().map_err(|e|e.to_string())?;
+        #[cfg(unix)]
+        let inode=std::os::unix::fs::MetadataExt::ino(&meta);
+        #[cfg(not(unix))]
+        let inode=0;
+        let scanned=self.inboxes.entry(path.to_path_buf()).or_default();
+        if scanned.inode!=inode || meta.len()<scanned.through {
+            *scanned=ScannedInbox{inode,..Default::default()};
+        }
+        if scanned.failed.is_none() && meta.len()>scanned.through {
+            let mut reader=BufReader::new(file);
+            reader.seek(SeekFrom::Start(scanned.through)).map_err(|e|e.to_string())?;
+            loop {
+                let mut line=String::new();
+                let count=match (&mut reader).take(256*1024+1).read_line(&mut line) {
+                    Ok(count)=>count,
+                    Err(e)=>{scanned.failed=Some(e.to_string());break}
+                };
+                self.read_bytes+=count as u64;
+                if count>256*1024 {scanned.failed=Some("Saved peer input exceeds its frame limit".into());break}
+                if count==0 || !line.ends_with('\n') {break}
+                let message:Message=match serde_json::from_str(&line) {
+                    Ok(message)=>message,
+                    Err(e)=>{scanned.failed=Some(e.to_string());break}
+                };
+                scanned.through+=count as u64;
+                if let Some(saved)=message.instruction.filter(|_|message.handoff) {
+                    scanned.handoffs.entry(saved.ledger_ref).or_insert((saved.sha256,scanned.through));
+                }
+            }
+        }
+        match scanned.handoffs.get(&instruction.ledger_ref) {
+            Some((sha256,_)) if *sha256!=instruction.sha256=>Err("Saved handoff disagrees with the original request".into()),
+            Some((_,through))=>Ok(Some(*through)),
+            None=>match &scanned.failed {Some(failed)=>Err(failed.clone()),None=>Ok(None)},
+        }
+    }
 }
 
 pub fn acknowledge(scope:&StatusToolScope,role:&str,through:u64)->Result<(),String> {

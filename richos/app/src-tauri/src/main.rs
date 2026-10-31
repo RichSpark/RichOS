@@ -9806,11 +9806,17 @@ fn questions_pending(state: &AppState) -> bool {
 
 /// What the assignment register says, using the same derivation as the update gate.
 fn registered_work(state: &AppState) -> lifecycle::Registered {
-    let work = state.work.background_work();
+    registered_from(&state.work, &state.control)
+}
+
+/// [`registered_work`] from the two handles it reads, so a test drives the quit question's
+/// own reading over a real work host (`updates.rs`, the end-to-end gate test).
+fn registered_from(work_host: &richos_core::work_host::WorkHost, control: &TurnControl) -> lifecycle::Registered {
+    let work = work_host.background_work();
     lifecycle::Registered {
-        running: work.running + usize::from(state.control.has_active_turns())
-            + usize::from(state.work.peer_work_pending())
-            + usize::from(!state.control.pending_intake().is_empty()),
+        running: work.running + usize::from(control.has_active_turns())
+            + usize::from(work_host.peer_work_pending())
+            + usize::from(!control.pending_intake().is_empty()),
         awaiting_you: work.awaiting_you,
         readable: work.readable,
         // Commands Rich started, on every live lease (reap gap C5): a few small files, no lock.

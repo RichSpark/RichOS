@@ -821,6 +821,12 @@ pub trait TurnCancel: Send + Sync {
     /// The shell commands this session's own model started that are still running, foreground
     /// or background. [`Self::stop_background_command`] stops one by its task id.
     fn own_commands(&self) -> Vec<OwnCommand> { Vec::new() }
+
+    /// **This session's provider has closed**: its output reached EOF, so nothing more will run
+    /// or be answered on it — the same fact as [`crate::cognition::Cognition::is_closed`] on the
+    /// lease this handle belongs to. `false`, the default, is a handle that cannot tell, and
+    /// that counts as open (fail toward waiting).
+    fn is_closed(&self) -> bool { false }
 }
 
 impl OwnCommand {
@@ -1066,8 +1072,17 @@ impl TurnControl {
         Ok(())
     }
 
+    /// **The provider sessions of Rich's conversations that are open now**, for the update gate's
+    /// worker reading (`updates.rs`), the quit and setup checks and the agents-working count.
+    /// The same closed-lease rule as Stu's (`WorkHost::lease_sessions`, review
+    /// rv-20261029T062537Z-21f7f26e-d081): the remembered [`ConversationState::lease_session`]
+    /// outlives the provider, which can exit on a lost connection between turns and is only
+    /// replaced at the next one, so a session whose provider has reached EOF is not counted. Its
+    /// helpers ran inside that provider. A session whose handle cannot tell still counts.
     pub fn lease_sessions(&self)->Vec<String> {
-        self.inner.conversations.lock().unwrap().iter().filter(|(thread,_)|!thread.is_empty()).filter_map(|(_,state)|state.lease_session.clone()).collect()
+        self.inner.conversations.lock().unwrap().iter().filter(|(thread,_)|!thread.is_empty())
+            .filter(|(_,state)|!state.cancel.as_ref().is_some_and(|handle|handle.is_closed()))
+            .filter_map(|(_,state)|state.lease_session.clone()).collect()
     }
 
     /// Read every conversation's native worker facts without taking the spine lock.
@@ -1787,5 +1802,57 @@ mod tests {
         let reopened = reopened.for_thread("thr_1");
         assert!(reopened.pending_intake().is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// **Rich's lease follows the same closed-lease rule as Stu's** (Tom's review of the landed P0,
+    /// follow-up 1; the reviewer's fixture `closed-lease.rs`, rv-20261029T062537Z-21f7f26e-d081).
+    /// Rich's provider launched a helper and then exited (a lost connection: provider EOF) between
+    /// turns. The update gate reads every Rich session in `lease_sessions()` through that
+    /// session's worker evidence (`updates.rs`), and on main the remembered session id kept the
+    /// launched helper "running" until his next turn opened a replacement. An open provider keeps
+    /// its veto; a handle that cannot tell whether it is closed counts as open.
+    #[test]
+    fn a_rich_session_whose_provider_closed_has_no_veto_and_an_open_one_keeps_it() {
+        struct Provider(Arc<std::sync::atomic::AtomicBool>);
+        impl TurnCancel for Provider {
+            fn cancel(&self) -> bool { false }
+            fn is_closed(&self) -> bool { self.0.load(std::sync::atomic::Ordering::SeqCst) }
+        }
+        let root = std::env::temp_dir().join(format!("richos-rich-closed-lease-{}", uuid::Uuid::new_v4()));
+        let evidence = root.join("evidence/rich-session");
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join(".lock"), "").unwrap();
+        let row = |event: &str, more: serde_json::Value| {
+            let mut callback = serde_json::json!({"session_id": "rich-session", "hook_event_name": event});
+            for (key, value) in more.as_object().unwrap() { callback[key] = value.clone(); }
+            serde_json::json!({"schema": 1, "callback": callback}).to_string() + "\n"
+        };
+        std::fs::write(evidence.join("callbacks.jsonl"), row("SubagentStart", serde_json::json!({"agent_id": "agent-one"}))
+            + &row("PostToolUse", serde_json::json!({"tool_name": "Agent",
+                "tool_response": {"status": "async_launched", "agentId": "agent-one"}}))).unwrap();
+        let controls = TurnControl::detached();
+        let rich = controls.for_thread("thread-one");
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        rich.set_cancel(Some(Arc::new(Provider(closed.clone()))));
+        rich.set_lease_session(Some("rich-session".into()));
+        // As `updates.rs` reads it.
+        let gate = || {
+            let views: Vec<_> = controls.lease_sessions().iter()
+                .map(|session| crate::app_workers::status(&root, Some(session))).collect();
+            crate::work_gate::all_workers(&views).0
+        };
+        assert_eq!(controls.lease_sessions(), vec!["rich-session".to_string()]);
+        assert_eq!(gate(), crate::work_gate::Liveness::Busy, "a helper of Rich's open provider was read as ended");
+        // The reviewer's case: his provider exits.
+        closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(controls.lease_sessions(), Vec::<String>::new(), "a closed provider's remembered session was counted as open");
+        assert_eq!(gate(), crate::work_gate::Liveness::Clear, "a closed provider's remembered session kept the update blocked");
+        assert_eq!(rich.lease_session().as_deref(), Some("rich-session"), "the remembered id itself is kept for the next turn's resume");
+        // A handle that cannot tell, or none at all: counted, as before.
+        rich.set_cancel(Some(Arc::new(RecordingCancel(Arc::new(Mutex::new(0)), true))));
+        assert_eq!(controls.lease_sessions(), vec!["rich-session".to_string()]);
+        rich.set_cancel(None);
+        assert_eq!(controls.lease_sessions(), vec!["rich-session".to_string()]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

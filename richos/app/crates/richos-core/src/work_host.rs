@@ -180,6 +180,10 @@ pub struct WorkHost {
     /// The app's own cleanup (CEO §54 addendum 2), run when nothing is left to do.
     cleanup: Mutex<Option<crate::app_cleanup::Hook>>,
     retry_clock: Mutex<Arc<dyn crate::upstream::RetryClock>>,
+    /// What [`Self::background_work`] has already read of the receipts and of Stu's inboxes, so
+    /// the update gate's five-second poll reads only what changed since the last one.
+    receipts: Mutex<crate::work_status::ReceiptIndex>,
+    handoffs: Mutex<crate::session_tools::HandoffIndex>,
 }
 impl WorkHost {
     pub fn new(
@@ -200,6 +204,8 @@ impl WorkHost {
             output: Mutex::new(None),
             cleanup: Mutex::new(None),
             retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
+            receipts: Mutex::new(Default::default()),
+            handoffs: Mutex::new(Default::default()),
         })
     }
     pub fn set_retry_clock(&self, clock: Arc<dyn crate::upstream::RetryClock>) {
@@ -1998,7 +2004,7 @@ impl WorkHost {
                 entity_id: entity.to_string(),
                 thread_id: thread.to_string(),
             };
-            let launches = crate::work_status::launches(&self.state, entity, thread);
+            let launches = self.receipts.lock().unwrap().launches(&self.state, entity, thread);
             let mut session_live = |session: &str| {
                 // A receipt naming no session has no worker reading that could clear it.
                 *sessions.entry(session.to_string()).or_insert_with(|| {
@@ -2011,14 +2017,18 @@ impl WorkHost {
                 if record.reported_state().is_some_and(AssignmentState::waits_for_the_world) {
                     return true;
                 }
-                let Ok(launches) = launches.as_ref() else { return true };
-                let launched = launches.get(&record.obligation_id).cloned().unwrap_or_default();
+                let Ok(receipts) = launches.as_ref() else { return true };
+                let launched = receipts.by_obligation.get(&record.obligation_id).cloned().unwrap_or_default();
+                // A damaged receipt of this job, or one that could be any job's: unknown is live.
+                if launched.damaged || receipts.unattributed_damage {
+                    return true;
+                }
                 let instruction = crate::ecs::UserInstruction {
                     ledger_ref: record.instruction_ledger_ref.clone(),
                     sha256: record.instruction_sha256.clone(),
                     text: None,
                 };
-                let given = match crate::session_tools::handoff_given(&scope, &instruction) {
+                let given = match self.handoffs.lock().unwrap().given(&scope, &instruction) {
                     Ok(given) => given,
                     Err(_) => return true,
                 };
@@ -6421,6 +6431,220 @@ done
         }), Arc::new(SilentNotifier));
         assert_eq!(read(&restarted), clear);
         restarted.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    // ---- Tom's review of the landed P0, follow-ups 2 and 3: what keeps the gate busy when no
+    // reading of the job itself does -------------------------------------------------------------
+
+    /// The job of [`handed_job`], given to Stu (his cursor accepted the handoff, as a delivery to
+    /// a turn of his does), whose one helper ran on a provider session that has since ended
+    /// (`SessionEnd` in its journal, `ended_at` on its canonical record). Nothing of the job
+    /// itself is live; only the back end's own readings can hold the gate.
+    fn given_job_with_an_ended_helper(h: &Harness) -> (crate::status_tools::StatusToolScope, PathBuf) {
+        use sha2::Digest;
+        let (_, scope, path) = handed_job(h);
+        let instruction = crate::ecs::UserInstruction { ledger_ref: registration(h).instruction_ledger_ref,
+            sha256: registration(h).instruction_sha256, text: None };
+        let (_, through) = crate::session_tools::saved_handoff(&scope, &instruction).unwrap().expect("the handoff is saved");
+        crate::session_tools::acknowledge(&scope, "stu", through).unwrap();
+        helper_receipt(h, "running");
+        let evidence = h.state.join("evidence/work-session-one");
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join(".lock"), "").unwrap();
+        let row = |event: &str, more: serde_json::Value| {
+            let mut callback = serde_json::json!({"session_id": "work-session-one", "hook_event_name": event});
+            for (key, value) in more.as_object().unwrap() { callback[key] = value.clone(); }
+            serde_json::json!({"schema": 1, "callback": callback}).to_string() + "\n"
+        };
+        std::fs::write(evidence.join("callbacks.jsonl"), row("SubagentStart", serde_json::json!({"agent_id": "agent-one"}))
+            + &row("PostToolUse", serde_json::json!({"tool_name": "Agent",
+                "tool_response": {"status": "async_launched", "agentId": "agent-one"}}))
+            + &row("SessionEnd", serde_json::json!({"reason": "other"}))).unwrap();
+        let sessions = h.state.join("workspaces")
+            .join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"))).join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("work-session-one.json"), serde_json::json!({"session_id": "work-session-one",
+            "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"}).to_string()).unwrap();
+        (scope, path)
+    }
+
+    /// Stu's back end for the harness conversation on `host`, holding his lease on
+    /// `work-session-one`, with no run loop: each test sets what the loop would.
+    fn back_end_without_a_loop(h: &Harness, host: &WorkHost) -> Arc<Backend> {
+        let backend = Backend::new();
+        {
+            let mut inner = backend.inner.lock().unwrap();
+            inner.lease_session = Some("work-session-one".into());
+            inner.binding = Some(h.binding.clone());
+        }
+        *backend.lease.lock().unwrap() = Some(Box::new(Lease { session: "work-session-one".into(),
+            prompts: h.work_prompts.clone(), commands: h.commands.clone(), team: h.team.clone(), settings: None }));
+        host.backends.lock().unwrap().insert(h.binding.thread_id().into(), backend.clone());
+        backend
+    }
+
+    /// The update gate's two readings from the work host, as `updates.rs` takes them.
+    fn gate_reading(host: &WorkHost, state: &Path) -> (usize, (crate::work_gate::Liveness, Option<String>)) {
+        let work = host.background_work();
+        let views: Vec<_> = host.lease_sessions().iter()
+            .map(|session| crate::app_workers::status(state, Some(session))).collect();
+        (work.running, crate::work_gate::background(&work, &views))
+    }
+
+    /// **The renewal gap keeps the gate busy, on `processing`** (Tom's review of the landed P0,
+    /// follow-up 2). `renew_lease` takes Stu's old lease out and releases its lock; only then does
+    /// `ensure_lease` lock it again and install the new one. In between the lease is `None` and
+    /// unlocked, so `lease_sessions` names no open session and his job's ended helper session has
+    /// no veto from it. The run loop sets `processing` before every renewal it makes (a message's
+    /// delivery, a move to another account), and that is the one reading that keeps the gate busy
+    /// there. The gap is held open here by a spawn that fails: `renew_lease` returns at exactly
+    /// that state. Once the loop's turn ends (`processing` false), the gate reads clear.
+    #[test]
+    fn the_gap_between_taking_out_stus_old_lease_and_installing_the_new_one_keeps_the_gate_busy() {
+        struct Unspawnable;
+        impl LeaseFactory for Unspawnable {
+            fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> { unreachable!() }
+            fn spawn_work(&self, _: &ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
+                Err(CognitionError::Protocol("the next provider is not open yet".into()))
+            }
+        }
+        let h = harness(0);
+        let _ = given_job_with_an_ended_helper(&h);
+        let host = WorkHost::new(&h.state, Box::new(Unspawnable), Arc::new(SilentNotifier));
+        let backend = back_end_without_a_loop(&h, &host);
+        let busy = (1, (crate::work_gate::Liveness::Busy, Some("1 assignment is still running in the background.".to_string())));
+        let clear = (0, (crate::work_gate::Liveness::Clear, None));
+        // Control: the open lease keeps its session's veto.
+        assert_eq!(gate_reading(&host, &h.state), busy);
+        // The run loop renews Stu with `processing` set.
+        backend.inner.lock().unwrap().processing = true;
+        assert!(matches!(host.renew_lease(&backend, &h.binding), Renewal::Failed));
+        assert!(backend.lease.try_lock().is_ok_and(|lease| lease.is_none()), "the gap is a lease that is out and unlocked");
+        assert_eq!(host.lease_sessions(), Vec::<String>::new(), "the gap still named an open session");
+        assert_eq!(gate_reading(&host, &h.state), busy, "the renewal gap read as no work running");
+        // The loop's turn ends.
+        backend.inner.lock().unwrap().processing = false;
+        assert_eq!(gate_reading(&host, &h.state), clear, "nothing but the renewal held the gate");
+        host.shutdown();
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **Provider EOF with input waiting keeps the gate busy** (Tom's review of the landed P0,
+    /// follow-up 3). Stu's provider has exited (his lease reports `is_closed`), so the closed
+    /// lease names no open session, and his job's helper session has ended: the reviewer's
+    /// closed-lease case, which reads clear. Then input for him arrives that no turn of his has
+    /// taken. That input is work, and `stu_busy`'s check for undelivered input is the one reading
+    /// that sees it: the closed lease cannot, and nothing of the job's own records changed.
+    #[test]
+    fn a_closed_lease_with_input_waiting_for_stu_keeps_the_gate_busy() {
+        let h = harness(0);
+        let (scope, path) = given_job_with_an_ended_helper(&h);
+        h.team.lock().unwrap().closed = true;
+        let _backend = back_end_without_a_loop(&h, &h.host);
+        let busy = (1, (crate::work_gate::Liveness::Busy, Some("1 assignment is still running in the background.".to_string())));
+        let clear = (0, (crate::work_gate::Liveness::Clear, None));
+        // Control: provider EOF, nothing waiting for Stu.
+        assert_eq!(h.host.lease_sessions(), Vec::<String>::new(), "a closed lease was counted as open");
+        assert_eq!(gate_reading(&h.host, &h.state), clear);
+        // Input for him that no turn has taken.
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Keep the original release date"})).unwrap();
+        assert_eq!(gate_reading(&h.host, &h.state), busy, "input waiting behind a closed lease read as no work");
+        assert!(h.host.peer_work_pending(), "the quit question did not see the input waiting for Stu");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// A finished helper's receipt for `obligation`, as `<name>.json`, in the schema given.
+    fn job_receipt(h: &Harness, name: &str, obligation: &str, schema: u32) -> PathBuf {
+        use sha2::Digest;
+        let folder = h.state.join("work-receipts").join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]")));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(format!("{name}.json"));
+        std::fs::write(&path, serde_json::json!({"schema":schema,"id":name,
+            "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"work-session-one"},
+            "request":{"obligation_id":obligation,"role":"worker","title":"Fictional","repo":"/fictional/project"},
+            "status":"run-ended","agent_id":format!("agent-{name}"),"tool_use_id":format!("call-{name}")}).to_string()).unwrap();
+        path
+    }
+
+    /// **One damaged receipt holds only its own job** (Tom's review of P0, follow-up 2). Two open
+    /// jobs, each with a helper that has finished, read idle. On main one damaged receipt made the
+    /// whole partition unreadable, so every open job counted as running, and the update gate
+    /// stuck on busy for as long as that receipt stayed. A receipt that names its job holds that
+    /// job only; so does one whose bytes are garbage where this index last read a job's receipt.
+    /// One it never read whole could be either job's, so both wait (fail toward waiting).
+    #[test]
+    fn one_damaged_receipt_holds_only_its_own_job() {
+        let h = harness(0);
+        assignment::register(&h.state, &registration(&h)).unwrap();
+        assignment::register(&h.state, &Registration { obligation_id: "obligation-8".into(), ..registration(&h) }).unwrap();
+        job_receipt(&h, "seven", "obligation-7", 1);
+        let eight = job_receipt(&h, "eight", "obligation-8", 1);
+        let running = || h.host.background_work().running;
+        assert_eq!(running(), 0, "two jobs whose helpers finished read as running");
+        // A receipt of another schema (another engine version): it parses and names its job.
+        job_receipt(&h, "eight", "obligation-8", 2);
+        assert_eq!(running(), 1, "a receipt of another schema held every job, not only its own");
+        job_receipt(&h, "eight", "obligation-8", 1);
+        assert_eq!(running(), 0);
+        // Bytes that are not a receipt at all.
+        std::fs::write(&eight, "{\"schema\":1,\"binding\"").unwrap();
+        assert_eq!(running(), 1, "a damaged receipt held every job, not only its own");
+        let unknown = eight.with_file_name("unknown.json");
+        std::fs::write(&unknown, "not a receipt").unwrap();
+        assert_eq!(running(), 2, "a damaged receipt that could be any job's was read as no job's");
+        std::fs::remove_file(&unknown).unwrap();
+        job_receipt(&h, "eight", "obligation-8", 1);
+        assert_eq!(running(), 0, "a repaired receipt still held its job");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **The gate poll reads only what changed** (Tom's review of P0, follow-up 2: about 4 MB of
+    /// JSON per five-second poll, measured while an update was on offer, growing with every job).
+    /// The first poll reads every receipt and Stu's inbox once. A poll with nothing changed reads
+    /// neither. A receipt the engine rewrote (a new file renamed over it, here with the same size
+    /// and time) is read alone, and so is a message appended for Stu.
+    #[test]
+    fn the_gate_poll_reads_only_the_receipts_and_messages_that_changed() {
+        let h = harness(0);
+        let (scope, path) = given_job_with_an_ended_helper(&h);
+        let earlier: Vec<PathBuf> = (0..40).map(|n| job_receipt(&h, &format!("old-{n}"), &format!("obligation-old-{n}"), 1)).collect();
+        // Receipts of earlier work are settled; one written in the last two seconds is read again.
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let age = |file: &Path| std::fs::File::options().write(true).open(file).unwrap().set_modified(hour_ago).unwrap();
+        let partition = earlier[0].parent().unwrap().to_path_buf();
+        let receipts: Vec<PathBuf> = std::fs::read_dir(&partition).unwrap().map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
+        receipts.iter().for_each(|file| age(file));
+        let all: u64 = receipts.iter().map(|file| std::fs::metadata(file).unwrap().len()).sum();
+        let inbox = crate::session_tools::inbox(&scope, "stu").unwrap();
+        let read = || (h.host.receipts.lock().unwrap().read_bytes(), h.host.handoffs.lock().unwrap().read_bytes());
+        h.host.background_work();
+        let first = read();
+        assert_eq!(first, (all, std::fs::metadata(&inbox).unwrap().len()), "the first poll did not read everything once");
+        h.host.background_work();
+        assert_eq!(read(), first, "a poll with nothing changed read receipts or the inbox again");
+        // The engine rewrites one receipt.
+        let rewritten = &earlier[3];
+        let incoming = partition.join(".old-3.incoming");
+        std::fs::write(&incoming, std::fs::read(rewritten).unwrap()).unwrap();
+        age(&incoming);
+        std::fs::rename(&incoming, rewritten).unwrap();
+        h.host.background_work();
+        let size = std::fs::metadata(rewritten).unwrap().len();
+        assert_eq!(read(), (first.0 + size, first.1), "a rewritten receipt was not read, or more was");
+        // A message for Stu.
+        let before = std::fs::metadata(&inbox).unwrap().len();
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Keep the original release date"})).unwrap();
+        let appended = std::fs::metadata(&inbox).unwrap().len() - before;
+        h.host.background_work();
+        assert_eq!(read(), (first.0 + size, first.1 + appended), "the appended message was not read alone");
+        h.host.background_work();
+        assert_eq!(read(), (first.0 + size, first.1 + appended), "a poll with nothing changed read again");
+        h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 

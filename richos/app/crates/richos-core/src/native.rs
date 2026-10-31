@@ -3727,6 +3727,8 @@ const STOP_TASK_REPLY_WAIT: Duration = Duration::from_secs(5);
 const STOP_TASK_ENDING_WAIT: Duration = Duration::from_secs(5);
 
 impl TurnCancel for NativeCancelHandle {
+    /// The flag [`NativeCognition`]'s own `is_closed` reads: the child's output closed.
+    fn is_closed(&self) -> bool { self.reader_closed.load(Ordering::SeqCst) }
     fn set_model(&self,model:crate::config::ModelChoice)->Result<bool,String> {
         if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
         let id=format!("richos_set_model_{}",self.next_id.fetch_add(1,Ordering::SeqCst));
