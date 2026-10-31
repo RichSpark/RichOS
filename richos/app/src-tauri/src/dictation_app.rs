@@ -116,7 +116,7 @@ pub fn on_tool_message(message: &ToolMessage, voice: &dyn VoiceMode, link: &Link
             link.send(&AppMessage::VoiceYielded { seq: *seq, bundle });
         }
         ToolMessage::State { .. } => link.observe(message.clone()),
-        ToolMessage::Key { .. } => {}
+        ToolMessage::Key { .. } | ToolMessage::Cleaner { .. } => {}
         ToolMessage::ComeForward { sheet } => voice.come_forward(*sheet),
         ToolMessage::SettingsChanged => voice.settings_changed(),
     }
@@ -203,7 +203,7 @@ impl Link {
         matches!(*self.last.lock().unwrap_or_else(|p| p.into_inner()), Some(ToolMessage::State { listening: true, .. }))
     }
 
-    fn send(&self, message: &AppMessage) -> bool {
+    pub(crate) fn send(&self, message: &AppMessage) -> bool {
         let mut writer = self.writer.lock().unwrap_or_else(|p| p.into_inner());
         match writer.as_mut() {
             Some(stream) => {

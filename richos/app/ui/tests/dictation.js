@@ -73,7 +73,7 @@ async function main() {
   });
 
   // ---- 2. the row ---------------------------------------------------------------------------
-  await run.check("the row: Dictation after Claude accounts, with round 19's line for each state and the more lines' words", async () => {
+  await run.check("the row: RichScribe followed by RichCleaner, with the line for each state and the more lines' words", async () => {
     const rows = [
       [{}, "Off", false],
       [ALLOWED, "On. Tap F1 to talk", false],
@@ -93,10 +93,10 @@ async function main() {
       await waitText(page, "#set-dictation-state", want);
       assert((await page.textContent("#set-dictation-open")).trim().startsWith("RichScribe"), "the row is named RichScribe (the CEO, 2026-10-19)");
       assertEqual(await page.locator("#set-dictation-state.is-attention").count(), attention ? 1 : 0, want + ": attention");
-      // Round 27: under "Working with Rich", after the interruption choice and directly above
-      // Use Rich from your phone, as drawn.
+      // RichCleaner shares RichScribe's key and sits immediately after its settings
+      // row. Both remain together in Working with Rich, before the phone entry.
       const order = await page.locator("#set-menu button.bugbtn").evaluateAll(b => b.map(x => x.id));
-      assert(order.indexOf("set-dictation-open") + 1 === order.indexOf("set-phone-open"), "directly above Use Rich from your phone, as drawn: " + order);
+      assertEqual(order.slice(order.indexOf("set-dictation-open"),order.indexOf("set-phone-open")+1),["set-dictation-open","set-cleaner-open","set-phone-open"],"RichScribe and RichCleaner stay adjacent before the phone entry");
       assertEqual(await page.evaluate(() => document.getElementById("set-dictation-open").closest(".sm-col").querySelector(".sm-group").textContent), "Working with Rich", "in the Working with Rich column");
       seen.push(want);
       await page.close();

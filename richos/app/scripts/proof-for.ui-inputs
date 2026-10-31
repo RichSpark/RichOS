@@ -203,3 +203,5 @@ tracked-tree.js         richos/app/ui/tests/fixtures/tracked-tree-suite.js
 # `run.js --coverage`, which it runs as a child, lists every suite here and reads each one's
 # declared check count, so the whole folder is its input (review rv-20261020T044017Z-ebbb640b-fc3b).
 gate-honesty.js        richos/app/ui/tests/ richos/app/ui/tests/run.js richos/app/ui/tests/appearance.js richos/app/ui/tests/fixtures/changed-shot-suite.js richos/app/ui/tests/fixtures/tiny-png.js
+
+cleaner.js  richos/app/ui/cleaner.html richos/app/ui/cleaner.js richos/app/ui/cleaner.css richos/app/ui/cleaner-settings.js richos/app/ui/cleaner-icon.png richos/app/ui/settings-button.js richos/app/ui/theme-boot.js richos/app/ui/dictation-overlay.css richos/app/ui/style.css

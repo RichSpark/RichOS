@@ -616,6 +616,9 @@ pub fn settle() {
     }
 }
 
+/// Workspace-only routing check, before any Accessibility lookup.
+pub fn front_is_finder()->bool {frontmost_pid().and_then(bundle_of).as_deref()==Some("com.apple.finder")}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -718,3 +721,4 @@ mod tests {
         }
     }
 }
+

@@ -1529,6 +1529,8 @@ async function main() {
     // checked rather than believed.
     const rules = SOURCES.cssRules("font-size");
     assert(rules.length >= 150, "only " + rules.length + " font-size declarations found — that is not this tree");
+    // NINE WITH RICHCLEANER: cleaner.css uses scalable rem sizes, all at least
+    // the 0.875rem text floor. The same declaration and floor checks below include every new rule.
     // EIGHT SINCE ROUND 41 (`terminal-and-git.css`: 29 font-sizes, all `rem`, none below 1rem, so
     // no px declaration and no floor exception; the walk below reads it like the rest).
     // SEVEN SINCE THE INSTRUCTIONS UPDATE (`instructions-update.css`, round 37: every font-size
@@ -1542,8 +1544,8 @@ async function main() {
     // list is compared by NAME, so a swap of one file for another cannot pass as "still five".
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "speckle.css", "splash.css", "home.css", "instructions-update.css", "terminal-and-git.css", "dictation-overlay.css"],
-      "the shell links a different set of stylesheets from the eight this check was measured against"
+      ["fonts/fonts.css", "style.css", "cleaner.css", "speckle.css", "splash.css", "home.css", "instructions-update.css", "terminal-and-git.css", "dictation-overlay.css"],
+      "the shell links a different set of stylesheets from the nine this check was measured against"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a
     // brace-counting walk and the property regex must see the same declarations, or the walk

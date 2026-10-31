@@ -1504,6 +1504,16 @@ if [ "${#build_launch[@]}" -eq 0 ]; then
   warn "  note: this compile runs without the release-build role ($build_launch_why),"
   warn "  so the CPU guard may stop rustc after 10 s above 3 cores."
 fi
+# The native file adapter and metadata runtime travel inside the signed app. Users
+# install no separate tools; source pins and the complete resource manifest are verified.
+cleaner_resources="$(python3 "$here/build-cleaner-resources.py")" || { warn "RichCleaner's resources could not be built."; exit 4; }
+cleaner_resource_config="$(python3 - "$cleaner_resources" <<'PYCONFIG'
+import json,sys
+print(json.dumps({"bundle":{"resources":{sys.argv[1]:"RichCleaner/"}}}))
+PYCONFIG
+)" || exit 4
+build_args+=(--config "$cleaner_resource_config")
+
 if ! (cd "$src_tauri" && ${build_launch[@]+"${build_launch[@]}"} env RICHOS_SOURCE_SHA="$source_stamp" cargo "${build_args[@]}"); then
   warn ""
   warn "the build did not complete — nothing was packaged. The output above is the reason."
@@ -1540,7 +1550,25 @@ fi
 # is nothing to wait on. `RICHOS_ALLOW_HOST_PATHS=1` is the deliberate, logged override.
 say ""
 say "checking the bundle for build-machine paths..."
-if ! python3 "$here/lib/no_host_paths.py" "$app_bundle" --reviewed-text --upstream-policy "$here/runtime-sources.json" --upstream-runtime-root "$app_bundle/Contents/Resources/runtime"; then
+# Reuse the existing pinned-upstream policy boundary for both bundled runtimes.
+# Examples are accepted only in their exact reviewed file bytes, never by user name.
+path_policy_dir="$(mktemp -d "${TMPDIR:?}richcleaner-package.XXXXXX")" || exit 5
+if ! python3 - "$here/runtime-sources.json" "$app_bundle/Contents/Resources/RichCleaner/manifest.json" "$path_policy_dir/policy.json" <<'PYPATHPOLICY'
+import json,pathlib,sys
+rows=[]
+for prefix,source in [("runtime/",sys.argv[1]),("RichCleaner/",sys.argv[2])]:
+    for row in json.loads(pathlib.Path(source).read_text()).get("upstream_path_exemptions",[]):
+        rows.append({**row,"member":prefix+row["member"]})
+pathlib.Path(sys.argv[3]).write_text(json.dumps({"upstream_path_exemptions":rows}))
+PYPATHPOLICY
+then
+  rm -rf "$path_policy_dir"
+  exit 5
+fi
+path_policy_status=0
+python3 "$here/lib/no_host_paths.py" "$app_bundle" --reviewed-text --upstream-policy "$path_policy_dir/policy.json" --upstream-runtime-root "$app_bundle/Contents/Resources" || path_policy_status=$?
+rm -rf "$path_policy_dir"
+if [ "$path_policy_status" -ne 0 ]; then
   if [ "${RICHOS_ALLOW_HOST_PATHS:-}" = "1" ]; then
     warn ""
     warn "  RICHOS_ALLOW_HOST_PATHS=1 — packaging a bundle that carries the above"
@@ -1623,6 +1651,27 @@ fi
 # .app unsigned around a linker-signed executable, which `codesign --verify` refuses
 # (measured — see verify_bundle's adhoc arm). So the ad-hoc path signs deliberately
 # and says it is doing so. This is the act that incurs the cost printed above.
+# Sign every executable/loadable part of the bundled metadata runtime inside-out.
+# Library validation remains enabled; Perl's XS modules use the same signing identity.
+python3 - "$app_bundle/Contents/Resources/RichCleaner" "$sign_mode" "${wanted:-}" <<'PYCLEANERSIGN'
+import pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]);developer=sys.argv[2]=="developer-id"
+for path in sorted(root.rglob("*")):
+    if not path.is_file() or path.is_symlink():
+        continue
+    kind=subprocess.check_output(["/usr/bin/file","-b",path],text=True)
+    if "Mach-O" not in kind:
+        continue
+    args=["codesign","--force","--sign",sys.argv[3] if developer else "-"]
+    args += ["--options","runtime","--timestamp"] if developer else ["--timestamp=none"]
+    mode=path.stat().st_mode
+    path.chmod(mode | 0o200)
+    try:
+        subprocess.run([*args,path],check=True)
+    finally:
+        path.chmod(mode)
+PYCLEANERSIGN
+
 if [ "$sign_mode" = "adhoc" ]; then
   say ""
   say "ad-hoc signing the bundle (the bundler does not: it signs only with a real identity)..."

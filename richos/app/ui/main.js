@@ -9854,6 +9854,7 @@ window.RichDismiss = {
   selector: POPUP_SELECTOR,
   open: openPopups,
   dismissTopmost: dismissTopmostPopup,
+  question: openQuestion,
 };
 
 // ---------------------------------------------------------------------------------------
@@ -10315,3 +10316,13 @@ async function hydrateRunningTurn() {
 }
 
 init();
+
+// Feature windows return to the existing Settings and report surfaces.
+Bridge.listen("rich://cleaner-settings", ({payload}) => {
+  if(payload.surface === "cleaner") window.RichCleaner?.open();
+  else if(payload.surface === "scribe") window.RichDictation?.open();
+  else if(payload.surface === "bug" || payload.surface === "idea") {
+    window.RichSettings.openMenu();
+    document.getElementById(payload.surface === "idea" ? "idea-btn" : "bug-btn")?.click();
+  }
+});

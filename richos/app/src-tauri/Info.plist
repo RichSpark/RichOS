@@ -29,6 +29,14 @@
 -->
 <plist version="1.0">
   <dict>
+    <key>NSServices</key>
+    <array><dict>
+      <key>NSMenuItem</key><dict><key>default</key><string>Add spoken note with RichCleaner</string></dict>
+      <key>NSMessage</key><string>richCleanerNote</string>
+      <key>NSPortName</key><string>RichOS</string>
+      <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string></array>
+      <key>NSReturnTypes</key><array/>
+    </dict></array>
     <key>NSMicrophoneUsageDescription</key>
     <string>So you can talk instead of typing. I listen only when you ask me to.</string>
   </dict>
