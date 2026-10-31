@@ -649,6 +649,18 @@ def ever_dispatched(record, canonical=None):
     return bool(admitted(record) or (canonical and any(canonical.get(field) for field in RUN_EVIDENCE)))
 
 
+def registry_landed(record):
+    """The canonical record when the workspace registry itself LANDED this receipt's
+    workspace, else None: the record has moved to done/ (not agents/) and its disposition
+    is `landed` (row 3, 2026-10-31). A landed disposition still in agents/ is only cleanup
+    intent, not a finished land."""
+    key = W.named_key(record["binding"]["session_id"], record["name"])
+    if os.path.exists(W.agent_path(key)):
+        return None
+    canonical = W.read_json(W.done_path(key))
+    return canonical if canonical and (canonical.get("disposition") or {}).get("kind") == "landed" else None
+
+
 def retired_execution(record):
     """A dispatched attempt with no result whose canonical cleanup is finished.
 
@@ -658,10 +670,8 @@ def retired_execution(record):
     """
     if record.get("integration", {}).get("verified"):
         return False
-    key = W.named_key(record["binding"]["session_id"], record["name"])
-    canonical = None if os.path.exists(W.agent_path(key)) else W.read_json(W.done_path(key))
-    return bool(canonical and not canonical.get("end") and ever_dispatched(record, canonical)
-                and (canonical.get("disposition") or {}).get("kind") == "landed")
+    canonical = registry_landed(record)
+    return bool(canonical and not canonical.get("end") and ever_dispatched(record, canonical))
 
 
 def refresh(record):
@@ -1981,6 +1991,36 @@ def automatic_reviews(worker, commits):
     return refs
 
 
+def landed_by_registry(canonical):
+    """Evidence for a worker whose run ended with no verified integration of its own and
+    whose workspace the registry LANDED (row 3, 2026-10-31: Newt and round 45 were landed
+    by the registry and their jobs could never complete). Each tip the land recorded is
+    checked again: in the integration branch, or accepted through the superseded link the
+    land recorded (a recorded link's commit is checked in the branch). A record from before
+    the land recorded its tips rests on the registry's landed disposition alone.
+
+    Judgment, stated: "on the integration branch" is taken as reviewed, because in the app
+    the only way onto it is `integrate`, which requires the review, and in the terminal it
+    is Rich's reviewed land."""
+    disposition=canonical["disposition"]
+    links={(s.get("repo"),s.get("branch")):s for s in disposition.get("superseded") or []}
+    parts=["landed-by-registry:%s:%s" % (canonical["key"],disposition.get("at"))]
+    for ref,tip in sorted((disposition.get("tips") or {}).items()):
+        repo,_sep,branch=ref.rpartition(":")
+        target,head,why=W.integration_target([canonical],repo)
+        if why: raise ValueError("the registry's land of %s cannot be checked again: %s" % (canonical.get("name"),why))
+        link=links.get((repo,branch))
+        if link:
+            if link.get("source")=="recorded" and not is_ancestor(repo,link.get("commit") or "",head):
+                raise ValueError("the commit that superseded %s is no longer in %s of %s" % (branch,target,repo))
+            parts.append("superseded:%s:%s:%s" % (repo,branch,tip))
+        elif is_ancestor(repo,tip,head):
+            parts.append("git:%s:%s:%s" % (repo,target,tip))
+        else:
+            raise ValueError("%s (%s) that the registry landed is not in %s of %s" % (branch,tip[:12],target,repo))
+    return "+".join(parts)
+
+
 def verification_evidence(scope, identity):
     """Read durable host receipts and Git again, including after interrupted cleanup."""
     root=folder(scope)
@@ -1996,6 +2036,10 @@ def verification_evidence(scope, identity):
             raise ValueError("review completion requires the actual independent reviewer's observed report")
         return f"review:{worker['id']}:{report['commit']}:{report['verdict']}:{observed['message_sha256']}"
     integration=worker.get("integration",{})
+    if not integration.get("verified"):
+        canonical=registry_landed(worker)
+        if canonical and canonical.get("end"):
+            return landed_by_registry(canonical)
     if integration.get("automatic_reviews"):
         repo=worker["request"]["repo"]
         landed=[(repo,integration)]+sorted((integration.get("repos") or {}).items())
@@ -2801,7 +2845,9 @@ def completion_evidence(scope, obligation, worker_ids):
     evidence = []
     for record in final:
         pending = record.get("integration", {}).get("cleanup_pending")
-        if pending != []:
+        # The registry's own land closes the workspace whichever route reached it (row 3):
+        # a run with no integrate of its own, or a cleanup_pending an earlier integrate left.
+        if pending != [] and not registry_landed(record):
             raise ValueError("finish the assignment's pending workspace cleanup before completion%s"
                              % ("" if not pending else ": integrate %s again to retry it (%s)"
                                 % (record["id"], str(pending[0])[:300])))
@@ -2929,6 +2975,35 @@ def quarantine_foreign_record(name, reason):
             "was_unreadable_because": damaged[os.path.realpath(path)]}
 
 
+def settle_superseded(scope, record, commit, reason):
+    """FINISHED WORK REDONE ELSEWHERE AND ALREADY INTEGRATED (row 3, 2026-10-31; §138: the
+    app has no workspaces.sh). The registry records the link (`W.supersede`, the terminal's
+    `workspaces.sh supersede`), then the live head of the receipt's chain is landed with
+    `W.land`, the call integrate's cleanup makes. A land that is still refused leaves the
+    link in place, and the next automatic land pass retries it."""
+    canonical = canonical_of(record)
+    if not canonical or not canonical.get("end"):
+        raise ValueError("this receipt's run has not ended; superseded_by settles only finished work")
+    me = scope["binding"]["session_id"]
+    linked = W.supersede(canonical["key"], commit, reason, me)["superseded"]
+    head, seen = canonical, {canonical["key"]}
+    while (head.get("disposition") or {}).get("kind") == "continued" and len(seen) < 50:
+        later = W.load_agent(head["disposition"].get("by") or "")
+        if not later or later["key"] in seen:
+            break
+        seen.add(later["key"])
+        head = later
+    try:
+        landed = W.land(head["key"], me=me)
+        pending = "" if landed.get("landed") and not landed.get("cleanup_pending") else \
+            "the land of %s is recorded and its cleanup is retried" % head.get("name")
+    except W.SpecError as error:
+        pending = str(error)[-2000:]
+    return {"id": record["id"], "name": record["name"], "request_id": record.get("request_id"),
+            "superseded": linked, "landed": head.get("name") if not pending else None,
+            **({"land_pending": pending} if pending else {})}
+
+
 def settle(scope, args):
     """SETTLE ONE RECEIPT THAT NEVER RAN, WITH A REASON (2026-10-28, work-709b35ac).
 
@@ -2940,8 +3015,10 @@ def settle(scope, args):
     way to say which, and to clear a dead one before its assignment completes. It settles
     only on the same proof, never a receipt whose run started, and removes a worktree only
     when it holds nothing."""
-    if set(args) - {"request_id", "registry_record", "reason"} or ("request_id" in args) == ("registry_record" in args):
+    if set(args) - {"request_id", "registry_record", "reason", "superseded_by"} or ("request_id" in args) == ("registry_record" in args):
         raise ValueError("settle takes a reason and exactly one of request_id or registry_record")
+    if "superseded_by" in args and "request_id" not in args:
+        raise ValueError("superseded_by settles a receipt: name it with request_id")
     reason = sent_text(args, "reason", 2000).strip()
     if len(reason) < 10:
         raise ValueError("say why this is settled, in at least ten characters")
@@ -2959,6 +3036,8 @@ def settle(scope, args):
         carried = carried_obligation(scope)
         if carried is not None and record["request"]["obligation_id"] != carried:
             raise ValueError("this receipt belongs to another assignment")
+        if "superseded_by" in args:
+            return settle_superseded(scope, record, text(args, "superseded_by", 64), reason)
         if not record.get("settled"):
             if preparing_elsewhere(record):
                 raise ValueError("this receipt is still being prepared; inspect it once its preparation returns")
@@ -3048,7 +3127,7 @@ TOOLS = [
     {"name":"integrate","description":"When the automatic independent handover review passes, integrate with worker_id alone. Do not prepare a routine reviewer agent: the watcher uses Codex when enabled and available, otherwise Claude automatically. reviewer_id is accepted for an existing explicit reviewer. Merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers; RichOS then sends a team_reloaded message: carry on there with the work that waited for them. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart.","inputSchema":{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"}},"additionalProperties":False}},
-    {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a later turn prepares a replacement for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded. With registry_record instead of request_id, it removes one record the workspace registry reports as unreadable, only when no workspace lifecycle wrote it (a stray test fixture); it is moved aside, never deleted, and a record that could own a workspace is refused.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"registry_record":{"type":"string"},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["reason"],"additionalProperties":False}},
+    {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a later turn prepares a replacement for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded. With registry_record instead of request_id, it removes one record the workspace registry reports as unreadable, only when no workspace lifecycle wrote it (a stray test fixture); it is moved aside, never deleted, and a record that could own a workspace is refused. With superseded_by (a commit already integrated that redid this receipt's work) and request_id, it settles a receipt whose run ENDED and whose branch was redone elsewhere: the replaced tip is recorded, not merged, and the receipt's chain is landed, so complete can close the assignment. A commit that is not integrated, or that touches none of the branch's files, is refused.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"registry_record":{"type":"string"},"superseded_by":{"type":"string","maxLength":64},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["reason"],"additionalProperties":False}},
 ]
 def available_tools(read_only=False):
     if not read_only: return TOOLS
