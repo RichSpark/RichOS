@@ -26,7 +26,7 @@
 .fico { position: relative; display: block; }
 .fico .pg { fill: #FDFCF8; stroke: rgba(0,0,0,.28); stroke-width: 1; }
 .fico .fold { fill: #D9D4C7; }
-.fico text { font-family: var(--font); font-weight: 700; font-size: 11px; fill: #2A3345; letter-spacing: .02em; }
+.fico text { font-family: var(--font); font-weight: 700; font-size: .875rem; fill: var(--ink); letter-spacing: .02em; }
 .fico .band { fill: #C2A35C; }
 
 /* =============================================================================================
