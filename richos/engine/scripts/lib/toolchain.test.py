@@ -449,8 +449,10 @@ class FakeMac(unittest.TestCase):
                   "/Users/x/Library/Application Support/RichOS/engine/scripts/lib/toolchain.py")
         with unittest.mock.patch.object(toolchain.sys, "executable", spaced[0]), \
                 unittest.mock.patch.object(toolchain, "__file__", spaced[1]):
-            for key, tail in toolchain._commands("make").items():
-                self.assertEqual(shlex.split(tail)[:2], list(spaced), key)
+            words = {"yes_command": ["answer", "make", "yes"], "no_command": ["answer", "make", "no"],
+                     "install_command": ["install", "make"]}
+            for key, command in toolchain._commands("make").items():
+                self.assertEqual(shlex.split(command), list(spaced) + words[key], key)
         rc, said = self.run_install(env, "make")
         self.assertEqual(rc, 3, said)
         self.assertIn("has not given permission", said)
