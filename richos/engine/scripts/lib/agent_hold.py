@@ -72,11 +72,25 @@ constructs for worktree-isolated agents. New calls retain the original command
 at top level after a literal helper invocation and owner exports. The helper
 records its own parent; it never reads or executes the user's command.
 
-Ordinary CLI subagent Bash calls get six seconds to deliver their result in the
+HOST CALLS (2026-10-30): IN THE APP AN ORDINARY CALL RUNS AS THE HOST RUNS IT. The
+app's sessions are `sdk-cli`. There a subagent's ordinary Bash call (mode "host") keeps
+the caller's own foreground choice and timeout, and nothing is said about waiting: its
+result comes back directly, or, when the host moves a long one to the background at its
+timeout, through the host's own notification. It is still recorded here, so a hold
+freezes it and its new calls are refused. Measured on Claude Code 2.1.314 in print mode
+with an async subagent: a lead's message reaches a worker in a foreground call only when
+that call returns; a frozen foreground call past its timeout is moved to the background,
+neither continued nor killed, and the same process finishes after SIGCONT; and
+`control_request{background_tasks, tool_use_id}` moves that call to the background at
+once. So at a hold the app sends that request for each of the worker's foreground calls
+(native.rs) and the WAIT reaches it within about a second. The wait (`wait` below) never
+waits on a host call. Explicit background calls keep their path.
+
+Ordinary CLI (terminal) subagent Bash calls get six seconds to deliver their result in the
 foreground by default, then use the harness's automatic native background
-handoff. Installed acceptance passed on Claude Code 2.1.289. SDK callers and
-explicit background calls keep their existing path. RICHOS_AGENT_BASH_FOREGROUND=0
-restores forced background execution. This is a handoff grace, not a process
+handoff. Installed acceptance passed on Claude Code 2.1.289. Explicit background
+calls keep their existing path. RICHOS_AGENT_BASH_FOREGROUND=0
+restores forced background execution, in the terminal and in the app. This is a handoff grace, not a process
 execution deadline; the host's own background limits still apply. A directly
 delivered result needs
 no collector call and is marked consumed at the next tool boundary.
@@ -497,10 +511,13 @@ def rewrite(payload):
         return None
     command = ti["command"]
     mode = "exempt" if is_wait_call(command) else "bg" if ti.get("run_in_background") else "native"
-    # Only the CLI transcript has authoritative structured handoff metadata.
-    # Keep SDK/other hosts on their established background path.
-    foreground = (mode == "native" and os.environ.get("RICHOS_AGENT_BASH_FOREGROUND", "1") == "1"
-                  and os.environ.get("CLAUDE_CODE_ENTRYPOINT", "cli") == "cli")
+    # The terminal (cli) keeps its six-second grace and the collector that needs its
+    # transcript's task metadata. Every other host (the app's sdk-cli sessions) runs an
+    # ordinary call as the host itself would, with nothing forced (HOST CALLS, module doc).
+    cli = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "cli") == "cli"
+    if mode == "native" and not cli and os.environ.get("RICHOS_AGENT_BASH_FOREGROUND", "1") == "1":
+        mode = "host"
+    foreground = mode == "native" and cli and os.environ.get("RICHOS_AGENT_BASH_FOREGROUND", "1") == "1"
     rec = _record(payload, mode, command, foreground=foreground)
     if rec is None:
         return None
@@ -517,6 +534,10 @@ def rewrite(payload):
     if os.path.exists(held):
         _unlink_call(stem)  # the hook refuses this call, so no native task can start
         return {"command": command, "input": {}, "deny": REFUSED_TEXT}
+    if mode == "host":
+        # The caller's own foreground/timeout choice stands and nothing is said: its result
+        # comes back directly, or through the host's own notification if the host moves it.
+        return {"command": head + command, "input": {}}
     if foreground:
         return {"command": head + command,
                 "input": {"run_in_background": False, "timeout": FOREGROUND_GRACE_MS},
@@ -591,8 +612,9 @@ def _read_pid(path):
 def calls(session_id, agent_id, table):
     """[{tid, pid, ppid, at, mode, stem}] of this agent's recorded calls whose shell is still that shell.
 
-    mode is "fg" (a wrapped foreground call), "bg", "exempt" (its wait command) or
-    "" (recorded by the previous capture, which did not wrap)."""
+    mode is "fg" (a wrapped foreground call), "bg", "exempt" (its wait command), "native"
+    (the terminal's graced or forced-background call), "host" (an app call the host runs
+    as it chooses, HOST CALLS) or "" (recorded by the previous capture, which did not wrap)."""
     directory = _shell_dir(session_id, agent_id)
     try:
         names = sorted(os.listdir(directory))
@@ -1632,7 +1654,9 @@ def wait_resume(max_seconds=None, poll=WAIT_RECHECK_SECONDS, out=sys.stdout):
     """Returns once this agent's hold is released, printing RESUMED and then the result of
     any foreground command the hold froze; at the bound it prints STILL WAITING (or STILL
     RUNNING) so the agent runs it again. Native task output and exit status are
-    delivered here even when no pause happened. Never ends anything.
+    delivered here even when no pause happened. A wait that sat out a hold returns at its
+    release and only names a native call still running, so the agent carries on at once.
+    Never ends anything.
 
     Every wait in it blocks on what it waits for (see WAIT_RECHECK_SECONDS): the hold
     directory, the call-record directory, the exit of each running shell, the host's
@@ -1647,10 +1671,12 @@ def wait_resume(max_seconds=None, poll=WAIT_RECHECK_SECONDS, out=sys.stdout):
     deadline = time.monotonic() + max_seconds
     path = _held_path(session, agent)
     held_dir, shells = os.path.dirname(path), _shell_dir(session, agent)
+    was_held = False
     while True:
         with _watch(paths=[held_dir]) as w:
             if not os.path.exists(path):
                 break
+            was_held = True
             if notice_hold(session, agent):
                 out.write("WAIT: running work is held. " + HOW_TO_WAIT + "\n")
                 return 0
@@ -1664,11 +1690,21 @@ def wait_resume(max_seconds=None, poll=WAIT_RECHECK_SECONDS, out=sys.stdout):
     if notice and not notice.get("resumed"):
         out.write("RESUMED at %s: carry on from where you were.\n" % _clock())
         _write_json(notice_path, dict(notice, resumed=True))
+        # The registered hook's gate() holds this call back until the release, so the hold
+        # file is gone before this wait starts: the unresumed notice is what says it sat one out.
+        was_held = True
+    # RESUMED MEANS CARRY ON NOW (2026-10-31). A wait that sat out a hold returns at the
+    # release with what is ready and names each native call still running; it never keeps
+    # the agent waiting on one. Its command was refused or its wait was ended by the hold, so
+    # carrying on is retrying that command, not sitting here until an unrelated long call ends
+    # or the bound runs out (pause-acceptance A4: the resumed agent did nothing for 180 s while
+    # its 20-minute counter ran on). An agent that was collecting a call runs the wait again.
+    pending = native_pending_ids(session, agent) if was_held else set()
     # Native tasks keep their output/status in the harness. Keep this agent's
     # run active while it waits, but return as soon as a new hold appears so a
     # queued SendMessage can be delivered at this tool boundary, and as soon as
     # any finished call's result is ready, even while another call still runs.
-    while True:
+    while not was_held:
         with _watch(paths=[held_dir, shells]) as w:
             found = {}
             pending = native_pending_ids(session, agent, found)

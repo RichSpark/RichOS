@@ -2455,15 +2455,47 @@ def _agent_transcript(session_id, agent_id):
     return hits[0] if hits else ""
 
 
+# The host's own background receipt, as the tool result's text says it. The app's sdk-cli
+# transcripts carry no toolUseResult at all (measured 2026-10-30 on Claude Code 2.1.311 and
+# 2.1.314: every row's toolUseResult is absent), so the text is the only receipt there.
+HOST_RECEIPT = re.compile(
+    r"Command (?:running in background with ID: |was manually backgrounded by user with ID: "
+    r"|was moved to the background \(ID: |did not complete within its [0-9.]+s timeout and was moved to "
+    r"the background \(ID: )([A-Za-z0-9_-]+)\b.*?Output is being written to: (\S+?/tasks/\1\.output)", re.S)
+
+
+def _host_receipt(row, tool_use_id):
+    """True when this transcript row is the host's background receipt for tool_use_id with no
+    structured metadata (sdk-cli): the row has no toolUseResult, its tool result is that call's,
+    and the output file the receipt names exists. Stdout imitating a receipt names no real file."""
+    if not isinstance(row, dict) or row.get("toolUseResult") is not None:
+        return False
+    for item in ((row.get("message") or {}).get("content") or []):
+        if not isinstance(item, dict) or item.get("type") != "tool_result" or item.get("tool_use_id") != tool_use_id:
+            continue
+        text = item.get("content")
+        if isinstance(text, list):
+            text = " ".join(str(b.get("text", "")) for b in text if isinstance(b, dict))
+        m = HOST_RECEIPT.match(text) if isinstance(text, str) else None
+        if m and os.path.isfile(m.group(2)):
+            return True
+    return False
+
+
 def _undelivered_calls(session_id, agent_id, ah, running):
     """This agent's background calls whose shell has already ended but whose completion the
     platform has not yet delivered, as [(tool call id, command)]: its transcript holds the call's
-    background receipt (a tool result carrying a backgroundTaskId) and no task notification naming
+    background receipt (a tool result carrying a backgroundTaskId, or in the app's sdk-cli
+    transcripts the receipt's own text, _host_receipt) and no task notification naming
     it yet. The platform wakes the agent with that notification, so a stop before it arrives is not
     its end either (2026-10-08: echo-fable-dict5's test run ended at 16:55:45, its turn ended at
     16:55:46.18 with no shell left running, the end was recorded, and the notification woke it at
     16:55:46.76 into the lock-out). A call whose result came back directly has no receipt, and a
-    delivered one names itself, so neither ever defers an end. No transcript is []."""
+    delivered one names itself, so neither ever defers an end. No transcript is [].
+
+    In the app this is the common path, not a rare race (2026-10-30): an app worker's ordinary
+    command runs in the foreground as in the terminal, the host moves a long one to the background
+    at its timeout, and the worker may end its turn to await the host's notification."""
     directory = ah._shell_dir(session_id, agent_id)
     candidates = {}
     for name in os.listdir(directory) if os.path.isdir(directory) else []:
@@ -2480,7 +2512,8 @@ def _undelivered_calls(session_id, agent_id, ah, running):
         for line in f:
             for m in re.finditer(rb"<tool-use-id>([A-Za-z0-9_.-]+)</tool-use-id>", line):
                 delivered.add(m.group(1).decode())
-            if b"backgroundTaskId" not in line:
+            structured = b"backgroundTaskId" in line
+            if not structured and b"Output is being written to: " not in line:
                 continue
             try:
                 row = json.loads(line)
@@ -2488,9 +2521,13 @@ def _undelivered_calls(session_id, agent_id, ah, running):
                 continue
             result = row.get("toolUseResult") if isinstance(row, dict) else None
             content = (row.get("message") or {}).get("content") if isinstance(row, dict) else None
-            if isinstance(result, dict) and result.get("backgroundTaskId") and isinstance(content, list):
-                receipts.update(i.get("tool_use_id") for i in content
-                                if isinstance(i, dict) and i.get("type") == "tool_result")
+            if not isinstance(content, list):
+                continue
+            ids = [i.get("tool_use_id") for i in content if isinstance(i, dict) and i.get("type") == "tool_result"]
+            if structured and isinstance(result, dict) and result.get("backgroundTaskId"):
+                receipts.update(ids)
+            else:
+                receipts.update(t for t in ids if t in candidates and _host_receipt(row, t))
     return [(tid, cmd) for tid, cmd in sorted(candidates.items()) if tid in receipts and tid not in delivered]
 
 
