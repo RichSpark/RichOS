@@ -7,12 +7,12 @@ Run by run-walk.py, which holds one guest slot for this run only, boots the gues
       stop-worker-walk.py --out DIR --expect-sha SHA
 
 THE QUESTION (2026-10-30, about §129). In the terminal, Esc during a foreground command stops it
-and background teammates keep running. In the app, Stu's own Bash is forced into the background
-(`engine/mega-lander/app.py` worker_context) so that Stop can end it by its own task. Does the app's
-Stop end Stu's command when it runs in the FOREGROUND, while a worker of another job keeps running
-and still answers? Give it an engine whose forced background is switched off for this test only
-(`--engine` built from a copy with those lines removed); `foreground` refuses an engine that still
-forces it, so the walk can never pass on the background path by mistake.
+and background teammates keep running. §129 forced Stu's own Bash into the background
+(`engine/mega-lander/app.py` worker_context) so that Stop could end it by its own task; that is
+removed, and Stu's commands run as he issues them. Does the app's Stop end Stu's command when it
+runs in the FOREGROUND, while a worker of another job keeps running and still answers? `foreground`
+refuses an engine that still forces the background, so the walk can never pass on the background
+path by mistake.
 
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   identity     the running app says it was built from --expect-sha

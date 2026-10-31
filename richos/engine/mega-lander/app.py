@@ -1783,10 +1783,8 @@ def worker_context(scope, payload):
     """Host context and direct file boundaries derived from an observed Agent ID."""
     aid = payload.get("agent_id")
     if not aid:
-        if scope.get("background_work_allowed") is True and payload.get("tool_name") == "Bash":
-            # Native task Stop requires Stu's own Bash to be backgrounded.
-            return {"hookSpecificOutput":{"hookEventName":"PreToolUse",
-                "updatedInput":{**payload.get("tool_input", {}), "run_in_background":True}}}
+        # Stu's own Bash runs as he issued it, as in the terminal: a foreground command is a
+        # native task with its own id, so a job's Stop ends it alone (stop_task), no other job.
         return None
     with locked(scope) as root:
         matches=[]

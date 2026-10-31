@@ -139,12 +139,13 @@ A user Stop is recorded durably before cancellation. For independent Stu, the ho
 persists revocation before waiting for the existing receipt lock, takes its launch
 snapshot under that lock, then sends the existing native per-task stop control only to that work's observed
 tool calls on their owning session. Missing delivery or ending evidence stays
-unknown. The canonical hook uses the native background-task option for Stu's own
-Bash calls, preserving the command and its other arguments; interrupting the
-session would also stop unrelated workers. Every shell command Stu's own model
-starts, foreground or background, is a native task with its own id (Claude Code
-2.1.307 answers `stop_task` for a foreground one and ends only that command; the
-turn goes on). The job travels with the command: Stu begins each command's
+unknown. The Stop never interrupts Stu's session, which would also stop unrelated
+workers. The canonical hook leaves Stu's own Bash calls as he issued them, so a
+foreground command waits for its own end, as in the terminal. Every shell command
+Stu's own model starts, foreground or background, is a native task with its own id
+(Claude Code 2.1.307 answers `stop_task` for a foreground one and ends only that
+command; the turn goes on; 2.1.314 measured the same with another job's worker
+still running, `richos/app/scripts/qa/stop-probe.py`). The job travels with the command: Stu begins each command's
 description with the job's obligation_id (stu.md) and the host also stops those
 of his running commands that name the stopped job, never one that names another
 job. A command that names no job is stopped only when it started after the job was

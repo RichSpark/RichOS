@@ -203,17 +203,29 @@ class DesktopHooks(unittest.TestCase):
                 result = self.hook("PreToolUse", tool_name=tool, tool_use_id="direct-" + tool, tool_input=args)
                 self.assertEqual(result.returncode, 0, tool + result.stderr)
                 output = json.loads(result.stdout).get("hookSpecificOutput", {}) if result.stdout.strip() else {}
-                if tool == "Bash":
-                    self.assertEqual(output.get("updatedInput"), {**args, "run_in_background":True},
-                                     "§129 changes only the native background option")
-                else:
-                    self.assertNotIn("updatedInput", output, "unrelated native arguments must stay unchanged")
+                self.assertNotIn("updatedInput", output, "native arguments must stay unchanged")
         self.assertFalse((self.coordination / "result.txt").exists(), "the fixture only runs the production hook")
         self.scope.write_text(json.dumps({**grant, "background_work_allowed":False}))
         rich = self.hook("PreToolUse", tool_name="Bash", tool_use_id="rich-command", tool_input={"command":"true", "run_in_background":False})
         self.assertEqual(rich.returncode, 0, rich.stderr)
         rich_output = json.loads(rich.stdout).get("hookSpecificOutput", {}) if rich.stdout.strip() else {}
-        self.assertNotIn("updatedInput", rich_output, "§129 applies to Stu's commands")
+        self.assertNotIn("updatedInput", rich_output, "Rich's commands run as he issued them")
+
+    def test_stus_own_ordinary_bash_runs_in_the_foreground_as_in_the_terminal(self):
+        """§129 forced Stu's own Bash into the background so a job's Stop could end it by its task.
+        On Claude Code 2.1.314 a foreground command is a native task with its own id: the job's
+        Stop ends it alone with stop_task (work_host.rs
+        a_jobs_stop_of_stus_foreground_command_leaves_another_jobs_worker_running). So his command now
+        runs as he issued it and waits for its own end, as in the terminal. On 1005c35e8 the hook
+        answered this call with updatedInput carrying run_in_background: true."""
+        self.scope.write_text(json.dumps({"version":1, "actions_allowed":True, "background_work_allowed":True,
+            "binding":{"entity_id":"company", "thread_id":"thread", "session_id":"fictional-session", "turn_id":"peer:1"}}))
+        args = {"command":"python3 heartbeat.py beat b 300", "description":"work-b: heartbeat"}
+        result = self.hook("PreToolUse", tool_name="Bash", tool_use_id="stu-foreground", tool_input=args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout).get("hookSpecificOutput", {}) if result.stdout.strip() else {}
+        self.assertNotIn("run_in_background", output.get("updatedInput") or {},
+                         "Stu's own foreground command must not be moved to the background")
 
 
     def test_an_agent_dispatch_answers_with_one_envelope_so_its_updated_input_reaches_the_teammate(self):
