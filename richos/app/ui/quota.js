@@ -284,7 +284,8 @@
       // this account". Round 16 names the model it drew (Sonnet); the app cannot know which
       // model is missing, so that row says "Weekly · per model".
       const absent = label => { const row = node("p", "quota-absent"); row.append(node("b", "", label), ": not reported by Claude Code for this account"); return row; };
-      if (!hero) list.prepend(absent("Five-hour window"));
+      // No five-hour row at all when the reading has none: the account has no five-hour limit
+      // (Anthropic, 2026-10-31; the CEO: "If no 5-hour-limit data, then don't show/don't handle it").
       if (!windows.some(w => w.id === "seven_day")) list.appendChild(absent("Weekly window"));
       if (!windows.some(w => w.id !== "five_hour" && w.id !== "seven_day")) list.appendChild(absent("Weekly · per model"));
     }
@@ -351,7 +352,7 @@
       html += `</span>`;
       if (signing) html += `<span class="quota-lane-note"><span class="quota-lane-pulse" aria-hidden="true"></span>Claude Code is signing in through your browser. The reading arrives when it is done.</span>`;
       else if (!read) html += `<span class="quota-lane-note">${esc(accountNote(a))}</span>`;
-      else html += `<span class="quota-lane-figs">${figure(winOf(a, "five_hour"), "five-hour", old || !!age)}${figure(week, "weekly", old || !!age)}${age ? `<span class="quota-fig quota-lane-age">read <b>${esc(age)}</b> ago</span>` : ""}</span>`;
+      else html += `<span class="quota-lane-figs">${winOf(a, "five_hour") ? figure(winOf(a, "five_hour"), "five-hour", old || !!age) : ""}${figure(week, "weekly", old || !!age)}${age ? `<span class="quota-fig quota-lane-age">read <b>${esc(age)}</b> ago</span>` : ""}</span>`;
       html += `</span><span class="quota-lane-side"></span>`;
       lane.innerHTML = html;
       const side = lane.querySelector(".quota-lane-side");
@@ -515,20 +516,24 @@
       head = "Off. Nothing is paused.";
       // Round 16's `fresh` card with one account. With several the app keeps its own second
       // sentence, because a turned-away step runs again on the next account with room.
-      body = many ? `Rich’s agents keep working through the line. If ${cur ? poss(cur.label) : "the"} five-hour window runs out, the step Claude Code turns away runs again on the next account with room. The switch at 99% of the week still happens; that is what a second account is for.`
-        : "Rich’s agents keep working through the limit. When the five-hour window is spent, Claude Code turns them away until it resets and Rich tells you.";
+      const spent = five ? "five-hour window" : "week";
+      body = many ? (five ? `Rich’s agents keep working through the line. If ${cur ? poss(cur.label) : "the"} five-hour window runs out, the step Claude Code turns away runs again on the next account with room. ` : "Rich’s agents keep working. ")
+          + "The switch at 99% of the week still happens; that is what a second account is for."
+        : `Rich’s agents keep working through the limit. When the ${spent} is spent, Claude Code turns them away until it resets and Rich tells you.`;
     } else if (noReading) {
       // Not drawn in round 16: the check came back with no figures, so nothing is held on it.
       head = "No current reading, so nothing is held.";
       const ask = view.retryAt > now ? view.retryAt : view.nextCheckAt;
-      body = `${state === "unknown" ? "There is no current usage reading" : view.message ? "The last check brought no usage figures" : "Claude Code’s last answer had no usage figures"} and the pause acts only on a number. Rather than wait on Claude Code, Rich’s agents keep working; the pause acts again once a reading shows the five-hour window past <b>${fiveLine()}%</b>.`
+      body = `${state === "unknown" ? "There is no current usage reading" : view.message ? "The last check brought no usage figures" : "Claude Code’s last answer had no usage figures"} and the pause acts only on a number. Rather than wait on Claude Code, Rich’s agents keep working; the pause acts again once a reading shows ${five ? `the five-hour window past <b>${fiveLine()}%</b>` : `the week at <b>${weekLine()}%</b>`}.`
         + (ask > now ? ` RichOS asks again in <span class="quota-keep">${esc(duration(ask - now))}.</span>` : "");
     } else if (state === "held") {
       head = "Ready to pause"; body = esc(weeklyHeld ? "Weekly usage reached 99%. Agents will pause at their next step until allowance is confirmed." : `The five-hour allowance has reached ${view.policy.pausePercent}%. Agents will pause when they finish their current step. No pauses observed yet.`);
     } else {
       acting = true;
       const five = many ? winOf(cur, "five_hour") : (view.windows || []).find(w => w.id === "five_hour");
+      const week = many ? winOf(cur, "seven_day") : (view.windows || []).find(w => w.id === "seven_day");
       const used = five ? `<b>${pct(five.usedPercent)} used</b>` : "not read yet", line = fiveLine();
+      const weekUsed = week ? `<b>${pct(week.usedPercent)} used</b>` : "not read yet";
       const whose = many ? poss(cur?.label || "The account in use") : "The";
       const from = accounts().find(a => a.id === view.lastSwitch?.from);
       if (many && from && cur && view.lastSwitch.to === cur.id) {
@@ -537,6 +542,11 @@
         head = `In use: ${cur.label}, since ${clock(view.lastSwitch.at)}.`;
         body = `Rich switched from <b>${esc(from.label)}</b> ${esc(duration(now - view.lastSwitch.at))} ago ${why}. Every agent’s next step ran on ${esc(cur.label)}; nothing restarted. `
           + (nx ? `When ${esc(cur.label)} reaches its line, the next is <b>${esc(nx.label)}</b>.` : "No other account has room right now, so at the line Rich pauses.");
+      } else if (!five) {
+        // No five-hour window: the account has no five-hour limit, so only the week acts.
+        head = many ? "On. Rich switches at the line." : "On. Nothing is waiting.";
+        body = many ? `${whose} weekly window is at ${weekUsed}. At <b>${weekLine()}%</b>, every agent’s next step runs on <b>${esc(nx ? nx.label : "the next account")}</b>, the account whose week ends soonest. Nothing stops.` + (nx ? "" : " No other account has room right now, so Rich would pause instead.")
+          : `${whose} weekly window is at ${weekUsed}. Agents pause the moment it reaches <b>${weekLine()}%</b>, until the week resets.`;
       } else if (many && view.atThreshold === "switch") {
         head = "On. Rich switches at the line.";
         body = `${whose} five-hour window is at ${used}. At <b>${line}%</b>, every agent’s next step runs on <b>${esc(nx ? nx.label : "the next account")}</b>, the account whose week ends soonest and Rich says so in the conversation. Nothing stops.` + (nx ? "" : " No other account has room right now, so Rich would pause instead.");

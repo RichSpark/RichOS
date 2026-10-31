@@ -207,6 +207,10 @@
 
   function meter(a, k) {
     const w = win(a, k === "week" ? "seven_day" : "five_hour"), label = k === "week" ? "Weekly limit" : "5-hour limit";
+    // An account whose reading has no five-hour window has no five-hour limit (Anthropic removed
+    // it for verified accounts, 2026-10-31); the CEO: "If no 5-hour-limit data, then don't
+    // show/don't handle it." Only the card of an account with a reading draws meters at all.
+    if (!w && k === "five") return "";
     if (!w) {
       return `<div class="acc-meter" data-k="${k}"><span class="acc-meter-label">${label}</span><span class="acc-meter-bar" role="img" aria-label="${label}: not reported yet"><b style="width:0"></b></span>
         <span class="acc-meter-num"></span><span class="acc-meter-when">Not reported yet</span></div>`;

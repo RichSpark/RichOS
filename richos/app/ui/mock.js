@@ -2857,7 +2857,10 @@
     // As quota.rs decides it: with no current reading, work waits only while a check is on its
     // way ("unknown"); once a check came back with no figures (`emptyAt`), nothing is held on it.
     const unread = { state: fixture.emptyAt ? "noReading" : "unknown" };
-    const admission = !quotaPolicy.enabled ? { state: "disabled" } : weekly ? (weekly.resetsAt > Date.now() ? { state: "held", resetsAt: weekly.resetsAt } : { state: "unknown" }) : !window || remaining <= 0 ? unread
+    // No five-hour window on a current reading is a complete reading (quota.rs `view_with`: no
+    // five-hour window, no five-hour rule; the CEO, 2026-10-31).
+    const weekOnly = !window && fixture.windows.length > 0 && fixture.state === "fresh";
+    const admission = !quotaPolicy.enabled ? { state: "disabled" } : weekly ? (weekly.resetsAt > Date.now() ? { state: "held", resetsAt: weekly.resetsAt } : { state: "unknown" }) : weekOnly ? { state: "ready" } : !window || remaining <= 0 ? unread
       : high && remaining < 20 * 60000 ? { state: "ready" } : high ? { state: "held", resetsAt: window.resetsAt }
       : fixture.state === "fresh" ? { state: "ready" } : unread;
     // Fill-first in the preview: the preset may carry `accounts`, `atThreshold`, `heldUntil`,
