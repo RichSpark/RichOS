@@ -1095,7 +1095,28 @@ async function openSheet(browser, theme, preset) {
           }
         }
       }
-      // THE ANDROID DEFECT, by name: a RichConnect Android phone that signed up in the app.
+      // AN ORDINARY NETWORK BLIP: RichConnect reconnecting while this Mac's listener is still up.
+      // The line above the card says "Reconnecting this Mac", so the chip must not say Connected.
+      for (const platform of Object.keys(PHONES)) {
+        const page = await openSheet(browser, "dark", {
+          phonePaired: true, phonePlatform: platform, phonePairedVia: "connect", phoneNotificationsOn: true,
+          phoneConnect: { enabled: true, phase: "active", health: { state: "reconnecting" } },
+        });
+        await page.waitForFunction(() => {
+          const chip = document.getElementById("phone-chip-word");
+          return chip && chip.textContent.trim().length > 0;
+        });
+        const seen = await page.evaluate(() => ({
+          chip: document.getElementById("phone-chip-word").textContent.trim(),
+          state: document.getElementById("phone-paired-state").textContent.trim(),
+          line: document.getElementById("phone-push-state").textContent.replace(/\s+/g, " ").trim(),
+        }));
+        await page.close();
+        assertEqual(seen.chip, WORDS.away.chip, platform + " reconnecting, listener up: the chip");
+        assertEqual(seen.state, WORDS.away.state, platform + " reconnecting, listener up: the pairing sentence");
+        assertEqual(seen.line, WORDS.away.line, platform + " reconnecting, listener up: the errand line");
+        out.push(platform + " reconnecting with the listener up: " + seen.chip);
+      }
       return out.length + " cards in round 49's words, no retired word on any; " + out.join("; ");
     }
   );

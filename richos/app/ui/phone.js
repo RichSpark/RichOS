@@ -567,7 +567,11 @@
   function pairedCardState(status) {
     const native = status.pushTransport === "apns" || status.pushTransport === "fcm";
     if (status.fingerprintConfirmed && !native) return "old";
-    if (status.listening === false) return "away";
+    // Not reachable is this Mac's listener down OR, for a phone paired over RichConnect, the
+    // connector restoring its link while the listener is up: the line above the card says
+    // "Reconnecting this Mac" then, and the chip must not say Connected beside it.
+    const connector = status.connect && status.connect.health && status.connect.health.state;
+    if (status.listening === false || (status.pairedVia === "connect" && connector === "reconnecting")) return "away";
     if (status.macConfirmed === false || !status.fingerprintConfirmed || status.completed === false) return null;
     return status.notificationsOn ? "ready" : "off";
   }
