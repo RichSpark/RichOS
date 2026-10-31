@@ -961,4 +961,23 @@ mod tests {
         assert_eq!(db.search("Corrected kitchen", 0, 65536).unwrap().total, 1);
     }
 
+    #[test]
+    fn simultaneous_first_openers_keep_every_accepted_note() {
+        let f = Fixture::new();
+        let ready = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut workers = Vec::new();
+        for n in 0..8 {
+            let ready = ready.clone();
+            let path = f.0.join("concurrent.sqlite");
+            workers.push(std::thread::spawn(move || {
+                ready.wait();
+                let mut db = Catalog::open(&path).unwrap();
+                db.save(&entry(&format!("file-{n}.png"), &format!("Accepted note {n}"), n+1)).unwrap();
+            }));
+        }
+        for worker in workers { worker.join().unwrap(); }
+        let db = Catalog::open(&f.0.join("concurrent.sqlite")).unwrap();
+        assert_eq!(db.search("Accepted",0,65536).unwrap().total,8);
+    }
+
 }

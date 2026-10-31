@@ -24,7 +24,7 @@ impl Catalog {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let db = Connection::open_with_flags(
+        let mut db = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
@@ -43,10 +43,19 @@ impl Catalog {
         if version > 2 {
             return Err("This library needs a newer RichOS".into());
         }
-        if version == 0 {
-            db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE files(id TEXT PRIMARY KEY,volume TEXT NOT NULL,object TEXT NOT NULL,phase TEXT NOT NULL,updated INTEGER NOT NULL,record TEXT NOT NULL,UNIQUE(volume,object)); CREATE VIRTUAL TABLE search USING fts5(id UNINDEXED,name,note,labels,tokenize='unicode61 remove_diacritics 2'); CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file)); PRAGMA user_version=2; COMMIT;").map_err(|e|e.to_string())?;
-        } else if version == 1 {
-            db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file)); PRAGMA user_version=2; COMMIT;").map_err(|e|e.to_string())?;
+        if version < 2 {
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e|e.to_string())?;
+            // Another connection may have initialized while this one waited.
+            // Decide only while holding the migration transaction's write lock.
+            let current:i64 = tx.query_row("PRAGMA user_version",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+            match current {
+                0 => tx.execute_batch("CREATE TABLE files(id TEXT PRIMARY KEY,volume TEXT NOT NULL,object TEXT NOT NULL,phase TEXT NOT NULL,updated INTEGER NOT NULL,record TEXT NOT NULL,UNIQUE(volume,object)); CREATE VIRTUAL TABLE search USING fts5(id UNINDEXED,name,note,labels,tokenize='unicode61 remove_diacritics 2'); CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file)); PRAGMA user_version=2;").map_err(|e|e.to_string())?,
+                1 => tx.execute_batch("CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file)); PRAGMA user_version=2;").map_err(|e|e.to_string())?,
+                2 => {},
+                _ => return Err("This library needs a newer RichOS".into()),
+            }
+            tx.commit().map_err(|e|e.to_string())?;
         }
         Ok(Self { db })
     }
