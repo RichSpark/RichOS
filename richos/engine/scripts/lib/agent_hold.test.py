@@ -1133,6 +1133,53 @@ class NativeResults(Base):
             self.assertEqual(value["native_result"]["task"],"bfixture")
             self.assertEqual(agent_hold.native_result(value),(7,"message-output\n","bfixture"))
 
+    def test_a_call_moved_to_the_background_after_its_grace_returns_its_task_result(self):
+        # 2026-10-31, as Claude Code writes it: the stdout printed during the grace comes FIRST,
+        # then the host's receipt, then a cwd note. The wait said "NATIVE RESULT UNAVAILABLE"
+        # while the task had finished with exit 0.
+        import io
+        meta,transcript,output,row=self.fixture("whole-output\n",0)
+        row["toolUseResult"]={"stdout":"partial line\n","stderr":"","interrupted":False,"isImage":False,
+                              "backgroundTaskId":"bfixture","timedOutAfterMs":6000}
+        row["message"]["content"][0].update(is_error=False,content=(
+            "partial line\nCommand did not complete within its 6s timeout and was moved to the background "
+            "(ID: bfixture). Output is being written to: "+str(output)+". You will be notified when it "
+            "completes.\nSession cwd remains "+self.tmp+"; directory changes made by the backgrounded "
+            "command do not apply to subsequent commands."))
+        transcript.write_text(json.dumps(row)+"\n")
+        out=io.StringIO()
+        self.assertEqual(agent_hold.wait_resume(0.5,0.01,out),0,out.getvalue())
+        self.assertNotIn("UNAVAILABLE",out.getvalue())
+        self.assertIn("TASK bfixture (tool toolu_result) EXIT STATUS 0",out.getvalue())
+        self.assertIn("whole-output",out.getvalue())
+
+    def test_a_refused_or_failed_call_is_never_listed_by_a_later_wait(self):
+        # 2026-10-31: a call a guard refused (it never starts a shell) and a foreground command
+        # that failed were each re-listed by the next wait as "TASK refused ... EXIT STATUS 2",
+        # or as still running, though the agent had already been given each error directly.
+        import io
+        for case in ("refused","failed"):
+            with self.subTest(case=case):
+                meta,transcript,_,row=self.fixture()
+                stem=str(meta)[:-5]
+                text=("Refusing to run it: a worktree-isolated agent's git operations must target its own "
+                      "worktree.") if case=="refused" else "Exit code 1\nls: missing: No such file or directory"
+                if case=="refused":
+                    os.unlink(stem+".pid")  # a refused call's shell never starts
+                row["toolUseResult"]="Error: "+text
+                row["message"]["content"][0].update(is_error=True,content=text)
+                transcript.write_text(json.dumps(row)+"\n")
+                self.assertFalse(agent_hold.native_pending(self.session,self.agent))
+                # The next call (here the wait's own) is a tool boundary: the error was delivered.
+                agent_hold.rewrite({**self.payload("toolu_wait_"+case),
+                                    "tool_input":{"command":agent_hold.WAIT_COMMAND}})
+                self.assertTrue(json.loads(meta.read_text()).get("result_collected"), "the delivered error is consumed")
+                out=io.StringIO()
+                self.assertEqual(agent_hold.wait_resume(0.5,0.01,out),0,out.getvalue())
+                self.assertEqual(out.getvalue(),"")
+                for name in os.listdir(agent_hold._shell_dir(self.session,self.agent)):
+                    os.unlink(os.path.join(agent_hold._shell_dir(self.session,self.agent),name))
+
     def test_conflicting_metadata_aliases_do_not_establish_delivery(self):
         meta,transcript,_,row=self.direct_fixture()
         row["tool_use_result"]={"backgroundTaskId":"different-task"}

@@ -1291,7 +1291,8 @@ def native_pending_ids(session, agent, found=None):
                 stem = os.path.join(directory, name[:-5])
                 meta = _read_json(stem + ".json") or {}
                 if (meta.get("mode") == "native" and not os.path.exists(stem + ".pid")
-                        and 0 <= time.time() - float(meta.get("at", 0)) < 10):
+                        and 0 <= time.time() - float(meta.get("at", 0)) < 10
+                        and not _returned_directly(meta)):
                     pending.add(name[:-5])
                     starting.append(float(meta.get("at", 0)) + 10)
     except OSError:
@@ -1300,6 +1301,19 @@ def native_pending_ids(session, agent, found=None):
         found["pids"] = [c["pid"] for c in running]
         found["starting_until"] = min(starting) if starting else None
     return pending
+
+
+def _returned_directly(meta):
+    """True when the host already gave this call's result to the agent, as a refusal or a
+    direct result: a guard-refused call never starts a shell, so it is not "starting"."""
+    if meta.get("result_collected"):
+        return True
+    if not isinstance(meta.get("result_source"), dict):
+        return False
+    try:
+        return native_result(dict(meta), binding_only=True) is FOREGROUND_DELIVERED
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
 
 
 def native_pending(session, agent):
@@ -1424,7 +1438,7 @@ def consume_foreground(session, agent):
     Never read background output here or consume a live/starting command.
     """
     records = [(p, m) for p, m in _native_uncollected(session, agent)
-               if m.get("foreground_grace_ms") and m.get("result_source") and not m.get("native_result")]
+               if m.get("result_source") and not m.get("native_result")]
     if not records:
         return
     pending = native_pending_ids(session, agent)
@@ -1481,10 +1495,26 @@ def native_result(meta, binding_only=False):
                           isinstance(response.get("stderr"), str) and
                           isinstance(response.get("interrupted"), bool) and
                           not structured_task and "timedOutAfterMs" not in response)
-                match = NATIVE_HANDOFF.match(text)
+                # A call moved to the background after its grace carries the stdout it printed
+                # so far IN FRONT of the host's receipt, so the receipt is searched for, never
+                # expected at the start, and only with the host's structured task id: the last
+                # receipt naming that id is the host's (2026-10-31: every timed-out call was
+                # reported "NATIVE RESULT UNAVAILABLE" though its task finished with exit 0).
+                if structured_task:
+                    found = [m for m in NATIVE_HANDOFF.finditer(text)
+                             if structured_task in (m["explicit"], m["timed"], m["message"], m["manual"])]
+                    match = found[-1] if found else None
+                else:
+                    match = NATIVE_HANDOFF.match(text)
                 if (meta.get("foreground_grace_ms") and isinstance(item.get("is_error"), bool)
                         and direct):
                     meta["foreground_delivery"] = {"is_error": item["is_error"] or response.get("interrupted") is True}
+                    return FOREGROUND_DELIVERED
+                if item.get("is_error") is True and not structured_task:
+                    # A refused call (a guard said no) or a failed foreground command: the host
+                    # gave the agent this error directly and no task runs, so there is no task
+                    # result to collect and the wait never lists it again (2026-10-31).
+                    meta["foreground_delivery"] = {"is_error": True}
                     return FOREGROUND_DELIVERED
                 if item.get("is_error"):
                     return (2, "Host refused or failed this call:\n" + text, None)
