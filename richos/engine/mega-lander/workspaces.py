@@ -6434,7 +6434,7 @@ def _release_carried_waits(chain, deadline=None):
         event("wait-ended", key=other["key"], landed=names, not_landed=out)
 
 
-def merge_and_land(ref, me="", message=""):
+def merge_and_land(ref, me="", message="", only=None):
     """`workspaces.sh merge <name>`: THE MERGE AND THE LAND ARE ONE COMMAND
     (2026-10-04). The lead merged with `git merge --no-ff` and then had to
     remember a separate `workspaces.sh land`; for four teammates he did not,
@@ -6446,7 +6446,12 @@ def merge_and_land(ref, me="", message=""):
     stops here with git's words; nothing is landed. In a repository listed in
     SECOND_REVIEW_REPOS nothing is merged unless the newest handover verdict
     on exactly each branch tip says passed (_review_check, CEO §113), and the
-    merge message names that review. Returns (merged, land result)."""
+    merge message names that review. Returns (merged, land result).
+
+    `only`: {repository: commit} for a caller that reviewed exactly those
+    commits (the app's integrate, CEO §154): a branch whose tip is not the one
+    named for its repository is not merged, so it stays outside the integration
+    branch and the land then names it, as for any branch not merged."""
     rec = _resolve(ref, me)
     # Before anything is merged: another registry's live worker is never
     # merged into main from here (land repeats the check before it stops).
@@ -6469,6 +6474,8 @@ def merge_and_land(ref, me="", message=""):
         # A tip a continuation rewrote, or one a recorded link stands for, is never
         # merged: it is the unreviewed WIP the redone work replaced (row 3).
         if not t or is_ancestor(main, t, tip) or _superseded(chain, repo, b, t, tip):
+            continue
+        if only is not None and t != {realpath(r): c for r, c in only.items()}.get(realpath(repo)):
             continue
         todo.append((repo, b, main, t))
         bases[t] = tip
@@ -6624,6 +6631,18 @@ def _lease_holder_args(F, conf):
     return []
 
 
+def _lease_chain(F):
+    """THIS PROCESS COUNTS AS ITS OWN CALLER: [(pid, start)] of this process and
+    its ancestors, the chain a lease is checked against. A lease held by the
+    process that runs this merge in-process (the app's library call, a test that
+    is the session) is held, and git's fence hooks, its descendants, agree.
+    Without it, acquire RENEWED that lease and _take_land_lease still said
+    "could not take it", and _lease_for_abort tried to take a lease this
+    process already held, so a refused merge was left in progress."""
+    me = F.proc(os.getpid())
+    return ([(me["pid"], me["start"])] if me else []) + F.ancestors()
+
+
 def _take_land_lease(main):
     """THE MERGE TAKES THE LAND LEASE ITSELF (2026-10-14). `workspaces.sh merge
     echo-opus-hiresnag55b` was refused by the operator fence ("this process
@@ -6642,12 +6661,7 @@ def _take_land_lease(main):
     Still not held after that: SpecError with acquire's own words, and nothing
     is merged."""
     F = _fence_program()
-    # THIS PROCESS COUNTS AS ITS OWN CALLER: a lease held by the process that
-    # runs this merge in-process (the app's library call, a test that is the
-    # session) is held, and git's fence hooks, its descendants, agree. Without
-    # it, acquire RENEWED that lease and this still said "could not take it".
-    me = F.proc(os.getpid())
-    chain = ([(me["pid"], me["start"])] if me else []) + F.ancestors()
+    chain = _lease_chain(F)
     try:
         conf, _paths = F.launcher_for(main)
         if not F.fenced(conf):
@@ -7063,7 +7077,7 @@ def _lease_for_abort(main):
     try:
         F = _fence_program()
         conf, _paths = F.launcher_for(main)
-        if not F.fenced(conf) or F.authorized(F.Files(conf))[0]:
+        if not F.fenced(conf) or F.authorized(F.Files(conf), _lease_chain(F))[0]:
             return ""
     except Exception as exc:    # noqa: BLE001  a check that cannot decide says so
         return "whether this command holds the land lease could not be read (%s)" % exc

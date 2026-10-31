@@ -774,7 +774,7 @@ class AppWorld(World):
         """Only implementation work gets a mid-job review: a receipt whose request.role is worker.
         A handover reviewer also gets a cc/ workspace, at the worker's commit (app.py prepare), and
         a quiet or long review would otherwise be reviewed itself, with a verdict that names the
-        reviewer's branch and so never reaches the worker (app.py worker_spaces: role worker)."""
+        reviewer's branch and its own record, and so never reaches the worker."""
         try:
             return receipt.get("request", {}).get("role") == "worker"
         except AttributeError:
