@@ -14845,7 +14845,7 @@
     },
     "scripts/pause-acceptance.test.sh": {
       "source": "scripts/pause-acceptance.test.sh",
-      "sha256": "f83fb0bf8343464d02c684ae71c348e14bdecfcc1f8ab40b3ee374038bc88e23",
+      "sha256": "bcca5ec82fcc931e22cd99cf89e3ee7d9308fd9990edb7d4c3b9656bf27bd117",
       "evidence": "Fixed private fake-agent programs plus real acceptance reader/worker. Copied config keeps actual isolation and cleanup keys. Generated shell prefixes and all subsequent commands are bound here; no real model or hook inventory executes.",
       "keys": [],
       "edges": [
