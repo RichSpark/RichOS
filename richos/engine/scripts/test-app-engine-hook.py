@@ -373,10 +373,14 @@ class DesktopHooks(unittest.TestCase):
         hook.run = lambda command, payload, timeout=20: ran.append(Path(command[-1]).name)
         with contextlib.redirect_stdout(io.StringIO()):
             hook.handle(dict(payload))
-        for guard in ("guard-stale-staging.sh", "guard-owned-state.sh", "guard-brief-scope.sh",
+        for guard in ("guard-owned-state.sh", "guard-brief-scope.sh",
                       "guard-no-home-network-phone.sh", "guard-reference-ledger.sh", "guard-public-record-repo.sh"):
             self.assertIn(guard, ran)
         self.assertNotIn("guard-brief-verification-scope.sh", ran)
+        # The staging guard reads the governed repository's main and deployment record, and the app's
+        # governed folder is the private coordination folder, not the user's product repository: run
+        # there it asked the wrong Git database (the second review of 2d5f7ded561a), so it stays out.
+        self.assertNotIn("guard-stale-staging.sh", ran)
 
     def test_stus_turn_end_runs_every_check_the_terminal_registers_except_the_terminal_only_ones(self):
         """The terminal ends a lead's turn with every Stop command in hooks/hooks.json; on 47e314bb6

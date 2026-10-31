@@ -127,11 +127,6 @@ audience: user-work
 reason: It never refuses anything; it removes operator acknowledgement lines from the assignment text before a worker sees it, so the user's own worker is never handed instructions written for the development session, and the app's spawn path applies it only when it is classified user-work.
 user_message: This assignment could not be prepared for a worker, so I did not start it. Nothing was created.
 
-id: guard-stale-staging.sh
-audience: user-work
-reason: It refuses work against a product tree whose landed commits have not reached the staging deployment that the user's own configuration declares (STAGING_TREES); a user who declares no staging has nothing for it to judge, and it stands down.
-user_message: This work needs the latest saved changes to be live on your test site first, so I did not start it. Nothing was created.
-
 id: guard-owned-state.sh
 audience: user-work
 reason: It never refuses; it tells the lead once per session when a standing system whose health the lead owns is known-bad, with the evidence and what makes it smaller, read from the owned-systems declaration the user's own configuration names (or the engine's).
@@ -160,6 +155,10 @@ user_message: This work would put a private record into a public place, so I did
 # ===========================================================================
 # OPERATOR-SESSION — each needs a terminal-only thing, so the app runs none of these
 # ===========================================================================
+
+id: guard-stale-staging.sh
+audience: operator-session
+reason: It needs the terminal's governed repository: it compares main and the deployment record of the one repository RICHOS_ENTITY_ROOT names, which in the app is the private coordination folder, not the user's product repository, so it would ask the wrong Git database and miss a stale staging or refuse current work (the second review of 2d5f7ded561a). Pointing it at a conversation's connected repositories, which can be several, is a separate change.
 
 id: guard-live-names.sh
 audience: operator-session

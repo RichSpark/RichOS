@@ -399,8 +399,8 @@ fn bypass_permissions_match_the_terminal_and_keep_company_and_thread_read_roots(
 // side). Three facts have to hold together for that to be true of the shipped app:
 //
 //   1. the preflight the app writes is DERIVED from the declaration, not typed;
-//   2. no operator-session guard is on it, and the terminal's own design-spec, ledger,
-//      phone-path and staging guards are (Hank's audit finding 7: they were left out);
+//   2. no operator-session guard is on it, and the terminal's own design-spec, ledger and
+//      phone-path guards are (Hank's audit finding 7: they were left out);
 //   3. `RICHOS_SPAWN_HOOK_SOURCES` points `spawn.py` at that preflight — the lease always
 //      set it and the probe never did, which is the whole of the "refused by 1 of 9
 //      guard(s)" finding of 2026-09-18.
@@ -425,7 +425,7 @@ fn the_app_preflight_is_the_declared_user_work_list_and_nothing_else() {
 
     // The terminal's guards that were left out of the app until 2026-10-31 are on it now.
     for guard in ["guard-brief-scope.sh", "guard-reference-ledger.sh", "guard-no-home-network-phone.sh",
-                  "guard-stale-staging.sh", "guard-owned-state.sh", "guard-public-record-repo.sh"] {
+                  "guard-owned-state.sh", "guard-public-record-repo.sh"] {
         assert!(written.contains(&guard.to_string()), "{guard} is a terminal dispatch guard missing from the app");
     }
     // The operator-session side, named rather than inferred from the absence of a name.
