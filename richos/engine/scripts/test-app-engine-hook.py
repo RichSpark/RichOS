@@ -330,7 +330,8 @@ class DesktopHooks(unittest.TestCase):
         real_load = hook.load
         def load(module, path):
             if path.name == "app-evidence.py":
-                return types.SimpleNamespace(capture=lambda payload, *args, **kwargs: payload)
+                return types.SimpleNamespace(capture=lambda payload, *args, **kwargs: payload,
+                                             record_reply=lambda *args: None)
             if path.name == "app.py":
                 return work
             return real_load(module, path)
@@ -434,6 +435,21 @@ class DesktopHooks(unittest.TestCase):
         result = self.hook("Stop", last_assistant_message="Commit %s has been pushed." % sha, stop_hook_active=False)
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
         self.assertIn("PUSHED", result.stderr)
+
+    def test_a_question_left_unanswered_in_an_earlier_turn_is_put_back_in_front_of_the_lead(self):
+        """notice-unanswered-question.sh reads earlier replies and whose turn each input started.
+        On 0aa9a71f60cf the app's guard transcript had neither, so the check never fired in the app
+        (the second review of that commit, finding 2). Here: the lead asks, a notification wakes it,
+        and at that turn's end the question is put back."""
+        question = "QUESTION FOR YOU: Should I publish the website?"
+        self.assertEqual(self.hook("UserPromptSubmit", prompt_id="turn-1", prompt="Prepare the website.").returncode, 0)
+        asked = self.hook("Stop", prompt_id="turn-1", last_assistant_message=question, stop_hook_active=False)
+        self.assertEqual(asked.returncode, 0, asked.stderr + asked.stdout)
+        self.assertNotIn("STILL WAITING FOR YOUR ANSWER", asked.stdout)
+        self.assertEqual(self.hook("UserPromptSubmit", prompt_id="turn-2", prompt="The worker finished.").returncode, 0)
+        later = self.hook("Stop", prompt_id="turn-2", last_assistant_message="Noted.", stop_hook_active=False)
+        self.assertEqual(later.returncode, 0, later.stderr + later.stdout)
+        self.assertIn("STILL WAITING FOR YOUR ANSWER", later.stdout)
 
     def test_a_turn_end_check_the_terminal_runs_refuses_stus_false_claim_in_the_app(self):
         """guard-unresolved-claims.sh refuses a reply that says a role is working when none was ever

@@ -360,6 +360,9 @@ def handle(payload):
         if scope().get("actions_allowed") is not True:
             return
         contexts, messages, refusals = turn_end_checks(payload, coordination)
+        # The reply joins the guard transcript after this turn's checks, as it joins Claude Code's
+        # own (app-evidence.py record_reply), so the next turn's checks can read it.
+        evidence.record_reply(payload, root / "evidence")
         if refusals:
             # Exit 2 refuses the turn end and hands stderr to the lead, as each refusing check does in
             # the terminal; the notices of the same turn end go with it rather than being dropped.

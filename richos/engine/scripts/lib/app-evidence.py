@@ -34,13 +34,16 @@ def project(payload, instruction=None):
     if event == "UserPromptSubmit":
         # Runtime input can also be hidden priming or quoted context. Only the
         # app ledger can attest that a given message is a user instruction.
-        record.update(type="user", promptSource="runtime",
+        # Every input starts a turn, and the native transcript says whose turn it is in
+        # `turnOrigin` (blocking_ask.py reads it): the user's own words are `human`, anything else
+        # that woke the lead is a notification. Only the ledger-attested words below are his.
+        record.update(type="user", promptSource="runtime", turnOrigin="task_notification",
                       message={"content": payload.get("prompt", "")})
         if (not payload.get("agent_id") and isinstance(instruction, dict)
                 and isinstance(payload.get("prompt"), str)
                 and instruction.get("sha256") == hashlib.sha256(payload["prompt"].encode()).hexdigest()
                 and str(instruction.get("ledger_ref", "")).startswith("ledger:")):
-            record.update(promptSource="sdk", origin={"kind":"human"},
+            record.update(promptSource="sdk", origin={"kind":"human"}, turnOrigin="human",
                           ledgerReference=instruction["ledger_ref"],
                           evidenceSource="richos-ledger-attested-hook-v1")
     elif event == "PreToolUse":
@@ -386,6 +389,24 @@ def capture(payload, state_root, instruction=None, app_data=None, worktrees=None
     if isinstance(payload.get("transcript_path"), str) and "native_transcript_path" not in payload:
         out["native_transcript_path"] = payload["transcript_path"]
     return out
+
+
+def record_reply(payload, state_root):
+    """The lead's final reply of a turn, appended to its guard transcript AFTER that turn's Stop
+    checks ran, as it reaches Claude Code's own transcript (a Stop hook reads the reply from
+    `last_assistant_message`; the transcript gets it only after). Later turns' checks read the
+    replies before them from here, as the terminal's do from the native transcript: the
+    unanswered-question check looks for a `QUESTION FOR YOU:` an earlier reply left. A worker's
+    Stop, or a turn with no text, adds nothing."""
+    text = payload.get("last_assistant_message")
+    if payload.get("agent_id") or not isinstance(text, str) or not text.strip():
+        return
+    with _session_folder(state_root, payload.get("session_id", "")) as folder:
+        append(folder / "guard-transcript.jsonl", {
+            "promptId": payload.get("prompt_id"), "cwd": payload.get("cwd"), "isSidechain": False,
+            "agentId": None, "evidenceSource": "richos-native-hook-v1", "type": "assistant",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "message": {"content": [{"type": "text", "text": text}]}})
 
 
 def main():
