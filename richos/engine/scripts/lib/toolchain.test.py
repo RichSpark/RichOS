@@ -29,6 +29,13 @@ exits 1. That marker is the install dialog; no case may ever leave one. Nothing 
   T15 off macOS the harness changes nothing: no stand-ins, the real /usr/bin tools stay found
   T16 a shell heredoc after a here-string (<<<), a comment or quoted text naming `<<EOF` is still
       read as commands; one inside "$( ... )" too
+  T17 a missing tool with no permission: the ask (with the yes and no commands) and no install
+  T18 the user's yes installs once and the step runs; a repeated yes or install installs nothing
+  T19 a general permission stored in the user's orchestration.config (off by default, other
+      lines kept): no ask, one install; switched off again, it asks
+  T20 a second request for the same tool: after a no it neither asks nor installs; while an
+      install runs, a second one waits for it (one installer run)
+The fake installer at the fake Mac's /usr/bin/xcode-select counts its runs; nothing real installs.
 """
 import json
 import os
@@ -36,6 +43,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import unittest.mock
 
@@ -382,6 +391,147 @@ class FakeMac(unittest.TestCase):
             rc, message = self.guard(command)
             self.assertEqual(rc, 2, "%r passed: %s" % (command, message))
             self.assertIn("`make`", message)
+        self.no_stub()
+
+
+    # --- the ask, the answer and the install (CEO 2026-10-29) -------------------------------
+    def installer(self, delay=0.0, installs=True):
+        """A fake Apple installer at the fake Mac's /usr/bin/xcode-select: each run appends one
+        line to INSTALLS and, like the real one after the user presses Install, puts the Command
+        Line Tools (make and git) in place, `delay` seconds later."""
+        self.installs = os.path.join(self.root, "INSTALLS")
+        clt = os.path.join(self.root, "Library/Developer/CommandLineTools/usr/bin")
+        body = 'mkdir -p "%s" && for t in make git; do printf "#!/bin/sh\\necho built\\n" > "%s/$t"; chmod 755 "%s/$t"; done' % (clt, clt, clt)
+        self._write(os.path.join(self.root, "usr/bin/xcode-select"),
+                    "#!/bin/sh\necho \"$*\" >> \"%s\"\n%s\n" % (self.installs, (
+                        "(sleep %s; %s) >/dev/null 2>&1 &" % (delay, body) if delay else body) if installs else ":"))
+
+    def install_count(self):
+        try:
+            with open(self.installs, encoding="utf-8") as fh:
+                return len(fh.read().splitlines())
+        except OSError:
+            return 0
+
+    def payload(self, message):
+        line = [l for l in message.splitlines() if l.startswith("RICHOS-MISSING-TOOL ")][0]
+        return json.loads(line.split(" ", 1)[1])
+
+    def user_env(self):
+        folder = os.path.join(self.root, "myrichos")
+        os.makedirs(folder, exist_ok=True)
+        return self.sanitized(RICHOS_USER_FOLDER=folder)
+
+    def run_install(self, env, name, said=None, wait=10):
+        import io
+        out = io.StringIO()
+        if said:
+            rc = toolchain.answer(env, name, said, out=out, wait=wait, poll=0.05)
+        else:
+            rc = toolchain.install(env, name, wait=wait, poll=0.05, out=out)
+        return rc, out.getvalue()
+
+    def test_t17_a_missing_tool_without_permission_is_asked_about_and_never_installed(self):
+        self.installer()
+        env = self.user_env()
+        rc, message = self.guard("make all", env)
+        self.assertEqual(rc, 2)
+        data = self.payload(message)
+        self.assertEqual((data["tool"], data["ask"], data["permitted"]), ("make", True, False))
+        self.assertIn("asks the user", message)
+        self.assertIn(data["yes_command"], message)
+        self.assertIn(data["no_command"], message)
+        self.assertFalse(toolchain.general_permission(env), "the general permission is off by default")
+        rc, said = self.run_install(env, "make")
+        self.assertEqual(rc, 3, said)
+        self.assertIn("has not given permission", said)
+        self.assertEqual(self.install_count(), 0, "installed without the user's yes")
+        self.no_stub()
+
+    def test_t18_a_yes_installs_once_and_the_work_continues(self):
+        self.installer()
+        env = self.user_env()
+        self.assertEqual(self.guard("make all", env)[0], 2)
+        rc, said = self.run_install(env, "make", said="yes")
+        self.assertEqual(rc, 0, said)
+        self.assertIn("INSTALLED `make`", said)
+        self.assertEqual(self.install_count(), 1)
+        self.assertEqual(self.guard("make all", env)[0], 0, "the work that needed it runs now")
+        # Asked again, installed again: never. The tool is checked first and found.
+        for again in ("yes", None):
+            rc, said = self.run_install(env, "make", said=again)
+            self.assertEqual(rc, 0, said)
+            self.assertIn("ALREADY-INSTALLED", said)
+        self.assertEqual(self.install_count(), 1, "the same tool was installed twice")
+        # git came with the same install: no ask, no install.
+        self.assertEqual(self.guard("git status", env)[0], 0)
+        self.assertEqual(self.install_count(), 1)
+        self.no_stub()
+
+    def test_t19_a_stored_general_permission_installs_without_asking(self):
+        self.installer()
+        env = self.user_env()
+        settings = os.path.join(env["RICHOS_USER_FOLDER"], "orchestration.config")
+        with open(settings, "w", encoding="utf-8") as fh:
+            fh.write('# the user\'s own values\nMODEL_CEILING="opus"\n')
+        self.assertEqual(toolchain.set_general_permission(env, True), settings)
+        with open(settings, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn('MODEL_CEILING="opus"', text, "the user's other values are kept")
+        self.assertIn('INSTALL_MISSING_TOOLS="yes"', text)
+        self.assertTrue(toolchain.general_permission(env))
+        rc, message = self.guard("make all", env)
+        self.assertEqual(rc, 2, "the stub still never runs")
+        data = self.payload(message)
+        self.assertEqual((data["ask"], data["permitted"]), (False, True))
+        self.assertNotIn("The lead asks the user", message)
+        self.assertNotIn("Stop this step", message)
+        self.assertIn(data["install_command"], message)
+        self.assertNotIn("make", self.asks(), "nobody was asked")
+        rc, said = self.run_install(env, "make")
+        self.assertEqual(rc, 0, said)
+        self.assertIn("Tell the user once", said)
+        self.assertEqual(self.install_count(), 1)
+        self.assertEqual(self.guard("make all", env)[0], 0)
+        # The way out: switched off, it asks again for the next missing tool.
+        toolchain.set_general_permission(env, False)
+        with open(settings, encoding="utf-8") as fh:
+            self.assertEqual(fh.read().count("INSTALL_MISSING_TOOLS="), 1)
+        self.assertFalse(toolchain.general_permission(env))
+        self.no_stub()
+
+    def test_t20_a_second_request_for_the_same_tool_neither_asks_nor_installs(self):
+        # After a no: never asked again, never installed, even with a direct install request.
+        self.installer()
+        env = self.user_env()
+        self.assertTrue(self.payload(self.guard("make", env)[1])["ask"])
+        rc, said = self.run_install(env, "make", said="no")
+        self.assertEqual(rc, 0, said)
+        for _ in range(2):
+            rc, message = self.guard("make", env)
+            data = self.payload(message)
+            self.assertEqual((rc, data["ask"], data["declined"]), (2, False, True))
+            self.assertIn("said NO", message)
+        self.assertEqual(self.run_install(env, "make")[0], 3)
+        self.assertEqual(self.install_count(), 0)
+        # While one install runs, a second request for the same tool (or another tool of the same
+        # package) waits for it: one installer run.
+        self.installer(delay=0.5)
+        toolchain.set_general_permission(env, True)
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(self.run_install(env, "git"))) for _ in range(2)]
+        threads[0].start()
+        deadline = time.time() + 5
+        while not toolchain.install_running(env) and time.time() < deadline:
+            time.sleep(0.02)
+        rc, message = self.guard("git status", env)
+        self.assertEqual((rc, self.payload(message)["ask"]), (2, False))
+        self.assertIn("being installed right now", message)
+        threads[1].start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(sorted(r[0] for r in results), [0, 0], results)
+        self.assertEqual(self.install_count(), 1, "the installer started twice: %r" % results)
         self.no_stub()
 
 

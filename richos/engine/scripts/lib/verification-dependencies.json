@@ -17413,7 +17413,7 @@
     },
     "scripts/lib/toolchain.py": {
       "source": "scripts/lib/toolchain.py",
-      "sha256": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0",
+      "sha256": "d0f52a39254113d75924b98801eebd2328be8b2b65b4e2529c36f9b91a0a71ae",
       "keys": [],
       "edges": [
         {
@@ -17423,11 +17423,11 @@
           "to": "scripts/lib/unguarded_rm.py"
         }
       ],
-      "evidence": "Full file reviewed (2026-10-29). Reads the file system only (DEVELOPER_DIR, the xcode-select link, the two default developer directories) and never executes a stub. Environment: DEVELOPER_DIR, PATH, RICHOS_TOOLCHAIN_ROOT (test prefix), RICHOS_TOOLCHAIN_STATE / RICHOS_APP_STATE (the asks.json folder), HOME; no orchestration key. Writes only asks.json and, for the harness, a stand-in folder the caller names."
+      "evidence": "Full file reviewed (2026-10-31). Reads the file system only (DEVELOPER_DIR, the xcode-select link, the two default developer directories) and never executes a stub. Environment: DEVELOPER_DIR, PATH, RICHOS_TOOLCHAIN_ROOT (test prefix), RICHOS_TOOLCHAIN_STATE / RICHOS_APP_STATE (the asks.json folder), HOME, RICHOS_USER_FOLDER / CLAUDE_PROJECT_DIR (where the user's own orchestration.config is). The only key it reads is INSTALL_MISSING_TOOLS, from the USER's own settings file (never the engine's orchestration.config; tests write their own fixture folder), so it adds no engine config key. Writes asks.json, install.lock beside it, the user's settings file only through `permission yes|no`, and, for the harness, a stand-in folder the caller names. `install`/`answer yes` run <root>/usr/bin/xcode-select --install only with the user's recorded yes or general permission and only when the tool is missing; tests point <root> at a fake Mac whose installer counts its runs."
     },
     "scripts/lib/toolchain.test.py": {
       "source": "scripts/lib/toolchain.test.py",
-      "sha256": "9c87519a30cd99e3ab2a50e8d3acb5b82d159ad3cc35105971a702112311b88e",
+      "sha256": "a67989261c1faaf92dfe65882145923803dacf60e85be6b5d412508311e4946b",
       "keys": [],
       "edges": [
         {
@@ -18203,7 +18203,7 @@
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
+        "scripts/lib/toolchain.py": "d0f52a39254113d75924b98801eebd2328be8b2b65b4e2529c36f9b91a0a71ae"
       }
     },
     "scripts/hooks/mechanical-findings.test.sh": {
@@ -18438,7 +18438,7 @@
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
+        "scripts/lib/toolchain.py": "d0f52a39254113d75924b98801eebd2328be8b2b65b4e2529c36f9b91a0a71ae"
       }
     },
     "scripts/hooks/stop-hook-visibility.test.sh": {
@@ -18679,7 +18679,7 @@
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
+        "scripts/lib/toolchain.py": "d0f52a39254113d75924b98801eebd2328be8b2b65b4e2529c36f9b91a0a71ae"
       },
       "evidence": "R1 checks event/matcher registrations of these five hooks. Dispatcher manifest is independently bound; no other hook registration runs."
     },
@@ -18897,7 +18897,7 @@
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
+        "scripts/lib/toolchain.py": "d0f52a39254113d75924b98801eebd2328be8b2b65b4e2529c36f9b91a0a71ae"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
     },

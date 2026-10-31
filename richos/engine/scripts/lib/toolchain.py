@@ -40,9 +40,24 @@ THREE USES.
             dialog. Earlier PATH entries (Homebrew git, a bundled python) still win.
   asks      a small ledger (asks.json) so the same missing tool is asked about ONCE: a tool
             found by a real check is recorded and never asked about; a tool already asked about
-            is not asked about again while it is still missing.
+            is not asked about again while it is still missing, nor one the user answered.
 
-NOTHING HERE INSTALLS ANYTHING OR CHANGES xcode-select. RICHOS_TOOLCHAIN_ROOT prefixes every
+THE ANSWER AND THE INSTALL (CEO 2026-10-29: ask before installing, unless the user already gave a
+general permission; never the same tool installed twice). Rich asks the user from the refusal's
+report (his instruction file says how; nothing here writes the question), then runs:
+  answer <tool> yes|no   yes: recorded, then `install`; no: recorded, never asked about again
+  install <tool>         only with the user's yes for that tool or the general permission;
+                         first checks the tool is really missing (present: nothing installed),
+                         never starts the installer while an install is already running (one
+                         lock, one record), then opens Apple's installer (`xcode-select
+                         --install`, where the user presses Install) and waits for the tool
+  permission [yes|no]    the general permission, `INSTALL_MISSING_TOOLS` in the user's own
+                         settings file, the orchestration.config in their central folder
+                         (RICHOS_USER_FOLDER, from the app; off unless it says yes). With it on,
+                         the refusal tells the agent to install, not to ask.
+An agent's own `xcode-select --install` is still refused: the install runs only through here.
+
+NOTHING ELSE HERE INSTALLS ANYTHING OR CHANGES xcode-select. RICHOS_TOOLCHAIN_ROOT prefixes every
 system path (tests build whole fake Macs under it); RICHOS_TOOLCHAIN_STATE names the ledger's
 folder. It is a text check and leaks (a script FILE that calls make, a build tool that calls a
 stub by absolute path): the harness half covers what runs under the test runners, the guard the
@@ -51,6 +66,7 @@ agent's own command line. Any error in the check is a pass. Suite: toolchain.tes
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -183,14 +199,218 @@ def record_found(env, name, where):
 
 
 def record_missing(env, name):
-    """-> True when this is a NEW ask (the user has not been asked about `name` yet)."""
+    """-> True when this is a NEW ask (the user has not been asked about `name` yet). A tool the
+    user already answered about (yes or no) is never asked about again."""
     path, data = _ledger(env)
     row = data["tools"].get(name)
-    if row and row.get("state") == "asked":
+    if row and row.get("state") in ("asked", "declined", "approved"):
         return False
     data["tools"][name] = {"state": "asked", "at": int(time.time())}
     _save(path, data)
     return True
+
+
+def tool_state(env, name):
+    return (_ledger(env)[1]["tools"].get(name) or {}).get("state")
+
+
+# ---------------------------------------------------------------------------------------------
+# The user's answer, the general permission and the install (CEO 2026-10-29: "If a tool is needed
+# for actual work and the tool isn't there, then the user needs to be asked permission for
+# installing etc. Unless the user has already given a general permission for installing what's
+# needed." and "no user would ever want getting the same fucking tool installed a million times.")
+# ---------------------------------------------------------------------------------------------
+# The general permission lives in the user's own settings file, the `orchestration.config` of
+# their central folder (user_settings.rs: "the user's values for the engine's checks"), which the
+# app names to every lease as RICHOS_USER_FOLDER. Off unless that file says yes.
+PERMISSION_KEY = "INSTALL_MISSING_TOOLS"
+PERMISSION_COMMENT = ("# Install a tool that work needs and this Mac does not have without asking first "
+                      "(yes), or ask each time (no). Rich sets it when you tell him.")
+# How long an install may take before a second request may start the installer again: the
+# Command Line Tools are a download of 1 to 2 GB.
+INSTALL_WAIT = 3600
+
+
+def settings_file(env):
+    folder = (env.get("RICHOS_USER_FOLDER") or "").strip()
+    if folder:
+        return os.path.join(folder, "orchestration.config")
+    project = (env.get("CLAUDE_PROJECT_DIR") or "").strip()
+    return os.path.join(project, "orchestration.config") if project else None
+
+
+def _assigns(line, key):
+    text = line.strip()
+    if text.startswith("export "):
+        text = text[len("export "):].lstrip()
+    return text.startswith(key + "=")
+
+
+def general_permission(env):
+    """The user's stored general permission: the last `INSTALL_MISSING_TOOLS=` line, as a shell
+    that sources the file sees it. Absent, unreadable or anything but yes is off."""
+    path = settings_file(env)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = [l for l in fh.read().splitlines() if _assigns(l, PERMISSION_KEY)]
+    except (OSError, TypeError):
+        return False
+    if not lines:
+        return False
+    value = lines[-1].split("=", 1)[1].split(" #", 1)[0].strip().strip("'\"").lower()
+    return value in ("yes", "true", "1", "on")
+
+
+def set_general_permission(env, on):
+    """Write the setting into the user's file, keeping every other line as it is. -> the path."""
+    path = settings_file(env)
+    if not path:
+        raise OSError("no settings file: RICHOS_USER_FOLDER and CLAUDE_PROJECT_DIR are both unset")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    line = '%s="%s"' % (PERMISSION_KEY, "yes" if on else "no")
+    at = [i for i, l in enumerate(lines) if _assigns(l, PERMISSION_KEY)]
+    if at:
+        lines[at[0]] = line
+        lines = [l for i, l in enumerate(lines) if i not in at[1:]]
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines += [PERMISSION_COMMENT, line]
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    os.replace(tmp, path)
+    return path
+
+
+def _set_state(env, name, state):
+    path, data = _ledger(env)
+    data["tools"][name] = {"state": state, "at": int(time.time())}
+    _save(path, data)
+
+
+def _commands(name):
+    me = "%s %s" % (sys.executable, os.path.abspath(__file__))
+    return {"yes_command": "%s answer %s yes" % (me, name), "no_command": "%s answer %s no" % (me, name),
+            "install_command": "%s install %s" % (me, name)}
+
+
+def _locked(env):
+    """An exclusive lock on the ledger's folder, so two requests never both start the installer."""
+    import fcntl
+    os.makedirs(state_dir(env), exist_ok=True)
+    fh = open(os.path.join(state_dir(env), "install.lock"), "a")
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    return fh
+
+
+def install_running(env, wait=INSTALL_WAIT):
+    started = int((_ledger(env)[1].get("install") or {}).get("started") or 0)
+    return bool(started) and time.time() - started < wait
+
+
+def _present(env, name):
+    directory, _source = developer_dir(env)
+    return directory, tool_path(directory, name)
+
+
+def install(env, name, wait=INSTALL_WAIT, poll=5.0, out=sys.stdout):
+    """Install the developer tools that carry `name`, ONCE, and only with the user's permission
+    (their yes for this tool, or the general permission). -> exit code.
+      0  the tool is there (it already was: nothing installed; or the install finished)
+      3  no permission: the user has not said yes (ask them first), or said no to this tool
+      4  the installer ran and the tool is not there yet after `wait` seconds
+      5  it cannot be installed from here (only the full Xcode app carries it; not macOS; the
+         installer refused)"""
+    directory, where = _present(env, name)
+    if where:  # really missing? never install what is already here
+        record_found(env, name, where)
+        out.write("ALREADY-INSTALLED `%s` is on this Mac at %s. Nothing was installed.\n" % (name, where))
+        return 0
+    state = tool_state(env, name)
+    if state == "declined":
+        out.write("NOT-INSTALLED: the user said no to installing `%s`. Nothing was installed; do not ask "
+                  "again.\n" % name)
+        return 3
+    permitted = general_permission(env)
+    if state != "approved" and not permitted:
+        out.write("NOT-INSTALLED: the user has not given permission to install `%s`. Nothing was installed. "
+                  "Ask the user first (what it is, why the work needs it, what installing involves: %s).\n"
+                  % (name, INSTALL_INVOLVES))
+        return 3
+    if directory:
+        out.write("CANNOT-INSTALL: the developer tools are already on this Mac (%s), and `%s` is not part of "
+                  "them: it comes only with the full Xcode app, from the App Store (a download of more than "
+                  "10 GB). Nothing was installed.\n" % (directory, name))
+        return 5
+    installer = _root() + "/usr/bin/xcode-select"
+    if sys.platform != "darwin" and not _root():
+        out.write("CANNOT-INSTALL: `%s` is installed with Apple's developer tools, which exist only on "
+                  "macOS. Nothing was installed.\n" % name)
+        return 5
+    lock = _locked(env)
+    try:
+        path, data = _ledger(env)
+        running = data.get("install") or {}
+        started = int(running.get("started") or 0)
+        if not (started and time.time() - started < wait):
+            proc = subprocess.run([installer, "--install"], capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL)
+            said = (proc.stdout + proc.stderr).strip()
+            if proc.returncode != 0 and "already installed" not in said:
+                out.write("CANNOT-INSTALL: Apple's installer did not start (exit %d): %s. Nothing was "
+                          "installed.\n" % (proc.returncode, said or "no message"))
+                return 5
+            data["install"] = {"started": int(time.time()), "tool": name}
+            _save(path, data)
+            out.write("INSTALLING `%s`: Apple's \"Install Command Line Developer Tools\" window is open on "
+                      "this Mac; the user presses Install there and agrees to Apple's license. Waiting for "
+                      "it to finish (up to %d minutes).\n" % (name, wait // 60))
+        else:
+            out.write("INSTALLING `%s`: the developer tools are already being installed (started %d s ago); "
+                      "not starting the installer again. Waiting for it to finish.\n"
+                      % (name, int(time.time() - started)))
+        out.flush()
+    finally:
+        lock.close()
+    deadline = time.time() + wait
+    while True:
+        directory, where = _present(env, name)
+        if where:
+            record_found(env, name, where)
+            path, data = _ledger(env)
+            data.pop("install", None)
+            _save(path, data)
+            told = " Tell the user once, in one line, that it was installed." if state != "approved" else ""
+            out.write("INSTALLED `%s` at %s. The work that needed it can continue.%s\n" % (name, where, told))
+            return 0
+        if time.time() >= deadline:
+            path, data = _ledger(env)
+            data.pop("install", None)  # a later request may open the installer again
+            _save(path, data)
+            out.write("NOT-INSTALLED-YET: `%s` is still not on this Mac after %d minutes. The installer "
+                      "window may have been closed, or the download is still running.\n" % (name, wait // 60))
+            return 4
+        time.sleep(poll)
+
+
+def answer(env, name, said, out=sys.stdout, **kw):
+    """The user's answer to the ask about `name`: yes installs it once, no records it so the user
+    is never asked about it again."""
+    if said == "no":
+        _set_state(env, name, "declined")
+        out.write("RECORDED: the user said no to installing `%s`. It will not be installed, and the user "
+                  "will not be asked about it again; work that needs it stays stopped.\n" % name)
+        return 0
+    directory, where = _present(env, name)
+    if not where:
+        _set_state(env, name, "approved")
+    return install(env, name, out=out, **kw)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -340,22 +560,36 @@ REFUSAL = """MISSING TOOL (guard-toolchain): this command needs `{tool}`, which 
   needed  : to run the command above
   install : {involves}
 
-What to do: stop this step and report the missing tool to whoever gave you the work. {ask}
+What to do: {ask}
 Do not run the command again, do not run `xcode-select --install` yourself, and do not look for a
 way around this that runs the tool: on a Mac without developer tools every such way opens the
 macOS install dialog on the user's screen.
 RICHOS-MISSING-TOOL {payload}
 """
-ASK_NEW = ("The lead asks the user in the conversation, in plain words, whether to install it; the "
-           "work on this step waits for the answer.")
-ASK_DONE = ("The user has ALREADY been asked about `{tool}` (do not ask again); wait for the answer, "
+ASK_NEW = ("Stop this step and report the missing tool to whoever gave you the work. "
+           "The lead asks the user in the conversation, in plain words, whether to install it; the "
+           "work on this step waits for the answer. On yes: `{yes_command}` (it installs it once); "
+           "on no: `{no_command}`.")
+ASK_DONE = ("Stop this step and report the missing tool to whoever gave you the work. "
+            "The user has ALREADY been asked about `{tool}` (do not ask again); wait for the answer, "
             "or carry on with work that does not need it.")
+ASK_DECLINED = ("Stop this step and report the missing tool to whoever gave you the work. "
+                "The user said NO to installing `{tool}`: do not ask again and do not install it; "
+                "carry on with work that does not need it.")
+ASK_PERMITTED = ("The user has already given permission to install it, so do not ask and do not stop: "
+                 "install it once with `{install_command}` (it does nothing if `{tool}` is already "
+                 "there and waits until the install finishes), report that it was installed so the "
+                 "user is told once, then run this step again.")
+ASK_INSTALLING = ("Stop this step and report the missing tool to whoever gave you the work. "
+                  "Apple's developer tools, which carry `{tool}`, are being installed right now: do not "
+                  "ask and do not start another install; run this step again once it is installed.")
 MISCONFIGURED = """REFUSED (guard-toolchain): DEVELOPER_DIR is set to `{given}`, which is not a developer directory, so `{tool}` would ask macOS to install the developer tools although this Mac has them at `{found}`. Nothing ran.
   Fix: run the command with DEVELOPER_DIR unset, or with DEVELOPER_DIR={found}.
 """
 INSTALL_REFUSAL = """REFUSED (guard-toolchain): `{command}` opens the macOS install dialog on the user's screen. Nothing ran.
-An agent never starts an install. If work needs the developer tools, stop and report it; the lead asks
-the user in the conversation, and the user installs them (or answers no).
+An agent never starts this install itself. If work needs the developer tools, stop and report it; the
+lead asks the user in the conversation, and on the user's yes the install runs through
+scripts/lib/toolchain.py (`answer <tool> yes`), once.
 """
 
 
@@ -375,12 +609,24 @@ def verdict(command, env):
                 return 2, MISCONFIGURED.format(given=given, tool=tool, found=directory)
             record_found(env, tool, where)
             continue
-        new = record_missing(env, tool)
-        payload = json.dumps({"tool": tool, "ask": new, "command": shown,
-                              "needed": "to run the command", "install": INSTALL_INVOLVES,
-                              "developer_dir": directory}, sort_keys=True)
+        commands = _commands(tool)
+        state = tool_state(env, tool)
+        if state == "declined":
+            new, ask = False, ASK_DECLINED
+        elif install_running(env):
+            new, ask = False, ASK_INSTALLING
+        elif state == "approved" or general_permission(env):
+            new, ask = False, ASK_PERMITTED
+        else:
+            new = record_missing(env, tool)
+            ask = ASK_NEW if new else ASK_DONE
+        fields = {"tool": tool, "ask": new, "command": shown, "needed": "to run the command",
+                  "install": INSTALL_INVOLVES, "developer_dir": directory,
+                  "declined": state == "declined", "permitted": ask is ASK_PERMITTED}
+        fields.update(commands)
+        payload = json.dumps(fields, sort_keys=True)
         return 2, REFUSAL.format(tool=tool, command=shown, involves=INSTALL_INVOLVES,
-                                 ask=(ASK_NEW if new else ASK_DONE.format(tool=tool)), payload=payload)
+                                 ask=ask.format(tool=tool, **commands), payload=payload)
     return 0, ""
 
 
@@ -468,8 +714,29 @@ def main(argv):
     if len(argv) >= 3 and argv[0] == "harness-env" and argv[1] == "--standins":
         print(json.dumps(harness_env(os.environ, argv[2]), sort_keys=True))
         return 0
+    if len(argv) == 3 and argv[0] == "answer" and argv[2] in ("yes", "no"):
+        return answer(os.environ, argv[1], argv[2])
+    if len(argv) == 2 and argv[0] == "install":
+        return install(os.environ, argv[1])
+    if argv and argv[0] == "permission" and len(argv) <= 2:
+        if len(argv) == 2 and argv[1] in ("yes", "no"):
+            try:
+                path = set_general_permission(os.environ, argv[1] == "yes")
+            except OSError as error:
+                sys.stderr.write("the setting could not be saved: %s\n" % error)
+                return 1
+            print("SAVED in %s: %s" % (path, "missing tools are installed without asking first; the user is "
+                                       "told once about each" if argv[1] == "yes" else
+                                       "the user is asked before any missing tool is installed"))
+            return 0
+        if len(argv) == 1:
+            print("%s in %s" % ("ON: missing tools are installed without asking first" if general_permission(os.environ)
+                                else "OFF: the user is asked before a missing tool is installed",
+                                settings_file(os.environ)))
+            return 0
     sys.stderr.write("usage: toolchain.py check < payload.json | resolve [tool...] | "
-                     "harness-env --standins <dir>\n")
+                     "harness-env --standins <dir> | answer <tool> yes|no | install <tool> | "
+                     "permission [yes|no]\n")
     return 64
 
 
