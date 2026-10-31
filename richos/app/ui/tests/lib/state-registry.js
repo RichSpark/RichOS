@@ -3812,13 +3812,13 @@ module.exports = [
     "why": "The native stop/exit fence reports an unsettled worker observation."
   },
   {
-    "s": "You need your own Anthropic account and a Max subscription there. You can sign in through your browser after setup; I never see your password. If you don't already have that subscription, sign up there first and pick the Max/Max 20x tier.",
+    "s": "You need your own Anthropic account and an Ultra subscription there. You can sign in through your browser after setup; I never see your password. If you don't already have that subscription, sign up there first and pick the Ultra tier.",
     "c": "INFORMATIONAL",
     "why": "Explains the separate account requirement before installation; the subsequent account sheet supplies the sign-in control.",
     "fixture": "setup-missing-both"
   },
   {
-    "s": "sign up there first and pick the Max/Max 20x tier",
+    "s": "sign up there first and pick the Ultra tier",
     "c": "CONTROL",
     "why": "The underlined pricing link inside the setup sheet's account sentence (`#setup-account a`, main.js renderSetupAccountNote). It is itself the control: a click opens claude.com/pricing through the `open_external` allowlist key."
   },
