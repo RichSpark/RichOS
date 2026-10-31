@@ -6624,6 +6624,18 @@ def _lease_holder_args(F, conf):
     return []
 
 
+def _lease_chain(F):
+    """THIS PROCESS COUNTS AS ITS OWN CALLER: [(pid, start)] of this process and
+    its ancestors, the chain a lease is checked against. A lease held by the
+    process that runs this merge in-process (the app's library call, a test that
+    is the session) is held, and git's fence hooks, its descendants, agree.
+    Without it, acquire RENEWED that lease and _take_land_lease still said
+    "could not take it", and _lease_for_abort tried to take a lease this
+    process already held, so a refused merge was left in progress."""
+    me = F.proc(os.getpid())
+    return ([(me["pid"], me["start"])] if me else []) + F.ancestors()
+
+
 def _take_land_lease(main):
     """THE MERGE TAKES THE LAND LEASE ITSELF (2026-10-14). `workspaces.sh merge
     echo-opus-hiresnag55b` was refused by the operator fence ("this process
@@ -6642,12 +6654,7 @@ def _take_land_lease(main):
     Still not held after that: SpecError with acquire's own words, and nothing
     is merged."""
     F = _fence_program()
-    # THIS PROCESS COUNTS AS ITS OWN CALLER: a lease held by the process that
-    # runs this merge in-process (the app's library call, a test that is the
-    # session) is held, and git's fence hooks, its descendants, agree. Without
-    # it, acquire RENEWED that lease and this still said "could not take it".
-    me = F.proc(os.getpid())
-    chain = ([(me["pid"], me["start"])] if me else []) + F.ancestors()
+    chain = _lease_chain(F)
     try:
         conf, _paths = F.launcher_for(main)
         if not F.fenced(conf):
@@ -7063,7 +7070,7 @@ def _lease_for_abort(main):
     try:
         F = _fence_program()
         conf, _paths = F.launcher_for(main)
-        if not F.fenced(conf) or F.authorized(F.Files(conf))[0]:
+        if not F.fenced(conf) or F.authorized(F.Files(conf), _lease_chain(F))[0]:
             return ""
     except Exception as exc:    # noqa: BLE001  a check that cannot decide says so
         return "whether this command holds the land lease could not be read (%s)" % exc
