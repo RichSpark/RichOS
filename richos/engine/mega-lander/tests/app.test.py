@@ -1320,6 +1320,73 @@ class DesktopWork(unittest.TestCase):
         self.assertTrue(Path(self.app.W.agent_path(key)).exists())
         self.assertFalse(Path(self.app.W.done_path(key)).exists())
 
+    def test_a_worker_the_registry_landed_completes_its_assignment(self):
+        """Row 3, part B (2026-10-31: Newt and round 45). The registry landed a worker's
+        workspace on its own; the receipt had no integrate of its own, so `complete` refused
+        "finish the assignment's pending workspace cleanup" forever. (a) A worker that ends
+        with nothing; (b) one whose commit reached the target through another merge."""
+        for tag,commit in (("empty",False),("merged",True)):
+            spec={**self.args,"request_id":"prepare-"+tag,"obligation_id":"task-"+tag}
+            self.app.ECS.execute(self.root/"ecs",{"protocol":1,"command":"checkpoint","binding":self.scope["binding"],
+                "request_id":"accept-"+tag,"checkpoint":{"statements":[{"verb":"commitment","fields":{"id":"task-"+tag,"title":"Task "+tag}}]}})
+            worker=self.call("prepare",spec)
+            target=self.start_fixture_worker(worker,tag+"-worker")
+            tips=[]
+            if commit:
+                (target/"result.txt").write_text("FICTIONAL")
+                self.app.git(target,"add","result.txt")
+                self.app.git(target,"-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-qm","Fictional result")
+                tips.append(self.app.git(target,"rev-parse","HEAD"))
+                self.app.git(self.repo,"merge","--no-ff","-qm","Fixture merge of the result",tips[0])
+            self.finish_fixture_worker(tag+"-worker")
+            key=self.app.W.named_key(self.session,worker["name"])
+            self.assertTrue(self.app.W.land(key,self.session,auto=True)["landed"])
+            self.assertTrue(Path(self.app.W.done_path(key)).exists())
+            done=self.call("complete",{"obligation_id":"task-"+tag,"worker_ids":[worker["id"]]})
+            self.assertTrue(done["obligation_closed"],tag)
+            self.assertTrue(done["evidence"][0].startswith("landed-by-registry:"+key+":"),done["evidence"])
+            for tip in tips:
+                self.assertIn(tip,done["evidence"][0])
+
+    def test_settle_superseded_by_closes_a_started_runs_rewritten_work(self):
+        """Row 3, part A through the app (Echo A, 2026-10-30): a continuation reworded its
+        predecessor's WIP tip and was integrated; the predecessor's branch is in no branch, so
+        integrate's cleanup left cleanup_pending and complete refused. The continuation's
+        record predates the observed `start`, so one settle with superseded_by closes it."""
+        worker=self.call("prepare",self.args)
+        target=self.start_fixture_worker(worker,"wip-worker")
+        (target/"result.txt").write_text("FICTIONAL")
+        self.app.git(target,"add","result.txt")
+        self.app.git(target,"-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-qm","WIP")
+        wip=self.app.git(target,"rev-parse","HEAD");self.finish_fixture_worker("wip-worker")
+        revised=self.call("prepare",{**self.args,"request_id":"revise-result","continue_of":worker["id"]})
+        revised_target=self.start_fixture_worker(revised,"reword-worker")
+        key=self.app.W.named_key(self.session,revised["name"])
+        with self.app.W.Lock():                    # a record from before the registry observed `start`
+            canonical=self.app.W.load_agent(key)
+            for w in canonical["workspaces"]: w.pop("start",None)
+            self.app.W.save_agent(canonical)
+        self.app.git(revised_target,"-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-q","--amend","-m","Fictional result")
+        reworded=self.app.git(revised_target,"rev-parse","HEAD");self.finish_fixture_worker("reword-worker")
+        review=self.call("prepare",{**self.args,"request_id":"final-review","role":"reviewer","review_of":revised["id"],"title":"Review result","brief":"Verify the requirement."})
+        self.start_fixture_worker(review,"accept-reviewer")
+        self.finish_fixture_worker("accept-reviewer","RICHOS_REVIEW "+json.dumps({"commit":reworded,"verdict":"passed","checks":["result is FICTIONAL"]}))
+        result=self.call("integrate",{"worker_id":revised["id"],"reviewer_id":review["id"]})
+        self.assertTrue(result["work_integrated"])
+        self.assertNotEqual(result["cleanup_pending"],[],"the fixture did not reproduce the stale cleanup")
+        args={"obligation_id":"fixture-task","worker_ids":[revised["id"]]}
+        with self.assertRaisesRegex(ValueError,"cleanup"):self.call("complete",args)
+        with self.assertRaisesRegex(self.app.W.SpecError,"touches none|is not in"):
+            self.call("settle",{"request_id":"prepare-one","superseded_by":wip,"reason":"Redone by its continuation."})
+
+        settled=self.call("settle",{"request_id":"prepare-one","superseded_by":reworded,"reason":"Reworded and integrated by its continuation."})
+
+        self.assertNotIn("land_pending",settled)
+        self.assertEqual(settled["landed"],revised["name"])
+        self.assertFalse(self.app.is_ancestor(self.repo,wip,"refs/heads/main"))
+        self.assertTrue(Path(self.app.W.done_path(key)).exists())
+        self.assertTrue(self.call("complete",args)["obligation_closed"])
+
     def test_v2_01_a_dispatched_worker_is_still_interrupted_by_its_session_ending(self):
         """The twin: a receipt with dispatch evidence keeps the interruption. The evidence is
         the app's own admission of the Agent call, then the guard's registration; a
