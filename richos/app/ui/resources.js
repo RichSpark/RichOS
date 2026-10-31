@@ -44,8 +44,9 @@
   const AFTER_SLEEP = /after sleep/;
   // Match both the live rail state and the pre-paint durable mirror. The narrow drawer
   // ignores the docked mirror, just as the shell's stylesheet does.
-  const visible = () => !document.hidden && !document.body.classList.contains("rail-closed") &&
+  const railVisible = () => !document.body.classList.contains("rail-closed") &&
     (document.body.classList.contains("bp-narrow") || document.documentElement.dataset.sidebar !== "hidden");
+  const visible = () => !document.hidden && railVisible();
   const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // ---- state --------------------------------------------------------------------------------
@@ -839,13 +840,16 @@
     syncVisibility();
   }
   let wasVisible = null;
+  let wasRailVisible = null;
   function syncVisibility() {
     if (!S.started) return;
+    const railShown = railVisible();
     const shown = visible();
-    if (shown === wasVisible) return;
+    if (shown === wasVisible && railShown === wasRailVisible) return;
     wasVisible = shown;
+    wasRailVisible = railShown;
     clearTimeout(pollTimer);
-    if (!shown) {
+    if (!railShown) {
       const focusInWidget = btn.contains(document.activeElement) || menu.contains(document.activeElement);
       pinned = false;
       hovering = false;
@@ -853,6 +857,10 @@
       closeMenu(false);
       sync();
       if (focusInWidget && !document.hidden) document.getElementById("rail-toggle").focus();
+    } else if (!shown) {
+      // A covered or minimized window pauses work without discarding the user's pin or
+      // focused view menu. Only a collapsed rail makes those overlays detached.
+      scheduleGlide();
     } else {
       // Age the held reading before painting, then ask the existing native cache for a fresh
       // snapshot. Native collection and agent reads continue throughout the UI pause.
