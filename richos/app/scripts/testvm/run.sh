@@ -134,7 +134,9 @@ if ! vm_running "$VM"; then
   # Tests must respect the host's power and sleep policy (§65). Launch Tart
   # directly: even a system-only wake lock is forbidden by the host shield.
   # The guest has its own WindowServer and needs no host display changes.
-  nohup "$TART_BIN" run "$VM" --no-graphics > "$TESTVM_LOG/$VM.log" 2>&1 &
+  # Clipboard assertions belong to this guest. Default sharing lets another
+  # guest or the host overwrite them and lets test data escape onto the host.
+  nohup "$TART_BIN" run "$VM" --no-graphics --no-clipboard > "$TESTVM_LOG/$VM.log" 2>&1 &
   echo $! > "$STATE/vm.pid"
 fi
 
