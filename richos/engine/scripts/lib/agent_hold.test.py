@@ -144,7 +144,10 @@ class Base(unittest.TestCase):
         self.env_before = {k: os.environ.get(k) for k in (
             "RICHOS_AGENT_HOLD_DIR", "TESTVM_ROOT", "RICHOS_CPU_GUARD_STATE", "RICHOS_AGENT_HOLD_WATCH_SECONDS",
             "RICHOS_AGENT_HOLD_REGISTRY", "RICHOS_AGENT_BASH_FOREGROUND", "CLAUDE_CODE_ENTRYPOINT",
-            agent_hold.TAG, agent_hold.SESSION_TAG)}
+            "CLAUDE_CONFIG_DIR", agent_hold.TAG, agent_hold.SESSION_TAG)}
+        # The registered hooks some cases run (shell-evidence.py's once-per-context notice) keep
+        # a record under the config directory; this run's own, never the operator's ~/.claude.
+        os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(self.tmp, "config")
         os.environ["RICHOS_AGENT_BASH_FOREGROUND"] = "1"
         os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
         os.environ["RICHOS_AGENT_HOLD_DIR"] = os.path.join(self.tmp, "hold")
