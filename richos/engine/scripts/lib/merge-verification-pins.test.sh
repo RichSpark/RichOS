@@ -22,6 +22,9 @@
 #       the exact entry that stopped the folderfiles2 land on 2026-10-22.
 #   V5  a note one side shortened while the other appended to it is still a conflict.
 #   V6  two notes that each had a sentence inserted in the middle merge by themselves, both kept.
+#   V7  two branches from one base that both changed a file pinned in a LIST entry (`external`),
+#       merged into main one after the other, leave one entry pinned to the merged file, never
+#       both renewals side by side (b19b5c8f4, 2026-10-31).
 #   V3  install.sh --check names the driver, and --uninstall removes it.
 #
 # Exit 0 = all cases pass; exit 1 = at least one failure.
@@ -269,6 +272,64 @@ if [ "$V6RC" = 0 ] && [ "$GOT6" = "$WANT6" ]; then
     ok "V6  two notes that each grew in the middle merge by themselves: both sentences kept, ours first, the base's order intact"
 else
     bad "V6  merge rc=$V6RC, note: ${GOT6:0:120}" "$(tail -3 "$SANDBOX/v6.out" | tr '\n' ' ')"
+fi
+git -C "$R" merge --abort >/dev/null 2>&1
+
+# --- V7 --------------------------------------------------------------------
+# 2026-10-31, b19b5c8f4: zach-opus-look1 and zach-opus-w1, both branched from 47e314bb6, each
+# changed mega-lander/workspaces.py and renewed its pins, one of which sits in a LIST (the
+# `external` entries of lifecycle-payload-transport.test.py). look1 landed, then w1 merged on top:
+# the list kept both renewed entries, side by side, each pinned to one branch's file and neither
+# to the merged one, and every later land was refused. Here: two branches from one base, both
+# changing c.sh and renewing its pins (a node's and a list entry's), merged one after the other.
+ext7() { # sets the external pin of c.sh in scripts/a.sh's node to c.sh's bytes on disk, adding it
+    python3 - "$R" <<'PY'
+import hashlib, json, os, sys
+root = sys.argv[1]
+p = os.path.join(root, "richos/engine/scripts/lib/verification-dependencies.json")
+d = json.load(open(p)); row = d["nodes"]["scripts/a.sh"]
+digest = hashlib.sha256(open(os.path.join(root, "richos/engine/scripts/c.sh"), "rb").read()).hexdigest()
+external = row.setdefault("external", [{"root": "environment", "path": "scripts/b.sh", "sha256": "0" * 64, "evidence": "fixture"}])
+for entry in external:
+    if entry["path"] == "scripts/c.sh":
+        entry["sha256"] = digest
+        break
+else:
+    external.append({"root": "environment", "path": "scripts/c.sh", "sha256": digest, "evidence": "fixture"})
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+PY
+}
+git -C "$R" checkout -q -f main
+ext7
+git -C "$R" commit -qam "main: a list entry pins c.sh"
+git -C "$R" switch -q -c look7
+sed -i.bak 's/^line two$/line two, look7/' "$R/richos/engine/scripts/c.sh"
+rm -f "$R"/richos/engine/scripts/*.bak
+write_maps; ext7
+git -C "$R" commit -qam "look7: c.sh and its pins"
+git -C "$R" switch -q main
+git -C "$R" switch -q -c w7
+sed -i.bak 's/^line four$/line four, w7/' "$R/richos/engine/scripts/c.sh"
+rm -f "$R"/richos/engine/scripts/*.bak
+write_maps; ext7
+git -C "$R" commit -qam "w7: c.sh and its pins"
+git -C "$R" switch -q main
+( cd "$R" && git merge --no-ff --no-edit look7 && git merge --no-ff --no-edit w7 ) >"$SANDBOX/v7.out" 2>&1
+V7RC=$?
+GOT7="$(python3 - "$R" 2>&1 <<'PY'
+import hashlib, json, os, sys
+root = sys.argv[1]
+digest = hashlib.sha256(open(os.path.join(root, "richos/engine/scripts/c.sh"), "rb").read()).hexdigest()
+external = json.load(open(os.path.join(root, "richos/engine/scripts/lib/verification-dependencies.json")))["nodes"]["scripts/a.sh"]["external"]
+pins = [e["sha256"] for e in external if e["path"] == "scripts/c.sh"]
+print("current" if pins == [digest] else "c.sh pinned %d time(s), %d stale" % (len(pins), sum(p != digest for p in pins)))
+PY
+)"
+C7="$(grep -c 'look7\|w7' "$R/richos/engine/scripts/c.sh")"
+if [ "$V7RC" = 0 ] && [ "$GOT7" = current ] && [ "$C7" = 2 ]; then
+    ok "V7  two branches from one base that both changed a file pinned in a list merge one after the other: one entry, pinned to the merged file (b19b5c8f4)"
+else
+    bad "V7  merge rc=$V7RC, list pin: $GOT7, c.sh sides=$C7" "$(tail -3 "$SANDBOX/v7.out" | tr '\n' ' ')"
 fi
 git -C "$R" merge --abort >/dev/null 2>&1
 

@@ -350,9 +350,10 @@ otherwise in a scratch git worktree of it (the recorded HEAD and MERGE_HEAD, rem
 run again (`blocked`) and an `invalid` result for any reason except inputs that changed while
 the gate ran (an invalid result can hide a failure, for example a UI suite whose ledger
 records a failed check). `engine receipts` blocks only when every engine unit passed.
-**Nothing else blocks**: a check over its cap, ended at the gate's cap, not admitted, stopped
-by the verification controller, NOT RUN for any reason or left to the nightly is named in
-the verdict and written to the receipt's `not_run` with its reason. The nightlies run all of
+**Nothing else blocks**: a check over its cap, ended at the gate's cap, stopped by the
+verification controller, NOT RUN for any reason or left to the nightly is named in the verdict
+and written to the receipt's `not_run` with its reason. **Except not admitted** (below): a check
+that never ran proved nothing, so it never ends in a receipt. The nightlies run all of
 it: `nightly-local.py` for the app and it stays the release gate; `nightly-engine.py` for
 every engine unit, which gates no release.
 
@@ -412,9 +413,19 @@ when such a unit appears, the gate resumes the saved plan (`proof-run.py --resum
 kept, a fresh round, the verification-retries procedure) and decides on that answer. Since
 2026-10-02 that is the next round ("A large land runs in rounds"): a unit that times out twice,
 or has no verdict when a round decides nothing new or the six rounds are spent, refuses the merge,
-naming it with "re-run it alone". The other no-verdict states (`not-admitted`, stopped by the
-controller, runner failed) stay NOT RUN, named as above; a merge that passes on a later round
-carries no NOT RUN for that unit.
+naming it with "re-run it alone". The other no-verdict states (stopped by the controller,
+runner failed) stay NOT RUN, named as above; a merge that passes on a later round carries no
+NOT RUN for that unit.
+
+**Not admitted never lands (since 2026-10-31).** That day all four lands on main wrote passing
+receipts with every selected check `not-admitted`: each run waited its 900 s for a proof-run slot,
+ran nothing and the receipt listed every check as NOT RUN. One of them was
+`verification-pins.test.sh` and main got a stale pin (`b19b5c8f4`) that refused every later land.
+Not admitted is a resource condition, not a failure (`docs/development/verification-retries.md`),
+so the gate waits for admission and runs the check: a check not admitted goes into the next round
+like one that timed out and a run that was not admitted at all (no plan to resume) is started
+once more. A check still not admitted after that refuses the merge, named `NOT ADMITTED: ...
+never ran` and no receipt is written.
 
 The original reasoning for the screen case, which still holds:
 
