@@ -22,16 +22,12 @@
 #                               against the corpus both phone apps must pass
 #   mobile-headless.test.sh     the shared mobile core and the reference client modules in
 #                               web/web-app/lib that the conformance corpus is generated from
-#   mobile-client-ui.test.sh    the earlier iPhone app's bundled screens in Chromium and WebKit;
-#                               it ran in the desktop build as mobile-pwa.test.sh until the phone
-#                               web page it also drove was retired on 2026-10-30, and stays there
 # A suite nobody lists runs in the desktop build.
 native-ios-app.test.sh	ios	the native iPhone app built and driven on an iPhone simulator (A1-A8); nothing it builds ships in the Mac app
 native-ios-core.test.sh	ios	the native iPhone app's Swift core package and its rios command line
 native-ios-share.test.sh	ios	the native iPhone app's Share and notification extensions, its release check and its TestFlight tool
 native-ios-ui.test.sh	ios	the native iPhone app's XCUITest screens on the smallest and largest iPhone simulators
 native-ios-physical-tool.test.sh	ios	the launcher for checks on a physical iPhone (rios device)
-mobile-ios.test.sh	ios	the earlier iPhone app in richos/mobile/ios, on an iPhone simulator
 native-android-app.test.sh	android	the native Android app: Robolectric app tests, its release check and its icon
 native-android-core.test.sh	android	the native Android app's Kotlin core and its randroid command line
 native-android-ui.test.sh	android	the native Android app's Compose screens, rendered by Robolectric

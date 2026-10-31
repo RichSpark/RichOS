@@ -4,7 +4,7 @@ const { rmSync } = require('node:fs');
 const { join } = require('node:path');
 const { createScratch, StorageUnavailable } = require('./storage.cjs');
 const target = process.argv[2];
-if (!['headless', 'client-ui', 'ios'].includes(target)) throw new Error('Expected headless, client-ui or ios');
+if (target !== 'headless') throw new Error('Expected headless');
 let scratch;
 try { scratch = createScratch(`suite-${target}`); }
 catch (error) {
@@ -12,8 +12,8 @@ catch (error) {
   console.log(`  NOT RUN  mobile-${target}: ${error.message}`);
   process.exit(2);
 }
-const bin = target === 'headless' ? 'npm' : process.execPath;
-const args = target === 'headless' ? ['--prefix', join(__dirname, '..'), 'test'] : [join(__dirname, 'proof-driver.mjs'), target];
+const bin = 'npm';
+const args = ['--prefix', join(__dirname, '..'), 'test'];
 const child = spawn(bin, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: scratch + '/' } });
 const signals = ['SIGINT', 'SIGTERM'];
 for (const signal of signals) process.on(signal, () => child.kill(signal));

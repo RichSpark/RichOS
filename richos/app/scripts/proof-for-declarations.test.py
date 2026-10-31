@@ -121,13 +121,31 @@ class Declarations(unittest.TestCase):
         self.assertIn("lint.test.sh", result.stdout)
         self.assertIn("UNCOVERED", result.stderr)
 
+    def test_the_retired_earlier_iphone_app_is_named_by_no_script_test_or_suite(self):
+        # The earlier iPhone app (its Swift sources and bundled screens) was removed 2026-10-31;
+        # the native RichConnect apps ship instead. Pieces are joined so this file does not match itself.
+        import re
+        old = [("richos/mobile/" + d) for d in ("ios", "ui")]
+        for folder in old:
+            self.assertFalse((ROOT / folder).exists(), folder + " is back")
+        tracked = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "richos/app/scripts", "richos/mobile/cli", "richos/mobile/test",
+             "richos/mobile/dev", "richos/mobile/core", "richos/mobile/service", "richos/mobile/package.json"],
+            capture_output=True, text=True, check=True).stdout.split()
+        pattern = "|".join(f + r"\b" for f in old) + "|mobile-ios[.]test|mobile-client-ui[.]test"
+        hits = []
+        for rel in tracked:
+            path = ROOT / rel
+            if path.is_file() and path != Path(__file__).resolve():
+                for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                    if re.search(pattern, line):
+                        hits.append(f"{rel}:{n}")
+        self.assertEqual(hits, [], "still names the retired earlier iPhone app: " + " ".join(hits[:8]))
+
     def test_mobile_paths_select_their_actual_proofs_without_hiding_new_code(self):
         for path, suite in [
             ("richos/mobile/test/cli.test.js", "mobile-headless.test.sh"),
             ("richos/mobile/package.json", "mobile-headless.test.sh"),
-            ("richos/mobile/test/client-ui.mjs", "mobile-client-ui.test.sh"),
-            ("richos/mobile/ios/Sources/AppDelegate.swift", "mobile-ios.test.sh"),
-            ("richos/mobile/ios/UITests/ComposerTests.swift", "mobile-ios.test.sh"),
         ]:
             with self.subTest(path=path):
                 result = self.select(path)

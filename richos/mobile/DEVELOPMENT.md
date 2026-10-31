@@ -30,27 +30,9 @@ node richos/mobile/cli/mobile.mjs headless action '{"type":"network","online":tr
 
 Other commands: `reset`, `restart`, `transport accept|unreachable|lose-ack|revoked` and `advance <milliseconds>`. Fixtures: `offline`, `online`, `queued`, `interrupted` and `revoked`. `action` accepts `compose`, `send`, `select-thread`, `network`, `sync`, `retry` and `discard`. Unknown actions and fixture names fail explicitly.
 
-## Simulator through the same CLI
+## The earlier iPhone app and its simulator loop are removed
 
-Requires macOS, Xcode with an installed iOS simulator runtime and XcodeGen. `doctor` reports the actual tool versions and cache paths. The checked-in Swift source targets iOS 16.7; simulator success is not proof of physical-device compatibility.
-
-```sh
-node richos/mobile/cli/mobile.mjs doctor
-node richos/mobile/cli/mobile.mjs sim prepare
-node richos/mobile/cli/mobile.mjs sim scenario offline-reconnect
-node richos/mobile/cli/mobile.mjs sim fixture queued
-node richos/mobile/cli/mobile.mjs sim state
-node richos/mobile/cli/mobile.mjs sim refresh
-node richos/mobile/cli/mobile.mjs sim verify
-node richos/mobile/cli/mobile.mjs sim ui-test
-node richos/mobile/cli/mobile.mjs check-release
-```
-
-`prepare` generates the Xcode project outside the repository, builds the minimal Debug app and installs it in a dedicated simulator. It does not launch the Simulator desktop window. `refresh` copies the current JavaScript/CSS/HTML into the running development app and reloads it without compiling Swift. All headless state, action, fixture and scenario commands also work with `sim`.
-
-`sim verify` compares the complete semantic trace from three scenarios between Node and the real WKWebView runtime. It separately terminates and relaunches the native app and checks that its queued message survives. `sim restart` is an actual native-process restart; the scenario's `restart` step reconstructs only the application core.
-
-`sim ui-test` resets to the offline fixture, uses XCUITest to type into the visible composer and tap Send, then checks the resulting queue through the CLI bridge. This is intentionally separate from direct action execution. It stores an `.xcresult` including a screenshot in the external cache. `sim screenshot` captures the current screen without opening a desktop window.
+The earlier iPhone app (`ios/` Swift sources and `ui/` bundled screens) and the `sim`, `doctor`, `build` and `check-release` commands that built it on a simulator were removed on 2026-10-31. The iPhone app is the native RichConnect app in `native-ios/`, driven through `native-ios/bin/rios`. Passages below that describe the earlier app's screens, simulator or WKWebView are history, kept until each is rewritten for the native apps.
 
 ## The phone web page is retired
 
@@ -76,16 +58,10 @@ Mac recognition budget is 90 seconds; a processing failure retains audio for ret
 node richos/mobile/cli/mobile.mjs client scenario connection-restart
 node richos/mobile/cli/mobile.mjs client scenario recording-interruption
 node richos/mobile/cli/mobile.mjs client scenario voice-gestures
-node richos/mobile/cli/mobile.mjs sim client-prepare
-node richos/mobile/cli/mobile.mjs sim action '{"type":"compose","text":"Client action check"}'
-node richos/mobile/cli/mobile.mjs sim state
-node richos/mobile/cli/mobile.mjs sim refresh
 ```
 
 The client scenarios use replaceable transport/recording ports and execute the actual
-client actions. They cannot prove microphone permission or hardware behavior. The simulator
-client commands use real native adapters. `sim prepare` returns to the original deterministic
-fixture host. Both screens support source refresh through the same CLI.
+client actions. They cannot prove microphone permission or hardware behavior.
 
 Physical builds and focused checks use the connected device identifier and signing team:
 
@@ -122,20 +98,12 @@ it does not claim those tests exercise Xcode or a physical USB device.
 The repository runner discovers these suites under `richos/app/scripts`:
 
 - `mobile-headless.test.sh`: `npm test` runs the core and CLI tests in disposable external sessions. It verifies persistence across real CLI processes, structured errors, locking, resource selection and the unpaired Release bootstrap. It needs Node and npm, with no simulator or browser.
-- `mobile-client-ui.test.sh`: runs the bundled native UI in Chromium and WebKit. A missing browser is `NOT RUN`, exit 2. The suite forces headless mode.
-- `mobile-ios.test.sh`: builds a dedicated simulator app, compares all three native/headless traces, checks process persistence and refresh, runs the visible-control XCUITest and verifies Release exclusion. Missing macOS/Xcode/XcodeGen or an available iOS runtime is `NOT RUN`, exit 2. Build/test failures on a capable host exit 1.
 
 ```sh
 bash richos/app/scripts/run-tests.sh --no-host-screen --only mobile-headless.test.sh
-bash richos/app/scripts/run-tests.sh --no-host-screen --only mobile-client-ui.test.sh
-bash richos/app/scripts/run-tests.sh --no-host-screen --only mobile-ios.test.sh
 ```
 
-All three suites choose unique scratch on the mounted external SSD and pass a scoped `TMPDIR` to their descendants. An existing external `TMPDIR` is respected; an unset or non-external value uses `/Volumes/E1TB/tmp/codex/`. The caller's environment and nightly configuration are unchanged. Scratch is removed after child processes finish. An absent SSD reports `NOT RUN`, exit 2, consistently.
-
-The iOS proof suite defaults explicitly to Apple's system device storage, using the owner's approved simulator exception. The external custom device set fails on this development Mac with CoreSimulator `NSCocoaErrorDomain 513`/`EPERM` and simctl exit 22. No environment override is needed for an ordinary suite run. `RICHOS_MOBILE_SIMULATOR_STORAGE=external` remains an explicit opt-in for hosts that support it; a failed creation is still a failure, never a silent fallback or pass. The interactive CLI's existing storage defaults are unchanged.
-
-Native proof builds remain external under `/Volumes/E1TB/caches/richos-mobile-ios-proof/<checkout-hash>-<storage>/`. A matching older `<checkout-hash>/` cache is reused. An incompatible saved policy is preserved and gets a separate policy-specific cache instead of being overwritten. `RICHOS_MOBILE_IOS_TEST_CACHE` can explicitly select another external cache, subject to the CLI's saved-policy checks. The suite locks that cache for its whole run and shuts down only its selected simulator. Reusable build caches remain available; tests do not delete another run's cache.
+The suite chooses unique scratch on the mounted external SSD and passes a scoped `TMPDIR` to its descendants. An existing external `TMPDIR` is respected; an unset or non-external value uses `/Volumes/E1TB/tmp/codex/`. The caller's environment and nightly configuration are unchanged. Scratch is removed after child processes finish. An absent SSD reports `NOT RUN`, exit 2, consistently.
 
 An unavailable host never earns a passing proof. `run-tests.sh` refuses undeclared exit-2 gaps. To record a known missing runtime without treating it as a product failure, set `RUN_TESTS_DECLARED_GAPS='mobile-ios.test.sh: <actual host reason>'`. A stale declaration on a capable host is rejected too. Both missing-runtime and missing-browser paths have regression tests.
 
@@ -144,10 +112,8 @@ Each suite has dependency `inputs` and exact-file `covers` rows. Coverage descri
 ## Boundaries
 
 - `core/`: real application actions and state, backed by the reference client's queue. Add new behavior here before wiring controls.
-- `ui/`: rendering and input events. The release client starts unpaired and enables sending only after the user confirms pairing.
 - `dev/`: deterministic environment adapters, persistent synthetic receipts and scenarios. The simulated Mac's receipt table models deduplication; it does not test a real Mac server.
-- `cli/`: headless persistence, resource packaging and simulator orchestration. The same request envelope reaches the development runtime in both modes.
-- `ios/`: native services and focused visible-control checks; physical recording and remote text are separate selectable tests.
+- `cli/`: headless persistence, resource selection and the lab and service commands. The same request envelope reaches the development runtime.
 
 Development fixture access and commands are compiled only for Debug simulator builds. The native bridge polls for UUID-named local sandbox command files while the Debug simulator app is running. Development commands use no URL scheme. The production `richos://conversation/` scheme accepts only validated conversation destinations; it cannot execute commands or initiate pairing. It exposes neither a network listener nor arbitrary JavaScript evaluation. The webview loads local resources only. Debug assets are separate from Release assets; `check-release` builds Release and inspects its executable, Info.plist and resources for development markers and unexpected URL registrations. This simulator Release check is not signed App Store artifact verification.
 
@@ -176,7 +142,7 @@ Stop the foreground lab and its separately owned Tailscale Serve endpoint after 
 
 ## Part 2 actions and persistence
 
-`client scenario update-controls` drives banner, dialog, blocking and withdrawn policies through the actual client. `sim client-prepare` opens the actual native renderer. In a Debug simulator, `sim policy '<JSON>'` installs a policy through substituted update-service ports; it does not rewrite the policy evaluator. The fixture client identifier is deliberately synthetic and is never bundled in a physical-device or Release build.
+`client scenario update-controls` drives banner, dialog, blocking and withdrawn policies through the actual client.  The fixture client identifier is deliberately synthetic and is never bundled in a physical-device or Release build.
 
 The client caches server-ordered history per conversation and keeps each conversation's draft. The outbox remains the reference client's queue, including its idempotency IDs and retry schedule. An active send does not hold up typing, navigation or suspension. Retries have a foreground timer. Version-unsupported responses and disabled actions are retained for attention rather than retried indefinitely. The Mac's existing protocol is version 1 when a legacy hello omits `protocol_version`; incompatible explicit versions disable text. Native requests advertise protocol, marketing version and build.
 
@@ -249,25 +215,13 @@ conversation open for manual testing. It requires `RICHOS_MOBILE_TEST_APP=integr
 and a connected paired Mac. It neither resets the session nor sends, records or discards
 anything. Its normal-composer assertion is readiness evidence, not a connectivity or voice gesture proof.
 
-The native conversation follows its newest message by default, including outgoing
-held/locked voice, text sends, growing replies and composer/viewport resizing.
-Deliberate upward scrolling pauses following; incoming messages preserve that reading
-position. An intentional send or Latest messages resumes following. The registered
-`mobile-client-ui.test.sh` suite exercises this with overflowing history in Chromium and
-WebKit, including a 24 px upward scroll, real wheel input and resize checks. Chromium
-uses trusted touch inputs; WebKit uses dispatched Touch Events for mic gestures and
-real browser layout. Neither substitutes for physical iPhone gesture acceptance.
-The same suite requires locked Cancel to stay centred, with at least 24 px separation
-from Send and 44 px minimum tap targets at 320, 375 and 430 px widths.
-
-
 Routine native reconnects are presentation-silent for three seconds: the transport
 is offline and the outbox retains work, while the ordinary header shows no connection status at all. Healthy operation is never announced. A sustained interruption shows a calm reconnecting notice. Known
 phone-offline, service-unavailable, revocation and incompatibility states remain
 explicit. An opening stream is never evidence that the Mac is asleep. Native stream
 startup refreshes the public authentication challenge before signing, including after
 suspension. Confirmed stream acceptance clears transient errors even without a hello
-frame. Headless fake-clock and Chromium/WebKit DOM tests protect these transitions.
+frame. Headless fake-clock tests protect these transitions.
 
 `device verify reconnect` is restricted to the integration app. It preserves the paired
 session, performs two background/foreground cycles and checks the quiet, usable
