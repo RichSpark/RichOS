@@ -1895,15 +1895,28 @@ def land_check(repo, what, staged, range_argv, changed_lint=True, receipt=True):
         result = repo.run(["python3", PROOF_RUN, *argv, *caps(max(60, int(GATE_CAP_SECONDS - (time.monotonic() - started)))),
                            "--log-dir", str(directory), "--summary-out", summary_path],
                           env={**repo.env, **MUTATION_SWITCH})
+        blocking, not_run, why_not = land_verdict(result.returncode, summary_path, directory)
+        if blocking == [] and not (directory / "plan.json").is_file() and \
+                any(row.get("state") in NOT_ADMITTED for row in not_run):
+            # The run itself was not admitted (no proof-run slot within its wait): nothing ran and
+            # there is no plan to resume, so it is started once more, as the first round was.
+            say(f"autocheck: {what}: the run was not admitted, so nothing ran; it is started once more "
+                f"and waits for admission up to {GATE_CAP_SECONDS} s again (NOT_ADMITTED)")
+            directory = Path(tempfile.mkdtemp(prefix="attempt-", dir=root))
+            summary_path = str(root / (directory.name + "-summary.json"))
+            result = repo.run(["python3", PROOF_RUN, *argv, *caps(GATE_CAP_SECONDS),
+                               "--log-dir", str(directory), "--summary-out", summary_path],
+                              env={**repo.env, **MUTATION_SWITCH})
+            blocking, not_run, why_not = land_verdict(result.returncode, summary_path, directory)
         if (directory / "plan.json").is_file():
             pending = root / "last-attempt.pending"
             pending.write_text(json.dumps({"directory": str(directory), "identity": identity}))
             os.replace(pending, prior)
-        blocking, not_run, why_not = land_verdict(result.returncode, summary_path, directory)
         blocking, not_run, current = retry_failed_alone(repo, what, root, prior, identity, directory, caps,
                                                         blocking, not_run, alone)
         blocking, not_run, why_not, rounds = more_rounds(repo, what, root, prior, identity, current, caps,
                                                          blocking, not_run, why_not, alone)
+        blocking, not_run, why_not = refuse_not_admitted(blocking, not_run, why_not)
         not_run = nightly + not_run
     finally:
         os.unlink(plan)
@@ -1967,9 +1980,20 @@ ENDED = "cancelled"  # dialect-exempt: proof-run.py's state value for a check it
 NOT_RUN_WHY[ENDED] = "ended at the gate's 900 s cap"
 # A pass invalidated only because what it read changed while the run went (proof_evidence.py,
 # Record.save and finalize): no verdict either way, which is not a failure of the change.
-# The two states that mean "the host ran out of time, not the change": the next round runs them
-# (more_rounds). A check that times out at its own cap twice refuses the merge.
-RETRY_STATES = ("timed-out", ENDED)
+# The states that mean "the host ran out of time or room, not the change": the next round runs
+# them (more_rounds). A check that times out at its own cap twice refuses the merge.
+#
+# A CHECK THAT WAS NOT ADMITTED PROVED NOTHING, SO IT NEVER LETS A LAND THROUGH (2026-10-31). All
+# four lands on main that day wrote passing receipts with every selected check not admitted: each
+# run waited its 900 s for a proof-run slot, ran nothing, and the gate counted every check as NOT
+# RUN, never blocking. One of those checks was verification-pins.test.sh, and main got a stale pin
+# (b19b5c8f4) that refused every land after it. Not admitted is a resource condition, not a failure
+# (docs/development/verification-retries.md), so the gate waits for admission and runs the check:
+# a check not admitted goes into the next round like one that timed out, a run that was not
+# admitted at all is started once more, and a check that still was not admitted after that
+# refuses the land, by name (refuse_not_admitted). The bound is the rounds' own.
+NOT_ADMITTED = ("not-admitted", "scheduler-starvation", "resource-recovery-exhausted")
+RETRY_STATES = ("timed-out", ENDED) + NOT_ADMITTED
 INPUTS_MOVED = ("inputs changed", "source changed during execution")
 # proof-run.py --only-check marks a check it left out of a round this way (leave_unselected).
 UNSELECTED = "retry-unselected"
@@ -2147,11 +2171,28 @@ def more_rounds(repo, what, root, prior, identity, directory, caps, blocking, no
     return blocking, not_run, why_not, rounds
 
 
+def refuse_not_admitted(blocking, not_run, why_not):
+    """Every check still not admitted after the rounds refuses the land (NOT_ADMITTED): it never
+    ran, so no receipt may say this tree passed it. Returns (blocking, not_run, why_not)."""
+    if blocking is None:
+        return blocking, not_run, why_not
+    waiting = [row for row in not_run if row.get("state") in NOT_ADMITTED]
+    if not waiting:
+        return blocking, not_run, why_not
+    blocking = blocking + [{"check": row["check"], "result": row["state"],
+                            "message": f"NOT ADMITTED: {row['check']} never ran, so nothing proved it on this tree."}
+                           for row in waiting]
+    why_not = why_not or ("The Mac had no room for these checks inside the gate's waits, also on the retry; "
+                          "a check that never ran is not a pass. Land again when the Mac has room.")
+    return blocking, [row for row in not_run if row.get("state") not in NOT_ADMITTED], why_not
+
+
 def land_verdict(rc, summary_path, directory):
     """(blocking rows, not_run rows, reason) from proof-run's summary. A failing check blocks:
     `failed`, `blocked` (an unchanged failure the runner refuses to run again), and `invalid`
     for any reason but inputs that moved during the run. Everything else that did not pass did
-    not reach a verdict: NOT RUN, named, never blocking. The coverage verifier `engine receipts`
+    not reach a verdict: NOT RUN, named, never blocking here (one not admitted is retried, and
+    refused if it never runs: refuse_not_admitted). The coverage verifier `engine receipts`
     fails whenever one of its units did not pass, so it blocks only when every unit passed.
     (None, [], reason) when there is no verdict to read."""
     if rc == 0:

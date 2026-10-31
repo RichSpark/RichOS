@@ -235,6 +235,15 @@ else:
         previous = list(json.loads((prior / "outcomes.json").read_text()).values())
         with open(os.environ["AUTOCHECK_FIXTURE_LOG"], "a") as log:
             log.write("reuse " + str(prior) + "\\n")
+noslot = Path(os.environ["AUTOCHECK_FIXTURE_LOG"] + ".noslot")
+if noslot.exists() and int(noslot.read_text() or 0) > 0:
+    # <log>.noslot holds how many runs are not admitted to a proof-run slot: as the real runner
+    # then, nothing runs, no plan.json is written, every check is not-admitted, and it exits 1.
+    noslot.write_text(str(int(noslot.read_text()) - 1))
+    rows = [{"check": line.strip(), "result": "not-admitted", "not_run": None} for line in lines if line.strip()]
+    if "--summary-out" in sys.argv:
+        Path(sys.argv[sys.argv.index("--summary-out") + 1]).write_text(json.dumps({"checks": rows}))
+    sys.exit(1)
 (directory / "plan.json").write_text(json.dumps(lines))
 only = [sys.argv[i + 1] for i, a in enumerate(sys.argv) if a == "--only-check"]
 rows = []
@@ -1505,13 +1514,12 @@ class Land(Fixture):
         self.assertTrue(60 <= left <= 900, runner)
 
     def test_a_check_that_reached_no_verdict_is_named_and_never_blocks(self):
-        # Not admitted, a NOT RUN for any reason, or a pass invalidated only because its inputs
-        # moved during the run: none of these is a failure of the change, so none refuses the
-        # land. Each is named in the verdict and the receipt. (Over the cap or ended at the
-        # gate's cap is retried once alone first: the tests after this one.)
+        # A NOT RUN for any reason, or a pass invalidated only because its inputs moved during
+        # the run: none of these is a failure of the change, so none refuses the land. Each is
+        # named in the verdict and the receipt. (Over the cap, ended at the gate's cap or not
+        # admitted is retried first, and not admitted never lands: the tests after this one.)
         self.make()
-        cases = (("not-admitted", "not admitted"),
-                 ("invalid execution inputs changed during the check", "what it read changed while the gate ran"))
+        cases = (("invalid execution inputs changed during the check", "what it read changed while the gate ran"),)
         for n, (state, why) in enumerate(cases):
             self.branch_with(f"feature{n}", "richos/app/src/state.txt", state + "\n")
             out = self.git("merge", "--no-ff", "-m", f"land {state}", f"feature{n}")
@@ -1521,6 +1529,54 @@ class Land(Fixture):
             self.assertEqual([(row["check"], row["why"]) for row in receipt["not_run"]],
                              [("cd richos/app && bash scripts/state.sh", why)])
         self.assertEqual(self.recorded(), "")
+
+    # 2026-10-31: all four lands on main wrote passing receipts with every selected check not
+    # admitted (each run waited 900 s for a proof-run slot and ran nothing), and one of those
+    # checks would have refused the stale pin b19b5c8f4 brought. A check that was not admitted
+    # proved nothing: the gate waits for admission and runs it, and refuses if it never runs.
+    def land_receipts(self):
+        folder = self.repo / ".git/richos-autocheck/land"
+        return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
+
+    def test_a_check_not_admitted_runs_in_the_next_round_and_lands(self):
+        self.landed_after_retry("not-admitted")
+
+    def test_a_check_never_admitted_refuses_the_merge_and_writes_no_receipt(self):
+        self.make()
+        self.branch_with("feature", "richos/app/src/state.txt", "held-not-admitted\n")
+        Path(str(self.log) + ".hold").touch()
+        before, receipts = self.head("main"), self.land_receipts()
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        self.assertIn("MERGE INTO MAIN REFUSED", out.stderr)
+        self.assertIn(f"{self.STATE_CHECK} (not-admitted)", out.stderr)
+        self.assertEqual(self.tools().count("run " + self.STATE_CHECK), 2)
+        self.assertEqual((self.head("main"), self.land_receipts()), (before, receipts))
+        self.git("merge", "--abort")
+
+    def test_a_run_not_admitted_at_all_is_started_once_more_and_lands_when_it_runs(self):
+        self.make()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        Path(str(self.log) + ".noslot").write_text("1")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        self.assertIn("the run was not admitted, so nothing ran; it is started once more", out.stderr)
+        self.assertEqual(len(self.runner_calls()), 2, self.runner_calls())
+        self.assertEqual(self.tools().count("run cd richos/app && bash scripts/suite.sh"), 1)
+        receipt = json.loads((self.repo / ".git/richos-autocheck/land" / self.head("HEAD^{tree}")).read_text())
+        self.assertEqual(receipt["not_run"], [])
+
+    def test_a_land_whose_checks_are_all_not_admitted_writes_no_passing_receipt(self):
+        # The 2026-10-31 case exactly: the run is not admitted to a slot, and again on its retry.
+        self.make()
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, better\n")
+        Path(str(self.log) + ".noslot").write_text("2")
+        before, receipts = self.head("main"), self.land_receipts()
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        self.assertIn("MERGE INTO MAIN REFUSED", out.stderr)
+        self.assertIn("NOT ADMITTED: cd richos/app && bash scripts/suite.sh never ran", out.stderr)
+        self.assertNotIn("ALLOWED", out.stderr)
+        self.assertEqual(self.tools().count("run cd richos/app && bash scripts/suite.sh"), 0)
+        self.assertEqual((self.head("main"), self.land_receipts()), (before, receipts))
+        self.git("merge", "--abort")
 
     def refused_after_retry(self, state, after="ONE RETRY"):
         self.make()
