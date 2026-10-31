@@ -27,7 +27,7 @@ pub fn allowed(scope: &Scope) -> bool {
 }
 pub fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"library_search","description":"Search the user's RichCleaner notes, names and folder labels. Use ordinary search words, never FTS syntax. Empty query lists saved metadata for meaning-based inspection when lexical matches are weak. Each answer names total matches, total saved and continuation; inspect remaining batches before claiming that no file exists. Never reads file contents or moves files.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
+        json!({"name":"library_search","description":"Search the user's RichCleaner notes, names and folder labels. Use ordinary search words, never FTS syntax. Empty query lists saved metadata for meaning-based inspection when lexical matches are weak. A noteTruncated preview retains its full note through library_show. Each answer names total matches, total saved and continuation; inspect remaining batches before claiming that no file exists. Never reads file contents or moves files.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
         json!({"name":"library_show","description":"Put one actual saved original in front of the user as a RichCleaner file card. Give an id returned by library_search. Opening resolves the current original on the host; no model-supplied file path is accepted. Does not move the file.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}}),
     ]
 }
@@ -60,7 +60,13 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
             let mut entries = vec![];
             let mut bytes = 1024;
             for e in page.entries {
-                let item = json!({"id":e.id,"name":e.path.file_name().map(|v|v.to_string_lossy()),"note":e.note,"folder":e.folder,"aliases":e.labels,"inbox":e.inbox,"sorting":e.pending_sort});
+                // Search carries a bounded preview. A valid maximum-length note can
+                // exceed the entire response budget after JSON escaping; returning no
+                // items with the same continuation would hide it and every later item.
+                let mut end = e.note.len().min(16 * 1024);
+                while !e.note.is_char_boundary(end) { end -= 1; }
+                let mut item = json!({"id":e.id,"name":e.path.file_name().map(|v|v.to_string_lossy()),"note":&e.note[..end],"folder":e.folder,"aliases":e.labels,"inbox":e.inbox,"sorting":e.pending_sort});
+                if end < e.note.len() { item["noteTruncated"] = json!(true); }
                 let size = serde_json::to_vec(&item).map_err(|e| e.to_string())?.len();
                 if bytes + size > 64 * 1024 {
                     break;
@@ -99,6 +105,25 @@ mod tests {
         assert!(allowed(&scope));
         scope.surface = "phone".into();
         assert!(!allowed(&scope));
+    }
+    #[test]
+    fn maximum_escaped_note_still_advances_and_show_retains_the_full_note() {
+        let root = std::env::temp_dir().join(format!("richcleaner-long-note-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let scope:Scope=serde_json::from_value(json!({"context":{"root":root.join("engine-state"),"entity_id":"company","thread_id":"thread","turn_id":"turn","asker":"front_desk","session_id":"session"},"actions_allowed":true,"answer_method":"typed","surface":"mac"})).unwrap();
+        let mut db = Catalog::open(&catalog_path(&scope.context.root).unwrap()).unwrap();
+        let note = "\"".repeat(32 * 1024);
+        let entry = super::super::Entry::new(root.join("large.png"), super::super::Identity { volume: 1, object: 1, size: 12, modified: "1".into(), changed: "1".into(), bookmark: String::new() }, note.clone()).unwrap();
+        db.save(&entry).unwrap();
+        let page = call(&scope, "library_search", &json!({"query":""})).unwrap();
+        assert_eq!(page["entries"][0]["id"], entry.id);
+        assert_eq!(page["entries"][0]["noteTruncated"], true);
+        assert_eq!(page["next"], Value::Null);
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 64 * 1024);
+        assert_eq!(call(&scope,"library_show",&json!({"id":entry.id})).unwrap()["note"],note);
+        assert_eq!(db.get(&entry.id).unwrap().note,note);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn bounded_search_lists_every_saved_original_and_show_uses_only_its_id() {
