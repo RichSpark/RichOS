@@ -40,10 +40,14 @@ impl Catalog {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        if version > 1 {
+        if version > 2 {
             return Err("This library needs a newer RichOS".into());
         }
-        db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY,volume TEXT NOT NULL,object TEXT NOT NULL,phase TEXT NOT NULL,updated INTEGER NOT NULL,record TEXT NOT NULL,UNIQUE(volume,object)); CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED,name,note,labels,tokenize='unicode61 remove_diacritics 2'); PRAGMA user_version=1; COMMIT;").map_err(|e|e.to_string())?;
+        if version == 0 {
+            db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE files(id TEXT PRIMARY KEY,volume TEXT NOT NULL,object TEXT NOT NULL,phase TEXT NOT NULL,updated INTEGER NOT NULL,record TEXT NOT NULL,UNIQUE(volume,object)); CREATE VIRTUAL TABLE search USING fts5(id UNINDEXED,name,note,labels,tokenize='unicode61 remove_diacritics 2'); CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file)); PRAGMA user_version=2; COMMIT;").map_err(|e|e.to_string())?;
+        } else if version == 1 {
+            db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file)); PRAGMA user_version=2; COMMIT;").map_err(|e|e.to_string())?;
+        }
         Ok(Self { db })
     }
     pub fn get(&self, id: &str) -> Result<Entry> {
@@ -99,7 +103,7 @@ impl Catalog {
     pub fn pending(&self) -> Result<Vec<Entry>> {
         let mut query = self
             .db
-            .prepare("SELECT record FROM files WHERE phase NOT IN ('\"draft\"','\"filed\"')")
+            .prepare("SELECT record FROM files WHERE phase NOT IN ('\"draft\"','\"filed\"') OR json_extract(record,'$.staged') IS NOT NULL")
             .map_err(|e| e.to_string())?;
         let rows = query
             .query_map([], |r| r.get::<_, String>(0))
@@ -108,6 +112,60 @@ impl Catalog {
             serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
         })
         .collect()
+    }
+    pub fn show(&self, entity: &str, thread: &str, turn: &str, file: &str) -> Result<String> {
+        self.get(file)?;
+        let id = format!("cleaner-{}", uuid::Uuid::new_v4());
+        self.db
+            .execute(
+                "INSERT OR IGNORE INTO cards VALUES(?1,?2,?3,?4,?5,?6)",
+                params![id, entity, thread, turn, file, crate::util::now_millis()],
+            )
+            .map_err(|e| e.to_string())?;
+        self.db
+            .query_row(
+                "SELECT id FROM cards WHERE entity=?1 AND thread=?2 AND turn=?3 AND file=?4",
+                params![entity, thread, turn, file],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+    pub fn cards(&self) -> Result<Vec<super::tools::Card>> {
+        let mut query = self
+            .db
+            .prepare("SELECT id,entity,thread,turn,file,at FROM cards ORDER BY at,id")
+            .map_err(|e| e.to_string())?;
+        let rows = query
+            .query_map([], |r| {
+                Ok(super::tools::Card {
+                    id: r.get(0)?,
+                    entity: r.get(1)?,
+                    thread: r.get(2)?,
+                    turn: r.get(3)?,
+                    file: r.get(4)?,
+                    at: r.get(5)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.map(|r| r.map_err(|e| e.to_string())).collect()
+    }
+    pub fn interrupted_inbox(&self) -> Result<Vec<Entry>> {
+        let mut query = self
+            .db
+            .prepare("SELECT record FROM files WHERE phase='\"filed\"'")
+            .map_err(|e| e.to_string())?;
+        let rows = query
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut entries = vec![];
+        for row in rows {
+            let entry: Entry = serde_json::from_str(&row.map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            if entry.pending_sort {
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
     }
     pub fn search(&self, text: &str, offset: u64, byte_limit: usize) -> Result<Page> {
         if text.len() > 4096 || offset > i64::MAX as u64 {
@@ -142,6 +200,9 @@ impl Catalog {
         for row in rows {
             let record = row.map_err(|e| e.to_string())?;
             if bytes + record.len() + 2 > byte_limit {
+                if entries.is_empty() {
+                    return Err("One file record exceeds this response budget".into());
+                }
                 break;
             }
             bytes += record.len() + 2;

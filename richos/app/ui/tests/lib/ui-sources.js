@@ -69,7 +69,7 @@ const ENTRY = "index.html";
 /// Named here rather than discovered, because "this HTML file is a window the app opens" is a
 /// claim about Rust code no scanner here reads; step 3 still refuses an HTML file that is
 /// neither, so a stray page cannot hide.
-const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html"];
+const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html", "cleaner.html"];
 
 /// What each shipped file is. Every row says WHY, because every row is a claim about
 /// whether a gate needs to look at the file, and an undeclared claim is the defect above.
@@ -83,6 +83,10 @@ const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html"];
 ///   "style"         a stylesheet. No string inventory; read by the contrast gate for
 ///                   declared exemptions and color literals.
 const ROLES = {
+  "cleaner.html":{role:"ui",why:"RichCleaner capture and personal library windows"},
+  "cleaner.js":{role:"ui",why:"RichCleaner owner-driven capture and retrieval"},
+  "cleaner-settings.js":{role:"ui",why:"RichCleaner settings and Inbox-first preference"},
+  "cleaner.css":{role:"style",why:"RichCleaner capture, search and details"},
   "index.html": { role: "ui", why: "the shell Tauri loads" },
   "main.js": { role: "ui", why: "the chat surface and the bridge" },
   "attachments.js": {

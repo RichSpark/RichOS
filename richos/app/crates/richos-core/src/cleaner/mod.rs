@@ -1,10 +1,15 @@
 //! Personal file catalog and narrow, durable filing recovery. The host supplies native
 //! coordinated file operations. Accepted notes always precede mutation of an original.
 mod catalog;
+pub mod choice;
+pub mod tools;
 pub use catalog::{Catalog, Page};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 pub type Result<T> = std::result::Result<T, String>;
+pub fn capture_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
 pub const EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "heif", "avif", "psd", "pdf", "docx",
     "xlsx", "pptx", "odt", "ods", "odp", "svg", "mp3", "flac", "ogg", "m4a", "mp4", "m4v", "mov",
@@ -81,15 +86,26 @@ pub struct Entry {
     pub phase: Phase,
     pub projection: Projection,
     pub intended: Option<PathBuf>,
+    #[serde(default)]
+    pub intended_folder: Option<String>,
     pub staged: Option<Staged>,
     pub undo: Option<PathBuf>,
     pub updated: u64,
     pub problem: Option<String>,
     pub inbox: bool,
+    #[serde(default)]
+    pub return_phase: Option<Phase>,
+    #[serde(default)]
+    pub pending_sort: bool,
 }
 impl Entry {
     pub fn new(path: PathBuf, identity: Identity, note: String) -> Result<Self> {
-        if note.trim().is_empty() || note.len() > 32 * 1024 {
+        if note.trim().is_empty()
+            || note.len() > 32 * 1024
+            || note
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        {
             return Err("The note is empty or too long".into());
         }
         Ok(Self {
@@ -103,11 +119,14 @@ impl Entry {
             phase: Phase::Draft,
             projection: Projection::default(),
             intended: None,
+            intended_folder: None,
             staged: None,
             undo: None,
             updated: crate::util::now_millis(),
             problem: None,
             inbox: false,
+            return_phase: None,
+            pending_sort: false,
         })
     }
 }
@@ -146,6 +165,7 @@ pub trait Files {
     fn destination(&self, root: &Path, parts: &[String], name: &std::ffi::OsStr)
         -> Result<PathBuf>;
     fn stage(&self, entry: &Entry) -> Result<Option<Staged>>;
+    fn annotate(&self, entry: &Entry, staged: &Staged) -> Result<Staged>;
     fn replace(&self, entry: &Entry, staged: &Staged) -> Result<Identity>;
     fn rename(&self, source: &Path, destination: &Path, identity: &Identity) -> Result<Identity>;
     fn cleanup(&self, staged: &Staged) -> Result<()>;
@@ -167,33 +187,54 @@ pub fn file(
     if !e.identity.unchanged(&fs.inspect(&e.path)?) {
         return Err("The file changed. Your saved note is still here".into());
     }
-    let destination = fs.destination(
-        root,
-        &folder_parts(folder)?,
-        e.path.file_name().ok_or("Missing filename")?,
-    )?;
-    e.undo = Some(e.path.clone());
+    let parts = folder_parts(folder)?;
+    let folder_path = parts
+        .iter()
+        .fold(root.to_path_buf(), |parent, part| parent.join(part));
+    let destination = if e.path.parent() == Some(folder_path.as_path()) {
+        e.path.clone()
+    } else {
+        fs.destination(root, &parts, e.path.file_name().ok_or("Missing filename")?)?
+    };
+    if !e.pending_sort {
+        e.undo = Some(e.path.clone());
+    }
     e.intended = Some(destination);
-    e.folder = folder.into();
+    e.intended_folder = Some(folder.into());
+    e.return_phase = Some(if e.phase == Phase::Filed {
+        Phase::Filed
+    } else {
+        Phase::Draft
+    });
     e.labels = labels;
-    e.inbox = inbox;
     e.problem = None;
     e.phase = Phase::Prepared;
     db.save(&e)?;
-    if e.projection.mode != "embedded" {
+    {
         match fs.stage(&e) {
             Ok(Some(staged)) => {
                 e.staged = Some(staged.clone());
                 db.save(&e)?;
-                e.identity = fs.replace(&e, &staged)?;
+                let staged = fs.annotate(&e, &staged)?;
+                e.staged = Some(staged.clone());
+                db.save(&e)?;
+                if staged.projection.mode == "embedded" {
+                    e.identity = fs.replace(&e, &staged)?;
+                }
                 e.projection = staged.projection;
                 e.phase = Phase::Replaced;
                 db.save(&e)?;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                e.projection = Projection {
+                    reason: "This file type has no supported in-file note field".into(),
+                    ..Projection::default()
+                };
+            }
             Err(reason) => {
-                e.phase = Phase::Draft;
+                e.phase = e.return_phase.take().unwrap_or(Phase::Draft);
                 e.intended = None;
+                e.intended_folder = None;
                 e.problem = Some(reason.clone());
                 db.save(&e)?;
                 return Err(reason);
@@ -203,8 +244,15 @@ pub fn file(
     e.phase = Phase::Moving;
     db.save(&e)?;
     let destination = e.intended.clone().ok_or("Missing filing destination")?;
-    e.identity = fs.rename(&e.path, &destination, &e.identity)?;
-    e.path = destination;
+    if e.path != destination {
+        relocate(db, fs, &mut e)?;
+    }
+    e.path = e.intended.clone().ok_or("Missing filing destination")?;
+    e.folder = folder.into();
+    e.inbox = inbox;
+    e.return_phase = None;
+    e.intended_folder = None;
+    e.pending_sort = false;
     e.phase = Phase::Filed;
     e.intended = None;
     e.updated = crate::util::now_millis();
@@ -219,6 +267,138 @@ pub fn file(
         db.save(&saved)?;
     }
     Ok(saved)
+}
+fn relocate(db: &mut Catalog, fs: &impl Files, e: &mut Entry) -> Result<()> {
+    for _ in 0..16 {
+        let destination = e.intended.as_ref().ok_or("Missing move intent")?;
+        match fs.rename(&e.path, destination, &e.identity) {
+            Ok(identity) => {
+                e.identity = identity;
+                return Ok(());
+            }
+            Err(reason) if reason == "destination-collision" => {
+                e.intended = Some(fs.destination(
+                    destination.parent().ok_or("Missing destination folder")?,
+                    &[],
+                    e.path.file_name().ok_or("Missing filename")?,
+                )?);
+                db.save(e)?;
+            }
+            Err(reason) => return Err(reason),
+        }
+    }
+    Err("Another app kept taking the destination name. The original is still tracked".into())
+}
+/// Optional fast-clear mode: durable note and intent, then one no-replace move to Inbox.
+/// No metadata rewrite or model answer can delay this first safe, searchable location.
+pub fn store_inbox(db: &mut Catalog, fs: &impl Files, id: &str, root: &Path) -> Result<Entry> {
+    let mut e = db.get(id)?;
+    if e.phase != Phase::Draft {
+        return Err("This file is already being handled".into());
+    }
+    if !e.identity.unchanged(&fs.inspect(&e.path)?) {
+        return Err("The selected file changed. Its note is saved".into());
+    }
+    let destination = fs.destination(
+        root,
+        &["Inbox".into()],
+        e.path.file_name().ok_or("Missing filename")?,
+    )?;
+    e.undo = Some(e.path.clone());
+    e.intended = Some(destination.clone());
+    e.pending_sort = true;
+    e.phase = Phase::Moving;
+    e.intended_folder = Some("Inbox".into());
+    db.save(&e)?;
+    relocate(db, fs, &mut e)?;
+    e.path = e.intended.clone().ok_or("Missing move destination")?;
+    e.intended = None;
+    e.intended_folder = None;
+    e.folder = "Inbox".into();
+    e.inbox = true;
+    e.phase = Phase::Filed;
+    db.save(&e)?;
+    fs.resolve(&e.path, &e.identity)?;
+    db.get(id)
+}
+/// Settle only a canceled folder choice, reading the latest row after any Undo/Edit.
+/// The host serializes this with actual mutations. Never pass an older Entry snapshot.
+pub fn cancel_sort(db: &mut Catalog, id: &str) -> Result<Entry> {
+    let mut entry = db.get(id)?;
+    if entry.pending_sort {
+        entry.pending_sort = false;
+        entry.phase = Phase::Filed;
+    } else if entry.phase == Phase::Choosing {
+        entry.phase = Phase::Draft;
+    }
+    db.save(&entry)?;
+    Ok(entry)
+}
+pub fn edit(db: &mut Catalog, fs: &impl Files, id: &str, note: String) -> Result<Entry> {
+    if note.trim().is_empty()
+        || note.len() > 32 * 1024
+        || note
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err("The note is empty or too long".into());
+    }
+    let mut e = db.get(id)?;
+    if !matches!(e.phase, Phase::Draft | Phase::Filed) {
+        return Err("Recover this file operation before editing its note".into());
+    }
+    e.note = note;
+    e.updated = crate::util::now_millis();
+    let embedded = matches!(e.projection.mode.as_str(), "embedded" | "older");
+    if embedded {
+        e.projection.mode = "older".into();
+    }
+    db.save(&e)?;
+    if !embedded {
+        return Ok(e);
+    }
+    e.path = match fs.resolve(&e.path, &e.identity) {
+        Ok(path) => path,
+        Err(reason) => {
+            e.problem = Some(reason);
+            db.save(&e)?;
+            return Ok(e);
+        }
+    };
+    e.return_phase = Some(e.phase.clone());
+    e.phase = Phase::Prepared;
+    db.save(&e)?;
+    let update = || -> Result<Staged> {
+        let staged = fs
+            .stage(&e)?
+            .ok_or("There is no safe embedded note field")?;
+        Ok(staged)
+    };
+    let result = update().and_then(|staged| {
+        e.staged = Some(staged.clone());
+        db.save(&e)?;
+        let staged = fs.annotate(&e, &staged)?;
+        e.staged = Some(staged.clone());
+        db.save(&e)?;
+        if staged.projection.mode != "embedded" {
+            return Err(staged.projection.reason);
+        }
+        e.identity = fs.replace(&e, &staged)?;
+        e.projection = staged.projection;
+        Ok(())
+    });
+    e.phase = e.return_phase.take().unwrap_or(Phase::Draft);
+    if let Err(reason) = result {
+        e.problem = Some(format!(
+            "Note saved in RichOS. The note inside the file is older: {reason}"
+        ));
+    }
+    db.save(&e)?;
+    if let Some(staged) = e.staged.take() {
+        fs.cleanup(&staged)?;
+        db.save(&e)?;
+    }
+    Ok(e)
 }
 pub fn undo(db: &mut Catalog, fs: &impl Files, id: &str) -> Result<Entry> {
     let mut e = db.get(id)?;
@@ -238,12 +418,16 @@ pub fn undo(db: &mut Catalog, fs: &impl Files, id: &str) -> Result<Entry> {
     )?;
     e.identity = now;
     e.intended = Some(destination.clone());
+    e.return_phase = Some(Phase::Filed);
     e.phase = Phase::Restoring;
     db.save(&e)?;
-    e.identity = fs.rename(&e.path, &destination, &e.identity)?;
-    e.path = destination;
+    relocate(db, fs, &mut e)?;
+    e.path = e.intended.clone().ok_or("Missing move destination")?;
     e.intended = None;
     e.undo = None;
+    e.return_phase = None;
+    e.intended_folder = None;
+    e.pending_sort = false;
     e.phase = Phase::Draft;
     e.folder.clear();
     e.inbox = false;
@@ -252,6 +436,14 @@ pub fn undo(db: &mut Catalog, fs: &impl Files, id: &str) -> Result<Entry> {
 }
 pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
     for mut e in db.pending()? {
+        if matches!(e.phase, Phase::Filed | Phase::Draft) && e.intended.is_none() {
+            if let Some(staged) = e.staged.take() {
+                fs.cleanup(&staged)?;
+                db.save(&e)?;
+            }
+            continue;
+        }
+
         if let Some(destination) = &e.intended {
             if let Ok(actual) = fs.inspect(destination) {
                 let expected = e
@@ -265,12 +457,19 @@ pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
                     if e.phase == Phase::Restoring {
                         e.phase = Phase::Draft;
                         e.undo = None;
+                        e.pending_sort = false;
                         e.folder.clear();
                         e.inbox = false;
                     } else {
                         e.phase = Phase::Filed;
+                        if let Some(folder) = e.intended_folder.take() {
+                            e.inbox = folder == "Inbox";
+                            e.folder = folder;
+                        }
+                        e.return_phase = None;
                     }
                     e.intended = None;
+                    e.pending_sort = false;
                     if let Some(staged) = &e.staged {
                         e.projection = staged.projection.clone();
                     }
@@ -293,9 +492,19 @@ pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
                     e.projection = staged.projection.clone();
                 }
                 e.identity = actual;
-                e.phase = Phase::Draft;
+                e.phase = e.return_phase.take().unwrap_or(Phase::Draft);
                 e.intended = None;
+                e.intended_folder = None;
                 e.problem = Some("Your note is saved. The file was not filed".into());
+                if e.pending_sort {
+                    e.phase = Phase::Filed;
+                    e.folder = "Inbox".into();
+                    e.inbox = true;
+                    e.pending_sort = false;
+                    e.problem = Some(
+                        "Sorting was interrupted. Your file is in Inbox; use File again".into(),
+                    );
+                }
                 db.save(&e)?;
                 if let Some(staged) = e.staged.take() {
                     fs.cleanup(&staged)?;
@@ -306,6 +515,11 @@ pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
         }
         e.phase = Phase::Unresolved;
         e.problem = Some("Your note is saved. Locate the original before trying again".into());
+        db.save(&e)?;
+    }
+    for mut e in db.interrupted_inbox()? {
+        e.pending_sort = false;
+        e.problem=Some("Sorting was interrupted. Your file is stored in Inbox; use File again to finish sorting".into());
         db.save(&e)?;
     }
     Ok(())
@@ -428,6 +642,9 @@ mod tests {
         fn stage(&self, _: &Entry) -> Result<Option<Staged>> {
             panic!("Recovery must not embed the note again")
         }
+        fn annotate(&self, _: &Entry, _: &Staged) -> Result<Staged> {
+            unreachable!()
+        }
         fn replace(&self, _: &Entry, _: &Staged) -> Result<Identity> {
             unreachable!()
         }
@@ -467,6 +684,7 @@ mod tests {
         let mut db = f.db();
         let mut e = entry("/Library/shot.png", "keep this note", 3);
         e.intended = Some(PathBuf::from("/Desktop/shot.png"));
+        e.return_phase = Some(Phase::Filed);
         e.phase = Phase::Restoring;
         db.save(&e).unwrap();
         let mut occupant = e.identity.clone();
@@ -480,6 +698,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(db.get(&e.id).unwrap().phase, Phase::Unresolved);
+        e.return_phase = Some(Phase::Filed);
         e.phase = Phase::Restoring;
         db.save(&e).unwrap();
         recover(
@@ -494,5 +713,181 @@ mod tests {
         assert_eq!(saved.phase, Phase::Draft);
         assert_eq!(saved.note, e.note);
         assert!(saved.undo.is_none());
+    }
+    struct DiskFiles {
+        db: PathBuf,
+        id: String,
+        interrupt: bool,
+    }
+    impl Files for DiskFiles {
+        fn inspect(&self, p: &Path) -> Result<Identity> {
+            use std::os::unix::fs::MetadataExt;
+            let m = std::fs::symlink_metadata(p).map_err(|e| e.to_string())?;
+            Ok(Identity {
+                volume: m.dev(),
+                object: m.ino(),
+                size: m.len(),
+                modified: format!("{}:{}", m.mtime(), m.mtime_nsec()),
+                changed: format!("{}:{}", m.ctime(), m.ctime_nsec()),
+                bookmark: String::new(),
+            })
+        }
+        fn resolve(&self, p: &Path, i: &Identity) -> Result<PathBuf> {
+            if self.inspect(p)?.same_object(i) {
+                Ok(p.into())
+            } else {
+                Err("The original is missing".into())
+            }
+        }
+        fn destination(
+            &self,
+            root: &Path,
+            parts: &[String],
+            name: &std::ffi::OsStr,
+        ) -> Result<PathBuf> {
+            let dir = parts.iter().fold(root.to_path_buf(), |p, n| p.join(n));
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let mut result = dir.join(name);
+            if result.exists() {
+                result = dir.join(format!("restored-{}", name.to_string_lossy()));
+            }
+            Ok(result)
+        }
+        fn stage(&self, _: &Entry) -> Result<Option<Staged>> {
+            Ok(None)
+        }
+        fn annotate(&self, _: &Entry, _: &Staged) -> Result<Staged> {
+            unreachable!()
+        }
+        fn replace(&self, _: &Entry, _: &Staged) -> Result<Identity> {
+            unreachable!()
+        }
+        fn rename(&self, a: &Path, b: &Path, i: &Identity) -> Result<Identity> {
+            let saved = Catalog::open(&self.db)?.get(&self.id)?;
+            assert!(!saved.note.is_empty(), "the note must already be durable");
+            assert_eq!(
+                saved.intended.as_deref(),
+                Some(b),
+                "the destination must already be durable"
+            );
+            if b.exists() || !self.inspect(a)?.unchanged(i) {
+                return Err("Refused to replace an occupant or changed source".into());
+            }
+            std::fs::rename(a, b).map_err(|e| e.to_string())?;
+            if self.interrupt {
+                return Err("Controlled interruption after rename".into());
+            }
+            self.inspect(b)
+        }
+        fn cleanup(&self, _: &Staged) -> Result<()> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn inbox_first_is_searchable_then_sorted_and_undo_still_targets_desktop() {
+        let f = Fixture::new();
+        let desktop = f.0.join("Desktop");
+        let root = f.0.join("Library");
+        std::fs::create_dir(&desktop).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        let source = desktop.join("quote.txt");
+        std::fs::write(&source, b"one original").unwrap();
+        let mut db = f.db();
+        let mut fs = DiskFiles {
+            db: f.0.join("library.sqlite"),
+            id: String::new(),
+            interrupt: false,
+        };
+        let e = Entry::new(
+            source.clone(),
+            fs.inspect(&source).unwrap(),
+            "kitchen quote".into(),
+        )
+        .unwrap();
+        fs.id = e.id.clone();
+        db.save(&e).unwrap();
+        let stored = store_inbox(&mut db, &fs, &e.id, &root).unwrap();
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&stored.path).unwrap(), b"one original");
+        assert!(stored.pending_sort);
+        assert_eq!(db.search("kitchen", 0, 65536).unwrap().total, 1);
+        let filed = file(&mut db, &fs, &e.id, &root, "Home/Kitchen", vec![], false).unwrap();
+        assert_eq!(filed.undo.as_ref(), Some(&source));
+        assert!(!stored.path.exists());
+        assert!(filed.path.starts_with(root.join("Home/Kitchen")));
+        assert!(!filed.pending_sort);
+        drop(db);
+        let mut db = f.db();
+        std::fs::write(&source, b"new file").unwrap();
+        let restored = undo(&mut db, &fs, &e.id).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), b"new file");
+        assert_eq!(std::fs::read(&restored.path).unwrap(), b"one original");
+        assert_eq!(restored.note, e.note);
+        // A late canceled choice must reload the row after Undo and a correction,
+        // rather than restore the older captured note/location snapshot.
+        edit(&mut db, &fs, &e.id, "The corrected estimate".into()).unwrap();
+        let settled = cancel_sort(&mut db, &e.id).unwrap();
+        assert_eq!(settled.phase, Phase::Draft);
+        assert_eq!(settled.path, restored.path);
+        assert_eq!(settled.note, "The corrected estimate");
+        let pending = store_inbox(&mut db, &fs, &e.id, &root).unwrap();
+        edit(
+            &mut db,
+            &fs,
+            &e.id,
+            "A correction while stored in Inbox".into(),
+        )
+        .unwrap();
+        let settled = cancel_sort(&mut db, &e.id).unwrap();
+        assert_eq!(settled.phase, Phase::Filed);
+        assert!(!settled.pending_sort);
+        assert_eq!(settled.path, pending.path);
+        assert_eq!(settled.undo, Some(restored.path));
+        assert_eq!(settled.note, "A correction while stored in Inbox");
+    }
+    #[test]
+    fn interrupted_inbox_move_recovers_its_original_and_settles_sorting_honestly() {
+        let f = Fixture::new();
+        let source = f.0.join("quote.txt");
+        std::fs::write(&source, b"one original").unwrap();
+        let root = f.0.join("Library");
+        std::fs::create_dir(&root).unwrap();
+        let mut db = f.db();
+        let mut fs = DiskFiles {
+            db: f.0.join("library.sqlite"),
+            id: String::new(),
+            interrupt: true,
+        };
+        let e = Entry::new(
+            source.clone(),
+            fs.inspect(&source).unwrap(),
+            "saved note".into(),
+        )
+        .unwrap();
+        fs.id = e.id.clone();
+        db.save(&e).unwrap();
+        assert!(store_inbox(&mut db, &fs, &e.id, &root).is_err());
+        drop(db);
+        let mut db = f.db();
+        recover(&mut db, &fs).unwrap();
+        let saved = db.get(&e.id).unwrap();
+        assert_eq!(saved.phase, Phase::Filed);
+        assert!(saved.path.starts_with(root.join("Inbox")));
+        assert_eq!(saved.note, e.note);
+        assert_eq!(std::fs::read(saved.path).unwrap(), b"one original");
+        assert!(!saved.pending_sort);
+    }
+    #[test]
+    fn library_cards_reference_the_catalog_and_disappear_without_deleting_originals() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let e = entry("quote.png", "kitchen quote", 5);
+        db.save(&e).unwrap();
+        let first = db.show("acme", "chat", "turn", &e.id).unwrap();
+        assert_eq!(first, db.show("acme", "chat", "turn", &e.id).unwrap());
+        assert_eq!(db.cards().unwrap().len(), 1);
+        assert_eq!(db.cards().unwrap()[0].file, e.id);
+        db.remove(&e.id).unwrap();
+        assert!(db.cards().unwrap().is_empty());
     }
 }

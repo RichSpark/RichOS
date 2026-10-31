@@ -152,6 +152,14 @@ mod opener;
 /// **A file Rich puts in front of the user** (§138, item 12): the cards' items, open and Show in
 /// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
 mod rich_files_host;
+#[cfg(target_os = "macos")]
+mod cleaner_native;
+#[cfg(target_os = "macos")]
+mod cleaner_metadata;
+#[cfg(target_os = "macos")]
+mod cleaner_host;
+#[cfg(target_os = "macos")]
+mod cleaner_service;
 mod emission_trace;
 /// **Settings → Terminal setup** (round 41 piece 1): what the login shell read found, and reading
 /// it again (`richos-core`'s `login_environment.rs`).
@@ -2689,6 +2697,8 @@ fn main() {
                     builder = builder.position(x, y);
                 }
                 let window = builder.build()?;
+                #[cfg(target_os="macos")]
+                cleaner_host::watch_main(&window);
                 // WHERE HE LEFT IT, FOR NEXT TIME — and only if it is still reachable then.
                 //
                 // ONLY AN INSTALLED LAUNCH RECORDS ANYTHING, and that is the same rule the
@@ -3624,6 +3634,8 @@ fn main() {
             app.manage(phone_runtime);
             question_host::start(app.handle().clone());
             rich_files_host::start(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            {cleaner_host::start(app.handle())?;cleaner_service::register(app.handle())?;}
             git_name_host::start(app.handle().clone());
             peer_messages::start(app.handle().clone())?;
             // Readiness starts before the window's setup/navigation reads, with the
@@ -3655,6 +3667,9 @@ fn main() {
                 // `rich://dictation`: its state moved, or key capture answered.
                 let window = app.handle().clone();
                 link.set_listener(Box::new(move |message| {
+                    #[cfg(target_os = "macos")]
+            cleaner_host::on_message(&window,message);
+                    if matches!(message,Some(dictation::ipc::ToolMessage::Cleaner{..})){return;}
                     if let Err(e) = window.emit(dictation_app::EVENT, dictation_app::event_payload(message)) {
                         eprintln!("[richos] dictation: the window could not be told: {e}");
                     }
@@ -4002,6 +4017,28 @@ fn main() {
             your_instructions_read,
             your_instructions_save,
             // --- a file Rich puts in front of the user (§138, item 12) — appended ---
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_status,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_open_main,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_panel_size,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_details,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_set_inbox_first,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_set_enabled,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_choose_root,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_list,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_open_window,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_capture_control,
+            #[cfg(target_os = "macos")]
+            cleaner_host::cleaner_action,
             rich_files_host::rich_file_open,
             rich_files_host::rich_file_reveal,
             // --- Terminal setup and your name in Git (round 41) — appended ---
@@ -9872,7 +9909,7 @@ fn ask_before_quitting(app: AppHandle) {
 /// nothing begins, no opening screen, no count (`launch.rs:149-151`) — this is a window
 /// coming back on a run that never stopped, which is exactly what that kind is for.
 fn reopen_window(app: &AppHandle) {
-    if let Some(window) = app.webview_windows().values().next() {
+    if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -9921,6 +9958,8 @@ fn reopen_window(app: &AppHandle) {
     }
     match builder.build() {
         Ok(window) => {
+            #[cfg(target_os="macos")]
+            {cleaner_host::watch_main(&window);}
             remember_window_geometry(&window, geometry_path);
             // A window rebuilt from the Dock takes drops too (CEO §86).
             mac_attachments::listen_for_drops(&window);

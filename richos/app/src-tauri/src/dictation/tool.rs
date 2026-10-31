@@ -209,9 +209,11 @@ pub fn preview_problem(tag: Option<&str>) -> Option<Problem> {
 /// Everything the control loop hears.
 enum Control {
     Tap(TapEvent),
+    CleanerLookup {id:String,result:Result<serde_json::Value,String>},
+    CleanerReady {id:String,result:Result<serde_json::Value,String>},
     App(AppMessage),
-    InputDied,
-    Written { outcome: Result<(), Problem>, words: Option<Rect> },
+    InputDied(u64),
+    Written { seq:u64, outcome: Result<(), Problem>, words: Option<Rect> },
     Hour,
     Ui(UiEvent),
     BarExpired(u64),
@@ -568,6 +570,11 @@ struct Tool {
     /// **The accuracy pinned when listening began** (finding 6): Faster chosen mid-dictation
     /// takes effect on the next one, as the menu says.
     recording_model: String,
+    capture_seq:u64,
+    cleaner_enabled:bool,
+    cleaner_pending:Option<String>,
+    cleaner_lookup:Option<Writing>,
+    cleaner_target:Option<(String,serde_json::Value)>,
 }
 
 impl Tool {
@@ -611,6 +618,7 @@ impl Tool {
             handover: None,
             handovers: 0,
             recording_model: String::new(),
+            capture_seq:0,cleaner_enabled:false,cleaner_pending:None,cleaner_lookup:None,cleaner_target:None,
         }
     }
 
@@ -627,6 +635,8 @@ impl Tool {
     }
 
     fn publish(&mut self) {
+        if let Phase::Problem(problem)=self.session.phase(){if let Some((id,_))=self.cleaner_target.take(){self.session.reset();self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":problem.tag()})});}}
+
         let message = {
             let Ok(mut s) = self.shared.lock() else { return };
             s.phase = self.session.phase();
@@ -645,6 +655,7 @@ impl Tool {
     /// The bar follows the session: each new view is drawn, and the ones that go by themselves
     /// get their timer (`dictation_bar::hide_after`).
     fn sync_bar(&mut self) {
+        if self.cleaner_pending.is_some() || self.cleaner_target.is_some(){self.bar.show(&self.app,BarView::Hidden,self.settings.key(),None,bar::look(&self.data_dir));return;}
         if self.ending {
             return;
         }
@@ -731,6 +742,37 @@ impl Tool {
         while let Ok(control) = rx.recv() {
             match control {
                 Control::Tap(TapEvent::Toggle) | Control::App(AppMessage::Finish) => self.toggle(matches!(control, Control::App(_))),
+                Control::CleanerReady{id,result}=>{
+                    if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
+                    let Some((active,expected))=self.cleaner_target.as_ref() else{continue};if active!=&id{continue}
+                    let good=result.as_ref().is_ok_and(|context|context["route"]=="file" && context["path"]==expected["path"] && context["identity"]["object"]==expected["identity"]["object"] && context["identity"]["changed"]==expected["identity"]["changed"]);
+                    if good{if self.session.tap(now_ms())==TapAction::StartListening{self.listen();}}else{self.cancel_cleaner();self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":"Focus or selection changed. Try again"})});}
+                }
+                Control::CleanerLookup{id,result}=>{
+                    if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
+                    if self.cleaner_pending.as_deref()!=Some(id.as_str()){continue;}
+                    self.cleaner_pending=None;
+                    match result {
+                        Ok(context) if context["route"]=="text"=>{self.cleaner_target=None;self.hub.broadcast(&ToolMessage::Cleaner{id,action:"passthrough".into(),payload:serde_json::json!({})});if self.session.tap(now_ms())==TapAction::StartListening{self.listen();}},
+                        Ok(context)=>{self.cleaner_target=Some((id.clone(),context.clone()));self.hub.broadcast(&ToolMessage::Cleaner{id,action:"target".into(),payload:context});},
+                        Err(reason)=>{self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":reason})});}
+                    }
+                }
+                Control::App(AppMessage::Cleaner{id,action,payload})=>{
+                    match action.as_str(){
+                        "mode"=>self.cleaner_enabled=payload["enabled"]==true,
+                        "release" if self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id)=>{self.cleaner_target=None;},
+                        "service-target" if self.settings.on && !matches!(self.session.phase(),Phase::Listening{..}|Phase::Writing) && self.cleaner_target.is_none()=>{self.cleaner_target=Some((id.clone(),payload.clone()));self.hub.broadcast(&ToolMessage::Cleaner{id,action:"target".into(),payload});},
+                        "record" if self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id)=>{
+                            if self.cleaner_target.as_ref().is_some_and(|(_,context)|context["service"]==true){if self.session.tap(now_ms())==TapAction::StartListening{self.listen();}}
+                            else{let tx=self.tx.clone();let stop=Arc::new(AtomicBool::new(false));let flag=stop.clone();let join=std::thread::spawn(move||{let result=crate::cleaner_native::Native::bundled().and_then(|native|native.context(&flag));if tx.send(Control::CleanerReady{id,result}).is_err(){log::line("RichCleaner target verification receiver ended");}});self.cleaner_lookup=Some(Writing{stop,join});}
+                        },
+                        "finish" if self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id) && matches!(self.session.phase(),Phase::Listening{..})=>self.toggle(true),
+                        "cancel" if self.cleaner_pending.as_deref()==Some(id.as_str()) || self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id)=>{self.cancel_cleaner();if let Some(message)=payload["message"].as_str(){log::line(message);}},
+                        _=>{}
+                    }
+                }
+
                 Control::Tap(TapEvent::Disabled { by_timeout }) => {
                     self.disables += 1;
                     log::line(&format!(
@@ -738,18 +780,20 @@ impl Tool {
                         if by_timeout { "timeout" } else { "user input" }
                     ));
                 }
-                Control::InputDied => {
+                Control::InputDied(seq) => {
+                    if seq!=self.capture_seq {continue;}
                     if let Some(duration_ms) = self.session.input_died(now_ms()) {
                         log::line("the microphone delivered nothing for 3.008 s; listening ended");
                         self.stop(duration_ms);
                     }
                 }
-                Control::Written { outcome, words } => {
+                Control::Written { seq, outcome, words } => {
+                    if seq!=self.capture_seq {continue;}
                     if let Some(w) = self.writing.take() {
                         // Done: joined at once, so the thread is reaped and nothing is owned.
                         w.stop_and_join();
                     }
-                    self.session.finish(outcome);
+                    if let Some((id,_))=self.cleaner_target.take(){if let Err(problem)=outcome{self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":problem.tag()})});}self.session.reset();}else{self.session.finish(outcome);}
                     self.publish();
                     if let (Ok(()), Some(words)) = (outcome, words) {
                         self.fly(words);
@@ -914,6 +958,8 @@ impl Tool {
     /// decoder killed and reaped) and joined, so its scratch folder drops its files before the
     /// process ends (finding 1).
     fn end(&mut self) -> i32 {
+        if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
+
         self.capture = None;
         self.tap = None;
         self.handover = None;
@@ -1070,6 +1116,14 @@ impl Tool {
         if self.ending {
             return;
         }
+        if !from_app && !matches!(self.session.phase(),Phase::Listening{..}|Phase::Writing) && self.cleaner_enabled && insert::front_is_finder() {
+            if self.cleaner_pending.is_some() || self.cleaner_target.is_some(){self.cancel_cleaner();return;}
+            let id=richos_core::cleaner::capture_id();self.cleaner_pending=Some(id.clone());
+            self.hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"checking".into(),payload:serde_json::json!({"key":self.settings.key()})});
+            let tx=self.tx.clone();let stop=Arc::new(AtomicBool::new(false));let flag=stop.clone();
+            let join=std::thread::spawn(move||{let result=crate::cleaner_native::Native::bundled().and_then(|native|native.context(&flag));if tx.send(Control::CleanerLookup{id,result}).is_err(){log::line("RichCleaner lookup receiver ended");}});
+            self.cleaner_lookup=Some(Writing{stop,join});return;
+        }
         match self.session.tap(now_ms()) {
             TapAction::StartListening => self.listen(),
             TapAction::StopListening { duration_ms } => self.stop(duration_ms),
@@ -1077,7 +1131,17 @@ impl Tool {
         }
     }
 
+    fn cancel_cleaner(&mut self){
+        self.capture_seq+=1;
+        let id=self.cleaner_pending.take().or_else(||self.cleaner_target.as_ref().map(|(id,_)|id.clone()));
+        if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
+        self.capture=None;self.handover=None;
+        if let Some(writing)=self.writing.take(){writing.stop_and_join();}
+        self.recording.lock().unwrap_or_else(|p|p.into_inner()).take();self.cleaner_target=None;self.session.reset();self.publish();
+        if let Some(id)=id{self.hub.broadcast(&ToolMessage::Cleaner{id,action:"canceled".into(),payload:serde_json::json!({})});}
+    }
     fn listen(&mut self) {
+        self.capture_seq+=1;
         self.focused = insert::focused_window_rect();
         // The accuracy for THIS dictation is the one chosen when it begins (finding 6).
         self.recording_model = self.settings.model.clone();
@@ -1121,18 +1185,21 @@ impl Tool {
         let app = self.app.clone();
         let mut meter = MeterGate::default();
         let source = AudioSource::from_env();
+        let capture_seq=self.capture_seq;
+        let cleaner_id=self.cleaner_target.as_ref().map(|(id,_)|id.clone());let cleaner_hub=self.hub.clone();
         match capture::start(&source, move |frame| {
             let died = recording.lock().ok().and_then(|mut r| r.as_mut().map(|r| r.push(frame))).unwrap_or(false);
             if died {
-                tx.send(Control::InputDied).ok();
+                tx.send(Control::InputDied(capture_seq)).ok();
             }
             if meter.due(now_ms()) {
-                bar::level(&app, meter_level(frame));
+                if let Some(id)=&cleaner_id{cleaner_hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"level".into(),payload:serde_json::json!({"level":(meter_level(frame)*100.) as u32})});}else{bar::level(&app, meter_level(frame));}
             }
         }) {
             Ok(c) => {
                 log::line(&format!("listening ({})", c.source_label));
                 self.capture = Some(c);
+                if let Some((id,_))=&self.cleaner_target{self.hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"listening".into(),payload:serde_json::json!({"key":self.settings.key()})});}
             }
             Err(e) => {
                 log::line(&format!("the microphone could not be opened: {e}"));
@@ -1152,11 +1219,14 @@ impl Tool {
         let model = self.recording_model.clone();
         let tx = self.tx.clone();
         let app = self.app.clone();
+        let capture_seq=self.capture_seq;
+        let target=self.cleaner_target.as_ref().map(|(id,_)|id.clone());let hub=self.hub.clone();
+        if let Some(id)=&target{self.hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"writing".into(),payload:serde_json::json!({})});}
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         match std::thread::Builder::new().name("dictation-write".into()).spawn(move || {
-            let (outcome, words) = write(recording, duration_ms, &model, &data_dir, &app, &flag);
-            tx.send(Control::Written { outcome, words }).ok();
+            let (outcome, words) = write(recording, duration_ms, &model, &data_dir, &app, &flag,target.as_deref().map(|id|(id,hub.as_ref())));
+            tx.send(Control::Written { seq:capture_seq, outcome, words }).ok();
         }) {
             Ok(join) => self.writing = Some(Writing { stop, join }),
             Err(e) => {
@@ -1186,8 +1256,8 @@ fn v_code_on_main(app: &tauri::AppHandle) -> u16 {
 
 /// One dictation, from the recording to the words in place, and where they landed on screen
 /// when Accessibility says. Never logs the words.
-fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool) -> (Result<(), Problem>, Option<Rect>) {
-    match write_words(recording, duration_ms, chosen, data_dir, app, stop) {
+fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool,target:Option<(&str,&Hub)>) -> (Result<(), Problem>, Option<Rect>) {
+    match write_words(recording, duration_ms, chosen, data_dir, app, stop,target) {
         Ok((then, landed)) => {
             let words = landed.and_then(|(start, text)| insert::words_rect(start, &text));
             (then.map_or(Ok(()), Err), words)
@@ -1200,7 +1270,7 @@ fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::p
 type Landed = Option<(isize, String)>;
 
 /// The words in place: `Ok` with the problem to say afterwards (if any) and what was pasted where.
-fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool) -> Result<(Option<Problem>, Landed), Problem> {
+fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool,target:Option<(&str,&Hub)>) -> Result<(Option<Problem>, Landed), Problem> {
     let secs = recording.secs();
     let then = match judge_recording(duration_ms, &recording) {
         Stopped::Refuse(p) => {
@@ -1247,6 +1317,11 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
             return Err(then.unwrap_or(p));
         }
     };
+    if let Some((id,hub))=target {
+        if stop.load(Ordering::Acquire){return Err(Problem::CouldNotWrite)}
+        if hub.broadcast(&ToolMessage::Cleaner{id:id.into(),action:"transcript".into(),payload:serde_json::json!({"note":words})})==0{return Err(Problem::CouldNotWrite)}
+        return Ok((then,None));
+    }
     if !keytap::accessibility_allowed() {
         let copied = insert::copy_only(&words);
         log::line(&format!("dictation: model {id}, {secs:.2} s, {latency} ms: Accessibility is not allowed, words copied ({copied:?})"));

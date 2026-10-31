@@ -530,6 +530,12 @@ struct StoredConfig {
     /// answers Ink for anything this build cannot draw.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resources_view: Option<String>,
+    #[serde(default)]
+    cleaner_on: bool,
+    #[serde(default)]
+    cleaner_inbox_first: bool,
+    #[serde(default)]
+    cleaner_root: Option<String>,
     /// HOW LONG ANOTHER CONVERSATION'S RICH STAYS RUNNING WITH NOTHING TO DO, in minutes
     /// (follow-ups, "a nightly's VM boot proof cannot get a guest slot", decision 3). Past it
     /// the conversation's `claude` process is ended; his next message resumes the same session
@@ -575,6 +581,9 @@ impl Default for StoredConfig {
             stu_model: ModelChoice::default(),
             oxford_comma: false,
             resources_view: None,
+            cleaner_on: false,
+            cleaner_inbox_first: false,
+            cleaner_root: None,
             idle_session_minutes: IDLE_SESSION_MINUTES_DEFAULT,
         }
     }
@@ -1100,6 +1109,15 @@ impl ConfigStore {
 
     /// `"ink"` or `"readout"`. Ink when nothing was chosen or the stored word is one this build
     /// does not draw.
+    pub fn cleaner_inbox_first(&self)->bool {self.config.cleaner_inbox_first}
+    pub fn set_cleaner_inbox_first(&mut self,on:bool)->io::Result<()> {self.config.cleaner_inbox_first=on;self.persist()}
+    pub fn cleaner(&self)->(bool,Option<&str>){(self.config.cleaner_on,self.config.cleaner_root.as_deref())}
+    pub fn set_cleaner(&mut self,on:bool,root:Option<String>)->io::Result<()> {
+        self.config.cleaner_on=on;
+        if let Some(root)=root{self.config.cleaner_root=Some(root);}
+        self.persist()
+    }
+
     pub fn resources_view(&self) -> &'static str {
         let stored = self.config.resources_view.as_deref();
         RESOURCES_VIEWS.into_iter().find(|v| Some(*v) == stored).unwrap_or(RESOURCES_VIEWS[0])

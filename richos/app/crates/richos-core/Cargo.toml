@@ -21,8 +21,8 @@ sha2 = "0.10"
 # name. Pure Rust, no native dependency. Chosen over a decomposition table kept by hand, which
 # would be a second copy of Unicode's data that nobody updates.
 unicode-normalization = "0.1"
-# RichCleaner's local catalogue uses the operating system's SQLite, including FTS5.
-# No bundled SQLite, ORM or server. Disabling defaults avoids the alternate WASM backend.
+# RichCleaner's Mac catalog uses system SQLite and FTS5, with no bundled runtime or ORM.
+[target.'cfg(target_os = "macos")'.dependencies]
 rusqlite = { version = "=0.32.1", default-features = false }
 
 [target.'cfg(unix)'.dependencies]

@@ -94,8 +94,9 @@
     glyph.appendChild(node("span", "tl-rfile-ext", f.ext || "FILE"));
     const text = node("span", "tl-rfile-text");
     text.appendChild(node("span", "tl-rfile-name", name));
-    const meta = node("span", "tl-rfile-meta", f.exists === false ? GONE : (f.meta || ""));
+    const meta = node("span", "tl-rfile-meta", f.exists === false ? (f.library ? "Locate the original. Your note is saved." : GONE) : (f.meta || ""));
     text.appendChild(meta);
+    if(f.library && f.note)text.appendChild(node("span","tl-rfile-note",f.note));
     named(main, meta);
     main.append(glyph, text);
 
@@ -104,18 +105,21 @@
     open.setAttribute("aria-hidden", "true");
     open.textContent = openLabel;
     open.insertAdjacentHTML("beforeend", OUT);
-    const finder = node("button", "tl-rfile-finder", "Show in Finder");
+    const finder = node("button", "tl-rfile-finder", f.library ? "Show in Folder" : "Show in Finder");
     finder.type = "button";
     const ask = node("button", "desk-btn tl-rfile-ask", "Ask Rich again");
     ask.type = "button";
+    if(f.library && f.exists===false)ask.textContent="Locate in RichCleaner";
     acts.append(open, finder, ask);
     el.append(main, acts);
 
-    const invoke = (command) =>
-      window.RichBridge.invoke(command, { threadId: item.threadId, fileId: f.id || item.id });
+    const invoke = (command) => f.library
+      ? window.RichBridge.invoke("cleaner_action",{id:f.id,action:command==="rich_file_reveal" ? "reveal" : "open",note:null})
+      : window.RichBridge.invoke(command, { threadId: item.threadId, fileId: f.id || item.id });
 
     el.addEventListener("click", (e) => {
       if (el.dataset.s === "missing") {
+        if(f.library && e.target.closest(".tl-rfile-ask")){window.RichBridge.invoke("cleaner_open_window").catch(error=>failed(el,meta,error));return;}
         if (e.target.closest(".tl-rfile-ask") && opts && opts.sendText) {
           opts.sendText("Please send " + name + " again.");
         }

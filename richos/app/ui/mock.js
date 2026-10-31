@@ -3588,6 +3588,8 @@
           dictationOfferCalls.push("dictation_offer");
           return { ready: setupDictationOn, offered: dictationOffered, key: preset.dictationKey || 1 };
         // THE DICTATION SHEET (`dictation_app.rs`): the same facts and the same refusals.
+        case "cleaner_status":
+          return {enabled:false,root:null,scribeOn:dictationView.on,key:dictationView.key,inboxFirst:false,operation:{stage:"idle"}};
         case "dictation_status":
           dictationCalls.push({ cmd });
           return structuredClone(dictationView);

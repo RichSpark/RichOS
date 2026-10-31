@@ -346,6 +346,9 @@ pub fn tools() -> Value {
 
 /// One tool call against the turn's scope file.
 pub fn call(scope_path: &Path, name: &str, args: Value) -> Result<Value, String> {
+    #[cfg(target_os="macos")]
+    if matches!(name,"library_search"|"library_show"){let scope=question_tools::read_scope(scope_path)?;return crate::cleaner::tools::call(&scope,name,&args);}
+
     if name != TOOL {
         return Err("Unknown file tool.".into());
     }
@@ -405,7 +408,12 @@ pub fn serve(scope_path: &Path, mut reader: impl BufRead, mut writer: impl Write
                         Ok(json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":SERVER,"version":"1"}}))
                     }
                     "ping" => Ok(json!({})),
-                    "tools/list" if initialized => Ok(tools()),
+                    "tools/list" if initialized => {
+                        let mut result=tools();
+                        #[cfg(target_os="macos")]
+                        if question_tools::read_scope(scope_path).is_ok_and(|scope|crate::cleaner::tools::allowed(&scope)){if let Some(list)=result["tools"].as_array_mut(){list.extend(crate::cleaner::tools::definitions());}}
+                        Ok(result)
+                    },
                     "tools/call" if initialized => {
                         let result = call(scope_path, r["params"]["name"].as_str().unwrap_or(""), r["params"]["arguments"].clone());
                         let error = result.is_err();

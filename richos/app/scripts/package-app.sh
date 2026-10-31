@@ -1504,6 +1504,16 @@ if [ "${#build_launch[@]}" -eq 0 ]; then
   warn "  note: this compile runs without the release-build role ($build_launch_why),"
   warn "  so the CPU guard may stop rustc after 10 s above 3 cores."
 fi
+# The native file adapter and metadata runtime travel inside the signed app. Users
+# install no separate tools; source pins and the complete resource manifest are verified.
+cleaner_resources="$(python3 "$here/build-cleaner-resources.py")" || { warn "RichCleaner's resources could not be built."; exit 4; }
+cleaner_resource_config="$(python3 - "$cleaner_resources" <<'PYCONFIG'
+import json,sys
+print(json.dumps({"bundle":{"resources":{sys.argv[1]:"RichCleaner/"}}}))
+PYCONFIG
+)" || exit 4
+build_args+=(--config "$cleaner_resource_config")
+
 if ! (cd "$src_tauri" && ${build_launch[@]+"${build_launch[@]}"} env RICHOS_SOURCE_SHA="$source_stamp" cargo "${build_args[@]}"); then
   warn ""
   warn "the build did not complete — nothing was packaged. The output above is the reason."
@@ -1623,6 +1633,22 @@ fi
 # .app unsigned around a linker-signed executable, which `codesign --verify` refuses
 # (measured — see verify_bundle's adhoc arm). So the ad-hoc path signs deliberately
 # and says it is doing so. This is the act that incurs the cost printed above.
+# Sign every executable/loadable part of the bundled metadata runtime inside-out.
+# Library validation remains enabled; Perl's XS modules use the same signing identity.
+python3 - "$app_bundle/Contents/Resources/RichCleaner" "$sign_mode" "${wanted:-}" <<'PYCLEANERSIGN'
+import pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]);developer=sys.argv[2]=="developer-id"
+for path in sorted(root.rglob("*")):
+    if not path.is_file() or path.is_symlink():
+        continue
+    kind=subprocess.check_output(["/usr/bin/file","-b",path],text=True)
+    if "Mach-O" not in kind:
+        continue
+    args=["codesign","--force","--sign",sys.argv[3] if developer else "-"]
+    args += ["--options","runtime","--timestamp"] if developer else ["--timestamp=none"]
+    subprocess.run([*args,path],check=True)
+PYCLEANERSIGN
+
 if [ "$sign_mode" = "adhoc" ]; then
   say ""
   say "ad-hoc signing the bundle (the bundler does not: it signs only with a real identity)..."

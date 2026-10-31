@@ -332,8 +332,7 @@ claim worth being able to check.
 ## Compiled dependency inventory — GENERATED and where it lives
 
 `docs/legal/THIRD-PARTY-RUST-DEPENDENCIES.md` is the per-package inventory of
-every Rust dependency that resolves in this repository: 498 distinct
-third-party packages across the three workspaces, each with its version, the
+every Rust dependency that resolves in the tracked workspaces, each with its version, the
 license its publisher declares and whether it reaches a macOS binary at all.
 
 **Every one of them may be distributed as part of an AGPL-3.0-only combined
@@ -610,3 +609,22 @@ this runtime asset.
 Runtime preparation and inventory checks do not establish installed-app
 acceptance, signing or notarization. Those checks apply to the exact release
 candidate separately.
+
+## RichCleaner metadata runtime
+
+RichCleaner bundles ExifTool 13.43 by Phil Harvey under the same terms as Perl,
+and a relocatable Perl 5.42.0 runtime. The runtime includes the Artistic and GNU
+General Public License texts in `RichCleaner/perl/Artistic` and
+`RichCleaner/perl/COPYING`. ExifTool's authorship and license notice accompany
+its script and README in `RichCleaner/exiftool`. Source archives and their SHA256
+hashes are pinned in `richos/app/scripts/build-cleaner-resources.py`.
+
+The bundled ExifTool uses its existing UTF16 codec at the PDF text encoding and
+decoding boundaries instead of UCS2, preserving supplementary Unicode characters.
+The build script records and checks those two source substitutions. The PDF
+container writer is otherwise unchanged.
+
+RichCleaner also uses Lofty 0.25.5 (MIT or Apache-2.0), ZIP 9.2.0 (MIT),
+quick-xml 0.41.0 (MIT), Ogg 0.9.2 (BSD-3-Clause) and rusqlite 0.32.1 (MIT).
+SQLite links to the operating system runtime. No SQLite server or media codec
+is bundled for this feature.

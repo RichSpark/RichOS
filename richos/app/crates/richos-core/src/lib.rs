@@ -116,6 +116,7 @@ pub mod question_tools;
 /// A file Rich or Stu puts in front of the user: the `attach_file` tool and its record (§138,
 /// build plan item 12).
 pub mod rich_files;
+#[cfg(target_os = "macos")]
 pub mod cleaner;
 pub mod recovery;
 pub mod reprime;
