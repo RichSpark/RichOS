@@ -1080,6 +1080,11 @@ pub const TOKEN_POINTS_FILE: &str = "claude-token-points.json";
 /// The gate appends one line per agent dispatch here (`gate.rs`); the service counts them.
 pub const DISPATCH_LOG: &str = "agent-dispatches.log";
 
+/// Every usage reading the app takes, one JSON line each, oldest first (`Service::record_reading`).
+pub const READINGS_LOG: &str = "engine-state/claude-quota-readings.jsonl";
+/// About 30,000 readings; the file then moves to `.1` and a new one starts.
+const READINGS_MAX_BYTES: u64 = 8 << 20;
+
 /// An added account's own probe and its last reading. The probe has its own lock, as
 /// Account 1's `source` does, so a read holds it and never the map (hunt part 1 v3,
 /// finding 48: it used to be swapped out of the map for the read, and an overlapping
@@ -1175,6 +1180,37 @@ impl Service {
             &self.cwd.join("engine-state/claude-quota.json"),
             &self.view(),
         )
+    }
+    /// **Every reading, kept** (Otto's trace of 2026-10-29 09:50Z): `claude-quota.json` holds
+    /// only the latest reading, so the readings of 09:30-09:48Z could not be recovered. Each
+    /// reading is appended here as one JSON line, at the three places readings are made and
+    /// nowhere else: Account 1's probe (`refresh_windows`), each added account's
+    /// (`refresh_accounts`) and each reading a lease streamed (`before_turn`). A line is never
+    /// rewritten. At `READINGS_MAX_BYTES` the file moves to `<file>.1`, replacing the one
+    /// before, so it cannot grow without end on a user's disk. Best effort: a reading is used
+    /// whether or not it could be written down.
+    fn record_reading(&self, account: &str, source: &str, reading: Result<&[Window], ReadError>, observed: u64) {
+        use std::io::Write;
+        let mut line = serde_json::json!({ "at": observed, "account": account, "source": source });
+        match reading {
+            Ok(windows) => line["windows"] = serde_json::json!(windows),
+            Err(error) => line["error"] = serde_json::json!(format!("{error:?}")),
+        }
+        let path = self.cwd.join(READINGS_LOG);
+        // The same lock as the published reading: one writer at a time, so a move to `.1`
+        // never races another reading's append.
+        let _serial = self.publication.lock().unwrap();
+        let written = (|| -> io::Result<()> {
+            if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+            if fs::metadata(&path).is_ok_and(|m| m.len() >= READINGS_MAX_BYTES) {
+                fs::rename(&path, path.with_extension("jsonl.1"))?;
+            }
+            let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+            file.write_all(format!("{line}\n").as_bytes())
+        })();
+        if let Err(error) = written {
+            eprintln!("[richos] quota reading history: {error}");
+        }
     }
     pub fn view(&self) -> View {
         self.view_at(crate::util::now_millis())
@@ -1328,6 +1364,7 @@ impl Service {
     /// boundary, so rotating is legal.
     pub fn before_turn(&self, account: &str, streamed: Option<StreamedReading>) -> String {
         if let Some((windows, observed)) = streamed {
+            self.record_reading(account, "streamed", Ok(&windows), observed);
             if account == crate::claude_accounts::ACCOUNT_ONE {
                 self.snapshot.lock().unwrap().observe(&windows, observed);
             } else if let Some((_, snapshot)) = self.extra.lock().unwrap().get_mut(account) {
@@ -1806,6 +1843,7 @@ impl Service {
             }
             drop(source);
             let observed = crate::util::now_millis();
+            self.record_reading(&account.id, "probe", result.as_deref().map_err(|e| *e), observed);
             let mut extra = self.extra.lock().unwrap();
             let Some((_, snapshot)) = extra.get_mut(&account.id) else { continue };
             match result {
@@ -1912,6 +1950,7 @@ impl Service {
             }
         }
         let observed = crate::util::now_millis();
+        self.record_reading(crate::claude_accounts::ACCOUNT_ONE, "probe", result.as_deref().map_err(|e| *e), observed);
         let mut snapshot = self.snapshot.lock().unwrap();
         match result {
             Ok(windows) => {
@@ -3339,6 +3378,42 @@ pub(crate) mod tests {
             assert_eq!(service.snapshot.lock().unwrap().view(policy(), later).refresh_interval_ms, REFRESH_INTERVAL_MS,
                 "the expected rise ends by itself");
         }
+    }
+
+    /// **Z2 / G13 of the two-day cleanup: every reading is kept, oldest first, never rewritten.**
+    /// Otto's trace of 2026-10-29 09:50Z could not recover the readings of 09:30-09:48Z, because
+    /// `claude-quota.json` keeps only the latest. One refresh reads Account 1 (a figure) and an
+    /// added Work (signed out); a turn then merges a reading its lease streamed. All three are in
+    /// the history, each naming its account and where it came from, and the first two lines are
+    /// still exactly as written. On main the history file does not exist.
+    #[test]
+    fn every_reading_is_appended_to_the_history_and_none_is_rewritten() {
+        let dir = Scratch::new();
+        let service = Service::open(dir.path()).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let now = crate::util::now_millis();
+        let at = |used: f64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: used,
+            resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 }];
+        *service.source.lock().unwrap() = Box::new(FakeSource { calls: calls.clone(), result: Ok(at(20.)) });
+        service.extra.lock().unwrap().insert(work.id.clone(), (
+            std::sync::Arc::new(Mutex::new(Box::new(FakeSource { calls, result: Err(ReadError::SignedOut) }) as Box<dyn Source>)),
+            Snapshot::default()));
+        service.refresh(Path::new("unused"), false);
+        let history = dir.path().join("engine-state/claude-quota-readings.jsonl");
+        let lines = |text: &str| text.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect::<Vec<_>>();
+        let first = fs::read_to_string(&history).expect("the readings are written to the history");
+        let read = lines(&first);
+        assert_eq!(read.len(), 2, "{first}");
+        assert_eq!((read[0]["account"].as_str(), read[0]["source"].as_str()), (Some("1"), Some("probe")));
+        assert_eq!(read[0]["windows"][0]["usedPercent"], json!(20.0));
+        assert_eq!((read[1]["account"].as_str(), read[1]["error"].as_str()), (Some(work.id.as_str()), Some("SignedOut")));
+        service.before_turn("1", Some((at(30.), now + 1_000)));
+        let second = fs::read_to_string(&history).unwrap();
+        assert!(second.starts_with(&first), "earlier readings are never rewritten:\n{second}");
+        let streamed = &lines(&second)[2];
+        assert_eq!((streamed["account"].as_str(), streamed["source"].as_str()), (Some("1"), Some("streamed")));
+        assert_eq!((streamed["at"].as_u64(), streamed["windows"][0]["usedPercent"].clone()), (Some(now + 1_000), json!(30.0)));
     }
 
     // ---- fill-first: several accounts, read by fake `claude` scripts -------------------
