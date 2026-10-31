@@ -337,11 +337,21 @@ pub fn items(root: &Path, entity_id: &str, thread_id: &str) -> Vec<Value> {
 // ---- the MCP endpoint ---------------------------------------------------------------------
 
 pub fn tools() -> Value {
-    json!({"tools":[{
+    let tools = json!({"tools":[{
         "name": TOOL,
         "description": "Put a file from this Mac in front of the user. It appears as a card under your reply in this conversation, on the Mac and on the phone and the user opens it with one click or tap. Give the absolute path of one existing regular file; call once per file. Use it whenever the user asks you to send, show or give them a file and whenever a file is the answer.",
         "inputSchema": {"type":"object","properties":{"path":{"type":"string","description":"Absolute path of the file, starting with /."}},"required":["path"],"additionalProperties":false}
-    }]})
+    }]});
+    // Clients discover tools before a user's turn opens its scope, then cache
+    // that list. Advertise capabilities consistently; authorize every call
+    // against the current scope below, including phone and background refusals.
+    #[cfg(target_os="macos")]
+    let tools = {
+        let mut result = tools;
+        result["tools"].as_array_mut().unwrap().extend(crate::cleaner::tools::definitions());
+        result
+    };
+    tools
 }
 
 /// One tool call against the turn's scope file.
@@ -409,10 +419,7 @@ pub fn serve(scope_path: &Path, mut reader: impl BufRead, mut writer: impl Write
                     }
                     "ping" => Ok(json!({})),
                     "tools/list" if initialized => {
-                        let mut result=tools();
-                        #[cfg(target_os="macos")]
-                        if question_tools::read_scope(scope_path).is_ok_and(|scope|crate::cleaner::tools::allowed(&scope)){if let Some(list)=result["tools"].as_array_mut(){list.extend(crate::cleaner::tools::definitions());}}
-                        Ok(result)
+                        Ok(tools())
                     },
                     "tools/call" if initialized => {
                         let result = call(scope_path, r["params"]["name"].as_str().unwrap_or(""), r["params"]["arguments"].clone());
@@ -598,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn the_server_lists_one_tool_and_answers_a_call() {
+    fn the_server_lists_file_tools_and_answers_a_scoped_call() {
         let dir = Dir::new("serve");
         let file = dir.0.join("c.pdf");
         std::fs::write(&file, b"x").unwrap();
@@ -616,4 +623,49 @@ mod tests {
         assert_eq!(replies[2]["result"]["isError"], false);
         assert_eq!(QUALIFIED_TOOL, format!("mcp__{SERVER}__{TOOL}"));
     }
+    #[cfg(target_os="macos")]
+    #[test]
+    fn library_discovery_precedes_the_turn_and_every_call_rechecks_its_scope() {
+        use std::io::{BufReader, BufRead, Write};
+        use std::os::unix::net::UnixStream;
+        let dir = Dir::new("library-startup");
+        let path = dir.0.join("turn.questions.json");
+        let engine = dir.0.join("engine-state");
+        let (mut client, server) = UnixStream::pair().unwrap();
+        // A protocol hang guard only. Each assertion waits for the actual RPC reply.
+        client.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        let scope_path = path.clone();
+        let worker = std::thread::spawn(move || serve(&scope_path, BufReader::new(server.try_clone().unwrap()), server).unwrap());
+        fn request(client: &mut UnixStream, reader: &mut BufReader<UnixStream>, id: u64, method: &str, params: Value) -> Value {
+            writeln!(client,"{}",json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})).unwrap();
+            let mut line = String::new(); reader.read_line(&mut line).unwrap();
+            let answer: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(answer["id"],id); answer
+        }
+        request(&mut client, &mut reader, 1,"initialize",json!({}));
+        let list = request(&mut client, &mut reader, 2,"tools/list",json!({}));
+        let names:Vec<_> = list["result"]["tools"].as_array().unwrap().iter().filter_map(|t|t["name"].as_str()).collect();
+        assert!(names.contains(&"library_search") && names.contains(&"library_show"));
+        let args=json!({"name":"library_search","arguments":{"query":"kitchen"}});
+        assert_eq!(request(&mut client, &mut reader, 3,"tools/call",args.clone())["result"]["isError"],true);
+        assert!(!dir.0.join("RichCleaner").exists(),"Discovery and a refused call must not open the personal catalog");
+        let mut grant:question_tools::Scope=serde_json::from_value(json!({"context":{"root":engine,"entity_id":"company","thread_id":"thread","turn_id":"turn","asker":"front_desk","session_id":"session"},"actions_allowed":true,"answer_method":"typed","surface":"mac"})).unwrap();
+        question_tools::write_scope(&path,&grant).unwrap();
+        let mut db=crate::cleaner::Catalog::open(&crate::cleaner::tools::catalog_path(&engine).unwrap()).unwrap();
+        let entry=crate::cleaner::Entry::new(dir.0.join("quote.png"),crate::cleaner::Identity{volume:1,object:7,size:12,modified:"1".into(),changed:"1".into(),bookmark:String::new()},"Private kitchen quote".into()).unwrap();
+        db.save(&entry).unwrap();
+        let found=request(&mut client, &mut reader, 4,"tools/call",args.clone());
+        assert_eq!(found["result"]["isError"],false);
+        assert!(found.to_string().contains(&entry.id));
+        for (id,asker,surface,allowed) in [(5,"stu","mac",true),(6,"front_desk","phone",true),(7,"front_desk","mac",false)] {
+            grant.context.asker=asker.into();grant.surface=surface.into();grant.actions_allowed=allowed;
+            question_tools::write_scope(&path,&grant).unwrap();
+            let refused=request(&mut client, &mut reader, id,"tools/call",args.clone());
+            assert_eq!(refused["result"]["isError"],true);
+            assert!(!refused.to_string().contains("Private kitchen quote"));
+        }
+        drop(reader);drop(client);worker.join().unwrap();
+    }
+
 }
