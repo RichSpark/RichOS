@@ -291,7 +291,7 @@
       "sha256": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6"
     }
   },
-  "launcher_revision": 3,
+  "launcher_revision": 4,
   "strip_node_debug_symbols": true,
   "portable_git_link_paths": true,
   "upstream_path_exemptions": [

@@ -33,6 +33,20 @@ def run(command, payload, timeout=20):
         raise RuntimeError(f"Required engine control failed or refused (exit {result.returncode})")
 
 
+def registered_timeout(guard, floor=20):
+    """The budget the engine's own registration (hooks/hooks.json, the terminal's) gives this
+    Agent guard, never less than `floor`. guard-worktree-isolation.sh waits up to 30 s for the
+    registry lock and runs Pierce inside register-spawn, so a typed 20 s killed real dispatches
+    (follow-up "app work tools refused dispatches for unexplained reasons", 2026-10-28)."""
+    try:
+        groups = json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"]["PreToolUse"]
+        found = [entry["timeout"] for group in groups if group.get("matcher") == "Agent"
+                 for entry in group["hooks"] if entry["command"].endswith("/" + guard)]
+    except (OSError, ValueError, KeyError, TypeError):
+        found = []
+    return max([floor, *found])
+
+
 def scope():
     path = Path(os.environ["RICHOS_APP_SCOPE"])
     # 256 KiB: the scope carries the user's own words since the second review's slice 4;
@@ -232,7 +246,7 @@ def handle(payload):
         for guard in audience.user_work_ids():
             if guard in ("guard-sealed-worktree.sh", "guard-pierce.sh"):
                 continue
-            run(["/bin/bash", str(ENGINE / "scripts/hooks" / guard)], payload)
+            run(["/bin/bash", str(ENGINE / "scripts/hooks" / guard)], payload, timeout=registered_timeout(guard))
         # Only a call that passed every control is a dispatch attempt. In particular,
         # returning findings must leave the prepared receipt available for dismissal.
         work.dispatch_intent(active, payload)

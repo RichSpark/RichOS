@@ -39,6 +39,15 @@ naming the run it waits for, so the lead's turn end is refused once it passes te
 `status` reads the holder and waiter files and probes their locks with a shared, non-blocking
 lock that it drops at once; it never touches a slot file, so looking cannot delay admission.
 
+A RUN WHOSE CHECKS STILL WAIT HOLDS THE NEXT ONE BACK (2026-10-29, work-6ec9b429). With the
+limit set to 6, six runs started together; one of them ran 46 min at 95% CPU and 30 of its 37
+checks were never admitted, so it proved almost nothing. The limit is a ceiling, never a reason
+to start: while a holder still has checks waiting to be admitted (it publishes how many in its
+`slot-NNN.waiting` file, written by the run, removed when none wait or the slot is released, and
+believed only while that holder's lock is held by the pid it names), a free slot is not taken.
+The new run waits in line and says which run it waits behind. With the default of one run at a
+time this changes nothing.
+
 NESTED RUNS. A suite that runs the real proof-run.py (proof-run.test.py, test-results.test.sh)
 inside a check of a proof run works inside its caller's slot: the caller exports its holder
 record's path as RICHOS_PROOF_RUN_SLOT_HELD, and the nested run borrows only if that record is
@@ -181,7 +190,17 @@ class Slot(object):
         """What a check of this run inherits, so a proof run inside it can borrow this slot."""
         return {HELD_ENV: self.holder_path} if self.holder_path else {}
 
+    def publish_waiting(self, count):
+        """How many of this run's checks still wait to be admitted (header); 0 removes the file.
+        Written only when the count changes; a borrowed slot is its caller's to describe."""
+        if self.borrowed or not self._fds or count == getattr(self, "_published", None):
+            return
+        _publish(self.holder_path, count)
+        self._published = count
+
     def release(self):
+        if not self.borrowed and self._fds:
+            _publish(self.holder_path, 0)
         for fd in reversed(self._fds):
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
@@ -194,7 +213,7 @@ class Slot(object):
         self._fds = []
 
 
-def _try(d, n, meta):
+def _try(d, n, meta, checks=0):
     for i in range(n):
         path = os.path.join(d, "slot-%03d" % i)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -210,8 +229,41 @@ def _try(d, n, meta):
         os.ftruncate(hfd, 0)
         record = dict(meta, pid=os.getpid(), since=time.time(), slot=i)
         os.write(hfd, (json.dumps(record) + "\n").encode())
-        return Slot(i, [fd, hfd], holder)
+        slot = Slot(i, [fd, hfd], holder)
+        # Until its checks are admitted, every one of them waits: said before the next run looks.
+        _publish(holder, checks)
+        slot._published = checks
+        return slot
     return None
+
+
+def _publish(holder, count):
+    path = holder[:-len(".holder")] + ".waiting"
+    if count <= 0:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        return
+    with open(path + ".new", "w") as fh:
+        json.dump({"pid": os.getpid(), "waiting": count, "since": time.time()}, fh)
+    os.replace(path + ".new", path)
+
+
+def waiting_holders(d=None):
+    """Holders with checks still waiting to be admitted: their record plus `waiting`, the count.
+    A `.waiting` file counts only while its slot's holder lock is held by the pid it names."""
+    rows = []
+    for rec in holders(d):
+        sidecar = _read(rec["holder_file"][:-len(".holder")] + ".waiting")
+        if sidecar.get("pid") == rec.get("pid") and isinstance(sidecar.get("waiting"), int) and sidecar["waiting"] > 0:
+            rows.append(dict(rec, waiting=sidecar["waiting"]))
+    return rows
+
+
+def describe_behind(rows):
+    return "; ".join("%s (pid %s): %d of its checks still wait to be admitted" % (
+        r.get("waiter", "?"), r.get("pid", "?"), r["waiting"]) for r in rows)
 
 
 def _ancestors(pid):
@@ -281,8 +333,10 @@ def status(d=None):
         rec = _read(path)
         rec["position"] = k
         waiting.append(rec)
+    behind = {rec["holder_file"]: rec["waiting"] for rec in waiting_holders(d)}
+    held = [dict(rec, checks_waiting=behind.get(rec["holder_file"], 0)) for rec in holders(d)]
     return {"dir": d, "limit": n, "limit_source": source, "measured_default": measured_default(),
-            "holders": holders(d), "waiting": waiting}
+            "holders": held, "waiting": waiting}
 
 
 def describe_holders(rows, now=None):
@@ -294,9 +348,11 @@ def describe_holders(rows, now=None):
                      for r in rows)
 
 
-def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None):
-    """A slot for this run: at once when one is free and nobody waits, else in line. Returns
-    (slot, seconds waited). Raises TimeoutError, naming the holders, after `wait_seconds`."""
+def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None, checks=0):
+    """A slot for this run: at once when one is free, nobody waits and no holder still has checks
+    waiting to be admitted (header), else in line. `checks`: how many this run plans, published as
+    waiting until it says otherwise. Returns (slot, seconds waited). Raises TimeoutError, naming
+    the holders, after `wait_seconds`."""
     say = say or (lambda line: None)
     d = directory()
     meta = dict(meta, waiter=_waiter_name(), cwd=os.getcwd())
@@ -304,8 +360,8 @@ def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None):
     if borrowed is not None:
         return borrowed, 0.0
     n, _source = limit(d)
-    if not _waiters(d):
-        slot = _try(d, n, meta)
+    if not _waiters(d) and not waiting_holders(d):
+        slot = _try(d, n, meta, checks)
         if slot is not None:
             return slot, 0.0
     started = time.time()
@@ -327,17 +383,21 @@ def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None):
         while True:
             n, _source = limit(d)
             line = _waiters(d)
-            if line and line[0] == mine:
-                slot = _try(d, n, meta)
+            behind = waiting_holders(d)
+            if line and line[0] == mine and not behind:
+                slot = _try(d, n, meta, checks)
                 if slot is not None:
                     return slot, time.time() - started
             position = line.index(mine) + 1 if mine in line else 1
             held = holders(d)
             why = ("proof-run: waiting for a proof-run slot (this Mac runs %d at once): held by %s; #%d in line"
                    % (n, describe_holders(held), position))
-            # What the line is SAID again for: the limit, who holds, the place in line. Not the
-            # holders' elapsed time, which is in `why` and would make every poll a new line.
-            changed = (n, tuple((h.get("pid"), h.get("since")) for h in held), position)
+            if behind:
+                why += "; waiting behind %s" % describe_behind(behind)
+            # What the line is SAID again for: the limit, who holds, the place in line, which run
+            # it waits behind. Not elapsed times or counts, which would make every poll a new line.
+            changed = (n, tuple((h.get("pid"), h.get("since")) for h in held), position,
+                       tuple(h.get("pid") for h in behind))
             if record is None and resource_waits is not None:
                 try:
                     record = resource_waits.waiting(resource_waits.CPU, why).start()
@@ -379,6 +439,9 @@ def print_status(s):
         for key in ("checkout", "logs", "selection"):
             if h.get(key):
                 print("           %s: %s" % (key, h[key]))
+        if h.get("checks_waiting"):
+            print("           checks still waiting to be admitted: %d (no other run starts until none wait)"
+                  % h["checks_waiting"])
     if not s["waiting"]:
         print("  waiting: nobody")
     for w in s["waiting"]:

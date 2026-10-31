@@ -176,7 +176,9 @@ default is one run at a time, and the lead sets another number for the whole Mac
 wait for the lead's turn-end gate; `python3 scripts/lib/proof_slots.py status` shows who holds and
 who waits. The slot is an flock the kernel drops with the run's last descriptor (the run's checks'
 supervisors hold it too), so a killed run releases it once its checks are stopped. A proof run
-started by a check of a proof run works inside its caller's slot.
+started by a check of a proof run works inside its caller's slot. Under a limit above one, a free
+slot is still not taken while a running run has checks waiting to be admitted (2026-10-29: six
+runs at once left 30 of one run's 37 checks never admitted); the new run says which it waits behind.
 """
 import argparse
 import copy
@@ -437,12 +439,18 @@ RUNTIME_REFUSALS = ("set RICHOS_RUNTIME_DIR to a prepared, verified runtime", "a
 
 
 def suite_text(item):
-    """The source of the run-tests suite an item runs, '' for any other kind of check."""
+    """The source of the suite an item runs: a run-tests.sh suite, or a suite proof-for.sh selects as
+    a plain `bash scripts/<suite>` (make-engine-asset.test.sh, which needs the runtime: until
+    2026-10-31 it was never read, so a recipe change left the run with no runtime); '' otherwise."""
     argv = item.argv
-    if len(argv) < 2 or argv[0] != "scripts/run-tests.sh" or argv[-2] != "--only":
+    if len(argv) == 2 and argv[0] == "bash" and argv[1].startswith("scripts/") and argv[1].endswith(".sh"):
+        path = os.path.join(item.cwd, argv[1])
+    elif len(argv) < 2 or argv[0] != "scripts/run-tests.sh" or argv[-2] != "--only":
         return ""
+    else:
+        path = os.path.join(item.cwd, "scripts", argv[-1])
     try:
-        with open(os.path.join(item.cwd, "scripts", argv[-1]), encoding="utf-8", errors="replace") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read()
     except OSError:
         return ""
@@ -1796,6 +1804,9 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
                 end_run_at_cap(items, running, args, logdir, run_cap)
                 break
         slot_blocked = False
+        if SLOT is not None and not SLOT.borrowed:
+            # Another run is held back while this one still has checks waiting (proof_slots.py).
+            SLOT.publish_waiting(sum(1 for it in order if it.state == "waiting"))
         for it in order:
             if it.state == "waiting":
                 it.wait_times[it.wait_reason] = it.wait_times.get(it.wait_reason, 0.0) + interval
@@ -2976,7 +2987,7 @@ def run_main(argv, run_state):
     try:
         SLOT, slot_wait = proof_slots.acquire(
             {"checkout": ROOT, "logs": logdir, "selection": " ".join(argv if argv is not None else sys.argv[1:])[:300]},
-            args.slot_wait, say=lambda line: print("[%s] %s" % (stamp(), line), flush=True))
+            args.slot_wait, say=lambda line: print("[%s] %s" % (stamp(), line), flush=True), checks=len(items))
     except TimeoutError as exc:
         print("proof-run: NOT ADMITTED: %s. Nothing was run. Logs: %s" % (exc, logdir), flush=True)
         # Written like any other end (2026-09-30): a caller reading summary.json sees every check

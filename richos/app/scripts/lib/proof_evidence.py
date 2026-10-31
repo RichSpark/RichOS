@@ -518,13 +518,49 @@ def checkout_installs(root):
 PLAYWRIGHT_VALIDATION_MARKER = "DEPENDENCIES_VALIDATED"
 
 
-def playwright_installs(environment):
+def playwright_browser_names(root, environment):
+    """The install folder names (`<name with _ for ->-<revision>`, and for a revision override
+    `<name>_<platform>_special-<revision>`, as Playwright's registry names them) that the
+    browsers.json of every Playwright package harness.js may load lists, every platform's override
+    included; None when no candidate has a readable browsers.json.
+
+    WHY (follow-up of 2026-10-29, fix A's own follow-up). The cache is shared by every Playwright
+    on the Mac and holds installs of revisions this checkout never launches (eight stale ones that
+    day); a write in any of them changed every whole-checkout identity. Over-binding costs only a
+    rerun, so every present candidate counts and every override revision is kept."""
+    names, read = set(), False
+    for candidate, folder in playwright_package_candidates(root, environment):
+        real = Path(os.path.realpath(candidate))
+        if not real.is_dir():
+            continue
+        module_root = Path(os.path.realpath(folder)) if folder is not None else _node_module_root(real)
+        for listing in (real / "browsers.json", real / "node_modules/playwright-core/browsers.json",
+                        module_root / "playwright-core/browsers.json"):
+            try:
+                browsers = json.loads(listing.read_text())["browsers"]
+                # An override install is `<name>_<host platform>_special-<revision>`, every "-" as
+                # "_" (Playwright's readDescriptors); every platform's is kept, not only this Mac's.
+                found = set()
+                for browser in browsers:
+                    found.add("%s-%s" % (browser["name"].replace("-", "_"), browser["revision"]))
+                    for platform_key, revision in (browser.get("revisionOverrides") or {}).items():
+                        found.add("%s_%s_special-%s" % (browser["name"].replace("-", "_"),
+                                                        platform_key.replace("-", "_"), revision))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+            names |= found
+            read = True
+    return names if read else None
+
+
+def playwright_installs(environment, root=None):
     """The Playwright browser installs a check would launch, by install identity.
 
     Bind the recursive install metadata, including ctime, so in-place writes and signing
     changes invalidate passes even when the revision directory survives. This is input
     drift detection, not content authentication. It avoids reading gigabytes per check.
-    PLAYWRIGHT_BROWSERS_PATH=0 is already covered by checkout_installs."""
+    PLAYWRIGHT_BROWSERS_PATH=0 is already covered by checkout_installs. With `root`, only
+    the installs the checkout's browsers.json names are bound (playwright_browser_names)."""
     configured = environment.get("PLAYWRIGHT_BROWSERS_PATH")
     if configured == "0":
         return {"inside": "node_modules"}
@@ -537,8 +573,11 @@ def playwright_installs(environment):
         entries = sorted(os.scandir(base), key=lambda entry: entry.name)
     except FileNotFoundError:
         return {"base": str(base), "absent": True}
+    named = playwright_browser_names(root, environment) if root is not None else None
     installs = {}
     for entry in entries:
+        if named is not None and entry.name not in named:
+            continue  # an install no browsers.json of this checkout names (see playwright_browser_names)
         if PLAYWRIGHT_INSTALL.fullmatch(entry.name) and entry.is_dir(follow_symlinks=False):
             rows = []
             for directory, dirs, files in os.walk(entry.path, followlinks=False):
@@ -694,7 +733,7 @@ def installed_dependencies(root, environment, browsers=None):
     """What a check executes that git does not track (WHOLE_CHECKOUT above). `browsers`: the
     playwright_installs(environment) reading this pass already took (InputSnapshot.browsers)."""
     return {"checkout": checkout_installs(root),
-            "playwright": browsers if browsers is not None else playwright_installs(environment),
+            "playwright": browsers if browsers is not None else playwright_installs(environment, root),
             "playwright_package": external_playwright(root, environment),
             "rust": rust_toolchain(root, environment)}
 
@@ -727,7 +766,7 @@ def portable_dependencies(root, environment, browsers=None):
     checkout = {name: value for name, value in checkout_installs(root).items()
                 if Path(os.path.realpath(root / name)) not in loaded}
     return {"checkout": checkout,
-            "playwright": browsers if browsers is not None else playwright_installs(environment),
+            "playwright": browsers if browsers is not None else playwright_installs(environment, root),
             "playwright_package": chain, "rust": rust_toolchain(root, environment)}
 
 
@@ -807,22 +846,23 @@ class InputSnapshot:
     def installed(self, root, environment):
         key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
         if key not in self.installs:
-            self.installs[key] = installed_dependencies(root, environment, self.browsers(environment))
+            self.installs[key] = installed_dependencies(root, environment, self.browsers(environment, root))
         return self.installs[key]
 
     def portable(self, root, environment):
         key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
         if key not in self.portables:
-            self.portables[key] = portable_dependencies(root, environment, self.browsers(environment))
+            self.portables[key] = portable_dependencies(root, environment, self.browsers(environment, root))
         return self.portables[key]
 
-    def browsers(self, environment):
-        """playwright_installs once per pass for what it reads (the browsers path and HOME): a
-        whole-checkout identity and a UI family identity each walked every browser install, so a
-        pass holding both kinds walked them twice (03-E, PRD line 139's no-execution budget)."""
-        key = (environment.get("PLAYWRIGHT_BROWSERS_PATH"), environment.get("HOME"))
+    def browsers(self, environment, root=None):
+        """playwright_installs once per pass for what it reads (the browsers path and HOME, and
+        the checkout and package lookup that name the installs bound): a whole-checkout identity
+        and a UI family identity each walked every browser install, so a pass holding both kinds
+        walked them twice (03-E, PRD line 139's no-execution budget)."""
+        key = (str(root), *(environment.get(name) for name in INSTALL_ENVIRONMENT_NAMES))
         if key not in self.browser_installs:
-            self.browser_installs[key] = playwright_installs(environment)
+            self.browser_installs[key] = playwright_installs(environment, root)
         return self.browser_installs[key]
 
     def path(self, path):

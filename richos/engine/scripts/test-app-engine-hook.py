@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic tests of the exact desktop wrapper and canonical Stop analyzer."""
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -261,6 +263,50 @@ class DesktopHooks(unittest.TestCase):
         out = io.StringIO()
         hook.main(io.StringIO(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent"})), out)
         self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_each_dispatch_guard_gets_at_least_the_budget_the_engine_registers_for_it(self):
+        """A dispatch failed with "guard-worktree-isolation.sh timed out after 20 seconds" (follow-up
+        "app work tools refused dispatches for unexplained reasons", 2026-10-28). That guard waits
+        up to 30 s for the registry lock and runs Pierce inside register-spawn, and the engine's own
+        registration (hooks/hooks.json, the terminal's) gives it 330 s; the app gave every guard 20."""
+        import importlib.util, types
+        spec = importlib.util.spec_from_file_location("app_engine_hook_budgets", ENGINE / "scripts/app-engine-hook.py")
+        hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
+        given = {}
+        def run(command, payload, timeout=20):
+            given[Path(command[-1]).name] = timeout
+        real_load = hook.load
+        work = types.SimpleNamespace(
+            validate_shell_target=lambda payload: None, worker_context=lambda active, payload: None,
+            dispatch_intent=lambda *args, **kwargs: None,
+            W=types.SimpleNamespace(_recovery_adapter=lambda: (
+                types.SimpleNamespace(cancellation_notice=lambda host, session: None), None)))
+        def load(name, path):
+            if path.name == "app-evidence.py":
+                return types.SimpleNamespace(capture=lambda payload, *args, **kwargs: payload)
+            if path.name == "app.py":
+                return work
+            return real_load(name, path)
+        hook.run, hook.load, hook.mid_job_notice = run, load, lambda *args: False
+        saved = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
+        os.environ.update(self.env)
+        with contextlib.redirect_stdout(io.StringIO()):
+            hook.handle({"hook_event_name": "PreToolUse", "tool_name": "Agent", "session_id": "fictional-session",
+                         "tool_use_id": "fictional-call", "cwd": str(self.coordination),
+                         "tool_input": {"name": "worker-sonnet-1", "subagent_type": "worker", "prompt": "fictional"}})
+        registered = {}
+        for group in json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"]["PreToolUse"]:
+            if group.get("matcher") == "Agent":
+                for entry in group["hooks"]:
+                    registered[entry["command"].split("/")[-1]] = entry["timeout"]
+        self.assertIn("guard-worktree-isolation.sh", given, given)
+        self.assertGreaterEqual(given["guard-worktree-isolation.sh"], registered["guard-worktree-isolation.sh"])
+        # guard-pierce.sh's bounded inspection has its own line above the loop (315 s, inside the
+        # app's outer PreToolUse budget); every guard the loop runs takes the registered budget.
+        for guard, timeout in given.items():
+            if guard in registered and guard != "guard-pierce.sh":
+                self.assertGreaterEqual(timeout, registered[guard], guard)
 
 
 if __name__ == "__main__":

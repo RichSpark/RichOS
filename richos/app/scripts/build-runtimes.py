@@ -292,6 +292,13 @@ def write_launcher(runtime, name, target, *, set_variable=None, default_path=Non
     launcher.chmod(0o755)
 
 
+def python_tree(runtime):
+    """{path under runtime: digest} for every bytecode cache under python/, and None for every other
+    file: what a Python run must leave as it found it (a new or rewritten cache, or a new file)."""
+    return {str(p.relative_to(runtime)): (sha(p) if p.suffix == ".pyc" else None)
+            for p in (Path(runtime) / "python").rglob("*") if p.is_file() or p.is_symlink()}
+
+
 def check_launched_entries(runtime):
     """What the old wrappers did, proven through runtime/bin with NONE of their variables in
     the caller's environment: git finds its own exec-path and templates and runs its libexec
@@ -339,14 +346,27 @@ def check_launched_entries(runtime):
         modules.mkdir()
         (modules / "parent_probe.py").write_text("VALUE = 1\n")
         (modules / "child_probe.py").write_text("VALUE = 2\n")
+        (modules / "rebuilt_probe.py").write_text("VALUE = 3\n")
+        installed = python_tree(runtime)
         child = f"import sys; sys.path.insert(0, {str(modules)!r}); import child_probe; print(sys.dont_write_bytecode)"
+        # A child that REBUILDS its environment (no PYTHONDONTWRITEBYTECODE) runs python/bin/python3
+        # itself, without the launcher's -B, and imports standard-library modules nothing above did.
+        rebuilt = (f"import sys; sys.path.insert(0, {str(modules)!r}); import rebuilt_probe, json, email.parser, "
+                   f"sqlite3, encodings.idna; print(sys.dont_write_bytecode)")
+        rebuilt_env = {"PATH": "/usr/bin:/bin", "HOME": str(root / "home")}
         flags = run(runtime / "bin/python3", "-c",
                     f"import subprocess, sys; sys.path.insert(0, {str(modules)!r}); import parent_probe; "
-                    f"print(sys.dont_write_bytecode); subprocess.run([sys.executable, '-c', {child!r}], check=True)").stdout.split()
+                    f"print(sys.dont_write_bytecode); subprocess.run([sys.executable, '-c', {child!r}], check=True); "
+                    f"subprocess.run([sys.executable, '-c', {rebuilt!r}], check=True, env={rebuilt_env!r})").stdout.split()
         written = sorted(str(p.relative_to(modules)) for p in modules.rglob("*") if p.suffix == ".pyc" or p.name == "__pycache__")
-        if flags != ["True", "True"] or written:
+        if flags != ["True", "True", "True"] or written:
             raise RuntimeError(f"python3 wrote bytecode or did not disable it: dont_write_bytecode {flags}, written {written}")
-        lines.append("python3: no .pyc written by it or by a Python started through sys.executable")
+        after = python_tree(runtime)
+        if after != installed:
+            changed = sorted(name for name in set(after) | set(installed) if after.get(name) != installed.get(name))
+            raise RuntimeError(f"a Python run changed the runtime's python/ files: {changed[:10]}")
+        lines.append("python3: no .pyc written by it, by a Python started through sys.executable, or by one "
+                     "started with a rebuilt environment; the runtime's python/ files are unchanged")
 
         node = runtime / "bin/node"
         modules_dir = run(node, "-p", "process.env.OPENSSL_MODULES").stdout.strip()
@@ -376,10 +396,62 @@ def prepare_portable_node(runtime, recipe):
     write_launcher(runtime, "node", "node/bin/node", default_path=("OPENSSL_MODULES", "node/lib/ossl-modules"))
 
 
+# A PYTHON STARTED FROM THIS RUNTIME NEVER WRITES BYTECODE INTO IT, WHATEVER ITS ENVIRONMENT
+# (2026-10-29, the CEO's startup sheet; runtime.rs `is_python_cache`). The launcher's -B and
+# PYTHONDONTWRITEBYTECODE reach only Pythons that keep the environment: a
+# `subprocess.run([sys.executable, ...], env={...})` runs python/bin/python3 itself with neither,
+# and wrote 36-47 caches into the installed runtime hours after install. Python reads no config
+# file for this, so `site` sets it: sitecustomize.py in the standard library directory, which
+# `site` imports for every interpreter start except `-S`.
+SITECUSTOMIZE = '''"""RichOS runtime: a Python started from this runtime writes no bytecode into it.
+
+The bin/python3 launcher passes -B and sets PYTHONDONTWRITEBYTECODE, but a child started with a
+rebuilt environment loses both. Written by build-runtimes.py (prepare_python_bytecode).
+"""
+import sys
+
+sys.dont_write_bytecode = True
+'''
+
+# The few caches upstream delivers (encodings/__init__, aliases and utf_8 in 3.13) are imported
+# BEFORE `site`, and relocation gives their sources a new mtime, so a timestamp cache is stale on
+# every installed Mac and was rewritten by the first Python without -B. sitecustomize.py itself is
+# imported before it has run. All of them are delivered as CHECKED_HASH caches (PEP 552): valid
+# wherever the unchanged source lands, still checked against it, never rewritten. Run by the
+# runtime's own interpreter, so the magic number is its own. Arguments: caches to compile again
+# from their sources, and sources (`.py`) to give a cache.
+RECOMPILE_CHECKED_HASH = (
+    "import importlib.util, os, py_compile, sys\n"
+    "for name in sys.argv[1:]:\n"
+    "    source, cache = (name, importlib.util.cache_from_source(name)) if name.endswith('.py') else \\\n"
+    "        (importlib.util.source_from_cache(name), name)\n"
+    "    if os.path.isfile(source):\n"
+    "        level = int(cache.rsplit('.opt-', 1)[1][0]) if '.opt-' in cache else -1\n"
+    "        py_compile.compile(source, cfile=cache, doraise=True, optimize=level,\n"
+    "                           invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)\n")
+
+
+def prepare_python_bytecode(runtime):
+    """sitecustomize.py turns bytecode writing off for every Python of this runtime, and the
+    delivered caches become hash-checked so relocation does not make them stale (above)."""
+    stdlib = sorted((runtime / "python/lib").glob("python3.*/os.py"))
+    if len(stdlib) != 1:
+        raise RuntimeError(f"expected one python/lib/python3.*/os.py in the runtime, found {len(stdlib)}")
+    library = stdlib[0].parent
+    existing = sorted(str(p.relative_to(runtime)) for p in library.rglob("sitecustomize.py"))
+    if existing:
+        raise RuntimeError("the upstream Python already ships a sitecustomize.py: " + ", ".join(existing))
+    (library / "sitecustomize.py").write_text(SITECUSTOMIZE)
+    caches = sorted(str(p) for p in (runtime / "python").rglob("*.pyc") if p.parent.name == "__pycache__")
+    subprocess.run([str(runtime / "python/bin/python3"), "-I", "-B", "-c", RECOMPILE_CHECKED_HASH,
+                    *caches, str(library / "sitecustomize.py")],
+                   env={"PATH": "/usr/bin:/bin", "HOME": str(runtime)}, check=True)
+
+
 def prepare_runtime_launchers(runtime, recipe):
     prepare_portable_node(runtime, recipe)
-    # Relocation can invalidate upstream bytecode. Do not rewrite the delivery: -B for this
-    # interpreter, and the variable for any Python it starts through sys.executable.
+    # Relocation can invalidate upstream bytecode: -B for this interpreter, and the variable for
+    # any Python it starts through sys.executable; prepare_python_bytecode covers the rest.
     write_launcher(runtime, "python3", "python/bin/python3",
                    set_variable=("PYTHONDONTWRITEBYTECODE", "1"), flag="-B")
     # Not a symlink: git takes its exec-path and templates from the path it was executed by,
@@ -460,6 +532,7 @@ def build(destination):
                 raise
             shutil.copyfile(git_source / "COPYING", runtime / "sources/GIT-COPYING")
         prepare_runtime_launchers(runtime, manifest)
+        prepare_python_bytecode(runtime)
         scripts = script_entries(runtime / "bin")
         if scripts:
             raise RuntimeError("runtime/bin must hold only Mach-O executables (a #! script there leaks "

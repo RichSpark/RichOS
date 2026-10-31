@@ -178,6 +178,21 @@ class ProofRun(Fixture):
         self.assertEqual(needing.env.get("RICHOS_RUNTIME_DIR"), str(self.want()))
         self.assertIn("RICHOS_RUNTIME_DIR=%s" % self.want(), line)
 
+    def test_make_engine_asset_as_proof_for_selects_it_gets_the_runtime_built(self):
+        """proof-for.sh selects this suite as a plain `bash` command, not through run-tests.sh, and
+        only run-tests.sh suites were read: a recipe change left the run with no runtime and the
+        check refused for want of RICHOS_RUNTIME_DIR (zach-opus-lz1's proof run, 2026-10-31)."""
+        cwd = self.root / "app"
+        (cwd / "scripts").mkdir(parents=True, exist_ok=True)
+        (cwd / "scripts" / "make-engine-asset.test.sh").write_text(NEEDING_SUITE)
+        needing = proof_run.Item("make-engine-asset", str(cwd), ["bash", "scripts/make-engine-asset.test.sh"], None)
+        self.assertTrue(proof_run.needs_runtime(needing))
+        line = self.supply([needing], build=True)
+        self.assertEqual(len(self.builds()), 1, line)
+        self.assertEqual(needing.env.get("RICHOS_RUNTIME_DIR"), str(self.want()))
+        (cwd / "scripts" / "plain.test.sh").write_text(PLAIN_SUITE)
+        self.assertFalse(proof_run.needs_runtime(proof_run.Item("plain", str(cwd), ["bash", "scripts/plain.test.sh"], None)))
+
     def test_the_runtime_is_built_in_the_configured_storage(self):
         """Follow-up 5 (2026-10-30): the automatic build wrote to ~/.richos-nightly whatever the bulk
         root said, so a configured Mac filled its home volume."""
