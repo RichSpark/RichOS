@@ -46,9 +46,13 @@ pub(super) fn decide(state: &Path, account: Option<&str>, now: u64) -> (Admissio
 /// his runs (`work_host.rs`, `Renewal::Waits`), and a helper's next Claude call goes on, on the
 /// account it runs on, in the room the switch point leaves before 100% (`Reading::weekly_point`,
 /// `Reading::act_point`). So while another account is there to move to, a helper's call on an
-/// account being left (its row used up: `exhaustedUntil`, which the weekly point and, with the
-/// setting on Switch, the five-hour line set; or published as `leaving`) is admitted, held by
-/// neither window. A new agent's dispatch is not a helper's call and is still held there, so no
+/// account being left is admitted, held by neither window. Being left is the move under way from
+/// it (`moving.from`: the switch is decided and Stu or a reply of Rich's still runs there), which
+/// stays until the move has happened, whatever the readings do meanwhile (review
+/// rv-20261031T211217Z-4e33879e-8378: a helper building for minutes spends nothing, its account's
+/// weekly speed reads 0, the point rises back over the reading and `leaving` clears while it and
+/// Stu are still there); or its row used up (`exhaustedUntil`, which the weekly point and, with
+/// the setting on Switch, the five-hour line set); or `leaving`. A new agent's dispatch is not a helper's call and is still held there, so no
 /// new work starts on the account being left. With no account to move to (one account, every
 /// account used up, or the setting on Pause, where the five-hour line pauses the team and moves
 /// nobody) there is no switch, and the hold holds the helper as before.
@@ -57,7 +61,8 @@ fn decide_call(state: &Path, account: Option<&str>, helper: bool, now: u64) -> (
         return (Admission::Unknown, None);
     };
     let carries_on = helper && view.accounts.len() > 1 && account.is_some_and(|id|
-        view.leaving.iter().any(|left| left == id)
+        view.moving.as_ref().is_some_and(|m| m.from == id)
+            || view.leaving.iter().any(|left| left == id)
             || view.accounts.iter().any(|a| a.id == id && a.exhausted_until.is_some_and(|t| t > now)));
     // Read the persisted switch separately: a publication failure must not leave
     // an old disabled snapshot admitting work after the policy was enabled.
@@ -776,6 +781,53 @@ mod tests {
         service.observe_for_test("1", windows(95.), crate::util::now_millis());
         let held = refusal(&wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
         assert!(held.starts_with("RichOS desktop quota: Still waiting"), "Pause moves nobody, so the helper pauses: {held}");
+    }
+
+    /// **The exemption lasts until the move has happened, whatever the readings do meanwhile**
+    /// (review rv-20261031T211217Z-4e33879e-8378, its fixture weekly-speed-drop.py made a test).
+    /// Automatic pause on, the setting on Pause, Account 1's five hours at 95%. Its week goes from
+    /// 90% to 95% in five minutes: at that speed its weekly point is under 95%, the switch to Work
+    /// is decided, and Stu's back end still runs on Account 1 (the move is under way). Five minutes
+    /// later the helper has been building, spending nothing: the week still reads 95%, the speed
+    /// is 0, the point is 99% again, and Account 1 is no longer `leaving` nor used up. On the
+    /// previous code the helper's next call lost its exemption there and waited behind the
+    /// five-hour hold until that window reset, while Stu waited for the helper. Now it carries on
+    /// until the move has happened; once Stu is on Work, a helper left on Account 1 is judged as
+    /// any call there.
+    #[test]
+    fn a_helper_keeps_carrying_on_until_the_move_has_happened_though_the_weekly_speed_drops() {
+        let (_root, service, state, scope) = setup();
+        let (now, minute) = (crate::util::now_millis(), 60_000);
+        let windows = |weekly: f64| vec![
+            Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: 95.,
+                resets_at: Some(now + 2 * 3_600_000), duration_ms: 18_000_000 },
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly,
+                resets_at: Some(now + 48 * 3_600_000), duration_ms: 604_800_000 },
+        ];
+        let work = service.accounts.add("Work").unwrap();
+        service.observe_for_test(&work.id, vec![Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: 10.,
+            resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 }, Window { id: "seven_day".into(), label: "Weekly".into(),
+            used_percent: 10., resets_at: Some(now + 72 * 3_600_000), duration_ms: 604_800_000 }], now - 10 * minute);
+        service.accounts.back_end_on("thread-stu", Some("1"));
+        service.observe_for_test("1", windows(90.), now - 10 * minute);
+        service.observe_for_test("1", windows(95.), now - 5 * minute);
+        assert_eq!(service.accounts.in_use().id, work.id, "Account 1's week at 95% at that speed is left for Work");
+        let helper = json!({"agent_id":"helper-a","session_id":"session-1","tool_name":"Bash"});
+        wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).expect("the switch decided: the helper carries on");
+
+        service.observe_for_test("1", windows(95.), now);
+        let view: View = read_json(&state.join("claude-quota.json")).unwrap();
+        assert!(view.leaving.is_empty(), "the flat reading set the speed to 0, so Account 1 is no longer leaving: {:?}", view.leaving);
+        assert!(view.accounts.iter().any(|a| a.id == "1" && a.exhausted_until.is_none()), "nor used up");
+        assert_eq!(view.moving.as_ref().map(|m| (m.from.as_str(), m.to.as_str())), Some(("1", work.id.as_str())), "Stu is still on Account 1");
+        assert!(matches!(decide(&state, Some("1"), now).0, Admission::Held { .. }), "the five-hour hold stands on Account 1");
+        wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO)
+            .expect("the move has not happened: the helper still carries on");
+
+        service.accounts.back_end_on("thread-stu", Some(&work.id));
+        service.publish().unwrap();
+        let held = refusal(&wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(held.starts_with("RichOS desktop quota: Still waiting"), "after the move a call on Account 1 is judged as any: {held}");
     }
 
     /// **A model's own week at its point is the account's week at its point** (follow-ups of
