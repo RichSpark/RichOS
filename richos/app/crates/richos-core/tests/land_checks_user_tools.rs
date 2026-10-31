@@ -3,11 +3,13 @@
 //! rv-20261021T090455Z-529d1d26-253b): a check that runs `cargo check` finds the `cargo` in the
 //! user's `~/.cargo/bin`, as the same land from the user's terminal does.
 //!
-//! The land (`mega-lander/app.py` `land_merge`) runs inside a lease's hook and inherits the
-//! lease's environment, so the tools a check finds are the ones on the lease's `PATH`. Build plan
-//! item 4 (`login_environment`, `EngineProfile::configure`) puts the user's login-shell `PATH`
-//! there; this test drives the real `land_merge` in exactly the environment `configure` gives a
-//! lease, with a `cargo` stand-in in the fixture home's `.cargo/bin`.
+//! The land (`mega-lander/app.py` `integrate`, which runs the terminal's own
+//! `workspaces.py merge_and_land`, CEO §154) runs inside a lease's hook and inherits the lease's
+//! environment, so the tools a check finds are the ones on the lease's `PATH`. Build plan item 4
+//! (`login_environment`, `EngineProfile::configure`) puts the user's login-shell `PATH` there;
+//! this test runs the terminal land's own `git merge`, with the environment it builds
+//! (`_land_env`) under the app's `users_git_settings_applied`, in exactly the environment
+//! `configure` gives a lease, with a `cargo` stand-in in the fixture home's `.cargo/bin`.
 use richos_core::engine_profile::EngineProfile;
 use richos_core::runtime::EngineRuntime;
 use std::collections::BTreeMap;
@@ -67,18 +69,23 @@ fn repository(home: &Path, root: &Path) -> (PathBuf, String, String) {
     (repo, tip, commit)
 }
 
-const LAND: &str = r#"import importlib.util, sys
+const LAND: &str = r#"import importlib.util, subprocess, sys
 spec = importlib.util.spec_from_file_location('richos_app_land', sys.argv[1])
 app = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(app)
-try:
-    print('LANDED ' + app.land_merge(sys.argv[2], sys.argv[3], sys.argv[4], 'main', 'fixture-review'))
-except ValueError as refused:
-    print('REFUSED\n' + str(refused))
+repo, commit = sys.argv[2], sys.argv[4]
+with app.users_git_settings_applied():
+    merged = subprocess.run(['git', '-C', repo, 'merge', '--no-ff', '--no-edit', '-m', 'Merge reviewed work', commit],
+                            capture_output=True, text=True, env=app.W._land_env('main'))
+if merged.returncode == 0:
+    print('LANDED ' + app.git(repo, 'rev-parse', 'HEAD'))
+else:
+    print('REFUSED\n' + merged.stdout + merged.stderr)
+    subprocess.run(['git', '-C', repo, 'merge', '--abort'], capture_output=True)
 "#;
 
-/// `land_merge` run by the runtime's Python in the environment `profile.configure` gives a lease
-/// (and every hook in it), in the user's home.
+/// The terminal land's merge run by the runtime's Python in the environment `profile.configure`
+/// gives a lease (and every hook in it), in the user's home.
 fn land(profile: &EngineProfile, f: &Scratch, home: &Path, repo: &Path, tip: &str, commit: &str) -> String {
     let mut lease = Command::new("/fictional/provider");
     profile.configure(&mut lease, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));

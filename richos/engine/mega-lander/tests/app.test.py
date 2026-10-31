@@ -2311,11 +2311,12 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual((self.repo/"unrelated.txt").read_text(),"KEEP")
         self.assertFalse((self.repo/"result.txt").exists())
         (self.repo/"unrelated.txt").unlink()
-        original=self.app.land_merge
-        def crash_after_merge(*argv):
-            original(*argv)
+        original=self.app.W.merge_and_land
+        def crash_after_merge(*argv,**kw):
+            original(*argv,**kw)
             raise RuntimeError("synthetic crash after the merge")
-        with patch.object(self.app,"land_merge",side_effect=crash_after_merge):
+        with patch.object(self.app.W,"merge_and_land",side_effect=crash_after_merge), \
+                patch.object(self.app.W,"remove_workspace",return_value=(False,"synthetic busy workspace")):
             with self.assertRaisesRegex(RuntimeError,"synthetic crash"):self.call("integrate",args)
         self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL")
         with patch.object(self.app.W,"remove_workspace",return_value=(False,"synthetic busy workspace")):
@@ -3151,14 +3152,15 @@ class DesktopWork(unittest.TestCase):
         seen=self.root/"lease during the switched land"
         self.repository_hook("pre-merge-commit","cp %s %s\n" % (shlex.quote(files.lease),shlex.quote(str(seen))))
         held=[]
-        original=self.app.land_merge
-        def watch(*argv):
-            held.append(not self.land_lock_free(files.lock))
-            return original(*argv)
-        with patch.object(self.app,"land_merge",side_effect=watch):
+        original=self.app.W.merge_and_land
+        def watch(*argv,**kw):
+            held.append((self.land_lock_free(files.lock),json.loads(Path(files.lease).read_text())["holder"]["pid"]))
+            return original(*argv,**kw)
+        with patch.object(self.app.W,"merge_and_land",side_effect=watch):
             landed=self.call("integrate",args)
         self.assertTrue(landed["work_integrated"])
-        self.assertEqual(held,[True],"the merge ran without the fence's own lock held")
+        self.assertEqual(held,[(True,os.getpid())],
+                         "the terminal's merge ran without this land's lease, or with the fence's lock still held")
         self.assertEqual(json.loads(seen.read_text())["holder"]["pid"],os.getpid())
         self.assertFalse(os.path.exists(files.lease),"the land lease outlived the land")
         self.assertTrue(self.land_lock_free(files.lock),"the fence's lock outlived the land")
@@ -3193,6 +3195,75 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])
         self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL fenced")
 
+    def test_an_app_land_is_the_terminals_merge_and_land(self):
+        """CEO §154 (2026-10-31), Hank's finding 3: Stu's integrate lands with the terminal's own
+        code, workspaces.py merge_and_land (`workspaces.sh merge`), never a copy of it, so one land
+        code serves both and a land fix is made once."""
+        args=self.reviewed_pair("terminalland")
+        worker=self.app.read_record(self.app.folder(self.scope),args["worker_id"])
+        tip=self.app.git(self.repo,"rev-parse","main")
+        calls=[]
+        original=self.app.W.merge_and_land
+        def watch(ref,*argv,**kw):
+            calls.append(ref)
+            return original(ref,*argv,**kw)
+        with patch.object(self.app.W,"merge_and_land",side_effect=watch):
+            landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(calls,[worker["workspace_ref"]],"the app landed without the terminal's merge_and_land")
+        head=self.app.git(self.repo,"rev-parse","main")
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^1"),tip)
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])
+        self.assertIn("Reviewer receipt: "+args["reviewer_id"],self.app.git(self.repo,"log","-1","--format=%B","main"))
+
+    def test_an_app_land_onto_a_release_branch_never_switches_the_main_checkout(self):
+        """Hank's finding 3, where the copy differed: the terminal merges into a release branch
+        nobody has checked out in a temporary checkout of it (workspaces.py
+        _merges_in_main_checkout, 2026-10-14), and the app refused ("select the recorded
+        integration branch before integrating"), so a v1.x land from the app needed the main
+        checkout switched. The same reviewed work now lands on the release branch while the main
+        checkout stays on main, with its own unrelated edit left alone."""
+        self.app.git(self.repo,"branch","v1.3.0")
+        self.args["integration"]="v1.3.0"
+        args=self.reviewed_pair("release")
+        main_tip=self.app.git(self.repo,"rev-parse","main")
+        release_tip=self.app.git(self.repo,"rev-parse","v1.3.0")
+        (self.repo/"unrelated.txt").write_text("the main checkout's own edit")
+        landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(self.app.git(self.repo,"rev-parse","v1.3.0^1"),release_tip)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","v1.3.0^2"),landed["commit"])
+        self.assertEqual(self.app.git(self.repo,"show","v1.3.0:result.txt"),"FICTIONAL release")
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),main_tip)
+        self.assertEqual(self.app.git(self.repo,"symbolic-ref","--short","HEAD"),"main")
+        self.assertEqual((self.repo/"unrelated.txt").read_text(),"the main checkout's own edit")
+        self.assertFalse((self.repo/"result.txt").exists())
+        self.assertEqual(landed["cleanup_pending"],[])
+        self.assertEqual([r["branch"] for r in self.app.W.land_records(self.repo)],["v1.3.0"])
+
+    def test_a_refused_land_in_a_fenced_repository_is_aborted_and_moves_nothing(self):
+        """The terminal's abort of a refused merge runs under the lease this land holds as itself
+        (workspaces.py _lease_for_abort counts this process as its own caller, as
+        _take_land_lease does): the merge the repository's check refused is aborted, nothing
+        moved, the lease is gone, and the same work lands once the check passes."""
+        args=self.reviewed_pair("fencedrefusal")
+        files=self.fence_on()
+        refuse=self.root/"fenced merge check refuses";refuse.write_text("")
+        self.repository_hook("pre-merge-commit",'if [ -e %s ]; then echo "FENCED MERGE CHECK: refused" >&2; exit 1; fi\n'
+                             % shlex.quote(str(refuse)))
+        tip=self.app.git(self.repo,"rev-parse","main")
+        with self.assertRaisesRegex(ValueError,"FENCED MERGE CHECK: refused"):
+            self.call("integrate",args)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)
+        self.assertFalse(Path(self.app.git(self.repo,"rev-parse","--path-format=absolute","--git-path","MERGE_HEAD")).exists(),
+                         "the refused merge was left in progress in the main checkout")
+        self.assertEqual(self.app.git(self.repo,"status","--porcelain","--untracked-files=all"),"")
+        self.assertFalse(os.path.exists(files.lease),"the land lease outlived the refused land")
+        refuse.unlink()
+        landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main^2"),landed["commit"])
+
     def test_two_conversations_landing_in_one_repository_take_one_lock_and_the_merge_is_under_it(self):
         args=self.reviewed_pair("onelock")
         lock=self.app.land_lock_path(self.repo)
@@ -3206,11 +3277,11 @@ class DesktopWork(unittest.TestCase):
         # POSITIVE CONTROL: the probe can say "free", and does, before the land.
         self.assertTrue(self.land_lock_free(lock))
         held=[]
-        original=self.app.land_merge
-        def watch(*argv):
+        original=self.app.W.merge_and_land
+        def watch(*argv,**kw):
             held.append(not self.land_lock_free(lock))
-            return original(*argv)
-        with patch.object(self.app,"land_merge",side_effect=watch):
+            return original(*argv,**kw)
+        with patch.object(self.app.W,"merge_and_land",side_effect=watch):
             result=self.call("integrate",args)
         self.assertTrue(result["work_integrated"])
         self.assertEqual(held,[True],"the merge ran without this repository's land lock held")

@@ -129,8 +129,8 @@ mutant land-record-overwritten-not-appended "test_the_land_record_is_appended_be
 # written at the end of the call rather than at the merge would count those
 # repeats as lands that never happened.
 mutant land-recorded-without-a-merge "test_the_land_record_is_appended_beside_the_lock_and_names_the_conversation" "$A" \
-    '                    git(repo,"merge-base","--is-ancestor",commit,"refs/heads/"+branch)' \
-    '                    W.append_land_record(repo,{"schema":1,"branch":branch,"before":tip,"commit":commit,"at":W.iso(),"thread_id":"x","entity_id":"y","session_id":"z","pid":0}){NL}                    git(repo,"merge-base","--is-ancestor",commit,"refs/heads/"+branch)' \
+    '                pending=[r for r in repositories_to_land if not plan[r]["already"]]' \
+    '                pending=list(repositories_to_land)' \
     "a repeated integrate -- the recovery path, which merges nothing -- would record a land it did not perform, and the history would then answer for moves that never happened."
 
 # --- 11. THE WAITER READS WHAT THE HOLDER DID FROM THE HISTORY ----------
@@ -182,9 +182,11 @@ mutant this-conversations-own-seat-not-kept "test_his_orphan_thread_seat_is_reco
     "this conversation's OWN thread seat would be decided by a file instead of by the fact that it is the one calling, so an unreadable ledger would report the running thread's own seat as unreconciled -- and a ledger that had lost that one record would release it."
 
 # --- 17. AN APP LAND GETS THE REPOSITORY'S OWN CHECKS (plan item 6, 2026-10-21) ----
-mutant land-skips-the-repositorys-hooks "test_an_app_land_runs_the_repositorys_own_merge_check_and_a_refusal_lands_nothing" "$A" \
-    '    result = subprocess.run(["git", "-c", "commit.gpgSign=false", "-C", str(repo), "merge", "--no-ff", "--no-edit",' \
-    '    result = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-C", str(repo), "merge", "--no-ff", "--no-edit",' \
+# The land is the terminal's merge_and_land since 2026-10-31 (CEO §154), so the hooks it must
+# keep are that merge's.
+mutant land-skips-the-repositorys-hooks "test_an_app_land_runs_the_repositorys_own_merge_check_and_a_refusal_lands_nothing" "$WS" \
+    '                r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True,' \
+    '                r = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-C", main] + args, capture_output=True, text=True,' \
     "an app land would again run with no hook of the repository, so a merge its own check refuses would land anyway -- the before-state itself."
 
 # --- 18. AND TAKES THE LAND LEASE WHERE THE FENCE IS ON -----------------
