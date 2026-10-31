@@ -185,6 +185,10 @@ def runs_heartbeat(command, tag):
     for word in words + [';']:
         if word and set(word) <= set(';&|()'):
             program = [w for w in segment if '=' not in w.split('/')[0]]  # skip VAR=value
+            if program[:1] == ['time']:  # the shell's own timer (`time python3 heartbeat.py ...`)
+                program = program[1:]
+                if program[:1] == ['-p']:
+                    program = program[1:]
             if program and program[0].rsplit('/', 1)[-1].startswith('python'):
                 program = program[1:]
             if (program[:1] and program[0].rsplit('/', 1)[-1] == 'heartbeat.py' and program[1:2] == ['beat']

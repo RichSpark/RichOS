@@ -113,7 +113,10 @@ class Grade(unittest.TestCase):
                     "python3  /h/Acme/heartbeat.py   'beat'  stop-bg /tmp/reap-walk",
                     'cd /h/Acme&&python3 ./heartbeat.py beat stop-bg /tmp/reap-walk',
                     'cd /h/Acme; PYTHONUNBUFFERED=1 /usr/bin/python3 heartbeat.py beat stop-bg /tmp/reap-walk &',
-                    './heartbeat.py beat stop-fg /tmp/reap-walk | tee /tmp/out'):
+                    './heartbeat.py beat stop-fg /tmp/reap-walk | tee /tmp/out',
+                    # Stu's own call in walk-2299dfc013d5 (2026-10-31), timed by the shell.
+                    'cd /h/Acme && time python3 heartbeat.py beat stop-fg /tmp/reap-walk --seconds 300',
+                    'time -p ./heartbeat.py beat stop-fg /tmp/reap-walk'):
             self.assertTrue(walk.runs_heartbeat(ran, 'stop'), ran)
         for other in ('cat heartbeat.py', 'ls /h/Acme/heartbeat.py',
                       'python3 heartbeat.py beat quit-fg /tmp/reap-walk',  # another step's

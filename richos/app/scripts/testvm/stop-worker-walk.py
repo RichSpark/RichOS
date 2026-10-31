@@ -7,12 +7,12 @@ Run by run-walk.py, which holds one guest slot for this run only, boots the gues
       stop-worker-walk.py --out DIR --expect-sha SHA
 
 THE QUESTION (2026-10-30, about §129). In the terminal, Esc during a foreground command stops it
-and background teammates keep running. In the app, Stu's own Bash is forced into the background
-(`engine/mega-lander/app.py` worker_context) so that Stop can end it by its own task. Does the app's
-Stop end Stu's command when it runs in the FOREGROUND, while a worker of another job keeps running
-and still answers? Give it an engine whose forced background is switched off for this test only
-(`--engine` built from a copy with those lines removed); `foreground` refuses an engine that still
-forces it, so the walk can never pass on the background path by mistake.
+and background teammates keep running. §129 forced Stu's own Bash into the background
+(`engine/mega-lander/app.py` worker_context) so that Stop could end it by its own task; that is
+removed, and Stu's commands run as he issues them. Does the app's Stop end Stu's command when it
+runs in the FOREGROUND, while a worker of another job keeps running and still answers? `foreground`
+refuses an engine that still forces the background, so the walk can never pass on the background
+path by mistake.
 
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   identity     the running app says it was built from --expect-sha
@@ -62,6 +62,17 @@ def worker_ask():
             'python3 heartbeat.py beat wk-fg %s --seconds %d   %s' % (BEATS, WORKER_SECONDS, TAIL))
 
 
+def stu_ask(seconds=reap.FOREGROUND_SECONDS):
+    """Job B, worded so Rich hands it over as a job and the one who directs the team runs it himself.
+    reap-walk.py's foreground ask ("run this for me with a shell tool") was run by Rich's own
+    session in both walks of 2026-10-31 (walk-ecbc62c617db, walk-0e7a185ff111), so it never
+    reached Stu. The app never names Stu (§110): he is the one who directs the team."""
+    return ('This one takes five minutes, so please do not run it in our conversation: hand it over as a job, '
+            'and have whoever directs my team run it themselves, not through a helper. In my Acme folder, run '
+            'this harmless test command in the foreground and wait for it, then tell me what it printed: '
+            'python3 heartbeat.py beat stop-fg %s --seconds %d   %s' % (BEATS, seconds, TAIL))
+
+
 def forces_background(app_py):
     """Does this engine's app.py still rewrite Stu's own Bash to run_in_background (§129)? Only
     `worker_context`'s branch for a call with no agent id counts; a worker's own dispatch is
@@ -93,6 +104,25 @@ class Walk(reap.Walk):
                   'print(json.dumps(out))\n')
         rows = json.loads(guest(self.vm, 'python3 -c %s %s' % (shlex.quote(script), shlex.quote(self.data)), 60))
         return [r for r in rows if reap.runs_heartbeat(str(r['input'].get('command', '')), tag)]
+
+    def mentions(self, word):
+        """A diagnostic, never the verdict: every hook callback row of any tool or event whose text
+        names `word`, with whose session it was, for a call `calls` could not attribute (walk
+        walk-2c0ab4a7486c: stop-fg recorded itself and no Bash PreToolUse row named it)."""
+        script = ('import json,glob,sys\n'
+                  'for p in glob.glob(sys.argv[1]+"/engine-state/evidence/*/callbacks.jsonl"):\n'
+                  '    try: role=json.load(open(p.rsplit("/",1)[0]+"/binding.json")).get("role")\n'
+                  '    except Exception: role=None\n'
+                  '    for line in open(p,errors="replace"):\n'
+                  '        if sys.argv[2] not in line: continue\n'
+                  '        try: c=json.loads(line).get("callback",{})\n'
+                  '        except Exception: c={}\n'
+                  '        print(json.dumps({"file":p.rsplit("/",2)[-2],"role":role,"event":c.get("hook_event_name"),\n'
+                  '            "tool":c.get("tool_name"),"agent":c.get("agent_id"),"input":c.get("tool_input")})[:900])\n')
+        try:
+            return guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data), shlex.quote(word)), 60)
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never changes the step's outcome
+            return 'mentions of %s unreadable: %s' % (word, exc)
 
     def wait_recorded(self, name, sent, within=420):
         end, approved = time.monotonic() + within, 0
@@ -135,14 +165,14 @@ class Walk(reap.Walk):
         if 'worker' not in self.facts:
             raise StepFailed('REFUSED: the worker step did not run')
         sent = self.now()
-        self.ask(reap.ask_text('stop', background=False))
+        self.ask(stu_ask())
         approved = self.wait_recorded('stop-fg', sent)
         calls = self.calls('stop')
         print('stop_calls %s' % json.dumps(calls), flush=True)
         own = [c for c in calls if c.get('role') == 'stu' and not c.get('agent')]
         if not own:
-            raise StepFailed('REFUSED: stop-fg was not run by Stu himself, so this is not his foreground command: %s'
-                             % json.dumps(calls))
+            raise StepFailed('REFUSED: stop-fg was not run by Stu himself, so this is not his foreground command: %s\n%s\n%s'
+                             % (json.dumps(calls), self.mentions('stop-fg'), self.not_started('stop', sent)))
         if any(c['input'].get('run_in_background') for c in own):
             raise StepFailed('REFUSED: Stu\'s stop-fg call ran in the background, not the foreground: %s' % json.dumps(own))
         if self.file_ms(BEATS + '/wk-fg.done') is not None:
