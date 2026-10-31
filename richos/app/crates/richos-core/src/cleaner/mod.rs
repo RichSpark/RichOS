@@ -387,12 +387,22 @@ pub fn edit(db: &mut Catalog, fs: &impl Files, id: &str, note: String) -> Result
         e.projection = staged.projection;
         Ok(())
     });
-    e.phase = e.return_phase.take().unwrap_or(Phase::Draft);
     if let Err(reason) = result {
-        e.problem = Some(format!(
-            "Note saved in RichOS. The note inside the file is older: {reason}"
-        ));
+        // A native replacement can finish before its process reports an error.
+        // Keep the persisted staged identity until recovery reconciles that gap.
+        let pending = db.get(id)?;
+        recover_entries(db, fs, vec![pending])?;
+        let mut recovered = db.get(id)?;
+        recovered.problem = Some(if recovered.projection.mode == "embedded" {
+            "Your note is saved inside the file. Its folder is unchanged".into()
+        } else {
+            format!("Note saved in RichOS. The note inside the file is older: {reason}")
+        });
+        db.save(&recovered)?;
+        return Ok(recovered);
     }
+    e.phase = e.return_phase.take().unwrap_or(Phase::Draft);
+    e.problem = None;
     db.save(&e)?;
     if let Some(staged) = e.staged.take() {
         fs.cleanup(&staged)?;
@@ -434,8 +444,8 @@ pub fn undo(db: &mut Catalog, fs: &impl Files, id: &str) -> Result<Entry> {
     db.save(&e)?;
     Ok(e)
 }
-pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
-    for mut e in db.pending()? {
+fn recover_entries(db: &mut Catalog, fs: &impl Files, entries: Vec<Entry>) -> Result<()> {
+    for mut e in entries {
         if matches!(e.phase, Phase::Filed | Phase::Draft) && e.intended.is_none() {
             if let Some(staged) = e.staged.take() {
                 fs.cleanup(&staged)?;
@@ -517,6 +527,11 @@ pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
         e.problem = Some("Your note is saved. Locate the original before trying again".into());
         db.save(&e)?;
     }
+    Ok(())
+}
+pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
+    let pending = db.pending()?;
+    recover_entries(db, fs, pending)?;
     for mut e in db.interrupted_inbox()? {
         e.pending_sort = false;
         e.problem=Some("Sorting was interrupted. Your file is stored in Inbox; use File again to finish sorting".into());
@@ -890,4 +905,60 @@ mod tests {
         db.remove(&e.id).unwrap();
         assert!(db.cards().unwrap().is_empty());
     }
+    #[test]
+    fn edit_recovers_a_completed_replacement_before_discarding_its_staged_identity() {
+        use std::cell::{Cell, RefCell};
+        struct Replaced {
+            actual: RefCell<Identity>,
+            cleaned: Cell<bool>,
+        }
+        impl Files for Replaced {
+            fn inspect(&self, _: &Path) -> Result<Identity> { Ok(self.actual.borrow().clone()) }
+            fn resolve(&self, p: &Path, i: &Identity) -> Result<PathBuf> {
+                if self.actual.borrow().same_object(i) { Ok(p.into()) } else { Err("Wrong original".into()) }
+            }
+            fn destination(&self, _: &Path, _: &[String], _: &std::ffi::OsStr) -> Result<PathBuf> { unreachable!() }
+            fn stage(&self, _: &Entry) -> Result<Option<Staged>> {
+                Ok(Some(Staged { path: "/owned-stage/shot.png".into(), identity: self.actual.borrow().clone(), projection: Projection::default() }))
+            }
+            fn annotate(&self, e: &Entry, s: &Staged) -> Result<Staged> {
+                let mut staged = s.clone();
+                staged.identity.object = 99;
+                staged.projection = Projection { mode: "embedded".into(), written: e.note.clone(), ..Projection::default() };
+                Ok(staged)
+            }
+            fn replace(&self, _: &Entry, s: &Staged) -> Result<Identity> {
+                *self.actual.borrow_mut() = s.identity.clone();
+                Err("The replacement finished before its confirmation was interrupted".into())
+            }
+            fn rename(&self, _: &Path, _: &Path, _: &Identity) -> Result<Identity> { panic!("An edit must not move the file") }
+            fn cleanup(&self, _: &Staged) -> Result<()> { self.cleaned.set(true); Ok(()) }
+        }
+        let f = Fixture::new();
+        let mut db = f.db();
+        let mut e = entry("/Library/Home/shot.png", "Initial note", 7);
+        e.phase = Phase::Filed;
+        e.folder = "Home".into();
+        e.undo = Some("/Desktop/shot.png".into());
+        e.projection = Projection { mode: "embedded".into(), written: e.note.clone(), ..Projection::default() };
+        db.save(&e).unwrap();
+        let mut pending = entry("/Library/Inbox/other.png", "Other file is still sorting", 111);
+        pending.phase = Phase::Filed;
+        pending.pending_sort = true;
+        db.save(&pending).unwrap();
+        let fs = Replaced { actual: RefCell::new(e.identity.clone()), cleaned: Cell::new(false) };
+        let saved = edit(&mut db, &fs, &e.id, "Corrected kitchen quote".into()).unwrap();
+        assert!(saved.identity.same_content(&fs.actual.borrow()));
+        assert_eq!(saved.path, e.path);
+        assert_eq!(saved.undo, e.undo);
+        assert_eq!(saved.phase, Phase::Filed);
+        assert_eq!(saved.projection.mode, "embedded");
+        assert!(saved.staged.is_none() && fs.cleaned.get());
+        assert!(db.get(&pending.id).unwrap().pending_sort, "An edit must not settle another file's live classifier");
+        drop(db);
+        let db = f.db();
+        assert_eq!(db.get(&e.id).unwrap().note, "Corrected kitchen quote");
+        assert_eq!(db.search("Corrected kitchen", 0, 65536).unwrap().total, 1);
+    }
+
 }

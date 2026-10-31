@@ -192,6 +192,44 @@ fn run() -> Result<(), String> {
         }
         results.push(json!({"fault":label,"checks":["real-native-mutation","restart","original-located","note-retained","staging-cleaned"],"path":recovered.path}));
     }
+    if let Some(input) = std::fs::read_dir(&fixtures).map_err(|e| e.to_string())?
+        .filter_map(std::result::Result::ok).map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|ext| ext == "png"))
+    {
+        for step in ["annotate", "replace"] {
+            let case = report.join(format!("edit-after-{step}"));
+            std::fs::create_dir(&case).map_err(|e| e.to_string())?;
+            std::fs::create_dir(case.join("Library")).map_err(|e| e.to_string())?;
+            let source = case.join("original.png");
+            std::fs::copy(&input, &source).map_err(|e| e.to_string())?;
+            let path = case.join("catalog.sqlite");
+            let mut db = Catalog::open(&path)?;
+            let entry = Entry::new(source, native.inspect(&case.join("original.png"))?, "Initial note".into())?;
+            db.save(&entry)?;
+            let filed = cleaner::file(&mut db, &native, &entry.id, &case.join("Library"), "Home/Kitchen", vec![], false)?;
+            let saved = cleaner::edit(&mut db, &Fault { native: &native, step }, &entry.id, "Corrected note survives the native error".into())?;
+            if saved.path != filed.path || saved.phase != cleaner::Phase::Filed
+                || !native.inspect(&saved.path)?.same_content(&saved.identity)
+                || saved.staged.is_some()
+                || saved.projection.mode != if step == "replace" { "embedded" } else { "older" }
+            {
+                return Err(format!("Edit {step} error lost the current original identity or note state"));
+            }
+            drop(db);
+            let db = Catalog::open(&path)?;
+            if db.get(&entry.id)?.note != "Corrected note survives the native error"
+                || db.search("Corrected", 0, 65536)?.total != 1
+            {
+                return Err("The corrected note was lost after reopening".into());
+            }
+            let mut db = Catalog::open(&path)?;
+            let retried = cleaner::edit(&mut db, &native, &entry.id, "A later correction is current".into())?;
+            if retried.projection.mode != "embedded" || retried.problem.is_some() || retried.path != filed.path {
+                return Err("A successful later edit retained an obsolete error or moved the file".into());
+            }
+            results.push(json!({"fault":format!("edit-after-{step}"),"checks":["real-native-mutation","error-reconciled-before-cleanup","correct-original-identity","corrected-note-retained","restart","searchable","folder-unchanged"],"path":saved.path}));
+        }
+    }
     if results.is_empty() {
         return Err("No fixtures were exercised".into());
     }
