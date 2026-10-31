@@ -6424,6 +6424,103 @@ done
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
+    // ---- Tom's review of the landed P0, follow-ups 2 and 3: what keeps the gate busy when no
+    // reading of the job itself does -------------------------------------------------------------
+
+    /// The job of [`handed_job`], given to Stu (his cursor accepted the handoff, as a delivery to
+    /// a turn of his does), whose one helper ran on a provider session that has since ended
+    /// (`SessionEnd` in its journal, `ended_at` on its canonical record). Nothing of the job
+    /// itself is live; only the back end's own readings can hold the gate.
+    fn given_job_with_an_ended_helper(h: &Harness) -> (crate::status_tools::StatusToolScope, PathBuf) {
+        use sha2::Digest;
+        let (_, scope, path) = handed_job(h);
+        let instruction = crate::ecs::UserInstruction { ledger_ref: registration(h).instruction_ledger_ref,
+            sha256: registration(h).instruction_sha256, text: None };
+        let (_, through) = crate::session_tools::saved_handoff(&scope, &instruction).unwrap().expect("the handoff is saved");
+        crate::session_tools::acknowledge(&scope, "stu", through).unwrap();
+        helper_receipt(h, "running");
+        let evidence = h.state.join("evidence/work-session-one");
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join(".lock"), "").unwrap();
+        let row = |event: &str, more: serde_json::Value| {
+            let mut callback = serde_json::json!({"session_id": "work-session-one", "hook_event_name": event});
+            for (key, value) in more.as_object().unwrap() { callback[key] = value.clone(); }
+            serde_json::json!({"schema": 1, "callback": callback}).to_string() + "\n"
+        };
+        std::fs::write(evidence.join("callbacks.jsonl"), row("SubagentStart", serde_json::json!({"agent_id": "agent-one"}))
+            + &row("PostToolUse", serde_json::json!({"tool_name": "Agent",
+                "tool_response": {"status": "async_launched", "agentId": "agent-one"}}))
+            + &row("SessionEnd", serde_json::json!({"reason": "other"}))).unwrap();
+        let sessions = h.state.join("workspaces")
+            .join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"))).join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("work-session-one.json"), serde_json::json!({"session_id": "work-session-one",
+            "ended_at": "2026-10-29T00:00:00Z", "end_reason": "SessionEnd"}).to_string()).unwrap();
+        (scope, path)
+    }
+
+    /// Stu's back end for the harness conversation on `host`, holding his lease on
+    /// `work-session-one`, with no run loop: each test sets what the loop would.
+    fn back_end_without_a_loop(h: &Harness, host: &WorkHost) -> Arc<Backend> {
+        let backend = Backend::new();
+        {
+            let mut inner = backend.inner.lock().unwrap();
+            inner.lease_session = Some("work-session-one".into());
+            inner.binding = Some(h.binding.clone());
+        }
+        *backend.lease.lock().unwrap() = Some(Box::new(Lease { session: "work-session-one".into(),
+            prompts: h.work_prompts.clone(), commands: h.commands.clone(), team: h.team.clone(), settings: None }));
+        host.backends.lock().unwrap().insert(h.binding.thread_id().into(), backend.clone());
+        backend
+    }
+
+    /// The update gate's two readings from the work host, as `updates.rs` takes them.
+    fn gate_reading(host: &WorkHost, state: &Path) -> (usize, (crate::work_gate::Liveness, Option<String>)) {
+        let work = host.background_work();
+        let views: Vec<_> = host.lease_sessions().iter()
+            .map(|session| crate::app_workers::status(state, Some(session))).collect();
+        (work.running, crate::work_gate::background(&work, &views))
+    }
+
+    /// **The renewal gap keeps the gate busy, on `processing`** (Tom's review of the landed P0,
+    /// follow-up 2). `renew_lease` takes Stu's old lease out and releases its lock; only then does
+    /// `ensure_lease` lock it again and install the new one. In between the lease is `None` and
+    /// unlocked, so `lease_sessions` names no open session and his job's ended helper session has
+    /// no veto from it. The run loop sets `processing` before every renewal it makes (a message's
+    /// delivery, a move to another account), and that is the one reading that keeps the gate busy
+    /// there. The gap is held open here by a spawn that fails: `renew_lease` returns at exactly
+    /// that state. Once the loop's turn ends (`processing` false), the gate reads clear.
+    #[test]
+    fn the_gap_between_taking_out_stus_old_lease_and_installing_the_new_one_keeps_the_gate_busy() {
+        struct Unspawnable;
+        impl LeaseFactory for Unspawnable {
+            fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> { unreachable!() }
+            fn spawn_work(&self, _: &ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
+                Err(CognitionError::Protocol("the next provider is not open yet".into()))
+            }
+        }
+        let h = harness(0);
+        let _ = given_job_with_an_ended_helper(&h);
+        let host = WorkHost::new(&h.state, Box::new(Unspawnable), Arc::new(SilentNotifier));
+        let backend = back_end_without_a_loop(&h, &host);
+        let busy = (1, (crate::work_gate::Liveness::Busy, Some("1 assignment is still running in the background.".to_string())));
+        let clear = (0, (crate::work_gate::Liveness::Clear, None));
+        // Control: the open lease keeps its session's veto.
+        assert_eq!(gate_reading(&host, &h.state), busy);
+        // The run loop renews Stu with `processing` set.
+        backend.inner.lock().unwrap().processing = true;
+        assert!(matches!(host.renew_lease(&backend, &h.binding), Renewal::Failed));
+        assert!(backend.lease.try_lock().is_ok_and(|lease| lease.is_none()), "the gap is a lease that is out and unlocked");
+        assert_eq!(host.lease_sessions(), Vec::<String>::new(), "the gap still named an open session");
+        assert_eq!(gate_reading(&host, &h.state), busy, "the renewal gap read as no work running");
+        // The loop's turn ends.
+        backend.inner.lock().unwrap().processing = false;
+        assert_eq!(gate_reading(&host, &h.state), clear, "nothing but the renewal held the gate");
+        host.shutdown();
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
     /// **A handoff the session already has is not handed to it again as new work** (2026-10-28
     /// ~23:00Z: after a restart Stu was given the nightly-78 handoff three times within minutes,
     /// two of them carrying no `previous_delivery_attempt`). His lease is renewed onto the same
