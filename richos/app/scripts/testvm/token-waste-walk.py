@@ -30,6 +30,7 @@ Exit 0 only when every step passes. Every app instance is quit by run-walk.py's 
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -55,6 +56,9 @@ GIT_EMAIL = 'qa@example.invalid'
 FIXTURE_SESSION ='beadfeed-0000-4000-8000-00000000w001'
 SILENT_CONTROL = 'control-silent'
 NEVER_STARTED = ('lined-up-never-started', 'refused-never-started')
+# The one interpreter in the guest, for the helper and (as its own sys.executable) the fixture it writes.
+GUEST_PYTHON = '/usr/bin/python3'
+HEADLINE = re.compile(r'^\s*\[([A-Z][A-Z -]*)\] (\S+): ')
 
 
 def judge_receipts(rows):
@@ -74,14 +78,34 @@ def judge_receipts(rows):
     return 'PASS', '%d never-started receipt(s) settled with a reason' % len(unadmitted)
 
 
+def parse_stalls(out):
+    """[(kind, who)] for each stall headline in stall-watch's tick output. The tick is run with
+    --jsonl (one {"text": block} line per announcement; plain text lines are read too), and a stall
+    is its block's headline, `  [KIND] who: what, for ...` (stall_watch.py Stall.render). A name that
+    only appears in a stall's detail or its "You can:" lines is not a stall of that name."""
+    stalls = []
+    for line in out.splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            value = None
+        text = value.get('text') if isinstance(value, dict) else line
+        for row in str(text or '').splitlines():
+            found = HEADLINE.match(row)
+            if found:
+                stalls.append((found.group(1), found.group(2)))
+    return stalls
+
+
 def judge_quiet(done):
     """(verdict, why) over the guest's stall-watch tick."""
     out = done.get('out', '')
     if done.get('rc') != 0:
         return 'FAIL', 'stall-watch --tick exited %s: %s' % (done.get('rc'), out[-300:])
-    if SILENT_CONTROL not in out or '[SILENT]' not in out:
+    stalls = parse_stalls(out)
+    if ('SILENT', SILENT_CONTROL) not in stalls:
         return 'FAIL', 'the control (started, silent for an hour) was not reported SILENT, so the check measured nothing'
-    told = [n for n in NEVER_STARTED if n in out]
+    told = [n for n in NEVER_STARTED if n in {who for _kind, who in stalls}]
     if told:
         return 'FAIL', 'stall-watch told a "gone quiet" notice for a teammate that never started: %s' % ', '.join(told)
     return 'PASS', 'the silent control was told; the prepared and the refused teammates were not'
@@ -111,8 +135,8 @@ class TokenWasteWalk(base.StuReminderWalk):
         made = self.payload + '/token-waste'
         guest(self.vm, 'mkdir -p ' + shlex.quote(made), 60)
         command_walk.command([HERE / 'guest.sh', self.vm, '--push', HERE / 'token-waste-guest.py', made + '/'], 300)
-        rows = json.loads(guest(self.vm, '/usr/bin/python3 %s receipts %s' % (
-            shlex.quote(made + '/token-waste-guest.py'), shlex.quote(self.data)), 120) or '[]')
+        rows = json.loads(guest(self.vm, '%s %s receipts %s' % (
+            GUEST_PYTHON, shlex.quote(made + '/token-waste-guest.py'), shlex.quote(self.data)), 120) or '[]')
         (self.out / 'receipts.json').write_text(json.dumps(rows, indent=2) + '\n')
         verdict, why = judge_receipts(rows)
         if verdict != 'PASS':
@@ -123,8 +147,8 @@ class TokenWasteWalk(base.StuReminderWalk):
         made = self.payload + '/token-waste'
         guest(self.vm, 'mkdir -p ' + shlex.quote(made), 60)
         command_walk.command([HERE / 'guest.sh', self.vm, '--push', HERE / 'token-waste-guest.py', made + '/'], 300)
-        text = guest(self.vm, '/usr/bin/python3 %s quiet %s %s %s' % (
-            shlex.quote(made + '/token-waste-guest.py'), shlex.quote(self.payload + '/engine'),
+        text = guest(self.vm, '%s %s quiet %s %s %s' % (
+            GUEST_PYTHON, shlex.quote(made + '/token-waste-guest.py'), shlex.quote(self.payload + '/engine'),
             FIXTURE_SESSION, shlex.quote(made + '/quiet-box')), 180)
         done = json.loads(text)
         (self.out / 'quiet.json').write_text(json.dumps(done, indent=2) + '\n')
@@ -135,6 +159,7 @@ class TokenWasteWalk(base.StuReminderWalk):
 
 
 def main():
+    base.__doc__ = __doc__  # the base walk's parser prints its module's docstring as --help
     base.STEPS = STEPS
     base.JOB = JOB
     base.StuReminderWalk = TokenWasteWalk

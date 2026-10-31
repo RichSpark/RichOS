@@ -13,7 +13,8 @@ Run by token-waste-walk.py over ssh, with the guest's /usr/bin/python3 (3.9), ne
       in SCRATCH (never the app's own registry): one teammate that started and has been silent for
       an hour (the control: it MUST be reported SILENT, or the check measures nothing), one that
       was only prepared and one whose Agent call was registered and then refused (neither ever
-      ran). Prints {"rc": N, "out": "<what stall-watch said>"}.
+      ran). Prints {"rc": N, "out": "<what stall-watch said>"}, the tick run with --jsonl: one
+      {"text": block} line per announcement, whose stall headlines the walk reads by their shape.
 """
 import json
 import os
@@ -85,13 +86,13 @@ def quiet(engine, session, scratch):
                RICHOS_WORKSPACES_DIR=reg, STALL_WATCH_STATE_DIR=str(box / 'state'))
     for kind, name in (('started', 'control-silent'), ('prepared', 'lined-up-never-started'),
                        ('refused', 'refused-never-started')):
-        made = subprocess.run(['python3', '-c', FIXTURE, engine, reg, session, str(os.getpid()), kind, name],
+        made = subprocess.run([sys.executable, '-c', FIXTURE, engine, reg, session, str(os.getpid()), kind, name],
                               env=env, capture_output=True, text=True, timeout=60)
         if made.returncode:
             raise SystemExit('fixture %s could not be written: %s' % (name, made.stderr))
     now = int(time.time())
     env['STALL_WATCH_NOW'] = str(now)
-    done = subprocess.run(['bash', engine + '/scripts/stall-watch.sh', '--tick'], env=env,
+    done = subprocess.run(['bash', engine + '/scripts/stall-watch.sh', '--tick', '--jsonl'], env=env,
                           capture_output=True, text=True, timeout=120)
     print(json.dumps({'rc': done.returncode, 'out': done.stdout + done.stderr}))
 
