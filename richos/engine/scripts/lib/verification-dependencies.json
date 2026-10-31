@@ -1513,7 +1513,7 @@
     },
     "scripts/lib/testdevices.py#workspace-collection": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+      "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
       "evidence": "workspaces calls collect with private HOME/config and no fake device adapters. The collector, ownership queries and error writer read private device/workspace state; no orchestration.config values are loaded. Device admission/launch helpers are not called.",
       "keys": [],
       "edges": [
@@ -4767,7 +4767,7 @@
     },
     "scripts/lib/testdevices.py#scheduled-collection": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+      "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
       "evidence": "Same reviewed collect/classification/registry/workspace-barrier closure as workspace collection, reached by the scheduled watchdog. Also retains the exported TEST_DEVICE_FAILURES_STATE read used by machine admission and the failure writer. Device launch/admission helpers are not called.",
       "keys": [
         "TEST_DEVICE_FAILURES_STATE"
@@ -13723,7 +13723,7 @@
     },
     "scripts/lib/testdevices.py#device-fixtures": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+      "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
       "evidence": "Suite-bound API path: real workspace liveness and cpu_guard APIs before HostMemory plus failure writer. In-process boot has _device_admission replaced; T60 exercises admission with literal worker/simulator modules. Separate CLI calls are register/run-active/acquire-ios, never boot, so app-side simulator_budget/reserve does not execute. Native commands and all run-active child programs are separately bound fixture strings, not config-provided code.",
       "keys": [],
       "edges": [
@@ -15397,7 +15397,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/testdevices.py",
-          "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+          "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15487,7 +15487,7 @@
     },
     "scripts/lib/testdevices.py#cpu-fixtures": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+      "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
       "keys": [],
       "edges": [
         {
@@ -16156,7 +16156,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "scripts/lib/testdevices.py",
-          "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+          "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
@@ -17832,7 +17832,7 @@
         "scripts/hooks/workspace-lifecycle.sh": "5c60902e44c8c46c072bdabd66bc5d7f66ae845e59a880bf371c489b885dfecd",
         "mega-lander/workspaces.py": "b14b730588676af08d996762f75a83b5f4084ad9cfcfd221fbdb1454b9e03621",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/snapshot-agent-definitions.sh": "37080a33015c780667bacc7b8c92340da55bcd2a5022b2f37c3c5991003e7f3f",
@@ -17890,7 +17890,7 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "mega-lander/workspaces.py": "b14b730588676af08d996762f75a83b5f4084ad9cfcfd221fbdb1454b9e03621",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-definition-drift.sh": "f8a3998ce46f399049256b3c67b8b1836794e130d29c28dc75d509e6090fedcb",
@@ -18055,7 +18055,7 @@
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/tree-witness.sh": "ce0b40484c82bb421e5b4fef7a20276f606cc3df2c19fc6466700fd9ddaf1304",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
@@ -18807,7 +18807,7 @@
         "scripts/hooks/guard-resume-isolation.sh": "5a86dfd9b446b0444703b787133d1b6914fd4e2c86ededb65067ffc38c3e4250",
         "scripts/lib/pause_protocol.py": "75275cc80313de3ff83dcfba86121d33ca5c4fe208c174a3be2508eb40143a18",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -18921,7 +18921,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "cc732687d46ddbb442a4541edeee8bd16e358862ef879f39956d0c34b1cc3f3f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",
@@ -18987,7 +18987,7 @@
         "scripts/lib/spawn-guard-audience.py": "0f29e5f4d8b857670e6566646e5ba1691b8b49e55b599b7e2d9d8a4782ccc0f9",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/prepare-agent-spawn.py": "8e47126285a2f30a8a598b63d696c4ff27cc162d09e14680c074e067cd310a10",
         "scripts/spawn.sh": "c1965676afbb3cca7b2659304bc23574cc738dedd84c1410841b11498ba26bc9",
@@ -19036,7 +19036,7 @@
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
@@ -19072,7 +19072,7 @@
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105"
@@ -19169,7 +19169,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8"
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775"
       },
       "evidence": "settings.local.json is named only in the duplicate-delivery explanatory comment. The suite invokes the actual guard directly with literal payloads, private team/registry facts and the already qualified helper closure. No reader consumes a registration surface. This does not qualify or alter WAIT/pause behavior.",
       "seated_reads_nothing": true
@@ -19204,7 +19204,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "cc732687d46ddbb442a4541edeee8bd16e358862ef879f39956d0c34b1cc3f3f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",
@@ -19262,7 +19262,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "cc732687d46ddbb442a4541edeee8bd16e358862ef879f39956d0c34b1cc3f3f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",
@@ -19320,7 +19320,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "cc732687d46ddbb442a4541edeee8bd16e358862ef879f39956d0c34b1cc3f3f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",
