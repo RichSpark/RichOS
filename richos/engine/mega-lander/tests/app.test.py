@@ -2167,43 +2167,52 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.app.git(self.repo,"show","HEAD:result.txt"),"FICTIONAL house-rules","the land did not happen")
         self.assertEqual(instruction_files(),before)
 
-    def review_row(self,rid,trigger,verdict,branch,tip,title):
-        """One row of the app's second-review ledger, with the verdict file second-review keeps."""
+    def review_row(self,rid,trigger,verdict,work,tip,title,branch="cc/fixture"):
+        """One row of the app's second-review ledger, as second-review writes it (the work it is
+        on, when it finished), with the verdict file second-review keeps."""
         paths=self.review.app_paths(self.root/"engine-state")
         record=Path(paths["reviews"])/"reviews"/rid;record.mkdir(parents=True)
         (record/"verdict.json").write_text(json.dumps({"answer":{"findings":[{"priority":1,"title":title,
             "files":["result.txt:1"],"evidence":"the fixture says so","fixture":""}],"summary":"x"}}))
         with open(paths["ledger"],"a") as f:
             f.write(json.dumps({"id":rid,"trigger":trigger,"verdict":verdict,"repo":str(self.repo),"branch":branch,
-                                "tip":tip,"record":str(record)})+"\n")
+                                "work":work,"tip":tip,"record":str(record),"reviewer":"claude","reviewer_model":"opus",
+                                "findings":1,"p1":1,"finished_at":"2099-01-01T00:00:00Z"})+"\n")
 
     def test_a_mid_job_request_for_changes_reaches_the_running_worker_once(self):
-        """Second review, slice 4 (plan §2.5; Sage's check, catch 7): a mid-job review's
-        changes-requested verdict is told to the running worker at its next tool call, once, by
-        the app's own hook (scripts/app-engine-hook.py); a pass, a handover verdict, another
-        branch's verdict and another agent's tool call are told nothing."""
+        """Second review, slice 4 (plan §2.5; Sage's check, catch 7), delivered by THE TERMINAL'S
+        OWN CODE (CEO §154, Hank's finding 9): the app's hook runs
+        scripts/hooks/deliver-review-verdict.sh with the app's ledger, so a verdict on this worker's
+        work is told to it at its next tool call, once; another worker's verdict, another agent's
+        tool call and the lead's own call are told nothing."""
         self.review=self.app.load("app_review_test",ENGINE/"scripts/lib/app_review.py")
         hook=self.app.load("app_engine_hook_test",ENGINE/"scripts/app-engine-hook.py")
         worker=self.call("prepare",self.args)
         self.start_fixture_worker(worker,"midjob-worker")
         call={"session_id":self.session,"agent_id":"midjob-worker","tool_name":"Bash","tool_input":{"command":"true"}}
-        (repo,branch),=self.app.worker_spaces(self.scope,call)
-        self.assertEqual(Path(repo).resolve(),self.repo)
+        work=self.app.W.recovery_work_key(self.app.W.load_agent(self.record_of(worker)["workspace_ref"]))
+        self.assertTrue(work.startswith("teammate:"),work)
         state=self.root/"engine-state"
+        ran=[]
+        real_run=subprocess.run
+        def watch(command,*argv,**kw):
+            ran.extend(str(part) for part in command)
+            return real_run(command,*argv,**kw)
         def told(payload):
             got=[]
-            self.assertEqual(hook.mid_job_notice(self.app,self.scope,payload,state,got.append),bool(got))
+            with patch.object(hook.subprocess,"run",side_effect=watch):
+                self.assertEqual(hook.mid_job_notice(self.app,self.scope,payload,state,got.append),bool(got))
             return "".join(got)
         self.assertEqual(told(call),"")      # no ledger yet
         Path(self.review.app_paths(state)["reviews"]).mkdir(parents=True)
-        self.review_row("rv-mid-1","long-job","changes-requested",branch,"a"*40,"Result is not committed")
-        self.review_row("rv-mid-pass","long-job","passed",branch,"b"*40,"Passing-row finding")
-        self.review_row("rv-handover","handover","changes-requested",branch,"c"*40,"Handover finding")
-        self.review_row("rv-other","quiet","changes-requested","cc/someone-else","d"*40,"Another worker's")
+        self.review_row("rv-mid-1","long-job","changes-requested",work,"a"*40,"Result is not committed")
+        self.review_row("rv-other","quiet","changes-requested","teammate:someone-else","d"*40,"Another worker's")
         text=told(call)
-        self.assertIn("asked for changes",text)
+        self.assertIn(str(ENGINE/"scripts/hooks/deliver-review-verdict.sh"),ran,"the app delivered without the terminal's script")
+        self.assertIn("SECOND REVIEW OF YOUR WORK (a mid-job review",text)
+        self.assertIn("CHANGES-REQUESTED",text)
         self.assertIn("P1 Result is not committed (result.txt:1)",text)
-        for absent in ("Passing-row finding","Handover finding","Another worker's"):self.assertNotIn(absent,text)
+        self.assertNotIn("Another worker's",text)
         self.assertEqual(told(call),"","told twice")
         self.assertEqual(told({**call,"agent_id":"someone"}),"")
         self.assertEqual(told({**call,"agent_id":None}),"")

@@ -95,9 +95,8 @@
 #   W27  a verdict is delivered only once the host accepts it: a failed pipe, or no
 #        acknowledgment from a host that acknowledges, leaves it for the next look
 #        (the reviewer's fixture delivery_ack_gap.py)
-#   W28  a mid-job verdict is recorded delivered only once the app's worker hook has
-#        written and flushed its answer: a closed pipe leaves it for the next tool call
-#        (the reviewer's fixture mid_job_failed_output.py)
+#   W28  (retired 2026-10-31 with the app's own copy of the mid-job delivery: the app's worker
+#        hook runs the terminal's deliver-review-verdict.sh, CEO §154; app.test.py drives it)
 #   W29  the quit keeps ending the review's own session after its launcher exits:
 #        a platform tool that hides the mark is ended, and the lock is settled only
 #        then (the reviewer's fixture orphan_platform_same_session.py)
@@ -131,8 +130,9 @@
 #        counts (the second review of 3331a349416c, finding 1, fixture quota_hold_retry.py)
 #
 # Every case loads scripts/lib/app_review.py too: review_watch.py imports its app_paths.
-# The app mode (--app-state) and app_review.py's mid-job notice are driven over the real
-# app fixture in mega-lander/tests/app.test.py.
+# The app mode (--app-state) and the app worker hook's delivery of a verdict (the terminal's
+# deliver-review-verdict.sh, run with the app's ledger) are driven over the real app fixture in
+# mega-lander/tests/app.test.py.
 #
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
@@ -1862,219 +1862,6 @@ sys.exit(0 if got == want else 1)
 PY
 check "W27 a verdict is delivered only once the host accepts it: a failed pipe or no acknowledgment leaves it for the next look" \
     $? "see above"
-
-# --- W28 ---------------------------------------------------------------------
-# The real second review of 283b4379d, finding 2 (fixtures/mid_job_failed_output.py): the app's
-# worker hook recorded a mid-job verdict delivered before it printed the notice, so a hook whose
-# output pipe had closed lost it for good. Now it is recorded only once the hook's answer is written
-# and flushed. Through the real scripts/app-engine-hook.py handle; scope, receipts and the unrelated
-# pre-tool controls are stand-ins, as in the reviewer's fixture.
-python3 - "$ENGINE" "$SB/w28" <<'PY'
-import fcntl, importlib.util, io, json, os, sys
-from pathlib import Path
-from types import SimpleNamespace
-engine, td = Path(sys.argv[1]), sys.argv[2]
-os.makedirs(td)
-spec = importlib.util.spec_from_file_location("w28_hook", engine / "scripts/app-engine-hook.py")
-hook = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(hook)
-review = hook.load("w28_review", engine / "scripts/lib/app_review.py")
-
-
-class ClosedPipe(io.StringIO):
-    def write(self, text):
-        raise BrokenPipeError("the host has closed its hook pipe")
-
-
-paths = review.app_paths(td)
-record = Path(td) / "verdict"
-record.mkdir()
-(record / "verdict.json").write_text(json.dumps({"answer": {"findings": [
-    {"priority": 2, "title": "Planted defect", "files": ["result.txt:1"], "evidence": "missing result"}]}}))
-Path(paths["ledger"]).parent.mkdir(parents=True)
-Path(paths["ledger"]).write_text(json.dumps({"id": "rv-pending", "repo": td, "branch": "cc/worker", "trigger": "long-job",
-                                             "verdict": "changes-requested", "tip": "a" * 40, "record": str(record)}) + "\n")
-os.environ["RICHOS_APP_STATE"] = os.environ["RICHOS_ENTITY_ROOT"] = td
-work = SimpleNamespace(validate_shell_target=lambda p: None, worker_context=lambda a, p: None,
-                       worker_spaces=lambda a, p: [(td, "cc/worker")])
-real_load = hook.load
-hook.load = lambda name, path: (SimpleNamespace(capture=lambda p, *a, **kw: p) if name == "richos_app_evidence"
-                                else work if name == "richos_desktop_work" else real_load(name, path))
-hook.scope = lambda: {"actions_allowed": True}
-hook.run = lambda *a, **kw: None
-payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "worker"}
-
-
-def call(out):
-    real, sys.stdout = sys.stdout, out
-    try:
-        hook.handle(payload)
-        return out.getvalue()
-    except BrokenPipeError:
-        return "broken pipe"
-    finally:
-        sys.stdout = real
-
-
-delivered = Path(paths["delivered"]) / "rv-pending"
-got = {"the hook's output failed": call(ClosedPipe()) == "broken pipe",
-       "recorded delivered after the failure": delivered.exists()}
-held = os.open(os.path.join(paths["watch"], "delivered.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
-fcntl.flock(held, fcntl.LOCK_EX)
-got["a call while another tells it says nothing"] = "Planted defect" not in call(io.StringIO())
-os.close(held)
-got["the next hook tells it"] = "Planted defect" in call(io.StringIO())
-got["recorded delivered once told"] = delivered.exists()
-got["the hook after that tells it again"] = "Planted defect" in call(io.StringIO())
-print("    %s" % json.dumps(got, sort_keys=True))
-sys.exit(0 if got == {"the hook's output failed": True, "recorded delivered after the failure": False,
-                      "a call while another tells it says nothing": True, "the next hook tells it": True,
-                      "recorded delivered once told": True, "the hook after that tells it again": False} else 1)
-PY
-check "W28 a mid-job verdict is recorded delivered only once the worker hook's answer is written and flushed" $? "see above"
-
-# --- W28b --------------------------------------------------------------------
-# The second review of 0b0bbed37 (fixtures/mid_job_partial_delivery.py): two notices were written and
-# flushed, then creating the second delivered marker failed (disk full), which exited the hook 2 and
-# discarded the output while the first verdict stayed marked. Once the output is written, a
-# bookkeeping error must not fail the hook: exit 0, mark what can be marked, leave the rest pending.
-python3 - "$ENGINE" "$SB/w28b" <<'PY2'
-import contextlib, errno, importlib.util, io, json, os, sys
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
-engine, td = Path(sys.argv[1]), sys.argv[2]
-os.makedirs(td)
-spec = importlib.util.spec_from_file_location("w28b_hook", engine / "scripts/app-engine-hook.py")
-hook = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(hook)
-review = hook.load("w28b_review", engine / "scripts/lib/app_review.py")
-paths = review.app_paths(td)
-record = Path(td) / "verdict"
-record.mkdir()
-(record / "verdict.json").write_text(json.dumps({"answer": {"summary": "Fix this defect"}}))
-Path(paths["ledger"]).parent.mkdir(parents=True)
-Path(paths["ledger"]).write_text("".join(json.dumps({"id": rid, "repo": td, "branch": "cc/worker",
-    "trigger": "long-job", "verdict": "changes-requested", "tip": t * 40, "record": str(record)}) + "\n"
-    for rid, t in (("rv-first", "a"), ("rv-second", "b"))))
-work = SimpleNamespace(validate_shell_target=lambda p: None, worker_context=lambda a, p: None,
-                       worker_spaces=lambda a, p: [(td, "cc/worker")])
-def load(name, path):
-    if name == "richos_app_evidence":
-        return SimpleNamespace(capture=lambda p, *a, **kw: p)
-    if name == "richos_desktop_work":
-        return work
-    if name == "richos_app_review":
-        return review
-    raise AssertionError(name)
-payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "worker"}
-real_open = os.open
-def full_on_second(path, *a, **kw):
-    if str(path) == str(Path(paths["delivered"]) / "rv-second"):
-        raise OSError(errno.ENOSPC, "No space left on device")
-    return real_open(path, *a, **kw)
-def call():
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        try:
-            hook.handle(payload)
-            return 0, out.getvalue()
-        except Exception:
-            return 2, out.getvalue()
-with patch.dict(os.environ, {"RICHOS_APP_STATE": td, "RICHOS_ENTITY_ROOT": td}), \
-        patch.object(hook, "load", load), patch.object(hook, "scope", lambda: {"actions_allowed": True}), \
-        patch.object(hook, "run", lambda *a, **kw: None):
-    with patch.object(os, "open", full_on_second):
-        code, text = call()
-    d = Path(paths["delivered"])
-    first_marked, second_marked = (d / "rv-first").exists(), (d / "rv-second").exists()
-    retry_code, retry = call()
-got = {"first hook exit": code, "both told": "aaaaaaaaaaaa" in text and "bbbbbbbbbbbb" in text,
-       "first marked": first_marked, "second marked": second_marked,
-       "retry exit": retry_code, "retry tells only the second": "bbbbbbbbbbbb" in retry and "aaaaaaaaaaaa" not in retry}
-print("    %s" % json.dumps(got, sort_keys=True))
-sys.exit(0 if got == {"first hook exit": 0, "both told": True, "first marked": True, "second marked": False,
-                      "retry exit": 0, "retry tells only the second": True} else 1)
-PY2
-check "W28b a failure marking a verdict delivered after the notices are written never fails the hook; the unmarked one stays pending" $? "see above"
-
-# --- W28c --------------------------------------------------------------------
-# The second review of 5a8857234: the marker failure plus a really broken stderr pipe, in a real
-# process (the interpreter's shutdown flush is what exited 120). Setup as W28b: two notices were written and
-# flushed, then creating the second delivered marker failed (disk full), which exited the hook 2 and
-# discarded the output while the first verdict stayed marked. Once the output is written, a
-# bookkeeping error must not fail the hook: exit 0, mark what can be marked, leave the rest pending.
-mkdir -p "$SB/w28c-bin"
-cat > "$SB/w28c-bin/w28c.py" <<'PY2'
-import contextlib, subprocess, errno, importlib.util, io, json, os, sys
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
-engine, td = Path(sys.argv[1]), sys.argv[2]
-child = len(sys.argv) > 3
-os.makedirs(td, exist_ok=True)
-spec = importlib.util.spec_from_file_location("w28c_hook", engine / "scripts/app-engine-hook.py")
-hook = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(hook)
-review = hook.load("w28c_review", engine / "scripts/lib/app_review.py")
-paths = review.app_paths(td)
-record = Path(td) / "verdict"
-if not child:
-  record.mkdir()
-  (record / "verdict.json").write_text(json.dumps({"answer": {"summary": "Fix this defect"}}))
-  Path(paths["ledger"]).parent.mkdir(parents=True)
-  Path(paths["ledger"]).write_text("".join(json.dumps({"id": rid, "repo": td, "branch": "cc/worker",
-    "trigger": "long-job", "verdict": "changes-requested", "tip": t * 40, "record": str(record)}) + "\n"
-    for rid, t in (("rv-first", "a"), ("rv-second", "b"))))
-work = SimpleNamespace(validate_shell_target=lambda p: None, worker_context=lambda a, p: None,
-                       worker_spaces=lambda a, p: [(td, "cc/worker")])
-def load(name, path):
-    if name == "richos_app_evidence":
-        return SimpleNamespace(capture=lambda p, *a, **kw: p)
-    if name == "richos_desktop_work":
-        return work
-    if name == "richos_app_review":
-        return review
-    raise AssertionError(name)
-payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "worker"}
-real_open = os.open
-def full_on_second(path, *a, **kw):
-    if str(path) == str(Path(paths["delivered"]) / "rv-second"):
-        raise OSError(errno.ENOSPC, "No space left on device")
-    return real_open(path, *a, **kw)
-def call():
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        try:
-            hook.handle(payload)
-            return 0, out.getvalue()
-        except Exception:
-            return 2, out.getvalue()
-with patch.dict(os.environ, {"RICHOS_APP_STATE": td, "RICHOS_ENTITY_ROOT": td}), \
-        patch.object(hook, "load", load), patch.object(hook, "scope", lambda: {"actions_allowed": True}), \
-        patch.object(hook, "run", lambda *a, **kw: None):
-    if child:
-        with patch.object(os, "open", full_on_second):
-            hook.handle(payload)
-        sys.exit(0)    # a normal interpreter exit: stderr is flushed at shutdown
-    r, w = os.pipe()
-    os.close(r)    # a really broken stderr: every write gets EPIPE
-    proc = subprocess.run([sys.executable, __file__, str(engine), td, "child"], stdout=subprocess.PIPE,
-                          stderr=w, text=True, env=dict(os.environ))
-    os.close(w)
-    code, text = proc.returncode, proc.stdout
-    d = Path(paths["delivered"])
-    first_marked, second_marked = (d / "rv-first").exists(), (d / "rv-second").exists()
-    retry_code, retry = call()
-got = {"first hook exit": code, "both told": "aaaaaaaaaaaa" in text and "bbbbbbbbbbbb" in text,
-       "first marked": first_marked, "second marked": second_marked,
-       "retry exit": retry_code, "retry tells only the second": "bbbbbbbbbbbb" in retry and "aaaaaaaaaaaa" not in retry}
-print("    %s" % json.dumps(got, sort_keys=True))
-sys.exit(0 if got == {"first hook exit": 0, "both told": True, "first marked": True, "second marked": False,
-                      "retry exit": 0, "retry tells only the second": True} else 1)
-PY2
-python3 "$SB/w28c-bin/w28c.py" "$ENGINE" "$SB/w28c"
-check "W28c a marker failure with a closed stderr never fails the hook" $? "see above"
 
 # --- W29 ---------------------------------------------------------------------
 # The real second review of 283b4379d, finding 1 (fixtures/orphan_platform_same_session.py): once

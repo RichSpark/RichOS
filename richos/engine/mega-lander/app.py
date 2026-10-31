@@ -1886,26 +1886,6 @@ def worker_context(scope, payload):
             "Shell actions still follow the native permission decision; this context is not a general shell sandbox or publication grant.")
 
 
-def worker_spaces(scope, payload):
-    """[(repository, branch)] of the implementation WORKER this tool call comes from, read off its
-    receipt and its canonical record; [] for a reviewer, a consult, the lead, or an agent that has
-    not joined a receipt. What the app's hook needs to tell a worker, once, a mid-job review's
-    request for changes on its own branch (second review, slice 4; scripts/lib/app_review.py).
-    Read only, without the conversation lock: receipts are replaced whole, never edited."""
-    aid = payload.get("agent_id")
-    if not aid:
-        return []
-    for _path, record in receipts(folder(scope)):
-        refresh(record)
-        if (record.get("agent_id") == aid and record["binding"]["session_id"] == payload.get("session_id")
-                and record["request"]["role"] == "worker"):
-            try:
-                return [(repo, w.get("branch")) for repo, w in target_workspaces(record).items() if w.get("branch")]
-            except ValueError:
-                return []
-    return []
-
-
 def review_report(record, message, aid, source, tool_use_id=None):
     """Parse a report actually delivered by the observed reviewer, never a lead claim."""
     if not isinstance(message, str): message = ""

@@ -106,37 +106,36 @@ def a_worker_this_lease_already_dispatched(active, payload):
 
 
 def mid_job_notice(work, active, payload, root, emit):
-    """A mid-job second review's request for changes, told ONCE to the running worker it is about,
-    at its next tool call (second review, slice 4; plan §2.5; Sage's check, catch 7: the app's
-    workers run this hook and not the engine's hook set, so this is where delivery lives). The
-    reviews are started by the app's own review-watch, the host's child; the verdicts are in the
-    app's ledger (scripts/lib/app_review.py). The notice goes to emit(text), which writes and
-    flushes the hook's answer; True when it did. Only a worker's tool call is answered; nothing
-    here can refuse a tool call, and a reading that fails says nothing rather than stopping the
-    work. An output that fails raises, as any hook output does, and the verdict stays undelivered
-    for the next tool call (the second review of 283b4379d, finding 2)."""
+    """A second review's verdict on a running worker's work, told ONCE to that worker at its next
+    tool call, by THE TERMINAL'S OWN DELIVERY: scripts/hooks/deliver-review-verdict.sh, whose body
+    is scripts/lib/review_delivery.py (CEO §154, 2026-10-31: the app does every job the terminal
+    already does with the terminal's own code). The app's workers run this hook and not the
+    engine's hook set (Sage's check, catch 7), so the script is run from here, unchanged, with the
+    app's own folders: its ledger (SECOND_REVIEW_STATE_DIR, set by handle), the review watch's
+    delivery markers (REVIEW_WATCH_STATE_DIR) and this conversation's registry
+    (RICHOS_WORKSPACES_DIR, already the lease's). The reviews are started by the app's own
+    review-watch, the host's child (scripts/lib/app_review.py names the folders). What the
+    script answers goes to emit(text), which writes and flushes the hook's one answer; True when
+    it did. Only a worker's tool call is answered, nothing here can refuse a tool call, and a
+    delivery that fails says so on stderr rather than stopping the work. `work` and `active` are
+    unused: the terminal's delivery finds the worker by its registered record, never by branch."""
     if not payload.get("agent_id"):
         return False
-    called = []
-
-    def write(text):
-        called.append(True)
-        emit(text)
-
+    paths = load("richos_app_review", ENGINE / "scripts/lib/app_review.py").app_paths(root)
+    env = dict(os.environ, SECOND_REVIEW_STATE_DIR=paths["reviews"], REVIEW_WATCH_STATE_DIR=paths["watch"])
     try:
-        review = load("richos_app_review", ENGINE / "scripts/lib/app_review.py")
-        # No review has ever been written: nothing to tell, and no receipt is read for it.
-        if not os.path.isfile(review.app_paths(root)["ledger"]):
-            return False
-        spaces = work.worker_spaces(active, payload)
-        if not spaces:
-            return False
-        return review.mid_job_notice(root, spaces, write)
-    except Exception as error:  # noqa: BLE001 -- a verdict that cannot be read never blocks the work
-        if called:
-            raise
-        print(f"RichOS desktop engine: a mid-job review could not be read: {error}", file=sys.stderr)
+        done = subprocess.run(["/bin/bash", str(ENGINE / "scripts/hooks/deliver-review-verdict.sh")],
+                              input=json.dumps(payload), text=True, capture_output=True, timeout=10, env=env)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"RichOS desktop engine: a review verdict could not be read: {error}", file=sys.stderr)
         return False
+    if done.stderr:
+        sys.stderr.write(done.stderr)
+    texts = lead_contexts(done.stdout)
+    if not texts:
+        return False
+    emit("\n\n".join(texts))
+    return True
 
 
 def held_work_context(work, root, payload):
