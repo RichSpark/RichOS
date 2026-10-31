@@ -187,6 +187,14 @@ with open(os.path.join(d, "call.json"), "w") as f:
     json.dump({"argv": argv, "cwd": os.getcwd(), "pid": os.getpid(), "kind": kind, "tree_a": tree_a,
                "jobs": [os.environ.get(k, "") for k in ("CARGO_BUILD_JOBS", "MAKEFLAGS", "CMAKE_BUILD_PARALLEL_LEVEL")],
                "config": os.environ.get("CLAUDE_CONFIG_DIR", ""), "account": os.environ.get("RICHOS_CLAUDE_ACCOUNT", "")}, f)
+# A limit reached while this review runs (C31): a published reading copied over the app's.
+during = os.path.join(log, "..", "publish-during.json")
+if os.path.isfile(during):
+    with open(during) as f:
+        step = json.load(f)
+    with open(step["from"]) as src, open(step["to"], "w") as dst:
+        dst.write(src.read())
+    os.remove(during)
 mode = os.environ.get("FAKE_MODE", "pass")
 if mode == "sleep":
     time.sleep(600)
@@ -698,25 +706,30 @@ assert not quota_sources, "not review-watch's environment: %s" % quota_sources
 env.update(seams)
 
 now = int(time.time())
-def publish(in_use, label, five, other, other_five):
-    windows = lambda used, reset: [{"id": "five_hour", "label": "Five-hour", "usedPercent": used,
+def publish(in_use, label, five, other, other_five, model=None, to=None):
+    # `model`: the account in use's Fable week, in percent (a model's own week, quota.rs is_weekly).
+    fable = lambda: [] if model is None else [{"id": "model:Fable", "label": "Weekly · Fable", "usedPercent": model,
+                                                "resetsAt": (now + 200000) * 1000, "durationMs": 604800000}]
+    windows = lambda used, reset, mine=False: [{"id": "five_hour", "label": "Five-hour", "usedPercent": used,
                                     "resetsAt": reset * 1000, "durationMs": 18000000},
                                    {"id": "seven_day", "label": "Weekly", "usedPercent": 20,
-                                    "resetsAt": (now + 300000) * 1000, "durationMs": 604800000}]
-    held = five >= 93
-    view = {"state": "fresh", "windows": windows(five, now + 4740), "checkedAt": (now - 30) * 1000,
+                                    "resetsAt": (now + 300000) * 1000, "durationMs": 604800000}] + (fable() if mine else [])
+    held = five >= 93 or (model or 0) >= 99
+    view = {"state": "fresh", "windows": windows(five, now + 4740, True), "checkedAt": (now - 30) * 1000,
             "retryAt": None, "nextCheckAt": None, "refreshIntervalMs": 300000, "message": None,
             "policy": {"enabled": True, "pausePercent": 93},
             "admission": {"state": "held", "resetsAt": (now + 4740) * 1000} if held else {"state": "ready"},
             "inUse": {"id": in_use, "label": label}, "heldUntil": None,
             # Each row with its own check time, as the app publishes them: the gate judges a call
             # on its own account's row (gate::decide), and so does the review.
-            "accounts": [{"id": in_use, "label": label, "inUse": True, "windows": windows(five, now + 4740),
+            "accounts": [{"id": in_use, "label": label, "inUse": True, "windows": windows(five, now + 4740, True),
                           "checkedAt": (now - 30) * 1000},
                          {"id": other[0], "label": other[1], "inUse": False, "windows": windows(other_five, now + 900),
                           "checkedAt": (now - 30) * 1000}]}
-    with open(os.path.join(app, "engine-state", "claude-quota.json"), "w") as f:
+    with open(to or os.path.join(app, "engine-state", "claude-quota.json"), "w") as f:
         json.dump(view, f)
+    if to:
+        return
     with open(os.path.join(app, "claude-quota-policy.json"), "w") as f:
         json.dump({"enabled": True, "pausePercent": 93}, f)
     with open(os.path.join(app, "claude-accounts.json"), "w") as f:
@@ -755,9 +768,19 @@ print(json.dumps({"reviewers": [(c["kind"], c["account"]) for c in calls], "tip"
 '''
 got = {}
 os.makedirs(rwstate)
+quota_file = os.path.join(app, "engine-state", "claude-quota.json")
 for case, args in (("work held", ("2", "Work", 99, ("1", "Home"), 10)),
-                   ("home in use, work at 99", ("1", "Home", 10, ("2", "Work"), 99))):
+                   ("home in use, work at 99", ("1", "Home", 10, ("2", "Work"), 99)),
+                   # The CEO, 2026-10-31: "You just have to avoid starting new automatic reviews. And
+                   # the already running automatic reviews can finish."
+                   ("fable week at its limit", ("2", "Work", 10, ("1", "Home"), 10, 99)),
+                   ("fable limit reached during the review", ("2", "Work", 10, ("1", "Home"), 10, 20))):
     publish(*args)
+    if case == "fable limit reached during the review":
+        held_file = os.path.join(os.path.dirname(app), "quota-fable-held.json")
+        publish(*args[:5], model=99, to=held_file)
+        with open(os.path.join(env["FAKE_LOG"], "..", "publish-during.json"), "w") as f:
+            json.dump({"from": held_file, "to": quota_file}, f)
     p = subprocess.run([os.path.join(runtime, "python3"), "-c", drive, scripts, repo, base, words,
                         os.path.join(app, "claude-accounts.json"), reviewer, rwstate, case],
                        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=rwstate)
@@ -778,10 +801,20 @@ if room.get("reviewers") != [["claude", "1"]] or room.get("verdict") != "passed"
     bad.append("Home in use with room: the review did not run on Home: %s" % room)
 if "Home (account 1)" not in (room.get("quota") or ""):
     bad.append("the review on Home does not name Home's reading: %s" % room)
+# A model's own week at its limit: no NEW review starts (quota.rs is_weekly; quota_watch.py).
+fable, during = got["fable week at its limit"], got["fable limit reached during the review"]
+if fable.get("reviewers") != [] or fable.get("quota_held") is not True:
+    bad.append("Work's Fable week at 99%%: a new review started: %s" % fable)
+# One already running is never held by it and finishes (the limit landed while it ran).
+fable_now = [w for w in json.load(open(quota_file))["windows"] if w["id"] == "model:Fable"]
+if not fable_now or fable_now[0]["usedPercent"] != 99:
+    bad.append("the Fable limit was not published while the review ran: %s" % fable_now)
+if during.get("reviewers") != [["claude", "2"]] or during.get("verdict") != "passed" or during.get("quota_held"):
+    bad.append("the Fable limit reached during a running review stopped it: %s" % during)
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
 PY
-check "C31 an app review in review-watch's own environment takes the gate's hold: Work published held, no Claude review starts; Home in use with room, it runs on Home" \
+check "C31 an app review in review-watch's own environment takes the gate's hold: Work published held, no Claude review starts; Home in use with room, it runs on Home; Work's Fable week at its limit, no new review starts; the limit reached during a running review, it finishes" \
     $? "$(cat "$SB/c31.out")"
 
 # --- C16 ---------------------------------------------------------------------

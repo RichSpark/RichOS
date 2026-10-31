@@ -264,7 +264,8 @@ pub enum Gone {
 }
 
 /// **Must this account be left (or, with no account left, held), and until when?**
-/// - weekly at its handoff point (`Reading::weekly_point`, weekly-switch plan §1): 99% at
+/// - a weekly window, its own week or one model's (`quota::is_weekly`), at its handoff point
+///   (`Reading::weekly_point`, weekly-switch plan §1): 99% at
 ///   normal speed, 98% or 97% when the wait for the next check and a teammate's handoff
 ///   would use more than 1 or 2 points at the measured speed;
 /// - with the setting on Switch AND the automatic switch on (`pause` is `Some(threshold)`),
@@ -279,13 +280,17 @@ pub fn gone(reading: &Reading, at_threshold: AtThreshold, pause: Option<u8>, lim
     if let Some(until) = limited_until.filter(|t| *t > now) {
         return Some((Gone::Limit, until));
     }
-    if let Some(weekly) = reading.windows.iter().find(|w| w.id == "seven_day"
-        && reading.reaches_weekly(w)) {
-        match weekly.resets_at {
-            Some(t) if t > now => return Some((Gone::Weekly(weekly.used_percent), t)),
-            Some(_) => {}
-            None => return Some((Gone::Weekly(weekly.used_percent), now + crate::quota::REFRESH_INTERVAL_MS)),
-        }
+    // Its own week or one model's (`quota::is_weekly`); with several at their point, the one
+    // that comes back last, since the account is fresh only when all of them are.
+    let weekly = reading.windows.iter().filter(|w| crate::quota::is_weekly(&w.id) && reading.reaches_weekly(w))
+        .filter_map(|w| match w.resets_at {
+            Some(t) if t > now => Some((w.used_percent, t)),
+            Some(_) => None,
+            None => Some((w.used_percent, now + crate::quota::REFRESH_INTERVAL_MS)),
+        })
+        .max_by_key(|(_, until)| *until);
+    if let Some((used, until)) = weekly {
+        return Some((Gone::Weekly(used), until));
     }
     if let (AtThreshold::Switch, Some(pause_percent)) = (at_threshold, pause) {
         if let Some(five) = reading.windows.iter().find(|w| w.id == "five_hour"
@@ -783,16 +788,16 @@ impl Accounts {
         let limit = |id: &str| limited.get(id).copied();
         let empty = Reading::default();
         let mine = readings.get(&current).unwrap_or(&empty);
-        let Some((why, _)) = gone(mine, at, pause, limit(&current), now) else { return Ok(false) };
+        let Some((why, until)) = gone(mine, at, pause, limit(&current), now) else { return Ok(false) };
         let next = next_account(state.accounts.iter().filter(|a| a.id != current)
             .filter_map(|a| readings.get(&a.id).map(|r| (a.id.as_str(), r)))
             .filter(|(id, r)| gone(r, at, pause, limit(id), now).is_none()));
         let Some(next) = next.map(str::to_string) else { return Ok(false) };
-        // When the account being left is fresh again: the reset of the window that made it go.
-        let window = match why { Gone::Weekly(_) => Some("seven_day"), Gone::FiveHour(_) => Some("five_hour"), Gone::Limit => None };
+        // When the account being left is fresh again: the reset of the window that made it go
+        // (`gone` returns that reset; a weekly window with no reset time has none to say).
         let fresh_at = match why {
             Gone::Limit => limit(&current),
-            _ => mine.windows.iter().find(|w| Some(w.id.as_str()) == window).and_then(|w| w.resets_at),
+            _ => mine.windows.iter().filter_map(|w| w.resets_at).find(|t| *t == until),
         };
         self.switch_to(&mut state, &next, why, fresh_at, now)?;
         Ok(true)
@@ -993,6 +998,37 @@ pub(crate) mod tests {
         assert_eq!(accounts.take_notice().as_deref(), Some("I switched the team to **Account 1**. Work had used 99% of its weekly limit, and it is fresh again in 2 d.\n\nNothing stopped. The team carried on right where it was."));
         assert!(accounts.use_first("9").is_err(), "an account that is not on this Mac cannot be picked");
         assert_eq!(accounts.in_use().id, "1");
+    }
+
+    /// **A model's own week decides like the account's week** (follow-ups of 2026-10-29:
+    /// "`model:Fable` never decides `leaving`"; the 2026-10-04 plan counts a model window used up
+    /// as the account's). Account 1's week reads 40% but its Fable week 99%, fresh again in 2
+    /// days: it is gone until that reset, and the switch moves to Work, saying when Account 1 is
+    /// fresh again. Below its point (98%), or with its reset already passed, nothing moves. On
+    /// main only `seven_day` was read, so Account 1 stayed in use until Fable's usage limit
+    /// refused it.
+    #[test]
+    fn a_models_own_week_at_its_point_leaves_the_account() {
+        let fable = |used: f64, reset: u64| {
+            let mut r = reading(10., HOUR, 40., 72 * HOUR);
+            r.windows.push(Window { id: "model:Fable".into(), label: "Weekly · Fable".into(), used_percent: used,
+                resets_at: Some(reset), duration_ms: 168 * HOUR });
+            r
+        };
+        let fresh_in_two_days = NOW + 48 * HOUR;
+        assert_eq!(gone(&fable(99., fresh_in_two_days), AtThreshold::Pause, Some(93), None, NOW),
+            Some((Gone::Weekly(99.), fresh_in_two_days)));
+        assert!(fable(99., fresh_in_two_days).leaving(NOW), "`leaving` and the switch read the same windows");
+        assert_eq!(gone(&fable(98., fresh_in_two_days), AtThreshold::Pause, Some(93), None, NOW), None, "under its point");
+        assert_eq!(gone(&fable(99., NOW - 1), AtThreshold::Pause, Some(93), None, NOW), None, "its reset has passed: a fresh week");
+        assert!(!fable(99., NOW - 1).leaving(NOW));
+
+        let (_dir, accounts) = two_accounts();
+        assert!(accounts.evaluate(&readings(fable(99., fresh_in_two_days), reading(5., HOUR, 20., 72 * HOUR)), Some(93), NOW).unwrap());
+        assert_eq!(accounts.in_use().id, "2");
+        replied(&accounts, "2");
+        assert!(accounts.take_notice().is_some_and(|line| line.contains("fresh again in 2 d")),
+            "fresh again at the Fable week's reset");
     }
 
     /// **Round 16: the one switch is the subject of the sentence.** Switch chosen, Account 1's

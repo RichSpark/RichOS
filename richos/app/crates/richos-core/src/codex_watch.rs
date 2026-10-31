@@ -14,9 +14,11 @@
 //! * **The watcher** is `codex_watch.py --monitor --host-json`, the app's own child from launch
 //!   to quit, given the channels' `to-rich.md` files and its own state folder under the app's
 //!   data ([`state_dir`]): an app's first start replays no backlog, and a later one tells what
-//!   was written while it was closed. Each entry comes back as one JSON line, and its text goes
-//!   to the sink the shell gives ([`Launch::sink`]), which saves it for Rich in the
-//!   conversation on screen ([`deliver`]); the shell's peer-input watch hands it to him there
+//!   was written while it was closed. Each entry comes back as one JSON line, is kept on disk at
+//!   once ([`pending_path`]: the watcher has marked it told), and goes to the sink the shell
+//!   gives ([`Launch::sink`]), which saves it for Rich in the conversation on screen
+//!   ([`deliver`]); only then is it removed from the pending entries. With no conversation open
+//!   it waits there, through a quit, until one is. The shell's peer-input watch hands it to him
 //!   as it hands him Stu's messages.
 //! * **Rich and Stu can answer**: each channel folder that exists is one of their sessions'
 //!   folders (`engine_profile.rs` `configure`), so either can write its `to-codex.md`.
@@ -97,9 +99,97 @@ pub fn deliver(state: &Path, binding: &crate::entity::ThreadBinding, text: &str)
     crate::session_tools::observe_codex(&scope, text)
 }
 
-/// Where each entry's text goes, called on the child's reader thread, one entry at a time. It
-/// returns once the entry is saved for Rich (or the app is quitting): the next waits for it.
-pub type Sink = Arc<dyn Fn(String) + Send + Sync>;
+/// **One attempt to save an entry for Rich**: `Ok` once it is saved, `Err` with the reason it
+/// cannot be yet (no conversation open). Called on the delivery thread, oldest entry first; an
+/// entry that cannot be saved is tried again every [`RETRY`], and the entries after it wait
+/// behind it ([`pending_path`]).
+pub type Sink = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+/// How long an entry that could not be saved waits before the next attempt.
+pub const RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// **The entries read from the watcher and not yet saved for Rich**, one JSON string per line,
+/// oldest first (follow-ups of 2026-10-28: "a waiting Codex entry is lost if the app quits
+/// before any conversation opens"). The watcher marks an entry told as it hands it over
+/// (`codex_watch.py` `tick`), so the app keeps it on disk the moment it reads it, and removes it
+/// only once it is saved in Rich's inbox. Before, an entry waiting for a conversation was held
+/// on the reader thread, the entries after it waited unread in the pipe, and a quit lost all of
+/// them. A later launch delivers what is left here first.
+pub fn pending_path(state: &Path) -> PathBuf {
+    state_dir(state).join("pending.jsonl")
+}
+
+/// The reader appends and the delivery thread removes; one at a time.
+static PENDING: Mutex<()> = Mutex::new(());
+
+/// Keep `text` at the end of the pending entries, on disk before this returns.
+fn keep(path: &Path, text: &str) -> io::Result<()> {
+    use std::io::Write;
+    let _one = PENDING.lock().unwrap();
+    let mut line = serde_json::to_string(text).map_err(io::Error::other)?;
+    line.push('\n');
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    file.write_all(line.as_bytes())?;
+    file.sync_all()
+}
+
+/// The oldest pending entry: `None` when there is none, `Some(Err)` for a line that cannot be
+/// read as one (it is dropped, said in the log).
+fn oldest(path: &Path) -> Option<Result<String, String>> {
+    let _one = PENDING.lock().unwrap();
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().next().filter(|line| !line.is_empty())?;
+    Some(serde_json::from_str::<String>(line).map_err(|e| e.to_string()))
+}
+
+/// Remove the oldest pending entry (it was saved for Rich), on disk before this returns.
+fn drop_oldest(path: &Path) -> io::Result<()> {
+    let _one = PENDING.lock().unwrap();
+    let text = std::fs::read_to_string(path)?;
+    let rest = text.split_once('\n').map_or("", |(_, rest)| rest);
+    let temporary = path.with_extension("jsonl.tmp");
+    std::fs::write(&temporary, rest)?;
+    std::fs::File::open(&temporary)?.sync_all()?;
+    std::fs::rename(&temporary, path)
+}
+
+/// **The delivery thread**: the oldest pending entry to the sink until it is saved, then the
+/// next; when one cannot be saved yet, again after [`RETRY`] or as soon as a new entry is kept.
+/// Ends when its watcher is stopped (`stop`), leaving what is not saved on disk.
+fn deliver_pending(path: PathBuf, sink: Sink, wake: std::sync::mpsc::Receiver<()>, stop: Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::Ordering;
+    let mut said = false;
+    while !stop.load(Ordering::SeqCst) {
+        match oldest(&path) {
+            Some(Ok(text)) => match sink(&text) {
+                Ok(()) => {
+                    said = false;
+                    if let Err(e) = drop_oldest(&path) {
+                        // Saved, but still pending: going on would save it again and again.
+                        eprintln!("[richos] Codex watch: a saved entry could not be removed from {} ({e}); \
+                                   delivery stops until the next launch", path.display());
+                        return;
+                    }
+                    continue;
+                }
+                Err(e) if !said => {
+                    eprintln!("[richos] Codex watch: an entry waits for Rich ({e})");
+                    said = true;
+                }
+                Err(_) => {}
+            },
+            Some(Err(e)) => {
+                eprintln!("[richos] Codex watch: a pending entry could not be read and is dropped ({e})");
+                if drop_oldest(&path).is_err() { return; }
+                continue;
+            }
+            None => {}
+        }
+        if let Err(std::sync::mpsc::RecvTimeoutError::Disconnected) = wake.recv_timeout(RETRY) {
+            return;
+        }
+    }
+}
 
 /// Everything the child needs. `state` is `<app data>/engine-state`.
 #[derive(Clone)]
@@ -133,7 +223,10 @@ struct CodexWatch {
     pid: u32,
     record: PathBuf,
     channels: Vec<PathBuf>,
-    _reader: JoinHandle<()>,
+    reader: Mutex<Option<JoinHandle<()>>>,
+    delivery: Mutex<Option<JoinHandle<()>>>,
+    wake: std::sync::mpsc::Sender<()>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl CodexWatch {
@@ -161,7 +254,18 @@ impl CodexWatch {
         // Fenced before anything else can fail, so an error below still ends it.
         let owned = OwnedChild::supervised_in(child, STOP_BOUND, &WATCHERS);
         let output = output.ok_or_else(|| io::Error::other("the watcher's output could not be read"))?;
-        let sink = Arc::clone(&launch.sink);
+        // What an earlier launch left unsaved goes first, then each entry as it is kept.
+        let pending = pending_path(&launch.state);
+        let (wake, woken) = std::sync::mpsc::channel::<()>();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let delivery = {
+            let (pending, sink, stop) = (pending.clone(), Arc::clone(&launch.sink), Arc::clone(&stop));
+            std::thread::Builder::new().name("richos-codex-deliver".into())
+                .spawn(move || deliver_pending(pending, sink, woken, stop))?
+        };
+        let told = wake.clone();
+        // Reads every line as it comes and keeps it on disk at once, never waiting for it to be
+        // saved for Rich: an entry left in the pipe is lost at a quit.
         let reader = std::thread::Builder::new().name("richos-codex-watch".into()).spawn(move || {
             for line in BufReader::new(output).lines() {
                 let text = line.map_err(|e| e.to_string()).and_then(|line| {
@@ -169,7 +273,11 @@ impl CodexWatch {
                     value["text"].as_str().map(str::to_owned).ok_or_else(|| "a line with no text".to_string())
                 });
                 match text {
-                    Ok(text) => sink(text),
+                    Ok(text) => match keep(&pending, &text) {
+                        Ok(()) => { let _woken = told.send(()); }
+                        Err(e) => eprintln!("[richos] Codex watch: an entry could not be kept in {} and is lost ({e}): {}",
+                            pending.display(), text.lines().nth(1).unwrap_or_default()),
+                    },
                     Err(e) => eprintln!("[richos] Codex watch: its output could not be read ({e})"),
                 }
             }
@@ -177,7 +285,8 @@ impl CodexWatch {
         let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         crate::review_watch::write_record(&launch.record_path(), &serde_json::json!({
             "pid": pid, "started_at": started, "channels": files}))?;
-        Ok(CodexWatch { child: Mutex::new(owned), pid, record: launch.record_path(), channels: launch.channels.clone(), _reader: reader })
+        Ok(CodexWatch { child: Mutex::new(owned), pid, record: launch.record_path(), channels: launch.channels.clone(),
+            reader: Mutex::new(Some(reader)), delivery: Mutex::new(Some(delivery)), wake, stop })
     }
 
     fn running(&self) -> bool {
@@ -185,10 +294,24 @@ impl CodexWatch {
     }
 
     /// SIGTERM, at most [`STOP_BOUND`], then the group SIGKILL; reaped either way, and the
-    /// record removed.
+    /// record removed. The reader keeps what was still in the pipe before it ends, and the
+    /// delivery thread ends after its current attempt, leaving what is not saved on disk.
     fn stop(&self) {
-        if let Err(e) = self.child.lock().unwrap().wait() {
-            eprintln!("[richos] Codex watch: watcher {} could not be reaped ({e})", self.pid);
+        let reaped = match self.child.lock().unwrap().wait() {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("[richos] Codex watch: watcher {} could not be reaped ({e})", self.pid);
+                false
+            }
+        };
+        // Its pipe is closed once it is gone; one not reaped may still hold it open.
+        if let Some(reader) = self.reader.lock().unwrap().take().filter(|_| reaped) {
+            drop(reader.join());
+        }
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _woken = self.wake.send(());
+        if let Some(delivery) = self.delivery.lock().unwrap().take() {
+            drop(delivery.join());
         }
         match std::fs::remove_file(&self.record) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => {
@@ -262,6 +385,100 @@ mod tests {
         root.canonicalize().unwrap()
     }
 
+    /// The process has one watcher ([`RUNNING`]): the tests that start it take turns.
+    static ONE_WATCHER: Mutex<()> = Mutex::new(());
+
+    /// Waits for `done`; `secs` only catches a hang, it is not the clock the test waits on.
+    fn until(secs: u64, done: impl Fn() -> bool) -> bool {
+        let began = std::time::Instant::now();
+        while !done() && began.elapsed() < Duration::from_secs(secs) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        done()
+    }
+
+    fn watcher_environment() -> std::collections::BTreeMap<String, String> {
+        // A look every half second here, so the test waits on the watcher, not its clock.
+        let mut environment = crate::review_watch::environment("/usr/bin:/bin:/usr/sbin:/sbin");
+        environment.insert("CODEX_WATCH_POLL_SECONDS".into(), "0.5".into());
+        environment
+    }
+
+    /// **Entries waiting for a conversation survive a quit** (follow-ups of 2026-10-28, second
+    /// review rv-20261028T095119Z-32768ffd-e1eb#1; STATUS-2026-10-31 row 11). No conversation is
+    /// open (first-run setup, company selection), so nothing can be saved for Rich. Codex writes
+    /// two entries and the watcher tells both, marking them told. The app quits. On main the first
+    /// waited in memory on the reader thread and the second unread in the pipe behind it; both
+    /// went with the quit, and the next launch's watcher had already told them. Now each is kept
+    /// on disk as it is read, and the next launch, with a conversation open, saves both for Rich,
+    /// in order and once each.
+    #[test]
+    fn entries_waiting_for_a_conversation_survive_a_quit_and_reach_rich_at_the_next_launch() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _one_watcher = ONE_WATCHER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = scratch("quit");
+        let (channel, state) = (root.join("channel"), root.join("engine-state"));
+        for dir in [&channel, &state] { std::fs::create_dir_all(dir).unwrap(); }
+        std::fs::write(channel.join(TO_RICH), "## 2026-10-28 07:00Z — OLD BACKLOG\nold-backlog-line\n\n").unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let tried = Arc::clone(&attempts);
+        let closed = Launch {
+            python: python(), engine: engine(), state: state.clone(), environment: watcher_environment(),
+            channels: vec![channel.clone()],
+            sink: Arc::new(move |_: &str| {
+                tried.fetch_add(1, Ordering::SeqCst);
+                Err("no conversation is open yet".to_string())
+            }),
+        };
+        let log = || std::fs::read_to_string(closed.log_path()).unwrap_or_default();
+        let pid = ensure(&closed).unwrap().expect("a watcher on one channel");
+        let looked = state_dir(&state).join("watch/app-host/offsets.json");
+        assert!(until(60, || looked.is_file()), "the watcher never looked: {}", log());
+
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(channel.join(TO_RICH)).unwrap().write_all(
+            "## 2026-10-28 09:00Z — FIRST ENTRY\nfirst-line\n## 2026-10-28 09:01Z — SECOND ENTRY\nsecond-line\n".as_bytes()).unwrap();
+        let end = std::fs::metadata(channel.join(TO_RICH)).unwrap().len();
+        let key = channel.join(TO_RICH).to_string_lossy().into_owned();
+        let offset = || std::fs::read(&looked).ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|offsets| offsets[&key]["offset"].as_u64());
+        assert!(until(60, || offset() == Some(end)), "the watcher never told the entries: {}", log());
+        let pending = pending_path(&state);
+        let kept = || std::fs::read_to_string(&pending).map_or(0, |text| text.lines().count());
+        assert!(until(30, || kept() == 2), "the two told entries are not kept on disk ({} kept)", kept());
+        assert!(until(30, || attempts.load(Ordering::SeqCst) > 0), "the first entry was never offered to Rich");
+
+        // The quit, with nothing saved for Rich.
+        assert_eq!(stop_all(), Some(pid));
+        assert!(!alive(pid), "the recorded pid {pid} is still running after quit");
+        assert_eq!(kept(), 2, "a quit keeps what was not saved");
+
+        // The next launch, with a conversation open.
+        let (told, heard) = mpsc::channel::<String>();
+        let told = Mutex::new(told);
+        let open = Launch {
+            sink: Arc::new(move |text: &str| {
+                told.lock().unwrap().send(text.to_string()).unwrap();
+                Ok(())
+            }),
+            ..closed.clone()
+        };
+        let pid = ensure(&open).unwrap().expect("a watcher on one channel");
+        let next = || heard.recv_timeout(Duration::from_secs(30)).unwrap_or_else(|_| panic!("an entry never reached Rich: {}", log()));
+        let (first, second) = (next(), next());
+        assert!(first.contains("## 2026-10-28 09:00Z — FIRST ENTRY") && first.contains("first-line") && !first.contains("SECOND"), "{first}");
+        assert!(second.contains("## 2026-10-28 09:01Z — SECOND ENTRY") && second.contains("second-line"), "{second}");
+        assert!(until(30, || kept() == 0), "saved entries are still pending ({} kept)", kept());
+        // Once each: a look finished after both were saved tells nothing more.
+        let recorded = std::time::SystemTime::now();
+        let later_look = || std::fs::metadata(&looked).and_then(|m| m.modified()).is_ok_and(|at| at > recorded);
+        assert!(until(60, later_look), "the watcher never looked again: {}", log());
+        assert!(heard.try_recv().is_err(), "an entry reached Rich twice");
+
+        assert_eq!(stop_all(), Some(pid));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// **The setting names the channels; unset, the conventional folders; set empty, none.**
     #[test]
     fn the_users_setting_names_the_channel_folders_with_the_conventional_ones_as_default() {
@@ -296,6 +513,7 @@ mod tests {
     /// watcher and removes its record.
     #[test]
     fn a_new_entry_in_the_users_codex_channel_reaches_rich_once_and_the_watcher_ends_at_quit() {
+        let _one_watcher = ONE_WATCHER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = scratch("child");
         let (user, channel, state) = (root.join("central"), root.join("my codex channel"), root.join("engine-state"));
         for dir in [&user, &channel, &state] { std::fs::create_dir_all(dir).unwrap(); }
@@ -319,9 +537,10 @@ mod tests {
                 environment
             },
             channels,
-            sink: Arc::new(move |text: String| {
-                deliver(&sink_state, &sink_binding, &text).unwrap();
-                told.lock().unwrap().send(text).unwrap();
+            sink: Arc::new(move |text: &str| {
+                deliver(&sink_state, &sink_binding, text).unwrap();
+                told.lock().unwrap().send(text.to_string()).unwrap();
+                Ok(())
             }),
         };
         let pid = ensure(&launch).unwrap().expect("a watcher on one channel");

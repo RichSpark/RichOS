@@ -17,6 +17,12 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65). The chan
 conventional folder in the GUEST's home (the setting is unset, as on a new install):
   identity   the running app says it was built from --expect-sha
   first-run  adopt-walk.py's: company "Acme" with a folder that is a Git repository
+  unopened   an entry written while NO conversation is open survives a quit (follow-ups of
+             2026-10-28, rv-20261028T095119Z-32768ffd-e1eb#1): the app relaunched with
+             RICHOS_ENTITY naming no registered company, so it opens on no conversation; an
+             entry is written and the watcher marks it told; the app is quit and opened again
+             as usual (Acme, its conversation open). PASS needs exactly one row from codex-watch
+             carrying it in THIS conversation's inbox for Rich
   channel    the channel's to-rich.md is written with one entry while the app runs: PASS needs
              exactly one row from codex-watch carrying it in THIS conversation's inbox for Rich
              (<app state>/messages/<company>/<conversation>/rich.jsonl)
@@ -54,7 +60,7 @@ stu_reminder_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(stu_reminder_walk)
 StepFailed = stu_reminder_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'channel', 'relaunch', 'append', 'answer', 'context']
+STEPS = ['identity', 'first-run', 'unopened', 'channel', 'relaunch', 'append', 'answer', 'context']
 # `context` measures one session, which `relaunch` ends, so it runs only when asked for.
 DEFAULT_STEPS = [s for s in STEPS if s != 'context']
 CHANNEL = '.richos-coordination/rich-codex'
@@ -137,6 +143,52 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
                 return [r for r in self.inbox() if mark in r['text']]
             time.sleep(3)
         return rows
+
+    def told_to_end(self):
+        """Has the watcher told the channel's to-rich.md up to its end (its own offsets record)?"""
+        script = ('import json,os,sys\n'
+                  'f=sys.argv[2]+"/to-rich.md"\n'
+                  'try: o=json.load(open(sys.argv[1]+"/engine-state/codex-watch/watch/app-host/offsets.json"))\n'
+                  'except Exception: o={}\n'
+                  'print(json.dumps({"offset":(o.get(f) or {}).get("offset"),"size":os.path.getsize(f) if os.path.exists(f) else None}))\n')
+        seen = json.loads(guest(self.vm, 'python3 -c %s %s %s' % (
+            shlex.quote(script), shlex.quote(self.data), shlex.quote(self.channel)), 60) or '{}')
+        return seen.get('size') is not None and seen.get('offset') == seen.get('size')
+
+    def unopened(self):
+        if not self.facts.get('thread'):
+            raise StepFailed('first-run must have run (no thread on record)')
+        from relaunch import relaunch
+        closed = relaunch(self.vm, environment={'RICHOS_ENTITY': 'no-such-company'})
+        end = time.monotonic() + self.a.relaunch_within
+        log = ''
+        while time.monotonic() < end and '[richos] Codex watch: watching' not in log:
+            log = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(closed['log']), 60)
+            time.sleep(2)
+        if 'RICHOS_ENTITY="no-such-company" is not a registered entity' not in log:
+            raise StepFailed('the relaunch did not open on no company; see its log %s' % closed['log'])
+        if '[richos] Codex watch: watching' not in log:
+            raise StepFailed('the watcher did not start within %g s of the relaunch' % self.a.relaunch_within)
+        mark, text = self.entry('unopened')
+        self.write(text, append=True)
+        end = time.monotonic() + self.a.within
+        while time.monotonic() < end and not self.told_to_end():
+            time.sleep(2)
+        if not self.told_to_end():
+            raise StepFailed('the watcher never told the entry within %g s' % self.a.within)
+        early = [r for r in self.inbox() if mark in r['text']]
+        opened = relaunch(self.vm)
+        settled = self.after_relaunch()
+        rows = self.told(mark, self.a.within)
+        evidence = {'mark': mark, 'closed_launch_log': closed['log'], 'rows_before_quit': early,
+                    'reopened': opened, 'settled': settled, 'rows': rows}
+        (self.out / 'unopened.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        if early:
+            raise StepFailed('the entry was saved while no conversation was open, so the quit proves nothing; see unopened.json')
+        if len(rows) != 1:
+            raise StepFailed('the entry written with no conversation open reached Rich\'s inbox %d time(s) after the relaunch, '
+                             'not once; see unopened.json' % len(rows))
+        return {'mark': mark, 'row': rows[0]}
 
     def channel_step(self):
         if not self.facts.get('thread'):

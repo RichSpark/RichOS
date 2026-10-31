@@ -172,13 +172,24 @@ impl Reading {
     pub fn reaches_weekly(&self, window: &Window) -> bool {
         window.used_percent >= self.weekly_point(window)
     }
-    /// **Is this account being left for its week?** (`View::leaving`.) Its weekly window has
-    /// reached its point, and that window has not reset since: a reset that has passed is a
-    /// fresh week, exactly as `claude_accounts::gone` reads it.
+    /// **Is this account being left for its week?** (`View::leaving`.) One of its weekly windows
+    /// ([`is_weekly`]: its own week or one model's) has reached its point, and that window has
+    /// not reset since: a reset that has passed is a fresh week, exactly as
+    /// `claude_accounts::gone` reads it.
     pub fn leaving(&self, now: u64) -> bool {
-        self.windows.iter().any(|w| w.id == "seven_day" && self.reaches_weekly(w)
+        self.windows.iter().any(|w| is_weekly(&w.id) && self.reaches_weekly(w)
             && w.resets_at.is_none_or(|t| t > now))
     }
+}
+/// **A weekly window**: the account's own week (`seven_day`) or one model's week
+/// (`model:<name>`, and the older `seven_day_opus` and `seven_day_sonnet`). A model's week at its
+/// point leaves the account as its own week does (richos-hq
+/// `docs/plans/2026-10-04-multi-subscription-fill-first.md`, "When an account counts as gone":
+/// the agents run on fixed models, so a model's week used up is the account's). Before, only
+/// `seven_day` decided `leaving`, the switch and the weekly hold, and a model's week ran to its
+/// usage-limit refusal (follow-ups of 2026-10-29, `model:Fable`).
+pub fn is_weekly(id: &str) -> bool {
+    id.starts_with("seven_day") || id.starts_with("model:")
 }
 /// **The 93% rule's window before a five-hour reset** (his §87/§108). Inside it a held team is
 /// released staggered, judged on the speed measured before the hold, and only while the account
@@ -626,6 +637,15 @@ struct Snapshot {
 pub const FIRST_READING_RETRY_MS: u64 = 30_000;
 pub const FIRST_READING_RETRY_MAX_MS: u64 = 120_000;
 
+/// **A check at a window's reset that still gets the old window back is asked again in
+/// seconds** (follow-ups of 2026-10-29; the CEO, after the 20:50Z reset: *"it took 5 fucking
+/// minutes for the refresh to show up."*). The check is already taken at `resets_at`; when
+/// Claude still answers with the window that just ended, the next one is 10 seconds later, not
+/// the full interval, for at most [`REFRESH_INTERVAL_MS`] after that reset: 300 000 / 10 000 =
+/// at most 30 extra checks per reset, after which a window that keeps its old reset time is
+/// asked on the normal schedule, as before.
+pub const RESET_RETRY_MS: u64 = 10_000;
+
 /// One window's reading as a speed base: used percent, its reset time, when it was first read
 /// (`at`) and last read (`last`) at that value, and whether its rise into that value was seen
 /// (`rose`: a lower reading came just before it).
@@ -887,7 +907,7 @@ impl Snapshot {
         } else if self.checked_at.is_none() {
             if answered_empty { Admission::NoReading } else { Admission::Unknown }
         } else if let Some(until) = reading.windows.iter() // moved forward while old (`reading_with`)
-            .filter(|w| w.id == "seven_day" && reading.reaches_weekly(w))
+            .filter(|w| is_weekly(&w.id) && reading.reaches_weekly(w))
             .filter_map(|w| w.resets_at.filter(|t| *t > now)).max() {
             // Weekly exhaustion never inherits the five-hour 20-minute exception.
             // An approval is not allowance: hold until a fresh post-reset reading.
@@ -951,6 +971,12 @@ impl Snapshot {
                 let wait = if self.checked_at.is_none() && self.error.is_none() && self.empties > 0 {
                     (FIRST_READING_RETRY_MS << (self.empties - 1).min(8)).min(FIRST_READING_RETRY_MAX_MS)
                 } else { interval };
+                // The last check came after a window's reset, within the interval after it, and
+                // that window is still the one held: Claude has not rolled it over yet
+                // (`RESET_RETRY_MS`).
+                let old_window_back = self.windows.iter().filter_map(|w| w.resets_at)
+                    .any(|r| r <= t && t < r.saturating_add(REFRESH_INTERVAL_MS));
+                let wait = if old_window_back { wait.min(RESET_RETRY_MS) } else { wait };
                 self.windows
                     .iter()
                     .filter_map(|w| w.resets_at)
@@ -3755,6 +3781,12 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
                 let mut windows = Vec::new();
                 if pick(8) != 0 { windows.push(window("five_hour", five_used[pick(five_used.len())], offsets(&five_reset, pick(five_reset.len())))); }
                 if pick(4) != 0 { windows.push(window("seven_day", week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len())))); }
+                // A model's own week decides as the account's week does (`is_weekly`; review
+                // rv-20261031T063327Z-eb4a5248-1bbf: the review reader held on seven_day alone).
+                if pick(3) == 0 {
+                    let model = ["model:Fable", "seven_day_opus", "seven_day_sonnet"][pick(3)];
+                    windows.push(window(model, week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len()))));
+                }
                 into["windows"] = json!(windows);
                 let mut speed_map = serde_json::Map::new();
                 for id in ["five_hour", "seven_day"] {
@@ -4112,6 +4144,65 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         let view = service.view();
         assert_eq!(view.moving, None, "the move is over");
         assert!(view.accounts.iter().any(|a| a.id == work.id && a.in_use));
+    }
+
+    /// **The new window shows within seconds of the reset** (follow-ups of 2026-10-29: after
+    /// Work's 20:50Z reset "it took 5 fucking minutes for the refresh to show up"; Sage's test).
+    /// The window read at 95% resets 2 seconds ago. The check at the reset is taken, and Claude
+    /// still answers with the window that ended. On main the next check was the full 5 minutes
+    /// later, and the file and the gate kept the ended window that long. Now it is 10 seconds
+    /// later (`RESET_RETRY_MS`): once Claude answers with the new window, the published file and
+    /// the gate have it. The retry stops 5 minutes after the reset: a window that still keeps
+    /// its old reset time then is asked on the normal schedule.
+    #[test]
+    fn a_check_at_the_reset_that_gets_the_old_window_back_is_asked_again_in_seconds() {
+        struct Flips(std::sync::Arc<Mutex<Vec<Window>>>, std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl Source for Flips {
+            fn read(&mut self, _: &Path, _: &Path) -> Result<Vec<Window>, ReadError> {
+                self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(self.0.lock().unwrap().clone())
+            }
+        }
+        let five = |used: f64, resets_at: u64| vec![Window { id: "five_hour".into(), label: "Five-hour".into(),
+            used_percent: used, resets_at: Some(resets_at), duration_ms: 18_000_000 }];
+        let dir = Scratch::new();
+        let service = Service::open(dir.path()).unwrap();
+        service.set_policy(policy()).unwrap();
+        let state = dir.path().join("engine-state");
+        let reset = crate::util::now_millis() - 2_000;
+        let answer = std::sync::Arc::new(Mutex::new(five(95., reset)));
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        *service.source.lock().unwrap() = Box::new(Flips(answer.clone(), calls.clone()));
+        service.snapshot.lock().unwrap().accept(five(95., reset), reset - 60_000);
+
+        // The check at the reset: Claude still says the window that ended.
+        service.refresh(Path::new("unused"), false);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the check at the reset is taken");
+        let view = service.view();
+        let checked = view.checked_at.unwrap();
+        assert_eq!(view.next_check_at, Some(checked + RESET_RETRY_MS),
+            "asked again in seconds, not after {} ms", REFRESH_INTERVAL_MS);
+
+        // Claude rolls the window over; 10 seconds pass.
+        let new_reset = crate::util::now_millis() + 5 * 3_600_000;
+        *answer.lock().unwrap() = five(3., new_reset);
+        service.snapshot.lock().unwrap().checked_at = Some(checked - RESET_RETRY_MS);
+        service.refresh(Path::new("unused"), false);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "the retry is due 10 seconds later");
+        let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
+        let shown = published.windows.iter().find(|w| w.id == "five_hour").unwrap();
+        assert_eq!((shown.used_percent, shown.resets_at), (3., Some(new_reset)), "the file has the new window");
+        assert_eq!(gate::admission(&state, crate::util::now_millis()), Admission::Ready, "and so has the gate");
+        assert_eq!(service.view().next_check_at, published.checked_at.map(|t| t + REFRESH_INTERVAL_MS),
+            "a new window: the normal schedule again");
+
+        // Bounded: a check 5 minutes after the reset that still gets the old window back waits
+        // the normal interval.
+        let mut late = Snapshot::default();
+        late.accept(five(95., NOW), NOW + REFRESH_INTERVAL_MS);
+        assert_eq!(late.view(policy(), NOW + REFRESH_INTERVAL_MS).next_check_at, Some(NOW + 2 * REFRESH_INTERVAL_MS));
+        late.accept(five(95., NOW), NOW + REFRESH_INTERVAL_MS - 1);
+        assert_eq!(late.view(policy(), NOW + REFRESH_INTERVAL_MS).next_check_at, Some(NOW + REFRESH_INTERVAL_MS - 1 + RESET_RETRY_MS));
     }
 
     #[test]

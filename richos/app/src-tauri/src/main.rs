@@ -339,25 +339,14 @@ static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sy
 
 /// **EACH NEW ENTRY CODEX WRITES TO RICH REACHES HIM, IN THE CONVERSATION ON SCREEN** (gap X):
 /// saved in Rich's inbox of the active conversation, where `peer_messages` hands it to him as it
-/// hands him Stu's messages. With no conversation open yet (or the state not yet managed) it
-/// waits, looking again every five seconds, and the entries after it wait behind it.
+/// hands him Stu's messages. One attempt: with no conversation open yet (or the state not yet
+/// managed) it says why, and the entry stays pending on disk, tried again every five seconds
+/// with the entries after it behind it, through a quit (`richos_core::codex_watch::pending_path`).
 fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
-    Arc::new(move |text: String| {
-        let mut said = false;
-        loop {
-            let saved = app.try_state::<AppState>().and_then(|state| {
-                let binding = state.reader.snapshot().active_binding().cloned()?;
-                Some(richos_core::codex_watch::deliver(&state.data_dir.join("engine-state"), &binding, &text))
-            });
-            match saved {
-                Some(Ok(())) => return,
-                Some(Err(e)) if !said => eprintln!("[richos] Codex watch: an entry waits for Rich ({e})"),
-                None if !said => eprintln!("[richos] Codex watch: an entry waits for a conversation to be open"),
-                _ => {}
-            }
-            said = true;
-            std::thread::sleep(std::time::Duration::from_secs(5));
-        }
+    Arc::new(move |text: &str| {
+        let state = app.try_state::<AppState>().ok_or("the app is still starting")?;
+        let binding = state.reader.snapshot().active_binding().cloned().ok_or("no conversation is open yet")?;
+        richos_core::codex_watch::deliver(&state.data_dir.join("engine-state"), &binding, text)
     })
 }
 

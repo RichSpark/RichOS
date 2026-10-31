@@ -851,7 +851,10 @@ def _gate_recompute(data, src, percent, now_ms):
     answered_empty = empty_at is not None and (checked is None or empty_at >= checked)
     if checked is None:
         return ("noReading" if answered_empty else "unknown"), None, "no reading yet"
-    weekly = [w for w in live if w["id"] == "seven_day" and w["used"] >= weekly_point(w)
+    # Every weekly window, the account's week and each model's own (quota.rs `is_weekly`), as the
+    # gate holds on all of them (review rv-20261031T063327Z-eb4a5248-1bbf).
+    is_weekly = lambda i: i.startswith("seven_day") or i.startswith("model:")
+    weekly = [w for w in live if is_weekly(w["id"]) and w["used"] >= weekly_point(w)
               and w["resets"] is not None and w["resets"] > now_ms]
     if weekly:
         w = max(weekly, key=lambda x: x["resets"])
