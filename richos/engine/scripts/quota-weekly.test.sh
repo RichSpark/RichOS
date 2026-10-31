@@ -411,5 +411,68 @@ class AccountSwitch(unittest.TestCase):
                       [workers(['worker'])]*4,4,out_cls=Recorder)
         self.assertEqual([k for k,_ in out.woken],['THRESHOLD','THRESHOLD'],out.woken)
 
+
+def week_only(used=49, source='get_usage', age=0):
+    """A reading with no five-hour window: an account Anthropic removed the limit from (2026-10-31),
+    as quota_watch.no_five_hour() makes it from get_usage, the status line or the app."""
+    r = {'state': '', 'why': '', 'used': None, 'resets_at': None, 'age': age, 'ended': False, 'source': source,
+         'windows': [{'id': 'seven_day', 'label': 'Weekly', 'used': used, 'resets_at': NOW + 3 * 86400}]}
+    return watcher.no_five_hour(r, NOW)
+
+class NoFiveHour(unittest.TestCase):
+    """THE CEO, 2026-10-31: "If no 5-hour-limit data, then don't show/don't handle it." An account
+    whose reading has no five-hour window has no five-hour hold or notice and is never UNKNOWN for
+    that reason; the weekly limit works exactly as before; with both windows nothing changes."""
+    def test_a_weekly_only_reading_is_below_the_five_hour_rule_and_says_no_five_hour_figure(self):
+        r = week_only()
+        self.assertEqual(watcher.rule_verdict(r, 93, 300, NOW), ('below', ''))
+        line = watcher.describe(r, 93, NOW)
+        self.assertIn('no five-hour window', line)
+        self.assertNotIn('% of the five-hour window', line)
+        self.assertIn('Weekly: 49%', line)
+        # Old is still old, as for any reading: a refresh keeps the weekly 99% from going unseen.
+        self.assertEqual(watcher.rule_verdict(week_only(age=301), 93, 300, NOW)[0], 'unknown')
+    def test_polls_on_weekly_only_readings_wake_nobody_while_a_worker_runs(self):
+        for source in ('get_usage', 'the status line'):
+            out = run_polls([week_only(source=source)] * 3, [workers(['worker'])] * 3, 3, out_cls=Recorder)
+            self.assertEqual(out.woken, [], (source, out.woken))
+            text = out.lines.getvalue() + out.events.getvalue()
+            self.assertNotIn('UNKNOWN', text)
+            self.assertNotIn('five-hour window at', text)
+    def test_the_weekly_rule_holds_and_releases_with_no_five_hour_window(self):
+        out = run_polls([week_only(99)], [workers(['worker'])], 1, out_cls=Recorder)
+        self.assertEqual([k for k, _ in out.woken], ['WEEKLY-THRESHOLD'], out.woken)
+        # The release asks the five-hour rule too; with no five-hour window it permits work.
+        out = run_polls([week_only(10)], [workers(held=['worker'])], 1, out_cls=Recorder)
+        self.assertEqual([k for k, _ in out.woken], ['WEEKLY-RELEASE'], out.woken)
+    def test_a_five_hour_window_that_disappears_stops_being_handled_from_that_reading_on(self):
+        both = reading(40, 95, NOW + 7200)
+        both['source'] = 'get_usage'
+        out = run_polls([both, week_only(40)], [workers(['worker'])] * 2, 2, out_cls=Recorder)
+        self.assertEqual([k for k, _ in out.woken], ['THRESHOLD'], out.woken)
+        last = out.lines.getvalue().strip().splitlines()[-1]
+        self.assertIn('no five-hour window', last)
+    def test_the_apps_gate_admits_a_weekly_only_reading_as_ready_and_holds_it_at_99(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as root:
+            state = os.path.join(root, 'engine-state'); os.makedirs(state)
+            def publish(used):
+                with open(os.path.join(state, 'claude-quota.json'), 'w') as fh:
+                    json.dump({'state': 'fresh', 'refreshIntervalMs': 300000, 'admission': {'state': 'ready'},
+                               'policy': {'enabled': True, 'pausePercent': 93}, 'checkedAt': NOW * 1000 - 1000,
+                               'windows': [{'id': 'seven_day', 'label': 'Weekly', 'usedPercent': used,
+                                            'resetsAt': (NOW + 86400) * 1000, 'durationMs': 604800000}],
+                               'speeds': {}, 'preHold': {}}, fh)
+            publish(49)
+            got = watcher.gate_admission(state, NOW)
+            self.assertFalse(got['held'], got)
+            self.assertIn('ready', got['line'])
+            self.assertNotIn('no current reading', got['line'])
+            r = watcher.read_app(state, NOW)
+            self.assertEqual((r['state'], r['used']), ('ok', None), r)
+            self.assertEqual(watcher.rule_verdict(r, 93, 300, NOW)[0], 'below')
+            publish(99)
+            self.assertTrue(watcher.gate_admission(state, NOW)['held'])
+
 unittest.main()
 PY

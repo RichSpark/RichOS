@@ -209,8 +209,10 @@ def cmd_sample(args):
             continue
         with open(os.path.join(state_dir(), "readings.jsonl"), "a") as fh:
             fh.write(json.dumps(row) + "\n")
-        print("account %s: five-hour %s, weekly %s" % (label, ("%g%%" % row["five_hour"]["used"]) if "five_hour" in row else "idle",
-                                                     ("%g%%" % row["seven_day"]["used"]) if "seven_day" in row else "unknown"))
+        # An account with no five-hour limit (quota_watch.no_five_hour) shows none, not "idle".
+        five = "" if r.get("five") is False else "five-hour %s, " % (
+            ("%g%%" % row["five_hour"]["used"]) if "five_hour" in row else "idle")
+        print("account %s: %sweekly %s" % (label, five, ("%g%%" % row["seven_day"]["used"]) if "seven_day" in row else "unknown"))
     return status
 
 
