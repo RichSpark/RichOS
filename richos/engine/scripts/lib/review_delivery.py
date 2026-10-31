@@ -42,6 +42,10 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_FINDINGS = 8
+# The work a verdict is on: a teammate's own (`teammate:<root key>`), or, where the app's recovery
+# enforcement names implementation work by its assignment, `app:<company>:<assignment>`
+# (workspaces.py recovery_work_key). The review watcher writes whichever that key is.
+WORK_PREFIXES = ("teammate:", "app:")
 
 
 def epoch(text):
@@ -92,7 +96,7 @@ def teammate_verdicts():
                     continue
                 if not isinstance(r, dict) or not r.get("verdict") or not r.get("id"):
                     continue
-                if not str(r.get("work") or "").startswith("teammate:"):
+                if not str(r.get("work") or "").startswith(WORK_PREFIXES):
                     continue
                 done = epoch(r.get("finished_at"))
                 if done is not None:
@@ -112,19 +116,43 @@ def load_workspaces():
 
 
 def teammate(agent_id):
-    """(record, {work key: that work's registration epoch}) for every record of
-    its chain (its own and each one it continues), or None. A verdict is judged
-    against the registration of the work it is ON, never the continuation's
-    own: a verdict on the predecessor's work that finished between the two
-    registrations is still owed to the continuation (review
-    rv-20261009T031207Z-ba444a8a-607a, finding 2)."""
+    """(record, {work key: that work's registration epoch}, {(repository, branch)}
+    of its chain) for every record of its chain (its own and each one it
+    continues), or None. A verdict is judged against the registration of the
+    work it is ON, never the continuation's own: a verdict on the predecessor's
+    work that finished between the two registrations is still owed to the
+    continuation (review rv-20261009T031207Z-ba444a8a-607a, finding 2).
+
+    The work key the review watcher itself writes for this record
+    (recovery_work_key) is one of them too, from the chain's first
+    registration: with the app's recovery enforcement on it is the assignment's
+    `app:` key, which every worker of that assignment shares, so a verdict on
+    such a key is this teammate's only when it names one of the chain's own
+    branches (mid-job review rv-20261031T185322Z-10c126b9-337c)."""
     ws = load_workspaces()
     key = ws.key_for_id(agent_id)
     rec = ws.load_agent(key) if key else None
     if not rec:
         return None
-    works = dict(("teammate:%s" % r["key"], epoch(r.get("registered_at")) or 0.0) for r in ws._chain(rec))
-    return rec, works
+    chain = ws._chain(rec)
+    works = dict(("teammate:%s" % r["key"], epoch(r.get("registered_at")) or 0.0) for r in chain)
+    try:
+        own = ws.recovery_work_key(rec)
+    except Exception:  # noqa: BLE001 -- a key that cannot be read leaves the teammate keys alone
+        own = ""
+    if own and own not in works:
+        works[own] = min(works.values()) if works else 0.0
+    branches = set((os.path.realpath(repo or ""), b) for repo, b in ws._branch_targets(chain))
+    return rec, works, branches
+
+
+def is_theirs(row, works, branches):
+    """The row is on this teammate's work: a teammate key of its chain, or the shared `app:` key of
+    its assignment on one of the chain's own branches."""
+    work = row.get("work")
+    if work not in works or row["_done"] < works[work] - 1:
+        return False
+    return not work.startswith("app:") or (os.path.realpath(row.get("repo") or ""), row.get("branch")) in branches
 
 
 def claim(key, rid):
@@ -191,11 +219,10 @@ def main():
     who = teammate(aid)
     if not who:
         return 0
-    rec, works = who
+    rec, works, branches = who
     # "Once" is per teammate: the marker is keyed by THIS record, so a verdict
     # its predecessor already received still reaches the continuation, once.
-    texts = [render(r) for r in rows if r.get("work") in works and r["_done"] >= works[r["work"]] - 1
-             and claim(rec["key"], str(r["id"]))]
+    texts = [render(r) for r in rows if is_theirs(r, works, branches) and claim(rec["key"], str(r["id"]))]
     if texts:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                                  "additionalContext": "\n\n".join(texts)}}))

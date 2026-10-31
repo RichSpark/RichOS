@@ -2217,6 +2217,42 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(told({**call,"agent_id":"someone"}),"")
         self.assertEqual(told({**call,"agent_id":None}),"")
 
+    def test_a_verdict_on_an_app_work_identity_reaches_the_worker_on_its_own_branch(self):
+        """Mid-job review rv-20261031T185322Z-10c126b9-337c: with the app's recovery enforcement on,
+        the review watcher names implementation work by its assignment, app:<company>:<assignment>
+        (workspaces.py recovery_work_key), and the shared delivery read only teammate: keys, so
+        such a verdict never reached the app worker. Every worker of that assignment shares the
+        key, so it reaches the one whose own branch it names, once, and no other."""
+        self.review=self.app.load("app_review_identity_test",ENGINE/"scripts/lib/app_review.py")
+        hook=self.app.load("app_engine_hook_identity_test",ENGINE/"scripts/app-engine-hook.py")
+        worker=self.call("prepare",self.args)
+        self.start_fixture_worker(worker,"app-identity-worker")
+        ref=self.record_of(worker)["workspace_ref"]
+        with self.app.W.Lock():
+            record=self.app.W.load_agent(ref)
+            # The record enforcement writes for an app implementation job (_classified_recovery_assignment).
+            record["recovery_assignment"]={"kind":"implementation","outcome":"app:depot:fixture-task",
+                "correction_of":[],"acceptance":"fixture","authority":{"mode":"enforce",
+                "host":{"kind":"implementation","outcome":"app:depot:fixture-task"}}}
+            self.app.W.save_agent(record)
+        work=self.app.W.recovery_work_key(self.app.W.load_agent(ref))
+        self.assertEqual(work,"app:depot:fixture-task")     # POSITIVE CONTROL: the watcher's key is the app's
+        branch=self.app.target_workspaces(self.record_of(worker))[str(self.repo)]["branch"]
+        state=self.root/"engine-state"
+        Path(self.review.app_paths(state)["reviews"]).mkdir(parents=True)
+        self.review_row("rv-app-own","quiet","changes-requested",work,"a"*40,"Own branch finding",branch=branch)
+        self.review_row("rv-app-other","quiet","changes-requested",work,"b"*40,"Sibling worker finding",
+                        branch="cc/another-worker-of-the-assignment")
+        call={"session_id":self.session,"agent_id":"app-identity-worker","tool_name":"Bash","tool_input":{"command":"true"}}
+        def told():
+            got=[]
+            hook.mid_job_notice(self.app,self.scope,call,state,got.append)
+            return "".join(got)
+        text=told()
+        self.assertIn("P1 Own branch finding (result.txt:1)",text)
+        self.assertNotIn("Sibling worker finding",text)
+        self.assertEqual(told(),"","told twice")
+
     def test_the_apps_review_watch_starts_mid_job_and_one_handover_with_the_users_words(self):
         """Second review, slice 4: the app's own review-watch (scripts/lib/review_watch.py
         --app-state, the host's child) reads every conversation's partition of the registry and
