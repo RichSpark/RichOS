@@ -2972,23 +2972,26 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         listed = modules / "playwright-core/browsers.json"
         listed.write_text(json.dumps({"browsers": [
             {"name": "chromium-headless-shell", "revision": "1228"},
-            {"name": "webkit", "revision": "2311", "revisionOverrides": {"mac14": "2251"}}]}))
+            {"name": "webkit", "revision": "2311", "revisionOverrides": {"mac14": "2251", "mac14-arm64": "2251"}}]}))
         browsers = Path(self.tmp.name) / "ms-playwright"
-        for name in ("chromium_headless_shell-1228", "webkit-2251", "chromium_headless_shell-1208", "firefox-1509"):
+        # An override install is named as Playwright's readDescriptors names it:
+        # <name>_<host platform>_special-<revision>, every "-" as "_". "webkit-2251" is no install.
+        for name in ("chromium_headless_shell-1228", "webkit_mac14_arm64_special-2251", "webkit-2251",
+                     "chromium_headless_shell-1208", "firefox-1509"):
             (browsers / name).mkdir(parents=True)
             (browsers / name / "INSTALLATION_COMPLETE").touch()
             (browsers / name / "binary").write_bytes(b"v1")
         environment = {"PATH": "/usr/bin:/bin", "HOME": self.tmp.name, "PLAYWRIGHT_BROWSERS_PATH": str(browsers)}
         identity = lambda: evidence.checkout_identity(self.root, ["bash", "x.sh"], environment)
         before = identity()
-        for stale in ("chromium_headless_shell-1208", "firefox-1509"):
+        for stale in ("chromium_headless_shell-1208", "firefox-1509", "webkit-2251"):
             (browsers / stale / "binary").write_bytes(b"rewritten by another checkout's install")
             (browsers / stale / "DEPENDENCIES_VALIDATED").write_text("stamp")
         self.assertEqual(identity(), before, "an install no browsers.json names changed every identity")
         (browsers / "chromium_headless_shell-1228" / "binary").write_bytes(b"v2, a named install")
         named = identity()
         self.assertNotEqual(named, before, "a named install changed in place")
-        (browsers / "webkit-2251" / "binary").write_bytes(b"v2, named through a revision override")
+        (browsers / "webkit_mac14_arm64_special-2251" / "binary").write_bytes(b"v2, named through a revision override")
         self.assertNotEqual(identity(), named, "an install named by a revision override")
         # A named install that appears is a new input; so is a different browsers.json.
         overridden = identity()

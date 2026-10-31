@@ -15415,7 +15415,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "edadd80ae5ec6727b2ebdc7881128ee8e2dfb54d7382879147cc3f9b9bde9e08",
+          "sha256": "d7e0d9993a348fe5871f331c27777766c095cd3f31364e5f1530e7a2564f947e",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15592,7 +15592,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "edadd80ae5ec6727b2ebdc7881128ee8e2dfb54d7382879147cc3f9b9bde9e08",
+          "sha256": "d7e0d9993a348fe5871f331c27777766c095cd3f31364e5f1530e7a2564f947e",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {

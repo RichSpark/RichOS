@@ -519,9 +519,10 @@ PLAYWRIGHT_VALIDATION_MARKER = "DEPENDENCIES_VALIDATED"
 
 
 def playwright_browser_names(root, environment):
-    """The install folder names (`<name with _ for ->-<revision>`, as Playwright's registry names
-    them) that the browsers.json of every Playwright package harness.js may load lists, every
-    revision override included; None when no candidate has a readable browsers.json.
+    """The install folder names (`<name with _ for ->-<revision>`, and for a revision override
+    `<name>_<platform>_special-<revision>`, as Playwright's registry names them) that the
+    browsers.json of every Playwright package harness.js may load lists, every platform's override
+    included; None when no candidate has a readable browsers.json.
 
     WHY (follow-up of 2026-10-29, fix A's own follow-up). The cache is shared by every Playwright
     on the Mac and holds installs of revisions this checkout never launches (eight stale ones that
@@ -537,9 +538,14 @@ def playwright_browser_names(root, environment):
                         module_root / "playwright-core/browsers.json"):
             try:
                 browsers = json.loads(listing.read_text())["browsers"]
-                found = {"%s-%s" % (browser["name"].replace("-", "_"), revision)
-                         for browser in browsers
-                         for revision in [browser["revision"], *(browser.get("revisionOverrides") or {}).values()]}
+                # An override install is `<name>_<host platform>_special-<revision>`, every "-" as
+                # "_" (Playwright's readDescriptors); every platform's is kept, not only this Mac's.
+                found = set()
+                for browser in browsers:
+                    found.add("%s-%s" % (browser["name"].replace("-", "_"), browser["revision"]))
+                    for platform_key, revision in (browser.get("revisionOverrides") or {}).items():
+                        found.add("%s_%s_special-%s" % (browser["name"].replace("-", "_"),
+                                                        platform_key.replace("-", "_"), revision))
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 continue
             names |= found
