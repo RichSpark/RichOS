@@ -6521,6 +6521,31 @@ done
         std::fs::remove_dir_all(&h.root).unwrap();
     }
 
+    /// **Provider EOF with input waiting keeps the gate busy** (Tom's review of the landed P0,
+    /// follow-up 3). Stu's provider has exited (his lease reports `is_closed`), so the closed
+    /// lease names no open session, and his job's helper session has ended: the reviewer's
+    /// closed-lease case, which reads clear. Then input for him arrives that no turn of his has
+    /// taken. That input is work, and `stu_busy`'s check for undelivered input is the one reading
+    /// that sees it: the closed lease cannot, and nothing of the job's own records changed.
+    #[test]
+    fn a_closed_lease_with_input_waiting_for_stu_keeps_the_gate_busy() {
+        let h = harness(0);
+        let (scope, path) = given_job_with_an_ended_helper(&h);
+        h.team.lock().unwrap().closed = true;
+        let _backend = back_end_without_a_loop(&h, &h.host);
+        let busy = (1, (crate::work_gate::Liveness::Busy, Some("1 assignment is still running in the background.".to_string())));
+        let clear = (0, (crate::work_gate::Liveness::Clear, None));
+        // Control: provider EOF, nothing waiting for Stu.
+        assert_eq!(h.host.lease_sessions(), Vec::<String>::new(), "a closed lease was counted as open");
+        assert_eq!(gate_reading(&h.host, &h.state), clear);
+        // Input for him that no turn has taken.
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Keep the original release date"})).unwrap();
+        assert_eq!(gate_reading(&h.host, &h.state), busy, "input waiting behind a closed lease read as no work");
+        assert!(h.host.peer_work_pending(), "the quit question did not see the input waiting for Stu");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
     /// **A handoff the session already has is not handed to it again as new work** (2026-10-28
     /// ~23:00Z: after a restart Stu was given the nightly-78 handoff three times within minutes,
     /// two of them carrying no `previous_delivery_attempt`). His lease is renewed onto the same
