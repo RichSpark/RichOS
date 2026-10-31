@@ -62,6 +62,17 @@ def worker_ask():
             'python3 heartbeat.py beat wk-fg %s --seconds %d   %s' % (BEATS, WORKER_SECONDS, TAIL))
 
 
+def stu_ask(seconds=reap.FOREGROUND_SECONDS):
+    """Job B, worded so Rich hands it over as a job and the one who directs the team runs it himself.
+    reap-walk.py's foreground ask ("run this for me with a shell tool") was run by Rich's own
+    session in both walks of 2026-10-31 (walk-ecbc62c617db, walk-0e7a185ff111), so it never
+    reached Stu. The app never names Stu (§110): he is the one who directs the team."""
+    return ('This one takes five minutes, so please do not run it in our conversation: hand it over as a job, '
+            'and have whoever directs my team run it themselves, not through a helper. In my Acme folder, run '
+            'this harmless test command in the foreground and wait for it, then tell me what it printed: '
+            'python3 heartbeat.py beat stop-fg %s --seconds %d   %s' % (BEATS, seconds, TAIL))
+
+
 def forces_background(app_py):
     """Does this engine's app.py still rewrite Stu's own Bash to run_in_background (§129)? Only
     `worker_context`'s branch for a call with no agent id counts; a worker's own dispatch is
@@ -135,7 +146,7 @@ class Walk(reap.Walk):
         if 'worker' not in self.facts:
             raise StepFailed('REFUSED: the worker step did not run')
         sent = self.now()
-        self.ask(reap.ask_text('stop', background=False))
+        self.ask(stu_ask())
         approved = self.wait_recorded('stop-fg', sent)
         calls = self.calls('stop')
         print('stop_calls %s' % json.dumps(calls), flush=True)
