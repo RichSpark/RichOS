@@ -156,7 +156,7 @@ reason: It refuses a spawn whose name is already held by a live agent of ANOTHER
 
 id: deliver-review-verdict.sh
 audience: operator-session
-reason: It never refuses anything; it hands a running teammate the verdict of the DEVELOPMENT session's own second-review ledger (reviews.jsonl, kept by the engine's review-watch monitor), and the app user has no such ledger, so the app has nothing for it to deliver.
+reason: It never refuses anything, so it judges no dispatch: it hands a running teammate a second review's verdict at its next tool call. The app's workers get exactly this script from scripts/app-engine-hook.py, which runs it at each of their tool calls with the app's own review ledger (CEO §154, 2026-10-31), never as a spawn guard.
 
 id: guard-operator-claim.sh
 audience: operator-session

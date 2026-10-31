@@ -618,8 +618,8 @@ mutant sr-every-registry-entity-read "test_second_review_only_the_declarations_g
     "an unreadable declaration governing only another repository would block every land (review rv-20261009T035450Z-882c7e75-0eab, finding 2)."
 
 mutant sr-continuation-judges-by-its-own-registration "test_second_review_a_continuation_gets_a_verdict_on_the_work_it_continues" "scripts/lib/review_delivery.py" \
-    '    texts = [render(r) for r in rows if r.get("work") in works and r["_done"] >= works[r["work"]] - 1' \
-    '    texts = [render(r) for r in rows if r.get("work") in works and r["_done"] >= works["teammate:%s" % rec["key"]] - 1' \
+    '    if work not in works or row["_done"] < works[work] - 1:' \
+    '    if work not in works or row["_done"] < max(works.values()) - 1:' \
     "a verdict on a predecessor's work that finished before its continuation was registered would never reach the continuation (review rv-20261009T031207Z-ba444a8a-607a, finding 2)."
 
 # "NOT REVIEWED" NEEDS POSITIVE EVIDENCE FOR EVERY GOVERNING ENTITY (review

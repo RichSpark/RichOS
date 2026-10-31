@@ -2083,6 +2083,10 @@ t "new-user-walk: every dead end a new user hit fails its step, the frame's own 
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/new-user-walk.test.py" >"$TMP/new-user-walk.log" 2>&1; ok $? "$(cat "$TMP/new-user-walk.log")"
 t_done
 
+t "setup-account-walk: the sheet names the Ultra plan and never Max, and only claude.com/pricing is the link's page"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/setup-account-walk.test.py" >"$TMP/setup-account-walk.log" 2>&1; ok $? "$(cat "$TMP/setup-account-walk.log")"
+t_done
+
 t "video-watch-walk: a background download is read from the boot line, every setup-walk name it calls exists, and glued sentences are told from paths"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/video-watch-walk.test.py" >"$TMP/video-watch-walk.log" 2>&1; ok $? "$(cat "$TMP/video-watch-walk.log")"
 t_done

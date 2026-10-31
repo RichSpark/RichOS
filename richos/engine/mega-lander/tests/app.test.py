@@ -217,7 +217,7 @@ class DesktopWork(unittest.TestCase):
         for repo in (self.coord,self.repo):
             repo.mkdir();subprocess.run(["git","init","--template=","-q","-b","main",str(repo)],check=True)
             subprocess.run(["git","-C",str(repo),"-c","core.hooksPath=/dev/null","-c","commit.gpgSign=false","-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","--allow-empty","-qm","Fixture"],check=True)
-        # Every land is a merge commit (land_merge), and its committer is the one the repository's
+        # Every land is a merge commit (the terminal's merge_and_land), and its committer is the one the repository's
         # own Git configuration names; nothing supplies one.
         for key,value in (("user.name","Fixture"),("user.email","fixture@example.invalid")):
             subprocess.run(["git","-C",str(self.repo),"config",key,value],check=True)
@@ -2211,46 +2211,91 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.app.git(self.repo,"show","HEAD:result.txt"),"FICTIONAL house-rules","the land did not happen")
         self.assertEqual(instruction_files(),before)
 
-    def review_row(self,rid,trigger,verdict,branch,tip,title):
-        """One row of the app's second-review ledger, with the verdict file second-review keeps."""
+    def review_row(self,rid,trigger,verdict,work,tip,title,branch="cc/fixture"):
+        """One row of the app's second-review ledger, as second-review writes it (the work it is
+        on, when it finished), with the verdict file second-review keeps."""
         paths=self.review.app_paths(self.root/"engine-state")
         record=Path(paths["reviews"])/"reviews"/rid;record.mkdir(parents=True)
         (record/"verdict.json").write_text(json.dumps({"answer":{"findings":[{"priority":1,"title":title,
             "files":["result.txt:1"],"evidence":"the fixture says so","fixture":""}],"summary":"x"}}))
         with open(paths["ledger"],"a") as f:
             f.write(json.dumps({"id":rid,"trigger":trigger,"verdict":verdict,"repo":str(self.repo),"branch":branch,
-                                "tip":tip,"record":str(record)})+"\n")
+                                "work":work,"tip":tip,"record":str(record),"reviewer":"claude","reviewer_model":"opus",
+                                "findings":1,"p1":1,"finished_at":"2099-01-01T00:00:00Z"})+"\n")
 
     def test_a_mid_job_request_for_changes_reaches_the_running_worker_once(self):
-        """Second review, slice 4 (plan §2.5; Sage's check, catch 7): a mid-job review's
-        changes-requested verdict is told to the running worker at its next tool call, once, by
-        the app's own hook (scripts/app-engine-hook.py); a pass, a handover verdict, another
-        branch's verdict and another agent's tool call are told nothing."""
+        """Second review, slice 4 (plan §2.5; Sage's check, catch 7), delivered by THE TERMINAL'S
+        OWN CODE (CEO §154, Hank's finding 9): the app's hook runs
+        scripts/hooks/deliver-review-verdict.sh with the app's ledger, so a verdict on this worker's
+        work is told to it at its next tool call, once; another worker's verdict, another agent's
+        tool call and the lead's own call are told nothing."""
         self.review=self.app.load("app_review_test",ENGINE/"scripts/lib/app_review.py")
         hook=self.app.load("app_engine_hook_test",ENGINE/"scripts/app-engine-hook.py")
         worker=self.call("prepare",self.args)
         self.start_fixture_worker(worker,"midjob-worker")
         call={"session_id":self.session,"agent_id":"midjob-worker","tool_name":"Bash","tool_input":{"command":"true"}}
-        (repo,branch),=self.app.worker_spaces(self.scope,call)
-        self.assertEqual(Path(repo).resolve(),self.repo)
+        work=self.app.W.recovery_work_key(self.app.W.load_agent(self.record_of(worker)["workspace_ref"]))
+        self.assertTrue(work.startswith("teammate:"),work)
         state=self.root/"engine-state"
+        ran=[]
+        real_run=subprocess.run
+        def watch(command,*argv,**kw):
+            ran.extend(str(part) for part in command)
+            return real_run(command,*argv,**kw)
         def told(payload):
             got=[]
-            self.assertEqual(hook.mid_job_notice(self.app,self.scope,payload,state,got.append),bool(got))
+            with patch.object(hook.subprocess,"run",side_effect=watch):
+                self.assertEqual(hook.mid_job_notice(self.app,self.scope,payload,state,got.append),bool(got))
             return "".join(got)
         self.assertEqual(told(call),"")      # no ledger yet
         Path(self.review.app_paths(state)["reviews"]).mkdir(parents=True)
-        self.review_row("rv-mid-1","long-job","changes-requested",branch,"a"*40,"Result is not committed")
-        self.review_row("rv-mid-pass","long-job","passed",branch,"b"*40,"Passing-row finding")
-        self.review_row("rv-handover","handover","changes-requested",branch,"c"*40,"Handover finding")
-        self.review_row("rv-other","quiet","changes-requested","cc/someone-else","d"*40,"Another worker's")
+        self.review_row("rv-mid-1","long-job","changes-requested",work,"a"*40,"Result is not committed")
+        self.review_row("rv-other","quiet","changes-requested","teammate:someone-else","d"*40,"Another worker's")
         text=told(call)
-        self.assertIn("asked for changes",text)
+        self.assertIn(str(ENGINE/"scripts/hooks/deliver-review-verdict.sh"),ran,"the app delivered without the terminal's script")
+        self.assertIn("SECOND REVIEW OF YOUR WORK (a mid-job review",text)
+        self.assertIn("CHANGES-REQUESTED",text)
         self.assertIn("P1 Result is not committed (result.txt:1)",text)
-        for absent in ("Passing-row finding","Handover finding","Another worker's"):self.assertNotIn(absent,text)
+        self.assertNotIn("Another worker's",text)
         self.assertEqual(told(call),"","told twice")
         self.assertEqual(told({**call,"agent_id":"someone"}),"")
         self.assertEqual(told({**call,"agent_id":None}),"")
+
+    def test_a_verdict_on_an_app_work_identity_reaches_the_worker_on_its_own_branch(self):
+        """Mid-job review rv-20261031T185322Z-10c126b9-337c: with the app's recovery enforcement on,
+        the review watcher names implementation work by its assignment, app:<company>:<assignment>
+        (workspaces.py recovery_work_key), and the shared delivery read only teammate: keys, so
+        such a verdict never reached the app worker. Every worker of that assignment shares the
+        key, so it reaches the one whose own branch it names, once, and no other."""
+        self.review=self.app.load("app_review_identity_test",ENGINE/"scripts/lib/app_review.py")
+        hook=self.app.load("app_engine_hook_identity_test",ENGINE/"scripts/app-engine-hook.py")
+        worker=self.call("prepare",self.args)
+        self.start_fixture_worker(worker,"app-identity-worker")
+        ref=self.record_of(worker)["workspace_ref"]
+        with self.app.W.Lock():
+            record=self.app.W.load_agent(ref)
+            # The record enforcement writes for an app implementation job (_classified_recovery_assignment).
+            record["recovery_assignment"]={"kind":"implementation","outcome":"app:depot:fixture-task",
+                "correction_of":[],"acceptance":"fixture","authority":{"mode":"enforce",
+                "host":{"kind":"implementation","outcome":"app:depot:fixture-task"}}}
+            self.app.W.save_agent(record)
+        work=self.app.W.recovery_work_key(self.app.W.load_agent(ref))
+        self.assertEqual(work,"app:depot:fixture-task")     # POSITIVE CONTROL: the watcher's key is the app's
+        branch=self.app.target_workspaces(self.record_of(worker))[str(self.repo)]["branch"]
+        state=self.root/"engine-state"
+        Path(self.review.app_paths(state)["reviews"]).mkdir(parents=True)
+        self.review_row("rv-app-own","quiet","changes-requested",work,"a"*40,"Own branch finding",branch=branch)
+        self.review_row("rv-app-other","quiet","changes-requested",work,"b"*40,"Sibling worker finding",
+                        branch="cc/another-worker-of-the-assignment")
+        call={"session_id":self.session,"agent_id":"app-identity-worker","tool_name":"Bash","tool_input":{"command":"true"}}
+        def told():
+            got=[]
+            hook.mid_job_notice(self.app,self.scope,call,state,got.append)
+            return "".join(got)
+        text=told()
+        self.assertIn("P1 Own branch finding (result.txt:1)",text)
+        self.assertNotIn("Sibling worker finding",text)
+        self.assertEqual(told(),"","told twice")
 
     def test_the_apps_review_watch_starts_mid_job_and_one_handover_with_the_users_words(self):
         """Second review, slice 4: the app's own review-watch (scripts/lib/review_watch.py
@@ -2355,11 +2400,12 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual((self.repo/"unrelated.txt").read_text(),"KEEP")
         self.assertFalse((self.repo/"result.txt").exists())
         (self.repo/"unrelated.txt").unlink()
-        original=self.app.land_merge
-        def crash_after_merge(*argv):
-            original(*argv)
+        original=self.app.W.merge_and_land
+        def crash_after_merge(*argv,**kw):
+            original(*argv,**kw)
             raise RuntimeError("synthetic crash after the merge")
-        with patch.object(self.app,"land_merge",side_effect=crash_after_merge):
+        with patch.object(self.app.W,"merge_and_land",side_effect=crash_after_merge), \
+                patch.object(self.app.W,"remove_workspace",return_value=(False,"synthetic busy workspace")):
             with self.assertRaisesRegex(RuntimeError,"synthetic crash"):self.call("integrate",args)
         self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL")
         with patch.object(self.app.W,"remove_workspace",return_value=(False,"synthetic busy workspace")):
@@ -3197,14 +3243,15 @@ class DesktopWork(unittest.TestCase):
         seen=self.root/"lease during the switched land"
         self.repository_hook("pre-merge-commit","cp %s %s\n" % (shlex.quote(files.lease),shlex.quote(str(seen))))
         held=[]
-        original=self.app.land_merge
-        def watch(*argv):
-            held.append(not self.land_lock_free(files.lock))
-            return original(*argv)
-        with patch.object(self.app,"land_merge",side_effect=watch):
+        original=self.app.W.merge_and_land
+        def watch(*argv,**kw):
+            held.append((self.land_lock_free(files.lock),json.loads(Path(files.lease).read_text())["holder"]["pid"]))
+            return original(*argv,**kw)
+        with patch.object(self.app.W,"merge_and_land",side_effect=watch):
             landed=self.call("integrate",args)
         self.assertTrue(landed["work_integrated"])
-        self.assertEqual(held,[True],"the merge ran without the fence's own lock held")
+        self.assertEqual(held,[(True,os.getpid())],
+                         "the terminal's merge ran without this land's lease, or with the fence's lock still held")
         self.assertEqual(json.loads(seen.read_text())["holder"]["pid"],os.getpid())
         self.assertFalse(os.path.exists(files.lease),"the land lease outlived the land")
         self.assertTrue(self.land_lock_free(files.lock),"the fence's lock outlived the land")
@@ -3239,6 +3286,75 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])
         self.assertEqual((self.repo/"result.txt").read_text(),"FICTIONAL fenced")
 
+    def test_an_app_land_is_the_terminals_merge_and_land(self):
+        """CEO §154 (2026-10-31), Hank's finding 3: Stu's integrate lands with the terminal's own
+        code, workspaces.py merge_and_land (`workspaces.sh merge`), never a copy of it, so one land
+        code serves both and a land fix is made once."""
+        args=self.reviewed_pair("terminalland")
+        worker=self.app.read_record(self.app.folder(self.scope),args["worker_id"])
+        tip=self.app.git(self.repo,"rev-parse","main")
+        calls=[]
+        original=self.app.W.merge_and_land
+        def watch(ref,*argv,**kw):
+            calls.append(ref)
+            return original(ref,*argv,**kw)
+        with patch.object(self.app.W,"merge_and_land",side_effect=watch):
+            landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(calls,[worker["workspace_ref"]],"the app landed without the terminal's merge_and_land")
+        head=self.app.git(self.repo,"rev-parse","main")
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^1"),tip)
+        self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])
+        self.assertIn("Reviewer receipt: "+args["reviewer_id"],self.app.git(self.repo,"log","-1","--format=%B","main"))
+
+    def test_an_app_land_onto_a_release_branch_never_switches_the_main_checkout(self):
+        """Hank's finding 3, where the copy differed: the terminal merges into a release branch
+        nobody has checked out in a temporary checkout of it (workspaces.py
+        _merges_in_main_checkout, 2026-10-14), and the app refused ("select the recorded
+        integration branch before integrating"), so a v1.x land from the app needed the main
+        checkout switched. The same reviewed work now lands on the release branch while the main
+        checkout stays on main, with its own unrelated edit left alone."""
+        self.app.git(self.repo,"branch","v1.3.0")
+        self.args["integration"]="v1.3.0"
+        args=self.reviewed_pair("release")
+        main_tip=self.app.git(self.repo,"rev-parse","main")
+        release_tip=self.app.git(self.repo,"rev-parse","v1.3.0")
+        (self.repo/"unrelated.txt").write_text("the main checkout's own edit")
+        landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(self.app.git(self.repo,"rev-parse","v1.3.0^1"),release_tip)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","v1.3.0^2"),landed["commit"])
+        self.assertEqual(self.app.git(self.repo,"show","v1.3.0:result.txt"),"FICTIONAL release")
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),main_tip)
+        self.assertEqual(self.app.git(self.repo,"symbolic-ref","--short","HEAD"),"main")
+        self.assertEqual((self.repo/"unrelated.txt").read_text(),"the main checkout's own edit")
+        self.assertFalse((self.repo/"result.txt").exists())
+        self.assertEqual(landed["cleanup_pending"],[])
+        self.assertEqual([r["branch"] for r in self.app.W.land_records(self.repo)],["v1.3.0"])
+
+    def test_a_refused_land_in_a_fenced_repository_is_aborted_and_moves_nothing(self):
+        """The terminal's abort of a refused merge runs under the lease this land holds as itself
+        (workspaces.py _lease_for_abort counts this process as its own caller, as
+        _take_land_lease does): the merge the repository's check refused is aborted, nothing
+        moved, the lease is gone, and the same work lands once the check passes."""
+        args=self.reviewed_pair("fencedrefusal")
+        files=self.fence_on()
+        refuse=self.root/"fenced merge check refuses";refuse.write_text("")
+        self.repository_hook("pre-merge-commit",'if [ -e %s ]; then echo "FENCED MERGE CHECK: refused" >&2; exit 1; fi\n'
+                             % shlex.quote(str(refuse)))
+        tip=self.app.git(self.repo,"rev-parse","main")
+        with self.assertRaisesRegex(ValueError,"FENCED MERGE CHECK: refused"):
+            self.call("integrate",args)
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main"),tip)
+        self.assertFalse(Path(self.app.git(self.repo,"rev-parse","--path-format=absolute","--git-path","MERGE_HEAD")).exists(),
+                         "the refused merge was left in progress in the main checkout")
+        self.assertEqual(self.app.git(self.repo,"status","--porcelain","--untracked-files=all"),"")
+        self.assertFalse(os.path.exists(files.lease),"the land lease outlived the refused land")
+        refuse.unlink()
+        landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(self.app.git(self.repo,"rev-parse","main^2"),landed["commit"])
+
     def test_two_conversations_landing_in_one_repository_take_one_lock_and_the_merge_is_under_it(self):
         args=self.reviewed_pair("onelock")
         lock=self.app.land_lock_path(self.repo)
@@ -3252,11 +3368,11 @@ class DesktopWork(unittest.TestCase):
         # POSITIVE CONTROL: the probe can say "free", and does, before the land.
         self.assertTrue(self.land_lock_free(lock))
         held=[]
-        original=self.app.land_merge
-        def watch(*argv):
+        original=self.app.W.merge_and_land
+        def watch(*argv,**kw):
             held.append(not self.land_lock_free(lock))
-            return original(*argv)
-        with patch.object(self.app,"land_merge",side_effect=watch):
+            return original(*argv,**kw)
+        with patch.object(self.app.W,"merge_and_land",side_effect=watch):
             result=self.call("integrate",args)
         self.assertTrue(result["work_integrated"])
         self.assertEqual(held,[True],"the merge ran without this repository's land lock held")

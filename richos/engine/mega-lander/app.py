@@ -519,36 +519,6 @@ def merge_tree(repo, tip, commit, branch):
     return lines[0].strip()
 
 
-def land_merge(repo, tip, commit, branch, reviewer_id, author_runs=()):
-    """THE LAND IS `git merge`, WITH THE REPOSITORY'S OWN HOOKS (plan item 6, 2026-10-21: an app
-    land gets the checks a terminal land gets in that repository). It is the merge the terminal's
-    lander runs (`workspaces.sh merge`, workspaces.py merge_and_land): `--no-ff`, in the
-    repository's checkout, which integrate has already found on `branch` and clean, with the same
-    environment (_land_env: the branch landed onto, the caller's locale, the author's saved proof
-    runs). So git runs the repository's pre-merge-commit check before the merge commit exists, its
-    reference-transaction hook (where a land fence lives) on every ref the merge moves, and its
-    post-merge hook after. Until then the app wrote the merge with `commit-tree` and moved the
-    branch with `merge --ff-only` under core.hooksPath=/dev/null, so no hook of the repository
-    ever saw an app land. Which hooks run, and what they check, is the repository's own setting;
-    nothing here names one.
-
-    No time bound of this command's own: a repository's land check bounds itself, and the
-    terminal's merge has none either. Returns the commit the branch now points at. A refusal
-    leaves no merge behind (_abort_own_merge) and is raised with Git's and the checks' own words.
-    Its author and committer are whoever the repository's own Git configuration names."""
-    message = ("Merge reviewed work %s into %s\n\nReviewed commit: %s\nReviewer receipt: %s\n"
-               % (commit[:12], branch, commit, reviewer_id))
-    result = subprocess.run(["git", "-c", "commit.gpgSign=false", "-C", str(repo), "merge", "--no-ff", "--no-edit",
-                             "-m", message, commit], text=True, capture_output=True, stdin=subprocess.DEVNULL,
-                            env=users_git_settings(W._land_env(branch, author_runs)))
-    if result.returncode == 0:
-        return git(repo, "rev-parse", "HEAD")
-    said = (result.stdout + result.stderr).strip()[-6000:]
-    raise ValueError("%s did not land in %s: git merge exited %d, so %s did not move. What Git and this "
-                     "repository's own checks said:\n%s\n%s"
-                     % (commit[:12], repo, result.returncode, branch, said, _abort_own_merge(repo, tip, commit)))
-
-
 def users_git_settings(env):
     """THE LAND READS THE USER'S OWN GIT SETTINGS, as a merge from the user's terminal does
     (mid-job review rv-20261021T082940Z-f79aeabf-fd06). The app gives its leases a generated
@@ -568,25 +538,30 @@ def users_git_settings(env):
     return env
 
 
-def _abort_own_merge(repo, tip, commit):
-    """A refused merge leaves no merge behind. A pre-merge-commit check that refuses makes Git
-    stop with "Not committing merge", leaving MERGE_HEAD and the merged files staged. Only the
-    merge this land started is aborted (MERGE_HEAD is the reviewed commit and HEAD the tip it
-    merged into), with the repository's hooks on: where a fence guards the checkout, this land
-    still holds its lease. Returns one sentence saying what was done."""
-    found = _git_answer(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD")
-    if found.returncode != 0:
-        return "No merge was left in progress."
-    head = _git_answer(repo, "rev-parse", "HEAD").stdout.strip()
-    if found.stdout.strip() != commit or head != tip:
-        return ("A merge is in progress that this land did not start (MERGE_HEAD %s, HEAD %s); it was left alone."
-                % (found.stdout.strip()[:12], head[:12]))
-    aborted = subprocess.run(["git", "-C", str(repo), "merge", "--abort"], text=True, capture_output=True,
-                             stdin=subprocess.DEVNULL, env=users_git_settings(W._git_env()))
-    if aborted.returncode == 0 and _git_answer(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode != 0:
-        return "The merge this land started was aborted: the checkout is back at %s." % tip[:12]
-    return ("The merge this land started could NOT be aborted (exit %d) and is still in progress: %s"
-            % (aborted.returncode, (aborted.stdout + aborted.stderr).strip()[-2000:]))
+GIT_SETTING_NAMES = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_SYSTEM")
+
+
+@contextlib.contextmanager
+def users_git_settings_applied():
+    """users_git_settings for the terminal's own land while it runs in this process: its
+    merge, its abort and its cleanup build their Git environment from os.environ
+    (workspaces.py _git_env, _land_env), so the three names are set there for the call and
+    put back afterwards, whatever happens."""
+    saved = {name: os.environ.get(name) for name in GIT_SETTING_NAMES}
+    wanted = users_git_settings({name: value for name, value in saved.items() if value is not None})
+    try:
+        for name in GIT_SETTING_NAMES:
+            if name in wanted:
+                os.environ[name] = wanted[name]
+            else:
+                os.environ.pop(name, None)
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def landed_files(repo, before, landed):
@@ -617,10 +592,11 @@ def witness_land(scope, worker, targets, plan):
         who = {"name": worker["name"], "agent_id": worker.get("agent_id") or None}
         rows = []
         for repo, step in plan.items():
-            if step["already"]:
+            if step["already"] or not step.get("landed"):
                 continue
-            # The worktree still exists here (cleanup is after), so its real path is the one
-            # the hook's command witness recorded (it resolves every directory it lists).
+            # Its real path, resolved by integrate while the worktree still existed (the land
+            # deletes it), is the one the hook's command witness recorded (it resolves every
+            # directory it lists).
             worktree = os.path.realpath(targets[repo]["path"])
             for name in landed_files(repo, step["tip"], step["landed"]):
                 rows.append({"path": os.path.join(repo, name), "from": os.path.join(worktree, name),
@@ -1908,26 +1884,6 @@ def worker_context(scope, payload):
             "Shell actions still follow the native permission decision; this context is not a general shell sandbox or publication grant.")
 
 
-def worker_spaces(scope, payload):
-    """[(repository, branch)] of the implementation WORKER this tool call comes from, read off its
-    receipt and its canonical record; [] for a reviewer, a consult, the lead, or an agent that has
-    not joined a receipt. What the app's hook needs to tell a worker, once, a mid-job review's
-    request for changes on its own branch (second review, slice 4; scripts/lib/app_review.py).
-    Read only, without the conversation lock: receipts are replaced whole, never edited."""
-    aid = payload.get("agent_id")
-    if not aid:
-        return []
-    for _path, record in receipts(folder(scope)):
-        refresh(record)
-        if (record.get("agent_id") == aid and record["binding"]["session_id"] == payload.get("session_id")
-                and record["request"]["role"] == "worker"):
-            try:
-                return [(repo, w.get("branch")) for repo, w in target_workspaces(record).items() if w.get("branch")]
-            except ValueError:
-                return []
-    return []
-
-
 def review_report(record, message, aid, source, tool_use_id=None):
     """Parse a report actually delivered by the observed reviewer, never a lead claim."""
     if not isinstance(message, str): message = ""
@@ -2154,9 +2110,8 @@ def verification_evidence(scope, identity):
 # Keyed to the REPOSITORY, not machine-wide. Two conversations landing into two
 # different repositories are the case the CEO says he will actually run, and
 # there is no reason for one to wait on the other. Two into the same repository
-# take turns — which is also the honest answer to the collision the lock cannot
-# fix: `integrate` requires the repository's checkout to be standing on the
-# recorded integration branch, and one checkout cannot be on two branches.
+# take turns: both merge into one ref store, and a merge into the branch the main
+# checkout is on runs in that one checkout.
 LAND_LOCK_TIMEOUT = 600.0
 
 
@@ -2267,27 +2222,29 @@ def _is_this_process(holder):
 def _take_fence_lease(repo, lock):
     """THE APP'S LAND TAKES THE LAND LEASE WHERE THE FENCE IS ON (plan item 6, 2026-10-21).
 
-    The land now runs Git with the repository's own hooks, so where its launcher has the fence on
+    The land runs Git with the repository's own hooks, so where its launcher has the fence on
     (operator-fences.sh), the fence refuses a move of main, and an ORIG_HEAD written in the main
     checkout, by anyone who does not hold the land lease. This process takes it, as itself: the
     fence's test is ancestry, pid and start time (operator_fences.authorized), and every Git
-    command of this land is this process's child.
+    command of this land is this process's child. As itself, because the terminal's own way of
+    taking it (land-lease.sh acquire) names the nearest Claude session or declared holder above
+    the caller, and this process is the app's work server, which no such record names; the
+    terminal's land (workspaces.py merge_and_land, _take_land_lease) takes no second lease when
+    the process that runs it already holds one, which is exactly this.
 
-    THE LEASE IS TAKEN UNDER THE FENCE'S OWN LOCK, named by the repository's launcher (its baked
+    THE LEASE IS WRITTEN UNDER THE FENCE'S OWN LOCK, named by the repository's launcher (its baked
     home and key): the lock land-lease.sh takes and releases a lease under. Usually that is `lock`,
     the land flock this land already holds (operator_fences_admin installs the launcher's home from
     the same land_lock_path). It is ANOTHER file only when the fence was installed from another
-    home than this land's: the land lock's home is the machine's one Claude home
-    (machine_settings.claude_home: Account 1's folder, RICHOS_CLAUDE_HOME, for a lease on an added
-    account, which EngineProfile.configure marks), so since 2026-10-28 a lease on an added
-    account no longer moves it; a launcher installed with another home still can. Then the fence's
-    lock is taken as well, after this land's own (one order for every land, so two never wait on
-    each other), and a live lease of another holder is waited for under it, within the land lock's
-    bound.
+    home than this land's (an added Claude account, machine_settings.claude_home); then the fence's
+    lock is taken as well, after this land's own, and a live lease of another holder is waited for
+    under it, within the land lock's bound. THAT OTHER LOCK IS LET GO AS SOON AS THE LEASE IS
+    WRITTEN, as land-lease.sh lets go of it: from then on the lease is what holds the repository,
+    and the terminal's land takes the fence's lock itself (operator_fences.register_land).
 
-    Returns (fence program, its Files, the holder, the fence lock taken here or None) for
-    _release_fence_lease, or None when the repository has no fence or has it off. The switch and
-    the lease home are the repository's own settings, never anything the app holds."""
+    Returns (fence program, its Files, the holder) for _release_fence_lease, or None when the
+    repository has no fence or has it off. The switch and the lease home are the repository's
+    own settings, never anything the app holds."""
     F = W._fence_program()
     conf, _paths = F.launcher_for(str(repo))
     if not F.fenced(conf):
@@ -2318,26 +2275,34 @@ def _take_fence_lease(repo, lock):
             time.sleep(0.5)
     try:
         F.write_json_atomic(files.lease, F._new_lease(holder, conf.get("REPO") or str(repo)))
-    except BaseException:
+    finally:
         if fence_lock:
             fence_lock.release()
-        raise
-    return F, files, holder, fence_lock
+    return F, files, holder
 
 
-def _release_fence_lease(taken):
-    """Ends the lease _take_fence_lease wrote, still under the lock it was written under, and only
-    while it is still this land's; then lets go of the fence's lock if this land took it. Never
-    raises: the land has happened or been refused by then, and a lease left by a process that has
-    ended is taken by the next acquire at rest."""
+def _release_fence_lease(taken, lock):
+    """Ends the lease _take_fence_lease wrote, under the fence's lock and only while it is still
+    this land's. `lock` is the land lock, which the caller holds again by now: when it is the
+    fence's lock (the usual install) nothing more is taken; otherwise the fence's own lock is
+    taken for the check-and-delete, within the land lock's bound. Never raises: the land has
+    happened or been refused by then. A lease this process could not take the lock for is
+    still deleted when it is this land's, because this process is the app's work server and
+    outlives the land: a lease left with it would hold every later land of the repository."""
     if not taken:
         return
-    F, files, holder, fence_lock = taken
+    F, files, holder = taken
+    fence_lock = None
     try:
+        if os.path.realpath(files.lock) != os.path.realpath(lock):
+            fence_lock = F._Flock(files.lock)
+            deadline = time.monotonic() + land_lock_timeout()
+            while not fence_lock.try_take() and time.monotonic() < deadline:
+                time.sleep(0.1)
         lease = F.read_lease(files)
         if lease and F.same_holder(lease.get("holder"), holder):
             os.unlink(files.lease)
-    except OSError:
+    except (OSError, ValueError):
         pass
     finally:
         if fence_lock:
@@ -2359,7 +2324,10 @@ def _land_holder_text(holder):
 def land_lock(scope, repo):
     """Hold this repository's land for the whole land: the recorded-tip check,
     the merge, and the workspace cleanup that deletes worktrees and
-    branches in the same repository.
+    branches in the same repository. The merge and the cleanup are the
+    terminal's (workspaces.py merge_and_land); this turn-taking is the app's
+    own, because only the app runs two conversations whose back ends share a
+    repository, and the terminal's lease names no app conversation as holder.
 
     TAKEN BEFORE `locked(scope)`, AND THAT ORDER IS THE POINT. A wait here can
     be minutes long and belongs to ANOTHER conversation; holding this
@@ -2444,16 +2412,28 @@ def land_lock(scope, repo):
             previous = W.land_records(repo)[-1:]
             if previous and previous[0].get("thread_id") == holder.get("thread_id"):
                 status["waited_for_land"] = previous[0]
-        # Held from here to the end of the land, under the flock just taken; released below,
-        # before the flock is.
+        # Taken under the flock just taken, and held to the end of the land.
         lease = _take_fence_lease(repo, path)
         try:
             if lease:
                 status["land_lease"] = lease[1].lease
             _write_land_lock(handle, mine)
+            if lease:
+                # WHERE THE FENCE IS ON, THE LEASE HOLDS THE REPOSITORY FROM HERE, NOT THE FLOCK.
+                # The terminal's land, which this one runs (workspaces.py merge_and_land), takes
+                # the fence's lock itself (operator_fences.register_land, and land-lease.sh in its
+                # abort), and that lock is this file. Another conversation that takes the flock
+                # meanwhile finds this live lease and waits (_live_fence_lease above), and so
+                # does land-lease.sh acquire. Where the fence is off there is no lease, and the
+                # flock is held to the end.
+                fcntl.flock(handle, fcntl.LOCK_UN)
             yield status
         finally:
-            _release_fence_lease(lease)
+            if lease:
+                # Back under the lock the lease was written under, to end it; another holder
+                # of this lock holds it only for a check of the lease.
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            _release_fence_lease(lease, path)
             mine["state"] = "released"
             mine["until"] = W.iso()
             try:
@@ -2553,9 +2533,13 @@ def integrate(scope_path,scope,args):
                     if repo not in repositories(scope): raise ValueError("target repository is no longer connected")
                     branch,tip,problem=W.integration_target([canonical],repo)
                     if problem: raise ValueError(problem)
-                    if git(repo,"symbolic-ref","--short","HEAD")!=branch:
-                        raise ValueError("select the recorded integration branch before integrating")
-                    trees=[repo,targets[repo]["path"]]+([review_targets[repo]["path"]] if reviewer else [])
+                    # THE MAIN CHECKOUT IS NEVER SWITCHED TO A RELEASE BRANCH (workspaces.py
+                    # _merges_in_main_checkout, 2026-10-14): the terminal's land merges into a
+                    # branch nobody has checked out in a temporary checkout of it. So the main
+                    # checkout's local edits are its own business unless the land merges there.
+                    listed=W.worktree_list(repo) or []
+                    in_main=bool(listed) and listed[0]["branch"]==branch
+                    trees=([repo] if in_main else [])+[targets[repo]["path"]]+([review_targets[repo]["path"]] if reviewer else [])
                     for tree in trees:
                         if git(tree,"status","--porcelain","--untracked-files=all"):
                             raise ValueError("integration preserves local edits; reconcile the dirty checkout first")
@@ -2564,9 +2548,9 @@ def integrate(scope_path,scope,args):
                                 raise ValueError("finish or explicitly abandon the existing Git operation first")
                     # A MOVED BRANCH IS MERGED, NEVER REBASED OR RESOLVED (part 4,
                     # finding 3). The reviewed commit is landed exactly as reviewed,
-                    # as the second parent of the land's merge commit (land_merge,
-                    # which merges with --no-ff as the terminal's lander does, so the
-                    # repository's merge check runs), and a branch that moved is
+                    # as the second parent of the land's merge commit (the terminal's
+                    # merge_and_land, --no-ff, so the repository's merge check runs),
+                    # and a branch that moved is
                     # merged only when Git merges the two without a conflict. No rebase rewrites
                     # it and no conflict is resolved here, so a moved target that
                     # needs new changes still goes back for another implementation
@@ -2606,51 +2590,67 @@ def integrate(scope_path,scope,args):
                     entry=landing_entry(worker["integration"],repository,repo)
                     if not plan[repo]["already"] and plan[repo]["tip"]!=entry["before"]:
                         raise ValueError("integration target moved after intent; reconcile before retrying")
-                # EACH REPOSITORY IS LANDED BY ITS OWN `git merge`, WITH ITS OWN HOOKS (plan item 6,
-                # 2026-10-21; land_merge). Its merge-time check runs before the merge commit
-                # exists, and a refusal moves nothing in that repository. In a job of several
-                # repositories, one refused after another landed leaves that one landed, as the
-                # terminal's lander does; the repeated integrate finds it already contains the
-                # reviewed commit and lands only the rest.
-                chain=W._chain(canonical)
-                landed_now=[]
-                for repo in repositories_to_land:
-                    commit,branch,tip=plan[repo]["commit"],plan[repo]["branch"],plan[repo]["tip"]
-                    if not plan[repo]["already"]:
-                        try:
-                            landed=plan[repo]["landed"]=land_merge(repo,tip,commit,branch,reviewer_id or refs[repo],
-                                                                   W._author_runs(chain,commit))
-                        except ValueError as error:
-                            if landed_now:
-                                raise ValueError("%s Already landed by this call: %s. Integrate again once this is "
-                                                 "resolved: it lands only what is not landed yet."
-                                                 % (error, ", ".join(landed_now)))
-                            raise
+                # THE LAND IS THE TERMINAL'S OWN: workspaces.py merge_and_land, the code behind
+                # `workspaces.sh merge` (CEO §154, 2026-10-31: the app does every job the terminal
+                # already does with the terminal's own code). It merges every branch of this work
+                # that its integration branch does not contain yet, in each repository, with that
+                # repository's own hooks, in the main checkout or, for a branch the main checkout
+                # is not on, in a temporary checkout of it; a refused merge is aborted and moves
+                # nothing in that repository; then it lands the workspace. In a job of several
+                # repositories, one refused after another landed leaves that one landed; the
+                # repeated integrate finds it already contains the reviewed commit and lands only
+                # the rest. What is the app's own stays here: the receipt checks above, the
+                # user's own Git settings (users_git_settings_applied), and the land record.
+                # The land deletes the worktrees; the witness below names each by its real path.
+                targets={r:{**t,"path":os.path.realpath(t["path"])} for r,t in targets.items()}
+                pending=[r for r in repositories_to_land if not plan[r]["already"]]
+                refused=None
+                try:
+                    if pending:
+                        reviewed_by=(reviewer_id and "Reviewer receipt: %s" % reviewer_id) or "Automatic review: %s" % (
+                            ", ".join("%s %s" % (refs[r],r) for r in repositories_to_land))
+                        with users_git_settings_applied():
+                            # Only the reviewed commits: a branch of the work holding anything else
+                            # (an earlier attempt's WIP) is not merged, and its cleanup stays pending.
+                            W.merge_and_land(worker["workspace_ref"],me=scope["binding"]["session_id"],
+                                             message="Merge reviewed work of %s\n\n%s" % (worker["name"],reviewed_by),
+                                             only={r:plan[r]["commit"] for r in pending})
+                except W.SpecError as error:
+                    refused=str(error)
+                finally:
+                    # THE LAND RECORD, ONE PER REPOSITORY WHOSE REF THIS CALL MOVED, written
+                    # while this repository's land is still held, and even when a later step
+                    # failed. APPENDED, never a field on the lock: two lands in a row both
+                    # survive, so a running agent in the OTHER conversation can be told which
+                    # thread moved the branch under it rather than that it moved (workspaces.py,
+                    # `land_by_another_conversation`). A REPEATED integrate, which merges nothing,
+                    # records nothing. `commit` is where the ref now points (the land's merge
+                    # commit), because that is what `land_by_another_conversation` matches;
+                    # `reviewed_commit` is the work itself.
+                    landed_now=[]
+                    for repo in pending:
+                        commit,branch,tip=plan[repo]["commit"],plan[repo]["branch"],plan[repo]["tip"]
+                        landed,_unread=W.branch_tip_read(repo,branch)
+                        if not landed or not W.is_ancestor(repo,commit,landed):
+                            continue
+                        plan[repo]["landed"]=landed
                         landed_now.append(repo)
-                        # THE LAND RECORD, WRITTEN AT THE MOMENT THE REF ACTUALLY
-                        # MOVED and while this repository's land lock is still held.
-                        # APPENDED, never a field on the lock: two lands in a row
-                        # both survive, so a running agent in the OTHER conversation
-                        # can be told which thread moved the branch under it rather
-                        # than that it moved (workspaces.py,
-                        # `land_by_another_conversation`). Here and not at release
-                        # because a crash between the two would leave a ref that
-                        # moved with no record of who moved it -- and a REPEATED
-                        # integrate, which merges nothing, must not record a second
-                        # land it did not perform. `commit` is where the ref now
-                        # points (the land's merge commit), because
-                        # that is what `land_by_another_conversation` matches;
-                        # `reviewed_commit` is the work itself.
                         lands[repo]["landed"]={"schema":1,"branch":branch,"before":tip,"commit":landed,"reviewed_commit":commit,"at":W.iso(),
                             "thread_id":scope["binding"].get("thread_id") or "","entity_id":scope["binding"].get("entity_id") or "",
                             "session_id":scope["binding"].get("session_id") or "","pid":os.getpid()}
                         W.append_land_record(repo,lands[repo]["landed"])
-                    git(repo,"merge-base","--is-ancestor",commit,"refs/heads/"+branch)
+                not_in=[repo for repo in repositories_to_land
+                        if not W.is_ancestor(repo,plan[repo]["commit"],"refs/heads/"+plan[repo]["branch"])]
+                if not_in:
+                    said=refused or "the reviewed commit is not in %s afterwards" % ", ".join(not_in)
+                    if landed_now:
+                        raise ValueError("%s\nAlready landed by this call: %s. Integrate again once this is resolved: it "
+                                         "lands only what is not landed yet." % (said, ", ".join(landed_now)))
+                    raise ValueError(said)
                 worker["integration"]["verified"]=True
                 worker["status"]="integrated"
                 save(path,worker)
-                # Every ref has moved and every land lock is still held; the worktrees are
-                # not yet cleaned up. Never fails the land.
+                # Every ref has moved and every land lock is still held. Never fails the land.
                 witness_land(scope,worker,targets,plan)
             # Cleanup remains canonical Mega Lander. Its result is separate from Git
             # integration; partial cleanup never rolls back a verified target commit.
