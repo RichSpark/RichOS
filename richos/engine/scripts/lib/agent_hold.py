@@ -1690,6 +1690,9 @@ def wait_resume(max_seconds=None, poll=WAIT_RECHECK_SECONDS, out=sys.stdout):
     if notice and not notice.get("resumed"):
         out.write("RESUMED at %s: carry on from where you were.\n" % _clock())
         _write_json(notice_path, dict(notice, resumed=True))
+        # The registered hook's gate() holds this call back until the release, so the hold
+        # file is gone before this wait starts: the unresumed notice is what says it sat one out.
+        was_held = True
     # RESUMED MEANS CARRY ON NOW (2026-10-31). A wait that sat out a hold returns at the
     # release with what is ready and names each native call still running; it never keeps
     # the agent waiting on one. Its command was refused or its wait was ended by the hold, so

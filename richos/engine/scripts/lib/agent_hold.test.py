@@ -1480,6 +1480,34 @@ class HeldAgentMakesNoModelCalls(Base):
         out, _ = call.communicate(timeout=60)
         return out
 
+    def test_a_wait_the_gate_held_back_returns_at_the_release_while_a_long_native_call_runs(self):
+        # 2026-10-31 review rv-20261031T020132Z-fbe99bb8-9344: the registered hook's gate holds the
+        # wait call back until the release, so the wait itself never sees the hold. It must still
+        # return at the release, naming the long call, not wait on it (STILL RUNNING at its bound).
+        import threading
+        hooks = self.hold_hooks()
+        long_call, _ = self.start_rewritten("sleep 60", tuid="toolu_long")
+        long_pid = Path(agent_hold._shell_dir(self.session, self.agent), "toolu_long.pid")
+        self.assertTrue(wait_for(long_pid.exists), "the long native call recorded its shell")
+        agent_hold.hold(self.session, self.agent, "fixture")
+        first = self.tool_call(hooks, agent_hold.WAIT_COMMAND, "toolu_notice")
+        self.assertIn("WAIT: running work is held", first)
+        returned = []
+        agent = threading.Thread(target=lambda: returned.append(
+            self.tool_call(hooks, agent_hold.WAIT_COMMAND, "toolu_wait")), daemon=True)
+        agent.start()
+        # Lets the call reach the gate first; a release before that takes the same path (the
+        # unresumed notice), so the verdict below never depends on this sleep.
+        time.sleep(1.5)  # load-bound: ordering aid only, both orders reach the same verdict
+        self.assertTrue(agent_hold.release(self.session, self.agent)["ok"])
+        agent.join(60)
+        self.assertFalse(agent.is_alive(), "the wait returns after the release")
+        out = returned[0]
+        self.assertIn("RESUMED at", out)
+        self.assertNotIn("STILL RUNNING", out)
+        self.assertIn("NOT FINISHED YET: tool toolu_long", out, "the running call is named for a later wait")
+        self.assertIsNone(long_call.poll(), "the long call continues; the wait never ends it")
+
     def test_a_held_agent_makes_no_model_call_until_it_is_released(self):
         import threading
         hooks = self.hold_hooks()
