@@ -1211,6 +1211,58 @@ t "claude login: an account list it cannot read is a refusal, never a guess at t
   has "$(cat "$TMP/acct-bad.err")" "$TMP/accounts-bad.json"
 t_done
 
+t "claude login: an account list the app itself would refuse is refused, never read around"
+  # Tom's review of 9bbb8777. The app's Stored (claude_accounts.rs) requires inUse and a string
+  # id and label on every account, Accounts::open refuses a list without Account 1, and a
+  # non-ASCII folder is refused rather than name another item for the same spelling. The script
+  # read the first two more leniently than the app, and none of the four had a case.
+  printf '{"accounts":[{"id":"1","label":"Home"},{"id":"2","label":"Work","folder":"%s"}],"atThreshold":"pause"}\n' \
+    "$ACCT_FOLDER" > "$TMP/accounts-no-inuse.json"
+  # The account without a label is NOT the one in use: the app refuses the whole list anyway.
+  printf '{"accounts":[{"id":"1"},{"id":"2","label":"Work","folder":"%s"}],"inUse":"2"}\n' \
+    "$ACCT_FOLDER" > "$TMP/accounts-no-label.json"
+  printf '{"accounts":[{"id":"2","label":"Work","folder":"%s"}],"inUse":"2"}\n' "$ACCT_FOLDER" > "$TMP/accounts-no-one.json"
+  printf '{"accounts":[{"id":"1","label":"Home"},{"id":"2","label":"Work","folder":"/nonexistent/caf\\u00e9/2"}],"inUse":"2"}\n' \
+    > "$TMP/accounts-non-ascii.json"
+  for case in no-inuse no-label no-one non-ascii; do
+    : > "$TMP/acct-refused.log"
+    # shellcheck disable=SC2046  # login_env prints NAME=value words; splitting them is intended
+    out="$(env $(login_env) TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-$case.json" STUB_LOG="$TMP/acct-refused.log" \
+           "$TESTVM_DIR/claude-login.sh" push richos-test-a "$KEEP_HOME" 2>"$TMP/acct-refused.err")"
+    no $? "a list the app would refuse ($case) must refuse"
+    eq "$out" "claude login: guest NOT logged in" "$case"
+    eq "$(wc -c < "$TMP/acct-refused.log" | tr -d ' ')" "0" "nothing reached the guest ($case)"
+    has "$(cat "$TMP/acct-refused.err")" "$TMP/accounts-$case.json"
+  done
+t_done
+
+t "claude login: an inUse the list does not name is the list's first account, as the app's in_use picks"
+  printf '{"accounts":[{"id":"2","label":"Work","folder":"%s"},{"id":"1","label":"Home"}],"inUse":"9"}\n' \
+    "$ACCT_FOLDER" > "$TMP/accounts-unlisted.json"
+  : > "$TMP/acct.services"
+  # shellcheck disable=SC2046
+  out="$(env $(login_env) TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-unlisted.json" HOST_SECURITY_SERVICES_LOG="$TMP/acct.services" \
+         STUB_LOG=/dev/null STUB_SECURITY_STDIN=/dev/null STUB_CLAUDE_LOGIN=present \
+         "$TESTVM_DIR/claude-login.sh" push richos-test-a "$KEEP_HOME" 2>/dev/null)"
+  ok $? "an unlisted inUse is the first account, not a refusal"
+  eq "$(sort -u "$TMP/acct.services")" "$ACCT_ITEM" "the first account listed (Work) is the one read"
+t_done
+
+t "claude login: run.sh passes on host-check's own reason, never a fixed 'not logged in'"
+  # Tom's review of 9bbb8777: run.sh sent host-check's stderr to /dev/null, so an unreadable
+  # account list was reported as "not logged in — /login on the host first".
+  src="$(cat "$TESTVM_DIR/run.sh")"
+  # shellcheck disable=SC2016  # the $ names are literal source text
+  has "$src" 'HOST_LOGIN_REFUSAL="$("$HERE/claude-login.sh" host-check 2>&1 >/dev/null)"'
+  hasnt "$src" 'host-check >/dev/null 2>&1'
+  # And the reason it passes on names the list, not a sign-in.
+  # shellcheck disable=SC2046
+  err="$(env $(login_env) TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-bad.json" "$TESTVM_DIR/claude-login.sh" host-check 2>&1 >/dev/null)"
+  no $? "host-check refuses an unreadable list"
+  has "$err" "cannot be read"
+  hasnt "$err" "/login on the host first"
+t_done
+
 # The mutation pass below is run by hand, so a change to claude-login.sh or to these cases
 # reaches the merge only through this runner: its text check (each mutant's text found once,
 # each case it names still here) runs no case and takes well under a second. Not named
@@ -1318,6 +1370,42 @@ t "claude login: keep asks THIS Mac to renew once when the guest's copy enters t
   kill -0 "$KEEP_PID" 2>/dev/null && { no 0 "the keeper outlived its run"; kill "$KEEP_PID" 2>/dev/null; }
   wait "$KEEP_PID" 2>/dev/null
   eq "$(wc -l < "$TMP/renew.log" | tr -d ' ')" "1" "asked once per token, never in a loop"
+t_done
+
+t "claude login: keep follows a mid-run account switch, handing the guest the new account's token"
+  # Tom's review of 9bbb8777: the keeper watched and renewed the account read when it started,
+  # so after the app moved the team to Work the guest kept Home's token. Here Home is in use at
+  # the push; mid-run the app moves to Work (this Mac's write time does not change, so nothing
+  # else would push). The guest must get Work's token, read from Work's own item.
+  mkdir -p "$TESTVM_ROOT/run/richos-test-a"
+  printf '20260926110315\n' > "$TMP/host-mdat"
+  accounts_list "$TMP/accounts-switch.json" 1
+  cred_at "$TMP/cred-switch.json" "home-token-0123456789" 7200
+  env "${LOGIN_ENV[@]}" TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-switch.json" HOST_SECURITY_CREDENTIAL_FILE="$TMP/cred-switch.json" \
+      HOST_SECURITY_MDAT_FILE="$TMP/host-mdat" STUB_LOG=/dev/null STUB_SECURITY_STDIN=/dev/null STUB_CLAUDE_LOGIN=absent \
+      "$TESTVM_DIR/claude-login.sh" push richos-test-a "$KEEP_HOME" >/dev/null 2>&1
+  has "$(cat "$STUB_GUEST_FS/credentials.json")" "home-token-0123456789"
+  : > "$TMP/switch.services"
+  env "${LOGIN_ENV[@]}" TESTVM_CLAUDE_ACCOUNTS="$TMP/accounts-switch.json" HOST_SECURITY_CREDENTIAL_FILE="$TMP/cred-switch.json" \
+      HOST_SECURITY_MDAT_FILE="$TMP/host-mdat" HOST_SECURITY_SERVICES_LOG="$TMP/switch.services" \
+      STUB_LOG=/dev/null STUB_SECURITY_STDIN=/dev/null STUB_CLAUDE_LOGIN=absent TESTVM_CLAUDE_KEEP_SECONDS=1 \
+      "$TESTVM_DIR/claude-login.sh" keep richos-test-a "$KEEP_HOME" >"$TMP/keep3.out" 2>&1 &
+  KEEP_PID=$!
+  sleep 2
+  cred_at "$TMP/cred-switch.json" "work-token-0123456789" 7200   # what Work's item holds
+  accounts_list "$TMP/accounts-switch.json" 2                     # the app moves the team to Work
+  for _ in 1 2 3 4 5 6 7 8; do
+    grep -q work-token "$STUB_GUEST_FS/credentials.json" 2>/dev/null && break
+    sleep 1
+  done
+  has   "$(cat "$STUB_GUEST_FS/credentials.json")" "work-token-0123456789"
+  hasnt "$(cat "$STUB_GUEST_FS/credentials.json")" "refreshToken"
+  has "$(cat "$TMP/switch.services")" "$ACCT_ITEM"
+  rm -rf "$TESTVM_ROOT/run/richos-test-a"
+  for _ in 1 2 3 4 5 6; do kill -0 "$KEEP_PID" 2>/dev/null || break; sleep 1; done
+  kill -0 "$KEEP_PID" 2>/dev/null && { no 0 "the keeper outlived its run"; kill "$KEEP_PID" 2>/dev/null; }
+  wait "$KEEP_PID" 2>/dev/null
+  has "$(cat "$TMP/keep3.out")" "moved the team to Work"
 t_done
 
 t "claude login: run.sh starts ONE keeper after a successful push and records its pid; stop.sh ends that pid"
