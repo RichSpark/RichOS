@@ -33,10 +33,28 @@ impl Catalog {
         .map_err(|e| e.to_string())?;
         db.busy_timeout(std::time::Duration::from_secs(3))
             .map_err(|e| e.to_string())?;
-        db.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
-        )
-        .map_err(|e| e.to_string())?;
+        // Changing a new database to WAL can return SQLITE_BUSY immediately,
+        // without invoking SQLite's busy handler, when first openers overlap.
+        // WAL persists: an established library only needs its mode read.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let mode = db.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+                .and_then(|mode| if mode == "wal" { Ok(mode) } else {
+                    db.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))
+                });
+            match mode {
+                Ok(mode) if mode == "wal" => break,
+                Ok(_) => return Err("The library could not enable durable journal storage".into()),
+                Err(rusqlite::Error::SqliteFailure(code, _))
+                    if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                        && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => return Err(format!("The library journal could not be opened: {error}")),
+            }
+        }
+        db.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")
+            .map_err(|e| e.to_string())?;
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
