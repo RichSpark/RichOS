@@ -9854,6 +9854,7 @@ window.RichDismiss = {
   selector: POPUP_SELECTOR,
   open: openPopups,
   dismissTopmost: dismissTopmostPopup,
+  question: openQuestion,
 };
 
 // ---------------------------------------------------------------------------------------
