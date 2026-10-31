@@ -30,7 +30,7 @@ UPSTREAM_EXAMPLES = [
         "member": "exiftool/lib/Image/ExifTool.pod",
         "sha256": "45f33e06d5157546fd9ad718344635482f6fe289e5caea45ada929c36f3313b2",
         "prefixes": [
-            "/Users/phil"
+            "/Users/phil"  # machine-path-exempt: hash-bound upstream ExifTool.pod example, never operator storage
         ],
         "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
     },
@@ -38,7 +38,7 @@ UPSTREAM_EXAMPLES = [
         "member": "exiftool/exiftool",
         "sha256": "b9703db99dc6fe8d8a6d3fcd38fc8d6c19761c655d713a10d786c155e315396d",
         "prefixes": [
-            "/Users/phil"
+            "/Users/phil"  # machine-path-exempt: hash-bound upstream exiftool example, never operator storage
         ],
         "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
     },
@@ -110,7 +110,7 @@ UPSTREAM_EXAMPLES = [
         "member": "perl/lib/perl5/5.42.0/IPC/Cmd.pm",
         "sha256": "e9f22c60fa41ed8392e8a5b56cf0d0cfb9e1749cd9d92d72ac9ff2c63a924f58",
         "prefixes": [
-            "/Users/kane"
+            "/Users/kane"  # machine-path-exempt: hash-bound upstream IPC/Cmd.pm example, never operator storage
         ],
         "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
     },
