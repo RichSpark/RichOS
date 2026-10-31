@@ -1193,30 +1193,30 @@ mod tests {
             Duration::ZERO, Duration::ZERO).is_err(), "121.6% projected: the helper waits for the reset");
     }
 
+    /// **Row 8 (E2), Sage 2026-10-31, `row8-stu-gate.md`:** the 93% rule pauses what the lead
+    /// runs and starts, never the lead itself (§87 names subagents; §146 terminal parity: Rich is
+    /// never paused). Pinned with the hold in force: the old test checked the lead's `Read`
+    /// before any reading was published, so it proved nothing about the hold. Deleting the
+    /// lead's exemption in `wait()` turns the first group red.
     #[test]
-    fn foreground_tools_are_not_quota_gated_but_new_agents_are() {
-        let (_root, _service, state, scope) = setup();
-        wait(
-            &json!({"tool_name":"Read"}),
-            &state,
-            &scope,
-            "1",
-            Duration::ZERO,
-            Duration::ZERO,
-        )
-        .unwrap();
+    fn the_lead_is_never_held_at_the_pause_point_only_what_it_starts_is() {
+        let (_root, service, state, scope) = setup();
         atomic_write(&scope, &json!({"version":1,"actions_allowed":true})).unwrap();
-        wait(&json!({"tool_name":"Agent"}),&state,&scope,"1",Duration::ZERO,Duration::ZERO).unwrap();
-        publish(&_service,3_600_000);
-        assert!(wait(
-            &json!({"tool_name":"Agent"}),
-            &state,
-            &scope,
-            "1",
-            Duration::ZERO,
-            Duration::ZERO
-        )
-        .is_err());
+        publish(&service, 3_600_000);
+        let now = crate::util::now_millis();
+        assert!(matches!(admission(&state, now), Admission::Held { .. }), "94% did not hold");
+        for tool in ["Read", "Bash", "mcp__richos_work__inspect", "mcp__richos_status__send"] {
+            wait(&json!({"tool_name": tool, "session_id": "stu"}), &state, &scope, "1",
+                Duration::ZERO, Duration::ZERO)
+                .unwrap_or_else(|e| panic!("the lead's own {tool} was held: {e}"));
+        }
+        let dispatch = wait(&json!({"tool_name": "Agent", "session_id": "stu"}), &state, &scope, "1",
+            Duration::ZERO, Duration::ZERO).expect_err("a new agent started during the hold");
+        let said = refusal(&dispatch);
+        assert!(said.starts_with("RichOS desktop quota: No new agent was started"), "{said}");
+        let helper = wait(&json!({"agent_id": "worker-1", "tool_name": "Bash"}), &state, &scope, "1",
+            Duration::ZERO, Duration::ZERO).expect_err("a helper's call ran during the hold");
+        assert!(helper.to_string().starts_with("Still waiting"), "{helper}");
     }
 
     /// **Two-day cleanup O1.2:** a dispatch during the hold stayed pending with nothing said for

@@ -344,9 +344,20 @@ mutant p03-backgrounded-window-consumed-at-its-post "test_point_03_a_backgrounde
     "the platform's run_in_background stamp would be ignored, so a backgrounded call's window would be consumed at its Post and the ref its process creates afterwards -- which the next call's snapshot already holds -- would be attributed to nobody and left behind (points 3, 9, 10)."
 
 mutant p14-unmerged-counts-as-landed "test_point_14_work_merged_nowhere_is_not_landed" "$W" \
-    '                elif not is_ancestor(repo, out.strip(), tip):{AND}        elif t and not is_ancestor(repo, t, tip):' \
-    '                elif False:{AND}        elif False:' \
+    '                elif (not is_ancestor(repo, out.strip(), tip){AND}        elif t and not is_ancestor(repo, t, tip) and not _superseded(chain, repo, b, t, tip):' \
+    '                elif False and (not is_ancestor(repo, out.strip(), tip){AND}        elif False:' \
     "a branch that reached neither main nor its dev branch would be counted as landed, and deleted (points 4, 8, 14)."
+
+# Row 3 (2026-10-31): a tip counts as in the target only through one of the two
+# superseded-by sources; each is proven by the case it alone decides.
+mutant row3-continuation-start-ignored "test_a_continuation_that_rewords_its_predecessors_tip_lands_the_chain" "$W" \
+    '            if w.get("start") == t and realpath(w.get("repo") or "") == repo:' \
+    '            if False:' \
+    "a predecessor's WIP tip its continuation reworded would hold the chain unlanded, or be merged unreviewed."
+mutant row3-recorded-link-ignored "test_supersede_links_a_redone_branch_after_the_fact" "$W" \
+    '    if link and link.get("tip") == t and tip and link.get("commit")' \
+    '    if False and link and link.get("tip") == t and tip and link.get("commit")' \
+    "work recorded as redone elsewhere would never land."
 
 mutant p14-failed-read-counts-as-landed "test_point_14_a_failed_read_of_a_workers_commit_or_branch_never_proves_it_landed" "$W" \
     '                elif rc != 0:{NL}                    missing.append("HEAD of %s could not be read{AND}        if unread:{NL}            missing.append("branch %s: %s" % (b, unread))' \
