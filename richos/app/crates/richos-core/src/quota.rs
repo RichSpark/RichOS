@@ -2153,7 +2153,7 @@ pub(crate) mod tests {
     ///
     /// On main the late tokens are 83,446 / 3,953 = 21.1 points in the live minute: fast, so I =
     /// 1 minute and H the default 5, and the point is 99 - (ceil(21.1 x 6 = 126.7) - 1) = -27,
-    /// clamped to 0: Work at 3% is `leaving` (the gate's handoff order) and held. With the late
+    /// clamped to 0: Work at 3% is `leaving` (then the gate's handoff order) and held. With the late
     /// tokens counted at most `tokens::LATE_POINTS_MAX` (1 point) the speed is (a) 1 point a
     /// minute and (b) 1,001 / 3,953 + 1 = 1.25: the point is (a) 99 - (ceil(1 x 6) - 1) = 94,
     /// or 93 when f64 puts 1/60,000 x 60,000 a hair over 1; (b) 99 - (ceil(1.25 x 6 = 7.5) - 1) = 92.
@@ -2412,7 +2412,7 @@ pub(crate) mod tests {
     /// 76,707 input and 6,739 output, all of it result remainder). Before the fix the fit gave
     /// Haiku 3,953 tokens a point, so the remainder was 21.1 points in the live minute; at the
     /// fast interval the point was 99 - (ceil(21.1 x (1 + 5)) - 1) = 99 - 126, clamped to 0, and
-    /// Work at 3% was `leaving` (the gate's handoff order, gate.rs `handoff`) and held (the
+    /// Work at 3% was `leaving` (then the gate's handoff order) and held (the
     /// gate's `admission`) until the minute passed. Home at 99% is leaving all along. Again with
     /// 1,500 Haiku tokens in the second episode (the second review of d73436c94: a fix that
     /// still let Haiku be fitted alone read 59.5 points a minute there).
