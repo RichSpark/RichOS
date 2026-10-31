@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The phone walk presses a Safari button the moment it exists instead of sleeping 2 s first
+"""The delta walk presses a button the moment it exists instead of sleeping 2 s first
 (hunt part 2, finding 41), and the import walk's after-relaunch reading looks before it sleeps.
 
 No guest: Walk.press is replaced by a stub that fails with 'notfound' a set number of times."""
@@ -35,15 +35,15 @@ class Stub(delta.Walk):
 
 began = time.monotonic()
 w = Stub(0)
-check('a button that is already there is pressed on the first look', w.press_when_present('They match', 'Safari') == 'pressed' and w.calls == 1)
+check('a button that is already there is pressed on the first look', w.press_when_present('They match') == 'pressed' and w.calls == 1)
 check('...with no fixed sleep before it', time.monotonic() - began < 1.0)
 
 w = Stub(2)
-check('a button that appears late is pressed once it does', w.press_when_present('They match', 'Safari') == 'pressed' and w.calls == 3, w.calls)
+check('a button that appears late is pressed once it does', w.press_when_present('They match') == 'pressed' and w.calls == 3, w.calls)
 
 w = Stub(10 ** 6)
 try:
-    w.press_when_present('They match', 'Safari', budget=0)
+    w.press_when_present('They match', budget=0)
     raised = False
 except delta.Failure:
     raised = True

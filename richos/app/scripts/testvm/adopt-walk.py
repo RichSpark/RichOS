@@ -22,9 +22,10 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               the business questions declined; the first conversation is the app's own
   watch       adopt-watch.py started in the guest: every assignment state, prompt and intake
               record on the guest's clock (no prompt text)
-  pair        "Use Rich from your phone" -> Use Tailscale -> Set my phone up -> the pairing page
-              in the guest's Safari (the phone) -> They match, on both sides
-  phone-task  the task typed into the PHONE's composer and sent from there
+  pair        "Use Rich from your phone" -> Use Tailscale -> Set my phone up -> the pairing address
+              given to the phone (walkphone.py: the actual RichConnect client, run on the host,
+              over the native apps' API) -> They match, on both sides
+  phone-task  the task written in the PHONE's composer and sent from there
   observe     within --within seconds: an assignment on that conversation leaves Registered, and
               every prompt on it after pairing came through the phone's intake channel — no desk
               record, no typed prompt. Evidence is pulled to --out.
@@ -46,6 +47,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest  # noqa: E402
 import axwait  # noqa: E402
+import walkphone  # noqa: E402
 
 STEPS = ['identity', 'first-run', 'watch', 'pair', 'phone-task', 'observe']
 TASK = ('Please add a file named hello.txt containing the single word hello to the Acme repository '
@@ -116,6 +118,7 @@ class Walk:
         self.data = self.home + '/Library/Application Support/com.richos.app'
         self.company = self.home + '/Acme'
         self.watch_out = self.payload + '/adopt-watch.jsonl'
+        self.phone_state = self.out / 'phone.json'  # the walk phone's own test key and session
         self.facts = {}
         facts = self.out / 'facts.json'
         if facts.exists():
@@ -425,9 +428,12 @@ class Walk:
                 time.sleep(1)
         if not url:
             raise StepFailed('no pairing address was drawn within 30 s')
-        guest(self.vm, shlex.join(['open', '-a', 'Safari', url]))
-        self.wait_for('They match', app='Safari', seconds=40)
-        self.press('They match', app='Safari')
+        # The phone is the actual RichConnect client on the host, over the native apps' API
+        # (walkphone.py). The guest's Safari drove the phone web page, retired 2026-10-30.
+        try:
+            paired = walkphone.pair(self.phone_state, url)
+        except walkphone.PhoneFailed as exc:
+            raise StepFailed('the phone could not pair: %s' % exc) from exc
         # Sage F1: the Mac, not the phone, activates a paired device — its own "They match".
         end = time.monotonic() + 40
         while True:
@@ -438,15 +444,17 @@ class Walk:
                 if time.monotonic() >= end:
                     raise StepFailed('the Mac never asked for its own "They match"')
                 time.sleep(1)
-        self.wait_for('Write to Rich', role='AXTextArea', app='Safari', seconds=40)
-        if self.present('Not now', app='Safari'):
-            self.press('Not now', app='Safari')
-        return {'paired': True}
+        return {'paired': True, 'words': paired.get('words'), 'phone_threads': len(paired.get('threads') or [])}
 
     def phone_task(self):
+        thread = self.facts.get('thread')
+        if not thread:
+            raise StepFailed('first-run must have run (no conversation on record)')
         before = self.clock()
-        self.type_into(self.a.task, '--role', 'AXTextArea', '--title', 'Write to Rich', app='Safari')
-        self.press('Send', app='Safari')
+        try:
+            walkphone.send(self.phone_state, thread, self.a.task)
+        except walkphone.PhoneFailed as exc:
+            raise StepFailed('the phone could not send the task: %s' % exc) from exc
         after = self.clock()
         self.facts['sent_ms'] = [before, after]
         self.save()

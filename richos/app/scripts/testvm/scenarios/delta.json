@@ -22,14 +22,6 @@
       "count": 5
     },
     {
-      "id": "typed-to-phone",
-      "action": "typed_to_phone",
-      "requires": [
-        "samples"
-      ],
-      "limit_ms": 1000
-    },
-    {
       "id": "first-words",
       "action": "first_words",
       "requires": [
@@ -38,27 +30,11 @@
       "limit_ms": 9000
     },
     {
-      "id": "reply-to-phone",
-      "action": "reply_to_phone",
-      "requires": [
-        "samples"
-      ],
-      "limit_ms": 1000
-    },
-    {
       "id": "wait-band",
       "action": "wait_band",
       "requires": [
         "samples"
       ]
-    },
-    {
-      "id": "phone-to-mac",
-      "action": "phone_to_mac",
-      "requires": [
-        "pair"
-      ],
-      "limit_ms": 1000
     },
     {
       "id": "work-chip-switch",

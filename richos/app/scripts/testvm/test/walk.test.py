@@ -75,7 +75,9 @@ class WalkTests(unittest.TestCase):
     def test_manifest_orders_destructive_check_last_and_budget_six(self):
         manifest=json.loads((HERE/'scenarios/delta.json').read_text());steps=manifest['steps'];ids=[x['id'] for x in steps]
         self.assertLess(ids.index('rejected-phone'),ids.index('rollback'))
-        self.assertLess(ids.index('phone-to-mac'),ids.index('work-chip-switch'))
+        self.assertLess(ids.index('samples'),ids.index('work-chip-switch'))
+        # The phone web page is retired: no step reads a phone screen any more.
+        for gone in ('typed-to-phone','reply-to-phone','phone-to-mac'):self.assertNotIn(gone,ids)
         self.assertEqual(manifest['model_turn_limit'],6)
         self.assertEqual(next(x['count'] for x in steps if x['id']=='samples'),5)
     def test_real_key_reads_use_default_search_list_and_never_emit_secrets(self):
@@ -139,7 +141,7 @@ class WalkTests(unittest.TestCase):
     def test_switch_uses_visible_header_and_requires_work_before_actual_switch(self):
         driver=module('delta-walk');w=object.__new__(driver.Walk)
         with tempfile.TemporaryDirectory() as tmp:
-            w.out=Path(tmp);w.phone={'directory':tmp};w.switch={'before':200,'after':500}
+            w.out=Path(tmp);w.switched={'directory':tmp};w.switch={'before':200,'after':500}
             w.a=SimpleNamespace(thread_b='Scenario B',header_box=[300,28,650,55],chip_box=[320,500,670,145])
             w.ax=lambda *args:[{'current':'true'}]
             frames=[(n,n*100) for n in range(1,8)]
@@ -150,10 +152,44 @@ class WalkTests(unittest.TestCase):
                 if name=='0003.png':return 'Rich is working' if active else 'Done'
                 return ''
             with patch.object(driver.timeline,'_read_meta',return_value=({},frames)),patch.object(driver.qaimg,'load',return_value=img),patch.object(driver.qaimg,'save'),patch.object(driver.qaocr,'text',side_effect=read):
-                self.assertEqual(w.work_chip({},None)['visible_switch_ms'],400)
+                self.assertEqual(w.judge_switch()["visible_switch_ms"],400)
             with patch.object(driver.timeline,'_read_meta',return_value=({},frames)),patch.object(driver.qaimg,'load',return_value=img),patch.object(driver.qaimg,'save'),patch.object(driver.qaocr,'text',side_effect=lambda p:read(p,False)):
-                with self.assertRaises(Failure) as raised:w.work_chip({},None)
+                with self.assertRaises(Failure) as raised:w.judge_switch()
                 self.assertEqual(raised.exception.outcome,'prerequisite unavailable')
+
+
+    def phone_walk(self,driver,calls,phone):
+        """A delta Walk on a scripted guest whose phone is the walk phone (walkphone.py)."""
+        url='https://richos-test-1.example.ts.net:8443/#pair=ABCD2345'
+        w=object.__new__(driver.Walk)
+        w.vm='walk-fixture';w.out=Path('/nonexistent-out');w.home='/Users/admin/testvm/demo/home'
+        w.phone_state=w.out/'phone.json'
+        w.a=SimpleNamespace(tailnet_route_choice=False,thread_a='Scenario A')
+        def ax(mode,*args,app=None):
+            calls.append(' '.join(map(str,[mode,*args,'app=%s'%app])))
+            return [{'title':url,'desc':'Your phone said the six words did not match'}]
+        w.ax=ax
+        def pair(state,link,reject=False):
+            phone.append((state.name,link,reject));return {'words':'six words'}
+        return w,url,pair
+    def test_delta_pairing_and_rejection_use_the_walk_phone_never_the_old_page(self):
+        driver=module('delta-walk');calls=[];phone=[]
+        w,url,pair=self.phone_walk(driver,calls,phone)
+        def guest(vm,command,*args):
+            calls.append('guest '+command)
+            return 'abc  file' if command.startswith('shasum') else ''
+        with patch.object(driver,'guest',side_effect=guest),patch.object(driver.walkphone,'pair',side_effect=pair),\
+             patch.object(driver,'relaunch',return_value={'pid':42,'log':'/guest/boot.log'}),patch.object(driver.time,'sleep'):
+            self.assertEqual(w.pair({},None)['words'],'six words')
+            self.assertTrue(w.rejected_phone({},None)['record_survived'])
+        self.assertEqual(phone,[('phone.json',url,False),('phone-rejected.json',url,True)])
+        self.assertTrue(any(c.startswith('click --title They match') for c in calls),calls)
+        self.assertFalse([c for c in calls if 'Safari' in c or c.startswith('guest open')],calls)
+    def test_delta_phone_that_cannot_pair_is_a_named_product_failure(self):
+        driver=module('delta-walk');w,url,_=self.phone_walk(driver,[],[])
+        with patch.object(driver.walkphone,'pair',side_effect=driver.walkphone.PhoneFailed('not trusted')):
+            with self.assertRaises(Failure) as raised:w.phone_pair(w.phone_state,url)
+        self.assertEqual(raised.exception.outcome,'product failure');self.assertIn('not trusted',str(raised.exception))
 
 
 if __name__=='__main__':unittest.main()

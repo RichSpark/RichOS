@@ -321,5 +321,69 @@ class OpenEnabled(unittest.TestCase):
         self.assertNotIn('time.sleep(2.5)', body)
 
 
+class PhoneSteps(unittest.TestCase):
+    """pair and phone-task against a scripted guest: the phone is the walk phone over the native
+    apps' API (walkphone.py), never the retired phone web page in the guest's Safari."""
+
+    URL = 'https://richos-test-1.example.ts.net:8443/#pair=ABCD2345'
+
+    def setUp(self):
+        from unittest.mock import patch
+        self.calls = []   # everything sent to the guest or its screen, as text
+        self.phone = []
+        w = walk.Walk.__new__(walk.Walk)
+        w.vm, w.out = 'walk-fixture', Path('/nonexistent-out')
+        w.a = type('A', (), {'task': 'Please add hello.txt'})()
+        w.facts = {'thread': THREAD}
+        w.phone_state = Path('/nonexistent-out/phone.json')
+        w.save = lambda: None
+        w.clock = lambda: 1000.0
+        def ax(mode, *args, app=None, timeout=40):
+            self.calls.append(' '.join(map(str, [mode, *args, 'app=%s' % app])))
+            return [{'title': 'They match'}]
+        w.ax = ax
+        w.press = lambda title, role='AXButton', app=None, contains=True: self.calls.append('press %s app=%s' % (title, app))
+        w.present = lambda title, role='AXButton', app=None: (self.calls.append('present %s app=%s' % (title, app)), title == 'Use Tailscale')[1]
+        w.wait_for = lambda title, role='AXButton', app=None, seconds=30: self.calls.append('wait %s app=%s' % (title, app))
+        w.type_into = lambda text, *sel, app=None: self.calls.append('type %s app=%s' % (text, app))
+        self.w = w
+        def command(argv, timeout=30):
+            self.calls.append(' '.join(map(str, argv)))
+            return '{"title": "%s"}' % self.URL
+        def guest(vm, cmd, *a, **k):
+            self.calls.append('guest ' + cmd)
+            return ''
+        self.patches = [patch.object(walk, 'command', side_effect=command), patch.object(walk, 'guest', side_effect=guest),
+                        patch.object(walk.walkphone, 'pair', side_effect=lambda *a, **k: self.phone.append(('pair', a, k)) or
+                                     {'words': 'six words', 'threads': [{'id': THREAD}]}),
+                        patch.object(walk.walkphone, 'send', side_effect=lambda *a, **k: self.phone.append(('send', a, k)) or {})]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+
+    def test_pairing_gives_the_address_to_the_walk_phone_and_the_mac_still_presses_they_match(self):
+        self.assertEqual(self.w.pair()['words'], 'six words')
+        self.assertEqual(self.phone, [('pair', (self.w.phone_state, self.URL), {})])
+        self.assertTrue(any('They match' in c and 'app=None' in c for c in self.calls), self.calls)
+
+    def test_the_task_is_sent_from_the_walk_phone_on_the_first_run_conversation(self):
+        self.assertEqual(self.w.phone_task(), {'sent_between_guest_ms': [1000, 1000]})
+        self.assertEqual(self.phone, [('send', (self.w.phone_state, THREAD, 'Please add hello.txt'), {})])
+
+    def test_neither_phone_step_opens_the_old_page_or_touches_safari(self):
+        self.w.pair()
+        self.w.phone_task()
+        self.assertFalse([c for c in self.calls if 'Safari' in c or c.startswith('guest open')], self.calls)
+
+    def test_a_phone_that_cannot_pair_fails_the_step_with_its_reason(self):
+        walk.walkphone.pair.side_effect = walk.walkphone.PhoneFailed('certificate not trusted')
+        with self.assertRaises(walk.StepFailed) as ctx:
+            self.w.pair()
+        self.assertIn('certificate not trusted', str(ctx.exception))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=1)
