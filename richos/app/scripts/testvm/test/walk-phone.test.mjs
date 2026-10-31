@@ -62,3 +62,26 @@ test('the walk phone pairs, waits for the Mac, sends on the chosen conversation,
   await assert.rejects(run('node', [PHONE, 'pair', '--state', join(dir, 'untrusted.json'), '--link', third], { env: untrusted, timeout: 60000 }),
     error => error.code === 1 && /walk-phone:/.test(error.stderr));
 });
+
+test('the walk phone switches notifications on and off, and the Mac holds its registration only while on', { timeout: 120000 }, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'walk-phone-notify-'));
+  const mac = createStubMac({ host: 'localhost', bindHost: '127.0.0.1', history: 0, macPress: 'manual',
+    pairCode: 'walk-notify-code', capabilities: ['text', 'native-push'], threads: [{ id: 'thread-main', title: 'Rich' }] });
+  const port = await mac.listen(0);
+  t.after(async () => { await mac.close(); rmSync(dir, { recursive: true, force: true }); });
+  writeFileSync(join(dir, 'ca.pem'), mac.caPem);
+  const env = { ...process.env, NODE_EXTRA_CA_CERTS: join(dir, 'ca.pem') };
+  const phone = async (...args) => JSON.parse((await run('node', [PHONE, ...args], { env, timeout: 60000 })).stdout.trim());
+  const state = join(dir, 'phone.json');
+  const paired = await phone('pair', '--state', state, '--link', `https://localhost:${port}/#pair=walk-notify-code`);
+  mac.pressOnMac();  // the Mac's own They match (Sage F1)
+
+  const on = await phone('notifications', '--state', state, '--seconds', '30');
+  assert.deepEqual([on.on, on.status], [true, 'enabled'], JSON.stringify(on));
+  const held = mac.state.devices.get(paired.device).nativePush;
+  assert.equal(held?.topic, 'dev.richos.connect.perf', 'the registration names the TEST app topic: ' + JSON.stringify(held));
+
+  const off = await phone('notifications', '--state', state, '--off', '--seconds', '30');
+  assert.deepEqual([off.on, off.status], [false, 'off'], JSON.stringify(off));
+  assert.equal(mac.state.devices.get(paired.device).nativePush, null, 'switching off removes the registration');
+});

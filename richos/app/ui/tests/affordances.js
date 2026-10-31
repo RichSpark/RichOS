@@ -2000,7 +2000,7 @@ async function main() {
       await page.click("#set-btn"); await page.click("#set-phone-open");
       await page.waitForSelector("#phone-connect", {state:"visible"});
       const control = recovering ? "#phone-connect-disable" : "#phone-connect-start";
-      const text = recovering ? "Your phone's pairing is saved. RichOS is trying to restore its connection." : "First, set up this RichOS app on your Mac. Then pair your phone with it.";
+      const text = recovering ? "Its pairing is saved. RichOS is trying to restore the connection." :"First, set up this RichOS app on your Mac. Then pair your phone with it.";
       await assertAffordance(page, {s:text, c:"ACTIONABLE", control}, {requireText:true});
       assert(await page.locator("#phone-close").isVisible(), "Connect has no visible way out");
       if (recovering) assert(await page.locator("#phone-forget").isVisible(), "Saved phone cannot be revoked from this view");

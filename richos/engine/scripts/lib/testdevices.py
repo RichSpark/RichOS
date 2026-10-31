@@ -714,7 +714,7 @@ def checkout_keys(path):
     """The keys each per-checkout tool derives from a checkout at `path`:
        suite     native-ios-*.test.sh: shasum -a 256 of the checkout root
        rios      native-ios/bin/rios: of <root>/richos/mobile/native-ios
-       loop      mobile/cli/simulator.mjs: of <root>/richos/mobile
+       loop      mobile/cli/cache.mjs: of <root>/richos/mobile
        randroid  native-android/bin/randroid: SHA-1 of <root>/richos/mobile/native-android"""
     p = path.rstrip("/")
     return {

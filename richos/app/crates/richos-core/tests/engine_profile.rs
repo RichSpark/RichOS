@@ -988,6 +988,28 @@ fn the_users_settings_json_adds_environment_and_hooks_and_never_the_apps_own_nam
     assert_eq!(profile.user.settings, Default::default());
 }
 
+/// **Every lease names the user's central folder**, so the engine's missing-tool guard finds the
+/// user's own settings file, where a general permission to install what work needs is kept, off
+/// by default (CEO 2026-10-29: "Unless the user has already given a general permission for
+/// installing what's needed."). A lease with no user folder names none, and a value inherited
+/// from the app's own environment never stands in for it.
+#[test]
+fn a_lease_names_the_users_own_folder_for_the_install_permission() {
+    let f = Scratch::new();
+    let folder = f.0.join("central");
+    let environment = |profile: &EngineProfile| {
+        let mut command = std::process::Command::new("/fictional/provider");
+        command.env("RICHOS_USER_FOLDER", "/fictional/someone-else");
+        profile.configure(&mut command, Path::new("/fictional/provider"), "session", &f.0.join("scope.json"));
+        command.get_envs().map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let env = environment(&prepare_for_user(&f, &folder));
+    assert_eq!(env["RICHOS_USER_FOLDER"].as_deref(), folder.to_str());
+    let env = environment(&prepare_fixture(&engine(), &f.0.join("no-user"), f.runtime()).unwrap());
+    assert_eq!(env.get("RICHOS_USER_FOLDER"), Some(&None), "no user folder: none named, nothing inherited");
+}
+
 /// **The user's commit attribution setting reaches every lease, exactly as in the terminal**
 /// (Hank's parity audit 2026-10-30, item 3). A lease starts Claude with `--setting-sources ''`,
 /// so `"attribution": {"commit": "", "pr": ""}` was dropped and Claude signed every commit with

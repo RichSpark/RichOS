@@ -1,9 +1,9 @@
 # RichOS for Android (native)
 
 The native Android app: Kotlin, Jetpack Compose, one activity. Build plan:
-`richos-hq/docs/plans/2026-09-22-native-apps-build-plan.md` §3.3. The preserved apps
-(`richos/mobile/ios/`, `richos/mobile/ui/`, `richos/web/web-app/`) are untouched; they are the
-working reference for the phone protocol.
+`richos-hq/docs/plans/2026-09-22-native-apps-build-plan.md` §3.3. The earlier iPhone app was removed on 2026-10-31
+(tag `preserved/mobile-ios-and-pwa-2026-10-22`); `richos/web/web-app/lib` is the
+reference client for the phone protocol.
 
 ## The rule that shapes it: the fast loop
 
@@ -13,7 +13,7 @@ calls. There is no second implementation of any behavior for tests.
 
 | Module | What it is |
 |---|---|
-| `core/` | `AppState`, `Action`, the five ports (`OutboxStorage`, `SessionStore`, `Transport`, `Clock`, `IdSource`), `RichCore` (the one place state changes), and `core/dev/`: the fixtures and the deterministic runtime the CLI and the debug bridge share. |
+| `core/` | `AppState`, `Action`, the five ports (`OutboxStorage`, `SessionStore`, `Transport`, `Clock`, `IdSource`), `RichCore` (the one place state changes) and `core/dev/`: the fixtures and the deterministic runtime the CLI and the debug bridge share. |
 | `cli/` | `randroid-headless`, the headless command line over the real core. |
 | `app/` | The Compose app. `app/` package: entry, `AppStore` (the one owner of the core, `StateFlow<AppState>`), production ports. `app/src/debug/`: the development bridge, absent from release builds. Screens: `ui/` and `design/` packages (stream A2). |
 
@@ -88,7 +88,7 @@ cache, the headless session and the emulator's AVD under `$RANDROID_CACHE` (defa
 is absent. Gradle's own cache is `$GRADLE_USER_HOME` (default
 `/Volumes/E1TB/caches/richos-native-android/gradle`). Java: `$JAVA_HOME`, else Android Studio's
 bundled runtime. Android SDK: `$ANDROID_HOME`, else `/opt/homebrew/share/android-commandlinetools`
-(needs `platforms;android-37.0`, `build-tools;36.0.0`, and for the emulator
+(needs `platforms;android-37.0`, `build-tools;36.0.0` and for the emulator
 `system-images;android-34;google_apis;arm64-v8a`).
 
 ## The debug bridge
@@ -130,7 +130,7 @@ It writes `RichConnect-<versionCode>.aab` and a receipt `RichConnect-<versionCod
 version, signer) under `$RANDROID_CACHE/release/`, after verifying that exact file. It refuses
 rather than produce a bundle that would upload and be wrong: without the upload key (unsigned),
 without the Firebase values (no notifications), from uncommitted source under this folder (no
-commit identifies it; `--allow-dirty` makes a test bundle and the receipt says so), or with a stale
+commit identifies it; `--allow-dirty` makes a test bundle and the receipt says so) or with a stale
 launcher icon. **And it refuses every bundle, whatever key signs it, unless the phone speed watch has
 a §104 PASS, cold and warm, for this exact app code on the Android test phone**
 (`richos/mobile/perf/shipgate.py`, CEO 2026-10-03 §106: nothing reaches users without passing the
@@ -140,7 +140,7 @@ Android suite's throwaway-key bundle passes with a stand-in verdict written into
 (`richos/app/scripts/lib/ship_gate_fixture.py`), which the gate's pass line names as a stand-in.
 
 **It also refuses every bundle unless the Google reviewer's walk PASSED on that exact commit** (CEO
-2026-10-04 §107: the CEO is never the first tester). The walk is one command, and it needs nobody:
+2026-10-04 §107: the CEO is never the first tester). The walk is one command and it needs nobody:
 
 ```sh
 richos/mobile/native-android/bin/randroid review-walk --commit <sha>   # default: HEAD
@@ -154,14 +154,14 @@ service: sign in on the access page (headless Chromium), get a pairing link, ope
 that the six words match and press They match in the app and on the page, send one message and see
 its Demo reply, then reset the Google review host. Each step passes or the walk fails, naming the step.
 Pass or fail, it writes `/Volumes/E1TB/state/richos/review-walk/android/<full sha>.json`
-(`richos/mobile/perf/reviewwalk.py`, shared with the iPhone), and `bundle` reads that record for its
+(`richos/mobile/perf/reviewwalk.py`, shared with the iPhone) and `bundle` reads that record for its
 own HEAD before anything builds; the receipt names it. A host that already has a phone (another walk
 or a reviewer) is not touched: the walk fails at its first step and says so. An emulator the walk
 booted is stopped when it ends. The suite's throwaway-key bundle uses a stand-in walk record in its
 scratch (`ship_gate_fixture.py --walks`, named by `RICHOS_REVIEW_WALK_RECORDS`); the pass line says so.
 
 **What verification means** (`bundle` runs it; `bin/randroid verify-bundle <file.aab>` runs it on
-any file): every entry is signed, by exactly one signer, and that signer's SHA-256 is
+any file): every entry is signed, by exactly one signer and that signer's SHA-256 is
 `release/upload-certificate.sha256` (the upload certificate's public fingerprint); the package is
 `dev.richos.connect`; the bundle holds only the `base` module; and the development bridge is
 absent, read from the complete dex dump of the bundle's `base` module (the same scan as the APK,
@@ -173,7 +173,7 @@ and cleartext off, only the expected components exported, no deep link; security
 **Signing.** The release build is signed with the Google Play **upload key**; Play App Signing
 holds the key that signs what users install. `app/build.gradle.kts` signs only when the four
 `richos.upload.*` Gradle properties arrive from the environment; without them the release build
-is unsigned exactly as before, and `check-release` says the signature was not checked. The key
+is unsigned exactly as before and `check-release` says the signature was not checked. The key
 was made once by `richos-hq/scripts/make-android-upload-key.py`, which refuses to replace it; the
 setup note is `richos-hq/docs/operations/2026-09-23-richconnect-android-upload-key.md`.
 
@@ -204,6 +204,6 @@ checksum pinned), AGP 9.4.1, Kotlin 2.4.20, Compose BOM 2026.09.00, Robolectric 
 `richos/app/scripts/native-android-core.test.sh` (core, CLI, headless processes) and
 `richos/app/scripts/native-android-app.test.sh` (Robolectric app tests, `check-release`, the icon's
 `--check`, a signed `bundle` made with a throwaway key that `verify-bundle` must then refuse
-against the committed upload certificate, and with
+against the committed upload certificate and with
 `RANDROID_SUITE_EMULATOR=1` the emulator parity, on-screen and restart checks). Both print
 `NOT RUN` and exit 2 on a host without the toolchain.

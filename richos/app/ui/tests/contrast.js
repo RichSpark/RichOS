@@ -192,12 +192,18 @@ const shellSettled = (p) => harnessShellSettled(p);
 /// `Element.getAnimations({ subtree: true })` is the exact end state and this WebKit has it
 /// (probed at `934f127`: one animation found, 192 ms awaited, opacity 1 and zero animations
 /// left). The two frames afterwards are the paint.
+///
+/// ONLY THE FINITE ONES. An infinite animation's `finished` never settles, so a panel that holds
+/// one waited out the suite's whole deadline: round 49's breathing Reconnecting dot on the phone
+/// card stopped this walk at `phone-connect-recovery` twice on 2026-10-31 (proof runs
+/// 20261031T105021Z and 20261031T113427Z, timed out at 1800 s). The same filter as below.
 async function overlaySettled(p, selector) {
   await p.waitForSelector(selector, { state: "visible" });
   await p.evaluate(async (sel) => {
     const el = document.querySelector(sel);
     if (!el) return;
-    await Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => {})));
+    const finite = el.getAnimations({ subtree: true }).filter((a) => a.effect && a.effect.getComputedTiming().iterations !== Infinity);
+    await Promise.all(finite.map((a) => a.finished.catch(() => {})));
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   }, selector);
 }

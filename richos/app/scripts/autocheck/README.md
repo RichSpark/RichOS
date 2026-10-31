@@ -282,7 +282,7 @@ Now:
 4. The land receipt records `rounds`.
 
 **Left to the nightly, by name**: suites that need a device this Mac has one of: the
-iPhone simulator (native-ios-app, native-ios-share, native-ios-ui, mobile-ios) or a screen,
+iPhone simulator (native-ios-app, native-ios-share, native-ios-ui) or a screen,
 the host's or the test VM's guest (read off the suite as `proof-run.py` reads it).
 
 **No mutation pass runs in the merge (2026-09-30).** The merge of cc/zach-opus-q1

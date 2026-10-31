@@ -45,7 +45,7 @@ test('notification focus holds its place until Latest or an explicit send',()=>{
 // WebKit and Chromium both move the view BEFORE they dispatch the wheel, so a fling to the oldest
 // message reaches pause() with scrollTop 0 and pause() does nothing; a layout change in the same
 // frame then sends the scroll handler down its "geometry changed while following" branch, which
-// pins him back to the newest message. Measured in real engines by mobile/test/client-ui.mjs. This
+// pins him back to the newest message. Measured in real engines by a browser test since removed. This
 // fails the day the defect is fixed, so the expectation cannot outlive it.
 test('KNOWN DEFECT follow-yank — a fling to the top with a layout change in the same frame is returned to the newest message',()=>{
   const p=setup();

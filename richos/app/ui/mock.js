@@ -166,7 +166,13 @@
       servingVia,
       platform: mockPhone.paired ? mockPhone.platform : null,
       pushReady: mockPhone.paired && window.__RICHOS_MOCK_PRESET__?.phonePushReady === true,
-      pushTransport: window.__RICHOS_MOCK_PRESET__?.phonePushTransport || "web-push",
+      // WHAT THIS BUILD WRITES BY DEFAULT: a RichConnect phone names its push service when it
+      // answers They match ("apns" on iPhone, "fcm" on Android). "web-push" is a record the
+      // retired phone web page made, reached with the preset (round 49's Older pairing).
+      pushTransport: window.__RICHOS_MOCK_PRESET__?.phonePushTransport || (mockPhone.platform === "android" ? "fcm" : "apns"),
+      // `PhoneStatus::notifications_on` (round 49): the paired phone signed up for notifications
+      // through the RichConnect app. Off unless a suite asks, as on a phone that has not yet.
+      notificationsOn: mockPhone.paired && window.__RICHOS_MOCK_PRESET__?.phoneNotificationsOn === true,
       // **HAS THE PERSON ANSWERED THE SIX WORDS?** Ray's nightly `.7`, defect 2: the Mac read
       // `It is paired` while the phone was still asking, so the card now waits for the phone to
       // come back with `fingerprint_confirmed` (`phone/routes.rs`, `POST /api/pair`).

@@ -104,7 +104,7 @@ test('Release carries the hosted update-policy address; development keeps its lo
   assert.equal(configuration(file, false, 'Release').policyURL, 'https://policy-lab.example.net/v1/policy');
 });
 
-// release-config.json is the earlier iPhone app's own version (richos/mobile/ios). The native iPhone
+// release-config.json is a version the earlier iPhone app (removed 2026-10-31) carried. The native iPhone
 // app sets its version in native-ios/project.yml and the Android app in native-android/app/
 // build.gradle.kts; nothing holds any of them to another (CEO ruling §91, 2026-09-26;
 // app/scripts/phone-apps-independent.test.sh).

@@ -15,13 +15,4 @@ function createScratch(label) {
     return fs.mkdtempSync(join(base, `richos-mobile-${label}-`));
   } catch (error) { throw new StorageUnavailable(`Cannot allocate mobile scratch in ${base}: ${error.message}`); }
 }
-function proofCache(base, storage, override) {
-  if (!['system', 'external'].includes(storage)) throw new Error('Simulator storage must be system or external');
-  if (override) return override; // Explicit paths remain subject to the CLI's policy checks.
-  const policy = join(base, 'simulator-storage.json');
-  // Reuse matching earlier caches. Never rewrite a saved choice or reuse a failed
-  // external device set when the suite now requests the approved system storage.
-  if (fs.existsSync(policy) && JSON.parse(fs.readFileSync(policy, 'utf8')).storage === storage) return base;
-  return `${base}-${storage}`;
-}
-module.exports = { createScratch, proofCache, StorageUnavailable };
+module.exports = { createScratch, StorageUnavailable };

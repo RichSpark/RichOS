@@ -614,6 +614,14 @@ function createStubMac(options) {
 					res.on('close', () => { if (!done) { done = true; clearTimeout(timer); record.ended = 'closed'; if (state.holds.get(who.deviceId) === finish) state.holds.delete(who.deviceId); } });
 					return;
 				}
+				// A native registration (`routes.rs` `native_push`): the Mac files it (null switches it
+				// off) and answers whether it holds one, as `notifications::Desk::response` does.
+				if (Object.prototype.hasOwnProperty.call(body, 'native_push')) {
+					who.device.nativePush = body.native_push || null;
+					send(res, 200, { host_id: 'a'.repeat(32), registered: !!body.native_push },
+						{ 'X-RichOS-Challenge': newChallenge(who.deviceId) });
+					return;
+				}
 				who.device.push = body.push || null;
 				who.device.pushTransport = body.push_transport || null;
 				send(res, 200, { ok: true, challenge: newChallenge(who.deviceId) });

@@ -1513,7 +1513,7 @@
     },
     "scripts/lib/testdevices.py#workspace-collection": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+      "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
       "evidence": "workspaces calls collect with private HOME/config and no fake device adapters. The collector, ownership queries and error writer read private device/workspace state; no orchestration.config values are loaded. Device admission/launch helpers are not called.",
       "keys": [],
       "edges": [
@@ -2921,7 +2921,7 @@
     },
     "scripts/lib/scratch-reaper.py": {
       "source": "scripts/lib/scratch-reaper.py",
-      "sha256": "9495d6c65b63962f5fe090ced0a8fae47f6606cc56e66b26cd7a6d093dbcd95d",
+      "sha256": "96c5b60125ebb40a33b62433b0ed5b51e9e96b9557cbadbc96f11d75c4114043",
       "evidence": "config_from_env uses finite literal need/number/opt/opt_number callers; process names, system flags and state paths are the other environment reads. The shell exports these values from its selected config. Reviewed local scan/apply closure imports only fixed workspace liveness, appinstances and testdevices/alert modules. Docker/ps/lsof are external executables, not engine readers. All imported settings readers honor the same SCRATCH_REAPER_CONFIG fixture path. Renewed 2026-10-01 (a land sweeps only the landed agent's scratch): --agent runs scan_agent instead of scan: it reads the ledger's new cwd field, the declared SCRATCH_AGENT_ROOTS and, by glob, the agent's own session scratchpad under SCRATCH_CLAUDE_ROOTS, and checks holders with the existing per-path lsof. In that mode apply() skips test devices and Docker and the state file is not written. No new execution edge. Renewed 2026-10-04 (what an automatic land kept): scan() adds scan_kept, which lists the declared SCRATCH_KEPT_DIR and deletes each child older than SCRATCH_KEPT_RETENTION_DAYS by its own mtime, through the same walls; it reads no other file. No new execution edge. Renewed 2026-10-08 (build caches on the external drive): scan() adds scan_build_caches, which reads the five declared SCRATCH_BUILD_CACHE_*/SCRATCH_CARGO_TARGET_ROOTS keys through config_from_env and plans through the fixed-path module lib/build_caches.py; apply() deletes cargo-units rows through that module under Cargo's lock. No other new reader. Renewed 2026-10-13: settings-based cache and Cargo root validation now runs within config_from_env's existing controlled Fatal refusal, before workspace discovery or any cleanup; no new reader, setting or execution edge. Renewed 2026-10-13: config_from_env now uses the already-declared build_caches.roots reader so scheduled cleanup includes a selected RICHOS_BUILD_CACHE; controlled storage refusal remains before discovery. No new edge or key. Renewed 2026-10-23: _ps_env appends /usr/sbin and /sbin to the child PATH when missing, so the launchd job (whose plist PATH lacks /usr/sbin) finds the same external lsof; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the allocator arm reads the .git pointer files and worktrees/*/gitdir files inside an ended, ledger-recorded allocation to prove its repositories are wholly inside it; those are files under the candidate itself, not settings. No new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the legacy, deny-by-default and standing-failure arms run the same containment read over a candidate's .git pointer files before narrowing wall 2. Files under the candidate itself; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD coverage): config_from_env reads the new declared key SCRATCH_BULK_TMP_ROOTS (paths relative to RICHOS_BULK_ROOT, read through the existing machine_settings reader and validate refusal) and adds those producer temp roots to the shared temp roots; scan_scratch_root then also sweeps the allocator root under each. No new execution edge. Renewed 2026-10-23 (cleanup PRD R4): the full --apply publishes source/outcome/unresolved/roots only when SCRATCH_REAPER_SCHEDULED=1, which scratch-reaper.sh sets from launchd's XPC_SERVICE_NAME and clears otherwise; a refused scheduled run publishes its refusal; the deletion log keeps one rotated file. No new config key or execution edge. Renewed 2026-10-23 (cleanup PRD R1, review rv-20261023T212629Z-3dc330ca-a2b9): config_from_env reads the new declared key SCRATCH_FIXTURE_REPO_LABELS; the allocator arm narrows wall 2 only for those ledger labels, and the deny-by-default arm only for declared harness families inside the producer temp roots. No new reader or execution edge. Renewed 2026-10-23 (cleanup PRD A6): scan_codex_worktrees reads SCRATCH_CODEX_WORKTREE_ROOTS (absolute or relative to the bulk root) and SCRATCH_CODEX_HOME, adds those roots to the walls, and hands each checkout to codex_worktrees.py; apply() closes codex-worktree rows only through codex_worktrees.close(); --notice skips the arm. Renewed 2026-10-24 (review rv-20261023T232303Z-ba744b07-d444 #2): scan() adds scan_named_scratch, which lists the already-declared named-agent root (machine_settings.agent_root) and reads the agent registry through the fixed workspace liveness module it already loads (damaged_records, all_agents, finished_state); it plans KEEP or INDETERMINATE only, never DELETE; --notice skips it. No new config key, reader or execution edge. Renewed 2026-10-25 (CEO \u00a754 addendum 2, the app's own sweep): --app runs scan_app instead of scan: it lists <data>/engine-state/evidence/*/binding.json (the app's own record, under a folder given on the command line, not a setting) and the hosted sessions' directories under the declared SCRATCH_CLAUDE_ROOTS, decided by the existing liveness, per-path lsof and walls; in that mode apply() skips test devices and Docker, writes no state file and logs a planned path that vanished as GONE. No new config key or execution edge. Renewed 2026-10-25 (the app's own sweep, two more classes): scan_app also lists <data>/engine-profiles and reads each lease folder's .richos-owner.json (written by richos-core app_cleanup.rs; pid and start, compared through the existing workspaces process_start), reads every process's command line once with ps -axww (an external executable, like lsof), and lists ~/Library/Caches/claude-cli-nodejs/<slug of <data>/coordination>/mcp-logs-*, decided by the existing claude-orphan rule; --app-exiting <pid> names the quitting app. Files under the app's folder or Claude Code's cache, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T000521Z-2fe81615-e0f2 #1): in --app, Liveness also reads <folder>/sessions for every added Claude account (<data>/claude-accounts/*/ and each folder <data>/claude-accounts.json names), and an ENDED app session is kept while any running process's command line (the ps -axww read above) carries its id. Files under the app's folder, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T010610Z-2cc154e7-1d03 #2): --app-budget (default APP_BUDGET_SECONDS, 8 s, inside the app's 10 s bound) stops weighing new app candidates at half the budget and starting new deletions at all of it; the rest is counted as deferred= for the app's next sweep. Reads the clock only. No new config key, file read or execution edge. Renewed 2026-10-25 (review rv-20261025T021219Z-91f589b0-af71 #1): scan_app_profiles reads a folder's own .richos-owner.json before its base's (the app now writes one into both). A file under the app's folder, not a setting. Renewed 2026-10-25 (review rv-20261025T020709Z-8339d95d-d408 #1): scan_app adds scan_app_voice, which lists <data>/voice-scratch for utt-<pid>.wav and $TMPDIR (the same TMPDIR environment read --process-only already makes) for richos-speech-warm-<pid>-<n>, and decides each through the existing workspaces process_start, the per-path lsof and the walls; a folder of the app's that exists and cannot be listed is planned INDETERMINATE instead of skipped. No new config key or execution edge. Renewed 2026-10-25 (the app's cleanup reports a failure as one): scan_app_profiles lists <data>/engine-profiles through the same app_listing, so an unreadable profiles folder is planned INDETERMINATE instead of skipped. No new reader, setting or execution edge. Renewed 2026-10-25 (a killed dictation tool's scratch): scan_app adds scan_app_dictation, which lists <data>/dictation-scratch through the same app_listing and reads each folder's .richos-owner.json (written by the tool's dictation/scratch.rs through richos-core app_cleanup.rs), decided through the existing workspaces process_start, the per-path lsof, the age floor and the walls. Files under the app's folder, not settings. No new config key, reader or execution edge. Renewed 2026-10-25 (Codex's read of 0dac9ba80): only a missing owner record takes the age-floor fallback; a record that exists and cannot be read or parsed is planned INDETERMINATE. No new reader, setting or execution edge. Renewed 2026-10-25: a record holding JSON null is a record that is there, not a missing one, and is planned INDETERMINATE with the rest. No new reader, setting or execution edge. Renewed 2026-10-29: every sweep (not only --app) also reads the session registries of the app's added Claude accounts, <HOME>/<dirname of SCRATCH_APP_REGISTRY_RELPATH>/claude-accounts/*/sessions/*.json and the folders claude-accounts.json there names, through the existing app_account_session_dirs; read only, an existing config key, no new execution edge.",
       "keys": [
         "SCRATCH_AGE_FLOOR_MINUTES",
@@ -4767,7 +4767,7 @@
     },
     "scripts/lib/testdevices.py#scheduled-collection": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+      "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
       "evidence": "Same reviewed collect/classification/registry/workspace-barrier closure as workspace collection, reached by the scheduled watchdog. Also retains the exported TEST_DEVICE_FAILURES_STATE read used by machine admission and the failure writer. Device launch/admission helpers are not called.",
       "keys": [
         "TEST_DEVICE_FAILURES_STATE"
@@ -5076,7 +5076,7 @@
     },
     "scripts/lib/scratch-reaper.py#required-setting-names": {
       "source": "scripts/lib/scratch-reaper.py",
-      "sha256": "9495d6c65b63962f5fe090ced0a8fae47f6606cc56e66b26cd7a6d093dbcd95d",
+      "sha256": "96c5b60125ebb40a33b62433b0ed5b51e9e96b9557cbadbc96f11d75c4114043",
       "evidence": "SCR2 scans source text for literal need/number calls and the session process key. It never imports or executes this Python module; changes to this source invalidate the declaration of required names.",
       "keys": [],
       "edges": [
@@ -13723,7 +13723,7 @@
     },
     "scripts/lib/testdevices.py#device-fixtures": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+      "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
       "evidence": "Suite-bound API path: real workspace liveness and cpu_guard APIs before HostMemory plus failure writer. In-process boot has _device_admission replaced; T60 exercises admission with literal worker/simulator modules. Separate CLI calls are register/run-active/acquire-ios, never boot, so app-side simulator_budget/reserve does not execute. Native commands and all run-active child programs are separately bound fixture strings, not config-provided code.",
       "keys": [],
       "edges": [
@@ -15397,7 +15397,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/testdevices.py",
-          "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+          "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15487,7 +15487,7 @@
     },
     "scripts/lib/testdevices.py#cpu-fixtures": {
       "source": "scripts/lib/testdevices.py",
-      "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+      "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
       "keys": [],
       "edges": [
         {
@@ -16155,14 +16155,6 @@
           "root": "environment",
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
-          "path": "scripts/lib/testdevices.py",
-          "sha256": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
-          "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
-        },
-        {
-          "root": "environment",
-          "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
-          "default_engine": true,
           "path": "scripts/lib/agent-liveness.py",
           "sha256": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
@@ -16181,6 +16173,14 @@
           "default_engine": true,
           "path": "scripts/lib/agent_hold.py",
           "sha256": "8a88b276d74977963790a3bfc3287aac9f95ebd161284bb0c37de434778ac003",
+          "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
+        },
+        {
+          "root": "environment",
+          "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
+          "default_engine": true,
+          "path": "scripts/lib/testdevices.py",
+          "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         }
       ]
@@ -17413,7 +17413,7 @@
     },
     "scripts/lib/toolchain.py": {
       "source": "scripts/lib/toolchain.py",
-      "sha256": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0",
+      "sha256": "22e87bb4748c79fc0952c304eec6ca3f4842dc13e3636b20b3a4a18f091b6a76",
       "keys": [],
       "edges": [
         {
@@ -17423,11 +17423,11 @@
           "to": "scripts/lib/unguarded_rm.py"
         }
       ],
-      "evidence": "Full file reviewed (2026-10-29). Reads the file system only (DEVELOPER_DIR, the xcode-select link, the two default developer directories) and never executes a stub. Environment: DEVELOPER_DIR, PATH, RICHOS_TOOLCHAIN_ROOT (test prefix), RICHOS_TOOLCHAIN_STATE / RICHOS_APP_STATE (the asks.json folder), HOME; no orchestration key. Writes only asks.json and, for the harness, a stand-in folder the caller names."
+      "evidence": "Full file reviewed (2026-10-31). Reads the file system only (DEVELOPER_DIR, the xcode-select link, the two default developer directories) and never executes a stub. Environment: DEVELOPER_DIR, PATH, RICHOS_TOOLCHAIN_ROOT (test prefix), RICHOS_TOOLCHAIN_STATE / RICHOS_APP_STATE (the asks.json folder), HOME, RICHOS_USER_FOLDER / CLAUDE_PROJECT_DIR (where the user's own orchestration.config is). The only key it reads is INSTALL_MISSING_TOOLS, from the USER's own settings file (never the engine's orchestration.config; tests write their own fixture folder), so it adds no engine config key. Writes asks.json, install.lock beside it, the user's settings file only through `permission yes|no`, and, for the harness, a stand-in folder the caller names. `install`/`answer yes` run <root>/usr/bin/xcode-select --install only with the user's recorded yes or general permission and only when the tool is missing; tests point <root> at a fake Mac whose installer counts its runs."
     },
     "scripts/lib/toolchain.test.py": {
       "source": "scripts/lib/toolchain.test.py",
-      "sha256": "9c87519a30cd99e3ab2a50e8d3acb5b82d159ad3cc35105971a702112311b88e",
+      "sha256": "d3872975543d1f574aa4e9ffbcc4f7e9251b2cae477fbfc9d1a9c21b8f9564c0",
       "keys": [],
       "edges": [
         {
@@ -17832,7 +17832,7 @@
         "scripts/hooks/workspace-lifecycle.sh": "5c60902e44c8c46c072bdabd66bc5d7f66ae845e59a880bf371c489b885dfecd",
         "mega-lander/workspaces.py": "5dcc577af1ad889553c1069328651a05695631be78de3d6475df409c3c18f156",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/snapshot-agent-definitions.sh": "37080a33015c780667bacc7b8c92340da55bcd2a5022b2f37c3c5991003e7f3f",
@@ -17849,7 +17849,7 @@
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "ec65aa22fcd926498c154a8a20f7477d4678c4c6aaf586eae341b576d6858598",
         "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
-        "scripts/lib/scratch-reaper.py": "9495d6c65b63962f5fe090ced0a8fae47f6606cc56e66b26cd7a6d093dbcd95d",
+        "scripts/lib/scratch-reaper.py": "96c5b60125ebb40a33b62433b0ed5b51e9e96b9557cbadbc96f11d75c4114043",
         "scripts/hooks/operator-claim.sh": "9e7feca8f62014f007f37cb96a4a8146358b42552b8964c22833585ad6442037",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
@@ -17890,7 +17890,7 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "mega-lander/workspaces.py": "5dcc577af1ad889553c1069328651a05695631be78de3d6475df409c3c18f156",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-definition-drift.sh": "f8a3998ce46f399049256b3c67b8b1836794e130d29c28dc75d509e6090fedcb",
@@ -17926,7 +17926,7 @@
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "ec65aa22fcd926498c154a8a20f7477d4678c4c6aaf586eae341b576d6858598",
         "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
-        "scripts/lib/scratch-reaper.py": "9495d6c65b63962f5fe090ced0a8fae47f6606cc56e66b26cd7a6d093dbcd95d",
+        "scripts/lib/scratch-reaper.py": "96c5b60125ebb40a33b62433b0ed5b51e9e96b9557cbadbc96f11d75c4114043",
         "scripts/hooks/operator-claim.sh": "9e7feca8f62014f007f37cb96a4a8146358b42552b8964c22833585ad6442037",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
@@ -18045,7 +18045,7 @@
         "scripts/lib/row-currency.py": "484404c6143d1a5b94182321e6fa0f6250b298b27a7d3b59ba26d5ed648db677",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "scripts/lib/sandbox-completeness.sh": "2d141da4f87eb59130459ce74fa1c3067e43c4e7b39ad03cb43f17cfb7973131",
-        "scripts/lib/scratch-reaper.py": "9495d6c65b63962f5fe090ced0a8fae47f6606cc56e66b26cd7a6d093dbcd95d",
+        "scripts/lib/scratch-reaper.py": "96c5b60125ebb40a33b62433b0ed5b51e9e96b9557cbadbc96f11d75c4114043",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
@@ -18055,7 +18055,7 @@
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/tree-witness.sh": "ce0b40484c82bb421e5b4fef7a20276f606cc3df2c19fc6466700fd9ddaf1304",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
@@ -18203,7 +18203,7 @@
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
+        "scripts/lib/toolchain.py": "22e87bb4748c79fc0952c304eec6ca3f4842dc13e3636b20b3a4a18f091b6a76"
       }
     },
     "scripts/hooks/mechanical-findings.test.sh": {
@@ -18438,7 +18438,7 @@
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
+        "scripts/lib/toolchain.py": "22e87bb4748c79fc0952c304eec6ca3f4842dc13e3636b20b3a4a18f091b6a76"
       }
     },
     "scripts/hooks/stop-hook-visibility.test.sh": {
@@ -18679,7 +18679,7 @@
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
+        "scripts/lib/toolchain.py": "22e87bb4748c79fc0952c304eec6ca3f4842dc13e3636b20b3a4a18f091b6a76"
       },
       "evidence": "R1 checks event/matcher registrations of these five hooks. Dispatcher manifest is independently bound; no other hook registration runs."
     },
@@ -18807,7 +18807,7 @@
         "scripts/hooks/guard-resume-isolation.sh": "5a86dfd9b446b0444703b787133d1b6914fd4e2c86ededb65067ffc38c3e4250",
         "scripts/lib/pause_protocol.py": "75275cc80313de3ff83dcfba86121d33ca5c4fe208c174a3be2508eb40143a18",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
@@ -18897,7 +18897,7 @@
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
         "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "727eab9a591e040b5bcb9bc43f9d80bf96fc63e9915d1b89acbb0ff26f0657f0"
+        "scripts/lib/toolchain.py": "22e87bb4748c79fc0952c304eec6ca3f4842dc13e3636b20b3a4a18f091b6a76"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
     },
@@ -18921,7 +18921,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "cc732687d46ddbb442a4541edeee8bd16e358862ef879f39956d0c34b1cc3f3f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",
@@ -18987,7 +18987,7 @@
         "scripts/lib/spawn-guard-audience.py": "0f29e5f4d8b857670e6566646e5ba1691b8b49e55b599b7e2d9d8a4782ccc0f9",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/prepare-agent-spawn.py": "8e47126285a2f30a8a598b63d696c4ff27cc162d09e14680c074e067cd310a10",
         "scripts/spawn.sh": "c1965676afbb3cca7b2659304bc23574cc738dedd84c1410841b11498ba26bc9",
@@ -19029,14 +19029,14 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
-        "scripts/lib/scratch-reaper.py": "9495d6c65b63962f5fe090ced0a8fae47f6606cc56e66b26cd7a6d093dbcd95d",
+        "scripts/lib/scratch-reaper.py": "96c5b60125ebb40a33b62433b0ed5b51e9e96b9557cbadbc96f11d75c4114043",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/stopwatch.sh": "1e54e36d5a28ddd3ba2a55a833c52e09e77e4553f9528eb28a7cd8b20f88e445",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
@@ -19068,11 +19068,11 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
-        "scripts/lib/scratch-reaper.py": "9495d6c65b63962f5fe090ced0a8fae47f6606cc56e66b26cd7a6d093dbcd95d",
+        "scripts/lib/scratch-reaper.py": "96c5b60125ebb40a33b62433b0ed5b51e9e96b9557cbadbc96f11d75c4114043",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105"
@@ -19169,7 +19169,7 @@
         "scripts/lib/resolve-roots.sh": "7201d2be91935659684b5ca5567278ff8be6ed884b11b95be965184cbed20e3e",
         "scripts/lib/teammate-identity.py": "54fed25d0e79b1757690cdc2b63fe3281c985b8324fe27b2d12d7048e27badf2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8"
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775"
       },
       "evidence": "settings.local.json is named only in the duplicate-delivery explanatory comment. The suite invokes the actual guard directly with literal payloads, private team/registry facts and the already qualified helper closure. No reader consumes a registration surface. This does not qualify or alter WAIT/pause behavior.",
       "seated_reads_nothing": true
@@ -19204,7 +19204,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "cc732687d46ddbb442a4541edeee8bd16e358862ef879f39956d0c34b1cc3f3f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",
@@ -19262,7 +19262,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "cc732687d46ddbb442a4541edeee8bd16e358862ef879f39956d0c34b1cc3f3f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",
@@ -19320,7 +19320,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "cc732687d46ddbb442a4541edeee8bd16e358862ef879f39956d0c34b1cc3f3f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
-        "scripts/lib/testdevices.py": "e03e8eec3624b038c06c59f2ae279fe29b4db3d647b80144defd40d8198863c8",
+        "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",

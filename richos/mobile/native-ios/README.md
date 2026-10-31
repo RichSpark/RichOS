@@ -1,7 +1,7 @@
 # RichOS native iPhone app
 
-SwiftUI, iOS 17 and later. This is the new native app. The preserved app in `../ios/`, `../ui/` and
-the PWA in `../../web/web-app/` are separate and are not modified from here.
+SwiftUI, iOS 17 and later. This is the new native app. The earlier iPhone app (`mobile/ios`, `mobile/ui`) was removed on 2026-10-31; its last
+state is the tag `preserved/mobile-ios-and-pwa-2026-10-22`.
 
 **The command line comes first.** Application behavior lives in `Core/`, a Swift package that builds
 and tests on this Mac with no simulator. The SwiftUI app renders the core's `AppState` and dispatches
@@ -20,7 +20,7 @@ Run from anywhere; `bin/rios` finds its own checkout.
 | L2 simulator | `bin/rios sim prepare conv-empty`, then `sim fixture <screen>`, `sim action '<json>'`, `sim state`, `sim screenshot`, `sim verify`, `sim stop` | The same commands inside the Debug app on a simulator the CLI created. |
 
 `bin/rios --help` lists every command. Output is JSON: `{ok, mode, command, elapsedMs, result}` on
-stdout, or `{ok:false, error, elapsedMs}` on stderr with exit 1 — the preserved mobile CLI's shape
+stdout or `{ok:false, error, elapsedMs}` on stderr with exit 1 — the preserved mobile CLI's shape
 (`../cli/mobile.mjs`). Actions use the preserved CLI's names and fields wherever it already names
 the action (`send`, `network`, `retry`, `discard`, `pair`, `confirm-pair`, `forget-pair`, `older`, …);
 the voice gesture's names are new (`voice-press`, `voice-move`, `voice-release`, …). Time and id stamps
@@ -36,10 +36,10 @@ predates (`bin/rios headless fixture nope` lists them).
 dialed, the Mac's `ca_fingerprint_sha256` and its own key; a Mac without `pair-v2` is refused, never
 fallen back to. After "They match" on the phone, the phone waits for the same press on the Mac by
 asking with its own signed "They match" again; the press on the phone is the first ask. A Mac that
-offers `pair-wait` holds each ask (`Prefer: wait=14`) and answers it the moment it is pressed, and two
+offers `pair-wait` holds each ask (`Prefer: wait=14`) and answers it the moment it is pressed and two
 asks never start less than 7 s apart; a Mac that does not keeps one bounded schedule (2, 3, 5, 8,
 13 s, then every 15 s; at most 22 asks in five minutes). At the deadline the phone asks one last
-time, and that answer decides. Only while the app is on screen: leaving it cancels the ask in flight
+time and that answer decides. Only while the app is on screen: leaving it cancels the ask in flight
 (`Core/Sources/RichOSCore/Pairing/MacWait.swift`). `sim launch <fixture>` and the launch arguments
 `-rios-fixture <name> -rios-appearance dark|light` open the app straight onto one; `-rios-notifications
 not-asked|on|off|denied` sets the notification state it starts in (`not-asked` shows the offer card under
@@ -57,7 +57,7 @@ Release app built from exactly that commit in a leased simulator, against the li
 (`../review-mock/README.md`): sign in on the access page in headless Chromium, get a pairing link,
 paste it into the app, compare the six words, press They match in the app and on the page, send a
 message and see its "Demo reply", then reset the review host. It writes
-`/Volumes/E1TB/state/richos/review-walk/ios/<sha>.json` (`../perf/reviewwalk.py`), pass or fail, and
+`/Volumes/E1TB/state/richos/review-walk/ios/<sha>.json` (`../perf/reviewwalk.py`), pass or fail and
 `Release/testflight.ts upload` refuses an archive whose stamped commit has no passing record. The app's
 half is `UITests/ReviewWalkTests.swift`, which skips unless the walk runs it; the driver is
 `Tools/review-walk.mjs`. A phone already on the review host is never removed: the walk refuses.
@@ -74,7 +74,7 @@ For `bin/rios device verify pairing`, `device verify text`, `device verify recor
 `RICHOS_MOBILE_TEST_CONFIG` to the isolated lab's external JSON with
 `"isolatedLab": "true"`. Pairing requires its current HTTPS `pairLink` and exact
 fingerprint `words`; recording requires that same isolated session already paired.
-Pairing is v2: the `words` are the ones the phone shows (over the origin it dials), and after
+Pairing is v2: the `words` are the ones the phone shows (over the origin it dials) and after
 "They match" on the phone the runner prints `PHYSICAL_PRESS_THEY_MATCH_ON_MAC`; press "They match"
 on the lab Mac within 120 seconds.
 These checks drive normal Release UI and real microphone capture. They never use
@@ -107,11 +107,11 @@ Trust or verification failures before launch are not successful device tests. Lo
 signing does not itself prove device acceptance. Release timing and energy qualification
 are separate from these functional checks.
 
-## The protocol, and the shared corpus
+## The protocol and the shared corpus
 
 `Core/Sources/RichOSCore/Protocol/` speaks the Mac's phone protocol: request signing, the event
 stream and thread filter, the API client with the challenge rule, the courier that sends outbox
-items, and the pairing, push and attachment bodies. The tests read the shared conformance corpus
+items and the pairing, push and attachment bodies. The tests read the shared conformance corpus
 (`../conformance/vectors/`) in place and must pass every case the Android core passes.
 
 Photos and files (`Core/Sources/RichOSCore/Conversation/Attachments.swift`): an outbox item with
@@ -147,5 +147,5 @@ project, DerivedData, screenshots, logs and the headless session. Nothing is wri
 - Fixtures, scenarios and the command envelope compile only in Debug; `bin/rios sim check-release`
   proves the Release app carries none of their markers (and that the Debug app carries all of them).
 - The CLI addresses only the simulator it created (its UDID is recorded in the cache); it never uses
-  `booted`, and `sim stop` shuts it down and deletes it.
+  `booted` and `sim stop` shuts it down and deletes it.
 - Permanent bundle identifier `dev.richos.connect`, approved by the CEO.

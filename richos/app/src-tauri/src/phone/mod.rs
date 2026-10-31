@@ -593,10 +593,17 @@ pub struct PhoneStatus {
     /// **WHAT KIND OF PHONE IT IS** — `"ios"`, `"android"`, `"other"`, or `""` for a record
     /// written before the field existed. `None` when nothing is paired.
     pub platform: Option<String>,
-    /// Whether that phone can be pushed to yet — it cannot until he has installed the app to the
-    /// Home Screen and allowed notifications, which happens after pairing.
+    /// Whether the retired phone web page left a Web Push subscription on the record. The paired
+    /// card no longer reads it; [`PhoneStatus::notifications_on`] is the RichConnect app's answer.
     pub push_ready: bool,
     pub push_transport: Option<String>,
+    /// **HAS THE PAIRED PHONE SIGNED UP FOR NOTIFICATIONS THROUGH THE RICHCONNECT APP?** True when
+    /// [`notifications::Desk`] holds a registration for this phone (the phone's Settings switch
+    /// "Notify me when Rich replies" sends it; switching it off clears it). Round 49's paired card
+    /// tells "Ready" from "Notifications not on" with this and nothing else. `push_ready` could
+    /// not: the native registration never sets the web subscription, so every RichConnect Android
+    /// phone was told the Chrome sentence.
+    pub notifications_on: bool,
     /// **HAS THE PERSON TOLD THIS MAC THE SIX WORDS MATCHED?** `false` while a phone is paired
     /// and has not come back with an answer, and `false` when nothing is paired at all.
     ///
@@ -1090,6 +1097,7 @@ impl PhoneRuntime {
                 platform: device.as_ref().map(|d| d.platform.clone()),
                 push_ready: false,
                 push_transport: device.as_ref().map(|d|d.push_transport.clone()),
+                notifications_on: self.notifications_on(device.as_ref()),
                 fingerprint_confirmed: device.as_ref().is_some_and(|d| d.fingerprint_confirmed),
                 mac_confirmed: device.as_ref().is_some_and(|d| d.mac_confirmed),
                 completed: device.as_ref().is_some_and(|d| d.completed),
@@ -1132,6 +1140,7 @@ impl PhoneRuntime {
             platform: device.as_ref().map(|d| d.platform.clone()),
             push_ready: device.as_ref().map(|d| d.push.is_some()).unwrap_or(false),
             push_transport: device.as_ref().map(|d|d.push_transport.clone()),
+            notifications_on: self.notifications_on(device.as_ref()),
             fingerprint_confirmed: device
                 .as_ref()
                 .map(|d| d.fingerprint_confirmed)
@@ -1171,6 +1180,13 @@ impl PhoneRuntime {
                 .filter(|d| !d.mac_confirmed)
                 .map(|d| d.confirm_by.saturating_sub(now_millis()) / 1000),
         }
+    }
+
+    /// Whether the notification desk holds a registration for this phone (see
+    /// [`PhoneStatus::notifications_on`]). A desk that cannot be read answers `false`: the card
+    /// then asks for the switch on the phone, which is harmless if it is already on.
+    fn notifications_on(&self, device: Option<&device::Device>) -> bool {
+        device.is_some_and(|d| notifications::Desk::open(&self.data_dir).is_ok_and(|desk| desk.enabled_for(d)))
     }
 
     /// **Everything that happens the first time he asks to use Rich from his phone**, in order:
@@ -1966,6 +1982,50 @@ mod tests {
         let end = start + source[start..].find("\n    }\n").expect("status() ends");
         let body = &source[start..end];
         assert_eq!(body.matches("self.rejected.lock()").count(), 1, "status() must lock `rejected` exactly once");
+    }
+
+    /// **ROUND 49: THE MAC SAYS WHETHER THE PAIRED PHONE SIGNED UP FOR NOTIFICATIONS IN THE APP.**
+    /// On main `push_ready` read only the retired web subscription, which a RichConnect phone
+    /// never sets, so a RichConnect Android phone was told the Chrome sentence. A native phone
+    /// that registers is `notifications_on`; one that unregisters (the switch off) is not.
+    #[test]
+    fn status_reports_a_native_notification_registration_for_the_paired_phone() {
+        let dir = std::env::temp_dir().join(format!("richos-phone-notify-{}-{}", std::process::id(), now_millis()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let devices = device::DeviceDesk::open(&dir).unwrap();
+        let phone = device::tests::Phone::new();
+        let window = devices.open_pairing().unwrap();
+        devices
+            .complete_pairing(&window.code, &device::PublicKeyForm::Jwk(phone.jwk()), "Pixel", device::PairedVia::CONNECT, device::Platform::ANDROID)
+            .unwrap();
+        devices.confirm_fingerprint().unwrap();
+        devices.confirm_on_mac().unwrap();
+        let paired = devices.paired().unwrap();
+        devices.use_native_transport(&paired.id, "fcm").unwrap();
+        drop(devices);
+
+        let (runtime, _emitter) = PhoneRuntime::install(dir.clone());
+        *runtime.tailnet.lock().unwrap() = Some((now_millis(), tailnet::TailnetState::Absent));
+        let before = runtime.status();
+        assert!(before.paired, "the fixture phone is paired");
+        assert_eq!(before.push_transport.as_deref(), Some("fcm"));
+        assert!(!before.notifications_on, "nothing registered yet, so notifications are not on");
+
+        let fcm = notifications::Registration {
+            platform: Some("fcm".into()),
+            token: "f".repeat(64),
+            environment: String::new(),
+            topic: "dev.richos.connect".into(),
+            preview_key: None,
+            previews: true,
+        };
+        let paired = device::DeviceDesk::open(&dir).unwrap().paired().unwrap();
+        notifications::Desk::open(&dir).unwrap().set(&paired, Some(fcm)).unwrap();
+        assert!(runtime.status().notifications_on, "the app registered, so notifications are on");
+
+        notifications::Desk::open(&dir).unwrap().set(&paired, None).unwrap();
+        assert!(!runtime.status().notifications_on, "the switch went off on the phone, so they are not");
+        std::fs::remove_dir_all(&dir).expect("the test's own folder could not be removed");
     }
 
     /// **A PUSH SUBSCRIPTION THE PUSH SERVICE SAYS IS GONE IS FORGOTTEN** (hunt 2026-09-29, part 1,

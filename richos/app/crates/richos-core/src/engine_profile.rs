@@ -912,6 +912,15 @@ impl EngineProfile {
         if let Some(model) = &self.speech_model {
             command.env("RICHOS_SPEECH_MODEL", model);
         }
+        // **The user's central folder**, where their own settings files are (`user_settings.rs`).
+        // The engine's missing-tool guard reads the user's general permission to install what
+        // work needs from its `orchestration.config`, and Rich saves it there when the user gives
+        // it (`scripts/lib/toolchain.py`, CEO 2026-10-29). Read live, never from the generated
+        // copy, so a permission given in this session counts at once. An inherited value was
+        // removed with every other `RICHOS_` name above.
+        if let Some(folder) = &self.user.folder {
+            command.env("RICHOS_USER_FOLDER", folder);
+        }
         let registry = crate::entity::EntityRegistry::load(&self.state.parent().unwrap().join("entities.json")).registry;
         let repos: Vec<_> = registry.entities().iter()
             .filter(|entity| self.work_scope.as_ref().is_some_and(|(id,_)| entity.id.as_str()==id))

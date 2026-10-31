@@ -8561,6 +8561,100 @@ body.home-open {
 .phone-push-line {
   color: var(--ink);
 }
+/* ROUND 49 (CEO 2026-10-31, "round-49/index.html: OK"): the paired card after the phone web page
+   is gone. The phone's name with its connection beside it, the errand line with an icon that says
+   which kind, and a divider above the forget note. NO NEW COLORS: every paint is a shell token.
+   Computed by round 49's build/contrast.js (audit/contrast.json) on --card, lowest of each:
+     --ink-soft sentences          5.78:1 dark   6.38:1 light  (floor 4.5)
+     --ink errand line, chip word 12.06:1 dark  18.07:1 light  (floor 4.5)
+     --success dot and bell        6.73:1 dark   7.31:1 light  (floor 3, non-text)
+     --attention dot and icons     6.54:1 dark   6.58:1 light  (floor 3, non-text)
+     --ink-soft circular arrow     5.78:1 dark   6.38:1 light  (floor 3, non-text)
+     --line-control chip edge      3.79:1 dark   4.06:1 light  (floor 3, non-text)
+   Re-measured in the app by ui/tests/phone.js check 9d. --line-strong on the divider is
+   decoration, as the app's other dividers are, and claims no contrast. */
+.phone-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0 8px;
+}
+.phone-card-head .phone-step-title {
+  margin: 0;
+}
+.phone-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px 3px 10px;
+  border: 1px solid var(--line-control);
+  border-radius: 999px;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.phone-chip[hidden] {
+  display: none;
+}
+.phone-chip-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--success);
+  flex: 0 0 auto;
+}
+.phone-chip[data-tone="todo"] .phone-chip-dot {
+  background: var(--attention);
+}
+.phone-chip[data-tone="wait"] .phone-chip-dot {
+  background: var(--attention);
+  animation: phone-chip-breathe 1.8s ease-in-out infinite;
+}
+@keyframes phone-chip-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .phone-chip[data-tone="wait"] .phone-chip-dot {
+    animation: none;
+  }
+}
+.phone-push-line[data-tone] {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  column-gap: 10px;
+  align-items: start;
+}
+.phone-push-line[hidden] {
+  display: none;
+}
+.phone-push-icon svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.phone-push-line[data-tone="ok"] .phone-push-icon { color: var(--success); }
+.phone-push-line[data-tone="todo"] .phone-push-icon { color: var(--attention); }
+.phone-push-line[data-tone="info"] .phone-push-icon { color: var(--ink-soft); }
+.phone-push-line strong {
+  font-weight: 600;
+}
+.phone-card-rule {
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  margin: 16px 0 14px;
+}
+.phone-card-rule[hidden] {
+  display: none;
+}
 .phone-qr-row {
   display: flex;
   align-items: flex-start;

@@ -1095,7 +1095,7 @@ fi
 #               Mac's request verifier (native-conformance), and the shared mobile core with
 #               the reference client modules the corpus is generated from (mobile-headless).
 PHONE_ONLY="native-ios-app.test.sh native-ios-core.test.sh native-ios-share.test.sh \
-native-ios-ui.test.sh native-ios-physical-tool.test.sh mobile-ios.test.sh \
+native-ios-ui.test.sh native-ios-physical-tool.test.sh \
 native-android-app.test.sh native-android-core.test.sh native-android-ui.test.sh \
 native-android-pair-lab.test.sh native-release-policy.test.sh mobile-perf.test.sh review-mock.test.sh"
 MAC_SIDE="mobile-mac.test.sh native-conformance.test.sh mobile-headless.test.sh"

@@ -3,9 +3,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } = require('node:fs');
 const { join, resolve } = require('node:path');
-const { createScratch, proofCache } = require('./storage.cjs');
-const vm = require('node:vm');
-const { createApp } = require('../core/app');
+const { createScratch } = require('./storage.cjs');
 const mobile = resolve(__dirname, '..');
 
 function session(t) {
@@ -45,7 +43,7 @@ test('separate CLI processes persist the selected conversation, draft and queued
   assert.equal(online.environment.receipts[0].clientId, sent.outbox[0].clientId);
 });
 
-test('suite storage honors the selected TMPDIR and preserves incompatible saved policies', (t) => {
+test('suite storage honors the selected TMPDIR', (t) => {
   const { dir } = session(t);
   const result = spawnSync(process.execPath, ['-e',
     'const fs=require("node:fs"); const {createScratch}=require(process.argv[1]); const p=createScratch("ordinary-shell"); console.log(p); fs.rmdirSync(p);',
@@ -53,16 +51,6 @@ test('suite storage honors the selected TMPDIR and preserves incompatible saved 
   assert.equal(result.status, 0, result.stderr);
   assert(result.stdout.trim().startsWith(dir + '/'));
   assert(!existsSync(result.stdout.trim()));
-  const legacy = join(dir, 'legacy');
-  mkdirSync(legacy);
-  const policy = join(legacy, 'simulator-storage.json');
-  writeFileSync(policy, '{"storage":"external"}');
-  assert.equal(proofCache(legacy, 'system'), legacy + '-system');
-  assert.equal(readFileSync(policy, 'utf8'), '{"storage":"external"}');
-  assert.equal(proofCache(legacy, 'external'), legacy);
-  assert.equal(proofCache(legacy, 'system', dir), dir);
-  writeFileSync(policy, '{"storage":"system"}');
-  assert.equal(proofCache(legacy, 'system'), legacy);
 });
 
 test('suite launcher forwards and removes its selected scratch and refuses an unusable allocator', (t) => {
@@ -126,105 +114,6 @@ test('invalid JSON, actions and modes fail without poisoning the CLI lock', (t) 
   assert(existsSync(join(cache, 'cli.lock/owner.json')), 'Do not remove another process lock');
 });
 
-test('CLI packaging selects exact shared assets and excludes Debug fixtures from Release and devices', (t) => {
-  const { cache, raw, env } = session(t);
-  delete env.RICHOS_MOBILE_RELEASE_CONFIG;
-  const destination = join(cache, 'mobile-ui');
-  for (const [configuration, platform, development] of [['Debug', 'iphonesimulator', true], ['Release', 'iphonesimulator', false], ['Debug', 'iphoneos', false], ['Release', 'iphoneos', false]]) {
-    const result = raw('bundle', destination, configuration, platform);
-    assert.equal(result.status, 0, result.stderr);
-    // The compiled policy address: hosted in Release, none in Debug unless an external configuration supplies one.
-    assert.equal(JSON.parse(readFileSync(join(destination, 'release-config.json'), 'utf8')).policyURL,
-      configuration === 'Release' ? 'https://updates.richos.ceo/v1/policy' : null, `${configuration} ${platform}`);
-    assert.equal(readFileSync(join(destination, 'queue.js'), 'utf8'), readFileSync(join(mobile, '../web/web-app/lib/queue.js'), 'utf8'));
-    assert.equal(existsSync(join(destination, 'runtime.js')), development);
-    assert.equal(readFileSync(join(destination, 'entry.js'), 'utf8'), readFileSync(join(mobile, development ? 'dev/entry.js' : 'ui/entry.js'), 'utf8'));
-    const html = readFileSync(join(destination, 'index.html'), 'utf8');
-    assert(!html.includes('<!-- ENTRY -->'));
-    assert.equal(html.includes('src="runtime.js"'), development);
-    for (const [, asset] of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert(existsSync(join(destination, asset)), asset);
-  }
-});
-
-test('Release bootstrap is unpaired, refuses sends and persists outbox removal', async () => {
-  const records = new Map([['richos.mobile.outbox.v1', JSON.stringify([{ clientId: 'saved', threadId: 'general', kind: 'text', text: 'Saved', state: 'waiting' }])]]);
-  let attach;
-  const attached = new Promise((resolve) => { attach = resolve; });
-  const context = vm.createContext({ RichOSMobile: { createApp }, RichOSView: { attach },
-    localStorage: { getItem: (key) => records.get(key), setItem: (key, value) => records.set(key, value) },
-    crypto: { randomUUID: () => 'new' }, document: { getElementById: () => { throw new Error('Bootstrap failed'); } } });
-  await vm.runInContext(readFileSync(join(mobile, 'ui/entry.js'), 'utf8'), context);
-  const app = await attached;
-  assert.equal(app.state().paired, false);
-  assert.equal(app.state().online, false);
-  assert.equal(app.state().outbox[0].clientId, 'saved');
-  await assert.rejects(app.dispatch({ type: 'send' }), /Pair/);
-  await app.dispatch({ type: 'discard', clientId: 'saved' });
-  assert.deepEqual(JSON.parse(records.get('richos.mobile.outbox.v1')), []);
-  assert.equal(context.RichOSDev, undefined);
-});
-
-test('iOS proof reports NOT RUN when no simulator runtime is available', (t) => {
-  const { dir, env } = session(t);
-  const bin = join(dir, 'bin');
-  mkdirSync(bin);
-  for (const name of ['xcodebuild', 'xcodegen']) writeFileSync(join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  writeFileSync(join(bin, 'xcrun'), '#!/bin/sh\nprintf \'%s\\n\' \'{"runtimes":[]}\'\n', { mode: 0o755 });
-  const result = spawnSync(process.execPath, [join(__dirname, 'proof-driver.mjs'), 'ios'], {
-    env: { ...env, PATH: `${bin}:${env.PATH}` }, encoding: 'utf8', timeout: 15000
-  });
-  assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stdout, /NOT RUN.*mobile-ios/);
-  assert.doesNotMatch(result.stdout, /PASS/);
-});
-
-test('iOS proof selects its fresh cache before creating the suite lock or building', { skip: process.platform !== 'darwin' }, (t) => {
-  const { dir, env, cache: original } = session(t);
-  const bin = join(dir, 'bin'), selected = join(dir, 'selected proof cache');
-  mkdirSync(bin);
-  for (const name of ['xcodebuild', 'xcodegen']) writeFileSync(join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  writeFileSync(join(bin, 'xcrun'), `#!${process.execPath}\n` +
-    `const fs = require('node:fs'), {join} = require('node:path'), {spawnSync} = require('node:child_process');\n` +
-    `if (process.argv[2] === 'simctl') { console.log(JSON.stringify({runtimes:[{isAvailable:true,name:'iOS fixture'}]})); process.exit(0); }\n` +
-    `const cache = process.env.RICHOS_MOBILE_CACHE;\n` +
-    `if (!fs.existsSync(join(cache, 'suite.lock'))) throw Error('selected proof lock absent before build');\n` +
-    `if (Number(process.env.RICHOS_TEST_DEVICE_OWNER_PID) !== process.ppid) throw Error('simulator owner is not the proof process');\n` +
-    `const child = spawnSync(process.execPath, [${JSON.stringify(join(mobile, 'cli/mobile.mjs'))}, 'headless', 'action', JSON.stringify({type:'compose',text:'proof child'})], {encoding:'utf8'});\n` +
-    `if (child.status !== 0) throw Error(child.stderr);\n` +
-    `fs.writeFileSync(join(cache, 'reached-build'), child.stdout);\n` +
-    `process.stderr.write('controlled compile refusal'); process.exit(1);\n`, { mode: 0o755 });
-  const childEnv = { ...env, PATH: `${bin}:${env.PATH}`, RICHOS_MOBILE_IOS_TEST_CACHE: selected };
-  // load-bound: stubbed compilation stops at the first build; the timeout only catches a stuck child.
-  const run = () => spawnSync(process.execPath, [join(__dirname, 'proof-driver.mjs'), 'ios'], { env: childEnv, encoding: 'utf8', timeout: 30000 });
-  const result = run();
-  assert.ifError(result.error);
-  assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /controlled compile refusal/);
-  assert.equal(JSON.parse(readFileSync(join(selected, 'reached-build'), 'utf8')).result.state.draft, 'proof child');
-  assert(!existsSync(original), 'Do not initialize the original CLI cache');
-  assert(!existsSync(join(selected, 'suite.lock')), 'The failed build releases its own suite lock');
-  mkdirSync(join(selected, 'suite.lock'));
-  writeFileSync(join(selected, 'suite.lock/owner'), 'another proof');
-  const occupied = run();
-  assert.ifError(occupied.error);
-  assert.equal(occupied.status, 1, occupied.stderr);
-  assert.match(occupied.stderr, /EEXIST/);
-  assert.equal(readFileSync(join(selected, 'suite.lock/owner'), 'utf8'), 'another proof');
-});
-
-test('client UI proof reports NOT RUN when its browser executable is missing', (t) => {
-  const { dir, env } = session(t);
-  const modulePath = join(dir, 'playwright.cjs');
-  writeFileSync(modulePath, 'module.exports = {chromium: {executablePath: () => __filename + ".missing"}};');
-  const result = spawnSync(process.execPath, [join(__dirname, 'proof-driver.mjs'), 'client-ui'], {
-    env: { ...env, RICHOS_PLAYWRIGHT: modulePath }, encoding: 'utf8', timeout: 15000
-  });
-  assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stdout, /NOT RUN.*mobile-client-ui.*Chromium/);
-  assert.doesNotMatch(result.stdout, /PASS/);
-});
-
-
 test('integration profile preserves the ordinary CLI session and uses a separate build cache', t => {
   const { run, env, cache } = session(t);
   run('headless', 'action', '{"type":"compose","text":"Ordinary session"}');
@@ -259,7 +148,7 @@ test('storage transport keeps a private-file snapshot across later child work', 
 });
 
 
-test('simulator cache uses the private setting on its first and later calls', (t) => {
+test('CLI cache uses the private setting on its first and later calls', (t) => {
   const dir = createScratch('simulator-settings');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const selected = join(dir, 'selected cache');
@@ -268,7 +157,7 @@ test('simulator cache uses the private setting on its first and later calls', (t
   const env = { ...process.env, HOME: dir, TMPDIR: dir, RICHOS_ENV_FILE: settings };
   delete env.RICHOS_MACHINE_SETTINGS_RESOLVED;
   delete env.RICHOS_MOBILE_CACHE;
-  const module = 'file://' + join(mobile, 'cli/simulator.mjs');
+  const module = 'file://' + join(mobile, 'cli/cache.mjs');
   const code = `const {cacheRoot} = await import(${JSON.stringify(module)}); console.log(JSON.stringify([cacheRoot(),cacheRoot()]));`;
   const result = spawnSync(process.execPath, ['--input-type=module','-e',code], { env, encoding:'utf8', timeout:15000 });
   assert.equal(result.status,0,result.stderr);
