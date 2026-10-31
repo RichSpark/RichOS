@@ -96,6 +96,8 @@
   const resetOf = a => (weekOf(a) && weekOf(a).resetsAt) || Infinity;
   const resting = a => !a.inUse && a.exhaustedUntil > Date.now();
   const read = a => (a.windows || []).length > 0;
+  // A reading with windows and no five-hour one: an account with no five-hour limit (2026-10-31).
+  const noFive = a => !!a && read(a) && !win(a, "five_hour");
   // Next, as claude_accounts.rs next_account chooses it: among the others with a reading and
   // room, the one whose week is fresh again soonest.
   function nextAcct() {
@@ -476,15 +478,18 @@
       return;
     }
     const nx = nextAcct(), on = !!view.policy.enabled, choice = on ? view.atThreshold : null;
+    // The 5-hour choice only while some account has a five-hour window (or has no reading yet to
+    // say): with none, there is no 5-hour limit to choose for (the CEO, 2026-10-31).
+    const anyFive = list().some(a => !read(a) || win(a, "five_hour"));
     const rows = (view.changes || []).slice().sort((a, b) => b.at - a.at).slice(0, 4);
     paintHow(`<h3 class="acc-how-title">How Rich uses your accounts</h3>
       <p class="acc-how-p">Rich uses one account at a time. When its weekly limit is almost used up, he <b>switches to the next one by himself</b>. Nothing stops and nothing is lost.</p>
       <p class="acc-how-p is-soft">Next is always the account whose week is fresh again soonest, so none of your weekly limit goes to waste. To use a different account first, press Use this one now on it.</p>
-      <div class="acc-how-sec"><p class="acc-how-h" id="acc-five-h">When a 5-hour limit is almost used up</p>
+      ${!anyFive ? "" : `<div class="acc-how-sec"><p class="acc-how-h" id="acc-five-h">When a 5-hour limit is almost used up</p>
         <div class="acc-choice" role="radiogroup" aria-labelledby="acc-five-h">
           <button class="acc-opt" type="button" role="radio" id="acc-five-pause" data-act="five" data-v="pause" aria-checked="${choice === "pause"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Pause the team until it is fresh again</span><span class="acc-opt-s">The default. Never longer than 5 hours.</span></span></button>
           <button class="acc-opt" type="button" role="radio" id="acc-five-switch" data-act="five" data-v="switch" aria-checked="${choice === "switch"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Switch to ${nx ? esc(nx.label) : "the next account"}</span><span class="acc-opt-s">The team keeps going and uses up the next account's week sooner.</span></span></button>
-        </div>${saved ? `<p class="acc-saved" role="status">Saved.</p>` : ""}</div>
+        </div>${saved ? `<p class="acc-saved" role="status">Saved.</p>` : ""}</div>`}
       <div class="acc-how-sec"><p class="acc-how-h">Recent changes</p>
         ${rows.length ? `<ul class="acc-log">${rows.map(c => `<li><time>${esc(ago(c.at))}</time><span>${changeText(c)}</span></li>`).join("")}</ul>`
           : `<p class="acc-how-p is-soft">Nothing has changed yet.</p>`}</div>`);
@@ -502,7 +507,7 @@
     if (sheet.hidden || !view) return;
     $("acc-lede").textContent = multi()
       ? "Rich and the team work on one Claude account at a time. When it is nearly full, Rich switches to the next one by himself, so the work keeps going."
-      : "Rich and the team do their work on your Claude account. Claude limits how much each account can do in 5 hours and in a week.";
+      : `Rich and the team do their work on your Claude account. Claude limits how much each account can do in ${noFive(inUse()) ? "a week" : "5 hours and in a week"}.`;
     // A form being typed in is never repainted under the cursor.
     if (!(add && add.step === "name" && col.contains(document.activeElement) && document.activeElement.tagName === "INPUT")) renderCol();
     renderHow();

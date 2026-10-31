@@ -154,6 +154,7 @@ async function main() {
     assertEqual(await text(page, '.acc-meter[data-k="week"] .acc-meter-num'), "86%used");
     assertEqual(await page.locator('.acc-meter[data-k="five"]').count(), 0, "no 5-hour meter");
     assert(!/5-hour|five-hour|Not reported yet/i.test(await text(page, "#accounts-sheet .acc-col")), "nothing five-hour on the card");
+    assertEqual(await text(page, "#acc-lede"), "Rich and the team do their work on your Claude account. Claude limits how much each account can do in a week.");
     await page.close();
     const mixed = two([30, 40], [0, 12]);
     mixed.accounts[1].windows = weekOnly(12, now + 3 * DAY);
@@ -161,8 +162,17 @@ async function main() {
     await sheet(page);
     assertEqual(await texts(page, '.acc-card[data-id="1"] .acc-meter-label'), ["Weekly limit", "5-hour limit"], "Home keeps both");
     assertEqual(await texts(page, '.acc-card[data-id="2"] .acc-meter-label'), ["Weekly limit"], "Work: the week only");
+    assert(await page.locator("#acc-five-h").isVisible(), "Home still has a 5-hour limit, so its choice stays");
     await page.close();
-    return "one weekly-only account: Weekly limit 86% alone; Home with both meters beside Work with the week only";
+    const neither = two([30, 40], [0, 12]);
+    neither.accounts.forEach((a, i) => { a.windows = weekOnly([40, 12][i], now + (2 + i) * DAY); });
+    neither.windows = neither.accounts[0].windows;
+    page = await open("dark", neither);
+    await sheet(page);
+    assertEqual(await page.locator("#acc-five-h").count(), 0, "no account has a 5-hour limit: no 5-hour choice");
+    assert(!/5-hour|five-hour/i.test(await text(page, "#accounts-sheet .acc-panel")), "nothing five-hour on the sheet");
+    await page.close();
+    return "one weekly-only account: Weekly limit 86% alone, the lede says a week; Home with both meters and the 5-hour choice beside Work with the week only; neither: no 5-hour choice";
   });
 
   // A new user's first run (2026-10-21): "In use now" over "No reading yet. If this account is not

@@ -44,7 +44,8 @@
 #   12-no-five-{dark,light}  ACCOUNTS_WALK_UNTIL=no-five, and nothing else: the one account answers
 #                       with only its week (49%), as an account with no five-hour limit does since
 #                       2026-10-31 (the CEO: "If no 5-hour-limit data, then don't show/don't handle
-#                       it"). The sheet shows the Weekly limit meter alone, no 5-hour limit.
+#                       it"). The sheet shows the Weekly limit meter alone and a lede that names
+#                       the week only: nothing says 5-hour limit or 5 hours.
 # Steps 9 to 11 were added by the nightly 41 walk (ray-opus-walk41): no walk pressed Use this one
 # now, read the quota row with Technical view on, or looked at the row in the smallest window.
 # EXIT STATUS: 1 when the setup fails or any capture or check below fails (named at the end);
@@ -205,11 +206,14 @@ if [ "${ACCOUNTS_WALK_UNTIL:-}" = no-five ]; then
     open_sheet || fail "12 the sheet ($lower)"
     has 'Weekly limit' "12 the Weekly limit meter ($lower)"
     has '49' "12 the week's 49% ($lower)"
-    if ax find --title '5-hour limit' --contains --first >/dev/null 2>&1 || ax find --value '5-hour limit' --contains --first >/dev/null 2>&1; then
-      fail "12 a 5-hour limit meter is on screen ($lower)"
-    else
-      note "read: no 5-hour limit on screen ($lower)"
-    fi
+    has 'can do in a week' "12 the lede names the week only ($lower)"
+    for words in '5-hour limit' '5 hours'; do
+      if ax find --title "$words" --contains --first >/dev/null 2>&1 || ax find --value "$words" --contains --first >/dev/null 2>&1; then
+        fail "12 '$words' is on screen ($lower)"
+      else
+        note "read: no '$words' on screen ($lower)"
+      fi
+    done
     ax tree > "$S/12-no-five-$lower.tree" 2>&1 || true
     shot "12-no-five-$lower"
     close_sheet
