@@ -48,6 +48,20 @@ believed only while that holder's lock is held by the pid it names), a free slot
 The new run waits in line and says which run it waits behind. With the default of one run at a
 time this changes nothing.
 
+ONLY CHECKS THE MAC COULD TAKE NOW COUNT, AND A NEWER RUN GIVES WAY (2026-10-31). The count used
+to be every check not yet started, and most of those wait for the run's own work, not for the
+Mac: the engine units of one shard run one after another in its lane, and `engine receipts`
+waits for every shard, so any run with an engine unit published a count above zero from its
+first second to its last. With the limit set to 4, agents' final proof runs waited 40 to 87
+minutes in line while the stall watcher sampled the Mac at 13-17% busy. So proof-run.py now
+publishes only the checks it would start the moment the Mac (the CPU line, the memory rule, the
+worker budget) lets it, never one waiting for its own lane or prerequisite, the engine slot, an
+identical check or the integration plan. A run that starts beside a holder this way can no
+longer starve it: before each admission a run looks at the holders that took their slot before
+it (`ahead_of`), and while one of them still has checks waiting to be admitted, its own checks
+give way, a wait that is not the Mac refusing and never spends --admission-wait. So the older
+run is always admitted first, and the newer one uses only what the older one cannot.
+
 NESTED RUNS. A suite that runs the real proof-run.py (proof-run.test.py, test-results.test.sh)
 inside a check of a proof run works inside its caller's slot: the caller exports its holder
 record's path as RICHOS_PROOF_RUN_SLOT_HELD, and the nested run borrows only if that record is
@@ -230,6 +244,7 @@ def _try(d, n, meta, checks=0):
         record = dict(meta, pid=os.getpid(), since=time.time(), slot=i)
         os.write(hfd, (json.dumps(record) + "\n").encode())
         slot = Slot(i, [fd, hfd], holder)
+        slot.since = record["since"]
         # Until its checks are admitted, every one of them waits: said before the next run looks.
         _publish(holder, checks)
         slot._published = checks
@@ -259,6 +274,19 @@ def waiting_holders(d=None):
         if sidecar.get("pid") == rec.get("pid") and isinstance(sidecar.get("waiting"), int) and sidecar["waiting"] > 0:
             rows.append(dict(rec, waiting=sidecar["waiting"]))
     return rows
+
+
+def ahead_of(slot):
+    """The holders that took their slot before `slot` and still have checks waiting to be admitted
+    (header): while there is one, `slot`'s run starts none of its own. Empty for a borrowed slot (a
+    proof run inside a check of its caller is part of that caller's run) and for no slot at all."""
+    if slot is None or slot.borrowed or not slot.fds or not slot.holder_path:
+        return []
+    mine = (getattr(slot, "since", None) or _read(slot.holder_path).get("since") or time.time(), slot.index)
+    own = os.path.realpath(slot.holder_path)
+    return [r for r in waiting_holders(os.path.dirname(slot.holder_path))
+            if os.path.realpath(r["holder_file"]) != own
+            and (r.get("since") or 0, r.get("slot") if isinstance(r.get("slot"), int) else -1) < mine]
 
 
 def describe_behind(rows):

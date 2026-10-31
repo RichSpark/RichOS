@@ -837,6 +837,129 @@ try:
           (behind, b_early, a_rc, b_rc, a2, jb, a_states, output("p16-j-b")[-500:]))
     slots("set", "1")
 
+    # P16k — a free Mac is used: checks that wait only for their own run's lane or prerequisite
+    # are not checks waiting to be admitted (2026-10-31: with the limit at 4, final proof runs
+    # waited 40-87 min in line while the Mac sampled 13-17% busy; every run with an engine unit has
+    # `engine receipts` waiting for all its shards and the units of a shard waiting in its lane).
+    # The holder here runs in this process on an idle host: one check holds its lane, two more wait
+    # in that lane and one waits for all three. A second run started meanwhile starts at once.
+    slots("set", "2")
+    import threading
+    k_dir = os.path.join(tmp, "p16-k")
+    os.makedirs(k_dir)
+    k_app = os.path.join(pr.ROOT, "richos/app")
+    k_items = [pr.Item("k-first", k_app, ["bash", "-c", "touch %s/k.first; %s" % (mark, held("k"))], "k-lane", 30.0),
+               pr.Item("k-second", k_app, ["bash", "-c", "true"], "k-lane", 2.0),
+               pr.Item("k-third", k_app, ["bash", "-c", "true"], "k-lane", 1.0)]
+    k_items.append(pr.Item("k-receipts", k_app, ["bash", "-c", "true"], None, 1.0,
+                           after=[it.label for it in k_items]))
+    k_seen = {}
+
+    def k_second_run():
+        try:
+            until(lambda: exists(os.path.join(mark, "k.first")))
+            # The holder publishes again within a scheduler pass (0.2 s); this is what it says now.
+            time.sleep(1.0)
+            k_seen["status"] = json.loads(slots("status", "--json").stdout)
+            cmds = os.path.join(tmp, "p16-k-b.cmds")
+            with open(cmds, "w") as fh:
+                fh.write("cd richos/app && bash -c %s\n" % shlex_quote("touch %s/k.b" % mark))
+            env = {**os.environ, "RICHOS_PROOF_RUN_SLOTS_DIR": slots_dir, "RICHOS_WAITER": "p16-k-b",
+                   "RICHOS_RUNTIME_DIR": os.path.join(tmp, "no-runtime")}
+            env.pop("RICHOS_PROOF_RUN_SLOT_HELD", None)
+            t = time.time()
+            # Bounded: on a runner that keeps it in line, it is refused after 20 s instead of 3 h.
+            with open(os.path.join(tmp, "p16-k-b.out"), "w") as out:
+                k_seen["rc"] = subprocess.run(
+                    [sys.executable, "-c", runner_boot, "--commands", cmds, "--slot-wait", "20",
+                     "--log-dir", os.path.join(tmp, "p16-k-b.log")], stdout=out, stderr=subprocess.STDOUT,
+                    env=env).returncode
+            k_seen["took"] = time.time() - t
+            k_seen["b_before_release"] = exists(os.path.join(mark, "k.b"))
+        finally:
+            release("k")
+
+    pr.SLOT, _k_wait = pr.proof_slots.acquire({"waiter": "p16-k-a"}, 5, checks=len(k_items))
+    k_thread = threading.Thread(target=k_second_run, daemon=True)
+    k_thread.start()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            pr.run(k_items, Args(), k_dir, sampler=idle)
+    finally:
+        pr.SLOT.release()
+        pr.SLOT = None
+    k_thread.join(60)
+    k_holder = [h for h in k_seen.get("status", {}).get("holders", []) if h.get("pid") == os.getpid()]
+    check(k_seen.get("b_before_release") and k_seen.get("rc") == 0 and "waiting for a proof-run slot" not in output("p16-k-b")
+          and k_holder and k_holder[0].get("checks_waiting") == 0
+          and [it.state for it in k_items] == ["passed"] * 4,
+          "P16k under a limit of 2 on an idle Mac, a run whose checks wait only for their own lane and "
+          "prerequisite publishes none waiting, and a second run starts beside it at once (%.1f s)"
+          % k_seen.get("took", -1),
+          (k_seen, [(it.label, it.state) for it in k_items], output("p16-k-b")[-500:]))
+
+    # P16l — ... and what the 2026-10-29 rule protects still holds: a run that took its slot after
+    # another gives way while the older run still has checks waiting to be admitted, so it cannot
+    # starve them, and giving way is not the Mac refusing: it never spends --admission-wait (here 1 s,
+    # given way to for longer than that) and the check runs as soon as the older run has none waiting.
+    l_holder_py = os.path.join(tmp, "p16-l-holder.py")
+    with open(l_holder_py, "w") as fh:
+        fh.write("import os, sys, time\nsys.path.insert(0, %r)\nimport proof_slots\n"
+                 "m = sys.argv[1]\n"
+                 "slot, _ = proof_slots.acquire({'waiter': 'p16-l-old'}, 5)\n"
+                 "open(m + '/l.held', 'w').close()\n"
+                 "def at(name):\n"
+                 "    while not os.path.exists(m + '/' + name):\n"
+                 "        time.sleep(0.05)\n"
+                 "at('l.wait'); slot.publish_waiting(3); open(m + '/l.published', 'w').close()\n"
+                 "at('l.free'); slot.publish_waiting(0)\n"
+                 "at('l.release'); slot.release()\n" % os.path.join(HERE, "lib"))
+    l_env = {**os.environ, "RICHOS_PROOF_RUN_SLOTS_DIR": slots_dir, "RICHOS_WAITER": "p16-l-old"}
+    l_old = subprocess.Popen([sys.executable, l_holder_py, mark], env=l_env)
+    until(lambda: exists(os.path.join(mark, "l.held")), l_old)
+    pr.SLOT, _l_wait = pr.proof_slots.acquire({"waiter": "p16-l-new"}, 5)
+    open(os.path.join(mark, "l.wait"), "w").close()
+    until(lambda: exists(os.path.join(mark, "l.published")), l_old)
+    l_dir = os.path.join(tmp, "p16-l")
+    os.makedirs(l_dir)
+    l_item = pr.Item("l-new", os.path.join(pr.ROOT, "richos/app"), ["bash", "-c", "touch %s/l.ran" % mark], None, 1.0)
+    l_seen = {}
+
+    def l_free_later():
+        while l_item.wait_reason != "older-run" and l_item.state == "waiting":
+            time.sleep(0.05)
+        l_seen["gave_way"] = l_item.wait_reason == "older-run"
+        l_seen["ran_early"] = exists(os.path.join(mark, "l.ran"))
+        time.sleep(2.0)   # longer than the 1 s admission wait: giving way must not spend it
+        l_seen["ran_while_older_waited"] = exists(os.path.join(mark, "l.ran"))
+        open(os.path.join(mark, "l.free"), "w").close()
+
+    l_thread = threading.Thread(target=l_free_later, daemon=True)
+    l_thread.start()
+    l_buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(l_buf):
+            pr.run([l_item], Args(admission_wait=1), l_dir, sampler=idle)
+    finally:
+        pr.SLOT.release()
+        pr.SLOT = None
+        if not exists(os.path.join(mark, "l.free")):   # its time is what the check is compared with
+            open(os.path.join(mark, "l.free"), "w").close()
+        open(os.path.join(mark, "l.release"), "w").close()
+    l_thread.join(30)
+    l_old_rc = l_old.wait()
+    l_ran = os.path.getmtime(os.path.join(mark, "l.ran")) if exists(os.path.join(mark, "l.ran")) else None
+    l_free = os.path.getmtime(os.path.join(mark, "l.free"))
+    check(l_seen.get("gave_way") and not l_seen.get("ran_early") and not l_seen.get("ran_while_older_waited")
+          and l_item.state == "passed" and l_ran is not None and l_ran >= l_free and l_old_rc == 0
+          and l_item.wait_times.get("older-run", 0) >= 1.5 and l_item.refused_wait == 0
+          and "gives way to an older run: p16-l-old" in l_buf.getvalue(),
+          "P16l a newer run's check gives way while an older run still has checks waiting to be admitted, "
+          "never spends its admission wait doing so, and runs once the older run has none waiting",
+          (l_seen, l_item.state, l_item.notes, l_item.wait_times, l_item.refused_wait, l_ran, l_free,
+           l_buf.getvalue()[-500:]))
+    slots("set", "1")
+
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine
     # units included, whatever a dated weight predicts (`workspace-spec-fourteen` was planned
     # at 2812 s and ran in 172-554 s); --run-cap ends the run on its own clock and ends, never

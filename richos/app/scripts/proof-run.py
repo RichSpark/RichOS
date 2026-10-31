@@ -179,6 +179,10 @@ supervisors hold it too), so a killed run releases it once its checks are stoppe
 started by a check of a proof run works inside its caller's slot. Under a limit above one, a free
 slot is still not taken while a running run has checks waiting to be admitted (2026-10-29: six
 runs at once left 30 of one run's 37 checks never admitted); the new run says which it waits behind.
+Only a check the run would start the moment the Mac lets it counts, never one waiting for its own
+lane or prerequisite (waiting_to_be_admitted, 2026-10-31), and a run's checks give way while a run
+that took its slot earlier still has checks waiting to be admitted, so starting beside it cannot
+starve it.
 """
 import argparse
 import copy
@@ -1386,6 +1390,22 @@ def admitted(args, sampler):
     return not reserve._refusal(s, args.max_cpu, 16, cpu_rule=True), s
 
 
+# A waiting check whose reason is one of these waits for other work, not for the Mac: its own run's
+# lane or prerequisite, the engine slot, another run's identical check, the integration plan. It is
+# never published as waiting to be admitted (proof_slots.py, 2026-10-31): every run with an engine
+# unit has `engine receipts` waiting for all its shards, and the units of a shard wait in its lane,
+# so counting them held every other run in line for the whole of such a run, while the stall
+# watcher sampled the Mac at 13-17% busy. Starting another run beside these cannot starve them:
+# the other run gives way whenever this one has a check the Mac could take (proof_slots.ahead_of).
+WAITS_ON_OTHER_WORK = frozenset({"dependency", "lane", "engine-slot", "identical-owner", "integration-episode"})
+
+
+def waiting_to_be_admitted(order):
+    """How many of the run's checks wait only for the Mac (the CPU line, the memory rule, the worker
+    budget, the ramp, an older run): what it publishes in its proof-run slot."""
+    return sum(1 for it in order if it.state == "waiting" and it.wait_reason not in WAITS_ON_OTHER_WORK)
+
+
 def refusal_counts(running):
     """Whether a refused start spends the check's --admission-wait (2026-09-29, 2026-09-30).
 
@@ -1786,6 +1806,8 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
     backoff_reason = "ready"
     backoff_refusing = False
     slot_blocked = False  # the last pass held engine units back for the engine slot
+    gave_way = False      # the last pass started nothing because an older run's checks wait (ahead_of)
+    said_ahead = None     # the runs it last said it gives way to
     heartbeat = time.monotonic() + 30
     while True:
         now = time.monotonic()
@@ -1798,15 +1820,18 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
             # for the engine slot (CEO, 2026-10-30): attempt __c3r0s4 of a land gate was ended at
             # its 900 s cap after its engine units had queued 285 s for the slot.
             args.run_started = getattr(args, "run_started", now) + held
-            if slot_blocked:
+            # So is giving way to an older run with nothing of its own running: until 2026-10-31
+            # that was time in the slot line, which never ran on this clock either.
+            if slot_blocked or (gave_way and not running):
                 args.run_started += max(0.0, interval - held)
             if now - args.run_started >= run_cap:
                 end_run_at_cap(items, running, args, logdir, run_cap)
                 break
-        slot_blocked = False
+        slot_blocked = gave_way = False
         if SLOT is not None and not SLOT.borrowed:
-            # Another run is held back while this one still has checks waiting (proof_slots.py).
-            SLOT.publish_waiting(sum(1 for it in order if it.state == "waiting"))
+            # Another run is held back while this one still has checks the Mac could take
+            # (proof_slots.py); a check waiting for this run's own lane or prerequisite is not one.
+            SLOT.publish_waiting(waiting_to_be_admitted(order))
         for it in order:
             if it.state == "waiting":
                 it.wait_times[it.wait_reason] = it.wait_times.get(it.wait_reason, 0.0) + interval
@@ -2012,7 +2037,25 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
             for it in eligible:
                 it.wait_reason = backoff_reason
                 it.refusing = backoff_refusing
+        ahead = proof_slots.ahead_of(SLOT) if eligible and now >= next_sample else []
+        if ahead:
+            # An older run still has checks waiting to be admitted: it goes first (proof_slots.py,
+            # 2026-10-31). Not the Mac refusing, so it never spends --admission-wait; with nothing
+            # of this run running it is a wait for the Mac like the slot line, recorded as one.
+            gave_way = True
+            behind = proof_slots.describe_behind(ahead)
+            for it in eligible:
+                it.wait_reason, it.refusing = "older-run", False
+            if not running:
+                STALL.refused("proof-run: %s gives way to an older run: %s" % (eligible[0].label, behind))
+            if said_ahead != [r.get("pid") for r in ahead]:
+                said_ahead = [r.get("pid") for r in ahead]
+                print("[%s] wait   %-40s gives way to an older run: %s" % (stamp(), eligible[0].label, behind),
+                      flush=True)
+            time.sleep(0.2)
+            continue
         if eligible and now >= next_sample:
+            said_ahead = None
             # Only HEAD stops the run. An edited file invalidates only the checks whose own
             # inputs hold it, when they finish (proof_evidence.Record, part-2 hunt section 07).
             if record and record.current_commit() != record.source["commit"]:
