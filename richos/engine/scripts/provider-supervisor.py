@@ -169,6 +169,44 @@ def _process_table():
     return table
 
 
+SESSION_TAG = "RICHOS_SESSION_PID"   # the provider's own pid, set in its environment before the exec
+
+
+def _environment(pid):
+    """The process's environment strings (bytes), or None when the OS will not show them.
+    Read in process (KERN_PROCARGS2 on macOS, /proc on Linux), never by spawning `ps`."""
+    if sys.platform == "darwin":
+        try:
+            ctypes = _darwin_libproc()[0]
+            libc = ctypes.CDLL(None, use_errno=True)
+            argmax = ctypes.c_int(0)
+            size = ctypes.c_size_t(ctypes.sizeof(argmax))
+            if libc.sysctl((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(argmax), ctypes.byref(size), None, 0):
+                return None                                           # KERN_ARGMAX
+            buf = ctypes.create_string_buffer(argmax.value)
+            size = ctypes.c_size_t(len(buf))
+            if libc.sysctl((ctypes.c_int * 3)(1, 49, pid), 3, buf, ctypes.byref(size), None, 0):
+                return None                                           # KERN_PROCARGS2
+            raw = buf.raw[:size.value]
+            argc, rest = int.from_bytes(raw[:4], "little"), raw[4:]
+            i = rest.index(b"\0")
+            while i < len(rest) and rest[i] == 0:
+                i += 1
+            env = []
+            for item in rest[i:].split(b"\0")[argc:]:
+                if not item:
+                    break
+                env.append(item)
+            return env
+        except (OSError, ValueError, AttributeError):
+            return None
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as fh:
+            return [item for item in fh.read().split(b"\0") if item]
+    except OSError:
+        return None
+
+
 class Record(object):
     """What the provider has below it now, with birth identities."""
 
@@ -177,13 +215,29 @@ class Record(object):
         self.own_group = own_group
         self.procs = {}           # pid -> (start, pgid)
         self.groups = {}          # pgid -> leader start (or None when the leader was never seen)
+        self.tag = ("%s=%d" % (SESSION_TAG, provider)).encode()
+        self.judged = {}          # pid -> start of a reparented process whose environment says not ours
 
     def snapshot(self, table=None):
         table = _process_table() if table is None else table
         children = {}
         for pid, (ppid, _pg, _st) in table.items():
             children.setdefault(ppid, []).append(pid)
-        roots = [self.provider] + list(self.procs)
+        self.walk([self.provider] + list(self.procs), table, children)
+        self.adopt_detached(table, children)
+        # Everything in a recorded group, including members reparented to launchd,
+        # but only for a group PROVEN still ours by a live recorded member or by its
+        # leader's recorded start. A group id recycled by an unrelated process is
+        # never adopted, so it is never signaled either.
+        ours = self.live_groups(table)
+        for pid, (_ppid, pgid, start) in table.items():
+            if pgid in ours and pid not in self.procs:
+                self.procs[pid] = (start, pgid)
+        self.prune(table, ours)
+        return table
+
+    def walk(self, roots, table, children):
+        """Record `roots` and everything below them, with every process group they are in."""
         stack = [p for p in roots if p in table]
         seen = set()
         while stack:
@@ -201,16 +255,36 @@ class Record(object):
                 leader = table.get(pgid)
                 self.groups.setdefault(pgid, leader[2] if leader and leader[1] == pgid else None)
             stack.extend(children.get(pid, []))
-        # Everything in a recorded group, including members reparented to launchd,
-        # but only for a group PROVEN still ours by a live recorded member or by its
-        # leader's recorded start. A group id recycled by an unrelated process is
-        # never adopted, so it is never signaled either.
-        ours = self.live_groups(table)
-        for pid, (_ppid, pgid, start) in table.items():
-            if pgid in ours and pid not in self.procs:
-                self.procs[pid] = (start, pgid)
-        self.prune(table, ours)
-        return table
+
+    def adopt_detached(self, table, children):
+        """A COMMAND STARTED DETACHED (Tom's review of P0, finding 1, 2026-10-29: nightly 80
+        started with `nohup … &` was in none of the lease files). Its tool shell exits at once,
+        inside the second between two snapshots, so the command is reparented to launchd in a
+        group no snapshot ever saw: neither counted by the update gate and the quit question
+        nor reaped. Every process the provider starts inherits SESSION_TAG=<provider pid>
+        (set before the exec, below), so a tree reparented to launchd, started after the
+        provider, in which any process carries exactly that tag is the provider's own: it is
+        recorded with its groups like any other descendant. macOS shows no environment for its
+        own binaries (/bin/sh, /bin/sleep), so the tree is searched, not only its root; a root
+        whose readable environment lacks the tag is decided once and never read again."""
+        born = (self.procs.get(self.provider) or (None,))[0]
+        if born is None:
+            return
+        self.judged = {pid: start for pid, start in self.judged.items() if pid in table and table[pid][2] == start}
+        for pid, (ppid, _pgid, start) in table.items():
+            if ppid != 1 or pid in self.procs or start < born or self.judged.get(pid) == start:
+                continue
+            tree, stack = [], [pid]
+            while stack and len(tree) < 256:
+                p = stack.pop()
+                tree.append(p)
+                stack.extend(children.get(p, []))
+            first = _environment(pid)
+            if (first is not None and self.tag in first) or any(
+                    self.tag in (_environment(p) or ()) for p in tree[1:]):
+                self.walk([pid], table, children)
+            elif first is not None:
+                self.judged[pid] = start
 
     def prune(self, table, ours):
         """Forget what can never be signaled again (design C4): a process that is gone or
