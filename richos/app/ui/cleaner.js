@@ -24,6 +24,7 @@
     if(view.stage==="listening") controls=button("finish","Done",view.id,"dov-btn")+button("cancel","Cancel",view.id);
     else if(["checking","writing","choosing"].includes(view.stage)) controls=button("cancel","Cancel",view.id);
     else if(e && ["filed","inbox","inbox-pending","draft","error","busy"].includes(view.stage)) controls=actions(e)+button("library","Recent files");
+    if(view.stage==="error" && !e) controls=button("settings","RichCleaner settings")+button("library","Recent files");
     let sub=view.message || "";
     if(view.stage==="listening") sub=`Tap ${k} to finish`;
     if(view.stage==="choosing") sub="Cancel keeps the note and leaves the file where it is.";
@@ -71,6 +72,7 @@
     const b=event.target.closest("[data-action]");if(!b)return;const action=b.dataset.action,id=b.dataset.id;
     try{
       if(["finish","cancel"].includes(action)){await call("cleaner_capture_control",{id,action});return;}
+      if(action==="settings"){await call("cleaner_open_main",{surface:"cleaner"});return;}
       if(action==="library" || action==="edit-focus"){await call("cleaner_open_window");if(!panel){document.getElementById("cleaner-note")?.focus();}return;}
       if(!panel)await flushEdits();
       b.disabled=true;const result=await call("cleaner_action",{id,action,note:null});
