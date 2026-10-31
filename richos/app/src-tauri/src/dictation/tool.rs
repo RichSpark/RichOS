@@ -1484,10 +1484,17 @@ mod tests {
         });
         // load-bound: a hang guard only, never the verdict; the child's own pid file is the fact waited for.
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !dir.join("decoder.pid").exists() && Instant::now() < deadline {
+        let pid = loop {
+            // Shell redirection creates the file before echo writes its PID. Existence
+            // alone can observe an empty file while the decoder is still starting.
+            if let Some(pid) = std::fs::read_to_string(dir.join("decoder.pid")).ok()
+                .and_then(|text| text.trim().parse::<i32>().ok()).filter(|pid| *pid > 0) {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "the decoder did not publish a valid PID");
+            // load-bound: only a hang guard; the published PID and joined child decide correctness.
             std::thread::sleep(Duration::from_millis(10));
-        }
-        let pid: i32 = std::fs::read_to_string(dir.join("decoder.pid")).unwrap().trim().parse().unwrap();
+        };
         // The verdict is the worker's own error (Interrupted, asserted inside it: only the stop
         // produces it, never the 30 s deadline) and the child being gone; no clock is read.
         Writing { stop, join }.stop_and_join();
