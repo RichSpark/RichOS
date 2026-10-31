@@ -16182,7 +16182,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "mega-lander/workspaces.py",
-          "sha256": "0b3c5c1a5a7e7d27163fc62ce25b34d515b1af1aaa13e50b03fd3a26492a7a03",
+          "sha256": "13539e8a4d85ec6722c793a4cc2351d742d7a3105ac7c955e6c132ffc008713a",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         },
         {
@@ -16206,7 +16206,7 @@
           "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
           "default_engine": true,
           "path": "mega-lander/workspaces.py",
-          "sha256": "56c7b6a9a6da17cb060bee582ad4da3b4d80fe7af4b4ca597bcdd9f73dcc4265",
+          "sha256": "13539e8a4d85ec6722c793a4cc2351d742d7a3105ac7c955e6c132ffc008713a",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         }
       ]
