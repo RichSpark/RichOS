@@ -2603,23 +2603,6 @@ def integrate(scope_path,scope,args):
                 # repeated integrate finds it already contains the reviewed commit and lands only
                 # the rest. What is the app's own stays here: the receipt checks above, the
                 # user's own Git settings (users_git_settings_applied), and the land record.
-                chain=W._chain(canonical)
-                unreviewed=[]
-                for brepo,b in W._branch_targets(chain):
-                    if brepo not in plan: continue
-                    t,unread=W.branch_tip_read(brepo,b)
-                    if unread: raise ValueError("nothing was merged: "+unread)
-                    tip=plan[brepo]["tip"]
-                    if not t or is_ancestor(brepo,t,tip) or W._superseded(chain,brepo,b,t,tip): continue
-                    if not is_ancestor(brepo,t,plan[brepo]["commit"]) or (
-                            b==targets[brepo].get("branch") and t!=plan[brepo]["commit"]):
-                        unreviewed.append("%s (%s) in %s" % (b,t[:12],brepo))
-                if unreviewed:
-                    # The terminal's land merges every branch of the work; the review here is of
-                    # one commit per repository. Nothing the review did not see is merged.
-                    raise ValueError("nothing was merged: %s is not the reviewed commit and is not contained in it. "
-                                     "A fresh independent review of the work as it stands is required."
-                                     % ", ".join(unreviewed))
                 # The land deletes the worktrees; the witness below names each by its real path.
                 targets={r:{**t,"path":os.path.realpath(t["path"])} for r,t in targets.items()}
                 pending=[r for r in repositories_to_land if not plan[r]["already"]]
@@ -2629,8 +2612,11 @@ def integrate(scope_path,scope,args):
                         reviewed_by=(reviewer_id and "Reviewer receipt: %s" % reviewer_id) or "Automatic review: %s" % (
                             ", ".join("%s %s" % (refs[r],r) for r in repositories_to_land))
                         with users_git_settings_applied():
+                            # Only the reviewed commits: a branch of the work holding anything else
+                            # (an earlier attempt's WIP) is not merged, and its cleanup stays pending.
                             W.merge_and_land(worker["workspace_ref"],me=scope["binding"]["session_id"],
-                                             message="Merge reviewed work of %s\n\n%s" % (worker["name"],reviewed_by))
+                                             message="Merge reviewed work of %s\n\n%s" % (worker["name"],reviewed_by),
+                                             only={r:plan[r]["commit"] for r in pending})
                 except W.SpecError as error:
                     refused=str(error)
                 finally:

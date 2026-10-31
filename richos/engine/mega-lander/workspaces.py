@@ -6434,7 +6434,7 @@ def _release_carried_waits(chain, deadline=None):
         event("wait-ended", key=other["key"], landed=names, not_landed=out)
 
 
-def merge_and_land(ref, me="", message=""):
+def merge_and_land(ref, me="", message="", only=None):
     """`workspaces.sh merge <name>`: THE MERGE AND THE LAND ARE ONE COMMAND
     (2026-10-04). The lead merged with `git merge --no-ff` and then had to
     remember a separate `workspaces.sh land`; for four teammates he did not,
@@ -6446,7 +6446,12 @@ def merge_and_land(ref, me="", message=""):
     stops here with git's words; nothing is landed. In a repository listed in
     SECOND_REVIEW_REPOS nothing is merged unless the newest handover verdict
     on exactly each branch tip says passed (_review_check, CEO §113), and the
-    merge message names that review. Returns (merged, land result)."""
+    merge message names that review. Returns (merged, land result).
+
+    `only`: {repository: commit} for a caller that reviewed exactly those
+    commits (the app's integrate, CEO §154): a branch whose tip is not the one
+    named for its repository is not merged, so it stays outside the integration
+    branch and the land then names it, as for any branch not merged."""
     rec = _resolve(ref, me)
     # Before anything is merged: another registry's live worker is never
     # merged into main from here (land repeats the check before it stops).
@@ -6469,6 +6474,8 @@ def merge_and_land(ref, me="", message=""):
         # A tip a continuation rewrote, or one a recorded link stands for, is never
         # merged: it is the unreviewed WIP the redone work replaced (row 3).
         if not t or is_ancestor(main, t, tip) or _superseded(chain, repo, b, t, tip):
+            continue
+        if only is not None and t != {realpath(r): c for r, c in only.items()}.get(realpath(repo)):
             continue
         todo.append((repo, b, main, t))
         bases[t] = tip
