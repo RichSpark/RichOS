@@ -3781,6 +3781,12 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
                 let mut windows = Vec::new();
                 if pick(8) != 0 { windows.push(window("five_hour", five_used[pick(five_used.len())], offsets(&five_reset, pick(five_reset.len())))); }
                 if pick(4) != 0 { windows.push(window("seven_day", week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len())))); }
+                // A model's own week decides as the account's week does (`is_weekly`; review
+                // rv-20261031T063327Z-eb4a5248-1bbf: the review reader held on seven_day alone).
+                if pick(3) == 0 {
+                    let model = ["model:Fable", "seven_day_opus", "seven_day_sonnet"][pick(3)];
+                    windows.push(window(model, week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len()))));
+                }
                 into["windows"] = json!(windows);
                 let mut speed_map = serde_json::Map::new();
                 for id in ["five_hour", "seven_day"] {
