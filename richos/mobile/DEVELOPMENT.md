@@ -1,12 +1,10 @@
 # Mobile development loop
 
-The mobile UI and CLI run the same `core/app.js` action handlers. That core imports the reference client's `richos/web/web-app/lib/queue.js` directly. Packaging copies that exact file into the iOS app; there is no second queue implementation or source fork.
-
-The Swift/WKWebView client now includes native recording/playback, protected signing, pairing, conversation history, drafts, offline text delivery and update controls. It reuses the reference client's stylesheet and its API, thread, fingerprint, stream and queue modules. Voice submission and optional native reply notifications use the same client actions. Managed RichOS Connect supplies remote reach. This is an installable technical pilot, not the public consumer release.
+The headless CLI runs the shared `core/app.js` action handlers. That core imports the reference client's `richos/web/web-app/lib/queue.js` directly; there is no second queue implementation or source fork.
 
 ## Headless first
 
-Requires Node.js with the built-in test runner. No npm dependencies or simulator are needed. Run from the repository root:
+Requires Node.js with the built-in test runner. No npm dependencies are needed. Run from the repository root:
 
 ```sh
 node --test richos/mobile/test/*.test.js
@@ -30,29 +28,11 @@ node richos/mobile/cli/mobile.mjs headless action '{"type":"network","online":tr
 
 Other commands: `reset`, `restart`, `transport accept|unreachable|lose-ack|revoked` and `advance <milliseconds>`. Fixtures: `offline`, `online`, `queued`, `interrupted` and `revoked`. `action` accepts `compose`, `send`, `select-thread`, `network`, `sync`, `retry` and `discard`. Unknown actions and fixture names fail explicitly.
 
-## The earlier iPhone app and its simulator loop are removed
-
-The earlier iPhone app (`ios/` Swift sources and `ui/` bundled screens) and the `sim`, `doctor`, `build` and `check-release` commands that built it on a simulator were removed on 2026-10-31. The iPhone app is the native RichConnect app in `native-ios/`, driven through `native-ios/bin/rios`. Passages below that describe the earlier app's screens, simulator or WKWebView are history, kept until each is rewritten for the native apps.
-
 ## The phone web page is retired
 
 The phone web page (a PWA) the Mac used to serve was retired on 2026-10-30; the native RichConnect apps replaced it. Its `richos/web/web-app/lib` modules stay as the reference client the conformance corpus is generated from. The CLI's `pwa` browser target went with the page.
 
 ## Native client
-
-The Swift/WKWebView client uses the reference client's API, signing-input contract, fingerprint phrase,
-single event-stream owner and durable queue. `core/client.js` owns pairing confirmation,
-messages, reconnect cursors and recording actions. `platform/native.js` adapts those ports
-to protected files, Keychain signing, URLSession and AVAudioRecorder. The private key and
-recording bytes stay behind the native boundary. Hold the mic and release to submit, slide left
-to cancel or slide up to lock. Locked recording leaves the conversation scrollable and
-provides Send and Cancel. Interrupted recordings remain unsent with recovery controls.
-The same headless gesture module drives the native client.
-
-The sending ceiling is 30 minutes of 16 kHz PCM (under 60 MB). Reaching it saves unsent
-audio instead of automatically sending. Successfully delivered audio is pruned to a
-50-file/200 MB playback cache; unsent and queued recordings are never evicted. The current
-Mac recognition budget is 90 seconds; a processing failure retains audio for retry.
 
 ```sh
 node richos/mobile/cli/mobile.mjs client scenario connection-restart
@@ -63,14 +43,6 @@ node richos/mobile/cli/mobile.mjs client scenario voice-gestures
 The client scenarios use replaceable transport/recording ports and execute the actual
 client actions. They cannot prove microphone permission or hardware behavior.
 
-Physical builds and focused checks use the connected device identifier and signing team:
-
-```sh
-RICHOS_IOS_DEVICE=<device-id> RICHOS_APPLE_TEAM=<team-id> node richos/mobile/cli/mobile.mjs device build
-RICHOS_IOS_DEVICE=<device-id> RICHOS_APPLE_TEAM=<team-id> RICHOS_MOBILE_TEST_CONFIG=<external-json-path> node richos/mobile/cli/mobile.mjs device verify recording
-RICHOS_IOS_DEVICE=<device-id> RICHOS_APPLE_TEAM=<team-id> RICHOS_MOBILE_TEST_CONFIG=<external-json-path> node richos/mobile/cli/mobile.mjs device verify text
-```
-
 The external JSON has `pairLink` and `words` for an isolated test server. It is copied only
 into the test bundle. `lab serve` starts an expiring loopback protocol server with its own
 identity, pairing and synthetic replies; it never opens the user's real Mac identity or
@@ -79,19 +51,6 @@ expose that loopback port through a private HTTPS test route such as Tailscale S
 The lab uses a verified TLS upstream; it does not bypass certificate validation. Its
 mode-0600 `lab.json` contains a single-use pairing code and test status. Stop the owned lab
 process with SIGTERM and stop its separately started Serve process after testing.
-
-Physical test logs stream to the external cache as the test runs. The runner monitors
-the pre-existing host USB devices, stops its own process group if one disappears or resets,
-enforces a time limit and never resets USB or retries a failed physical test automatically.
-That detects a disruption; it does not prove the initiating cause or prevent every USB fault.
-XCUITest stops on its first assertion failure and terminates its app during teardown.
-Recording-start failure also releases the audio session and removes its partial file.
-
-Simulator proofs explicitly skip live microphone recording, which would use the host Mac's
-microphone. Run the named physical recording check for that evidence. A missing remote
-configuration is an explicit skipped remote test, never evidence of connectivity. The
-headless suite tests supervision and orchestration with substituted process/device ports;
-it does not claim those tests exercise Xcode or a physical USB device.
 
 ## Registered repository proofs
 
@@ -115,9 +74,7 @@ Each suite has dependency `inputs` and exact-file `covers` rows. Coverage descri
 - `dev/`: deterministic environment adapters, persistent synthetic receipts and scenarios. The simulated Mac's receipt table models deduplication; it does not test a real Mac server.
 - `cli/`: headless persistence, resource selection and the lab and service commands. The same request envelope reaches the development runtime.
 
-Development fixture access and commands are compiled only for Debug simulator builds. The native bridge polls for UUID-named local sandbox command files while the Debug simulator app is running. Development commands use no URL scheme. The production `richos://conversation/` scheme accepts only validated conversation destinations; it cannot execute commands or initiate pairing. It exposes neither a network listener nor arbitrary JavaScript evaluation. The webview loads local resources only. Debug assets are separate from Release assets; `check-release` builds Release and inspects its executable, Info.plist and resources for development markers and unexpected URL registrations. This simulator Release check is not signed App Store artifact verification.
-
-Each CLI invocation locks its checkout's target session to prevent overlapping resets or installs. On a crash, inspect `cli.lock/owner.json` and confirm the PID is gone before removing the lock. A timed-out simulator request is a failure, not a successful action; inspect state before retrying a send.
+Each CLI invocation locks its checkout's target session to prevent overlapping resets or installs. On a crash, inspect `cli.lock/owner.json` and confirm the PID is gone before removing the lock.
 
 ## Storage and measurements
 
@@ -125,7 +82,7 @@ Projects, DerivedData, generated resources, command results and screenshots are 
 
 Keep measured timings and private verification reports in `richos-hq`. Measure these separately: a fresh Node process running a focused scenario, direct core execution, JavaScript screen refresh, Swift incremental build, cold build/install/boot and native UI automation. Cold simulator boot and UI automation are not part of a routine application-logic edit. Establish budgets from measured results; a green fixture is not evidence about real microphone permissions, radio transitions, APNs or App Store installation.
 
-For new platform behavior, add a narrow adapter and controllable outcomes without importing platform APIs into the core. Update-policy evaluation runs in `core/updates.js` and is exercised through the same client actions in Node and the simulator. Validate actual store availability and installation separately on real devices.
+For new platform behavior, add a narrow adapter and controllable outcomes without importing platform APIs into the core. Update-policy evaluation runs in `core/updates.js` and is exercised through the same client actions in Node. Validate actual store availability and installation separately on real devices.
 
 ## Real Mac protocol integration
 
@@ -133,51 +90,12 @@ For new platform behavior, add a narrow adapter and controllable outcomes withou
 
 For a physical test, start `node richos/mobile/cli/mobile.mjs lab mac` with `RICHOS_MOBILE_MAC_ORIGIN` set to your separate HTTPS test origin. Wait for its ready result before reading `mac.json` for the loopback proxy port. Expose that port using a separately owned Tailscale Serve endpoint. The proxy verifies the Rust server's private test CA; the phone verifies the public endpoint with system TLS. No trust bypass is required.
 
-The server writes `mac-test-config.json` in its cache. Pass that path through `RICHOS_MOBILE_TEST_CONFIG`, set `RICHOS_MOBILE_TEST_APP=integration`, `RICHOS_IOS_DEVICE` and `RICHOS_APPLE_TEAM`, then run `node richos/mobile/cli/mobile.mjs device verify text`. Pairing codes expire after five minutes. Stop and restart the lab for a fresh code if needed. Physical text/update checks refuse a missing configuration before launching Xcode. The CLI reads the xcresult test counts after success and rejects skipped or absent selected tests; Xcode's exit status alone is not proof.
-
-The integration profile installs `dev.richos.mobile.integration` and uses an `integration` subdirectory beneath the selected cache. A Debug-only launch argument clears this app's saved session once per new server run. It preserves recordings and does not affect the ordinary app or the Android pairing. Relaunches with the same run marker keep their session, which the physical test verifies by receiving another fresh reply after restart. Release verification checks that this reset mechanism is absent.
-
 Stop the foreground lab and its separately owned Tailscale Serve endpoint after testing. The lab closes its sockets, retains synthetic timeline/intake/ledger evidence in the cache and deletes its scratch data. `lab serve` remains the faster JavaScript protocol fixture; it is not the production Rust server.
 
 
 ## Part 2 actions and persistence
 
 `client scenario update-controls` drives banner, dialog, blocking and withdrawn policies through the actual client.  The fixture client identifier is deliberately synthetic and is never bundled in a physical-device or Release build.
-
-The client caches server-ordered history per conversation and keeps each conversation's draft. The outbox remains the reference client's queue, including its idempotency IDs and retry schedule. An active send does not hold up typing, navigation or suspension. Retries have a foreground timer. Version-unsupported responses and disabled actions are retained for attention rather than retried indefinitely. The Mac's existing protocol is version 1 when a legacy hello omits `protocol_version`; incompatible explicit versions disable text. Native requests advertise protocol, marketing version and build.
-
-Session schema 2 migrates the Part 1 cache without deleting drafts or the outbox. Unknown schemas and corrupt stored data fail with a recovery message and leave the file intact. Only the replaceable conversation cache is evicted to bound disk use. Unsent work is never evicted. The app refuses to change pairing while unresolved text remains. Local forgetting is separate from revoking the device on the Mac.
-
-Pairing accepts a pasted HTTPS link or a native QR scan, followed by the existing fingerprint comparison. A scan only fills the link field; it does not automatically trust the Mac. Conversation links accept `richos://conversation/#thread=<id>&at=<id>` and explicitly configured universal-link hosts. The reference client's inbound validator checks the payload. Universal links require the matching associated-domain website file before deployment. External HTTPS links open outside the privileged webview. Remote HTML and scripts cannot enter that view.
-
-Recording files are protected native files. Hold/release, slide-to-lock and slide-to-cancel invoke shared headless actions. Microphone denial has a Settings recovery button. Interrupted audio appears in the conversation with Play, Send and Discard. Unfinished headers from process termination are recovered only for our known PCM format without changing audio bytes. Capture stops and saves at 30 minutes; uploads are capped at 60 MB. A critical policy stops and retains captured audio. Unsent files are never automatically evicted; acknowledged recordings are retained within 50-file and 200-MB bounds.
-
-## Release configuration and update service
-
-`release-config.json` contains marketing version, build, numeric `appId`, `policyURL`, `supportURL`, optional `universalHosts` and the `metrics` switch. `RICHOS_MOBILE_RELEASE_CONFIG` can supply an external build configuration. The selected configuration is validated and bundled with the app; it cannot be changed by remote policy data. `policyURL` is the hosted service, `https://updates.richos.ceo/v1/policy` and only Release builds carry it. A Debug build (simulator or device) bundles no policy address unless `RICHOS_MOBILE_RELEASE_CONFIG` supplies one, so development keeps its local override and never reads production policy by default. There is no App Store ID yet and metrics are off. Do not invent an ID to fill them.
-
-`node richos/mobile/cli/mobile.mjs release-config-check` fails until the listing and HTTPS policy/support destinations are configured. This checks configuration only. It does not certify licensing, App Review eligibility, signing, artwork completeness or successful distribution. The pilot reuses the PWA's 180-pixel home-screen artwork for the iPhone X; complete the store artwork set before submission. `check-release` separately verifies that fixture scripts, synthetic update data and native development commands are absent from Release.
-
-See [the update-service runbook](service/README.md) for schema, publication, expiry recovery, availability receipts, metrics and deployment boundaries. The service has a separate native network session from the paired Mac. It uses HTTPS policy fetches plus foreground SSE change hints. Hints trigger a coalesced refetch; a 60-second fallback remains active if streaming fails. Cold start, foreground return and network recovery also trigger checks. Invalid data and service outages do not introduce a lockout. Previously validated policy remains authoritative only until its expiry, at most 24 hours after issue.
-
-For the physical service proof, start `lab updates` in a separate cache, expose its printed loopback port through an isolated private HTTPS route and supply that `/v1/policy` URL in an external release configuration. Pass a test-bundle JSON with `{"updateServiceTest":"true"}` and run `device verify updates`. The fixture publishes a recording pause after the first policy fetch, then withdraws it with a higher revision. The XCUITest checks both visible action states with the real native adapter. The lab retains publication/request timestamps. It never supplies a fabricated App Store destination. Stop its owned process and route after the check.
-
-Actual App Store listing navigation, storefront download availability and an old-to-new Store installation remain distribution checks that require the real listing and released builds. Managed-route verification requires Part 3. A simulated notice or successful development install cannot stand in for those checks.
-
-## Managed Connect integration
-
-See [Connect's protocol and deployment contract](service/CONNECT.md). The normal product flow is Mac phone settings → RichConnect for RichOS → enable → scan or paste the pairing link → compare the six words. Tailscale remains an optional route. Pilot enrollment is closed to pre-authorized Mac public identities; a person does not need a Cloudflare account or a command-line tool.
-
-The common CLI also supports isolated real-provider checks:
-
-- `connect lab-identity <external-lab-directory>` creates a test identity. Authorize only its public host ID through the private operator procedure.
-- `connect lab-enable <external-lab-directory>` allocates a tunnel and saves its scoped token in a protected external file.
-- Start `lab mac` with `RICHOS_MOBILE_CONNECT_TOKEN_FILE` pointing to that file, `RICHOS_MOBILE_MAC_ORIGIN` set to the returned HTTPS endpoint and `RICHOS_CONNECT_HELPER` pointing to the verified pinned helper. The test listener binds to loopback port 18443.
-- `connect lab-check <external-cache/mac.json>` runs actual client actions through public HTTPS. A test-owned Mac server can instead be started by `mobile-mac.test.sh` with the same Connect environment and `RICHOS_MOBILE_USE_PUBLIC_ROUTE=1`; it additionally forces an abrupt restart of its own Rust process and verifies durable duplicate suppression and recovery.
-- The existing `device verify text` selection uses the same lab through the native transport and visible iPhone controls. Record the phone's actual network and VPN state separately. HTTPS success alone does not establish a cellular or foreign-network test.
-- Stop the owned lab, then run `connect lab-disable <external-lab-directory>`. Verify the old allocation is disabled and its owned tunnel/DNS records are removed. Remove disposable token/identity files after preserving redacted evidence privately.
-
-The lab uses isolated test data and a separate integration app. It must never replace the owner's own phone pairing. Keep the device CLI's USB health guard enabled; never recover tests by resetting hubs or unrelated devices.
 
 ## Voice submission
 
@@ -194,26 +112,8 @@ The authenticated Mac route accepts at most 60 MB of mono 16 kHz PCM16 WAV and v
 
 The real Rust lab can enable the installed local speech model with `RICHOS_MOBILE_VOICE_TEST=1`. Set `RICHOS_MOBILE_VOICE_FIXTURE` to a mono 16 kHz PCM16 WAV on the external SSD and `RICHOS_MOBILE_VOICE_PHRASE` to a phrase it contains when running `node --test richos/mobile/test/mac-server.test.mjs`. The test verifies authenticated upload, local transcription, one projected message and generated WAV reply audio. Model startup gets a bounded two-minute allowance; ordinary text proofs do not resolve a speech model. The optional speech check fails if the model is unavailable. It never records the Mac microphone or plays its speakers.
 
-Physical selections use the same guarded device CLI:
-
-- `device verify notifications` needs an isolated test configuration with `notificationTest: "true"`, a push-enabled Apple identifier, a signed development build and the sandbox provider key. Set the lab's `RICHOS_MOBILE_CONNECT_IDENTITY_FILE` to its private PKCS8 identity and `RICHOS_MOBILE_REPLY_DELAY_MS=8000` so the test can leave the app before its reply completes. It enables notifications through visible controls, sends a message, terminates the app, checks the real generic Apple alert, taps it and checks the fetched reply before disabling notifications.
-- `device verify voice` needs `spokenPhrase` in the isolated test configuration and a person ready to speak that phrase into the phone. It locks the microphone for ten seconds, taps Send, checks the Mac transcription/reply and starts then stops native playback. To reuse an existing operator recording without asking them to repeat it, explicitly set `useRecoveredRecording: "true"`, `threadId` and `origin` in the integration configuration. The Debug-only integration setup copies retained audio from that same origin into the fresh lab conversation, leaving the original unchanged. This proves retained audio submission, not a fresh microphone capture. The separate `recording` selection proves the physical lock, cancellation, interruption/relaunch, locked Send and held-release gestures. The speaker output itself still needs the person's confirmation.
-
-Both selections refuse missing configuration before launching Xcode. A skipped test is not a successful physical proof. Keep Android's production pairing intact by using the integration app and isolated lab. The lab's deterministic `ack:` reply does not prove a live AI provider turn.
-
 See [native notification operations](service/notifications.md) for APNs provisioning, token rotation, revocation and delivery limits. Notifications are opt-in. The Mac retains registration intent and pending opaque events for retry; the phone retains its preference and registration fingerprint, not an APNs token in shared session JSON. Phone permission denial leaves foreground conversations usable. Closed-app alerts require Apple delivery and a reachable Mac/provider; they are not an emergency-update transport guarantee.
 
-
-`device verify cleanup` only operates on `RICHOS_MOBILE_TEST_APP=integration` with an
-external test configuration containing `{"cleanupTestRecordings":"true"}`. It discards
-visible unsent lab recordings through the real recovery controls and leaves the normal
-composer visible. Ordinary test selections skip this cleanup unless explicitly configured;
-the normal installed app and other conversations are outside its scope.
-
-`device verify preview` installs the current integration build and leaves its existing
-conversation open for manual testing. It requires `RICHOS_MOBILE_TEST_APP=integration`
-and a connected paired Mac. It neither resets the session nor sends, records or discards
-anything. Its normal-composer assertion is readiness evidence, not a connectivity or voice gesture proof.
 
 Routine native reconnects are presentation-silent for three seconds: the transport
 is offline and the outbox retains work, while the ordinary header shows no connection status at all. Healthy operation is never announced. A sustained interruption shows a calm reconnecting notice. Known
@@ -223,11 +123,6 @@ startup refreshes the public authentication challenge before signing, including 
 suspension. Confirmed stream acceptance clears transient errors even without a hello
 frame. Headless fake-clock tests protect these transitions.
 
-`device verify reconnect` is restricted to the integration app. It preserves the paired
-session, performs two background/foreground cycles and checks the quiet, usable
-conversation for 35 seconds. Actual delivery is proved by the text/voice selections. It sends no message, records nothing and leaves the conversation
-open. This is bounded recovery/idle evidence, not proof of every network condition.
-
 Native resume requests one previously observed row as well as newer frames. The shared
 thread model deduplicates the replay, while that immediate body avoids waiting for the
 15-second heartbeat when an existing Mac/proxy would otherwise return an empty tail.
@@ -236,5 +131,3 @@ Incomplete reply replay keeps its earlier cursor, so missed deltas remain recove
 For user-driven testing, use `lab mac --manual` with a fresh isolated cache. Manual sessions have no automatic shutdown deadline and retain backend state in `manual-data` under that cache. Stop the owned CLI with SIGTERM when testing is finished. Automated `lab mac` runs retain their bounded lifetime. Never leave a user testing against an expiring fixture.
 
 A file Rich attached (round 36 screen 3): start `lab mac` with `RICHOS_MOBILE_LAB_ATTACH` set to one or more absolute file paths joined by `:` and the lab attaches each, as Rich's `attach_file` tool does, under every reply it writes. The phone gets each card at once and a tap fetches the bytes through the production file route (`GET /api/messages?kind=file`) from the lab's own record in its data directory. Use fixture files, never a person's documents.
-
-`device verify notifications` restores the prior notification and preview preferences, including on failure. It sets each preview state explicitly, so reruns are independent of the previous setting. `device verify notification-defaults` is confined to the physical integration app: it enables reply notifications and previews through visible Settings controls and leaves the paired conversation open for manual testing.
