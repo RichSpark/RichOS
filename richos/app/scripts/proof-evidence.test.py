@@ -2958,6 +2958,48 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         (install / "INSTALLATION_COMPLETE").unlink()
         self.assertNotEqual(identity(), without, "INSTALLATION_COMPLETE removed")
 
+    def test_only_the_browser_installs_the_checkouts_browsers_json_names_are_bound(self):
+        # Follow-up of 2026-10-29 (fix A's own follow-up; cleanup status row 24, G32): the Mac's
+        # shared Playwright cache holds installs of older revisions no checkout launches (eight
+        # stale ones then). Any write in one of them changed every whole-checkout identity. Only
+        # the installs the loadable package's browsers.json names (revision overrides included)
+        # are bound; with no readable browsers.json every install still is.
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
+        modules = self.root / "richos/app/ui/tests/node_modules"
+        (modules / "playwright").mkdir(parents=True)
+        (modules / "playwright/package.json").write_text('{"name": "playwright"}\n')
+        (modules / "playwright-core").mkdir()
+        listed = modules / "playwright-core/browsers.json"
+        listed.write_text(json.dumps({"browsers": [
+            {"name": "chromium-headless-shell", "revision": "1228"},
+            {"name": "webkit", "revision": "2311", "revisionOverrides": {"mac14": "2251"}}]}))
+        browsers = Path(self.tmp.name) / "ms-playwright"
+        for name in ("chromium_headless_shell-1228", "webkit-2251", "chromium_headless_shell-1208", "firefox-1509"):
+            (browsers / name).mkdir(parents=True)
+            (browsers / name / "INSTALLATION_COMPLETE").touch()
+            (browsers / name / "binary").write_bytes(b"v1")
+        environment = {"PATH": "/usr/bin:/bin", "HOME": self.tmp.name, "PLAYWRIGHT_BROWSERS_PATH": str(browsers)}
+        identity = lambda: evidence.checkout_identity(self.root, ["bash", "x.sh"], environment)
+        before = identity()
+        for stale in ("chromium_headless_shell-1208", "firefox-1509"):
+            (browsers / stale / "binary").write_bytes(b"rewritten by another checkout's install")
+            (browsers / stale / "DEPENDENCIES_VALIDATED").write_text("stamp")
+        self.assertEqual(identity(), before, "an install no browsers.json names changed every identity")
+        (browsers / "chromium_headless_shell-1228" / "binary").write_bytes(b"v2, a named install")
+        named = identity()
+        self.assertNotEqual(named, before, "a named install changed in place")
+        (browsers / "webkit-2251" / "binary").write_bytes(b"v2, named through a revision override")
+        self.assertNotEqual(identity(), named, "an install named by a revision override")
+        # A named install that appears is a new input; so is a different browsers.json.
+        overridden = identity()
+        (browsers / "webkit-2311").mkdir()
+        self.assertNotEqual(identity(), overridden, "a named install appearing")
+        # No readable browsers.json: every install is bound, as before.
+        listed.write_text("not json")
+        unread = identity()
+        (browsers / "firefox-1509" / "binary").write_bytes(b"v3")
+        self.assertNotEqual(identity(), unread, "with no browsers.json every install stays bound")
+
     def test_an_invalid_pass_names_the_identity_keys_that_differ_and_says_since_planned(self):
         # B and D. A whole-checkout check declares no paths, so the note could only say "nothing
         # under its declared paths"; it now names the identity key path, at completion and at finalize.
@@ -3218,9 +3260,9 @@ class UiFamily(unittest.TestCase):
         walks = []
         real = evidence.playwright_installs
 
-        def counting(environment):
+        def counting(environment, root=None):
             walks.append(environment.get("PLAYWRIGHT_BROWSERS_PATH"))
-            return real(environment)
+            return real(environment, root)
 
         recipe = evidence.family_invocation(self.root, evidence.contract_for(self.root, "a.js"),
                                             self.root / "richos/app/ui/tests", ["node", "a.js"])
