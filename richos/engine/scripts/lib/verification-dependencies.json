@@ -11806,7 +11806,7 @@
     },
     "scripts/lib/spawn.py#fixture-guards": {
       "source": "scripts/lib/spawn.py",
-      "sha256": "3f5b489bc1684909bd8b3d63a8c083921ef845cfb3ea43b9e6bc53cd7c353c56",
+      "sha256": "d7ef66ca7a8ff5282223b9d22345e8080bf00d1e06447170c85680b176d7ceda",
       "evidence": "All import/execution sites and full main/rollback reviewed. Fixture calls pin hook sources to literal verdict scripts plus real isolation guard. Real-surface collector calls only read hook JSON without execution. Creator runs only on plain private repositories. Prompt annotators produce data, never spawn model agents. Renewed 2026-09-28 (af7d7c93): for the operator audience it also loads brief-done.py, whose annotate runs the brief's quoted read-only evidence commands from its allowlist and appends their output.",
       "keys": [],
       "edges": [
@@ -11852,7 +11852,7 @@
     },
     "scripts/spawn.test.sh": {
       "source": "scripts/spawn.test.sh",
-      "sha256": "f6d236f89403fe9618966cd3bd01ab99293b9ea9debec24885f2ed6b45a52b84",
+      "sha256": "cb6a7a1833ad1f4ee60974b0899bd33555523b8ffedd5759c874bb4d7ae90238",
       "evidence": "Full suite reviewed: private repositories copy actual engine config, execute spawn with pinned guard fixtures and retain real model, toolkit and cleanup readers. Real surfaces collect registration as data; only the separately content-bound external scope guard executes. Direct LOCAL_APP_CONTEXT_RE config read remains. Literal QA directory override applies to just one case; other cases keep its actual key.",
       "keys": [
         "LOCAL_APP_CONTEXT_RE"
@@ -18990,8 +18990,8 @@
         "scripts/hooks/guard-sealed-worktree.sh"
       ],
       "sources": {
-        "scripts/spawn.test.sh": "f6d236f89403fe9618966cd3bd01ab99293b9ea9debec24885f2ed6b45a52b84",
-        "scripts/lib/spawn.py": "3f5b489bc1684909bd8b3d63a8c083921ef845cfb3ea43b9e6bc53cd7c353c56",
+        "scripts/spawn.test.sh": "cb6a7a1833ad1f4ee60974b0899bd33555523b8ffedd5759c874bb4d7ae90238",
+        "scripts/lib/spawn.py": "d7ef66ca7a8ff5282223b9d22345e8080bf00d1e06447170c85680b176d7ceda",
         "ass-kicker/brief-provenance.py": "dc8b2c55174fd815580afef91583582ffc66d4ce153aa3d3356f361e3257f005",
         "ass-kicker/brief-scope.py": "d6910b6891d7461b98d51b234343a004834e6fd4a3c52e5dc530b6539cf376a9",
         "mega-lander/create-teammate-worktree.sh": "6a93ddb7edc62746a487cbdb4bbe0f2d16469137bf9cf4be29a8e9de58ffb6ef",
