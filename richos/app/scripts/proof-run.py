@@ -439,12 +439,18 @@ RUNTIME_REFUSALS = ("set RICHOS_RUNTIME_DIR to a prepared, verified runtime", "a
 
 
 def suite_text(item):
-    """The source of the run-tests suite an item runs, '' for any other kind of check."""
+    """The source of the suite an item runs: a run-tests.sh suite, or a suite proof-for.sh selects as
+    a plain `bash scripts/<suite>` (make-engine-asset.test.sh, which needs the runtime: until
+    2026-10-31 it was never read, so a recipe change left the run with no runtime); '' otherwise."""
     argv = item.argv
-    if len(argv) < 2 or argv[0] != "scripts/run-tests.sh" or argv[-2] != "--only":
+    if len(argv) == 2 and argv[0] == "bash" and argv[1].startswith("scripts/") and argv[1].endswith(".sh"):
+        path = os.path.join(item.cwd, argv[1])
+    elif len(argv) < 2 or argv[0] != "scripts/run-tests.sh" or argv[-2] != "--only":
         return ""
+    else:
+        path = os.path.join(item.cwd, "scripts", argv[-1])
     try:
-        with open(os.path.join(item.cwd, "scripts", argv[-1]), encoding="utf-8", errors="replace") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read()
     except OSError:
         return ""
