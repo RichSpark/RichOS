@@ -26,7 +26,7 @@ func identity(_ u:URL,local:Bool=true)throws->[String:Any] {
         try fm.startDownloadingUbiquitousItem(at:u)
         try fail("The file is downloading from iCloud. Try again when it is available")
     }
-    let bookmark=try u.bookmarkData(options:.suitableForBookmarkFile,includingResourceValuesForKeys:nil,relativeTo:nil)
+    let bookmark=try s.st_nlink>1 ? Data():u.bookmarkData(options:.suitableForBookmarkFile,includingResourceValuesForKeys:nil,relativeTo:nil)
     return ["volume":UInt64(UInt32(bitPattern:s.st_dev)),"object":s.st_ino,"size":UInt64(s.st_size),"modified":"\(s.st_mtimespec.tv_sec):\(s.st_mtimespec.tv_nsec)","changed":"\(s.st_ctimespec.tv_sec):\(s.st_ctimespec.tv_nsec)","bookmark":bookmark.base64EncodedString()]
 }
 func same(_ a:[String:Any],_ b:[String:Any],version:Bool=true)throws {
@@ -151,6 +151,7 @@ func main(_ r:[String:Any])throws->[String:Any] {
         let source=try canonical(url(string(r,"path")))
         return try coordinate(source) {a,_ in
             _=try checked(r,a)
+            var info=stat();guard lstat(a.path,&info)==0,info.st_nlink<=1 else {try fail("This file has multiple hard links. Its note is saved, but the file was not annotated or sorted")}
             let directory=try fm.url(for:.itemReplacementDirectory,in:.userDomainMask,appropriateFor:a,create:true)
             let staged=directory.appendingPathComponent(UUID().uuidString+"."+a.pathExtension)
             try fm.setAttributes([.posixPermissions:0o700],ofItemAtPath:directory.path)

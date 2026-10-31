@@ -34,6 +34,15 @@ for name,value in {"com.apple.metadata:kMDItemFinderComment":plistlib.dumps("Exi
     subprocess.run(["/usr/bin/xattr","-wx",name,value.hex(),source],check=True)
 subprocess.run(["chmod","+a","everyone allow readattr,readextattr,readsecurity",source],check=True)
 subprocess.run(["chflags","nodump",source],check=True)
+linked=root/"linked.txt";linked.write_bytes(b"linked original");alias=root/"other-link.txt";os.link(linked,alias)
+linked_id=native("inspect",path=str(linked));assert linked_id["bookmark"]=="", "A bookmark must not silently select another hard-link alias"
+try:
+    native("reserve",path=str(linked),identity=linked_id)
+except RuntimeError as error:
+    assert "hard links" in str(error)
+else:
+    raise AssertionError("Replacing one hard link would create a permanent duplicate")
+assert linked.stat().st_ino==alias.stat().st_ino and linked.read_bytes()==alias.read_bytes()==b"linked original"
 before=attributes(source);identity=native("inspect",path=str(source));stage=native("reserve",path=str(source),identity=identity)
 native("materialize",path=str(source),identity=identity,staged=stage["path"])
 pathlib.Path(stage["path"]).write_bytes(b"one original with a staged annotation")

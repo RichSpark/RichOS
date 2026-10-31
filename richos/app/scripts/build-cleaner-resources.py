@@ -227,6 +227,11 @@ def build(cache):
                 pdf_unicode(stage / "exiftool")
         modules=cache / "swift-modules"
         run(["xcrun","swiftc","-O","-target",f"{platform.machine()}-apple-macosx13.0","-module-cache-path",modules,native,"-o",stage / "native"])
+        # Installed Perl sources include mode-0444 modules. Bundle rebuilds must
+        # be able to replace these generated resources, like ordinary macOS apps.
+        for path in stage.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                path.chmod(path.stat().st_mode | 0o200)
         files={str(p.relative_to(stage)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(stage.rglob("*")) if p.is_file()}
         for example in UPSTREAM_EXAMPLES:
             if files.get(example["member"])!=example["sha256"]:
