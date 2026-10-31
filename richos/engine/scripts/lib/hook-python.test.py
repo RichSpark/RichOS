@@ -44,9 +44,6 @@ HOOKS = os.path.join(ENGINE, "scripts", "hooks")
 LIB = os.path.join(HERE, "hook-python.sh")
 ENGINE_PROFILE = os.path.join(os.path.dirname(ENGINE), "app", "crates", "richos-core", "src", "engine_profile.rs")
 SCAFFOLD = (".test.sh", ".mutation.sh", ".selftest.sh")
-# shell-evidence.sh was in flight on another branch when this suite landed (2026-10-30); it joins
-# H1 and H3 the moment it sources hook-python.sh, and is named on every run until then.
-PENDING = {"shell-evidence.sh"}
 SOURCE_LINE = re.compile(r'^_hp_dir="\$\{BASH_SOURCE\[0\]%/\*\}"; if \[ -f "\$_hp_dir/\.\./lib/hook-python\.sh" \]; then '
                          r'\. "\$_hp_dir/\.\./lib/hook-python\.sh"; fi')
 REAL_PY = os.path.realpath(sys.executable)
@@ -127,16 +124,12 @@ class H1EveryHookSourcesIt(unittest.TestCase):
     def test_h1_every_hook_sources_the_library_first(self):
         missing = []
         for name in hook_scripts():
-            if name in PENDING:
-                continue
             with open(os.path.join(HOOKS, name), encoding="utf-8") as fh:
                 lines = fh.read().splitlines()
             code = [l for l in lines[1:] if l.strip() and not l.lstrip().startswith("#")]
             if not code or not SOURCE_LINE.match(code[0]):
                 missing.append(name)
         self.assertEqual(missing, [], "these hooks can still reach the python3 stub by name")
-        for name in sorted(PENDING):
-            print(f"\nNOTE: {name} does not source hook-python.sh yet (in flight on another branch)", file=sys.stderr)
 
 
 class H2TheLibrary(FakeMac):
@@ -310,8 +303,6 @@ class H3TheWholeHookChain(FakeMac):
                 tool = matcher.split("|")[0].replace(".*", "playwright__browser_navigate")
                 for h in entry["hooks"]:
                     command = h["command"]
-                    if any(p in command for p in PENDING):
-                        continue
                     runs.append((f"terminal {event}[{matcher}] {command.split('/')[-1]}",
                                  command, self.payload(event, tool), min(h.get("timeout") or 60, 120)))
         # The desktop app's registrations (engine_profile.rs EngineProfile::prepare).
@@ -329,8 +320,7 @@ class H3TheWholeHookChain(FakeMac):
                     r"const APP_%s_RULES[^=]*=\s*\[(.*?)\];" % chain.upper(), rust, re.S).group(1))
                 runs.append((f"app dispatcher {chain}", f'/bin/bash "{hooks}/dispatch-pretooluse.sh" {chain} '
                              + " ".join(rules), self.payload("PreToolUse", chain), 60))
-            for name in sorted(set(re.findall(r'join\("scripts/hooks/([\w.-]+\.sh)"\)', rust)) - PENDING
-                               - {"dispatch-pretooluse.sh"}):
+            for name in sorted(set(re.findall(r'join\("scripts/hooks/([\w.-]+\.sh)"\)', rust)) - {"dispatch-pretooluse.sh"}):
                 for tool in ("Bash", "Write"):
                     runs.append((f"app direct {name}[{tool}]", f'/bin/bash "{hooks}/{name}"',
                                  self.payload("PreToolUse", tool), 60))

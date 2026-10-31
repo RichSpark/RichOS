@@ -23,7 +23,7 @@ class ShellEvidence(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="shell-evidence-test.")
         self.env = {**os.environ, "RICHOS_AGENT_HOLD_DIR": os.path.join(self.tmp, "hold"),
-                    "CLAUDE_CODE_ENTRYPOINT":"cli"}
+                    "CLAUDE_CONFIG_DIR": os.path.join(self.tmp, "config"), "CLAUDE_CODE_ENTRYPOINT":"cli"}
         self.env.pop("RICHOS_AGENT_BASH_FOREGROUND",None)
 
     def tearDown(self):
@@ -142,6 +142,66 @@ class ShellEvidence(unittest.TestCase):
             self.assertEqual(out["permissionDecision"], "deny")
             self.assertIn("WAIT:", out["permissionDecisionReason"])
             self.assertNotIn("updatedInput", out)
+
+    # The notice is said once per context (2026-10-31): on 8e8aa492d every Bash call carried it,
+    # 152 copies (about 11k tokens) in one session.
+    def transcript(self, session="fixture-session", agent=None):
+        p = Path(self.tmp, "projects", session + ".jsonl")
+        if agent:
+            p = Path(self.tmp, "projects", session, "subagents", "agent-" + agent + ".jsonl")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not p.exists():
+            p.write_text(json.dumps({"type": "user", "message": {"content": "start"}}) + "\n")
+        return p
+
+    def said(self, command, session="fixture-session", **extra):
+        main = self.transcript(session)
+        payload = self.bash(command, transcript_path=str(main), **extra)
+        payload["session_id"] = session
+        hso = self.run_hook(payload)["hookSpecificOutput"]
+        self.assertTrue(hso["updatedInput"]["command"].startswith(PREFIX), "every call keeps the failure prefix")
+        return hso.get("additionalContext", "")
+
+    def test_two_calls_in_one_session_carry_the_full_notice_once(self):
+        first = self.said("echo one")
+        self.assertIn("Shell commands use errexit and pipefail", first)
+        self.assertIn("do not turn a failed check into success", first)
+        self.assertEqual(self.said("echo two"), "", "the second call repeats nothing")
+        self.assertEqual(self.said("echo three"), "")
+
+    def test_a_new_session_and_a_compaction_hear_it_again(self):
+        self.assertTrue(self.said("echo one"))
+        self.assertEqual(self.said("echo two"), "")
+        self.assertIn("errexit", self.said("echo one", session="fixture-session-2"), "a new session hears it")
+        # A tool result quoting the compaction line is escaped JSON, not a compaction.
+        with self.transcript().open("a") as fh:
+            fh.write(json.dumps({"type": "user", "toolUseResult": '{"subtype":"compact_boundary"}'}) + "\n")
+        self.assertEqual(self.said("echo three"), "")
+        with self.transcript().open("a") as fh:
+            fh.write(json.dumps({"type": "system", "subtype": "compact_boundary",
+                                 "content": "Conversation compacted"}, separators=(",", ":")) + "\n")
+        self.assertIn("errexit", self.said("echo four"), "the compacted context hears it again")
+        self.assertEqual(self.said("echo five"), "")
+
+    def test_each_subagent_hears_it_once_in_its_own_context(self):
+        self.transcript(agent="afixture1")
+        self.assertIn("errexit", self.said("echo lead"))
+        sub = self.said("echo one", agent_id="afixture1")
+        self.assertIn("errexit", sub)
+        self.assertIn("six-second foreground grace", sub)
+        self.assertEqual(self.said("echo two", agent_id="afixture1"), "")
+        self.assertEqual(self.said("echo lead again"), "")
+        # Its own compaction (in its own transcript) is the only one that re-says it to it.
+        with self.transcript(agent="afixture1").open("a") as fh:
+            fh.write('{"type":"system","subtype":"compact_boundary"}\n')
+        self.assertEqual(self.said("echo lead three"), "")
+        self.assertIn("errexit", self.said("echo three", agent_id="afixture1"))
+
+    def test_without_a_session_the_notice_is_still_said(self):
+        payload = self.bash("echo hi")
+        del payload["session_id"]
+        for _ in range(2):
+            self.assertIn("errexit", self.run_hook(payload)["hookSpecificOutput"]["additionalContext"])
 
     def test_capture_failure_never_breaks_the_call(self):
         blocked = os.path.join(self.tmp, "a-file")
