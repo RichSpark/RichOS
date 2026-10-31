@@ -246,7 +246,7 @@ pub mod hook_alarms;
 /// review, slice 4): mid-job reviews of the app's workers.
 pub mod review_watch;
 /// `codex_watch` — the engine's codex-watch run as the app's own child: each new entry Codex
-/// writes in one of the user's Codex channels reaches Rich in the conversation on screen (gap X).
+/// writes in one of the user's Codex channels reaches Stu in the conversation on screen (gap X).
 pub mod codex_watch;
 /// `app_management_watch` — the engine's read-only App Management watcher run as the app's own
 /// child: kernel write denials and tccd's App Management attributions, with full paths, kept in
