@@ -29,6 +29,10 @@
 #   5c-age-{fresh-dark,dark,light}  The quota sheet's account lanes: no age while both readings
 #                       are current, then "read N min ago" on both after 5.5 min of null answers
 #                       (with .read.json, the matching nodes, and .tree). ACCOUNTS_WALK_UNTIL=age runs 5c and ends there.
+#   5d-*                The CEO's §153: a weekly switch while a helper runs. ACCOUNTS_WALK_UNTIL=weekly-helper
+#                       runs 5d after 5 (before 5b) and ends there: 5d-job-running, 5d-switch-helper-running,
+#                       5d-after-move, with 5d-calls.log, 5d-calls-running.log, 5d-journal.txt and
+#                       5d-records-{at-switch,end}.txt (the block's own comment says what is checked).
 #   6-switched-chat     Home's week at 99%: Rich's line, with See your accounts
 #   7-switched-{dark,light}  The sheet: the banner (when and why) and Recent changes
 #   8-menu-two          Settings: "Using Work, switched <time>"
@@ -254,6 +258,178 @@ grep -q '"kind": *"added"' "$S/5-accounts.txt" || fail "5 Recent changes has no 
 close_sheet; theme Light; open_sheet || fail "5 the sheet in light"; shot 5-two-light
 close_sheet; theme Dark
 
+# 5d (the CEO's §153, 2026-10-31): THE WEEKLY SWITCH WHILE A HELPER RUNS, handled exactly as the
+# five-hour one. No helper is told to stop, commit or hand off; running work carries on, and Stu
+# moves once nothing of his runs. Two accounts, automatic pause on (checked below; 5b reads the
+# same switch on screen). It runs before 5b: 5b's jump of Home's five hours from 20% to 95% is a
+# measured speed that keeps Home's five-hour hold on for the rest of that window (quota.rs
+# pre_hold), and a helper on Home would be held by it, which is not what this stage asks. The front desk
+# writes a job down and the back end launches one helper (the fake's `register` and
+# `work-agents`), which steps through the app's gate every 2 s after the back end's turn ends.
+# Home's week is then written as 99 and read from Rich's next turns (each streams its usage, as
+# step 6 does): the switch to Work is decided and Home is being left (`leaving: ["1"]`).
+# Checked from the fake's calls.log, where each gate step is a line:
+#   - the app's QUOTA gate admits every helper step on Home after the switch: no order, no
+#     quota refusal and no hold, although the weekly hold stands on Home's row, at least 3 in
+#     45 s, which is past the app's 30 s idle check (work_host.rs ACCOUNT_CHECK_EVERY).
+#     Admitted is exit 0 or a refusal by the engine's hook behind the gate, which the gate runs
+#     only once it has admitted the call, and whose own guards refuse the fake's stand-in
+#     command ("Lock-out: REFUSED (no registration)": not a registered worker's). The quota
+#     gate's own refusals start "RichOS desktop quota:" or "RichOS desktop:", the old order
+#     said "Stop the task now", and a held step never returns;
+#   - no back-end session opens on Work while the helper runs, and Stu is told `account_switch`
+#     on Home, where he keeps his session;
+#   - once it finishes on its own (work-agents-finish), a back-end session opens on Work and Stu
+#     is told `account_moved` there;
+#   - nothing says stop or handoff, no handoff marker exists, no work record says failed.
+# ACCOUNTS_WALK_UNTIL=weekly-helper runs 5d after 5 and ends there.
+if [ "${ACCOUNTS_WALK_UNTIL:-}" = weekly-helper ]; then
+  G=/Users/admin/fill-first # machine-path-exempt: isolated test VM account/path; never a customer default
+  JOB='Start the Northwind job and keep Mark on it.'
+  wait_calls() {  # wait_calls <extended regex> [tries of 5 s, default 24]
+    for _ in $(seq 1 "${2:-24}"); do
+      "$T/guest.sh" "$VM" "grep -Eq '$1' $G/calls.log" >/dev/null 2>&1 && return 0
+      sleep 5
+    done
+    return 1
+  }
+  records() {  # the work records, anything under engine-state/handoffs, the quota file, the accounts, the policy
+    "$T/guest.sh" "$VM" "find \"$DATA/engine-state/assignments\" \"$DATA/engine-state/handoffs\" -type f -name '*.json' 2>/dev/null | sort | while IFS= read -r f; do echo \"== \$f\"; cat \"\$f\"; echo; done; echo '== claude-quota.json'; cat \"$DATA/engine-state/claude-quota.json\" 2>&1; echo; echo '== claude-accounts.json'; cat \"$DATA/claude-accounts.json\" 2>&1; echo; echo '== claude-quota-policy.json'; cat \"$DATA/claude-quota-policy.json\" 2>&1; echo; true" > "$1" 2>&1
+  }
+  collect5d() {
+    "$T/guest.sh" "$VM" "cat $G/calls.log" > "$S/5d-calls.log" 2>&1 || fail "5d calls.log"
+    "$T/guest.sh" "$VM" "find \"$DATA/engine-state/evidence\" -type f -name callbacks.jsonl 2>/dev/null | sort | while IFS= read -r f; do echo \"== \$f\"; cat \"\$f\"; done" > "$S/5d-journal.txt" 2>&1 \
+      || fail "5d the evidence journals"
+    records "$S/5d-records-end.txt" || fail "5d the app's records"
+    # A gate step still waiting (a held call) has a gate process and its gate-err file in the
+    # fixture folder: evidence for a run where the helper's steps stopped coming.
+    "$T/guest.sh" "$VM" "ps -axo pid,etime,command | grep -e '--claude-quota-gate' | grep -v grep; for f in $G/gate-err-*; do [ -e \"\$f\" ] && { echo \"== \$f\"; cat \"\$f\"; }; done; true" > "$S/5d-gates.txt" 2>&1 || true
+    # The app's own log (relaunch.py's), for what the work host said about Stu's session.
+    # shellcheck disable=SC2016  # the $(...) is meant to expand in the guest's shell, not here
+    "$T/guest.sh" "$VM" 'cat "$(ls -t /Users/admin/testvm/*/relaunch-*.log 2>/dev/null | head -1)"' > "$S/5d-app.log" 2>&1 || true # machine-path-exempt: isolated test VM account/path; never a customer default
+  }
+  end5d() {
+    collect5d
+    if [ "${#FAILS[@]}" -gt 0 ]; then
+      note "done at 5d, with ${#FAILS[@]} failed step(s): $(printf '%s; ' "${FAILS[@]}")"
+      exit 1
+    fi
+    note "done at 5d (ACCOUNTS_WALK_UNTIL=weekly-helper)"
+    exit 0
+  }
+  stop5d() { fail "$1; nothing after it can pass"; end5d; }
+
+  note "5d a job with a helper on Home, then Home's week reaches 99%"
+  "$T/guest.sh" "$VM" "rm -f $G/work-agents-finish $G/work-agents-started; : > $G/calls.log; touch $G/log-turns; printf 'Mark\n' > $G/work-agents; printf '%s\n' '$JOB' > $G/register" \
+    || stop5d "5d the job fixtures"
+  # The policy the gate judges on: claude-quota-policy.json once a choice was saved, else the
+  # published file's own (quota/gate.rs decide). 5b found no saved file and the switch on.
+  if "$T/guest.sh" "$VM" "test -f \"$DATA/claude-quota-policy.json\"" >/dev/null 2>&1; then
+    policy_on="grep -Eq '\"enabled\": *true' \"$DATA/claude-quota-policy.json\""
+  else
+    policy_on="grep -Eq '\"policy\": *\\{ *\"enabled\": *true' \"$DATA/engine-state/claude-quota.json\""
+  fi
+  "$T/guest.sh" "$VM" "$policy_on" >/dev/null 2>&1 \
+    || fail "5d automatic pause is not on: the weekly hold would not stand on Home"
+  send_turn "$JOB"
+  wait_calls 'register ok' || stop5d "5d the front desk never wrote the job down (no 'register ok')"
+  # A step the quota gate admitted: exit 0, or refused by the engine's hook behind it (above).
+  wait_calls 'gate work-agent-1 exit (0|2 said: [^R]|2 said: R[^i])' \
+    || stop5d "5d the back end's helper never stepped through the quota gate admitted"
+  note "5d ok: the helper runs and steps through the gate"
+  shot 5d-job-running
+  usage "$G/usage-1.json" 20 99 || fail "5d Home's 99% weekly fixture"
+  send_turn 'How is the Northwind job going?'
+  send_turn 'And the pairing screens?'
+  switched=""
+  for _ in $(seq 1 24); do
+    if "$T/guest.sh" "$VM" "grep -Eq '\"leaving\": *\\[ *\"1\" *\\]' \"$DATA/engine-state/claude-quota.json\" && grep -Eq '\"inUse\": *\"2\"' \"$DATA/claude-accounts.json\"" >/dev/null 2>&1; then
+      switched=1; break
+    fi
+    sleep 5
+  done
+  [ -n "$switched" ] || stop5d "5d the weekly switch was never decided (no leaving [\"1\"] with Work in use)"
+  AT=$("$T/guest.sh" "$VM" 'date +%s')
+  note "5d ok: Home is being left for Work (guest clock $AT)"
+  records "$S/5d-records-at-switch.txt" || fail "5d the records at the switch"
+
+  note "5d the helper carries on through the switch (45 s)"
+  sleep 45
+  "$T/guest.sh" "$VM" "cat $G/calls.log" > "$S/5d-calls-running.log" 2>&1 || fail "5d calls.log while the helper runs"
+  "$T/guest.sh" "$VM" "ps -axo pid,ppid,etime,command | grep -e 'fill-first/claude' | grep -v grep | cut -c1-300; true" > "$S/5d-procs-running.txt" 2>&1 || true
+  steps=$(awk -v at="$AT" '$1 >= at && $3 == "gate" && $4 == "work-agent-1"' "$S/5d-calls-running.log")
+  gate_refused() { awk 'NF && (/Stop the task now/ || ($6 != "0" && / said: RichOS desktop( quota)?: /))'; }
+  admitted=$(printf '%s\n' "$steps" | awk 'NF && !(/Stop the task now/ || ($6 != "0" && / said: RichOS desktop( quota)?: /))' | grep -c . || true)
+  other=$(printf '%s\n' "$steps" | gate_refused | grep -c . || true)
+  printf '%s\n' "$steps" | gate_refused > "$S/5d-gate-refusals.txt"
+  # Each lease is one "lease <kind> <session>" line (fake-claude-fill-first.pl); Work's folder
+  # has a space in it, so a line is matched by its words, never by a field number.
+  on_work=$(awk -v at="$AT" '$1 >= at && /claude-accounts\/2 gate work-agent-1 /' "$S/5d-calls-running.log" | grep -c . || true)
+  if [ "$admitted" -ge 3 ] && [ "$other" = 0 ]; then
+    note "5d ok: $admitted steps of the helper after the switch, every one admitted by the quota gate"
+  else
+    fail "5d the helper after the switch: $admitted admitted, $other refused by the quota gate (want 3 or more admitted and none refused; 5d-gate-refusals.txt)"
+  fi
+  [ "$on_work" = 0 ] || fail "5d $on_work helper steps ran under Work's folder: the helper was not on Home"
+  if awk -v at="$AT" '$1 >= at && /claude-accounts\/2 lease back-end /' "$S/5d-calls-running.log" | grep -q .; then
+    fail "5d a back-end session opened on Work while the helper still ran (Stu moved under running work)"
+  else
+    note "5d ok: no back-end session on Work while the helper runs"
+  fi
+  # Something of Stu's runs, so he is told the switch is coming on the session he keeps (Home).
+  if awk -v at="$AT" '$1 >= at && !/claude-accounts\/2/ && / turn .*account_switch/' "$S/5d-calls-running.log" | grep -q .; then
+    note "5d ok: Stu was told account_switch on Home and kept his session"
+  else
+    fail "5d Stu was not told account_switch on Home while his helper ran"
+  fi
+  shot 5d-switch-helper-running
+
+  note "5d the helper finishes on its own"
+  "$T/guest.sh" "$VM" "touch $G/work-agents-finish" || fail "5d the finish fixture"
+  wait_calls 'gate work-agent-1 exit [0-9]+ finished' || stop5d "5d the helper never finished (no 'gate work-agent-1 exit N finished')"
+  # When it finished is the time on its own last line, not when this walk next looked.
+  FIN=$("$T/guest.sh" "$VM" "awk '/ gate work-agent-1 exit [0-9]+ finished/ {print \$1; exit}' $G/calls.log")
+  note "5d ok: the helper finished with an admitted step (guest clock $FIN)"
+  if wait_calls 'claude-accounts/2 lease back-end ' 36; then
+    note "5d ok: a back-end session opened on Work"
+  else
+    fail "5d no back-end session opened on Work after the helper finished"
+  fi
+  if wait_calls 'claude-accounts/2 turn .*account_moved' 36; then
+    note "5d ok: Stu was told account_moved on Work"
+  else
+    fail "5d no turn on Work told Stu account_moved"
+  fi
+  sleep 5
+  shot 5d-after-move
+  collect5d
+  first_work=$(awk '/claude-accounts\/2 lease back-end / {print $1; exit}' "$S/5d-calls.log")
+  if [ -n "$first_work" ] && [ "$first_work" -ge "$FIN" ]; then
+    note "5d ok: the back end's first session on Work started after the helper finished"
+  else
+    fail "5d the back end's first session on Work (${first_work:-none}) did not start after the helper finished ($FIN)"
+  fi
+  if grep -Eqi 'Stop the task now|RichOS handoff|hand off' "$S/5d-calls.log"; then
+    fail "5d calls.log carries a stop order or a handoff"
+  else
+    note "5d ok: nothing in calls.log says stop or handoff"
+  fi
+  if grep -q '^== .*/engine-state/handoffs/' "$S/5d-records-end.txt"; then fail "5d a handoff marker exists"; fi
+  if grep '"hook_event_name":"SubagentStop"' "$S/5d-journal.txt" | grep -q '"agent_id":"work-agent-1"'; then
+    note "5d ok: the helper ended (SubagentStop for work-agent-1)"
+  else
+    fail "5d no SubagentStop for work-agent-1 in the evidence journals"
+  fi
+  work_states() { awk '/^== / {w = ($0 ~ /\/engine-state\/assignments\//)} w' "$@" | grep -o '"state":"[a-z-]*"'; }
+  if ! grep -q '^== .*/engine-state/assignments/' "$S/5d-records-end.txt"; then
+    fail "5d no work record was written (the job never reached the register)"
+  elif work_states "$S/5d-records-at-switch.txt" "$S/5d-records-end.txt" | grep -q '"state":"failed"'; then
+    fail "5d a work record says failed"
+  else
+    note "5d ok: no work record says failed (at the switch: $(work_states "$S/5d-records-at-switch.txt" | tr '\n' ' '); now: $(work_states "$S/5d-records-end.txt" | tr '\n' ' '))"
+  fi
+  end5d
+fi
 # D13 (walk of nightly 41): on a fresh install the sheet's "When a 5-hour limit is almost used up"
 # showed neither choice selected, while Pause says "The default." Nothing above presses either
 # choice, so this is still the fresh install's own setting. Selected is read from the radios'
