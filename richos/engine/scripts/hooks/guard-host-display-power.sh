@@ -356,6 +356,7 @@
 # next session — it assumes nothing about being live in the session that adds
 # it, which is the session that wrote the brief it refuses.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 # --- ROOT RESOLUTION -------------------------------------------------------
 # TWO ROOTS, NEVER ONE. The full contract, and why the old single-root

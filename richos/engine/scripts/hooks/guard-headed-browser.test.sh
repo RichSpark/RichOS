@@ -302,8 +302,12 @@ if [ "$rc" = 0 ]; then ok "N5 an unreadable payload is not refused"; else bad "N
 echo "=== never the /usr/bin python3 stub ==="
 # On a Mac without developer tools /usr/bin/python3 is Apple's stub: running it opens the install
 # dialog. With no other python3 on PATH the hook passes rather than run it (a refusal here would
-# mean it ran /usr/bin/python3).
-out="$(payload 'node review.mjs' | PATH=/usr/bin:/bin bash "$HOOK" 2>&1)"; rc=$?
+# mean it ran /usr/bin/python3). RICHOS_TOOLCHAIN_ROOT is an empty fake Mac, so the developer
+# tools this host may have are not found behind the stub (scripts/lib/hook-python.sh step 3), and
+# DEVELOPER_DIR, which the test runners pass through when this host has a toolchain, is unset.
+NODEV="$(mktemp -d -t ghb-nodev.XXXXXX)"
+out="$(payload 'node review.mjs' | env -u DEVELOPER_DIR RICHOS_TOOLCHAIN_ROOT="$NODEV" PATH=/usr/bin:/bin bash "$HOOK" 2>&1)"; rc=$?
+rm -rf "$NODEV"
 if [ "$rc" = 0 ]; then ok "N7 with only /usr/bin/python3 on PATH the hook passes and never runs it"; else bad "N7 the hook ran /usr/bin/python3" "rc=$rc $out"; fi
 
 echo "=== through the dispatcher ==="

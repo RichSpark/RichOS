@@ -83,6 +83,7 @@
 # (WORKER_EVENTS_TEAMS_DIR is honored too, so a test harness that already sets
 # one does not have to set two).
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -o pipefail
 
 INFLIGHT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)"

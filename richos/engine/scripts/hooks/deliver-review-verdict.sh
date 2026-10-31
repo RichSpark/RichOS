@@ -4,6 +4,7 @@
 # additionalContext (CEO §113; richos-hq plan 2026-10-09 §2.5, slice 3). Never
 # blocks: every outcome is exit 0. The logic: scripts/lib/review_delivery.py.
 # UNEVALUATED-PAYLOAD-EXEMPT: payload-independent — it never blocks or approves, so a payload it cannot read delivers nothing and the call goes ahead, which is what it should do.
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -uo pipefail
 INPUT="$(cat)"
 # The lead's own call carries no agent_id: nothing to deliver, no interpreter.

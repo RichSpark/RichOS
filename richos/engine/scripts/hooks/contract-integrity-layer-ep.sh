@@ -67,6 +67,7 @@
 # decided whether to PARSE ARGUMENTS, so sourcing this into any shell that
 # happened to carry positional parameters made it refuse them as its own — which
 # is how its first regression test failed.
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _ep_layer_executed=0
 case "${BASH_SOURCE[0]}" in
     "$0") _ep_layer_executed=1 ;;

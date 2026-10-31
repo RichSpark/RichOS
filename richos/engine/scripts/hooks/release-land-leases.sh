@@ -33,6 +33,7 @@
 # holder's ancestry and the repositories' own Git state; the payload is read only
 # to resolve the governed root, and a failure there is announced above.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 # --- ROOT RESOLUTION -------------------------------------------------------
 # TWO ROOTS, NEVER ONE. The full contract, and why the old single-root
 # resolution was wrong the moment the engine became loadable by reference,

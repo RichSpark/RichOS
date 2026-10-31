@@ -27,6 +27,7 @@
 # STDIN IS READ WITH A TIMEOUT: a SessionStart hook is runnable as a CLI tool with
 # an inherited stdin nobody closes (session-start-stdin.test.sh).
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 # --- ROOT RESOLUTION -------------------------------------------------------
 # TWO ROOTS, NEVER ONE. The full contract, and why the old single-root
 # resolution was wrong the moment the engine became loadable by reference,

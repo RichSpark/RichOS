@@ -68,6 +68,7 @@
 # Everything else on the Bash matcher passes untouched, at the cost of one
 # regex.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: guard-publication-commits.sh: python3 is required for payload parsing — refusing (fail-closed)" >&2; exit 2; }

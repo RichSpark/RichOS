@@ -13,6 +13,7 @@
 # app does not run this chain: its hook, scripts/app-engine-hook.py, applies the same rule through
 # mega-lander/app.py validate_shell_target. Suite: guard-no-shell-c.test.sh.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _gsc_in="$(cat)"
 _gsc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _UE_LIB="$_gsc_dir/../lib/unevaluated-notice.sh"

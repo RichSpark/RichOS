@@ -16,28 +16,19 @@
 # usually has no developer tools at all, and that is exactly the Mac where the dialog would open.
 # Any error in the check is a pass. Suite: scripts/lib/toolchain.test.sh.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _gtc_in="$(cat)"
 # No dirname: on a Mac without developer tools a scrubbed PATH may hold nothing beyond /bin.
 _gtc_src="${BASH_SOURCE[0]}"
 case "$_gtc_src" in */*) _gtc_dir="${_gtc_src%/*}" ;; *) _gtc_dir=. ;; esac
 _gtc_dir="$(cd "$_gtc_dir" && pwd)"
 # Nothing this hook runs may itself be a stub: /usr/bin/python3 IS one, and on a Mac without
-# developer tools running it opens the very dialog this rule exists to prevent. Take the first
-# python3 on PATH outside /usr/bin (the app's bundled runtime, Homebrew); with none, pass. That
-# python's folder goes first on PATH for the rest of the hook, so the shared library sourced below
-# (which calls `python3` by name) gets it too, never the stub. Only file tests here, nothing run.
-_gtc_py=""
-_gtc_stubs="${RICHOS_TOOLCHAIN_ROOT:-}/usr/bin"   # the suite's fake Mac keeps its stubs under a root
-_gtc_ifs="$IFS"; IFS=:
-for _gtc_d in $PATH; do
-    [ -n "$_gtc_d" ] && [ "$_gtc_d" != "/usr/bin" ] && [ "$_gtc_d" != "$_gtc_stubs" ] &&
-        [ -x "$_gtc_d/python3" ] && { _gtc_py="$_gtc_d/python3"; break; }
-done
-IFS="$_gtc_ifs"
+# developer tools running it opens the very dialog this rule exists to prevent. hook-python.sh
+# (sourced above) chose the interpreter by path, the app's bundled runtime first; with none, pass.
+_gtc_py="${RICHOS_HOOK_PYTHON:-}"
 # The command is resolved with the caller's own PATH (review 2026-10-29: with the bundled python's
 # folder prepended, its pip3 hid the /usr/bin stub the agent's shell would actually run).
-_gtc_caller_path="$PATH"
-[ -n "$_gtc_py" ] && PATH="${_gtc_py%/*}:$PATH"
+_gtc_caller_path="${RICHOS_HOOK_CALLER_PATH:-$PATH}"
 # An unreadable payload is said, never passed in silence (unevaluated-payload.test.sh), and that
 # comes BEFORE the cheap exit below: an empty, truncated or non-JSON payload names no stub, so the
 # cheap exit used to pass it without a word. The library runs `python3` by name (to read the payload

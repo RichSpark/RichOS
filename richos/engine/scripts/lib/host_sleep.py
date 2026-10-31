@@ -154,15 +154,93 @@ def _scan_words(words, findings, depth):
         findings.append(reason)
 
 
-def _heredoc_bodies(text):
-    """(command line, body) for each heredoc in `text`."""
-    out = []
-    for m in re.finditer(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n", text):
-        start = m.end()
-        end = re.search(r"^\s*%s\s*$" % re.escape(m.group(2)), text[start:], re.M)
-        body = text[start:start + end.start()] if end else text[start:]
-        line_start = text.rfind("\n", 0, m.start()) + 1
-        out.append((text[line_start:m.start()], body))
+_HEREDOC_HEAD = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+
+
+def heredocs(text):
+    """(command line, body) for each heredoc at command level in `text`; the one heredoc scan of
+    the Bash rules (toolchain.py reads it too).
+
+    A head is shell syntax: never a here-string (`<<<`), a comment or quoted text (review
+    rv-20261030T162409Z-41c917da finding 1: each of those, read as a head, swallowed the real
+    heredoc after it), and never inside an earlier heredoc's body, which its own command decides
+    about (`cat > notes.sh <<'SCRIPT'` holding `bash <<'BUILD'` only writes a file). A `$( ... )`
+    inside double quotes is shell again until its `)`. An ANSI-quoted string ($'...', where \\'
+    does not end it) and arithmetic ($(( ... )), (( ... )), whose << is a shift) are skipped whole
+    (review rv-20261030T221210Z-f238edab-a661)."""
+    out, i, n = [], 0, len(text)
+    quote, frames = None, []  # frames: [the quote outside a $( ... ), parentheses open inside it]
+    while i < n:
+        c = text[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if quote == "$'":
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if quote is None and (text.startswith("$((", i) or (
+                text.startswith("((", i) and (i == 0 or text[i - 1] in " \t\n;&|("))):
+            j, depth = (i + 1 if c == "$" else i), 0
+            while j < n:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+                if depth == 0:
+                    break
+            i = j
+            continue
+        if quote is None and text.startswith("$'", i):
+            quote = "$'"
+            i += 2
+            continue
+        if quote == '"':
+            if c == '"':
+                quote = None
+            elif text.startswith("$(", i) and not text.startswith("$((", i):
+                frames.append(['"', 0])
+                quote = None
+                i += 2
+                continue
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+            nl = text.find("\n", i)
+            i = n if nl < 0 else nl
+            continue
+        elif text.startswith("$(", i) and not text.startswith("$((", i):
+            frames.append([None, 0])
+            i += 2
+            continue
+        elif frames and c == "(":
+            frames[-1][1] += 1
+        elif frames and c == ")":
+            if frames[-1][1]:
+                frames[-1][1] -= 1
+            else:
+                quote = frames.pop()[0]
+        elif text.startswith("<<<", i):
+            i += 3
+            continue
+        elif text.startswith("<<", i):
+            m = _HEREDOC_HEAD.match(text, i)
+            nl = text.find("\n", m.end()) if m else -1
+            if nl >= 0:
+                start = nl + 1
+                end = re.compile(r"^\s*%s\s*$" % re.escape(m.group(3)), re.M).search(text, start)
+                out.append((text[text.rfind("\n", 0, i) + 1:i], text[start:end.start()] if end else text[start:]))
+                i = end.end() if end else n
+                continue
+            i += 2
+            continue
+        i += 1
     return out
 
 
@@ -177,7 +255,7 @@ def _scan_text(text, findings, depth=0):
     # A heredoc is input to the command in front of it (review 2026-10-29: `python3 <<EOF` and
     # `bash <<EOF` ran caffeinate). Fed to a shell, its body is commands; fed to an interpreter, it
     # is code. Written to a file or sent to the guest, it is text and passes.
-    for head, body in _heredoc_bodies(text):
+    for head, body in heredocs(text):
         head_cmds, _ = tokenize(head)
         for words in head_cmds:
             argv = _strip_prefix(words)

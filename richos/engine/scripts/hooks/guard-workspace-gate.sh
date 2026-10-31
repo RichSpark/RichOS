@@ -20,6 +20,7 @@
 # FAILS OPEN ON ITS OWN ERROR, LOUDLY: a broken engine that could never let a
 # turn end would trap the CEO's session. The failure is announced every turn.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -o pipefail
 
 # --- ROOT RESOLUTION -------------------------------------------------------

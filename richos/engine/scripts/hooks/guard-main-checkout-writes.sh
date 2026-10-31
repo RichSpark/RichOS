@@ -20,6 +20,7 @@
 # wires the hook by absolute path to the MAIN checkout's copy — so REPO_ROOT is
 # always the main checkout, regardless of which session triggered the write.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 
 # Fail-closed, not fail-open: TOOL_NAME and FILE_PATH below are both extracted

@@ -81,6 +81,7 @@
 # scripts/lib/interactive-prompt.py under "WHAT THIS CANNOT SEE", and repeated
 # here so nobody has to find it.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 
 command -v python3 >/dev/null 2>&1 || {

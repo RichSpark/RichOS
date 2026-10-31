@@ -17,8 +17,11 @@
 #        com.apple.PowerManagement, open -a <keep-awake app>, inline python/osascript code
 #   P6   review 2026-10-29: a heredoc fed to a shell (its body is commands) or an interpreter
 #        (its body is code) that starts caffeinate
+#   P7   review 2026-10-30: that heredoc is still read after a here-string (<<<), a comment or
+#        quoted text naming `<<EOF` (one heredoc scan, host_sleep.heredocs, shared with toolchain.py)
 #   N1   reading is allowed: pmset -g, pmset -g assertions, bare pmset
-#   N2   a MENTION is not a run: echo, grep, which, man, a commit message, a heredoc body, a comment
+#   N2   a MENTION is not a run: echo, grep, which, man, a commit message, a heredoc body, a comment,
+#        a shell heredoc inside a file a heredoc writes
 #   N3   the test VM: ssh <vm> caffeinate, ssh <vm> 'sudo pmset ...', a testvm/ script
 #   N4   an unreadable payload, another tool's payload and a command naming none of it pass
 #   D1   through the real dispatcher (dispatch-pretooluse.sh Bash) the refusal is exit 2 with its
@@ -113,6 +116,26 @@ check 2 P6 'a heredoc fed to sh behind nohup, unquoted delimiter' "nohup sh <<EO
 echo start
 caffeinate -s -t 5
 EOF"
+check 2 P7 'a heredoc fed to bash after a here-string' "cat <<< hello
+bash <<'EOF'
+caffeinate -i -t 5
+EOF"
+check 2 P7 'a heredoc fed to bash after a comment naming <<EOF' "ls  # writes <<EOF somewhere
+bash <<'EOF'
+caffeinate -i -t 5
+EOF"
+check 2 P7 'a heredoc fed to bash after quoted <<EOF' "echo \"use <<EOF here\"
+bash <<'X'
+caffeinate -i -t 5
+X"
+check 2 P7 'a heredoc fed to bash after an ANSI-quoted apostrophe' "echo \$'it\\'s'
+bash <<'EOF'
+caffeinate -i -t 5
+EOF"
+check 2 P7 'a heredoc fed to bash after an arithmetic shift' "x=\$((1 << SHIFT))
+bash <<EOF
+caffeinate -i -t 5
+EOF"
 }
 
 echo "=== guard-host-sleep: allowed ==="
@@ -138,6 +161,11 @@ EOF"
 check 0 N3 'a heredoc sent to the guest' "ssh vm bash <<'EOF'
 caffeinate -i -t 60
 EOF"
+check 0 N2 'a shell heredoc inside a file written by a heredoc' "cat > notes.sh <<'SCRIPT'
+bash <<'BUILD'
+caffeinate -i -t 5
+BUILD
+SCRIPT"
 check 0 N2 'a comment' 'ls # caffeinate -i'
 check 0 N2 'a path that names it' 'cat scripts/lib/host-shield/caffeinate'
 check 0 N2 'open of an ordinary file' 'open -R notes/caffeine-review.md'

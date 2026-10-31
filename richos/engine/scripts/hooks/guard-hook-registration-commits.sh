@@ -153,6 +153,7 @@
 # beside scripts/lib/registered-hooks.sh). Every other repository on this
 # machine is untouched at the cost of a substring test and two file tests.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -eo pipefail
 
 # --- ROOT RESOLUTION -------------------------------------------------------

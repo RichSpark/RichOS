@@ -35,6 +35,7 @@
 # never truncated, rewritten or rotated by this hook.
 
 # Deliberately NO `set -e` and NO `set -o pipefail`. See above.
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -u 2>/dev/null || true
 
 RICHOS_REF_FORENSICS_DIR="${RICHOS_REF_FORENSICS_DIR:-$HOME/.claude/state/ref-forensics}"

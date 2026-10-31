@@ -26,6 +26,7 @@
 # IT IS A TEXT MATCH AND IT LEAKS (a script, a variable, `sh -c "$X"`). Its job is to stop
 # the habitual command, not an adversary. Any error in the check is a pass.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 _gfad_in="$(cat)"
 _gfad_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _UE_LIB="$_gfad_dir/../lib/unevaluated-notice.sh"

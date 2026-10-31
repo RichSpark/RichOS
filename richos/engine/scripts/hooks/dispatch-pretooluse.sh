@@ -151,6 +151,7 @@
 #
 # Exit codes: 0 allow, 2 block. Anything else is a bug in this file.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -uo pipefail
 
 _DSP_TAG="(hook: scripts/hooks/dispatch-pretooluse.sh)"

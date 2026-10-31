@@ -22,6 +22,7 @@
 # Fail-open everywhere: any parse/IO error exits 0. Env override for tests:
 # TEAMMATE_IDLE_TEAMS_DIR.
 
+_hp_dir="${BASH_SOURCE[0]%/*}"; if [ -f "$_hp_dir/../lib/hook-python.sh" ]; then . "$_hp_dir/../lib/hook-python.sh"; fi  # python3 by path, never Apple's install-dialog stub
 set -o pipefail
 
 # Keep event JSON out of argv/environment: Linux imposes per-string exec limits.

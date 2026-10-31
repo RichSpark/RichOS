@@ -26,6 +26,9 @@ exits 1. That marker is the install dialog; no case may ever leave one. Nothing 
       /usr/bin python3 stub
   T10 host_shield.shield_env, the path every suite runs through: DEVELOPER_DIR passed through
       with a toolchain, stand-ins ahead of /usr/bin without one
+  T15 off macOS the harness changes nothing: no stand-ins, the real /usr/bin tools stay found
+  T16 a shell heredoc after a here-string (<<<), a comment or quoted text naming `<<EOF` is still
+      read as commands; one inside "$( ... )" too
 """
 import json
 import os
@@ -34,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -350,6 +354,34 @@ class FakeMac(unittest.TestCase):
         self.assertEqual(env["DEVELOPER_DIR"], d)
         proc = subprocess.run(["make"], env=env, capture_output=True, text=True)
         self.assertEqual((proc.returncode, proc.stdout.strip()), (0, "built by xcode"), proc.stderr)
+        self.no_stub()
+
+    def test_t15_the_stand_ins_are_for_macos_only(self):
+        # Review rv-20261030T130236Z-aaf88b85-fcb0: the stubs are Apple's. Anywhere else /usr/bin/git
+        # and make are the real tools, and a stand-in ahead of them would hide them.
+        env = self.sanitized()
+        standins = os.path.join(self.root, "standins")
+        with unittest.mock.patch.object(toolchain.sys, "platform", "linux"):
+            self.assertEqual(toolchain.harness_env(env, standins), env)
+        self.assertFalse(os.path.exists(standins), "no stand-in was written off macOS")
+        with unittest.mock.patch.object(toolchain.sys, "platform", "darwin"):
+            self.assertIn(standins, toolchain.harness_env(env, standins)["PATH"].split(os.pathsep))
+        self.no_stub()
+
+    def test_t16_a_heredoc_after_a_here_string_a_comment_or_quoted_text_is_still_read(self):
+        # Review rv-20261030T162409Z-41c917da-c71e finding 1: `<<<`, a comment and quoted text were
+        # read as heredoc heads, whose "bodies" swallowed the real heredoc after them.
+        for command in ("cat <<< hello\nbash <<'EOF'\nmake\nEOF",
+                        "ls  # writes <<EOF somewhere\nbash <<'EOF'\nmake\nEOF",
+                        "echo \"use <<EOF here\"\nbash <<'X'\nmake\nX",
+                        "echo 'use <<EOF here'\nbash <<X\nmake\nX",
+                        # review rv-20261030T221210Z-f238edab-a661: ANSI quoting and arithmetic
+                        "echo $'it\\'s'\nbash <<'EOF'\nmake\nEOF",
+                        "x=$((1 << SHIFT))\nbash <<EOF\nmake\nEOF",
+                        "out=\"$(bash <<EOF\nmake\nEOF\n)\""):
+            rc, message = self.guard(command)
+            self.assertEqual(rc, 2, "%r passed: %s" % (command, message))
+            self.assertIn("`make`", message)
         self.no_stub()
 
 
