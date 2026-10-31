@@ -46,7 +46,8 @@ pub fn write_package(path: &Path, e: &Entry, extension: &str) -> Result<Projecti
     let mut input = ZipArchive::new(File::open(path).map_err(err)?).map_err(err)?;
     let archive = extension == "zip";
     for i in 0..input.len() {
-        let f = input.by_index(i).map_err(err)?;
+        // Inspect entry headers without trying to decrypt protected content.
+        let f = input.by_index_raw(i).map_err(err)?;
         if f.encrypted()
             || !archive && f.name().map_err(err)?.starts_with("_xmlsignatures/")
             || !archive && f.name().map_err(err)?.contains("documentsignatures")
@@ -223,7 +224,7 @@ pub fn write_audio(path: &Path, e: &Entry, ext: &str) -> Result<Projection> {
             (previous, written)
         }
         "flac" => {
-            let audio = lofty::flac::FlacFile::read_from(&mut file, ParseOptions::default())
+            let mut audio = lofty::flac::FlacFile::read_from(&mut file, ParseOptions::default())
                 .map_err(err)?;
             let mut tag = audio.vorbis_comments().cloned().unwrap_or_default();
             let previous = tag.get("DESCRIPTION").unwrap_or_default().to_string();
@@ -238,8 +239,10 @@ pub fn write_audio(path: &Path, e: &Entry, ext: &str) -> Result<Projection> {
             for value in remaining {
                 tag.push("DESCRIPTION".into(), value);
             }
-            tag.save_to_path(path, WriteOptions::default())
-                .map_err(err)?;
+            // FLAC stores cover pictures on FlacFile, outside VorbisComments.
+            // Save the complete file's tags so a comment edit retains those pictures.
+            audio.set_vorbis_comments(tag);
+            audio.save_to_path(path, WriteOptions::default()).map_err(err)?;
             (previous, written)
         }
         "ogg" => {
@@ -1212,6 +1215,33 @@ fn pdf_base_length(file: &mut File) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_flac_note_retains_cover_blocks_and_audio() {
+        let root = std::env::temp_dir().join(format!("cleaner-flac-cover-{}", richos_core::cleaner::capture_id()));
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("source.flac");
+        let staged = root.join("staged.flac");
+        std::fs::write(&source, include_bytes!("../fixtures/cleaner/with-cover.flac")).unwrap();
+        std::fs::copy(&source, &staged).unwrap();
+        let entry = Entry::new(source.clone(), richos_core::cleaner::Identity { volume: 1, object: 1, size: 1, modified: "1".into(), changed: "1".into(), bookmark: String::new() }, "Remember this recording".into()).unwrap();
+        let projected = write_audio(&staged, &entry, "flac").unwrap();
+        assert_eq!(projected.mode, "embedded");
+        verify_note(&staged, &projected, "flac").unwrap();
+        verify_content(&source, &staged, "flac", &root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn encrypted_zip_is_left_byte_identical_with_a_local_note() {
+        let path = std::env::temp_dir().join(format!("cleaner-encrypted-{}.zip", richos_core::cleaner::capture_id()));
+        let original = include_bytes!("../fixtures/cleaner/encrypted.zip");
+        std::fs::write(&path, original).unwrap();
+        let entry = Entry::new(path.clone(), richos_core::cleaner::Identity { volume: 1, object: 1, size: 1, modified: "1".into(), changed: "1".into(), bookmark: String::new() }, "Private archive context".into()).unwrap();
+        let projected = write_package(&path, &entry, "zip").unwrap();
+        assert_eq!(projected.mode, "local");
+        assert!(projected.reason.contains("encrypted"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn xml_note_keeps_entities_and_unrelated_properties() {
         let xml = r#"<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator>Original author</dc:creator><dc:description>O&apos;Brien &amp; café 📷</dc:description></cp:coreProperties>"#;
