@@ -180,6 +180,10 @@ pub struct WorkHost {
     /// The app's own cleanup (CEO §54 addendum 2), run when nothing is left to do.
     cleanup: Mutex<Option<crate::app_cleanup::Hook>>,
     retry_clock: Mutex<Arc<dyn crate::upstream::RetryClock>>,
+    /// What [`Self::background_work`] has already read of the receipts and of Stu's inboxes, so
+    /// the update gate's five-second poll reads only what changed since the last one.
+    receipts: Mutex<crate::work_status::ReceiptIndex>,
+    handoffs: Mutex<crate::session_tools::HandoffIndex>,
 }
 impl WorkHost {
     pub fn new(
@@ -200,6 +204,8 @@ impl WorkHost {
             output: Mutex::new(None),
             cleanup: Mutex::new(None),
             retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
+            receipts: Mutex::new(Default::default()),
+            handoffs: Mutex::new(Default::default()),
         })
     }
     pub fn set_retry_clock(&self, clock: Arc<dyn crate::upstream::RetryClock>) {
@@ -1998,7 +2004,7 @@ impl WorkHost {
                 entity_id: entity.to_string(),
                 thread_id: thread.to_string(),
             };
-            let launches = crate::work_status::launches(&self.state, entity, thread);
+            let launches = self.receipts.lock().unwrap().launches(&self.state, entity, thread);
             let mut session_live = |session: &str| {
                 // A receipt naming no session has no worker reading that could clear it.
                 *sessions.entry(session.to_string()).or_insert_with(|| {
@@ -2011,14 +2017,18 @@ impl WorkHost {
                 if record.reported_state().is_some_and(AssignmentState::waits_for_the_world) {
                     return true;
                 }
-                let Ok(launches) = launches.as_ref() else { return true };
-                let launched = launches.get(&record.obligation_id).cloned().unwrap_or_default();
+                let Ok(receipts) = launches.as_ref() else { return true };
+                let launched = receipts.by_obligation.get(&record.obligation_id).cloned().unwrap_or_default();
+                // A damaged receipt of this job, or one that could be any job's: unknown is live.
+                if launched.damaged || receipts.unattributed_damage {
+                    return true;
+                }
                 let instruction = crate::ecs::UserInstruction {
                     ledger_ref: record.instruction_ledger_ref.clone(),
                     sha256: record.instruction_sha256.clone(),
                     text: None,
                 };
-                let given = match crate::session_tools::handoff_given(&scope, &instruction) {
+                let given = match self.handoffs.lock().unwrap().given(&scope, &instruction) {
                     Ok(given) => given,
                     Err(_) => return true,
                 };
@@ -6542,6 +6552,98 @@ done
         crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Keep the original release date"})).unwrap();
         assert_eq!(gate_reading(&h.host, &h.state), busy, "input waiting behind a closed lease read as no work");
         assert!(h.host.peer_work_pending(), "the quit question did not see the input waiting for Stu");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// A finished helper's receipt for `obligation`, as `<name>.json`, in the schema given.
+    fn job_receipt(h: &Harness, name: &str, obligation: &str, schema: u32) -> PathBuf {
+        use sha2::Digest;
+        let folder = h.state.join("work-receipts").join(format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]")));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(format!("{name}.json"));
+        std::fs::write(&path, serde_json::json!({"schema":schema,"id":name,
+            "binding":{"entity_id":"depot","thread_id":"thread-one","session_id":"work-session-one"},
+            "request":{"obligation_id":obligation,"role":"worker","title":"Fictional","repo":"/fictional/project"},
+            "status":"run-ended","agent_id":format!("agent-{name}"),"tool_use_id":format!("call-{name}")}).to_string()).unwrap();
+        path
+    }
+
+    /// **One damaged receipt holds only its own job** (Tom's review of P0, follow-up 2). Two open
+    /// jobs, each with a helper that has finished, read idle. On main one damaged receipt made the
+    /// whole partition unreadable, so every open job counted as running, and the update gate
+    /// stuck on busy for as long as that receipt stayed. A receipt that names its job holds that
+    /// job only; so does one whose bytes are garbage where this index last read a job's receipt.
+    /// One it never read whole could be either job's, so both wait (fail toward waiting).
+    #[test]
+    fn one_damaged_receipt_holds_only_its_own_job() {
+        let h = harness(0);
+        assignment::register(&h.state, &registration(&h)).unwrap();
+        assignment::register(&h.state, &Registration { obligation_id: "obligation-8".into(), ..registration(&h) }).unwrap();
+        job_receipt(&h, "seven", "obligation-7", 1);
+        let eight = job_receipt(&h, "eight", "obligation-8", 1);
+        let running = || h.host.background_work().running;
+        assert_eq!(running(), 0, "two jobs whose helpers finished read as running");
+        // A receipt of another schema (another engine version): it parses and names its job.
+        job_receipt(&h, "eight", "obligation-8", 2);
+        assert_eq!(running(), 1, "a receipt of another schema held every job, not only its own");
+        job_receipt(&h, "eight", "obligation-8", 1);
+        assert_eq!(running(), 0);
+        // Bytes that are not a receipt at all.
+        std::fs::write(&eight, "{\"schema\":1,\"binding\"").unwrap();
+        assert_eq!(running(), 1, "a damaged receipt held every job, not only its own");
+        let unknown = eight.with_file_name("unknown.json");
+        std::fs::write(&unknown, "not a receipt").unwrap();
+        assert_eq!(running(), 2, "a damaged receipt that could be any job's was read as no job's");
+        std::fs::remove_file(&unknown).unwrap();
+        job_receipt(&h, "eight", "obligation-8", 1);
+        assert_eq!(running(), 0, "a repaired receipt still held its job");
+        h.host.shutdown();
+        std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    /// **The gate poll reads only what changed** (Tom's review of P0, follow-up 2: about 4 MB of
+    /// JSON per five-second poll, measured while an update was on offer, growing with every job).
+    /// The first poll reads every receipt and Stu's inbox once. A poll with nothing changed reads
+    /// neither. A receipt the engine rewrote (a new file renamed over it, here with the same size
+    /// and time) is read alone, and so is a message appended for Stu.
+    #[test]
+    fn the_gate_poll_reads_only_the_receipts_and_messages_that_changed() {
+        let h = harness(0);
+        let (scope, path) = given_job_with_an_ended_helper(&h);
+        let earlier: Vec<PathBuf> = (0..40).map(|n| job_receipt(&h, &format!("old-{n}"), &format!("obligation-old-{n}"), 1)).collect();
+        // Receipts of earlier work are settled; one written in the last two seconds is read again.
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let age = |file: &Path| std::fs::File::options().write(true).open(file).unwrap().set_modified(hour_ago).unwrap();
+        let partition = earlier[0].parent().unwrap().to_path_buf();
+        let receipts: Vec<PathBuf> = std::fs::read_dir(&partition).unwrap().map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
+        receipts.iter().for_each(|file| age(file));
+        let all: u64 = receipts.iter().map(|file| std::fs::metadata(file).unwrap().len()).sum();
+        let inbox = crate::session_tools::inbox(&scope, "stu").unwrap();
+        let read = || (h.host.receipts.lock().unwrap().read_bytes(), h.host.handoffs.lock().unwrap().read_bytes());
+        h.host.background_work();
+        let first = read();
+        assert_eq!(first, (all, std::fs::metadata(&inbox).unwrap().len()), "the first poll did not read everything once");
+        h.host.background_work();
+        assert_eq!(read(), first, "a poll with nothing changed read receipts or the inbox again");
+        // The engine rewrites one receipt.
+        let rewritten = &earlier[3];
+        let incoming = partition.join(".old-3.incoming");
+        std::fs::write(&incoming, std::fs::read(rewritten).unwrap()).unwrap();
+        age(&incoming);
+        std::fs::rename(&incoming, rewritten).unwrap();
+        h.host.background_work();
+        let size = std::fs::metadata(rewritten).unwrap().len();
+        assert_eq!(read(), (first.0 + size, first.1), "a rewritten receipt was not read, or more was");
+        // A message for Stu.
+        let before = std::fs::metadata(&inbox).unwrap().len();
+        crate::session_tools::send(&path, &scope, serde_json::json!({"text":"Keep the original release date"})).unwrap();
+        let appended = std::fs::metadata(&inbox).unwrap().len() - before;
+        h.host.background_work();
+        assert_eq!(read(), (first.0 + size, first.1 + appended), "the appended message was not read alone");
+        h.host.background_work();
+        assert_eq!(read(), (first.0 + size, first.1 + appended), "a poll with nothing changed read again");
         h.host.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
     }
