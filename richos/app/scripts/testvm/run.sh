@@ -90,8 +90,11 @@ SLOT="$(python3 "$HERE/slots.py" check 2>&1)" || die "no guest is booted outside
 # minute and leaves a VM behind.
 host_claude_path >/dev/null 2>&1 \
   || die "no claude binary on this host at $TESTVM_HOST_CLAUDE — the app shells out to it; install Claude Code first"
-"$HERE/claude-login.sh" host-check >/dev/null 2>&1 \
-  || die "host claude is not logged in — /login on the host first"
+# host-check says WHY it refuses (signed out, or the app's account list unreadable), and that
+# reason is the one passed on: a fixed "not logged in" sent the reader to /login for a list
+# that could not be read (Tom's review of 9bbb8777).
+HOST_LOGIN_REFUSAL="$("$HERE/claude-login.sh" host-check 2>&1 >/dev/null)" \
+  || die "the host's Claude login cannot be handed to the guest: ${HOST_LOGIN_REFUSAL#\[testvm\] }"
 
 START=$(date +%s)
 preflight_tart

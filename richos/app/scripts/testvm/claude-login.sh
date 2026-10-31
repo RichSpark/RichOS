@@ -161,13 +161,22 @@ import json, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as f:
         stored = json.load(f)
-    listed = [a for a in stored["accounts"] if isinstance(a, dict) and isinstance(a.get("id"), str)]
+    # Read as the app's `Stored` is (claude_accounts.rs): `inUse` is required, and every account
+    # has a string `id` and `label` and a `folder` that is absent, null or a string. The app
+    # refuses to open any other list, so this refuses it too rather than pick from what is left.
+    listed = stored["accounts"]
+    if not isinstance(stored["inUse"], str) or not isinstance(listed, list):
+        raise ValueError("not the app's account list")
+    for a in listed:
+        if not (isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("label"), str)
+                and isinstance(a.get("folder"), (str, type(None)))):
+            raise ValueError("an account the app would not read")
     if not any(a["id"] == "1" for a in listed):
         raise ValueError("the account list lost Account 1")  # Accounts::open refuses it too
     # `inUse` among `accounts`, else the first: Accounts::in_use.
-    a = next((a for a in listed if a["id"] == stored.get("inUse")), listed[0])
+    a = next((a for a in listed if a["id"] == stored["inUse"]), listed[0])
     folder = a.get("folder") or ""
-    label = a.get("label") if isinstance(a.get("label"), str) else a["id"]
+    label = a["label"]
     # Claude Code names the item for the folder string exactly as the app passes it
     # (CLAUDE_CONFIG_DIR = folder, engine_profile.rs); the app refuses non-ASCII
     # (reset_transport.rs) rather than name a different item for the same spelling.
@@ -180,13 +189,11 @@ except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
 PY
 }
 
-if [ -z "$ACCOUNT_ITEM" ] && [ "$CMD" != "check" ]; then
-  if ! IN_USE="$(in_use_account)"; then
-    [ "$CMD" = "push" ] && printf 'claude login: guest NOT logged in\n'
-    printf '[testvm] REFUSED: the app'"'"'s account list %s cannot be read, so which Claude account is in use is unknown; nothing was read or pushed rather than guess.\n' \
-      "$TESTVM_CLAUDE_ACCOUNTS" >&2
-    exit 5
-  fi
+# The host item and folder the primary login is read and renewed from, for the account in
+# $IN_USE (in_use_account's lines; empty is Account 1). Run at the start and, by keep, at
+# every tick, so both always name the same account.
+apply_in_use() {
+  IN_USE_LABEL=""; IN_USE_FOLDER=""; HOST_SERVICE="$TESTVM_CLAUDE_KC_SERVICE"; HOST_FOLDER=""
   if [ -n "$IN_USE" ]; then
     { IFS= read -r _; IFS= read -r IN_USE_LABEL; IFS= read -r IN_USE_FOLDER; } <<EOF
 $IN_USE
@@ -194,10 +201,18 @@ EOF
     if [ -n "$IN_USE_FOLDER" ]; then
       HOST_SERVICE="$CLAUDE_KC_PREFIX-$(sha8 "$IN_USE_FOLDER")"
       HOST_FOLDER="$IN_USE_FOLDER"
-    else
-      HOST_FOLDER=""
     fi
   fi
+}
+
+if [ -z "$ACCOUNT_ITEM" ] && [ "$CMD" != "check" ]; then
+  if ! IN_USE="$(in_use_account)"; then
+    [ "$CMD" = "push" ] && printf 'claude login: guest NOT logged in\n'
+    printf '[testvm] REFUSED: the app'"'"'s account list %s cannot be read, so which Claude account is in use is unknown; nothing was read or pushed rather than guess.\n' \
+      "$TESTVM_CLAUDE_ACCOUNTS" >&2
+    exit 5
+  fi
+  apply_in_use
 fi
 
 cg() {  # one command in the guest, the harness's single indirection
@@ -479,6 +494,21 @@ if [ "$CMD" = "keep" ]; then
     if [ $(( $(date +%s) - BEGAN )) -ge "$TESTVM_CLAUDE_KEEP_MAX_SECONDS" ]; then
       log "the keeper for $VM ends after ${TESTVM_CLAUDE_KEEP_MAX_SECONDS}s"
       exit 0
+    fi
+    # THE APP CAN MOVE THE TEAM TO ANOTHER ACCOUNT MID-RUN (Tom's review of 9bbb8777). The
+    # primary login follows the account in use at every tick, not only the one read when the
+    # keeper started: the guest is handed the new account's token at once, and from then on
+    # the new account's item is the one watched and renewed. A list that cannot be read now
+    # keeps the account already in hand; it never guesses a new one.
+    if [ -z "$ACCOUNT_ITEM" ] && IN_USE="$(in_use_account)"; then
+      WAS_SERVICE="$HOST_SERVICE"
+      apply_in_use
+      if [ "$HOST_SERVICE" != "$WAS_SERVICE" ]; then
+        log "the app moved the team to ${IN_USE_LABEL:-Account 1}: handing $VM that account's access token"
+        LAST_WRITTEN=""; ASKED_FOR=""
+        "$0" push "$VM" "$GUEST_HOME" >/dev/null && LAST_WRITTEN="$(host_written_at)"
+        continue
+      fi
     fi
     W="$(host_written_at)"
     if [ -n "$W" ] && [ "$W" != "$LAST_WRITTEN" ]; then
