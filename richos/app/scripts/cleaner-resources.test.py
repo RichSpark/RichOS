@@ -12,6 +12,8 @@ import sys
 import tempfile
 import unittest
 sys.dont_write_bytecode=True
+sys.path.insert(0,str(Path(__file__).parent/"lib"))
+import bundle_invariants
 source=Path(__file__).with_name("build-cleaner-resources.py")
 spec=importlib.util.spec_from_file_location("cleaner_resources",source)
 resources=importlib.util.module_from_spec(spec)
@@ -35,6 +37,21 @@ class Resources(unittest.TestCase):
             (root/"native").unlink()
             with self.assertRaisesRegex(RuntimeError,"changed or is missing"):
                 resources.verify(root)
+    def test_finished_bundle_accepts_only_the_exact_reviewed_member_and_bytes(self):
+        app=Path("/fixture/RichOS.app")
+        member=app/"Contents/Resources/RichCleaner/example.pm"
+        data=b"# Upstream example: /Users/upstream-developer/demo/file"
+        reviewed={str(member.relative_to(app)):{"sha256":hashlib.sha256(data).hexdigest(),"prefixes":["/Users/upstream-developer"]}}
+        self.assertEqual(bundle_invariants.home_path_findings(member,data,app,reviewed),{})
+        self.assertTrue(bundle_invariants.home_path_findings(member,data+b" changed",app,reviewed))
+        self.assertTrue(bundle_invariants.home_path_findings(member.with_name("other.pm"),data,app,reviewed))
+        self.assertTrue(bundle_invariants.home_path_findings(member,data+b" /Users/fixture-builder/private/file",app,reviewed))
+        self.assertTrue(bundle_invariants.home_path_findings(member,data,app,{}))
+        # Production policy comes from the source recipe rather than the candidate app.
+        policy=bundle_invariants.reviewed_upstream_paths()
+        self.assertIn("Contents/Resources/RichCleaner/exiftool/exiftool",policy)
+        self.assertTrue(all(row.get("reason") and len(row["sha256"])==64 for row in policy.values()))
+
     def test_pdf_uses_existing_utf16_codec_and_refuses_source_drift(self):
         with tempfile.TemporaryDirectory(prefix="richcleaner-unicode-test-",dir=os.environ["TMPDIR"]) as temp:
             root=Path(temp);writer=root/"lib/Image/ExifTool/WritePDF.pl";reader=root/"lib/Image/ExifTool/PDF.pm";writer.parent.mkdir(parents=True)

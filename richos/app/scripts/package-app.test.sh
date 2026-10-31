@@ -95,7 +95,7 @@
 # No application window is opened. Signed bundles contain a native fixture
 # that prints a source stamp. The isolation test runs a headless file reader.
 # run-tests: no-host-screen: bundles contain a native fixture; the isolated probe runs only that fixture and the headless compiler
-# run-tests: inputs richos/app/scripts/package-app.test.sh richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/lib/probe_packaged.test.py richos/engine/scripts/lib/named-persons.py richos/app/scripts/install-signing-cert.sh richos/app/scripts/nightly-local.py richos/engine/scripts/lib/proc_tree.py richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Info.plist richos/app/src-tauri/Entitlements.plist richos/app/src-tauri/tauri.conf.json
+# run-tests: inputs richos/app/scripts/build-cleaner-resources.py richos/app/scripts/runtime-sources.json richos/app/scripts/package-app.test.sh richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/lib/probe_packaged.test.py richos/engine/scripts/lib/named-persons.py richos/app/scripts/install-signing-cert.sh richos/app/scripts/nightly-local.py richos/engine/scripts/lib/proc_tree.py richos/app/src-tauri/Cargo.toml richos/app/src-tauri/Info.plist richos/app/src-tauri/Entitlements.plist richos/app/src-tauri/tauri.conf.json
 # run-tests: covers richos/app/scripts/package-app.sh richos/app/scripts/lib/bundle_invariants.py richos/app/scripts/lib/no_host_paths.py richos/app/scripts/lib/probe_packaged.py
 set -uo pipefail
 

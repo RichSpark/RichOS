@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Checks owned by the finished app bundle, shared by build and verify-only."""
 import importlib.util
+import hashlib
+import json
 import os
 from pathlib import Path
 import plistlib
 import re
 import sys
+sys.dont_write_bytecode = True
 
 from no_host_paths import DEFAULT_ALLOWED, scan_bytes
 
@@ -16,6 +19,32 @@ def names_predicate():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def reviewed_upstream_paths():
+    # Trust the reviewed source recipe, never an exception invented by a bundle's
+    # own manifest. Re-signing a changed file cannot excuse a private path.
+    scripts = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location('cleaner_resource_recipe', scripts / 'build-cleaner-resources.py')
+    recipe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recipe)
+    rows = {}
+    for prefix, entries in [
+        ('runtime/', json.loads((scripts / 'runtime-sources.json').read_text()).get('upstream_path_exemptions', [])),
+        ('RichCleaner/', recipe.UPSTREAM_EXAMPLES),
+    ]:
+        for entry in entries:
+            rows['Contents/Resources/' + prefix + entry['member']] = entry
+    return rows
+
+
+def home_path_findings(member, data, app, reviewed):
+    findings = scan_bytes(data, DEFAULT_ALLOWED, os.path.expanduser('~'))
+    entry = reviewed.get(str(member.relative_to(app)))
+    if entry and hashlib.sha256(data).hexdigest() == entry['sha256']:
+        for prefix in entry['prefixes']:
+            findings.pop(prefix, None)
+    return findings
 
 
 def verify(app):
@@ -42,6 +71,7 @@ def verify(app):
     elif executable not in files or stamp.encode() not in executable.read_bytes():
         failures.add('bundle-source-identity: plist source stamp is absent from the executable')
 
+    reviewed = reviewed_upstream_paths()
     predicate = names_predicate()
     try:
         denylist = predicate.load_list()
@@ -55,7 +85,7 @@ def verify(app):
         data = member.read_bytes()
         # The path checker is the same predicate used before signing. Nothing
         # about an existing signature excuses a path leak in verify-only mode.
-        if scan_bytes(data, DEFAULT_ALLOWED, os.path.expanduser('~')):
+        if home_path_findings(member, data, app, reviewed):
             failures.add('bundle-home-paths: a member contains a home-directory path')
         relative = str(member.relative_to(app))
         if denylist.match(relative, 'bundle member'):
