@@ -1842,7 +1842,7 @@
   const SETUP_DOWNLOAD_LINE =
     "Sit tight, we need to download about 1 GB of local voice AI so that you can just talk to Rich instead of typing. This will save you $140+/year\u{1F44D} because you won't need Wispr Flow with this setup.";
   const SETUP_ACCOUNT_NOTE =
-    "You need your own Anthropic account and a Max subscription there. You can sign in through your browser after setup; I never see your password. If you don't already have that subscription, sign up there first and pick the Max/Max 20x tier.";
+    "You need your own Anthropic account and an Ultra subscription there. You can sign in through your browser after setup; I never see your password. If you don't already have that subscription, sign up there first and pick the Ultra tier.";
   // WHAT A SEND IS REFUSED WITH WHEN THE SETTING UP WAS NEVER DONE. Verbatim from
   // `setup_view::SETUP_INCOMPLETE_*` (app/src-tauri/src/setup_view.rs). The preview must
   // rehearse the sentence the product ships, not a paraphrase of it — the same rule

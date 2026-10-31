@@ -6754,7 +6754,7 @@ function maybeAskAboutSetup() {
 /// below, underlined, open the Claude pricing page in his browser. `claude.com/pricing` is a KEY
 /// into the allowlist in `src-tauri/src/opener.rs`, not a URL the shell acts on. The `title` is
 /// the same key, so the destination is visible on hover.
-const SETUP_ACCOUNT_LINK_TEXT = "sign up there first and pick the Max/Max 20x tier";
+const SETUP_ACCOUNT_LINK_TEXT = "sign up there first and pick the Ultra tier";
 const SETUP_ACCOUNT_LINK_KEY = "claude.com/pricing";
 function renderSetupAccountNote(note) {
   const at = note.indexOf(SETUP_ACCOUNT_LINK_TEXT);

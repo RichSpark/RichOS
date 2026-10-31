@@ -113,9 +113,9 @@ function rustConst(file, name) {
 const HIS_TOOLS_LINE = rustConst("crates/richos-core/src/setup.rs", "MEDIA_TOOLS_WHY");
 const HIS_DOWNLOAD_LINE = rustConst("src-tauri/src/setup_view.rs", "SETUP_DOWNLOAD_LINE");
 const HIS_ACCOUNT_NOTE = rustConst("src-tauri/src/setup_view.rs", "SETUP_ACCOUNT_NOTE");
-/// His account sentence (2026-10-08), word for word. It carries "Max 20x" and "Max/Max 20x".
+/// His account sentence (2026-10-08), word for word. It carries "an Ultra subscription" and "the Ultra tier".
 const ROUND_ACCOUNT_NOTE =
-  "You need your own Anthropic account and a Max subscription there. You can sign in through your browser after setup; I never see your password. If you don't already have that subscription, sign up there first and pick the Max/Max 20x tier.";
+  "You need your own Anthropic account and an Ultra subscription there. You can sign in through your browser after setup; I never see your password. If you don't already have that subscription, sign up there first and pick the Ultra tier.";
 /// His setup sentence (2026-10-08) and round 19's download line, as he approved them.
 const HIS_SETUP_SENTENCE =
   "My voice and video tools: the tools I use to watch and download videos for you. Plus, it gives you a free & private/local replacement for Wispr Flow. So, it saves you $140+/year👍 and allows you to talk instead of typing anywhere on this computer.";
@@ -305,7 +305,7 @@ async function main() {
   await run.check("2  no terminal, no path, no version number reaches his screen", async () => {
     const page = await openApp(browser, { setup: "missing-both" });
     await page.waitForSelector("#setup-sheet:not([hidden])");
-    // His account sentence ("Max 20x", "Max/Max 20x") is the one declared exemption here, removed
+    // His account sentence ("Ultra") is the one declared exemption here, removed
     // by comparison with the Rust constant it is rendered from; everything else holds the floor.
     const { text, rest, removed } = await sheetTextExempt(page);
     assertEqual(removed.join(" | "), HIS_ACCOUNT_NOTE, "only his account sentence is exempt on this sheet");
@@ -355,7 +355,7 @@ async function main() {
   await run.check("3a the account sentence is his, and its last clause is an underlined link to the pricing page", async () => {
     const page = await openApp(browser, { setup: "missing-both" });
     await page.waitForSelector("#setup-sheet:not([hidden])");
-    const LINK = "sign up there first and pick the Max/Max 20x tier";
+    const LINK = "sign up there first and pick the Ultra tier";
     assertEqual((await page.textContent("#setup-account")).trim(), ROUND_ACCOUNT_NOTE, "the sheet's sentence is not his");
     const links = await page.evaluate(() => [...document.querySelectorAll("#setup-account a")].map((a) => ({
       text: a.textContent, href: a.getAttribute("href"), title: a.title, underline: getComputedStyle(a).textDecorationLine,

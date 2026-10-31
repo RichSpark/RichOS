@@ -47,7 +47,7 @@ pub enum Target {
 /// `tailscale.com/download/mac`, which is the page Tailscale's own documentation sends people to.)
 const ALLOWED: &[(&str, Target)] = &[
     ("claude.ai/new#settings/usage", Target::Page("https://claude.ai/new#settings/usage")),
-    // The setup sheet's "sign up there first and pick the Max/Max 20x tier" link (CEO, 2026-10-08).
+    // The setup sheet's "sign up there first and pick the Ultra tier" link (CEO, 2026-10-08).
     ("claude.com/pricing", Target::Page("https://claude.com/pricing")),
     ("tailscale.com/download/mac", Target::Page("https://tailscale.com/download/mac")),
     (
