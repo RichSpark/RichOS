@@ -60,7 +60,11 @@ identical check or the integration plan. A run that starts beside a holder this 
 longer starve it: before each admission a run looks at the holders that took their slot before
 it (`ahead_of`), and while one of them still has checks waiting to be admitted, its own checks
 give way, a wait that is not the Mac refusing and never spends --admission-wait. So the older
-run is always admitted first, and the newer one uses only what the older one cannot.
+run is always admitted first, and the newer one uses only what the older one cannot. The one
+exception keeps a single priority order: a land in the primary checkout holding integration
+priority (engine_pass.Admission) never gives way, because that priority is what keeps an older
+background run's checks waiting; giving way to them left both waiting until the 600 s turn
+expired (review rv-20261031T223851Z-0d748dd7-f9f7). Once its turn is over it gives way like any.
 
 NESTED RUNS. A suite that runs the real proof-run.py (proof-run.test.py, test-results.test.sh)
 inside a check of a proof run works inside its caller's slot: the caller exports its holder

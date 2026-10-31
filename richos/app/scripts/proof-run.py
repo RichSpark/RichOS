@@ -182,7 +182,7 @@ runs at once left 30 of one run's 37 checks never admitted); the new run says wh
 Only a check the run would start the moment the Mac lets it counts, never one waiting for its own
 lane or prerequisite (waiting_to_be_admitted, 2026-10-31), and a run's checks give way while a run
 that took its slot earlier still has checks waiting to be admitted, so starting beside it cannot
-starve it.
+starve it, except a land holding integration priority, which goes first (one priority order).
 """
 import argparse
 import copy
@@ -2037,7 +2037,15 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
             for it in eligible:
                 it.wait_reason = backoff_reason
                 it.refusing = backoff_refusing
-        ahead = proof_slots.ahead_of(SLOT) if eligible and now >= next_sample else []
+        # ONE priority order: integration priority first, then the order runs took their slots.
+        # A land holding integration priority never gives way to an older run (review
+        # rv-20261031T223851Z-0d748dd7-f9f7): its priority is what keeps an older background run's
+        # checks waiting, so giving way to them left both waiting until the 600 s turn expired.
+        # Only one run holds it at a time (the episode lock is exclusive), so no older run can
+        # hold it too; once its turn is over the land is background work and gives way like any.
+        holds_priority = intent is not None and getattr(intent, "fd", None) is not None
+        ahead = (proof_slots.ahead_of(SLOT) if eligible and now >= next_sample and not holds_priority
+                 else [])
         if ahead:
             # An older run still has checks waiting to be admitted: it goes first (proof_slots.py,
             # 2026-10-31). Not the Mac refusing, so it never spends --admission-wait; with nothing

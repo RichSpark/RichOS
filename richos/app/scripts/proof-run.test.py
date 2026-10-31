@@ -958,6 +958,113 @@ try:
           "never spends its admission wait doing so, and runs once the older run has none waiting",
           (l_seen, l_item.state, l_item.notes, l_item.wait_times, l_item.refused_wait, l_ran, l_free,
            l_buf.getvalue()[-500:]))
+
+    # P16m — ... but one priority order, never two that wait on each other (review
+    # rv-20261031T223851Z-0d748dd7-f9f7, its fixtures/priority_cycle.py with the assertions turned
+    # round). A newer land in the primary checkout holds integration priority while an older worktree
+    # run's lane frees: that priority keeps the older run's worker admission waiting, so the older
+    # run publishes a waiting check. The land giving way to that check while still holding the
+    # priority that blocks it left both waiting on an idle Mac until the 600 s turn expired. Now the
+    # land, holding integration priority, does not give way: it is admitted, and once it lets the
+    # priority go the older run is admitted too. Real Admission and slot locks, in a private
+    # directory; a simulated clock; no commands run.
+    from unittest import mock as mock16m
+
+    class M16Stop(Exception):
+        pass
+
+    class M16Admitted(Exception):
+        pass
+
+    class M16Clock:
+        now, passes = 1000.0, 0
+
+        def sleep(self, seconds):
+            self.now += seconds
+            self.passes += 1
+            if self.passes == 6:
+                raise M16Stop()
+
+    class M16Budget:
+        shared = refusal = None
+
+        def __init__(self, admission):
+            self.admission, self.attempts = admission, 0
+
+        def try_acquire(self):
+            self.attempts += 1
+            if not self.admission.begin():
+                return None
+            self.admission.attempted(True)
+            raise M16Admitted()
+
+    m_clock = M16Clock()
+    m_dir = os.path.join(tmp, "p16-m")
+    os.makedirs(m_dir)
+
+    def m_passes(slot, item, budget, intent, episode=None):
+        """Up to six scheduler passes of one run; True when a worker admission succeeded."""
+        pr.SLOT = slot
+        m_args = Args(run_cap=None, integration_episode=episode, engine_gate=None, integration_intent=intent)
+        m_clock.passes = 0
+        with contextlib.redirect_stdout(io.StringIO()):
+            try:
+                pr.schedule([item], [item], [], m_args, m_dir, m_dir, budget, 1, idle)
+            except M16Stop:
+                return False
+            except M16Admitted:
+                return True
+        return False
+
+    saved_slot = pr.SLOT
+    with contextlib.ExitStack() as m_stack:
+        m_stack.enter_context(mock16m.patch.object(pr.time, "monotonic", lambda: m_clock.now))
+        m_stack.enter_context(mock16m.patch.object(pr.time, "sleep", m_clock.sleep))
+        m_stack.enter_context(mock16m.patch.object(pr.engine_pass, "is_main_checkout", lambda p: p == "main"))
+        m_stack.enter_context(mock16m.patch.object(pr.engine_pass, "birth", lambda *a: "fixture"))
+        m_stack.enter_context(mock16m.patch.object(pr, "discount_held_gap", lambda *a: 0))
+        m_stack.enter_context(mock16m.patch.object(pr, "checkpoint", lambda *a: None))
+        m_stack.enter_context(mock16m.patch.object(pr, "STALL", type("S", (), {
+            "over": staticmethod(lambda: None), "refused": staticmethod(lambda *a: None)})()))
+        m_old = pr.proof_slots._try(m_dir, 2, {"waiter": "p16-m-older-background"}, checks=0)
+        m_new = pr.proof_slots._try(m_dir, 2, {"waiter": "p16-m-newer-land"}, checks=0)
+        m_background = pr.engine_pass.Admission(m_dir, "worktree")
+        m_land = pr.engine_pass.Admission(m_dir, "main")
+        m_intent = pr.engine_pass.Admission(m_dir, "main")
+        m_episode = pr.engine_pass.IntegrationPlan(m_dir, [{"check": "land"}], m_dir)
+        m_old_budget, m_new_budget = M16Budget(m_background), M16Budget(m_land)
+        m_old_item = pr.Item("p16-m-older-ready", m_dir, ["true"])
+        m_new_item = pr.Item("p16-m-newer-ready", m_dir, ["true"])
+        m_seen = {}
+        try:
+            m_seen["intent"] = m_intent.begin()   # the land's schedule holds it while it has ready work
+            for _ in range(3):
+                m_seen["older_admitted"] = m_passes(m_old, m_old_item, m_old_budget, None)
+                m_seen["newer_admitted"] = m_passes(m_new, m_new_item, m_new_budget, m_intent, m_episode)
+                if m_seen["newer_admitted"]:
+                    break
+            m_seen["older_wait_reason"] = m_old_item.wait_reason
+            m_seen["older_published"] = [r["waiting"] for r in pr.proof_slots.waiting_holders(m_dir)
+                                         if r["holder_file"] == m_old.holder_path]
+            m_seen["newer_wait_reason"] = m_new_item.wait_reason
+            m_seen["newer_attempts"] = m_new_budget.attempts
+            m_seen["simulated_seconds"] = round(m_clock.now - 1000, 1)
+            # The land lets its priority go (nothing of it left ready): the older run is admitted.
+            m_intent.close()
+            m_seen["older_admitted_after"] = m_passes(m_old, m_old_item, m_old_budget, None)
+        finally:
+            m_episode.close()
+            for m_adm in (m_intent, m_background, m_land):
+                m_adm.close()
+            m_old.release()
+            m_new.release()
+            pr.SLOT = saved_slot
+    check(m_seen.get("intent") and m_seen.get("newer_admitted") and m_seen.get("newer_attempts", 0) >= 1
+          and m_seen.get("newer_wait_reason") != "older-run" and m_seen.get("older_admitted_after")
+          and m_seen.get("simulated_seconds", 999) < 600,
+          "P16m a newer land holding integration priority is admitted instead of giving way to the older "
+          "run its own priority keeps waiting, and the older run is admitted once the land lets it go",
+          m_seen)
     slots("set", "1")
 
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine
