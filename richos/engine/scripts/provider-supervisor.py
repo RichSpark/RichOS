@@ -169,6 +169,44 @@ def _process_table():
     return table
 
 
+SESSION_TAG = "RICHOS_SESSION_PID"   # the provider's own pid, set in its environment before the exec
+
+
+def _environment(pid):
+    """The process's environment strings (bytes), or None when the OS will not show them.
+    Read in process (KERN_PROCARGS2 on macOS, /proc on Linux), never by spawning `ps`."""
+    if sys.platform == "darwin":
+        try:
+            ctypes = _darwin_libproc()[0]
+            libc = ctypes.CDLL(None, use_errno=True)
+            argmax = ctypes.c_int(0)
+            size = ctypes.c_size_t(ctypes.sizeof(argmax))
+            if libc.sysctl((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(argmax), ctypes.byref(size), None, 0):
+                return None                                           # KERN_ARGMAX
+            buf = ctypes.create_string_buffer(argmax.value)
+            size = ctypes.c_size_t(len(buf))
+            if libc.sysctl((ctypes.c_int * 3)(1, 49, pid), 3, buf, ctypes.byref(size), None, 0):
+                return None                                           # KERN_PROCARGS2
+            raw = buf.raw[:size.value]
+            argc, rest = int.from_bytes(raw[:4], "little"), raw[4:]
+            i = rest.index(b"\0")
+            while i < len(rest) and rest[i] == 0:
+                i += 1
+            env = []
+            for item in rest[i:].split(b"\0")[argc:]:
+                if not item:
+                    break
+                env.append(item)
+            return env
+        except (OSError, ValueError, AttributeError):
+            return None
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as fh:
+            return [item for item in fh.read().split(b"\0") if item]
+    except OSError:
+        return None
+
+
 class Record(object):
     """What the provider has below it now, with birth identities."""
 
@@ -177,13 +215,29 @@ class Record(object):
         self.own_group = own_group
         self.procs = {}           # pid -> (start, pgid)
         self.groups = {}          # pgid -> leader start (or None when the leader was never seen)
+        self.tag = ("%s=%d" % (SESSION_TAG, provider)).encode()
+        self.judged = {}          # pid -> start of a reparented process whose environment says not ours
 
     def snapshot(self, table=None):
         table = _process_table() if table is None else table
         children = {}
         for pid, (ppid, _pg, _st) in table.items():
             children.setdefault(ppid, []).append(pid)
-        roots = [self.provider] + list(self.procs)
+        self.walk([self.provider] + list(self.procs), table, children)
+        self.adopt_detached(table, children)
+        # Everything in a recorded group, including members reparented to launchd,
+        # but only for a group PROVEN still ours by a live recorded member or by its
+        # leader's recorded start. A group id recycled by an unrelated process is
+        # never adopted, so it is never signaled either.
+        ours = self.live_groups(table)
+        for pid, (_ppid, pgid, start) in table.items():
+            if pgid in ours and pid not in self.procs:
+                self.procs[pid] = (start, pgid)
+        self.prune(table, ours)
+        return table
+
+    def walk(self, roots, table, children):
+        """Record `roots` and everything below them, with every process group they are in."""
         stack = [p for p in roots if p in table]
         seen = set()
         while stack:
@@ -201,16 +255,36 @@ class Record(object):
                 leader = table.get(pgid)
                 self.groups.setdefault(pgid, leader[2] if leader and leader[1] == pgid else None)
             stack.extend(children.get(pid, []))
-        # Everything in a recorded group, including members reparented to launchd,
-        # but only for a group PROVEN still ours by a live recorded member or by its
-        # leader's recorded start. A group id recycled by an unrelated process is
-        # never adopted, so it is never signaled either.
-        ours = self.live_groups(table)
-        for pid, (_ppid, pgid, start) in table.items():
-            if pgid in ours and pid not in self.procs:
-                self.procs[pid] = (start, pgid)
-        self.prune(table, ours)
-        return table
+
+    def adopt_detached(self, table, children):
+        """A COMMAND STARTED DETACHED (Tom's review of P0, finding 1, 2026-10-29: nightly 80
+        started with `nohup … &` was in none of the lease files). Its tool shell exits at once,
+        inside the second between two snapshots, so the command is reparented to launchd in a
+        group no snapshot ever saw: neither counted by the update gate and the quit question
+        nor reaped. Every process the provider starts inherits SESSION_TAG=<provider pid>
+        (set before the exec, below), so a tree reparented to launchd, started after the
+        provider, in which any process carries exactly that tag is the provider's own: it is
+        recorded with its groups like any other descendant. macOS shows no environment for its
+        own binaries (/bin/sh, /bin/sleep), so the tree is searched, not only its root; a root
+        whose readable environment lacks the tag is decided once and never read again."""
+        born = (self.procs.get(self.provider) or (None,))[0]
+        if born is None:
+            return
+        self.judged = {pid: start for pid, start in self.judged.items() if pid in table and table[pid][2] == start}
+        for pid, (ppid, _pgid, start) in table.items():
+            if ppid != 1 or pid in self.procs or start < born or self.judged.get(pid) == start:
+                continue
+            tree, stack = [], [pid]
+            while stack and len(tree) < 256:
+                p = stack.pop()
+                tree.append(p)
+                stack.extend(children.get(p, []))
+            first = _environment(pid)
+            if (first is not None and self.tag in first) or any(
+                    self.tag in (_environment(p) or ()) for p in tree[1:]):
+                self.walk([pid], table, children)
+            elif first is not None:
+                self.judged[pid] = start
 
     def prune(self, table, ours):
         """Forget what can never be signaled again (design C4): a process that is gone or
@@ -220,12 +294,21 @@ class Record(object):
         self.groups = {pgid: start for pgid, start in self.groups.items() if pgid in ours}
 
     def live_groups(self, table):
+        """The recorded groups still proven ours: the leader alive with its recorded start, a
+        recorded member alive, or (a detached command left in its exited tool shell's group,
+        review rv-20261031T063529Z-4ca7addc-9ce9) a leader gone while the group still has a
+        member. A group id is never reused while any process is in that group (POSIX), and a
+        group with no member at one snapshot is forgotten (prune), so a group kept here was never
+        empty since it was recorded. A leader id now held by another start is a reused id: not ours."""
         members = {pg for pid, (start, pg) in self.procs.items() if pid in table and table[pid][2] == start}
+        occupied = {pg for _ppid, pg, _start in table.values()}
         ours = set()
         for pgid, leader_start in self.groups.items():
             if leader_start is not None and pgid in table and table[pgid][2] == leader_start:
                 ours.add(pgid)
             elif pgid in members:
+                ours.add(pgid)
+            elif pgid not in table and pgid in occupied:
                 ours.add(pgid)
         return ours
 
@@ -340,6 +423,15 @@ def reap(record, provider_running):
 
 
 SNAPSHOT_SECONDS = 1.0   # the reap's process snapshot, as before (every tenth 100 ms tick)
+# A TOOL SHELL IS SEEN WHILE IT LIVES (review rv-20261031T063529Z-4ca7addc-9ce9): the provider's
+# fork wakes the watch for a snapshot at once, so a shell that starts `nohup … &` and exits is
+# recorded with its process group, and live_groups keeps that group while the detached command
+# is in it. This finds a detached command whose environment macOS hides (its own binaries, such
+# as /bin/sleep), which the session tag cannot. The limit: a shell that forks its command and
+# exits within the few milliseconds before that snapshot, all of it system binaries (a login
+# zsh alone lives 18-30 ms, measured 2026-10-31; Claude Code's tool shell also sources its snapshot).
+FORK_NOTE = 0x40000000   # NOTE_FORK (sys/event.h), select.KQ_NOTE_FORK on macOS
+FORK_FOLLOW_UPS = (0.01, 0.03)   # seconds after a fork: two more snapshots
 
 
 def _exit_watch(provider, parent, wake_read):
@@ -352,10 +444,10 @@ def _exit_watch(provider, parent, wake_read):
         kq = select.kqueue()
     except OSError:
         return None
-    for pid in (provider, parent):
+    for pid, notes in ((provider, select.KQ_NOTE_EXIT | FORK_NOTE), (parent, select.KQ_NOTE_EXIT)):
         try:
             kq.control([select.kevent(pid, select.KQ_FILTER_PROC, select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-                                      select.KQ_NOTE_EXIT)], 0, 0)
+                                      notes)], 0, 0)
         except OSError:
             pass   # already gone: the loop's own checks see it at once
     try:
@@ -399,13 +491,15 @@ def operator_main(parent, argv):
     kq = _exit_watch(provider, parent, wake_read)
     try:
         next_snapshot = time.monotonic()
+        soon = []                         # the quick snapshots that follow a fork
         while os.getppid() == parent and not terminate:
             ended, _ = os.waitpid(provider, os.WNOHANG)
             if ended:
                 running = False           # G9: reap from the last snapshot
                 break
             if time.monotonic() >= next_snapshot:
-                next_snapshot = time.monotonic() + SNAPSHOT_SECONDS
+                soon = [t for t in soon if t > time.monotonic()]
+                next_snapshot = min([time.monotonic() + SNAPSHOT_SECONDS] + soon)
                 try:
                     table = record.snapshot()
                     _write_state(record, table, parent)
@@ -415,7 +509,12 @@ def operator_main(parent, argv):
                 select.select([wake_read], [], [], 0.1)
                 continue
             try:
-                kq.control(None, 4, max(0.0, next_snapshot - time.monotonic()))
+                events = kq.control(None, 4, max(0.0, next_snapshot - time.monotonic()))
+                if any(e.ident == provider and e.fflags & FORK_NOTE for e in events):
+                    # A new tool shell: seen at once, and again once it has left the provider's
+                    # group for its own (the fork comes before the child's setsid).
+                    now = time.monotonic()
+                    next_snapshot, soon = now, [now + d for d in FORK_FOLLOW_UPS]
             except OSError:
                 select.select([wake_read], [], [], 0.1)
         cause = "the provider exited" if not running else ("SIGTERM" if terminate else "the owner died")

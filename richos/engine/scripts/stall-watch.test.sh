@@ -50,6 +50,8 @@
 #   T12  a worker whose transcript was read and is 25 min old is SILENT though a command
 #        it left running (a dev server) still runs; one with no transcript to read and
 #        its own command running is not
+#   T13  a worker whose call the app's usage hold keeps waiting (a pause record its waiter
+#        locks), or released a minute ago, is not SILENT; a dead waiter's record is
 #   T05  a silent teammate whose end the registry deferred because its own endless
 #        loop still runs: the notice says so and names the one command that ends
 #        its own commands (agent_hold.py end), not a pid to look up
@@ -149,6 +151,8 @@ unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT RICHOS_PROOF_RUN_
 # This suite may itself run under a teammate's owner tag; its fixture
 # processes must not inherit it, or every fixture would share one owner.
 unset RICHOS_AGENT_OWNER RICHOS_AGENT_SESSION RICHOS_WAITER
+# The app's usage-hold records (T13) are this suite's own, never a live app's.
+unset RICHOS_APP_STATE
 SID="beadfeed-0000-4000-8000-00000000s001"
 SLEEPER="$(spawn_sleeper)"; PIDS+=("$SLEEPER")
 export RICHOS_ENTITY_ROOT="$SB/entity"
@@ -756,6 +760,42 @@ OUT="$(env -u RICHOS_PROJECTS_DIR HOME="$AHOME" CLAUDE_CONFIG_DIR="$ADATA/claude
 check "T11  an app worker whose transcript is in its session's account folder, written a minute ago, is not SILENT" \
     "$( ! has "$OUT" "sierra-opus-a1" && has "$OUT" "[SILENT] tango-opus-a2" \
         && has "$OUT" "last transcript write" && ! has "$OUT" "no transcript found"; echo $?)" "out=$OUT"
+
+# --- T13: work the app's usage hold keeps waiting is not SILENT (two-day cleanup O1.2) ----
+# In the app a worker's tool call waits at the desktop gate while the usage hold stands
+# (quota/gate.rs), so its transcript is not written, and the watcher called the held worker
+# SILENT. The gate's own pause records (quota/holds.rs) are the evidence: a record its waiter
+# still locks is a call waiting now; a released one carries its release time. Four workers,
+# each with a transcript 25 minutes old: one held now, one released a minute ago, one whose
+# waiter died (an unlocked record with no release), and one with no record at all.
+new_registry t13; new_state t13
+add_agent alfa-opus-h13 a0000000000fixh13 "$SID" 3600 3000 1500
+add_agent bravo-opus-r13 a0000000000fixr13 "$SID" 3600 3000 1500
+add_agent charlie-opus-d13 a0000000000fixd13 "$SID" 3600 3000 1500
+add_agent delta-opus-n13 a0000000000fixn13 "$SID" 3600 3000 1500
+QSTATE="$SB/app-state-t13"; mkdir -p "$QSTATE/quota-waits"
+python3 - "$QSTATE/quota-waits" <<'PY'
+import json, os, sys, time
+now = int(time.time() * 1000)
+def row(aid, released=None):
+    return {"kind": "agent", "id": aid, "entityId": "e", "threadId": "t", "sessionId": "s", "name": aid,
+            "task": None, "sinceAt": now - 1_500_000, "releasedAt": released, "account": "1", "key": aid}
+json.dump(row("a0000000000fixh13"), open(os.path.join(sys.argv[1], "held.json"), "w"))
+json.dump(row("a0000000000fixr13", now - 60_000), open(os.path.join(sys.argv[1], "rel.released.json"), "w"))
+json.dump(row("a0000000000fixd13"), open(os.path.join(sys.argv[1], "dead.json"), "w"))
+PY
+# The held call's waiter: it locks its record for the whole wait, as the gate's waiter does.
+python3 -c 'import fcntl, os, sys, time
+f = open(sys.argv[1], "rb"); fcntl.flock(f, fcntl.LOCK_EX)
+open(sys.argv[2], "w").write("%d\n" % os.getpid()); time.sleep(900)' \
+    "$QSTATE/quota-waits/held.json" "$SB/t13-waiter.pid" >/dev/null 2>&1 &
+QWAITER=$!; PIDS+=("$QWAITER"); disown "$QWAITER" 2>/dev/null
+wait_for 10 test -s "$SB/t13-waiter.pid"
+OUT="$(RICHOS_APP_STATE="$QSTATE" STALL_WATCH_NOW="$(date +%s)" bash "$SW" --tick 2>&1)"
+check "T13  a worker the app's usage hold keeps waiting, or released a minute ago, is not SILENT; a dead waiter's record and no record are" \
+    "$( ! has "$OUT" "alfa-opus-h13" && ! has "$OUT" "bravo-opus-r13" \
+        && has "$OUT" "[SILENT] charlie-opus-d13" && has "$OUT" "[SILENT] delta-opus-n13"; echo $?)" "out=$OUT"
+kill "$QWAITER" 2>/dev/null; rm -f "$SB/t13-waiter.pid"
 
 # --- T05: an end deferred by its own endless loop (2026-10-11, echo-opus-walk49fix1) ----
 new_registry t5; new_state t5

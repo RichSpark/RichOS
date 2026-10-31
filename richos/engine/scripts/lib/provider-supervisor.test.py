@@ -62,6 +62,35 @@ time.sleep(300)
 '''
 
 
+# Tom's review of P0, finding 1 (2026-10-29): the lead starts a command with `nohup … &` in a
+# tool shell that exits at once, so the command is reparented to launchd before any snapshot
+# sees the shell or its group. The command writes its own pid and keeps a heartbeat.
+PROVIDER_WITH_NOHUP = r'''
+import json, os, subprocess, sys, time
+receipt, beat, out = sys.argv[1], sys.argv[2], sys.argv[3]
+loop = "import os,sys,time\nopen(sys.argv[1],'w').write(str(os.getpid()))\nwhile True:\n open(sys.argv[2],'w').write(str(time.time())); time.sleep(0.2)\n"
+shell = subprocess.Popen(["/bin/sh", "-c", 'nohup "$0" -c "$1" "$2" "$3" >/dev/null 2>&1 &',
+                          sys.executable, loop, out, beat], start_new_session=True)
+shell.wait()                                  # the tool call returns at once, as `nohup … &` does
+open(receipt, "w").write(json.dumps({"provider": os.getpid(), "shell": shell.pid}))
+time.sleep(300)
+'''
+
+# Review rv-20261031T063529Z-4ca7addc-9ce9: the same, with a detached command macOS shows no
+# environment for (its own /bin/sleep), so no session tag can find it. The shell first lives a
+# little, as a login shell sourcing its snapshot does (a login zsh alone lives 18-30 ms, measured
+# 2026-10-31).
+PROVIDER_WITH_SYSTEM_NOHUP = r'''
+import json, os, subprocess, sys, time
+receipt, beat, out = sys.argv[1], sys.argv[2], sys.argv[3]
+shell = subprocess.Popen(["/bin/sh", "-c", 'sleep 0.1; nohup /bin/sleep 300 >/dev/null 2>&1 & echo $! > "$0"', out],
+                         start_new_session=True)
+shell.wait()
+open(receipt, "w").write(json.dumps({"provider": os.getpid(), "shell": shell.pid}))
+time.sleep(300)
+'''
+
+
 def without_operator_names():
     """This process's environment minus the operator's three supervisor names, so a product
     case proves its parameters came from the command line."""
@@ -244,6 +273,71 @@ class ReapDescendants(unittest.TestCase):
         # not read the last snapshot's commands as running.
         self.assertTrue(result["final"].get("ended"), "no final state was written: %s" % result["final"])
         self.assertEqual(result["final"].get("outside_provider_groups"), [], "the final state still lists commands")
+
+    def test_R14_a_command_started_with_nohup_counts_as_running_and_is_reaped_with_its_lead(self):
+        """Tom's P0 finding 1 (richos-hq follow-ups.md:357): a real `nohup … &` in a tool shell
+        that exits at once. The lease's state file, which the update gate and the quit question
+        read (lease_commands.rs `read`: any group listed is a running command), must list the
+        command's group, and the reap must end it with its lead."""
+        self.nohup_case(PROVIDER_WITH_NOHUP)
+
+    def test_R15_a_detached_system_command_whose_environment_macos_hides_is_tracked_too(self):
+        """Review rv-20261031T063529Z-4ca7addc-9ce9: `nohup /bin/sleep` shows no environment, so
+        the session tag never found it, and it was neither counted nor reaped."""
+        self.nohup_case(PROVIDER_WITH_SYSTEM_NOHUP)
+
+    def nohup_case(self, provider):
+        with tempfile.TemporaryDirectory(prefix="supervisor nohup ") as root:
+            root = Path(root)
+            receipt, beat, out, state = root/"pids.json", root/"beat", root/"nohup.pid", root/"state.json"
+            fake = root/"provider.py"; fake.write_text(provider)
+            launcher = root/"desktop.py"
+            launcher.write_text("import subprocess,sys,time\np=subprocess.Popen(sys.argv[2:],start_new_session=True)\n"
+                                "open(sys.argv[1],'w').write(str(p.pid))\ntime.sleep(120)\n")
+            args = [sys.executable, str(SUPERVISOR), "--reap-descendants", "--reap-grace=0",
+                    "--reap-state=%s" % state, "--reap-log=%s" % (root/"reap.log"),
+                    sys.executable, str(fake), str(receipt), str(beat), str(out)]
+            desktop = subprocess.Popen([sys.executable, str(launcher), str(root/"sup.pid")] + args,
+                                       env=without_operator_names())
+            detached = None
+            try:
+                for _ in range(100):
+                    if receipt.exists() and out.exists() and out.read_text().strip() and (root/"sup.pid").exists():
+                        break
+                    time.sleep(0.05)
+                detached = int(out.read_text())
+                sup = int((root/"sup.pid").read_text())
+                group = int(json.loads(receipt.read_text())["shell"])
+                ps = subprocess.run(["/bin/ps", "-o", "ppid=,pgid=", "-p", str(detached)], text=True, capture_output=True)
+                self.assertEqual([int(v) for v in ps.stdout.split()], [1, group],
+                                 "fixture: the nohup command is reparented to launchd in the exited shell's group")
+                reading = {}
+                for _ in range(40):                  # the snapshot runs once a second
+                    time.sleep(0.1)
+                    reading = json.loads(state.read_text()) if state.exists() else {}
+                    if group in (reading.get("outside_provider_groups") or []) \
+                            and detached in (reading.get("outside_provider_group") or []):
+                        break
+                self.assertIn(group, reading.get("outside_provider_groups") or [],
+                              "the update gate would read no running command: %s" % reading)
+                self.assertIn(detached, reading.get("outside_provider_group") or [], reading)
+                os.kill(sup, signal.SIGTERM)
+                for _ in range(40):
+                    if not alive(detached):
+                        break
+                    time.sleep(0.05)
+                self.assertFalse(alive(detached), "the nohup command outlived its lead")
+                log = root/"reap.log"
+                for _ in range(40):                  # the reap writes its line after its last pass
+                    if "killed group %d" % group in (log.read_text() if log.exists() else ""):
+                        break
+                    time.sleep(0.05)
+                self.assertIn("killed group %d" % group, log.read_text())
+            finally:
+                if desktop.poll() is None:
+                    desktop.kill(); desktop.wait()
+                if detached and alive(detached):
+                    os.kill(detached, signal.SIGKILL)   # the fixture's own process, its pid captured from itself
 
     def test_R11_the_provider_s_argv_and_environment_equal_the_flagless_path_s(self):
         seen = {}

@@ -18,6 +18,7 @@ from pathlib import Path
 import shutil
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -95,6 +96,26 @@ os.setsid()
 open(out + ".pid", "w").write(str(os.getpid()))
 while True:
     time.sleep(0.05)
+'''
+
+# A compiler cache server as sccache starts one (2026-10-29 12:22Z, pid 56210): the client that
+# starts it exits, so it is reparented to launchd, but it never calls setsid, so it leads no
+# session. It serves every agent's compile on a loopback port.
+CACHE_SERVER = r'''
+import os, socket, sys
+out = sys.argv[1]
+if os.fork():
+    sys.exit(0)
+srv = socket.socket()
+srv.bind(("127.0.0.1", 0))
+srv.listen(8)
+open(out + ".port", "w").write(str(srv.getsockname()[1]))
+open(out + ".pid", "w").write(str(os.getpid()))
+while True:
+    conn, _ = srv.accept()
+    conn.recv(64)
+    conn.sendall(b"compiled")
+    conn.close()
 '''
 
 # run.sh's login keeper: `nohup claude-login.sh keep ... &` then `echo $! > claude-keep.pid`,
@@ -550,6 +571,34 @@ class Catches(Base):
         self.assertIn("shared daemon(s) it started left running for other agents' work: pid %d" % dpid,
                       agent_hold.describe_hold(r))
         agent_hold.release(self.session, self.agent)
+
+    def test_o1_5_a_shared_cache_server_that_leads_no_session_keeps_serving_another_worker(self):
+        """2026-10-29 12:22Z (escalation esc-20261029T122249Z-d4d31678): holding one worker froze
+        the sccache server its tree had started (parent 1, state T), and every other worker's
+        Rust build hung. The server never calls setsid, so the session-leader rule missed it."""
+        server = self.script("cache_server.py", CACHE_SERVER)
+        self.start_call("%s %s %s\n%s %s %s %d" % (sys.executable, server, self.out("cs"),
+                                                   sys.executable, self.worker, self.out("w"), ROUNDS * 20))
+        spid = self.pid_from(self.out("cs") + ".pid")
+        port = int(Path(self.out("cs") + ".port").read_text())
+        worker = self.worker_pid("w")
+        self.assertTrue(wait_for(lambda: agent_hold.snapshot().get(spid, {}).get("ppid") == 1), "reparented")
+        self.assertNotIn("s", agent_hold.snapshot()[spid]["stat"], "fixture: like sccache, it leads no session")
+        r = agent_hold.hold(self.session, self.agent, "fixture")
+        try:
+            self.assertIn(str(worker), r["held"], "the worker's own command is held")
+            self.assertNotIn(str(spid), r["held"], "the shared cache server was frozen")
+            self.assertFalse(state(spid).startswith("T"), "the shared cache server is stopped")
+            # A second worker's compile through the server finishes while the first is held.
+            # load-bound: a hang guard only; the verdict is the held set and the process state above
+            with socket.create_connection(("127.0.0.1", port), timeout=60) as conn:
+                conn.settimeout(60)  # load-bound: the same hang guard for the reply
+                conn.sendall(b"rustc -vV")
+                self.assertEqual(conn.recv(64), b"compiled")
+            self.assertIn("shared daemon(s) it started left running for other agents' work: pid %d" % spid,
+                          agent_hold.describe_hold(r))
+        finally:
+            agent_hold.release(self.session, self.agent)
 
     def test_catch5_the_locks_held_work_keeps_are_named(self):
         lock = os.path.join(self.tmp, "cargo-target", "debug", ".cargo-lock")

@@ -1,5 +1,6 @@
 //! Desktop hook wrapper. A hold keeps the provider's tool call pending, so the
 //! worker retains its context and never emits a false SubagentStop receipt.
+//! A new agent's dispatch during a hold is refused at once with the reason instead.
 use super::{Admission, Policy, ReadError, Snapshot, View};
 use serde_json::Value;
 use std::{
@@ -390,6 +391,13 @@ fn wait(
                 return Ok(());
             }
         }
+        // **No new agent starts during the hold, and the dispatcher is told why at once**
+        // (two-day cleanup O1.2): a held Agent call used to stay pending, with nothing said,
+        // for as long as the hold lasted. A helper's own calls still wait above, keeping its
+        // context; a new agent has none to keep, so its dispatch is refused and nothing starts.
+        if payload["tool_name"] == "Agent" {
+            return Err(io::Error::other(dispatch_held(state, account, &admission, now)));
+        }
         if started.elapsed() >= budget {
             // Named (follow-ups 7fed0bef item 3): the hold is this call's account's, and a reader
             // of this refusal must not take it for another account's.
@@ -400,6 +408,27 @@ fn wait(
         }
         std::thread::sleep(tick);
     }
+}
+
+/// The refusal of an Agent call during the usage hold: which account is held, why, and until
+/// when, read from the same published file [`decide`] judged it on.
+fn dispatch_held(state: &Path, account: &str, admission: &Admission, now: u64) -> String {
+    let until = match admission {
+        Admission::Held { resets_at } => format!("until {}", utc(*resets_at)),
+        _ => "until its next reset".to_string(),
+    };
+    let view = read_json::<View>(&state.join("claude-quota.json")).ok();
+    let why = if view.as_ref().and_then(|v| v.held_until).is_some_and(|t| t > now) {
+        "Every signed-in Claude account has reached its limit.".to_string()
+    } else {
+        let policy = state.parent()
+            .and_then(|p| read_json::<Policy>(&p.join("claude-quota-policy.json")).ok())
+            .or_else(|| view.map(|v| v.policy))
+            .unwrap_or_default();
+        format!("Its usage reached the pause point set in RichOS ({}%).", policy.pause_percent)
+    };
+    format!("No new agent was started: the usage hold on {} stands {until}. {why} Dispatch it again \
+             after that time.", held_named(state, account))
 }
 
 /// **The permit a held call is released on** (`stagger::admit`). An Agent call starts a new
@@ -780,7 +809,7 @@ mod tests {
     /// marker written (its session and account), and from then on every call of its is
     /// admitted although the hold still stands. A helper on another account is untouched: the
     /// ordinary hold, no order, no marker. So is the back end (no `agent_id`): its own tools
-    /// pass as before and its new `Agent` dispatch is held, never ordered.
+    /// pass as before and its new `Agent` dispatch is refused with the hold's reason, never ordered.
     #[test]
     fn a_helper_on_a_leaving_account_is_ordered_once_then_admitted_while_the_weekly_hold_stands() {
         let (_root, service, state, scope) = setup();
@@ -824,7 +853,7 @@ mod tests {
         atomic_write(&scope, &json!({"version":1,"actions_allowed":true})).unwrap();
         let dispatch = refusal(&wait(&json!({"tool_name":"Agent","session_id":"session-1"}), &state, &scope, "1",
             Duration::ZERO, Duration::ZERO).unwrap_err());
-        assert!(dispatch.starts_with("RichOS desktop quota: Still waiting"), "{dispatch}");
+        assert!(dispatch.starts_with("RichOS desktop quota: No new agent was started"), "{dispatch}");
         assert_eq!(fs::read_dir(state.join(HANDOFFS_DIR)).unwrap().count(), 1, "only the helper on the leaving account was ordered");
     }
 
@@ -1087,6 +1116,30 @@ mod tests {
             Duration::ZERO
         )
         .is_err());
+    }
+
+    /// **Two-day cleanup O1.2:** a dispatch during the hold stayed pending with nothing said for
+    /// as long as the hold lasted (up to the 21,500 s budget), then was told only "Still waiting".
+    /// It is refused before any wait, saying which account is held, why and until when, and it
+    /// leaves no pause record behind. With no budget the verdict is the text, never a clock: on
+    /// main this call answered "Still waiting".
+    #[test]
+    fn a_dispatch_during_the_hold_is_refused_at_once_with_the_reason() {
+        let (_root, service, state, scope) = setup();
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":true})).unwrap();
+        publish(&service, 3_600_000);
+        let resets = service.snapshot.lock().unwrap().windows[0].resets_at.unwrap();
+        let dispatch = json!({"tool_name":"Agent","session_id":"stu","tool_use_id":"toolu_held"});
+        let said = wait(&dispatch, &state, &scope, "1", Duration::ZERO, Duration::ZERO)
+            .expect_err("a dispatch during the hold went through");
+        let said = refusal(&said);
+        assert!(said.contains("No new agent was started"), "{said}");
+        assert!(said.contains(&format!("until {}", utc(resets))), "no end named: {said}");
+        assert!(said.contains("pause point set in RichOS (93%)"), "no reason named: {said}");
+        assert!(super::super::holds::held_calls(&state).unwrap().is_empty(), "a refused dispatch left a pause record");
+        // A helper's own call still waits for the release, keeping its context.
+        assert!(wait(&json!({"agent_id":"worker-1","tool_name":"Bash"}), &state, &scope, "1",
+            Duration::ZERO, Duration::ZERO).unwrap_err().to_string().starts_with("Still waiting"));
     }
 
     // ---- a document written for him comes out American (CEO §93) ----------------------------

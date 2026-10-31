@@ -56,6 +56,10 @@ WHAT IS A STALL (every threshold, and why)
    command that ends its own commands (agent_hold.py end), never a pid hunt.
    Once those commands have sat idle for 10 minutes the watcher runs that end
    itself (IDLE END below).
+   A teammate whose tool call the app's usage hold keeps waiting (quota/gate.rs: the
+   call's pause record in <RICHOS_APP_STATE>/quota-waits, locked by its waiter) is not
+   silent while it waits, and the moment it was released counts as its activity (APP
+   USAGE HOLD below).
 
 3. A SELF-WAIT: a teammate process waiting for a proof-run slot or a test VM
    slot that another process of the SAME teammate holds, reported after 2
@@ -868,6 +872,60 @@ def _deferred_end(src, rec, running, marks):
     return at
 
 
+# ---------------------------------------------------------------------------
+# APP USAGE HOLD (2026-10-29, richos-hq two-day cleanup O1.2)
+# ---------------------------------------------------------------------------
+# In the app a worker's tool call waits at the desktop gate while the usage hold
+# stands (quota/gate.rs `wait`), so its transcript is not written until the hold
+# ends, and the watcher called held work SILENT. The gate keeps one pause record
+# per held call in <RICHOS_APP_STATE>/quota-waits (quota/holds.rs): its waiter
+# holds an exclusive lock on it for the whole wait, and a released call leaves
+# `<id>.released.json` with its release time. Evidence of the wait, never an
+# inference from the quota reading. Read-only: a shared, non-blocking lock probe
+# dropped at once, as the gate's own readers do.
+QUOTA_WAITS = "quota-waits"
+
+
+def app_quota_waits(state=None):
+    """{agent id: ("held", since epoch) | ("released", release epoch)} from the app gate's
+    pause records. A record its waiter no longer locks and that carries no release time is a
+    waiter that died: left out. Outside the app (no RICHOS_APP_STATE), or unreadable: {}."""
+    state = state if state is not None else (os.environ.get("RICHOS_APP_STATE") or "").strip()
+    root = os.path.join(state, QUOTA_WAITS) if state else ""
+    if not root or os.path.islink(root):
+        return {}
+    try:
+        names = sorted(n for n in os.listdir(root) if n.endswith(".json"))[:4096]
+    except OSError:
+        return {}
+    out = {}
+    for name in names:
+        try:
+            fd = os.open(os.path.join(root, name), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError:
+            continue                    # the waiter just left
+        try:
+            with os.fdopen(fd, "rb") as fh:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    waiting = False
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+                except BlockingIOError:
+                    waiting = True
+                row = json.loads(fh.read(16385).decode("utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(row, dict) or row.get("kind") != "agent" or not row.get("id"):
+            continue
+        aid, released = str(row["id"]), row.get("releasedAt")
+        if waiting and released is None:
+            out[aid] = ("held", float(row.get("sinceAt") or 0) / 1000.0)
+        elif isinstance(released, (int, float)) and out.get(aid, ("",))[0] != "held":
+            at = released / 1000.0
+            out[aid] = ("released", max(at, (out.get(aid) or ("", 0.0))[1]))
+    return out
+
+
 def _silent(src, reg, now, session_id, th, waits):
     if src.ws is None or reg.problem:
         return [], ""
@@ -876,6 +934,7 @@ def _silent(src, reg, now, session_id, th, waits):
     out = []
     unread = []
     cache = {}
+    quota = app_quota_waits()
     for rec in reg.recs:
         if rec.get("session_id") != session_id or rec.get("disposition"):
             continue
@@ -887,6 +946,9 @@ def _silent(src, reg, now, session_id, th, waits):
             continue
         if fin or paused:
             continue
+        held = quota.get(str(rec.get("agent_id") or ""))
+        if held and held[0] == "held":
+            continue                       # its call waits at the app's usage hold (APP USAGE HOLD)
         name = str(rec.get("name") or rec.get("key") or "?")
         start = None
         for k in ("started_at", "spawned_at", "registered_at"):
@@ -894,6 +956,8 @@ def _silent(src, reg, now, session_id, th, waits):
             if start is not None:
                 break
         marks = [start or now]
+        if held:
+            marks.append(held[1])          # released: its call went on at that moment
         commit_line = "no commit since it started"
         best = None
         for w in rec.get("workspaces") or []:

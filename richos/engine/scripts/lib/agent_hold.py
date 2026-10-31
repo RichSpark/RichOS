@@ -25,9 +25,10 @@ cpu_guard's CPU kills, not from a pause): left running, it watched a frozen chec
 and its bounds expired (Sage's catch 2).
 
 SHARED DAEMONS ARE LEFT RUNNING. A tagged process that was reparented to launchd
-and leads its own session is a daemon the agent started for everyone (an adb
-server, a Gradle daemon): other agents' work talks to it, so freezing it would
-hold their work too. It is named in the report. (Sage's catch 5.)
+and leads its own session, or listens for connections (the sccache server, which
+never calls setsid), is a daemon the agent started for everyone (an adb server, a
+Gradle daemon): other agents' work talks to it, so freezing it would hold their
+work too. It is named in the report. (Sage's catch 5; 2026-10-29 12:22Z.)
 
 THE TEST VM GUEST IS LEFT RUNNING. A walk that holds a guest slot (its holder
 record is validated against the holder's start time) keeps running with
@@ -753,13 +754,47 @@ def _ancestors(table):
 
 
 def daemons(owned, shells, table):
-    """Owned processes that daemonized: reparented to launchd and leading their own session.
+    """Owned processes that daemonized: reparented to launchd and either leading their own
+    session or accepting connections on a socket.
 
     An adb server or a Gradle daemon started by this agent serves every agent's
-    work; freezing it would hold theirs too. The agent's own recorded shells are
-    never daemons, even after their session process died.
+    work; freezing it would hold theirs too. The sccache server never calls setsid,
+    so it leads no session, and on 2026-10-29 at 12:22Z the hold of one worker froze
+    it and every other worker's Rust build hung: a server is known by its listening
+    socket. A detached command that serves nobody is still the agent's and is held.
+    The agent's own recorded shells are never daemons, even after their session
+    process died.
     """
-    return {p for p in owned if p not in shells and table[p]["ppid"] == 1 and "s" in table[p]["stat"]}
+    return {p for p in owned if p not in shells and table[p]["ppid"] == 1
+            and ("s" in table[p]["stat"] or accepts_connections(p))}
+
+
+def accepts_connections(pid):
+    """True when the process has a socket listening for connections (SO_ACCEPTCONN). Read
+    through libproc (no lsof); any failure, or another platform, is False."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        size = libproc.proc_pidinfo(pid, 1, 0, None, 0)                  # PROC_PIDLISTFDS
+        if size <= 0:
+            return False
+        buf = ctypes.create_string_buffer(size)
+        size = libproc.proc_pidinfo(pid, 1, 0, buf, size)
+        for i in range(max(0, size) // 8):                               # struct proc_fdinfo
+            fd, kind = struct.unpack_from("iI", buf.raw, i * 8)
+            if kind != 2:                                                # PROX_FDTYPE_SOCKET
+                continue
+            info = ctypes.create_string_buffer(1024)                     # struct socket_fdinfo
+            if libproc.proc_pidfdinfo(pid, fd, 3, info, 1024) < 190:     # PROC_PIDFDSOCKETINFO
+                continue
+            # proc_fileinfo (24 bytes), then socket_info: vinfo_stat (136), soi_so and soi_pcb
+            # (16), soi_type, soi_protocol, soi_family (12), then soi_options.
+            if struct.unpack_from("h", info.raw, 188)[0] & 0x2:          # SO_ACCEPTCONN
+                return True
+    except (OSError, ValueError, AttributeError, struct.error):
+        return False
+    return False
 
 
 def _recorded_pid(path, table, slack=5.0):

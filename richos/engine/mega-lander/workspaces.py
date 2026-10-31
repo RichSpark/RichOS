@@ -3671,9 +3671,12 @@ def holds(me="", at=None, cache=None):
                 row = (reviews or {}).get(t)
                 if row and row.get("verdict") == "changes-requested" \
                         and row.get("id") not in (rec.get("reviews_released") or []):
+                    # HELD WORK STAYS QUIET UNTIL ITS HOLD ENDS (2026-10-29 13:38Z: four receipts
+                    # held `--until at:20:00Z` were told again as "nothing checkable ends it"):
+                    # the review item ends where the record's own wait or pause ends.
                     found.append(("review", "the fixes review %s asked of %s" % (row.get("id"), name),
                                   "it handed over %s without them (%s finding(s))" % (t[:10], row.get("findings")),
-                                  parse_iso_epoch(row.get("finished_at")) or now(), "", ))
+                                  parse_iso_epoch(row.get("finished_at")) or now(), _wait_end(rec), ))
                     found[-1] = found[-1] + (row.get("id"),)
         if not found or _continued_by(rec, cache):
             continue                     # nothing held, or the work runs: a continuation does it
