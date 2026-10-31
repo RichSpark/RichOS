@@ -1550,7 +1550,25 @@ fi
 # is nothing to wait on. `RICHOS_ALLOW_HOST_PATHS=1` is the deliberate, logged override.
 say ""
 say "checking the bundle for build-machine paths..."
-if ! python3 "$here/lib/no_host_paths.py" "$app_bundle" --reviewed-text --upstream-policy "$here/runtime-sources.json" --upstream-runtime-root "$app_bundle/Contents/Resources/runtime"; then
+# Reuse the existing pinned-upstream policy boundary for both bundled runtimes.
+# Examples are accepted only in their exact reviewed file bytes, never by user name.
+path_policy_dir="$(mktemp -d "${TMPDIR:?}richcleaner-package.XXXXXX")" || exit 5
+if ! python3 - "$here/runtime-sources.json" "$app_bundle/Contents/Resources/RichCleaner/manifest.json" "$path_policy_dir/policy.json" <<'PYPATHPOLICY'
+import json,pathlib,sys
+rows=[]
+for prefix,source in [("runtime/",sys.argv[1]),("RichCleaner/",sys.argv[2])]:
+    for row in json.loads(pathlib.Path(source).read_text()).get("upstream_path_exemptions",[]):
+        rows.append({**row,"member":prefix+row["member"]})
+pathlib.Path(sys.argv[3]).write_text(json.dumps({"upstream_path_exemptions":rows}))
+PYPATHPOLICY
+then
+  rm -rf "$path_policy_dir"
+  exit 5
+fi
+path_policy_status=0
+python3 "$here/lib/no_host_paths.py" "$app_bundle" --reviewed-text --upstream-policy "$path_policy_dir/policy.json" --upstream-runtime-root "$app_bundle/Contents/Resources" || path_policy_status=$?
+rm -rf "$path_policy_dir"
+if [ "$path_policy_status" -ne 0 ]; then
   if [ "${RICHOS_ALLOW_HOST_PATHS:-}" = "1" ]; then
     warn ""
     warn "  RICHOS_ALLOW_HOST_PATHS=1 — packaging a bundle that carries the above"
@@ -1646,7 +1664,12 @@ for path in sorted(root.rglob("*")):
         continue
     args=["codesign","--force","--sign",sys.argv[3] if developer else "-"]
     args += ["--options","runtime","--timestamp"] if developer else ["--timestamp=none"]
-    subprocess.run([*args,path],check=True)
+    mode=path.stat().st_mode
+    path.chmod(mode | 0o200)
+    try:
+        subprocess.run([*args,path],check=True)
+    finally:
+        path.chmod(mode)
 PYCLEANERSIGN
 
 if [ "$sign_mode" = "adhoc" ]; then

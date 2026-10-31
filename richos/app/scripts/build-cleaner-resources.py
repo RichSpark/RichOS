@@ -23,6 +23,108 @@ PINS = {
 }
 
 # Execution hang guard for compiler/configure steps, not a performance assertion.
+# Reviewed upstream text only. Each exception is bound to exact source bytes and
+# exact prefixes; the normal artifact gate still rejects any changed/extra path.
+UPSTREAM_EXAMPLES = [
+    {
+        "member": "exiftool/lib/Image/ExifTool.pod",
+        "sha256": "45f33e06d5157546fd9ad718344635482f6fe289e5caea45ada929c36f3313b2",
+        "prefixes": [
+            "/Users/phil"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "exiftool/exiftool",
+        "sha256": "b9703db99dc6fe8d8a6d3fcd38fc8d6c19761c655d713a10d786c155e315396d",
+        "prefixes": [
+            "/Users/phil"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/perl5db.pl",
+        "sha256": "2cb5b4ea8ea55ad11c6b6862d6a744394b24a31c01c0ad03eadb5e9144f35632",
+        "prefixes": [
+            "/home/me"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/File/Fetch.pm",
+        "sha256": "4f5af5cdf655573630144a3206aa668f7aff45bf1374498b2ff2652b614a288f",
+        "prefixes": [
+            "/home/kane"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/Term/Table/HashBase.pm",
+        "sha256": "a2db95421677b0768682bb46e518445a398b81ddb1a37fcf472d986db9c60c21",
+        "prefixes": [
+            "/home/exodist"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/Test/Tester/CaptureRunner.pm",
+        "sha256": "736c80e239f8b913c012776996f30c7242e9dc158429327815548844ae2de298",
+        "prefixes": [
+            "/home/fergal"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/Pod/Perldoc/ToTk.pm",
+        "sha256": "d5053e53eaa2d85fb431d9191fc198babee2948d0ccebb8001f6d716fb76faec",
+        "prefixes": [
+            "/home/e"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/Test2/Util/HashBase.pm",
+        "sha256": "ea255d22821ab8eea6e73694b950908b38822649d72a02e915859c3402417487",
+        "prefixes": [
+            "/home/exodist"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/ExtUtils/MM_Unix.pm",
+        "sha256": "81fdee047b5cf1984c4ca422f2462f7db495ebd00dab442213d66aa59f293954",
+        "prefixes": [
+            "/home/foo"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/CPAN/Shell.pm",
+        "sha256": "a3293de51876d0df59f9b5000bdcc008fcdaa879dd11bc21ce25137b5dd5e392",
+        "prefixes": [
+            "/home/ftp"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/IPC/Cmd.pm",
+        "sha256": "e9f22c60fa41ed8392e8a5b56cf0d0cfb9e1749cd9d92d72ac9ff2c63a924f58",
+        "prefixes": [
+            "/Users/kane"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    },
+    {
+        "member": "perl/lib/perl5/5.42.0/CPAN.pm",
+        "sha256": "fc9ea8ea85a4a0409e70cf6e712adffe58411bd5f000b7dfa8924184c5e96ef4",
+        "prefixes": [
+            "/home/ftp",
+            "/home/scott"
+        ],
+        "reason": "Pinned unmodified upstream Perl/ExifTool example, source comment or conventional CPAN server path, never RichOS operator storage."
+    }
+]
+
 def run(args, cwd=None):
     subprocess.run([str(a) for a in args], cwd=cwd, check=True, stdout=subprocess.DEVNULL,timeout=900)
 
@@ -126,7 +228,10 @@ def build(cache):
         modules=cache / "swift-modules"
         run(["xcrun","swiftc","-O","-target",f"{platform.machine()}-apple-macosx13.0","-module-cache-path",modules,native,"-o",stage / "native"])
         files={str(p.relative_to(stage)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(stage.rglob("*")) if p.is_file()}
-        (stage / "manifest.json").write_text(json.dumps({"sources":PINS,"files":files},sort_keys=True,indent=2)+"\n")
+        for example in UPSTREAM_EXAMPLES:
+            if files.get(example["member"])!=example["sha256"]:
+                raise RuntimeError("A reviewed upstream example changed; inspect its source before packaging")
+        (stage / "manifest.json").write_text(json.dumps({"sources":PINS,"files":files,"upstream_path_exemptions":UPSTREAM_EXAMPLES},sort_keys=True,indent=2)+"\n")
         verify(stage)
         destination.parent.mkdir(parents=True,exist_ok=True)
         if destination.exists():
