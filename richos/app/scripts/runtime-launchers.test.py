@@ -83,6 +83,63 @@ class EveryEntryIsMachO(unittest.TestCase):
             self.assertEqual(builder.script_entries(bin_dir), ["outside", "python3"])
 
 
+class PythonBytecode(unittest.TestCase):
+    """2026-10-29: a child that rebuilt its environment ran the runtime's python/bin/python3 with
+    neither -B nor PYTHONDONTWRITEBYTECODE and wrote 36-47 caches into the CEO's installed engine,
+    and every Python without -B rewrote the delivered encodings caches relocation made stale.
+    prepare_python_bytecode delivers sitecustomize.py (writing off for every start) and makes every
+    delivered cache, sitecustomize's own included, a hash-checked one. The interpreter here stands in
+    for the runtime's; build-runtimes.test.sh B7 runs the same check on a built runtime."""
+
+    def test_delivered_caches_survive_relocation_and_sitecustomize_turns_writing_off(self):
+        import py_compile, struct, subprocess
+        with tempfile.TemporaryDirectory(prefix="runtime python bytecode ") as temporary:
+            runtime = Path(temporary).resolve() / "engine/runtime"
+            library = runtime / "python/lib/python3.99"
+            (library / "probe_pkg").mkdir(parents=True)
+            (runtime / "python/bin").mkdir(parents=True)
+            (library / "os.py").write_text("# the standard library's marker file\n")
+            interpreter = runtime / "python/bin/python3"
+            interpreter.write_text('#!/bin/sh\nexec "%s" "$@"\n' % os.path.realpath(sys.executable))
+            interpreter.chmod(0o755)
+            source = library / "probe_pkg/__init__.py"
+            source.write_text("VALUE = 1\n")
+            delivered = Path(py_compile.compile(str(source), doraise=True,
+                                                invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP))
+            builder.prepare_python_bytecode(runtime)
+            caches = sorted(p for p in (runtime / "python").rglob("*.pyc"))
+            self.assertEqual(sorted(p.name.split(".")[0] for p in caches), ["__init__", "sitecustomize"], caches)
+            for cache in caches:
+                self.assertEqual(struct.unpack("<I", cache.read_bytes()[4:8])[0], 3, f"{cache.name} is hash-checked")
+            # Relocation: the installer gives every source a new mtime.
+            later = source.stat().st_mtime + 3600
+            os.utime(source, (later, later))
+            os.utime(library / "sitecustomize.py", (later, later))
+            before = {p: p.read_bytes() for p in caches}
+            env = {"PATH": "/usr/bin:/bin", "HOME": temporary}
+            result = subprocess.run([sys.executable, "-c",
+                                     f"import sys; sys.dont_write_bytecode = False; sys.path.insert(0, {str(library)!r}); "
+                                     f"import probe_pkg; print(probe_pkg.VALUE)"],
+                                    env=env, capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout.strip(), "1")
+            self.assertEqual({p: p.read_bytes() for p in caches}, before, "a delivered cache was rewritten")
+            self.assertEqual(sorted((runtime / "python").rglob("*.pyc")), caches, "a cache was added")
+            ran = subprocess.run([sys.executable, "-c", "import runpy, sys; sys.dont_write_bytecode = False; "
+                                  f"runpy.run_path({str(library / 'sitecustomize.py')!r}); print(sys.dont_write_bytecode)"],
+                                 env=env, capture_output=True, text=True, check=True)
+            self.assertEqual(ran.stdout.strip(), "True")
+            self.assertTrue(delivered.is_file())
+
+    def test_an_upstream_sitecustomize_is_refused_not_replaced(self):
+        with tempfile.TemporaryDirectory(prefix="runtime python bytecode ") as temporary:
+            library = Path(temporary) / "runtime/python/lib/python3.99"
+            (library / "site-packages").mkdir(parents=True)
+            (library / "os.py").write_text("")
+            (library / "site-packages/sitecustomize.py").write_text("UPSTREAM = True\n")
+            with self.assertRaisesRegex(RuntimeError, "already ships a sitecustomize.py"):
+                builder.prepare_python_bytecode(Path(temporary) / "runtime")
+
+
 class Launchers(unittest.TestCase):
     def test_python_and_git_launchers_need_no_fork(self):
         with tempfile.TemporaryDirectory(prefix="runtime launchers with spaces ") as temporary:
