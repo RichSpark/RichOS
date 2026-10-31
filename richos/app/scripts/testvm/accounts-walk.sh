@@ -32,9 +32,11 @@
 #   6-switched-chat     Home's week at 99%: Rich's line, with See your accounts
 #   7-switched-{dark,light}  The sheet: the banner (when and why) and Recent changes
 #   8-menu-two          Settings: "Using Work, switched <time>"
-#   9-chose-home        Item 8 (his test): Home at 97% of its week, chosen with "Use this one now";
-#                       9-home-in-use the record says Home and Recent changes "You chose Home";
-#                       then Home reaches 99% and 9-switched-again: Rich switched to Work by himself
+#   9-chose-side        Item 8 (his test): a third account, Side, added at 97% of its week (Home
+#                       rests at 99% until its week resets, so it is never offered again), chosen
+#                       with "Use this one now"; 9-side-in-use the record says Side and Recent
+#                       changes "You chose Side"; then Side reaches 99% and 9-switched-again: Rich
+#                       switched to Work by himself
 #   10-menu-technical   2026-10-06_02: Technical view on, the quick settings quota row reads the
 #                       in-use account's WEEKLY figure ("Work 12% weekly"; its five-hour is 0%)
 #   11-menu-1024-{light,dark}  The window at 1024x700: the "Using Work, switched <time>" row,
@@ -434,41 +436,62 @@ has 'Using Work, switched' "8 the row's line after a switch"
 shot 8-menu-two
 menu closed
 
-note "9 item 8: he chooses the account at 97% of its week, and Rich switches again at 99%"
-usage /Users/admin/fill-first/usage-1.json 20 97 || fail "Home's 97% usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
-# Home was resting at 99%; a fresh reading at 97% gives it room again. A turn reads the quota, so
-# the sheet is opened after one, and again after up to two more, until Home's card offers the choice.
+note "9 item 8: he chooses an account at 97% of its week, and Rich switches again at 99%"
+# A week's usage only goes up. Home, switched away from at 99% in step 6, rests until its week
+# resets (ui/accounts.js `resting`), so a later 97% reading of Home cannot happen and is never
+# offered. His case is an account at 97% that nobody switched away from: a third one, Side,
+# added from the sheet (account 3: claude_accounts.rs `add` numbers it after the highest).
+open_sheet || fail "9 the sheet, to add a third account"
+press 'Add another account' "9 Add another account"
+sleep 3
+field 'The new account' 'Side' || fail "9 the third account's name"
+press 'Continue' "9 Continue"
+sleep 2
+has 'Sign in to Side' "9 step 2 for Side"
+login_as 'side@fixture.invalid' || fail "9 the login-as fixture"
+press 'Open sign-in' "9 Open sign-in"
+wait_for 'is ready' || true
+# "<b>Side</b> is ready." is two text nodes, so the words after the bold name are read.
+has 'is ready. Rich switches to it when Work is nearly full' "9 Side is ready"
+# Its folder exists once it is signed in; its week is then read at 97% (it was used elsewhere).
+usage "$DATA/claude-accounts/3/usage.json" 20 97 || fail "Side's 97% usage fixture"
+"$T/guest.sh" "$VM" "cat \"$DATA/claude-accounts.json\"" > "$S/9-accounts-added.txt" 2>&1 || fail "9 the accounts record"
+grep -q '"label": *"Side"' "$S/9-accounts-added.txt" || fail "9 Side is not on the record"
+close_sheet
+# A turn reads the quota, so the sheet is opened after one, and again after up to two more,
+# until Side's card offers the choice.
 chosen=0
 for try in 1 2 3; do
   send_turn "Quick check $try on the weekly figures, please."
   open_sheet || { note "no sheet on try $try"; continue; }
-  if ax find --title 'Use Home now' --first >/dev/null 2>&1; then chosen=1; break; fi
-  note "Home's card offers no Use this one now yet (try $try)"
+  if ax find --title 'Use Side now' --first >/dev/null 2>&1; then chosen=1; break; fi
+  note "Side's card offers no Use this one now yet (try $try)"
   close_sheet
 done
 if [ "$chosen" = 1 ]; then
-  shot 9-chose-home
-  press 'Use Home now' "9 Use this one now on Home"
+  shot 9-chose-side
+  press 'Use Side now' "9 Use this one now on Side"
   sleep 4
   "$T/guest.sh" "$VM" "cat \"$DATA/claude-accounts.json\"" > "$S/9-accounts-chosen.txt" 2>&1 || fail "9 the accounts record"
-  grep -q '"inUse": *"1"' "$S/9-accounts-chosen.txt" || fail "9 the record does not say Home is in use after Use this one now"
+  grep -q '"inUse": *"3"' "$S/9-accounts-chosen.txt" || fail "9 the record does not say Side is in use after Use this one now"
   grep -q '"kind": *"chose"' "$S/9-accounts-chosen.txt" || fail "9 Recent changes has no chose row"
-  # "You chose <b>Home</b>." is two text nodes, so the words are read up to the bold name
+  # "You chose <b>Side</b>." is two text nodes, so the words are read up to the bold name
   # (walk-434edf5caf3d: the frame showed the row and a find of the whole sentence missed it).
-  has 'You chose' "9 Recent changes says You chose Home"
-  shot 9-home-in-use
+  has 'You chose' "9 Recent changes says You chose Side"
+  shot 9-side-in-use
   close_sheet
-  usage /Users/admin/fill-first/usage-1.json 20 99 || fail "Home's second 99% usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
+  usage "$DATA/claude-accounts/3/usage.json" 20 99 || fail "Side's 99% usage fixture"
+  # Home still rests at 99%, so Rich's next account is Work (12%), which steps 10 and 11 read.
   switched=0
   for try in 1 2 3; do
     send_turn "Status update $try on the client report?"
     "$T/guest.sh" "$VM" "cat \"$DATA/claude-accounts.json\"" > "$S/9-accounts-after.txt" 2>&1 || true
     if grep -q '"inUse": *"2"' "$S/9-accounts-after.txt"; then switched=1; break; fi
   done
-  [ "$switched" = 1 ] || fail "9 Home reached 99% of its week and Rich did not switch to Work"
+  [ "$switched" = 1 ] || fail "9 Side reached 99% of its week and Rich did not switch to Work"
   shot 9-switched-again
 else
-  fail "9 Home at 97% never offered Use this one now"
+  fail "9 Side at 97% never offered Use this one now"
 fi
 theme Dark
 

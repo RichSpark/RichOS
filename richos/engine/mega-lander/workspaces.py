@@ -1881,6 +1881,14 @@ def confirm_cc(session_id, name, path, ok, why=""):
     # every such land until somebody typed --ignored-not-needed. It is recorded
     # here, exactly, so the land can tell it from the agent's own ignored files.
     generated = _generated_manifest(realpath(path)) if ok else {}
+    # WHERE THE WORKSPACE STARTED, OBSERVED (row 3, 2026-10-31). A continuation is
+    # created at its predecessor's exact tip (`spawn.py --base`), and that is the
+    # only proof that a tip it later rewrote was handed to it (_superseded). Read
+    # from git here, never reported by the worker.
+    start = ""
+    if ok:
+        rc, out, _err = git(realpath(path), "rev-parse", "HEAD")
+        start = out.strip() if rc == 0 else ""
     with Lock():
         rec = load_agent(key)
         if not rec:
@@ -1890,6 +1898,8 @@ def confirm_cc(session_id, name, path, ok, why=""):
                 w["created"] = bool(ok)
                 if generated:
                     w["generated"] = generated
+                if start:
+                    w["start"] = start
         if not ok:
             rec["creation_failed"] = {"at": now(), "why": why}
         save_agent(rec)
@@ -3758,7 +3768,9 @@ def _finished_command(name):
     if this_conversation():
         return ("integrate it after its automatic independent review passes (no separate reviewer preparation; "
                 "then %sintegrate) or continue it (%sprepare with continue_of that receipt); %sinspect lists "
-                "the receipt named %s. The app has no tool that discards it" % (APP_WORK, APP_WORK, APP_WORK, name))
+                "the receipt named %s. Work that was redone elsewhere and integrated is closed with %ssettle "
+                "(that receipt's request_id, superseded_by the integrated commit that redid it, and the reason)"
+                % (APP_WORK, APP_WORK, APP_WORK, name, APP_WORK))
     return "land it (workspaces.sh land %s), discard it, or spawn its continuation" % name
 
 
@@ -6354,14 +6366,21 @@ def land(ref, me="", auto=False, ignored_ok="", deadline=None, keep_ignored=None
     if keep and not ignored_ok and not _not_in_integration(rec, chain, deadline=deadline):
         kept = _keep_ignored(rec, chain, deadline)
     _require_landed(rec, chain, ignored_ok, deadline)
+    # What the land accepted, read before anything is deleted (row 3): every
+    # branch tip, as discard records them, and each tip that counted as landed
+    # only through a superseded-by link. A superseded commit stays recoverable
+    # by this SHA until git's own garbage collection prunes it.
+    tips, superseded = _land_tips(chain)
     for r in chain:
         with Lock():
             fresh = load_agent(r["key"])
             fresh["disposition"] = {"kind": "landed", "at": now(), "auto": bool(auto), "by_session": me,
                                     "ignored_not_needed": ignored_ok or None, "as_part_of": rec["key"],
+                                    "tips": tips, "superseded": superseded,
                                     **({"kept_ignored": kept} if kept else {})}
             save_agent(fresh)
-        event("landed", key=r["key"], auto=bool(auto), as_part_of=rec["key"])
+        event("landed", key=r["key"], auto=bool(auto), as_part_of=rec["key"],
+              **({"superseded": superseded} if superseded else {}))
     _release_carried_waits(chain, deadline)
     clean = _delete_chain(chain, "landed", processes=stopped, deadline=deadline, memo=memo)
     if not clean:
@@ -6447,7 +6466,9 @@ def merge_and_land(ref, me="", message=""):
         t, unread = branch_tip_read(main, b)
         if unread:
             raise SpecError("cannot merge %s of %s: %s" % (b, repo, unread))
-        if not t or is_ancestor(main, t, tip):
+        # A tip a continuation rewrote, or one a recorded link stands for, is never
+        # merged: it is the unreviewed WIP the redone work replaced (row 3).
+        if not t or is_ancestor(main, t, tip) or _superseded(chain, repo, b, t, tip):
             continue
         todo.append((repo, b, main, t))
         bases[t] = tip
@@ -6464,7 +6485,7 @@ def merge_and_land(ref, me="", message=""):
             target, tip, why_not = integration_target(chain, repo)
             if why_not:
                 raise SpecError("cannot merge %s of %s: %s" % (b, repo, why_not))
-            if is_ancestor(main, t, tip):
+            if is_ancestor(main, t, tip) or _superseded(chain, repo, b, t, tip):
                 continue
             in_main = _merges_in_main_checkout(main, target, b)
             # Git merges the commit read above, never the branch name: a writer
@@ -7213,7 +7234,8 @@ def _not_in_integration(rec, chain, preserved=(), deadline=None, definite_only=F
                 elif rc != 0:
                     missing.append("HEAD of %s could not be read (git exit %d: %s), so it is not shown to be in "
                                    "%s of %s" % (w["path"], rc, err.strip()[:200], branch, repo))
-                elif not is_ancestor(repo, out.strip(), tip):
+                elif (not is_ancestor(repo, out.strip(), tip)
+                      and not _superseded(chain, repo, w.get("branch"), out.strip(), tip)):
                     missing.append("HEAD of %s (%s) is not in %s of %s at %s"
                                    % (w["path"], out.strip()[:12], branch, repo, tip[:12]))
                     definite.append(missing[-1])
@@ -7231,10 +7253,144 @@ def _not_in_integration(rec, chain, preserved=(), deadline=None, definite_only=F
         t, unread = branch_tip_read(repo, b)
         if unread:
             missing.append("branch %s: %s" % (b, unread))
-        elif t and not is_ancestor(repo, t, tip):
+        elif t and not is_ancestor(repo, t, tip) and not _superseded(chain, repo, b, t, tip):
             missing.append("%s (%s) is not in %s of %s at %s" % (b, t[:12], branch, repo, tip[:12]))
             definite.append(missing[-1])
     return definite if definite_only else missing
+
+
+def _owner_of(chain, repo, branch):
+    """The record in `chain` whose workspace (or recorded created branch) is
+    `branch` of `repo`, else None."""
+    for r in chain:
+        if any(realpath(w.get("repo") or "") == repo and w.get("branch") == branch
+               for w in r.get("workspaces") or []):
+            return r
+        if any(realpath(p[0]) == repo and p[1] == branch for p in r.get("created_branches") or []):
+            return r
+    return None
+
+
+def _superseded(chain, repo, branch, t, tip):
+    """THE LINK THAT LETS TIP `t` OF `branch` COUNT AS IN THE TARGET, else None (row 3,
+    2026-10-31: Echo's continuation reworded its predecessor's WIP tip, and the chain
+    could never land, because the old tip is in no branch).
+
+    Two sources, nothing else:
+      continuation - a record in the same `chain` continues the branch's owner and has
+                     a workspace in `repo` that STARTED at `t` (observed by confirm_cc).
+                     It was handed exactly `t`, and the land still proves that
+                     continuation's own branches are in the target.
+      recorded     - the owner's `superseded_by["<repo>:<branch>"]` (supersede()), only
+                     while the tip asked about is still the one it names (a later commit
+                     reopens it) and its `commit` is in the target, read again here.
+    `_unlanded` is asked with the predecessor's own chain, which holds no continuation,
+    so discarding an empty continuation still keeps the predecessor (2026-10-24)."""
+    if not t or not branch:
+        return None
+    repo = realpath(repo or "")
+    owner = _owner_of(chain, repo, branch)
+    if owner is None:
+        return None
+    for r in chain:
+        if r["key"] == owner["key"] or owner["key"] not in (r.get("continues") or []):
+            continue
+        for w in r.get("workspaces") or []:
+            if w.get("start") == t and realpath(w.get("repo") or "") == repo:
+                return {"repo": repo, "branch": branch, "tip": t, "source": "continuation",
+                        "by": r["key"], "started": w.get("branch") or ""}
+    link = (owner.get("superseded_by") or {}).get("%s:%s" % (repo, branch))
+    if link and link.get("tip") == t and tip and link.get("commit") and is_ancestor(repo, link["commit"], tip):
+        return {"repo": repo, "branch": branch, "tip": t, "source": "recorded", "commit": link["commit"],
+                "reason": link.get("reason"), "by_session": link.get("by_session")}
+    return None
+
+
+def _land_tips(chain):
+    """({"<repo>:<branch>": tip}, [each tip accepted through _superseded]) for a land's record."""
+    tips, accepted, targets = {}, [], {}
+    for repo, b in _branch_targets(chain):
+        t = branch_tip(repo, b)
+        if not t:
+            continue
+        tips["%s:%s" % (repo, b)] = t
+        if repo not in targets:
+            targets[repo] = integration_target(chain, repo)
+        _branch, tip, why_not = targets[repo]
+        if tip and not why_not and not is_ancestor(repo, t, tip):
+            link = _superseded(chain, repo, b, t, tip)
+            if link:
+                accepted.append(link)
+    return tips, accepted
+
+
+def _changed_files(repo, a, b):
+    """The paths changed between commits `a` and `b`, or None when git cannot say."""
+    rc, out, _err = git(repo, "diff", "--name-only", a, b)
+    return set(out.splitlines()) - {""} if rc == 0 else None
+
+
+def supersede(ref, commit, reason, me=""):
+    """RECORD THAT FINISHED WORK WAS REDONE ELSEWHERE (row 3, 2026-10-31). `commit` is
+    already in the branch this work integrates on and stands for each branch of the agent
+    that is not; the next land counts that branch's CURRENT tip as landed (_superseded)
+    and names it on its record. Not CEO-gated: it removes nothing from main's content.
+
+    Refused: work that has not finished; a reason under ten characters; a commit not in
+    the target; and, as a typo guard, a commit whose first-parent diff touches no file
+    the branch itself changed."""
+    reason = (reason or "").strip()
+    if len(reason) < 10:
+        raise SpecError("a supersede records why the work was redone elsewhere: give a reason of at least ten "
+                        "characters")
+    rec = _resolve(ref, me)
+    _refuse_held_elsewhere(rec, "supersede")
+    fin, _pz, why = finished_state(rec)
+    if not fin:
+        raise SpecError("%s is not finished (%s); only finished work is superseded" % (rec["name"], why))
+    linked, unresolved = {}, []
+    for repo, b in _branch_targets([rec]):
+        t, unread = branch_tip_read(repo, b)
+        if unread:
+            raise SpecError("cannot supersede %s: %s" % (b, unread))
+        if not t:
+            continue
+        target, tip, why_not = integration_target([rec], repo)
+        if why_not:
+            raise SpecError("cannot supersede %s of %s: %s" % (b, repo, why_not))
+        if is_ancestor(repo, t, tip):
+            continue
+        rc, out, _err = git(repo, "rev-parse", "--verify", "--quiet", commit + "^{commit}")
+        if rc != 0 or not out.strip():
+            unresolved.append("%s is not a commit in %s" % (commit, repo))
+            continue
+        c = out.strip()
+        if not is_ancestor(repo, c, tip):
+            raise SpecError("%s is not in %s of %s, so it cannot stand for %s's %s: land the redone work first"
+                            % (c[:12], target, repo, rec["name"], b))
+        rc, base, _err = git(repo, "merge-base", t, tip)
+        mine = _changed_files(repo, base.strip(), t) if rc == 0 else None
+        rc, parent, _err = git(repo, "rev-parse", "--verify", "--quiet", c + "^1")
+        if rc == 0:
+            theirs = _changed_files(repo, parent.strip(), c)
+        else:                                               # a root commit has no first parent
+            rc, out, _err = git(repo, "diff-tree", "--root", "-r", "--name-only", "--no-commit-id", c)
+            theirs = set(out.splitlines()) - {""} if rc == 0 else None
+        if mine is None or theirs is None:
+            raise SpecError("cannot supersede %s: the files it or %s changed could not be read" % (b, c[:12]))
+        if not mine & theirs:
+            raise SpecError("%s touches none of the files %s changed on %s (%s): name the commit that redid this "
+                            "work" % (c[:12], rec["name"], b, ", ".join(sorted(mine)[:5]) or "none"))
+        linked["%s:%s" % (repo, b)] = {"tip": t, "commit": c, "reason": reason, "by_session": me, "at": now()}
+    if not linked:
+        raise SpecError("%s has nothing to supersede: %s" % (
+            rec["name"], "; ".join(unresolved) or "every branch of it is already in its integration branch"))
+    with Lock():
+        fresh = load_agent(rec["key"])
+        fresh.setdefault("superseded_by", {}).update(linked)
+        save_agent(fresh)
+    event("superseded", key=rec["key"], links=linked)
+    return {"superseded": linked}
 
 
 def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
@@ -7310,7 +7466,7 @@ def _unlanded(chain, repo, b):
     if not t:
         return False
     _target, tip, why_not = integration_target(chain, repo)
-    return bool(why_not or not tip or not is_ancestor(repo, t, tip))
+    return bool(why_not or not tip or (not is_ancestor(repo, t, tip) and not _superseded(chain, repo, b, t, tip)))
 
 
 def never_ran(rec):
@@ -8942,6 +9098,11 @@ def main(argv):
     x.add_argument("--reason", required=True)
     x.add_argument("--ceo-word", default="")
     x.add_argument("--not-ceo-ordered", default="")
+    x = sub.add_parser("supersede", help="record that a finished agent's unlanded branch was redone by a commit "
+                                         "already in its integration branch; its next land counts it as landed")
+    x.add_argument("agent")
+    x.add_argument("--by", required=True)
+    x.add_argument("--reason", required=True)
     x = sub.add_parser("pause")
     x.add_argument("agent")
     x.add_argument("--until", required=True)
@@ -9116,6 +9277,11 @@ def main(argv):
             print("discarded: %s — tips recorded: %s" % (a.agent, json.dumps(r["tips"])))
             for k in r.get("kept") or []:
                 print("kept: %s holds work not yet landed; it is back on the list to land" % k)
+        elif a.cmd == "supersede":
+            r = supersede(a.agent, a.by, a.reason, me)
+            for ref, link in sorted(r["superseded"].items()):
+                print("superseded: %s %s (%s) by %s; it lands with its next land"
+                      % (a.agent, ref, link["tip"][:12], link["commit"][:12]))
         elif a.cmd == "pause":
             notes = []
             pause(a.agent, a.until, me, notes)

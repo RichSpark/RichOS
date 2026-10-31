@@ -23,6 +23,9 @@
 #   workspaces.sh discard <agent> --reason '<why>' (--ceo-word '<his words>' | --not-ceo-ordered '<why>')
 #       work that must not go into main: every workspace and branch deleted,
 #       the reason and the branch tips recorded (point 7)
+#   workspaces.sh supersede <agent> --by <commit> --reason '<why>'
+#       a finished agent's unlanded branch was redone by <commit>, already in its
+#       integration branch: its next land counts that tip as landed and records it
 #   workspaces.sh pause <agent> --until '<what ends it>'   /  resume <agent>  /  stop <agent>
 #       point 11. A SendMessage carrying a line `pause-until: <what ends it>`
 #       records the same pause; a later message to the paused agent resumes it.

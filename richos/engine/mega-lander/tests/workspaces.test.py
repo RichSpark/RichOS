@@ -5379,6 +5379,79 @@ class DiscardTakesAWorkspaceWhoseTeammateNeverRan(Base):
             self.assertTrue(os.path.isdir(cc))
 
 
+class SupersededBy_RedoneWorkLandsWithARecordedLink(Base):
+    """Row 3 of the 2026-10-31 cleanup (richos-hq docs/plans/2026-10-29-two-day-cleanup/
+    row3-superseded-design.md, part A). Echo's continuation reworded its predecessor's WIP
+    tip; the predecessor's branch could then never be proved to be in main, so the chain
+    never landed and `merge` would have merged the unreviewed WIP commit. A tip a
+    continuation was handed (its workspace's observed `start`), or one a recorded link names,
+    counts as in the target, and the land records what it accepted."""
+
+    def tip(self, path, ref="HEAD"):
+        return run("git", "-C", path, "rev-parse", ref).stdout.strip()
+
+    def test_a_continuation_that_rewords_its_predecessors_tip_lands_the_chain(self):
+        cc = self.make_cc("zach-opus-sa")
+        aid, _np = self.spawn("zach-opus-sa", cc=cc)
+        self.commit(cc, "wip.txt", "wip\n")
+        w1 = self.tip(cc)
+        self.finish(aid)
+        cc2 = self.make_cc("zach-opus-sb", base="cc/zach-opus-sa")
+        aid2, _np2 = self.spawn("zach-opus-sb", cc=cc2, extra="continues: zach-opus-sa\n")
+        start = [w for w in self.rec("zach-opus-sb")["workspaces"] if w.get("path") == os.path.realpath(cc2)]
+        self.assertEqual(start[0].get("start"), w1, "the registry did not observe where the continuation started")
+        run("git", "-C", cc2, "commit", "-q", "--amend", "-m", "the work, reworded")
+        self.commit(cc2, "more.txt")
+        self.finish(aid2)
+
+        merged, res = ws.merge_and_land("zach-opus-sb", self.sid)
+
+        self.assertEqual(merged, [(self.other, "cc/zach-opus-sb")], "the unreviewed WIP tip was merged")
+        self.assertTrue(res["landed"])
+        self.assertFalse(ws.is_ancestor(self.other, w1, self.tip(self.other, "main")))
+        self.assertEqual(self.names(), [])
+        disp = self.rec("zach-opus-sa")["disposition"]
+        self.assertEqual(disp["kind"], "landed")
+        self.assertEqual(disp["superseded"][0]["tip"], w1)
+        self.assertEqual(disp["tips"]["%s:cc/zach-opus-sa" % self.other], w1)
+        self.assertNotIn("cc/zach-opus-sa", branches(self.other))
+
+    def test_supersede_links_a_redone_branch_after_the_fact(self):
+        cc = self.make_cc("zach-opus-sc")
+        aid, _np = self.spawn("zach-opus-sc", cc=cc)
+        self.commit(cc, "wip.txt", "wip\n")
+        w1 = self.tip(cc)
+        self.commit(self.other, "wip.txt", "wip, redone by another worker\n")      # the rewrite lands
+        rewrite = self.tip(self.other, "main")
+        self.commit(self.other, "unrelated.txt")
+        unrelated = self.tip(self.other, "main")
+        why = "redone and landed by another worker"
+        with self.assertRaises(ws.SpecError) as e:
+            ws.supersede("zach-opus-sc", rewrite, why, self.sid)
+        self.assertIn("not finished", str(e.exception))
+        self.finish(aid)
+        for commit, said in ((w1, "is not in"), (unrelated, "touches none"), (rewrite, "reason")):
+            with self.assertRaises(ws.SpecError) as e:
+                ws.supersede("zach-opus-sc", commit, why if said != "reason" else "short", self.sid)
+            self.assertIn(said, str(e.exception))
+        self.assertIsNone(self.rec("zach-opus-sc").get("superseded_by"))
+
+        self.assertEqual(ws.main(["--session", self.sid, "supersede", "zach-opus-sc", "--by", rewrite[:12],
+                                  "--reason", why]), 0)
+
+        link = self.rec("zach-opus-sc")["superseded_by"]["%s:cc/zach-opus-sc" % self.other]
+        self.assertEqual((link["tip"], link["commit"]), (w1, rewrite))
+        self.commit(cc, "later.txt")                                                   # new work reopens it
+        self.assertIn("zach-opus-sc", self.names())
+        run("git", "-C", cc, "reset", "-q", "--hard", w1)
+        self.assertEqual(self.names(), [])
+        disp = self.rec("zach-opus-sc")["disposition"]
+        self.assertEqual(disp["kind"], "landed")
+        self.assertEqual((disp["superseded"][0]["tip"], disp["superseded"][0]["source"]), (w1, "recorded"))
+        self.assertNotIn("cc/zach-opus-sc", branches(self.other))
+        self.assertFalse(ws.is_ancestor(self.other, w1, self.tip(self.other, "main")))
+
+
 class TeammateBoundToABranchOfItsOwn(Base):
     """2026-10-14: the meeting and search work goes to the v1.3.0 release
     branch while fixes go to main. `spawn.sh --integration richos=v1.3.0` for
@@ -8401,8 +8474,10 @@ class AppDueNotice(Base):
         self.assertNotIn("integrate", commands["zach-opus-as"])                 # stopped: never landed
         self.assertNotIn("continu", commands["zach-opus-as"].replace("never land or continue it", ""))
         # An action the app has no tool for is said, never dropped or shown as done: no discard,
-        # so saving a stopped worker's commits does not close it (Codex, 2026-10-24).
-        self.assertIn("The app has no tool that discards it", commands["zach-opus-af"])
+        # so saving a stopped worker's commits does not close it (Codex, 2026-10-24). Finished
+        # work redone elsewhere is closed with settle's superseded_by (row 3, 2026-10-31).
+        self.assertIn("mcp__richos_work__settle (that receipt's request_id, superseded_by", commands["zach-opus-af"])
+        self.assertNotIn("no tool that discards", commands["zach-opus-af"])
         self.assertIn("The app has no tool that discards it, so saving them does not close it",
                       commands["zach-opus-as"])
         self.assertIn("If no workspace lifecycle wrote it, the app's settle tool removes it (registry_record).", notices[2])
