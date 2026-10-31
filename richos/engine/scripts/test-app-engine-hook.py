@@ -415,6 +415,26 @@ class DesktopHooks(unittest.TestCase):
         disk = [argv for name, argv, _timeout in checks if name == "notice-disk-alert.sh"]
         self.assertEqual(disk[0][2:], ["--event", "Stop"])
 
+    def test_the_claim_check_sees_the_connected_repositories_in_the_app(self):
+        """The terminal refuses "commit X has been pushed" for a commit only on the local branch;
+        it finds the commit because its repository sits beside the lead's. The app's coordination
+        folder sits beside nothing: on 0aa9a71f60cf the app let the same false claim through (the
+        second review of that commit, finding 1). A connected repository whose path has a space."""
+        product = self.root / "my projects/website"
+        product.mkdir(parents=True)
+        git_env = {**self.env, "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                   "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+        def git(*args, body=None):
+            return subprocess.run(["git", "-C", str(product), *args], input=body, text=True, env=git_env,
+                                  capture_output=True, check=True, timeout=10).stdout.strip()
+        git("init", "-q", "--template=", "--initial-branch=main")
+        sha = git("commit-tree", git("mktree", body=""), body="fixture\n")
+        git("update-ref", "refs/heads/main", sha)
+        self.env["RICHOS_APP_READ_ROOTS"] = json.dumps([str(product)])
+        result = self.hook("Stop", last_assistant_message="Commit %s has been pushed." % sha, stop_hook_active=False)
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("PUSHED", result.stderr)
+
     def test_a_turn_end_check_the_terminal_runs_refuses_stus_false_claim_in_the_app(self):
         """guard-unresolved-claims.sh refuses a reply that says a role is working when none was ever
         dispatched. It reads the session's team folder; the app's are under RICHOS_SA_TEAMS_DIR."""

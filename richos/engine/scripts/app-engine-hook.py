@@ -93,6 +93,17 @@ def turn_end_checks(payload, coordination):
     # them it looks in Claude Code's ~/.claude/teams, which an app lease never writes.
     if os.environ.get("RICHOS_SA_TEAMS_DIR"):
         env.setdefault("RICHOS_CLAIMS_TEAMS_DIR", os.environ["RICHOS_SA_TEAMS_DIR"])
+    # The terminal's governed repository sits beside the repositories its lead cites, so the claim
+    # check finds their commits as siblings; the app's coordination folder sits beside none of them.
+    # Its connected repositories are this lease's read roots (engine_profile.rs RICHOS_APP_READ_ROOTS),
+    # given one per line, so a folder name with a space stays one path. A value the user's own
+    # configuration sets still wins, as the wrapper sources it after this.
+    try:
+        roots = json.loads(os.environ.get("RICHOS_APP_READ_ROOTS") or "[]")
+    except ValueError:
+        roots = []
+    if roots and isinstance(roots, list):
+        env.setdefault("CLAIM_CHECK_EXTRA_REPOS", "".join(str(root) + "\n" for root in roots))
     body = json.dumps(payload)
 
     def one(check):

@@ -573,8 +573,11 @@ def repo_roots(entity_root, extra):
             add(os.path.join(parent, d))
     except OSError:
         pass
-    for p in (extra or "").split():
-        add(os.path.expanduser(p))
+    # One per line when the value has a line break (the app's connected repositories, whose
+    # paths may hold a space); otherwise whitespace-separated, as configured by hand.
+    extra = extra or ""
+    for p in (extra.splitlines() if "\n" in extra else extra.split()):
+        add(os.path.expanduser(p.strip()))
     return roots
 
 
