@@ -258,9 +258,16 @@ for n in 1 2 3 4 5 6; do
     M4+=("mutant par-$n P1.1 mega-lander/feature.sh \"RULE_A=1\" \"RULE_A=0\" \"rule A removed ($n)\"")
 done
 harness h9.sh mega-lander/tests/par.test.sh - "${M4[@]}"
-rm -f "$PROBE"/*
-FOCUS_WAIT=300 RICHOS_MUTANT_JOBS=4 run_h h9.sh
-FREE_MAX="$(sort -n "$PROBE/concurrency" 2>/dev/null | tail -1)"
+# The control only has to be seen once: on a busy machine the four starts can straggle past the
+# hold window and reach just two at once (2026-10-30, F9 red under load with nothing wrong), so it
+# is retried, up to four times, until three overlap. The bounded run below is never retried.
+FREE_MAX=0
+for _ in 1 2 3 4; do
+    rm -f "$PROBE"/*
+    FOCUS_WAIT=300 RICHOS_MUTANT_JOBS=4 run_h h9.sh
+    FREE_MAX="$(sort -n "$PROBE/concurrency" 2>/dev/null | tail -1)"
+    [ "${FREE_MAX:-0}" -ge 3 ] && break
+done
 rm -f "$PROBE"/*
 BUDGET="$SANDBOX/budget"
 python3 "$ENGINE_ROOT/scripts/lib/worker_tokens.py" init "$BUDGET" 1

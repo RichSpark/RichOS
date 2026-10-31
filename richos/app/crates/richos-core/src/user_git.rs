@@ -24,13 +24,46 @@ pub struct UserGit {
     pub exec_path: Option<PathBuf>,
 }
 
-/// Apple's `/usr/bin/git` is a stand-in that asks to install the developer tools when they
-/// are not there. It is run only when the developer tools it would hand over to are present.
+/// **Apple's install stand-ins.** On a Mac without the developer tools, `/usr/bin/git` and
+/// `/usr/bin/python3` are not Git and Python: run, each puts the "install the command line
+/// developer tools" dialog on the user's screen. Each hands over to the developer tools'
+/// own copy (`<developer folder>/usr/bin/<name>`), so it is a stand-in exactly when no
+/// developer folder has that copy. Nothing the app runs may reach one.
+#[derive(Clone, Debug)]
+pub struct StandIns {
+    /// Where the stand-ins are: `/usr/bin`.
+    pub folder: PathBuf,
+    /// The developer folders a stand-in hands over to: the Command Line Tools and the folder
+    /// `xcode-select` chose.
+    pub developer: Vec<PathBuf>,
+}
+
+/// The tools the runtime carries that Apple puts a stand-in for.
+pub const STAND_IN_TOOLS: [&str; 2] = ["python3", "git"];
+
+impl StandIns {
+    pub fn installed() -> Self {
+        let mut developer = vec![PathBuf::from("/Library/Developer/CommandLineTools")];
+        developer.extend(std::fs::read_link("/var/db/xcode_select_link").ok());
+        Self { folder: PathBuf::from("/usr/bin"), developer }
+    }
+
+    /// Is `program` a stand-in for developer tools that are not there?
+    pub fn is_stand_in(&self, program: &Path) -> bool {
+        let (Some(folder), Some(name)) = (program.parent(), program.file_name()) else { return false };
+        folder == self.folder && !self.developer.iter().any(|developer| developer.join("usr/bin").join(name).is_file())
+    }
+
+    /// Does `folder` hold a stand-in for one of [`STAND_IN_TOOLS`]?
+    pub fn holds_one(&self, folder: &Path) -> bool {
+        STAND_IN_TOOLS.iter().map(|name| folder.join(name)).any(|program| program.is_file() && self.is_stand_in(&program))
+    }
+}
+
+/// Apple's `/usr/bin/git` is run only when the developer tools it would hand over to are
+/// present ([`StandIns`]).
 fn runnable(git: &Path) -> bool {
-    if git != Path::new("/usr/bin/git") { return true; }
-    let mut developer_folders = vec![PathBuf::from("/Library/Developer/CommandLineTools")];
-    developer_folders.extend(std::fs::read_link("/var/db/xcode_select_link").ok());
-    developer_folders.iter().any(|developer| developer.join("usr/bin/git").is_file())
+    !StandIns::installed().is_stand_in(git)
 }
 
 /// **Find the user's Git**: the first `git` on `path` (the user's login `PATH`) that is not

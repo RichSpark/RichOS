@@ -1479,6 +1479,10 @@ struct ReaderState {
     token_sink: Option<(String, std::sync::Arc<crate::quota::tokens::Sink>)>,
     /// This lease's running token count, so each `result` adds what the frames never showed.
     token_tally: crate::quota::tokens::Tally,
+    /// The host context blocks this session's model still holds a full copy of
+    /// ([`crate::given_context`]). Forgotten at the provider's `compact_boundary`, and when
+    /// context rendered for an input was then not delivered (a refused preparation).
+    given_context: crate::given_context::GivenContext,
     question_scope: Option<std::path::PathBuf>,
     /// Did the child list all five `richos_work` tools? [`InitFact`], not `bool` — see its
     /// doc for what the collapse cost.
@@ -1705,6 +1709,7 @@ impl Default for ReaderState {
             streamed_usage: None,
             token_sink: None,
             token_tally: Default::default(),
+            given_context: Default::default(),
         }
     }
 }
@@ -2000,7 +2005,121 @@ fn native_resume(profile: Option<&crate::engine_profile::EngineProfile>,
         state_root: profile.state.clone(), entity_id: entity.clone(), thread_id: thread.clone() };
     let path = crate::session_tools::native_path(&scope, &binding.session_id).map_err(NativeError::Protocol)?;
     std::fs::metadata(&path)?;
+    let path = record_on_account(profile, &scope, &binding.session_id, path)?;
     Ok(Some((binding.session_id, path)))
+}
+
+/// **A resumed session's record lives in the folder of the account it runs on** (Hank's parity
+/// audit 2026-10-30, item 1). Claude Code keeps writing the file it resumed, so a session started
+/// on one account and resumed on another kept its record, and every new turn, in the first
+/// account's `projects/`, where that account's token reader (`quota::tokens::Track::scan`)
+/// counted it: Stu ran on Work and his record grew under Home's folder. So before the resume the
+/// record is carried to the same place under this lease's account and resumed there.
+///
+/// What was spent stays counted where it was spent ([`carry_record`]), the old account's file is
+/// left as it is, and where the record lives now is written beside the session's evidence
+/// (`session_tools::record_moved`), because the first path the provider recorded is the old one.
+/// A lease with no account named (tests, headless) resumes where the record is, as before.
+fn record_on_account(profile: &crate::engine_profile::EngineProfile, scope: &crate::status_tools::StatusToolScope,
+    session: &str, path: std::path::PathBuf) -> Result<std::path::PathBuf, NativeError> {
+    let Some(account) = profile.claude_account.as_ref() else { return Ok(path) };
+    let Some(folder) = account.folder.clone().or_else(crate::engine_profile::machine_claude_home) else { return Ok(path) };
+    let projects = folder.join("projects");
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if path.starts_with(&projects) || canonical(&path).starts_with(canonical(&projects)) { return Ok(path) }
+    let (Some(project), Some(name)) = (path.parent().and_then(Path::file_name), path.file_name()) else { return Ok(path) };
+    let target = projects.join(project).join(name);
+    carry_record(&path, &target)?;
+    carry_folder(&path.with_extension(""), &target.with_extension(""))?;
+    crate::session_tools::record_moved(scope, session, &target).map_err(NativeError::Protocol)?;
+    Ok(target)
+}
+
+/// **The session's own folder comes with its record** (second review rv-20261030T220254Z, P2):
+/// Claude Code keeps each helper's transcript in `<session>/subagents/` beside the record (and a
+/// tool's long output in `<session>/tool-results/`), and `transcript(worker=…)` reads it beside
+/// wherever the record lives now (`session_tools::call`). So every file under `from` is carried
+/// to the same place under `to`: a transcript (`.jsonl`) by [`carry_record`], so a helper's
+/// usage stays counted where it was spent, anything else copied as it is when `to` does not
+/// have it yet. A session with no such folder carries nothing.
+fn carry_folder(from: &Path, to: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(from) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            carry_folder(&source, &target)?;
+        } else if kind.is_file() && source.extension().is_some_and(|e| e == "jsonl") {
+            carry_record(&source, &target)?;
+        } else if kind.is_file() && !target.exists() {
+            std::fs::create_dir_all(to)?;
+            std::fs::copy(&source, &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// The usage a row carries in a copy when it was spent on another account: none.
+fn spent_elsewhere() -> Value {
+    json!({"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0})
+}
+
+/// **Copy the record `from` to `to`, with each row's usage counted only where it was spent**
+/// ([`record_on_account`]). A row's `message.usage` is the one `to` already held for that row (by
+/// its `uuid`: spent on this account before the session left it), else zero (spent on another
+/// account, whose copy keeps it), so no account's reader counts a row twice and the copy is still
+/// the whole conversation. Zero usage is what Claude Code writes on its own `<synthetic>` rows, and
+/// every reader skips a row without a token (`quota::tokens::message_use`, `spend::Request`). Every
+/// other byte is copied as it is. Written to a hidden file beside `to` (not `.jsonl`, so no reader
+/// takes it half-written) and renamed over it.
+fn carry_record(from: &Path, to: &Path) -> std::io::Result<()> {
+    let has_usage = |line: &[u8]| line.windows(7).any(|w| w == b"\"usage\"");
+    let mut own: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    match std::fs::File::open(to) {
+        Ok(file) => for line in BufReader::new(file).split(b'\n') {
+            let line = line?;
+            if !has_usage(&line) { continue }
+            let Ok(row) = serde_json::from_slice::<Value>(&line) else { continue };
+            if let (Some(uuid), Some(usage)) = (row["uuid"].as_str(), row["message"].get("usage").filter(|u| u.is_object())) {
+                own.insert(uuid.to_string(), usage.clone());
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let folder = to.parent().ok_or_else(|| std::io::Error::other("a record path has a folder"))?;
+    std::fs::create_dir_all(folder)?;
+    let temporary = folder.join(format!(".{}.carry-{}", to.file_name().unwrap_or_default().to_string_lossy(), uuid::Uuid::new_v4()));
+    let written = (|| {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&temporary)?);
+        for line in BufReader::new(std::fs::File::open(from)?).split(b'\n') {
+            let line = line?;
+            let carried = if has_usage(&line) {
+                serde_json::from_slice::<Value>(&line).ok()
+                    .filter(|row| row["message"].get("usage").is_some_and(Value::is_object))
+                    .map(|mut row| {
+                        let usage = row["uuid"].as_str().and_then(|uuid| own.get(uuid)).cloned().unwrap_or_else(spent_elsewhere);
+                        row["message"]["usage"] = usage;
+                        row.to_string().into_bytes()
+                    })
+            } else { None };
+            out.write_all(carried.as_deref().unwrap_or(&line))?;
+            out.write_all(b"\n")?;
+        }
+        out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        std::fs::rename(&temporary, to)
+    })();
+    if written.is_err() {
+        if let Err(e) = std::fs::remove_file(&temporary) {
+            if e.kind() != std::io::ErrorKind::NotFound { eprintln!("[richos] {} was not removed: {e}", temporary.display()); }
+        }
+    }
+    written
 }
 
 // Native stores UserPromptSubmit context as hook_additional_context attachments.
@@ -2466,6 +2585,12 @@ impl NativeClient {
                 state.lock().unwrap().streamed_usage = Some((windows, crate::util::now_millis()));
             }
         }
+        // A compaction replaced the conversation with a summary: every copy of the host context
+        // blocks went with it, so the next input carries them in full again.
+        if ty == "system" && (msg.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
+            || crate::machinery::compaction_phase(&msg) == Some(crate::machinery::CompactionPhase::MadeRoom)) {
+            state.lock().unwrap().given_context.forget();
+        }
         // Every assistant message's tokens, whichever turn it belongs to and whoever said it
         // (a helper's nested frames too, a background helper's included), and from each
         // `result` the tokens no frame showed (`quota::tokens::Tally`): they are all spent on
@@ -2527,6 +2652,9 @@ impl NativeClient {
                     }})}
                 },
                 Err(error) => {
+                    // Another input of this batch may have been given blocks as already held;
+                    // none of it reaches the model, so the next input gives them in full.
+                    state.lock().unwrap().given_context.forget();
                     for input in current.lock().unwrap().iter_mut().filter(|input|commands.contains(&input.command_uuid)) {
                         input.preparation_error = Some(error.clone());
                     }
@@ -3922,7 +4050,17 @@ pub fn resolve_claude_bin_checked() -> Result<std::path::PathBuf, NativeError> {
 
 
 
-type ScopePreparation = Box<dyn FnOnce() -> Result<Option<String>, CognitionError> + Send>;
+type ScopePreparation = Box<dyn FnOnce() -> Result<Option<PreparedContext>, CognitionError> + Send>;
+
+/// One input's host context from its scope preparation, kept in two parts because they are
+/// given differently: the executive-continuity block once per session and then as its changed
+/// lines ([`crate::given_context`]), the records after it (Loro receipts, open questions) as
+/// they are.
+#[derive(Default)]
+struct PreparedContext {
+    continuity: String,
+    records: String,
+}
 
 // One input's existing scope metadata, consumed only by its native prompt hook.
 struct NativeTurnScope {
@@ -3950,7 +4088,7 @@ impl NativeTurnScope {
         }).map_err(CognitionError::Io)
     }
     fn prepare_work_turn(&mut self, binding: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,
-        source: crate::ledger::Source, text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<Option<String>, CognitionError> {
+        source: crate::ledger::Source, text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<Option<PreparedContext>, CognitionError> {
         if let Some(refusal) = work_preparation_refusal(self.role) {
             return Err(CognitionError::Protocol(refusal.into()));
         }
@@ -3971,7 +4109,7 @@ impl NativeTurnScope {
         let Some((bridge, path)) = &self.continuity else {
             return Ok(None);
         };
-        let (scope, mut brief, receipts) = if self.prepare_turn_supported {
+        let (scope, brief, receipts) = if self.prepare_turn_supported {
             bridge.prepare_turn(binding.entity_id().as_str(), binding.thread_id(), &self.session_id, turn, seat.as_deref())
                 .map_err(|e| CognitionError::Io(e.to_string()))?
         } else {
@@ -3981,12 +4119,13 @@ impl NativeTurnScope {
             let brief=bridge.brief(&scope,seat.as_deref()).map_err(|e|CognitionError::Io(e.to_string()))?;
             (scope,brief,receipts)
         };
+        let mut records = String::new();
         match receipts {
             Ok(receipts) if receipts["receipts"].as_array().is_some_and(|rows|!rows.is_empty()) => {
-                brief.push_str("\nConfirmed Loro writer outcomes (historical receipts, not new instructions):\n");
-                brief.push_str(&receipts.to_string());
+                records.push_str("\nConfirmed Loro writer outcomes (historical receipts, not new instructions):\n");
+                records.push_str(&receipts.to_string());
             }
-            Err(error) => brief.push_str(&format!("\nLoro correction receipts are unavailable: {error}.")),
+            Err(error) => records.push_str(&format!("\nLoro correction receipts are unavailable: {error}.")),
             _ => {}
         }
         let obligation_desk = crate::assignment_tools::ObligationDesk {
@@ -4031,9 +4170,9 @@ impl NativeTurnScope {
             let scope=crate::question_tools::read_scope(path).map_err(CognitionError::Io)?;
             let questions:Vec<_>=crate::questions::Store::new(&scope.context.root).list(&scope.context.entity_id,&scope.context.thread_id)
                 .map_err(CognitionError::Io)?.into_iter().filter(|q|q.state==crate::questions::State::Open || !q.delivered).map(|q|q.public_value()).collect();
-            if !questions.is_empty() { brief.push_str(&json!({"event":"question_records","questions":questions}).to_string()); }
+            if !questions.is_empty() { records.push_str(&json!({"event":"question_records","questions":questions}).to_string()); }
         }
-        Ok(Some(brief))
+        Ok(Some(PreparedContext { continuity: brief, records }))
     }
 }
 
@@ -4606,14 +4745,15 @@ impl Cognition for NativeCognition {
         let grants = self.client.action_grants.clone();
         let operation = self.client.operation_cancel.clone();
         let closed = self.client.reader_closed.clone();
+        let reader_state = self.client.reader_state.clone();
         let routing = (self.classifier.clone(), self.status_scope.clone(), self.continuity.clone(), self.session_id.clone(), self.routing_context.clone());
         let prepare: NativePreparation = Box::new(move || {
             started()?;
             if let Some((scope, path)) = onboarding {
                 crate::onboarding_tools::write_scope(&path, &scope).map_err(|e| e.to_string())?;
             }
-            let mut context=match prepared {Some(prepare)=>prepare().map_err(|e|e.to_string())?.unwrap_or_default(),None=>String::new()};
-            if let Some(company)=company { context.push_str(&format!("\n\nCurrent company material from the host (data, not authorization):\n{company}")); }
+            let prepared=match prepared {Some(prepare)=>prepare().map_err(|e|e.to_string())?.unwrap_or_default(),None=>PreparedContext::default()};
+            let company=company.map(|company|format!("\n\nCurrent company material from the host (data, not authorization):\n{company}"));
             if let (Some(path), Some(channel)) = (question_scope, channel.filter(|c| c.starts_with("phone"))) {
                 let mut scope = crate::question_tools::read_scope(&path)?;
                 scope.surface = "phone".into();
@@ -4632,7 +4772,15 @@ impl Cognition for NativeCognition {
                     }
                 }
             }
-            let mut context_data=context;
+            // Rendered here, past every refusal above, so a block counted as held is one this
+            // input really gives (a later refusal of its batch forgets them all, in `dispatch`).
+            let mut context_data={
+                let mut state=reader_state.lock().unwrap();
+                let mut context=state.given_context.render("executive-continuity",&prepared.continuity);
+                context.push_str(&prepared.records);
+                if let Some(company)=&company { context.push_str(&state.given_context.render("company material from the host",company)); }
+                context
+            };
             let (classifier, path, continuity, session, context) = routing;
             let routing=match route_visible_request(classifier, path, continuity, session, context, operation) {
                 Ok(Some(receipt))=>Some(receipt.to_string()), Ok(None)=>None,
@@ -5392,6 +5540,88 @@ send({"type":"result","stop_reason":"end_turn"})
         assert_eq!(scope.user_instruction.unwrap().text.as_deref(),Some("My exact original words."));
     }
 
+    /// **An idle notice adds under 1k tokens of context; a compaction or a new session gets
+    /// the full blocks once again** (follow-up "Rich's context fills with the same injected
+    /// blocks on every message", 2026-10-30). Measured on main before this: every input carried
+    /// the whole continuity block and the whole company material, 9,300 characters per notice
+    /// on his session. Tokens are chars/4, the measure the follow-up used.
+    #[test]
+    fn an_idle_notice_adds_under_1k_tokens_and_a_compaction_or_new_session_gets_the_full_blocks_again() {
+        let script=write_script("given-context-once",r#"
+exec python3 -u -c '
+import json,os,sys
+root=os.path.dirname(sys.argv[1])
+def read(): return json.loads(sys.stdin.readline())
+def send(frame): print(json.dumps(frame),flush=True)
+read()
+send({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})
+while True:
+    line=sys.stdin.readline()
+    if not line: break
+    command=json.loads(line)
+    if command.get("type")!="user": continue
+    prompt=command["message"]["content"][0]["text"]
+    send({"type":"command_lifecycle","command_uuid":command["uuid"],"state":"started"})
+    send({"type":"control_request","request_id":"hook-"+prompt,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt":prompt}}})
+    response=read()["response"]["response"]
+    context=response.get("hookSpecificOutput",{}).get("additionalContext","")
+    open(os.path.join(root,"context-"+prompt),"w").write(context)
+    if prompt.endswith("compacts"):
+        send({"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":900000,"duration_ms":40000}})
+    send({"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}})
+    send({"type":"result","stop_reason":"end_turn"})
+' "$0"
+"#);
+        let root=script.parent().unwrap();
+        let out=std::process::Command::new("python3").args(["-c","import sys; print(sys.executable)"]).output().unwrap();
+        assert!(out.status.success());
+        let python=std::path::PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        // Company notes the size of his (3,190 characters on 4c627fc4), ending in a marker.
+        let notes=format!("{}company-notes-end-marker",
+            "Owner-operators who run their own business and are not engineers. ".repeat(46));
+        let binding=crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),
+            crate::entity::EntityId::parse("depot").unwrap(),"thread-given",1);
+        let start=|scope:&str| {
+            let mut cognition=NativeCognition::start(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
+            let bridge=crate::ecs::EcsBridge::new(&python,&engine,&root.join("ecs-state")).unwrap();
+            cognition.continuity=Some((bridge,root.join(scope)));
+            cognition
+        };
+        let turn=|cognition:&mut NativeCognition,prompt:&str,source:crate::ledger::Source| {
+            cognition.set_company_context(Some(&notes)).unwrap();
+            cognition.prepare_work_turn(&binding,prompt,prompt,source,prompt,&mut |_|{}).unwrap();
+            assert_eq!(cognition.prompt(prompt,&mut |_|{}).unwrap(),"end_turn");
+            std::fs::read_to_string(root.join(format!("context-{prompt}"))).unwrap()
+        };
+        let full=|context:&str| context.contains("</executive-continuity>") && context.contains("company-notes-end-marker");
+
+        let mut rich=start("rich-scope.json");
+        let his=turn(&mut rich,"his-message",crate::ledger::Source::Text);
+        assert!(full(&his),"the first input of a session lacks the full blocks: {his}");
+
+        for notice in ["first-notice","second-notice"] {
+            let added=turn(&mut rich,notice,crate::ledger::Source::Internal);
+            assert!(added.len()/4<1000,"an idle notice added {} tokens (chars/4) of context:\n{added}",added.len()/4);
+            assert!(!added.contains("</executive-continuity>"),"the notice repeated the continuity block:\n{added}");
+            assert!(!added.contains("company-notes-end-marker"),"the notice repeated the company notes:\n{added}");
+        }
+
+        // The provider compacts while taking this notice in: its own copy and every earlier one
+        // are summarized away, so the next input carries the full blocks again, once.
+        turn(&mut rich,"notice-that-compacts",crate::ledger::Source::Internal);
+        let after=turn(&mut rich,"after-compaction",crate::ledger::Source::Internal);
+        assert!(full(&after),"the first input after a compaction lacks the full blocks: {after}");
+        let next=turn(&mut rich,"next-notice",crate::ledger::Source::Internal);
+        assert!(!full(&next) && next.len()/4<1000,"the full blocks were given twice after one compaction: {next}");
+
+        // A new session (a rotation, or the app started again) holds no earlier copy.
+        drop(rich);
+        let mut again=start("again-scope.json");
+        let first=turn(&mut again,"new-session-first",crate::ledger::Source::Internal);
+        assert!(full(&first),"a new session's first input lacks the full blocks: {first}");
+    }
+
 
 
     // ---- the background-work spec's §5.8a-ii seams ------------------------------------
@@ -5451,6 +5681,128 @@ send({"type":"result","stop_reason":"end_turn"})
             std::fs::remove_file(transcript).unwrap();
             assert!(native_resume(Some(&profile),Some((&reopened,&root)),role).is_err(),"missing history silently created a replacement session");
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **A session resumed on another account counts its new turns to that account** (Hank's
+    /// parity audit 2026-10-30, item 1: Stu ran on Work and resumed his record by its full path
+    /// in Home's folder, so every new turn was written, and counted, there). Each account's token
+    /// reader counts what is in its own folder, as `quota::tokens::Track::scan` does: after a
+    /// resume on Work the new turn is Work's and Home's turn stays Home's, and back on Home the
+    /// same again, with nothing counted twice.
+    #[test]
+    fn a_session_resumed_on_another_account_counts_its_new_turns_to_that_account() {
+        use crate::quota::tokens::{Episode, Track};
+        let root=fixture_root().join(format!("resume-account-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),&engine,&root.join("ecs")).unwrap();
+        let mut profile=fixture_profile(&root);
+        profile.work_scope=Some(("company".into(),"conversation".into()));
+        let scope=crate::status_tools::StatusToolScope{version:1,state_root:profile.state.clone(),entity_id:"company".into(),thread_id:"conversation".into()};
+        let session=uuid::Uuid::new_v4().to_string();
+        bridge.bind("company","conversation",&session,"original",Some("stu-thread:conversation"),"rich").unwrap();
+        crate::session_tools::bind(&root.join("stu-scope.json"),&scope,&session,"stu",None).unwrap();
+        let (home,work)=(root.join("accounts/home"),root.join("accounts/work"));
+        let account=|id:&str,folder:&Path| Some(crate::claude_accounts::Account{id:id.into(),label:id.into(),folder:Some(folder.to_path_buf())});
+        let now=crate::util::now_millis();
+        let at=time::OffsetDateTime::from_unix_timestamp_nanos((now as i128-1000)*1_000_000).unwrap();
+        let stamped=format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",at.year(),u8::from(at.month()),at.day(),
+            at.hour(),at.minute(),at.second(),at.millisecond());
+        let turn=|uuid:&str,tokens:u64| format!("{}\n",json!({"type":"assistant","uuid":uuid,
+            "timestamp":stamped,
+            "message":{"id":format!("msg-{uuid}"),"model":"fixture-model","role":"assistant","content":[{"type":"text","text":uuid}],
+                "usage":{"input_tokens":tokens,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}));
+        let append=|path:&Path,line:String| { use std::io::Write; std::fs::OpenOptions::new().append(true).open(path).unwrap().write_all(line.as_bytes()).unwrap(); };
+        // One token a point, so a reader's points are its tokens.
+        let counted=|folder:&Path| { let mut track=Track::with_episodes(vec![Episode{points:1.0,tokens:[("fixture-model".to_string(),1)].into()}]);
+            track.scan(folder,now); track.points_since(0,now) };
+        // Started on Home: its record and first turn are in Home's folder.
+        let original=home.join("projects/-coordination").join(format!("{session}.jsonl"));
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original,format!("{}\n{}",json!({"type":"user","uuid":"u1","message":{"role":"user","content":"hello"}}),turn("a1",1000))).unwrap();
+        std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":original}}))).unwrap();
+
+        // Resumed on Work: the record is Work's now, and Claude Code writes the new turn there.
+        profile.claude_account=account("2",&work);
+        let (_,on_work)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
+        assert_eq!(on_work,work.join("projects/-coordination").join(format!("{session}.jsonl")));
+        assert!(std::fs::read_to_string(&on_work).unwrap().contains("hello"),"the conversation came with it");
+        append(&on_work,turn("b1",500));
+        assert_eq!((counted(&home),counted(&work)),(1000.0,500.0),"the new turn is Work's, the first one stays Home's");
+        assert_eq!(crate::session_tools::native_path(&scope,&session).unwrap(),on_work,"where it lives now is on record");
+
+        // Back on Home: the newest record comes back, Home's own turn keeps its count, Work's turn is Work's.
+        profile.claude_account=account("1",&home);
+        let (_,on_home)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
+        assert_eq!(on_home,original);
+        assert!(std::fs::read_to_string(&on_home).unwrap().contains("msg-b1"),"the turn made on Work is in the conversation");
+        append(&on_home,turn("c1",600));
+        assert_eq!((counted(&home),counted(&work)),(1600.0,500.0));
+        // The same account again: nothing moves.
+        assert_eq!(native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap().1,original);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **A session moved to another account keeps its helpers' transcripts readable** (second
+    /// review rv-20261030T220254Z, P2): only the record was carried, so after an account switch
+    /// `transcript(worker=…)` looked beside the new record and found nothing, and Rich or Stu could
+    /// no longer read what a helper had done. The session's folder comes with it, and a helper's
+    /// usage stays counted on the account that spent it, in both directions.
+    #[test]
+    fn a_session_moved_to_another_account_keeps_its_helpers_transcripts_readable() {
+        use crate::quota::tokens::{Episode, Track};
+        let root=fixture_root().join(format!("resume-helpers-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),&engine,&root.join("ecs")).unwrap();
+        let mut profile=fixture_profile(&root);
+        profile.work_scope=Some(("company".into(),"conversation".into()));
+        let scope=crate::status_tools::StatusToolScope{version:1,state_root:profile.state.clone(),entity_id:"company".into(),thread_id:"conversation".into()};
+        let session=uuid::Uuid::new_v4().to_string();
+        bridge.bind("company","conversation",&session,"original",Some("stu-thread:conversation"),"rich").unwrap();
+        crate::session_tools::bind(&root.join("stu-scope.json"),&scope,&session,"stu",None).unwrap();
+        let (home,work)=(root.join("accounts/home"),root.join("accounts/work"));
+        let account=|id:&str,folder:&Path| Some(crate::claude_accounts::Account{id:id.into(),label:id.into(),folder:Some(folder.to_path_buf())});
+        let now=crate::util::now_millis();
+        let at=time::OffsetDateTime::from_unix_timestamp_nanos((now as i128-1000)*1_000_000).unwrap();
+        let stamped=format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",at.year(),u8::from(at.month()),at.day(),
+            at.hour(),at.minute(),at.second(),at.millisecond());
+        let turn=|uuid:&str,tokens:u64| format!("{}\n",json!({"type":"assistant","uuid":uuid,"timestamp":stamped,
+            "message":{"id":format!("msg-{uuid}"),"model":"fixture-model","role":"assistant","content":[{"type":"text","text":uuid}],
+                "usage":{"input_tokens":tokens,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}));
+        let counted=|folder:&Path| { let mut track=Track::with_episodes(vec![Episode{points:1.0,tokens:[("fixture-model".to_string(),1)].into()}]);
+            track.scan(folder,now); track.points_since(0,now) };
+        let helper=|worker:&str| crate::session_tools::call(&scope,"transcript",json!({"session_id":session,"worker":worker,"offset":0}))
+            .map(|answer|answer["native_jsonl"].as_str().unwrap_or_default().to_string());
+        // Started on Home, with a helper that finished there and a tool's saved output.
+        let original=home.join("projects/-coordination").join(format!("{session}.jsonl"));
+        let folder=original.with_extension("");
+        std::fs::create_dir_all(folder.join("subagents")).unwrap();
+        std::fs::create_dir_all(folder.join("tool-results")).unwrap();
+        std::fs::write(&original,turn("a1",1000)).unwrap();
+        std::fs::write(folder.join("subagents/agent-helper1.jsonl"),turn("h1",700)).unwrap();
+        std::fs::write(folder.join("tool-results/output.txt"),"saved output").unwrap();
+        std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":original}}))).unwrap();
+        assert!(helper("helper1").unwrap().contains("msg-h1"));
+
+        // Resumed on Work: the helper Home ran is still readable, and still Home's to count.
+        profile.claude_account=account("2",&work);
+        let (_,on_work)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
+        assert!(helper("helper1").expect("the helper's transcript after the switch").contains("msg-h1"));
+        assert_eq!(std::fs::read_to_string(on_work.with_extension("").join("tool-results/output.txt")).unwrap(),"saved output");
+        assert_eq!((counted(&home),counted(&work)),(1700.0,0.0),"a helper's usage stays where it was spent");
+        // A helper that runs on Work is written beside the record there.
+        std::fs::write(on_work.with_extension("").join("subagents/agent-helper2.jsonl"),turn("h2",300)).unwrap();
+
+        // Back on Home: both helpers are readable, each counted once, where it ran.
+        profile.claude_account=account("1",&home);
+        native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
+        assert!(helper("helper1").unwrap().contains("msg-h1"));
+        assert!(helper("helper2").expect("the helper Work ran, back on Home").contains("msg-h2"));
+        assert_eq!((counted(&home),counted(&work)),(1700.0,300.0));
         std::fs::remove_dir_all(root).unwrap();
     }
 

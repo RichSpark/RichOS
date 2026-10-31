@@ -26,6 +26,9 @@ So this driver merges the two documents as JSON, three ways, and then regenerate
      parallel renewals of one entry did exactly that (2026-10-22, cc/zach-opus-folderfiles2 and
      cc/zach-opus-landgate4 on nodes/mega-lander/app.py#land-lock-fixtures). A note either side
      rewrote or shortened is a real conflict: a deleted sentence is never brought back.
+     A note both sides extended in the middle (a sentence inserted between base sentences, each
+     side keeping every base sentence in order) is merged sentence by sentence: both insertions
+     kept, ours first (two merges of one batch needed hand work, 2026-10-30).
   4. Anything else both sides changed differently is a real conflict: the driver leaves git's own
      conflict markers in the file (`git merge-file`) and exits 1, exactly as without it.
 
@@ -181,7 +184,7 @@ def appended_notes(base, ours, theirs):
     # Both must extend the base: a side that shortened or rewrote the note made a decision the
     # driver never overrides (one side deleting a sentence the other kept is a conflict).
     if not (ours.startswith(base) and theirs.startswith(base)):
-        return None
+        return inserted_notes(base, ours, theirs)
     if theirs.startswith(ours):
         return theirs
     if ours.startswith(theirs):
@@ -190,6 +193,35 @@ def appended_notes(base, ours, theirs):
     if base and not added[:1].isspace() and not ours[-1:].isspace():
         added = " " + added
     return ours + added
+
+
+SENTENCE = re.compile(r"\S.*?(?:[.!?](?=\s|$)|$)", re.S)
+
+
+def inserted_notes(base, ours, theirs):
+    """Both notes merged sentence by sentence when each side only INSERTED sentences into the base
+    note (every base sentence kept, in order), both insertions kept, ours first; else None."""
+    parts = [SENTENCE.findall(v) for v in (base, ours, theirs)]
+    if not all(parts) or any(" ".join(p) != " ".join(v.split()) for p, v in zip(parts, (base, ours, theirs))):
+        return None
+    if " ".join(parts[0]) != base:  # a base note laid out other than one space between sentences
+        return None
+
+    def keeps(whole, kept):
+        rest = iter(whole)
+        return all(any(s == w for w in rest) for s in kept)
+    if not (keeps(parts[1], parts[0]) and keeps(parts[2], parts[0])):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        files = []
+        for name, sentences in zip(("base", "ours", "theirs"), parts):
+            files.append(os.path.join(tmp, name))
+            with open(files[-1], "w") as stream:
+                stream.write("".join(json.dumps(x) + "\n" for x in sentences))
+        code, data = git("merge-file", "-p", "--union", files[1], files[0], files[2])
+    if code < 0 or code > 127:
+        return None
+    return " ".join(json.loads(line) for line in data.decode().splitlines())
 
 
 def pin_path_of(document, where):

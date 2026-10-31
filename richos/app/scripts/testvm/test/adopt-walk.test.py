@@ -125,6 +125,43 @@ class FirstRunSheets(unittest.TestCase):
         self.assertEqual(state['pressed'], [])
 
 
+class Identity(unittest.TestCase):
+    """The app reports the commit its release was built from (the version bump on top of the source);
+    the nightly's own records name both for a release."""
+
+    RECORDS = [{'source_commit': 'aaaa1111aaaa1111', 'build_commit': 'bbbb2222bbbb2222', 'created_at': '2'},
+               {'source_commit': 'cccc3333cccc3333', 'build_commit': 'dddd4444dddd4444', 'created_at': '1'}]
+
+    def test_the_source_commit_of_the_release_accepts_its_build_commit(self):
+        self.assertTrue(walk.built_from_matches('bbbb2222b', 'aaaa1111', self.RECORDS))
+
+    def test_the_build_commit_itself_is_accepted(self):
+        self.assertTrue(walk.built_from_matches('bbbb2222bbbb2222', 'bbbb2222', self.RECORDS))
+
+    def test_another_releases_build_commit_is_refused(self):
+        self.assertFalse(walk.built_from_matches('dddd4444d', 'aaaa1111', self.RECORDS))
+
+    def test_a_commit_no_record_names_is_refused(self):
+        self.assertFalse(walk.built_from_matches('eeee5555e', 'aaaa1111', self.RECORDS))
+        self.assertFalse(walk.built_from_matches('', 'aaaa1111', self.RECORDS))
+        self.assertFalse(walk.built_from_matches('bbbb2222b', '', self.RECORDS))
+
+    def test_the_default_is_the_newest_releases_build_commit(self):
+        self.assertEqual(walk.latest_build_commit(self.RECORDS[::-1][::-1]), 'bbbb2222bbbb2222')
+        self.assertEqual(walk.latest_build_commit([]), '')
+
+    def test_records_are_read_from_the_nightly_state_directory(self):
+        import tempfile
+        root = Path(tempfile.mkdtemp())
+        for name, created in (('v1', '1'), ('v2', '2')):
+            (root / 'releases' / name).mkdir(parents=True)
+            (root / 'releases' / name / 'build-info.json').write_text(json.dumps(
+                {'source_commit': 's' + name, 'build_commit': 'b' + name, 'created_at': created}))
+        (root / 'releases' / 'v0').mkdir()
+        (root / 'releases' / 'v0' / 'build-info.json').write_text('not json')
+        self.assertEqual([r['build_commit'] for r in walk.release_records(root)], ['bv2', 'bv1'])
+
+
 class OpenEnabled(unittest.TestCase):
     """wait_open_enabled against a scripted chooser: the click waits for Open to be enabled."""
 
@@ -160,6 +197,42 @@ class OpenEnabled(unittest.TestCase):
         w = self.walk_on([walk.StepFailed('{"error": "unresponsive"}'), True])
         w.wait_open_enabled()
         self.assertEqual(w.calls, 2)
+
+    def test_one_slow_read_on_a_loaded_host_does_not_end_the_wait(self):
+        """A review walk once failed when a read that used its whole 20 s deadline ended a fixed 15 s wait;
+        it passed only with TESTVM_AX_TIMEOUT=40 set by hand. The default wait outlasts several reads."""
+        import os
+        before = os.environ.pop('TESTVM_AX_TIMEOUT', None)
+        try:
+            w = walk.Walk.__new__(walk.Walk)
+            w.calls = 0
+            def ax(mode, *a, **k):
+                w.calls += 1
+                if w.calls <= 2:
+                    self.now += 20   # the read ran to its deadline and had no answer
+                    raise walk.StepFailed('{"error": "guest_deadline"}')
+                return [{'meta': True}, {'title': 'Open', 'x': 1, 'enabled': True}]
+            w.ax = ax
+            w.wait_open_enabled()
+            self.assertEqual(w.calls, 3)
+        finally:
+            if before is not None:
+                os.environ['TESTVM_AX_TIMEOUT'] = before
+
+    def test_the_default_wait_follows_the_read_deadline(self):
+        import os
+        before = os.environ.get('TESTVM_AX_TIMEOUT')
+        os.environ['TESTVM_AX_TIMEOUT'] = '40'
+        try:
+            w = self.walk_on([False])
+            with self.assertRaises(walk.StepFailed) as ctx:
+                w.wait_open_enabled()
+            self.assertIn('within 120.0 s', str(ctx.exception))
+        finally:
+            if before is None:
+                os.environ.pop('TESTVM_AX_TIMEOUT')
+            else:
+                os.environ['TESTVM_AX_TIMEOUT'] = before
 
     def test_still_disabled_at_the_limit_names_the_step_and_state(self):
         w = self.walk_on([False])

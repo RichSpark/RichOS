@@ -46,6 +46,11 @@ const APP_WRITE_RULES: [&str; 3] = [
     "guard-named-persons-writes.sh",  // a listed person's name in a written file or its path
 ];
 
+/// **The file Claude Code runs ahead of every Bash command of a lease** (its `CLAUDE_ENV_FILE`,
+/// read by Claude Code 2.1.314 for Bash commands only, never for hooks): it sets the agent's
+/// own `PATH` ([`EngineProfile::commands_path`]). Written into the lease's plugin folder.
+pub const COMMANDS_ENV: &str = "commands-env.sh";
+
 /// The engine's dispatcher command for one chain, running only `rules` of it.
 fn app_rules(engine: &Path, chain: &str, rules: &[&str]) -> String {
     format!("/bin/bash {} {chain} {}", quote(&engine.join("scripts/hooks/dispatch-pretooluse.sh")), rules.join(" "))
@@ -162,7 +167,7 @@ pub struct EngineProfile {
 
 /// **Account 1's Claude folder, the machine-wide home** a lease is given as `RICHOS_CLAUDE_HOME`:
 /// the app's own `CLAUDE_CONFIG_DIR`, else `~/.claude`, exactly as a terminal resolves it.
-fn machine_claude_home() -> Option<PathBuf> {
+pub(crate) fn machine_claude_home() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from).or_else(|| {
         std::env::var_os("HOME").filter(|home| !home.is_empty()).map(|home| PathBuf::from(home).join(".claude"))
     })
@@ -495,8 +500,14 @@ impl EngineProfile {
     /// files in the central folder (`company::install_central_root`) and the user's login
     /// shell environment (`login_environment::current`).
     pub fn prepare(engine: &Path, data: &Path, runtime: EngineRuntime) -> Result<Self, RuntimeError> {
-        Self::prepare_for(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?,
-            crate::company::install_central_root(), Some(crate::login_environment::current()))
+        let mut profile = Self::prepare_for(engine, data, runtime, crate::machine_settings::Settings::current().map_err(RuntimeError)?,
+            crate::company::install_central_root(), Some(crate::login_environment::current()))?;
+        // The co-author line the user switched off in the terminal stays off here (Hank's parity
+        // audit 2026-10-30, item 3): the terminal reads it from its Claude folder's settings file.
+        if let Some(home) = machine_claude_home() {
+            profile.user.settings = std::mem::take(&mut profile.user.settings).with_terminal_attribution(&home.join("settings.json"));
+        }
+        Ok(profile)
     }
 
     /// A profile that reads no user settings file, for a caller that names its own machine
@@ -659,9 +670,11 @@ impl EngineProfile {
             .collect();
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
-        Ok(Self { engine, coordination, plugin, state, runtime, work_scope: None,
+        let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None,
                   claude_account: None, token_sink: None, speech_model: None,
-                  lease_models: crate::config::lease_models_from_config(&data), machine_settings, user })
+                  lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
+        write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
+        Ok(profile)
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
     /// do not implement that CLI entrypoint keep their canonical hooks unchanged.
@@ -762,16 +775,55 @@ impl EngineProfile {
     /// when it sets one, otherwise the login shell's), then the system folders and the tools
     /// folder (`runtime::search_path_with`).
     pub fn lease_path(&self) -> String {
-        let user = self.user.settings.env.get("PATH").or_else(|| self.user.login.as_ref()?.get("PATH"));
-        let mut path = self.runtime.path_with(user.map(String::as_str));
-        // The user's Git's helpers (`git-credential-osxkeychain` and the like), last, so the
-        // runtime's Git finds the helper the user's settings name and nothing is shadowed.
+        let mut path = self.runtime.path_with(self.user_path());
+        self.with_git_helpers(&mut path);
+        path
+    }
+
+    /// The user's own `PATH`: `settings.json`'s when it sets one, otherwise the login shell's.
+    fn user_path(&self) -> Option<&str> {
+        self.user.settings.env.get("PATH").or_else(|| self.user.login.as_ref()?.get("PATH")).map(String::as_str)
+    }
+
+    /// The user's Git's helpers (`git-credential-osxkeychain` and the like), last, so the
+    /// runtime's Git finds the helper the user's settings name and nothing is shadowed.
+    fn with_git_helpers(&self, path: &mut String) {
         if let Some(helpers) = self.user.git.exec_path.as_ref().map(|p| p.display().to_string())
             .filter(|p| !p.contains(':') && !path.split(':').any(|entry| entry == p)) {
             path.push(':');
             path.push_str(&helpers);
         }
+    }
+
+    /// **The `PATH` an agent's own commands run with** (Hank's parity audit 2026-10-30, item 2):
+    /// the user's own folders first, so `python3`, `node` and `git` are the user's where the user
+    /// has them, and never one of Apple's install stand-ins (`runtime::commands_path`). The
+    /// lease's own `PATH` ([`Self::lease_path`]), which the hooks and the app's tool servers run
+    /// with, keeps the runtime first. With no user `PATH` the two are the same.
+    pub fn commands_path(&self) -> String {
+        let Some(user) = self.user_path() else { return self.lease_path() };
+        let mut path = self.runtime.commands_path(user, &crate::user_git::StandIns::installed());
+        self.with_git_helpers(&mut path);
         path
+    }
+
+    /// **What [`COMMANDS_ENV`] says ahead of every Bash command of an agent**: the agent's own
+    /// `PATH` ([`Self::commands_path`]), and the user's interpreter settings that the lease leaves
+    /// out for the app's own scripts (`runtime::isolate_interpreter_environment`): `PYTHONPATH`,
+    /// `PYTHONUSERBASE` and the rest as the user's terminal has them (`settings.json`'s, else the
+    /// login shell's), and Python's `pip --user` packages back on, so the user's `python3` imports
+    /// what it imports in the terminal (second review rv-20261030T220254Z, P2). A name the user
+    /// does not set is unset, as in the terminal.
+    pub fn commands_env(&self) -> String {
+        let user = |key: &str| self.user.settings.env.get(key).or_else(|| self.user.login.as_ref()?.get(key));
+        let mut text = format!("export PATH={}\n", quote(Path::new(&self.commands_path())));
+        for key in crate::runtime::INTERPRETER_KEYS.into_iter().chain([crate::runtime::NO_USER_SITE]) {
+            match user(key) {
+                Some(value) => text.push_str(&format!("export {key}={}\n", quote(Path::new(value)))),
+                None => text.push_str(&format!("unset {key}\n")),
+            }
+        }
+        text
     }
 
     /// **The folders this one lease was given, removed when it retires**: its engine plugin and
@@ -791,14 +843,16 @@ impl EngineProfile {
         self.user.standing.clone().unwrap_or_else(|| shipped.to_path_buf())
     }
 
-    /// **The `--settings` a lease starts with**: the app's own keys, and the user's own hooks
-    /// from `settings.json` beside the engine plugin's, which Claude Code runs together.
+    /// **The `--settings` a lease starts with**: the app's own keys, the user's own hooks from
+    /// `settings.json` beside the engine plugin's, which Claude Code runs together, and the
+    /// user's commit attribution (`user_settings::ATTRIBUTION`).
     pub fn lease_settings(&self) -> serde_json::Value {
         // Auto-memory on (build plan item 10); where Rich and Stu keep it is their definitions'
         // `memory:` scope (`user_settings::MEMORY_SCOPE`), in the coordination folder.
         let mut settings = json!({"autoMemoryEnabled":true,
             "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]});
         if let Some(hooks) = &self.user.settings.hooks { settings["hooks"] = hooks.clone(); }
+        for (key, value) in &self.user.settings.attribution { settings[key] = value.clone(); }
         settings
     }
 
@@ -885,6 +939,10 @@ impl EngineProfile {
             .arg("--settings").arg(self.lease_settings().to_string())
             .env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
             .env("PATH", self.lease_path()).env_remove("CLAUDECODE")
+            .env("CLAUDE_ENV_FILE", self.plugin.join(COMMANDS_ENV))
+            // The app's own tools run the app's Python whatever an agent's PATH finds first
+            // (the yt-dlp launcher, `media_tools::launcher_text`).
+            .env(crate::media_tools::RUNTIME_PYTHON, &self.runtime.python)
             // Hooks inherit the runtime-only PATH, which excludes Claude's installer path.
             .env("RICHOS_CLAUDE_BIN", provider)
             .env("PYTHONDONTWRITEBYTECODE", "1")

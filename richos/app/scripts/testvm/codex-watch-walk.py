@@ -27,6 +27,11 @@ conventional folder in the GUEST's home (the setting is unset, as on a new insta
              prompt from codex-watch carrying it, ended with a reply)
   answer     typed to Rich: add one line to the to-codex.md beside that to-rich.md. PASS needs the
              line in the guest's to-codex.md
+  context    what each input added to Rich's context, from the guest's native transcripts: a
+             session's first input carries the full blocks; every later one, the second entry's
+             included, under 1,000 tokens (chars/4) with neither the full continuity block nor
+             the company material. For one session, run it without relaunch:
+             --steps identity,first-run,channel,append,context
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -49,8 +54,31 @@ stu_reminder_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(stu_reminder_walk)
 StepFailed = stu_reminder_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'channel', 'relaunch', 'append', 'answer']
+STEPS = ['identity', 'first-run', 'channel', 'relaunch', 'append', 'answer', 'context']
+# `context` measures one session, which `relaunch` ends, so it runs only when asked for.
+DEFAULT_STEPS = [s for s in STEPS if s != 'context']
 CHANNEL = '.richos-coordination/rich-codex'
+
+
+def judge_context(rows):
+    """The `context` step's verdict over its rows (one per input, in transcript order): None when
+    it passes, else why not. Each entry's input must be on record. The first input of a session is
+    given the full blocks by design (the model holds no earlier copy); every LATER input of that
+    session, and so the second entry's always, must add under 1,000 tokens (chars/4) and carry
+    neither the full continuity block nor the company material."""
+    for name in ('first', 'second'):
+        if not any(r['entry'] == name for r in rows):
+            return 'no input carrying the %s entry has host context on record' % name
+    seen = set()
+    for r in rows:
+        later = r['session'] in seen
+        seen.add(r['session'])
+        if r['entry'] == 'second' and not later:
+            return 'the second entry was the first input of its session, so it proves nothing about a repeat'
+        if later and (r['tokens'] >= 1000 or r['full_continuity'] or r['full_company']):
+            return 'a later input (%s entry) added %d tokens (chars/4), full continuity %s, full company material %s' % (
+                r['entry'] or 'no', r['tokens'], r['full_continuity'], r['full_company'])
+    return None
 
 
 class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
@@ -179,6 +207,49 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
             raise StepFailed('the line did not reach to-codex.md within %g s; see to-codex.md' % self.a.answer_within)
         return {'line': line, 'to_codex_bytes': len(text.encode())}
 
+    def context(self):
+        """What each input of the conversation added to Rich's context: every UserPromptSubmit
+        `hook_additional_context` in the guest's native transcripts, beside the input it came
+        with ([`judge_context`]: each later input of a session under 1,000 tokens, chars/4, with
+        neither the full continuity block nor the company material; follow-up "Rich's context
+        fills with the same injected blocks on every message", 2026-10-30). Run it without
+        `relaunch`: a relaunched app is a new session and gives the full blocks once again."""
+        marks = {k: v for k, v in self.marks.items() if k in ('first', 'second')}
+        if set(marks) != {'first', 'second'}:
+            raise StepFailed('channel and append must have run (no entries on record)')
+        script = ('import glob,json,sys\n'
+                  'marks=json.loads(sys.argv[2])\n'
+                  'out=[]\n'
+                  'for p in sorted(glob.glob(sys.argv[1]+"/.claude/projects/*/*.jsonl")):\n'
+                  '    said=""\n'
+                  '    for l in open(p):\n'
+                  '        try: r=json.loads(l)\n'
+                  '        except Exception: continue\n'
+                  '        a=r.get("attachment") or {}\n'
+                  '        m=r.get("message") if isinstance(r.get("message"),dict) else {}\n'
+                  '        c=m.get("content","")\n'
+                  '        result=isinstance(c,list) and any(isinstance(x,dict) and x.get("type")=="tool_result" for x in c)\n'
+                  '        if r.get("type")=="user" and not result:\n'
+                  '            said=json.dumps(c)\n'
+                  '        elif a.get("type")=="queued_command":\n'
+                  '            said=json.dumps(a)\n'
+                  '        elif a.get("type")=="hook_additional_context" and a.get("hookEvent")=="UserPromptSubmit":\n'
+                  '            text="\\n".join(x for x in a.get("content",[]) if isinstance(x,str))\n'
+                  '            out.append({"session":p.rsplit("/",1)[-1],"entry":next((k for k,v in marks.items() if v in said),None),\n'
+                  '                        "input":said[:200],"characters":len(text),"tokens":len(text)//4,\n'
+                  '                        "full_continuity":"</executive-continuity>" in text,\n'
+                  '                        "full_company":"Current company material from the host" in text,"context":text})\n'
+                  'print(json.dumps(out))\n')
+        rows = json.loads(guest(self.vm, 'python3 -c %s %s %s' % (
+            shlex.quote(script), shlex.quote(self.home), shlex.quote(json.dumps(marks))), 120) or '[]')
+        (self.out / 'context.json').write_text(json.dumps(rows, indent=2) + '\n')
+        summary = [{k: r[k] for k in ('session', 'entry', 'input', 'characters', 'tokens', 'full_continuity', 'full_company')}
+                   for r in rows]
+        problem = judge_context(rows)
+        if problem:
+            raise StepFailed(problem + '; see context.json')
+        return {'inputs': summary}
+
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -188,7 +259,7 @@ def main():
     p.add_argument('--within', type=float, default=300, help="seconds for an entry to reach Rich and his turn on it")
     p.add_argument('--answer-within', type=float, default=300, help='seconds for the line to reach to-codex.md')
     p.add_argument('--relaunch-within', type=float, default=120)
-    p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--steps', default=','.join(DEFAULT_STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')
     unknown = [s for s in steps if s not in STEPS]

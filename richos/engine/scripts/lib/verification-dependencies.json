@@ -2116,7 +2116,7 @@
     },
     "scripts/lib/mutation-focus.test.sh": {
       "source": "scripts/lib/mutation-focus.test.sh",
-      "sha256": "cb902e151718b1f7f0fb4c3c00e4aa672218248aa822cb0b3b5f0b02fe847090",
+      "sha256": "ad572d855504d5d75d7b44521348f7706bc8d0c4ccf58199c9fa2610e442cfdd",
       "evidence": "Creates a tiny engine with literal PROTECTED_PATHS and feature variables, then executes generated sequential/named/parallel suites under the real mutation helper. Its only eval receives fixed RULE_A/RULE_B assertions. Copied helper directories are transport; discovered production scripts are not run. All worker and supervisor helpers are separately declared. Renewal 2026-10-28 (zero-CPU waits): the tiny engine also receives quiet_wait.py, which stop-at-line.py imports; transport only.",
       "keys": [],
       "edges": [
@@ -15185,12 +15185,6 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/proof-run.py",
-          "sha256": "5a5f7b1f35e5cfd6a34e0dee3061744fc5912f6e0518406c0695443d41c21634",
-          "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
-        },
-        {
-          "root": "repository",
           "path": "richos/mobile/native-android/bin/randroid",
           "sha256": "b49476409dd1c2aab9f574789e63ee541bdca2946e426c543bbe9a412f7fd064",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
@@ -15245,9 +15239,9 @@
         },
         {
           "root": "repository",
-          "path": "richos/engine/scripts/lib/operator_fences.py",
-          "sha256": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+          "path": "richos/app/scripts/proof-run.py",
+          "sha256": "f6f3cfbb45801465b5408615ec15a6a65a90ba1f19aa5ee301ce33654f576fec",
+          "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         }
       ]
     },
@@ -15369,7 +15363,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "5a5f7b1f35e5cfd6a34e0dee3061744fc5912f6e0518406c0695443d41c21634",
+          "sha256": "f6f3cfbb45801465b5408615ec15a6a65a90ba1f19aa5ee301ce33654f576fec",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
@@ -16373,7 +16367,7 @@
     },
     "scripts/lib/merge-verification-pins.test.sh": {
       "source": "scripts/lib/merge-verification-pins.test.sh",
-      "sha256": "1282df85cc3ea5804b2c81ab09c0669d6ca9721f75c4dfadccfb7fcb2d5d6fec",
+      "sha256": "3047a05da78d9d2efde5295fa56f37945d231b88a44f23f69f50300a03b0b45a",
       "evidence": "Reviewed 2026-10-05: builds a private repository under TMPDIR with its own fixture maps, readers and git configuration (GIT_CONFIG_GLOBAL in the sandbox, no system config), runs the repository's install.sh and the merge driver there, and reads nothing from orchestration.config. Renewed 2026-10-22 (zach-opus-folderfiles3): case V4 adds literal fixture notes and edges to the same sandbox map and merges two more sandbox branches; nothing new is read. Renewed 2026-10-22 (zach-opus-folderfiles3, review rv-20261022T111705Z-e8050296-c669): case V5 edits the same sandbox note on two more sandbox branches; nothing new is read.",
       "keys": [],
       "edges": []
