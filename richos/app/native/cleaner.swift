@@ -47,6 +47,24 @@ func coordinate(_ first:URL,_ second:URL?=nil,replacement:Bool=false,_ body:(URL
     }
     if let error=error {throw error};guard let result=result else {try fail("File coordination did not complete")};return try result.get()
 }
+// copyfile/replaceItemAt can rewrite quarantine provenance and round creation
+// dates. Preserve the original's raw values through the coordinated replacement.
+struct OriginalMetadata {
+    let created:timespec
+    let quarantine:Data?
+    init(_ source:URL)throws {
+        var info=stat();guard lstat(source.path,&info)==0 else {try fail("Could not read original file dates")};created=info.st_birthtimespec
+        let count=getxattr(source.path,"com.apple.quarantine",nil,0,0,0)
+        if count<0 {guard errno==ENOATTR else {try fail("Could not read the original quarantine attribute")};quarantine=nil}
+        else {guard count<=65536 else {try fail("The quarantine attribute is unexpectedly large")};var data=Data(count:count);let copied=data.withUnsafeMutableBytes{getxattr(source.path,"com.apple.quarantine",$0.baseAddress,count,0,0)};guard copied==count else {try fail("The original quarantine attribute changed")};quarantine=data}
+    }
+    func restore(_ target:URL)throws {
+        var attrs=attrlist();attrs.bitmapcount=UInt16(ATTR_BIT_MAP_COUNT);attrs.commonattr=UInt32(ATTR_CMN_CRTIME);var time=created
+        guard setattrlist(target.path,&attrs,&time,MemoryLayout<timespec>.size,0)==0 else {try fail("Could not preserve the original creation date")}
+        if let data=quarantine {let result=data.withUnsafeBytes{setxattr(target.path,"com.apple.quarantine",$0.baseAddress,data.count,0,0)};guard result==0 else {try fail("Could not preserve the original quarantine attribute")}}
+        else if removexattr(target.path,"com.apple.quarantine",0) != 0 && errno != ENOATTR {try fail("Could not preserve the original quarantine state")}
+    }
+}
 func flushFolder(_ folder:URL)throws {
     let fd=open(folder.path,O_RDONLY);guard fd>=0 else {try fail("The move needs recovery: could not open its folder for sync")};defer{close(fd)}
     guard fsync(fd)==0 else {try fail("The move needs recovery: could not sync the folder")}
@@ -152,8 +170,10 @@ func main(_ r:[String:Any])throws->[String:Any] {
     case "attributes":
         let source=try canonical(url(string(r,"path")));let staged=try canonical(url(string(r,"staged")))
         _=try checked(r,source)
+        let metadata=try OriginalMetadata(source)
         guard copyfile(source.path,staged.path,nil,copyfile_flags_t(COPYFILE_METADATA))==0 else {try fail("Could not preserve the file attributes")}
-        let handle=try FileHandle(forWritingTo:staged);try handle.synchronize();try handle.close()
+        try metadata.restore(staged)
+        let handle=try FileHandle(forReadingFrom:staged);try handle.synchronize();try handle.close()
         return try identity(staged)
     case "replace":
         let source=try canonical(url(string(r,"path")));let staged=try canonical(url(string(r,"staged")))
@@ -161,10 +181,12 @@ func main(_ r:[String:Any])throws->[String:Any] {
             _=try checked(r,a)
             guard let expected=r["stagedIdentity"] as? [String:Any],let b=b else {try fail("Missing staged identity")}
             try same(expected,identity(b))
+            let metadata=try OriginalMetadata(a)
             // copyItem preserves ACL/xattrs; usingNewMetadataOnly retains the staged copy's
             // metadata rather than allowing the replacement API to silently choose fields.
             _=try fm.replaceItemAt(a,withItemAt:b,backupItemName:nil,options:.usingNewMetadataOnly)
-            let handle=try FileHandle(forWritingTo:a);try handle.synchronize();try handle.close()
+            try metadata.restore(a)
+            let handle=try FileHandle(forReadingFrom:a);try handle.synchronize();try handle.close()
             try flushFolder(a.deletingLastPathComponent())
             return try identity(a)
         }
