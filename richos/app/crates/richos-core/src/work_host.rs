@@ -3244,6 +3244,50 @@ mod tests {
         m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
     }
 
+    /// **A five-hour switch while a helper runs is handled exactly as a weekly one** (the CEO's
+    /// §153, 2026-10-31: "why would I want there to be any difference between weekly account switch
+    /// and the 5-hour-quota handling"). The same as the weekly test above, the setting on Switch
+    /// and Account 1 at 95% of its five hours (its week at 20%): the switch to Home is decided, the
+    /// helper's calls on Account 1 are admitted every time (on main the first was held until that
+    /// window reset, which also kept Stu from moving), Stu keeps his session while it runs, and
+    /// once it has finished he moves to Home and is told so there.
+    #[test]
+    fn a_five_hour_switch_while_a_helper_runs_lets_it_carry_on_and_stu_moves_once_it_finishes() {
+        let m=stu_on_account_one();
+        m.helpers.store(1,Ordering::SeqCst);
+        m.quota.set_policy(crate::quota::Policy {enabled:true,pause_percent:93}).unwrap();
+        m.quota.set_at_threshold(crate::claude_accounts::AtThreshold::Switch).unwrap();
+        let now=crate::util::now_millis();
+        let windows=|five:f64|vec![
+            crate::quota::Window {id:"five_hour".into(),label:"Five-hour".into(),used_percent:five,
+                resets_at:Some(now+3_600_000),duration_ms:18_000_000},
+            crate::quota::Window {id:"seven_day".into(),label:"Weekly".into(),used_percent:20.,
+                resets_at:Some(now+48*3_600_000),duration_ms:604_800_000}];
+        m.quota.observe_for_test(&m.home.id,windows(3.),now);
+        m.quota.observe_for_test("1",windows(95.),now);
+        assert_eq!(m.quota.accounts.in_use().id,m.home.id,"the switch to Home is decided");
+        let state=m.h.root.join("quota").join("engine-state");
+        let scope=m.h.root.join("helper-scope.json");
+        std::fs::write(&scope,r#"{"version":1,"actions_allowed":false,"background_work_allowed":true}"#).unwrap();
+        for step in 0..3 {
+            crate::quota::gate::helper_call(&state,&scope,"1","helper-1")
+                .unwrap_or_else(|said|panic!("step {step} of the helper on Account 1 was refused: {said}"));
+        }
+
+        automatic_turn(&m);
+        until("Stu is told the switch is coming",||!told(&m,"account_switch").is_empty());
+        settled(&m);
+        assert_eq!(m.spawns.load(Ordering::SeqCst),1,"Stu's session was ended while his helper ran");
+        crate::quota::gate::helper_call(&state,&scope,"1","helper-1").expect("the helper still carries on after Stu was told");
+
+        m.helpers.store(0,Ordering::SeqCst);
+        automatic_turn(&m);
+        until("Stu is on Home",||m.spawns.load(Ordering::SeqCst)==2);
+        until("Stu is told he moved, on Home",||told(&m,"account_moved").iter().any(|(account,_)|account==&m.home.id));
+        assert_eq!(told(&m,"account_switch").len(),1,"told again: {:?}",told(&m,"account_switch"));
+        m.host.shutdown();m.h.host.shutdown();std::fs::remove_dir_all(&m.h.root).unwrap();
+    }
+
     /// The run loop has nothing left to do for now: no input of ours and no account check.
     fn settled(m: &Moving) {
         let backend=m.host.backend(m.h.binding.thread_id()).unwrap();

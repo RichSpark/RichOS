@@ -39,22 +39,26 @@ pub(super) fn decide(state: &Path, account: Option<&str>, now: u64) -> (Admissio
 /// [`decide`] for one tool call; `helper` when a running helper makes it (the payload's
 /// `agent_id`).
 ///
-/// **A helper running on an account being left for its week carries on** (the CEO's §153,
-/// 2026-10-31, replacing his weekly handoff order of 2026-10-07): the weekly switch is handled
-/// exactly as the five-hour one. Nobody is told to stop, commit or hand off; Stu moves once
-/// nothing of his runs (`work_host.rs`, `Renewal::Waits`), and a helper's next Claude call goes
-/// on, on the account it runs on, using the room the weekly point leaves before 100%
-/// (`Reading::weekly_point`). So while another account is there to move to, the weekly hold
-/// does not judge a helper's call: only the five-hour line can hold it, as it holds any call. A
-/// new agent's dispatch is not a helper's call and is still held there, so no new work starts on
-/// the account being left. With no account to move to (one account, or every account used up)
-/// there is no switch, and the weekly hold holds the helper as the five-hour one does.
+/// **A helper running on an account being left carries on**, at a weekly switch and at a
+/// five-hour one alike (the CEO's §153, 2026-10-31: "why would I want there to be any difference
+/// between weekly account switch and the 5-hour-quota handling"; it replaces his weekly handoff
+/// order of 2026-10-07). Nobody is told to stop, commit or hand off; Stu moves once nothing of
+/// his runs (`work_host.rs`, `Renewal::Waits`), and a helper's next Claude call goes on, on the
+/// account it runs on, in the room the switch point leaves before 100% (`Reading::weekly_point`,
+/// `Reading::act_point`). So while another account is there to move to, a helper's call on an
+/// account being left (its row used up: `exhaustedUntil`, which the weekly point and, with the
+/// setting on Switch, the five-hour line set; or published as `leaving`) is admitted, held by
+/// neither window. A new agent's dispatch is not a helper's call and is still held there, so no
+/// new work starts on the account being left. With no account to move to (one account, every
+/// account used up, or the setting on Pause, where the five-hour line pauses the team and moves
+/// nobody) there is no switch, and the hold holds the helper as before.
 fn decide_call(state: &Path, account: Option<&str>, helper: bool, now: u64) -> (Admission, Option<super::stagger::Release>) {
     let Ok(view) = read_json::<View>(&state.join("claude-quota.json")) else {
         return (Admission::Unknown, None);
     };
-    let carries_on = helper && view.accounts.len() > 1
-        && account.is_some_and(|id| view.leaving.iter().any(|left| left == id));
+    let carries_on = helper && view.accounts.len() > 1 && account.is_some_and(|id|
+        view.leaving.iter().any(|left| left == id)
+            || view.accounts.iter().any(|a| a.id == id && a.exhausted_until.is_some_and(|t| t > now)));
     // Read the persisted switch separately: a publication failure must not leave
     // an old disabled snapshot admitting work after the policy was enabled.
     let policy = state
@@ -67,12 +71,12 @@ fn decide_call(state: &Path, account: Option<&str>, helper: bool, now: u64) -> (
     }
     let row = account.and_then(|id| view.accounts.iter().find(|a| a.id == id));
     let exhausted_until = row.and_then(|a| a.exhausted_until);
-    let (mut windows, checked_at, message, speeds, pre_hold, empty_at) = match row {
+    let (windows, checked_at, message, speeds, pre_hold, empty_at) = match row {
         Some(a) => (a.windows.clone(), a.checked_at, a.message.clone(), a.speeds.clone(), a.pre_hold.clone(), a.empty_at),
         None => (view.windows, view.checked_at, view.message, view.speeds, view.pre_hold, view.empty_at),
     };
-    if carries_on {
-        windows.retain(|w| !super::is_weekly(&w.id));
+    if carries_on && held.is_none() {
+        return (Admission::Ready, None);
     }
     let judged = (policy.enabled && policy.validate().is_ok() && checked_at.is_none_or(|t| t <= now)).then(|| Snapshot {
         windows,
@@ -684,10 +688,10 @@ mod tests {
     /// Work (3%), with automatic pause on, so the weekly hold stands on Account 1's row. On main a
     /// helper on Account 1 was refused with the order to commit, hand off and end
     /// (`HANDOFF_ORDER`), and a marker was written for it. Now its calls are admitted, every
-    /// time, with no order, no refusal and nothing written. Exactly as anywhere, the five-hour
-    /// hold still judges it: Account 1 at its five-hour line holds the helper's next call there
-    /// too. A new agent's dispatch on Account 1 is not a helper's call: it is refused with the
-    /// hold's reason, so nothing new starts on the account being left. With one account there is
+    /// time, with no order, no refusal and nothing written, Account 1's five hours at their line
+    /// too (the account is being left, so neither window holds a helper on it). A new agent's
+    /// dispatch on Account 1 is not a helper's call: it is refused with the hold's reason, so
+    /// nothing new starts on the account being left. With one account there is
     /// nowhere to move to and no switch: the weekly hold holds the helper, with no order.
     #[test]
     fn a_weekly_switch_orders_no_helper_and_a_helper_on_the_account_being_left_carries_on() {
@@ -722,17 +726,56 @@ mod tests {
         let other = json!({"agent_id":"helper-b","session_id":"session-2","tool_name":"Bash"});
         wait(&other, &state, &scope, &work.id, Duration::ZERO, Duration::ZERO).expect("a helper on Work goes on");
 
-        // The five-hour line holds it exactly as it holds any call.
+        // Its five hours at their line as well: the account is still being left, so it carries on.
         service.before_turn("1", Some((windows(95., 99.), crate::util::now_millis())));
-        let five = refusal(&wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
-        assert!(five.starts_with("RichOS desktop quota: Still waiting") && five.contains("(account 1)"), "{five}");
-        service.before_turn("1", Some((windows(10., 99.), crate::util::now_millis())));
-        wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).expect("under the five-hour line it carries on again");
+        wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).expect("at the five-hour line too it carries on");
 
         atomic_write(&scope, &json!({"version":1,"actions_allowed":true})).unwrap();
         let dispatch = refusal(&wait(&json!({"tool_name":"Agent","session_id":"session-1"}), &state, &scope, "1",
             Duration::ZERO, Duration::ZERO).unwrap_err());
         assert!(dispatch.starts_with("RichOS desktop quota: No new agent was started"), "{dispatch}");
+    }
+
+    /// **A five-hour switch is handled exactly as a weekly one** (the CEO's §153, 2026-10-31: "why
+    /// would I want there to be any difference between weekly account switch and the 5-hour-quota
+    /// handling"). Account 1 at 95% of its five hours, its week at 20%; Work at 10%. With the
+    /// setting on Switch the switch to Work is decided and Account 1 is used up by its five hours
+    /// (`exhaustedUntil`), so a helper still running on it carries on: every call admitted, with
+    /// no refusal. On main it was held at its next call until that window reset (and Stu's move
+    /// waited for it). A new agent's dispatch on Account 1 is still refused. With the setting on
+    /// Pause there is no switch: the five-hour line pauses the team, the helper included, as
+    /// before.
+    #[test]
+    fn a_five_hour_switch_lets_a_helper_on_the_account_being_left_carry_on_as_a_weekly_one_does() {
+        use crate::claude_accounts::AtThreshold;
+        let (_root, service, state, scope) = setup();
+        let now = crate::util::now_millis();
+        let windows = |five: f64| vec![
+            Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: five,
+                resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 },
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: 20.,
+                resets_at: Some(now + 48 * 3_600_000), duration_ms: 604_800_000 },
+        ];
+        let work = service.accounts.add("Work").unwrap();
+        service.set_at_threshold(AtThreshold::Switch).unwrap();
+        service.observe_for_test(&work.id, windows(10.), now);
+        service.observe_for_test("1", windows(95.), now);
+        assert_eq!(service.accounts.in_use().id, work.id, "Account 1 at its five-hour line is left for Work");
+        assert!(matches!(decide(&state, Some("1"), now).0, Admission::Held { .. }), "the five-hour hold stands on Account 1");
+        let helper = json!({"agent_id":"helper-a","session_id":"session-1","tool_name":"Bash"});
+        for _ in 0..3 {
+            wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO)
+                .expect("a helper on the account being left carries on at a five-hour switch");
+        }
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":true,"background_work_allowed":true})).unwrap();
+        let dispatch = refusal(&wait(&json!({"tool_name":"Agent","session_id":"session-1"}), &state, &scope, "1",
+            Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(dispatch.starts_with("RichOS desktop quota: No new agent was started"), "{dispatch}");
+
+        service.set_at_threshold(AtThreshold::Pause).unwrap();
+        service.observe_for_test("1", windows(95.), crate::util::now_millis());
+        let held = refusal(&wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(held.starts_with("RichOS desktop quota: Still waiting"), "Pause moves nobody, so the helper pauses: {held}");
     }
 
     /// **A model's own week at its point is the account's week at its point** (follow-ups of
@@ -772,9 +815,8 @@ mod tests {
     /// its reset, the team measured at 1.4 points a minute before the hold (the frame math of the
     /// ten-worker test above: one is 95 + 0.14 x 19 = 97.66, two are 100.32), ten workers held on
     /// Work, the setting on Switch.
-    /// - Home free (10%): one goes, the rest wait. This already held on 1986736c0: since
-    ///   e4bdd8383 each call is judged on its own account's row, so the old account is staggered
-    ///   whatever the setting says. Kept as the follow-up's own test.
+    /// - Home free (10%): Work is being left, so its helpers carry on, all ten (the CEO's §153: a
+    ///   five-hour switch is handled as a weekly one; before, one went and the rest waited).
     /// - Home at its line too (95%): with Switch, an account at its five-hour line is used up
     ///   (`claude_accounts::gone`), so every account was, and the "every account used up" hold
     ///   returned before Work's row was read: nobody went until the reset, where Pause on the
@@ -819,7 +861,7 @@ mod tests {
             workers.iter().filter(|id| wait(&json!({"agent_id": id, "tool_name": "Bash"}), &state, &scope, &work.id,
                 Duration::ZERO, Duration::ZERO).is_ok()).count()
         };
-        assert_eq!(released(AtThreshold::Switch, 10., 20.), 1, "Home free: Work's held team is staggered, never all at once");
+        assert_eq!(released(AtThreshold::Switch, 10., 20.), 10, "Home free: Work is being left, so its running helpers carry on");
         assert_eq!(released(AtThreshold::Pause, 95., 20.), 1, "Pause, both at their line: one at a time");
         assert_eq!(released(AtThreshold::Switch, 95., 20.), 1, "Switch, both at their line: the same staggered release as Pause");
         assert_eq!(released(AtThreshold::Switch, 95., 99.), 0, "Work at its weekly limit: held, nobody released");
