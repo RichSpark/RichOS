@@ -1633,6 +1633,28 @@ fn a_task_the_back_end_awaits(task_type: &str) -> bool {
 /// conversation, its grants opened and closed like any turn's, and stopped like any turn.
 pub const CONTINUATION_CHANNEL: &str = "background-command";
 
+/// **The input the host files for that turn**: a peer message (`session_tools::Message`) from
+/// [`CONTINUATION_CHANNEL`] with the notification's summary, carrying the user's latest request in
+/// this conversation as its instruction, exactly as Stu's messages carry it. So the turn keeps
+/// the authority of the request that started the command (the terminal's woken lead keeps it
+/// too): it can record new work and hand work to Stu. No request of his yet: no instruction.
+pub fn continuation_input(ledger: &crate::ledger::Ledger, thread: &str, summary: &str) -> String {
+    use sha2::Digest;
+    let turns = ledger.thread_turns(thread).unwrap_or_default();
+    let his = |t: &crate::ledger::Turn| matches!(t.source, crate::ledger::Source::Text | crate::ledger::Source::Jam) && !t.pressed;
+    let instruction = turns.iter().rev().find(|t| his(t)).map(|latest| {
+        // The request as first received: a recovered turn's successor points back to it.
+        let mut original: &crate::ledger::Turn = latest;
+        while let Some(previous) = turns.iter().find(|t| t.superseded_by.as_deref() == Some(original.id.as_str()) && his(t)) {
+            original = previous;
+        }
+        crate::ecs::UserInstruction::with_text(format!("ledger:{thread}:{}", original.id),
+            format!("{:x}", sha2::Sha256::digest(original.user_text.as_bytes())), Some(&original.user_text))
+    });
+    serde_json::to_string(&crate::session_tools::Message { handoff: false, from: CONTINUATION_CHANNEL.into(),
+        text: summary.into(), instruction, work: None }).unwrap_or_else(|_| summary.to_string())
+}
+
 /// How long the provider's own turn waits for the app to adopt it before it runs unadopted
 /// (its tools refused, as before this channel existed). Adoption is a ledger write and the
 /// turn's preparation, well under a second; the bound only keeps a missing host from holding
@@ -3124,15 +3146,18 @@ impl NativeClient {
     /// provider already has the turn. It is parked as running, `prepare` runs now (it opens the
     /// grants and begins the app turn, as at any input's hook) and its context answers the held
     /// callback, so the turn's frames, its end and a Stop reach this input like any other.
-    pub(crate) fn adopt_continuation(&self, prepare: NativePreparation, complete: Option<NativeCompletion>) -> Result<NativeResponse, NativeError> {
+    ///
+    /// Nothing held (a retry of that turn after an overload or on another account, or a turn
+    /// that already ran unadopted): `text` is sent as an ordinary input instead.
+    pub(crate) fn adopt_continuation(&self, text: &str, prepare: NativePreparation, complete: Option<NativeCompletion>) -> Result<NativeResponse, NativeError> {
+        let held = self.reader_state.lock().unwrap().held_continuation.take();
+        let Some((request_id, prompt)) = held else {
+            return self.enqueue_prepared(text, Some(prepare), complete);
+        };
         let (tx, rx): (Sender<ChunkMsg>, Receiver<ChunkMsg>) = channel();
         let command_uuid = uuid::Uuid::new_v4().to_string();
         let response = NativeResponse { rx, command_uuid: command_uuid.clone(),
             current_prompt: self.current_prompt.clone(), session_id: self.session_id.clone() };
-        let held = self.reader_state.lock().unwrap().held_continuation.take();
-        let Some((request_id, prompt)) = held else {
-            return Err(NativeError::Protocol("The turn after your background command already ran without the app.".into()));
-        };
         {
             let mut current = self.current_prompt.lock().unwrap();
             if self.reader_closed.load(Ordering::SeqCst) { return Err(NativeError::Closed); }
@@ -4983,7 +5008,7 @@ impl Cognition for NativeCognition {
             }) as NativeCompletion)
         } else { None };
         let reply = if adopts {
-            self.client.adopt_continuation(prepare, complete)?
+            self.client.adopt_continuation(text, prepare, complete)?
         } else {
             self.client.enqueue_prepared(text, Some(prepare), complete)?
         };
@@ -8471,6 +8496,61 @@ read -r keep_alive
         assert_eq!(reason, STOP_REASON_CANCELLED, "the turn after his background command ran on past his Stop");
         assert_eq!(said, "continued-words");
         assert!(!after.actions_allowed, "the stopped turn kept its tools");
+    }
+
+    /// **The continued turn keeps the authority of his request** (second review of `afaa5b2d0`,
+    /// finding 1): the input filed for it carries his latest request as its instruction, and the
+    /// work host verifies that instruction against the ledger, as it does a peer message's. A
+    /// plain summary carried none, so the turn could not record work or hand it to Stu.
+    #[test]
+    fn the_continued_turn_carries_his_latest_request_as_a_verified_instruction() {
+        use crate::ledger::{Ledger, Source};
+        let root = fixture_root().join(format!("continuation-authority-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("engine-state")).unwrap();
+        let mut ledger = Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
+        let entity = crate::entity::EntityId::parse("company").unwrap();
+        let thread = ledger.create_thread("work", &entity).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let turn = ledger.record_prompt_received(&binding, "Install the tools and then build the site", Source::Text).unwrap();
+        ledger.record_prompt_received(&binding, "Work result", Source::Agent).unwrap();
+        let message: crate::session_tools::Message =
+            serde_json::from_str(&continuation_input(&ledger, &thread, "Background command \"install\" completed")).unwrap();
+        assert_eq!(message.from, CONTINUATION_CHANNEL);
+        assert_eq!(message.text, "Background command \"install\" completed");
+        let instruction = message.instruction.expect("the continued turn carries no request of his");
+        assert_eq!(instruction.ledger_ref, format!("ledger:{thread}:{turn}"), "not his latest request");
+        assert_eq!(crate::work_host::verified_instruction(&root.join("engine-state"), "company", &thread,
+            &instruction.ledger_ref, &instruction.sha256).unwrap(), "Install the tools and then build the site");
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    /// **A retry of the continued turn is sent as an ordinary input** (second review of
+    /// `afaa5b2d0`, finding 2): an overload retry or a move to another account delivers the
+    /// same channel again, after the provider's held callback was already answered. It used to
+    /// fail with "The turn after your background command already ran without the app."
+    #[test]
+    fn a_retry_on_the_continuation_channel_with_nothing_held_is_sent_as_an_ordinary_input() {
+        let body = r#"
+read -r init
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}}'
+read -r prompt
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"retried"}}}'
+printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
+read -r keep_alive
+"#;
+        let (mut lease, root) = lease_with_production_grants("continuation-retry", LeaseRole::Conversation, body);
+        crate::onboarding_tools::write_scope(lease.onboarding_scope.as_ref().unwrap(), &crate::onboarding_tools::OnboardingToolScope {
+            version: 1, entity_id: "qa-test-co".into(), actions_allowed: false,
+            central_root: root.join("corpus"), record_path: root.join("onboarding.json"),
+        }).unwrap();
+        crate::cognition::Cognition::set_input_channel(&mut lease, Some(CONTINUATION_CHANNEL)).unwrap();
+        let mut said = String::new();
+        let reason = crate::cognition::Cognition::prompt(&mut lease, "Background command finished", &mut |item| {
+            if let TurnItem::Text { text, .. } = item { said.push_str(text); }
+        }).expect("a retry of the continued turn was refused");
+        assert_eq!((reason.as_str(), said.as_str()), ("end_turn", "retried"));
+        drop(lease);
+        drop(std::fs::remove_dir_all(&root));
     }
 
     /// One turn of a front desk that hands work over, as the wire actually carries it.
