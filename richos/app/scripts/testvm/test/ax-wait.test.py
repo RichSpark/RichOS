@@ -180,6 +180,7 @@ class AnUnansweredReadIsNeverAbsence(unittest.TestCase):
         mod, cls, root = walk_class('adopt-walk.py')
         w = object.__new__(cls)
         w.vm = 'walk-x'
+        w.phone_state = 'walk-x-phone.json'
         failed = root.ax.__globals__['StepFailed']
 
         class Opened(Exception):
@@ -189,8 +190,9 @@ class AnUnansweredReadIsNeverAbsence(unittest.TestCase):
         w.present = lambda *a, **k: False
         reads = [failed(UNRESPONSIVE), failed(DEADLINE.replace('find', 'tree')),
                  'AXStaticText value="https://pair.example/#pair=ABC123"']
+        # The address read is handed to the walk phone (walkphone.py), which this stops.
         with mock.patch.object(mod, 'command', side_effect=reads) as tree, \
-                mock.patch.object(mod, 'guest', side_effect=Opened):
+                mock.patch.object(mod.walkphone, 'pair', side_effect=Opened):
             with self.assertRaises(Opened):
                 w.pair()
         self.assertEqual(tree.call_count, 3)

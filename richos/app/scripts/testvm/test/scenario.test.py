@@ -215,7 +215,7 @@ class ScenarioTests(unittest.TestCase):
         walk=object.__new__(delta.Walk);walk.a=SimpleNamespace(admission_wait_seconds=0)
         budget=TurnBudget()
         with patch.object(delta,'cpu_admission',side_effect=BlockingIOError('CPU measurement unavailable')),patch.object(walk,'ax') as guest_access:
-            with self.assertRaises(Failure):walk.capture('test','mac',budget)
+            with self.assertRaises(Failure):walk.capture('test',budget)
             self.assertEqual(budget.used,0);guest_access.assert_not_called()
 
     def test_ax_timeout_reaps_child_group(self):

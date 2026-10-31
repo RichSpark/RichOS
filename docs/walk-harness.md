@@ -123,7 +123,7 @@ Example, with paths and pinned versions supplied by the operator:
 
 ```sh
 cd richos/app/scripts/testvm
-./run-walk.py --bundle "$CURRENT_ZIP" --home "$DELTA_HOME" --engine "$ENGINE_TAR" \
+./run-walk.py --tailnet --bundle "$CURRENT_ZIP" --home "$DELTA_HOME" --engine "$ENGINE_TAR" \
   --previous-bundle "$PREVIOUS_ZIP" --report "$RESULTS/run.json" -- \
   ./delta-walk.py --out "$RESULTS/delta" \
   --previous "$PREVIOUS_VERSION" --current "$CURRENT_VERSION" \
@@ -149,11 +149,16 @@ gate. After inspection, delete the caller-owned scratch and caches.
 
 ## Scenario evidence and limits
 
-`scenarios/delta.json` specifies order, dependencies, limits and outcomes. Five Mac
-turns supply typed-to-phone and first-word samples. One phone turn supplies
-phone-to-Mac and the thread-switch capture. That turn requests a 12-second terminal
-wait before its reply so the eight-second switch has an active-work interval to
-observe. Both clients explicitly select the same named conversation. Send attempts count before sending;
+`scenarios/delta.json` specifies order, dependencies, limits and outcomes. The phone is
+the actual RichConnect client run on the host by `walkphone.py`
+(`walk-phone.mjs` beside it), over the native apps' API and the guest's tailnet
+name, so the walk needs `run-walk.py --tailnet`: it pairs and it answers the six words
+for the rejection check. The steps that photographed the retired phone web page in the
+guest's Safari (typed-to-phone, reply-to-phone, phone-to-Mac) are gone with that page
+(2026-10-30): a native phone has no screen in the guest. Five Mac turns supply the
+first-word samples. One more Mac turn supplies the thread-switch capture; it requests a
+12-second terminal wait before its reply so the eight-second switch has an active-work
+interval to observe. Send attempts count before sending;
 there is no automatic retry and recovery cannot exceed six total attempts. A missing
 reply is a measured failure, not a reason to keep sending diagnostic prompts.
 On a shared host, `--admission-wait-seconds 120` allows a bounded wait for user CPU
@@ -176,19 +181,16 @@ lock remains mandatory for a walk in either mode and `reserve.py --release-lock`
 the nightly lock only for work that writes nightly or release state.
 
 Each prompt contains spaced characters; the requested reply joins them. Thus the
-reply token is absent from the prompt. Desktop and phone OCR streams stay separate.
-Offsets use the capture's millisecond timestamps, including its action window. The
-reply-to-phone result is a signed difference because capture cadence can place the
-phone observation before the Mac observation. Keep the frame cadence and action
-window alongside the result when interpreting subsecond numbers.
+reply token is absent from the prompt. Offsets use the capture's millisecond
+timestamps, including its action window. Keep the frame cadence and action window
+alongside the result when interpreting subsecond numbers.
 
-Captures use fixed desktop and Safari rectangles. Check the supplied band boundary
-and chip rectangles against a guest frame before acceptance. Band coordinates are
-relative to the desktop crop by default (`--band-side phone` changes this); chip
-coordinates are relative to the desktop crop. The band check examines every
+Captures use a fixed desktop rectangle. Check the supplied band boundary and chip
+rectangles against a guest frame before acceptance. Band and chip coordinates are
+relative to the desktop crop. The band check examines every
 band-visible frame and requires an exact boundary color measurement, without a
 tolerance that could also match the surrounding background. The old detail
-line is searched across both complete frame streams. A switch at eight seconds only
+line is searched across the complete frame stream. A switch at eight seconds only
 qualifies if work is visible immediately before it; otherwise the chip check reports
 `prerequisite unavailable`. AX must also confirm that the destination is selected.
 These checks fail closed if a changed layout no longer exposes the expected evidence.
@@ -251,14 +253,17 @@ comparisons. An unfinished historical run is not an equivalent speed benchmark.
 walk goes through the app's own first run (memory setup declined, a company registered
 with a folder that it makes into a repository in the guest, the business questions
 declined; the first conversation is the app's own). It then starts `adopt-watch.py` in
-the guest, pairs the guest's Safari as the phone over Tailscale (both sides press
-`They match`, Sage F1), sends a task from the phone's composer and passes only when an
+the guest, pairs a phone over Tailscale (both sides press `They match`, Sage F1), sends a
+task from the phone's composer and passes only when an
 assignment on that conversation leaves Registered no earlier than the phone turn's
 `TurnCompleted`, with every prompt on the conversation from the phone's intake channel.
+The phone is the actual RichConnect client on the host (`walkphone.py`), over the native
+apps' API, so the walk runs with `run-walk.py --tailnet`; the guest's Safari drove the
+phone web page, retired 2026-10-30.
 
 ```sh
 cd richos/app/scripts/testvm
-./run-walk.py --wait 600 --bundle "$ZIP" --home "$EMPTY_DIR" --engine "$ENGINE_TAR" \
+./run-walk.py --tailnet --wait 600 --bundle "$ZIP" --home "$EMPTY_DIR" --engine "$ENGINE_TAR" \
   --report "$RESULTS/run.json" -- \
   ./adopt-walk.py --out "$RESULTS/adopt" --expect-sha "$SHA" --within 240
 ```

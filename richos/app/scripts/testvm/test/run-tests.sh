@@ -1909,6 +1909,10 @@ t "adopt-walk: phone-only, left Registered at the boundary, each way to fail nam
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/adopt-walk.test.py" >"$TMP/adopt-walk.log" 2>&1; ok $? "$(cat "$TMP/adopt-walk.log")"
 t_done
 
+t "walk-phone: the walks' phone pairs over TLS, waits for the Mac's press, sends on the chosen conversation, refuses the words"
+  node --test "$HERE/walk-phone.test.mjs" >"$TMP/walk-phone.log" 2>&1; ok $? "$(cat "$TMP/walk-phone.log")"
+t_done
+
 t "ax-wait: every walk's waiting find reads a find the app did not answer (unresponsive, a deadline) as not yet, through axwait.py alone; a click is sent once"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/ax-wait.test.py" >"$TMP/ax-wait.log" 2>&1; ok $? "$(cat "$TMP/ax-wait.log")"
 t_done
