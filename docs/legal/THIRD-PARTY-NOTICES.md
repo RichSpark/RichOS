@@ -446,7 +446,7 @@ reasoning was ours.
 
 | What we took | Upstream | Revision | License | Copyright | Where it landed |
 |---|---|---|---|---|---|
-| The phone outbox's retry policy and its compare-and-set write revisions and the rule that the send path owns its own retry clock rather than borrowing the transport's | `pingdotgg/t3code` | `8ebb6112377a110afb956ac01fb44fee68f5709c` | MIT | T3 Tools Inc. | `richos/web/web-app/lib/queue.js`, `richos/web/web-app/app.js` |
+| The phone outbox's retry policy and its compare-and-set write revisions and the rule that the send path owns its own retry clock rather than borrowing the transport's | `pingdotgg/t3code` | `8ebb6112377a110afb956ac01fb44fee68f5709c` | MIT | T3 Tools Inc. | `richos/web/web-app/lib/queue.js` (and the phone web page's app.js, removed with that page on 2026-10-30) |
 | Dictation's paste: save every clipboard item, write the words, post Command-V with V's key code found by `UCKeyTranslate` over key codes 0 to 127 on the current layout and put the clipboard back after 1.0 s only if its change count is still the one the write produced | `human37/open-wispr`, `Sources/OpenWisprLib/TextInserter.swift` | `7ab4e62e8f182f3ecc2116e1094a1eb4416a248f` (v0.43.0) | MIT | human37 | `richos/app/src-tauri/src/dictation/insert.rs`, `richos/app/crates/richos-voice/src/dictation.rs` |
 
 **What was and was not taken, precisely.** The two numbers — double from one

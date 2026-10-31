@@ -1,13 +1,20 @@
 # The phone channel — the contract between the Mac and the phone app
 
 **Status:** the contract for slice A of `richos-hq/docs/plans/richos-phone-client-2026-09-18.md`.
-**Mac half:** `richos/app/src-tauri/src/phone/`. **Phone half:** `richos/web/web-app/`.
+**Mac half:** `richos/app/src-tauri/src/phone/`. **Phone half:** the native RichConnect apps
+(`richos/mobile/native-ios`, `richos/mobile/native-android`), held to the conformance corpus
+generated from the reference client modules in `richos/web/web-app/lib/`.
+
+> **The phone web page is retired (CEO, 2026-10-30: *"yes, the phone web page needs to be retired
+> now"*).** The Mac no longer serves a web app; §3 says what a browser gets instead. Where this file
+> says "the phone" below, the wire behavior it describes is the reference client's, which both
+> native apps follow.
 
 > ## RECONCILED 2026-09-18, AND THE PHONE WON
 >
 > This file was written first, before either half was built, so the two would be built against one
 > document. The phone was then finished first and **landed** (`dfa7ed27`) against its own stub
-> (`richos/web/web-app/CONTRACT-STUB.md`), which had to invent several things this file had settled
+> (a contract stub beside it, removed with the page on 2026-10-30), which had to invent several things this file had settled
 > differently.
 >
 > **Every one of those differences is resolved in the phone's favor and this file now describes
@@ -82,21 +89,21 @@ starts, in his words and the profile's own description repeats it (plan §2.1).
 
 ---
 
-## 3. The static app
+## 3. What a browser gets (the web app is retired)
 
-`GET /` and `GET /<asset>` on 8443 serve the files in `richos/web/web-app/`, bundled into the
-application as a resource. **No credential is required and none can be:** the phone loads the app
-in order to pair, so a lock here would be a lock whose key is behind the lock.
+Until 2026-10-30, `GET /` and `GET /<asset>` on 8443 served a web app to the phone's browser. That
+page is retired; the native apps use only the routes in §4 onward. Two credential-free answers
+remain, both fixed strings in `phone/routes.rs`:
 
-That is safe because of what those files are: **the shell only, with no conversation in it.**
-Nothing served here is derived from the ledger, from a thread or from anything the CEO said.
-Everything with his words in it is behind §4.
+- `GET /` and `GET /index.html`: a plain page with no script, "Use the RichConnect app". A phone
+  camera that scans the pairing QR code opens `<origin>/#pair=<code>` in a browser; this is what
+  that person sees.
+- `GET /sw.js`: a service worker that deletes the old page's caches, unregisters itself and reloads
+  the open page. A phone that installed the old page kept serving it from its own cache; its
+  browser checks this file for a newer worker and so removes the page.
 
-Rules: no directory listing; no path containing `..`, `.`, an empty segment or a null byte; no
-symbolic link followed out of the directory (checked by canonicalizing, not by inspecting the
-string); anything not present is a flat 404. `index.html` is served for `/` only, **never as a
-catch-all** — a phone that asks for a file we do not have must be told so, not handed an app shell
-that then fails in a way nobody can read.
+Every other path outside the API is a flat 404, including every file the web app was made of.
+Nothing in either answer is derived from the ledger, from a thread or from anything the CEO said.
 
 ---
 

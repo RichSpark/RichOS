@@ -236,8 +236,8 @@ show unknown."*
 **An eighth is emitted and is not one of §13's**: `rich://ceo-message`, added 2026-09-19.
 Every event §13 names is about RICH; the CEO's own message reached a surface only by being
 projected, which was enough while the one surface was a webview that had drawn his sentence
-itself the moment he pressed Send. A second surface makes that false — the phone page
-subscribes to this family and learned nothing, live, about a message typed on the Mac
+itself the moment he pressed Send. A second surface makes that false — the phone (a web page then, the RichConnect apps
+since 2026-10-30) subscribes to this family and learned nothing, live, about a message typed on the Mac
 (`esc-20260919T003541Z-6885f74b`). It is listed with the seven rather than in a section of
 its own, because it is the same family, the same fence and the same gate.
 

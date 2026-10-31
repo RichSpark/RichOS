@@ -21,7 +21,7 @@ Put the lines in that order: every Added line first, then Changed, Improved and 
 
 - Plain American English, the way a non-technical user would say it to a friend. One sentence per line, no period at the end.
 - In a list, no comma before the last "and" or "or": "Cut, Copy, Paste and Select All".
-- Name things by what the user sees on screen: "Talk to Rich", "the Output panel", "Settings, Updates", "question cards", "the phone page".
+- Name things by what the user sees on screen: "Talk to Rich", "the Output panel", "Settings, Updates", "question cards", "the RichConnect app".
 - Never a file name, function, branch, agent or teammate name, commit id, review id, round number, follow-up number or escalation id.
 - One line per change a user would notice. Several merges that fix the same thing are one line.
 - Establish the release facts from the implementation at the request's source commit before writing. Commit subjects are an index to investigate, never evidence for a claim.

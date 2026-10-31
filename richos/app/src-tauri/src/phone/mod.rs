@@ -37,7 +37,6 @@
 //! rather than a rule to remember.
 
 pub mod api_base;
-pub mod assets;
 pub mod attachments;
 pub mod bridge;
 pub mod ca;
@@ -1401,7 +1400,6 @@ impl PhoneRuntime {
             api_base: Arc::new(api_base::ApiBaseDesk::only(origin.clone())),
             hub: Arc::clone(&self.hub),
             bridge: Arc::clone(&bridge) as Arc<dyn routes::Bridge>,
-            assets: phone_assets(),
             vapid_public: vapid.application_server_key(),
             fingerprint_hex: fingerprint_hex.clone(),
             // **THE PATH A PHONE THAT REDEEMS THIS CODE WILL BE STAMPED WITH.** It is a
@@ -1835,23 +1833,6 @@ struct Gathered {
     vapid: Arc<push::VapidKey>,
     api_base: Option<String>,
     bridge: Arc<bridge::PhoneBridge>,
-}
-
-/// Where the static phone app lives: **in this executable.**
-///
-/// It used to be a search — the bundle's `Contents/Resources/phone` first, then the checkout's own
-/// copy (`app/phone` as it was then) by way of `env!("CARGO_MANIFEST_DIR")`. Neither arm was
-/// reachable on a customer's
-/// Mac: nothing ever wrote `Contents/Resources/phone` (no `resources` entry existed in
-/// `tauri.conf.json`, and the 2026-09-18 bundle's `Resources` held `icon.icns` alone), and the
-/// second arm named a directory on the build machine. So the search always fell through to `None`
-/// in a shipped build and the phone channel served nothing — while the builder's home directory
-/// went to the customer inside the binary, which is what `no_host_paths.py` refused.
-///
-/// There is nothing to search for now. [`assets::PhoneApp::embedded`] returns the table
-/// `build.rs` compiled in, and a build that embedded nothing does not compile.
-fn phone_assets() -> assets::PhoneApp {
-    assets::PhoneApp::embedded()
 }
 
 /// The conversation list on the live stream as its own `threads` frame, under the newest cursor:

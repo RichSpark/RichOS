@@ -125,7 +125,7 @@ class Declarations(unittest.TestCase):
         for path, suite in [
             ("richos/mobile/test/cli.test.js", "mobile-headless.test.sh"),
             ("richos/mobile/package.json", "mobile-headless.test.sh"),
-            ("richos/mobile/cli/pwa-worker.mjs", "mobile-pwa.test.sh"),
+            ("richos/mobile/test/client-ui.mjs", "mobile-client-ui.test.sh"),
             ("richos/mobile/ios/Sources/AppDelegate.swift", "mobile-ios.test.sh"),
             ("richos/mobile/ios/UITests/ComposerTests.swift", "mobile-ios.test.sh"),
         ]:

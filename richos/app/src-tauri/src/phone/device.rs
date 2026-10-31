@@ -106,13 +106,13 @@ pub const CHALLENGE_LIFETIME_MS: u64 = 600_000;
 /// a browser's own subresource loads cannot see a response header — and still pushes one entry out
 /// of this set.
 ///
-/// The arithmetic, counted rather than estimated: `web/web-app/sw.js`'s `SHELL` array is **19**
-/// entries and its `install` handler fetches every one of them with `cache: 'reload'`, so one
-/// service-worker install is 19 responses in a single burst. **19 > 16**, so the challenge the
-/// phone was holding was pushed out without the phone making a request at all, and the next signed
-/// send was refused `UnknownChallenge` → a flat 404 → `Not sent.` on his screen.
-/// `challenges_survive_the_phone_app_being_served_twice_over` holds this number against the app's
-/// own file count so it cannot quietly go under it again.
+/// The arithmetic, counted rather than estimated: the phone web page (retired 2026-10-30) had a
+/// service worker whose `SHELL` array was **19** entries, fetched in one burst at install, so one
+/// install was 19 responses. **19 > 16**, so the challenge the phone was holding was pushed out
+/// without the phone making a request at all, and the next signed send was refused
+/// `UnknownChallenge` → a flat 404 → `Not sent.` on his screen.
+/// `challenges_survive_a_burst_of_credential_free_responses` keeps that burst, twice over, as the
+/// floor, so the bound cannot quietly go under it again.
 ///
 /// **256, and the bound is still doing its original job.** It is the same size as
 /// the former idempotency cache and costs about 14 KB; it is more than ten times the widest legitimate
@@ -2659,22 +2659,16 @@ pub(crate) mod tests {
     /// browser's own subresource loads and its `EventSource` cannot see a response header. But
     /// [`super::super::listen::render`] mints a challenge for every response this port gives, so
     /// until this commit each one of them pushed an entry out of a set of 16 — and
-    /// `web/web-app/sw.js`'s `install` fetches its whole 19-entry shell with `cache: 'reload'`.
-    /// One service-worker install therefore emptied the set of everything older than itself,
+    /// the phone web page's service worker (retired 2026-10-30) fetched its whole 19-entry shell
+    /// at install. One install therefore emptied the set of everything older than itself,
     /// including the challenge the phone was holding, and the next send was refused as a flat 404.
     ///
-    /// The number is taken from the app this build actually embedded rather than typed in, so
-    /// growing the phone app cannot silently walk back under the bound.
+    /// That burst, twice over, stays the floor: the widest run of credential-free responses this
+    /// Mac has ever given between a phone reading a challenge and presenting it.
     #[test]
-    fn challenges_survive_the_phone_app_being_served_twice_over() {
+    fn challenges_survive_a_burst_of_credential_free_responses() {
         let (_dir, desk, phone, device, held) = paired("shell");
-
-        // Every file in the embedded app, twice: an install that reloads the shell and a page
-        // load behind it. That is the widest burst of credential-free responses this Mac can
-        // give between the phone reading a challenge and presenting it.
-        let app = super::super::assets::PhoneApp::embedded();
-        let burst = app.len() * 2;
-        assert!(burst > 0, "this build embedded no phone app to count");
+        let burst = 19 * 2;
         for _ in 0..burst {
             desk.issue_challenge().unwrap();
         }
@@ -2683,9 +2677,8 @@ pub(crate) mod tests {
         assert_eq!(
             desk.verify(&p),
             Ok(device.clone()),
-            "serving the phone app {burst} times evicted the credential the phone is holding \
-             ({} embedded files against LIVE_CHALLENGES = {LIVE_CHALLENGES})",
-            app.len()
+            "{burst} credential-free responses evicted the credential the phone is holding \
+             (LIVE_CHALLENGES = {LIVE_CHALLENGES})"
         );
     }
 

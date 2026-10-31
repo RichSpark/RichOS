@@ -27,7 +27,6 @@ fn main() {
     println!("cargo::rerun-if-changed=tauri.conf.json");
     println!("cargo::rerun-if-changed=icons");
     println!("cargo::rerun-if-changed=../ui");
-    println!("cargo::rerun-if-changed=../../web/web-app");
     println!("cargo::rerun-if-env-changed=RICHOS_REQUIRE_REAL_ICONS");
 
     // THE SOURCE-COMMIT STAMP, so a changed commit actually reaches the next build.
@@ -48,7 +47,6 @@ fn main() {
 
     check_icons(Path::new("tauri.conf.json"), Path::new("icons"));
     stage_frontend(Path::new("tauri.conf.json"), Path::new("../ui"));
-    embed_phone(Path::new("../../web/web-app"));
     tauri_build::build();
 }
 
@@ -170,11 +168,9 @@ fn same_tree(a: &Path, b: &Path) -> bool {
 /// mtimes — `tauri-codegen`'s asset cache is keyed on them, and rewriting 2.6 MB every
 /// build would recompile the whole shell every build.
 ///
-/// `not_shipped` is a PARAMETER rather than the one constant it used to read, because two
-/// trees are staged now and they exclude different things: `app/ui` leaves its Playwright
-/// evidence behind, `web/web-app` leaves its own test suite and its icon generator behind.
-/// One list covering both would have to be the union, and a union quietly excludes a name
-/// from a tree that never asked for it.
+/// `not_shipped` is a parameter: the one tree staged here, `app/ui`, passes `UI_NOT_SHIPPED`.
+/// (A second tree, the phone web page, was staged beside it until that page was retired on
+/// 2026-10-30.)
 fn sync_tree(source: &Path, dest: &Path, top: bool, not_shipped: &[&str]) -> std::io::Result<()> {
     fs::create_dir_all(dest)?;
 
@@ -190,8 +186,8 @@ fn sync_tree(source: &Path, dest: &Path, top: bool, not_shipped: &[&str]) -> std
 
         // `.DS_Store` is the one that actually happens: Finder writes it into any directory
         // somebody opens, it is untracked, and it would otherwise be staged and shipped. No
-        // dotfile under `app/ui` or `web/web-app` is product — MEASURED at this commit, the only
-        // one in either tree is `ui/tests/.gitignore`, which `UI_NOT_SHIPPED` already excludes
+        // dotfile under `app/ui` is product — MEASURED at the commit that wrote this, the only
+        // one in the tree is `ui/tests/.gitignore`, which `UI_NOT_SHIPPED` already excludes
         // with the rest of `tests/`.
         if name.to_string_lossy().starts_with('.') {
             continue;
@@ -228,259 +224,6 @@ fn sync_tree(source: &Path, dest: &Path, top: bool, not_shipped: &[&str]) -> std
     }
 
     Ok(())
-}
-
-// =====================================================================================
-// THE PHONE APP — embedded in this executable, not copied next to it.
-// =====================================================================================
-
-/// Names under `web/web-app/` that are the phone app's WORKSHOP and not the phone app.
-///
-/// `test` is the phone's own node suite plus `stub-mac.js` and `desktop-verify.js`.
-/// `bin/make-icons.js` regenerates the four PNGs from source; the PNGs ship, the generator
-/// does not. `package.json` exists to give `npm test` a script — the app has no
-/// dependencies by design, so it is not a manifest the product reads. The two `.md` files
-/// are documentation for whoever works on it.
-///
-/// A DENYLIST AND NOT AN ALLOWLIST, deliberately, because of which way each one fails. A
-/// forgotten denylist entry ships a README nobody reads. A forgotten allowlist entry drops
-/// a file the app fetches, and the app breaks on his phone. The first failure is untidy;
-/// the second is the defect this whole change exists to end.
-/// Files the phone app gets from the desktop app's own tree instead of holding a copy:
-/// `(url path, source relative to this crate)`. ONE today, the Oxford comma rule (CEO,
-/// 2026-10-19): the desktop and the phone draw what Claude writes through the same filter, and a
-/// second copy would be a second rule that drifts. Staged under `$OUT_DIR/phone-shared/`, never
-/// inside `$OUT_DIR/phone/`, whose sync deletes whatever `web/web-app` does not hold.
-const SHARED_WITH_PHONE: &[(&str, &str)] = &[("lib/oxford-comma.js", "../ui/oxford-comma.js")];
-const PHONE_SHARED_DIR: &str = "phone-shared";
-
-const PHONE_NOT_SHIPPED: &[&str] =
-    &["test", "bin", "node_modules", "package.json", "README.md", "CONTRACT-STUB.md"];
-
-/// Stage `web/web-app` into `$OUT_DIR/phone` and generate the table `phone::assets` includes.
-///
-/// # Why the phone app is EMBEDDED rather than declared as a Tauri resource
-///
-/// Both would put the app inside the shipped `.app`, and `bundle.resources` is the shorter
-/// diff — `tauri_build::build()` copies declared resources into the cargo output directory
-/// on every build (`tauri-build-2.6.3/src/lib.rs:555-572`) and `resource_dir` returns that
-/// same directory on a developer run (`tauri-utils-2.9.3/src/platform.rs:297-302`), so that
-/// route would have one lookup too. Both were checked before this one was chosen; the
-/// reason is not effort.
-///
-/// It is that these bytes are **program data served on a socket by our own HTTP stack** —
-/// not an operating-system resource, and never a file anything needs to open. Embedding
-/// makes three things true by construction that a copy step can only promise:
-///
-///  1. **The developer run and the shipped bundle serve the SAME BYTES**, because they are
-///     the same bytes: one array, compiled in. There is no copy to be stale, absent or
-///     modified after signing.
-///  2. **There is nothing to find at runtime**, so no path — compile-time or otherwise —
-///     is needed to find it. The `env!("CARGO_MANIFEST_DIR")` this replaces put the build
-///     machine's home directory into the shipped executable
-///     (`/Users/<builder>/…/richos/app/src-tauri`, read out of the 2026-09-18 nightly's
-///     release binary with `strings`), and `--remap-path-prefix` could not touch it,
-///     because a macro's output is program data rather than compiler metadata.
-///  3. **Path traversal stops being a question.** A request resolves by exact key lookup
-///     against a fixed table; there is no directory to escape from and no symbolic link to
-///     follow.
-///
-/// And one thing it is NOT: a size problem. The staged tree is about 300 KB against an
-/// executable already north of 30 MB.
-///
-/// # Why in build.rs, and not in `beforeBuildCommand`
-///
-/// The same reason `stage_frontend` gives: only the Tauri CLI runs `beforeBuildCommand`,
-/// and a plain `cargo build` does not. One staging path, and no command that bypasses it.
-fn embed_phone(source: &Path) {
-    let out_dir = std::env::var_os("OUT_DIR")
-        .unwrap_or_else(|| panic!("\n\nrichos-tauri: OUT_DIR is not set; cargo always sets it\n\n"));
-    let out_dir = Path::new(&out_dir);
-    let staged = out_dir.join("phone");
-
-    if !source.join("index.html").is_file() {
-        panic!(
-            "\n\nrichos-tauri: {source:?} does not hold the phone app (no index.html). The \
-             phone channel serves what this build embeds and nothing else, so a build \
-             without it would ship an app whose `/` is a 404 — which is exactly the defect \
-             found in the 2026-09-18 nightly. Refusing to build.\n\n"
-        );
-    }
-
-    if let Err(e) = sync_tree(source, &staged, true, PHONE_NOT_SHIPPED) {
-        panic!("\n\nrichos-tauri: could not stage {source:?} into {staged:?}: {e}\n\n");
-    }
-
-    // The staging verifies itself rather than trusting its own recursion — the same posture
-    // `stage_frontend` takes, and for the same reason: everything staged here is compiled
-    // into the binary and signed with it.
-    for name in PHONE_NOT_SHIPPED {
-        let stowaway = staged.join(name);
-        if stowaway.exists() {
-            panic!(
-                "\n\nrichos-tauri: {stowaway:?} exists in the staged phone app after staging \
-                 excluded {name:?}. Refusing to build.\n\n"
-            );
-        }
-    }
-
-    let mut files: Vec<String> = Vec::new();
-    if let Err(e) = collect_files(&staged, "", &mut files) {
-        panic!("\n\nrichos-tauri: could not walk the staged phone app at {staged:?}: {e}\n\n");
-    }
-    let shared = out_dir.join(PHONE_SHARED_DIR);
-    for (rel, from) in SHARED_WITH_PHONE {
-        if files.iter().any(|f| f == rel) {
-            panic!(
-                "\n\nrichos-tauri: web/web-app holds its own {rel}, which the phone app gets from \
-                 {from}. Two copies of one rule are two rules; delete the phone's copy.\n\n"
-            );
-        }
-        let bytes = fs::read(from).unwrap_or_else(|e| {
-            panic!("\n\nrichos-tauri: could not read {from}, which the phone app serves as {rel}: {e}\n\n")
-        });
-        let to = shared.join(rel);
-        // Written only when it differs, for the reason `phone_app.rs` is: an unchanged file must
-        // not force a recompile of everything that includes it.
-        if fs::read(&to).ok().as_deref() != Some(bytes.as_slice()) {
-            if let Err(e) = to.parent().map(fs::create_dir_all).unwrap_or(Ok(())).and_then(|_| fs::write(&to, &bytes)) {
-                panic!("\n\nrichos-tauri: could not stage {from} as {to:?}: {e}\n\n");
-            }
-        }
-        files.push((*rel).to_string());
-    }
-    files.sort();
-
-    if files.is_empty() {
-        panic!(
-            "\n\nrichos-tauri: the staged phone app at {staged:?} is empty. Refusing to \
-             build.\n\n"
-        );
-    }
-
-    check_phone_shell(&staged, &files);
-
-    let mut generated = String::new();
-    generated.push_str(
-        "// @generated by app/src-tauri/build.rs — the phone app, embedded. Do not edit.\n\
-         //\n\
-         // `include_bytes!` takes its path as a MACRO ARGUMENT, so no path reaches the\n\
-         // binary as data; the bytes do. `env!(\"OUT_DIR\")` is read at compile time and\n\
-         // consumed by the same macro, for the same reason.\n\
-         pub static FILES: &[(&str, &[u8])] = &[\n",
-    );
-    for rel in &files {
-        // A name that needed escaping would produce a generated literal that is not the
-        // file's name. Refuse rather than emit it.
-        if !rel
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
-        {
-            panic!(
-                "\n\nrichos-tauri: the phone app carries {rel:?}, whose name is not plain \
-                 ASCII `[A-Za-z0-9._-]` and `/`. Every name here becomes a URL the phone \
-                 requests and a string literal in generated code. Rename it.\n\n"
-            );
-        }
-        let dir = if SHARED_WITH_PHONE.iter().any(|(r, _)| r == rel) { PHONE_SHARED_DIR } else { "phone" };
-        generated.push_str(&format!(
-            "    (\"{rel}\", include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{dir}/{rel}\"))),\n"
-        ));
-    }
-    generated.push_str("];\n");
-
-    let table = out_dir.join("phone_app.rs");
-    // Written only when it differs, so an unchanged phone app does not force a recompile of
-    // everything that includes it.
-    if fs::read_to_string(&table).ok().as_deref() != Some(generated.as_str()) {
-        if let Err(e) = fs::write(&table, &generated) {
-            panic!("\n\nrichos-tauri: could not write {table:?}: {e}\n\n");
-        }
-    }
-}
-
-/// Every file under `root`, as a `/`-separated path relative to it.
-fn collect_files(root: &Path, prefix: &str, out: &mut Vec<String>) -> std::io::Result<()> {
-    for entry in fs::read_dir(root.join(prefix))? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let rel = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
-        if entry.file_type()?.is_dir() {
-            collect_files(root, &rel, out)?;
-        } else {
-            out.push(rel);
-        }
-    }
-    Ok(())
-}
-
-/// Hold the embedded set to the phone app's OWN list of what it needs.
-///
-/// `web/web-app/sw.js` names every file the service worker pre-caches, and its comment says
-/// why that list is written out rather than discovered: *"a service worker that caches
-/// whatever it happens to see is a service worker that serves yesterday's JavaScript to a
-/// page that expects today's."* It is therefore the app's own statement of what it is,
-/// maintained by whoever edits the app — so this reads it and refuses a build that embeds
-/// less than it names.
-///
-/// This is the check that would have caught the defect it was written for: the 2026-09-18
-/// bundle carried NO phone file at all, so every entry below would have been missing.
-fn check_phone_shell(staged: &Path, files: &[String]) {
-    let sw = staged.join("sw.js");
-    let source = match fs::read_to_string(&sw) {
-        Ok(s) => s,
-        Err(e) => panic!(
-            "\n\nrichos-tauri: the staged phone app has no readable service worker at \
-             {sw:?}: {e}. It is what makes the app open away from his Mac. Refusing to \
-             build.\n\n"
-        ),
-    };
-
-    let array = source
-        .split_once("const SHELL = [")
-        .unwrap_or_else(|| {
-            panic!(
-                "\n\nrichos-tauri: {sw:?} no longer declares `const SHELL = [`. That list is \
-                 what this build checks the embedded phone app against; if it moved, point \
-                 `check_phone_shell` at where it went rather than deleting the check.\n\n"
-            )
-        })
-        .1
-        .split_once("];")
-        .unwrap_or_else(|| panic!("\n\nrichos-tauri: {sw:?} has an unterminated SHELL array\n\n"))
-        .0;
-
-    // The single-quoted tokens, exactly as `phone/ca.rs` reads the phone's own word list.
-    let declared: Vec<&str> = array.split('\'').skip(1).step_by(2).collect();
-    if declared.is_empty() {
-        panic!("\n\nrichos-tauri: {sw:?} declares an empty SHELL array\n\n");
-    }
-
-    let mut missing: Vec<String> = Vec::new();
-    for entry in &declared {
-        // `/` is the shell itself. Everything else is a root-relative URL.
-        let rel = if *entry == "/" { "index.html" } else { entry.trim_start_matches('/') };
-        if !files.iter().any(|f| f == rel) {
-            missing.push((*entry).to_string());
-        }
-    }
-
-    // The service worker is fetched by the registration rather than pre-cached, so it names
-    // itself nowhere in its own list.
-    if !files.iter().any(|f| f == "sw.js") {
-        missing.push("/sw.js".to_string());
-    }
-
-    if !missing.is_empty() {
-        panic!(
-            "\n\nrichos-tauri: the phone app embedded in this build is missing {} file(s) \
-             that web/web-app/sw.js pre-caches:\n\n{}\n\nEither the file left web/web-app and \
-             sw.js still names it, or PHONE_NOT_SHIPPED is excluding something the app \
-             needs. Refusing to build.\n\n",
-            missing.len(),
-            missing.iter().map(|m| format!("  - {m}")).collect::<Vec<_>>().join("\n")
-        );
-    }
 }
 
 /// Windows `.ico` layers Tauri's icon guide specifies.

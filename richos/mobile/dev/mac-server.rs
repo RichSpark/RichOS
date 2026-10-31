@@ -5,7 +5,6 @@
 use crate::phone::{
     self,
     api_base::ApiBaseDesk,
-    assets::PhoneApp,
     ca::PhoneCa,
     device::DeviceDesk,
     listen::{tls_config, Listener},
@@ -288,7 +287,6 @@ fn serve() {
         api_base: Arc::new(ApiBaseDesk::only(&origin)),
         hub,
         bridge: bridge.clone(),
-        assets: PhoneApp::embedded(),
         vapid_public: vapid.application_server_key(),
         fingerprint_hex: ca.fingerprint_hex(),
         pairing_path: Mutex::new(if managed { phone::device::PairedVia::CONNECT } else { phone::device::PairedVia::TAILNET }),

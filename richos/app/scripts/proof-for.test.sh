@@ -24,7 +24,7 @@
 # would be worse than none, so the assertion is that it says 55 AND names the one file that
 # caused it.
 #
-# run-tests: inputs richos/app/scripts/lib/ios_ui_scope.py richos/app/scripts/proof-for.test.sh richos/app/scripts/proof-for.sh richos/app/scripts/battery-check.py richos/app/scripts/proof-for.ui-inputs richos/app/ui/tests/docs-claims.js richos/app/scripts/lib/proof_declarations.py richos/app/scripts/proof-for-declarations.test.py richos/app/scripts/proof-for-engine.test.py richos/engine docs/development/verification-input-qualifications.json richos/mobile richos/app/scripts/mobile-headless.test.sh richos/app/scripts/mobile-pwa.test.sh richos/app/scripts/mobile-ios.test.sh
+# run-tests: inputs richos/app/scripts/lib/ios_ui_scope.py richos/app/scripts/proof-for.test.sh richos/app/scripts/proof-for.sh richos/app/scripts/battery-check.py richos/app/scripts/proof-for.ui-inputs richos/app/ui/tests/docs-claims.js richos/app/scripts/lib/proof_declarations.py richos/app/scripts/proof-for-declarations.test.py richos/app/scripts/proof-for-engine.test.py richos/engine docs/development/verification-input-qualifications.json richos/mobile richos/app/scripts/mobile-headless.test.sh richos/app/scripts/mobile-client-ui.test.sh richos/app/scripts/mobile-ios.test.sh
 # run-tests: covers richos/app/scripts/proof-for.sh richos/app/scripts/lib/proof_declarations.py richos/app/scripts/proof-for-declarations.test.py richos/app/scripts/proof-for-engine.test.py
 set -uo pipefail
 
@@ -763,7 +763,7 @@ docs/verification/compaction-notice-2026-09-06/raw/cellT1.jsonl compaction-notic
 docs/verification/inner-doctrine-opens-2026-09-06/raw/cellC0-control-no-doctrine.jsonl compaction-progress.js
 richos/app/crates/richos-core/src/machinery.rs compaction-progress.js
 richos/app/src-tauri/src/phone/attachments.rs no-home-network.js
-richos/web/web-app/index.html no-home-network.js
+richos/web/web-app/lib/api.js no-home-network.js
 richos/app/src-tauri/src/phone/mod.rs phone.js
 richos/tools/phone-probe/lib/qr.js phone.js
 richos/app/src-tauri/examples/timeline_payload.rs realbytes.js

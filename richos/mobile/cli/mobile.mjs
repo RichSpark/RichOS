@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync, rmSync 
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import * as simulator from './simulator.mjs';
-import * as pwa from './pwa.mjs';
 import { device } from './device.mjs';
 const require = createRequire(import.meta.url);
 const { createRuntime } = require('../dev/runtime.js');
@@ -39,11 +38,6 @@ const usage = `Mobile development loop (JSON output; nonzero exit on failure)
   node richos/mobile/cli/mobile.mjs headless scenario offline-reconnect|revoked|interrupted
   node richos/mobile/cli/mobile.mjs sim prepare|client-prepare|refresh|restart|verify|ui-test|screenshot
   node richos/mobile/cli/mobile.mjs sim <same state/action/fixture/scenario commands>
-  node richos/mobile/cli/mobile.mjs pwa prepare|state|reset|refresh|restart|verify|screenshot|stop
-  node richos/mobile/cli/mobile.mjs pwa fixture offline|online|queued|revoked
-  node richos/mobile/cli/mobile.mjs pwa action '<JSON>'
-  node richos/mobile/cli/mobile.mjs pwa scenario offline-reconnect
-  node richos/mobile/cli/mobile.mjs pwa transport accept|unreachable|revoked
   node richos/mobile/cli/mobile.mjs build Debug|Release
   node richos/mobile/cli/mobile.mjs check-release
 Stateful headless commands share a session under the external cache.
@@ -74,7 +68,7 @@ try {
     process.exit(0);
   }
   const cache = simulator.cacheRoot();
-  const proposedLock = join(cache, mode === 'lab' ? 'lab.cli.lock' : mode === 'pwa' ? 'pwa.cli.lock' : mode === 'update' ? (command === 'serve' ? 'update-service.cli.lock' : 'update-admin.cli.lock') : 'cli.lock');
+  const proposedLock = join(cache, mode === 'lab' ? 'lab.cli.lock' : mode === 'update' ? (command === 'serve' ? 'update-service.cli.lock' : 'update-admin.cli.lock') : 'cli.lock');
   try { mkdirSync(proposedLock); lock = proposedLock; writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, mode, command })); }
   catch { throw new Error(`Another mobile CLI command owns ${proposedLock}. If it crashed, verify its owner.json PID is gone before removing that directory.`); }
   let result;
@@ -98,9 +92,6 @@ try {
     const runtime = await createRuntime({ initial: existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : undefined,
       save: async (data) => { const temp = file + '.new'; writeFileSync(temp, JSON.stringify(data)); renameSync(temp, file); } });
     result = await runtime.execute(payload(command, arg));
-  } else if (mode === 'pwa') {
-    result = await pwa.command(['prepare', 'refresh', 'verify', 'screenshot', 'stop'].includes(command)
-      ? { command } : payload(command, arg));
   } else if (mode === 'sim') {
     const native = { prepare: simulator.prepare, 'client-prepare': simulator.prepareClient, refresh: simulator.refresh, restart: simulator.restart,
       verify: simulator.verify, 'ui-test': simulator.uiTest, screenshot: simulator.screenshot };

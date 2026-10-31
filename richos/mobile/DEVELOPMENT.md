@@ -1,8 +1,8 @@
 # Mobile development loop
 
-The mobile UI and CLI run the same `core/app.js` action handlers. That core imports the existing PWA's `lib/queue.js` directly. Packaging copies that exact file into the iOS app; there is no second queue implementation or source fork.
+The mobile UI and CLI run the same `core/app.js` action handlers. That core imports the reference client's `richos/web/web-app/lib/queue.js` directly. Packaging copies that exact file into the iOS app; there is no second queue implementation or source fork.
 
-The Swift/WKWebView client now includes native recording/playback, protected signing, pairing, conversation history, drafts, offline text delivery and update controls. It reuses the PWA stylesheet and its API, thread, fingerprint, stream and queue modules. Voice submission and optional native reply notifications use the same client actions. Managed RichOS Connect supplies remote reach. This is an installable technical pilot, not the public consumer release.
+The Swift/WKWebView client now includes native recording/playback, protected signing, pairing, conversation history, drafts, offline text delivery and update controls. It reuses the reference client's stylesheet and its API, thread, fingerprint, stream and queue modules. Voice submission and optional native reply notifications use the same client actions. Managed RichOS Connect supplies remote reach. This is an installable technical pilot, not the public consumer release.
 
 ## Headless first
 
@@ -52,42 +52,20 @@ node richos/mobile/cli/mobile.mjs check-release
 
 `sim ui-test` resets to the offline fixture, uses XCUITest to type into the visible composer and tap Send, then checks the resulting queue through the CLI bridge. This is intentionally separate from direct action execution. It stores an `.xcresult` including a screenshot in the external cache. `sim screenshot` captures the current screen without opening a desktop window.
 
-## Android PWA through the same CLI
+## The phone web page is retired
 
-The Android PWA remains supported. `pwa` serves the actual `richos/web/web-app` source in Chromium at a 360 × 800 touch viewport, using the existing test Mac over loopback HTTPS. It performs the real pairing flow and verifies the certificate words. Its TLS exception accepts only that test certificate's public key; nothing is added to a keychain. The server binds only to `127.0.0.1`. Commands travel through local files, not a network control endpoint.
-
-```sh
-node richos/mobile/cli/mobile.mjs pwa prepare
-node richos/mobile/cli/mobile.mjs pwa fixture offline
-node richos/mobile/cli/mobile.mjs pwa action '{"type":"select-thread","threadId":"planning"}'
-node richos/mobile/cli/mobile.mjs pwa action '{"type":"compose","text":"Hello Rich"}'
-node richos/mobile/cli/mobile.mjs pwa action '{"type":"send"}'
-node richos/mobile/cli/mobile.mjs pwa state
-node richos/mobile/cli/mobile.mjs pwa screenshot
-node richos/mobile/cli/mobile.mjs pwa action '{"type":"network","online":true}'
-node richos/mobile/cli/mobile.mjs pwa verify
-node richos/mobile/cli/mobile.mjs pwa refresh
-node richos/mobile/cli/mobile.mjs pwa stop
-```
-
-`prepare` starts a reusable browser session with the offline fixture. The browser is always headless: nothing an agent or a test runs shows anything on the user's screen, so the harness (`richos/app/ui/tests/lib/quiet-browser.js`) refuses `RICHOS_PWA_HEADED=1` on the host and a check that needs a real window runs in the test VM. Playwright is resolved through the repository's existing browser harness, including the main checkout's install for linked worktrees; `RICHOS_PLAYWRIGHT` can explicitly name its module. Chromium must be installed in that Playwright's browser cache. No dependency is added to the shipped PWA or mobile app. Missing tooling fails explicitly.
-
-PWA actions use visible controls for compose, send, conversation selection and retry. The `network` action changes browser connectivity. Fixtures are `offline`, `online`, `queued` and `revoked`; the last configures the test Mac to reject subsequent authenticated requests. `transport accept|unreachable|revoked` controls that server. `reset` starts a fresh paired offline context. `restart` closes and reopens the page in the same browser context; it is not a full browser-process restart. `refresh` brings the test network online, clears only shell caches and reloads current source while preserving IndexedDB and pairing. `stop` closes the browser and server. Sessions are disposable and do not touch a user's phone or real Mac identity.
-
-`pwa verify` (also `pwa scenario offline-reconnect`) first runs the shared deterministic headless scenario, then uses the actual PWA's conversation picker, composer and Send button. It proves that a queued message survives an offline page reload through the service worker and IndexedDB, then reaches the synthetic Mac once after reconnect with the same client ID and conversation. It reports semantic snapshots and checks for uncaught browser exceptions. Screenshots are under the external cache's `pwa/output/playwright/` directory.
-
-The shared production modules include the PWA queue, API, thread model, inbound validation, fingerprint and stream owner. The PWA retains its existing controller; it does not yet run the minimal native shell's entire `core/app.js`. Both use one CLI and the same queue implementation. Browser checks use real browser time and random signing/message IDs, so their trace is checked for behavior rather than exact equality with the deterministic native/headless trace. `advance` and synthetic lost-ack commands belong to the headless/simulator targets. As further behavior is extracted or added, keep it headless and shared where applicable. Android microphone, push, installation and background behavior still need physical-phone verification.
+The phone web page (a PWA) the Mac used to serve was retired on 2026-10-30; the native RichConnect apps replaced it. Its `richos/web/web-app/lib` modules stay as the reference client the conformance corpus is generated from. The CLI's `pwa` browser target went with the page.
 
 ## Native client
 
-The Swift/WKWebView client uses the PWA's API, signing-input contract, fingerprint phrase,
+The Swift/WKWebView client uses the reference client's API, signing-input contract, fingerprint phrase,
 single event-stream owner and durable queue. `core/client.js` owns pairing confirmation,
 messages, reconnect cursors and recording actions. `platform/native.js` adapts those ports
 to protected files, Keychain signing, URLSession and AVAudioRecorder. The private key and
 recording bytes stay behind the native boundary. Hold the mic and release to submit, slide left
 to cancel or slide up to lock. Locked recording leaves the conversation scrollable and
 provides Send and Cancel. Interrupted recordings remain unsent with recovery controls.
-The same headless gesture module drives the PWA and native client.
+The same headless gesture module drives the native client.
 
 The sending ceiling is 30 minutes of 16 kHz PCM (under 60 MB). Reaching it saves unsent
 audio instead of automatically sending. Successfully delivered audio is pruned to a
@@ -144,12 +122,12 @@ it does not claim those tests exercise Xcode or a physical USB device.
 The repository runner discovers these suites under `richos/app/scripts`:
 
 - `mobile-headless.test.sh`: `npm test` runs the core and CLI tests in disposable external sessions. It verifies persistence across real CLI processes, structured errors, locking, resource selection and the unpaired Release bootstrap. It needs Node and npm, with no simulator or browser.
-- `mobile-pwa.test.sh`: runs the actual Chromium PWA target through pairing, visible Send, offline reload, reconnect, page restart and source refresh. It also runs the bundled native UI in Chromium and WebKit. A missing browser is `NOT RUN`, exit 2. The suite forces headless mode and stops its worker.
+- `mobile-client-ui.test.sh`: runs the bundled native UI in Chromium and WebKit. A missing browser is `NOT RUN`, exit 2. The suite forces headless mode.
 - `mobile-ios.test.sh`: builds a dedicated simulator app, compares all three native/headless traces, checks process persistence and refresh, runs the visible-control XCUITest and verifies Release exclusion. Missing macOS/Xcode/XcodeGen or an available iOS runtime is `NOT RUN`, exit 2. Build/test failures on a capable host exit 1.
 
 ```sh
 bash richos/app/scripts/run-tests.sh --no-host-screen --only mobile-headless.test.sh
-bash richos/app/scripts/run-tests.sh --no-host-screen --only mobile-pwa.test.sh
+bash richos/app/scripts/run-tests.sh --no-host-screen --only mobile-client-ui.test.sh
 bash richos/app/scripts/run-tests.sh --no-host-screen --only mobile-ios.test.sh
 ```
 
@@ -165,7 +143,7 @@ Each suite has dependency `inputs` and exact-file `covers` rows. Coverage descri
 
 ## Boundaries
 
-- `core/`: real application actions and state, backed by the PWA queue. Add new behavior here before wiring controls.
+- `core/`: real application actions and state, backed by the reference client's queue. Add new behavior here before wiring controls.
 - `ui/`: rendering and input events. The release client starts unpaired and enables sending only after the user confirms pairing.
 - `dev/`: deterministic environment adapters, persistent synthetic receipts and scenarios. The simulated Mac's receipt table models deduplication; it does not test a real Mac server.
 - `cli/`: headless persistence, resource packaging and simulator orchestration. The same request envelope reaches the development runtime in both modes.
@@ -173,7 +151,7 @@ Each suite has dependency `inputs` and exact-file `covers` rows. Coverage descri
 
 Development fixture access and commands are compiled only for Debug simulator builds. The native bridge polls for UUID-named local sandbox command files while the Debug simulator app is running. Development commands use no URL scheme. The production `richos://conversation/` scheme accepts only validated conversation destinations; it cannot execute commands or initiate pairing. It exposes neither a network listener nor arbitrary JavaScript evaluation. The webview loads local resources only. Debug assets are separate from Release assets; `check-release` builds Release and inspects its executable, Info.plist and resources for development markers and unexpected URL registrations. This simulator Release check is not signed App Store artifact verification.
 
-Each CLI invocation locks its checkout's target session to prevent overlapping resets or installs. The browser target has its own `pwa.cli.lock`, so it can run alongside native checks. On a crash, inspect `cli.lock/owner.json` and confirm the PID is gone before removing the lock. A timed-out simulator request is a failure, not a successful action; inspect state before retrying a send.
+Each CLI invocation locks its checkout's target session to prevent overlapping resets or installs. On a crash, inspect `cli.lock/owner.json` and confirm the PID is gone before removing the lock. A timed-out simulator request is a failure, not a successful action; inspect state before retrying a send.
 
 ## Storage and measurements
 
@@ -200,11 +178,11 @@ Stop the foreground lab and its separately owned Tailscale Serve endpoint after 
 
 `client scenario update-controls` drives banner, dialog, blocking and withdrawn policies through the actual client. `sim client-prepare` opens the actual native renderer. In a Debug simulator, `sim policy '<JSON>'` installs a policy through substituted update-service ports; it does not rewrite the policy evaluator. The fixture client identifier is deliberately synthetic and is never bundled in a physical-device or Release build.
 
-The client caches server-ordered history per conversation and keeps each conversation's draft. The outbox remains the PWA queue, including its idempotency IDs and retry schedule. An active send does not hold up typing, navigation or suspension. Retries have a foreground timer. Version-unsupported responses and disabled actions are retained for attention rather than retried indefinitely. The Mac's existing protocol is version 1 when a legacy hello omits `protocol_version`; incompatible explicit versions disable text. Native requests advertise protocol, marketing version and build.
+The client caches server-ordered history per conversation and keeps each conversation's draft. The outbox remains the reference client's queue, including its idempotency IDs and retry schedule. An active send does not hold up typing, navigation or suspension. Retries have a foreground timer. Version-unsupported responses and disabled actions are retained for attention rather than retried indefinitely. The Mac's existing protocol is version 1 when a legacy hello omits `protocol_version`; incompatible explicit versions disable text. Native requests advertise protocol, marketing version and build.
 
 Session schema 2 migrates the Part 1 cache without deleting drafts or the outbox. Unknown schemas and corrupt stored data fail with a recovery message and leave the file intact. Only the replaceable conversation cache is evicted to bound disk use. Unsent work is never evicted. The app refuses to change pairing while unresolved text remains. Local forgetting is separate from revoking the device on the Mac.
 
-Pairing accepts a pasted HTTPS link or a native QR scan, followed by the existing fingerprint comparison. A scan only fills the link field; it does not automatically trust the Mac. Conversation links accept `richos://conversation/#thread=<id>&at=<id>` and explicitly configured universal-link hosts. The PWA's inbound validator checks the payload. Universal links require the matching associated-domain website file before deployment. External HTTPS links open outside the privileged webview. Remote HTML and scripts cannot enter that view.
+Pairing accepts a pasted HTTPS link or a native QR scan, followed by the existing fingerprint comparison. A scan only fills the link field; it does not automatically trust the Mac. Conversation links accept `richos://conversation/#thread=<id>&at=<id>` and explicitly configured universal-link hosts. The reference client's inbound validator checks the payload. Universal links require the matching associated-domain website file before deployment. External HTTPS links open outside the privileged webview. Remote HTML and scripts cannot enter that view.
 
 Recording files are protected native files. Hold/release, slide-to-lock and slide-to-cancel invoke shared headless actions. Microphone denial has a Settings recovery button. Interrupted audio appears in the conversation with Play, Send and Discard. Unfinished headers from process termination are recovered only for our known PCM format without changing audio bytes. Capture stops and saves at 30 minutes; uploads are capped at 60 MB. A critical policy stops and retains captured audio. Unsent files are never automatically evicted; acknowledged recordings are retained within 50-file and 200-MB bounds.
 
@@ -233,7 +211,7 @@ The common CLI also supports isolated real-provider checks:
 - The existing `device verify text` selection uses the same lab through the native transport and visible iPhone controls. Record the phone's actual network and VPN state separately. HTTPS success alone does not establish a cellular or foreign-network test.
 - Stop the owned lab, then run `connect lab-disable <external-lab-directory>`. Verify the old allocation is disabled and its owned tunnel/DNS records are removed. Remove disposable token/identity files after preserving redacted evidence privately.
 
-The lab uses isolated test data and a separate integration app. It must never replace the owner's daily Android PWA pairing. Keep the device CLI's USB health guard enabled; never recover tests by resetting hubs or unrelated devices.
+The lab uses isolated test data and a separate integration app. It must never replace the owner's own phone pairing. Keep the device CLI's USB health guard enabled; never recover tests by resetting hubs or unrelated devices.
 
 ## Voice submission
 
@@ -275,7 +253,7 @@ The native conversation follows its newest message by default, including outgoin
 held/locked voice, text sends, growing replies and composer/viewport resizing.
 Deliberate upward scrolling pauses following; incoming messages preserve that reading
 position. An intentional send or Latest messages resumes following. The registered
-`mobile-pwa.test.sh` suite exercises this with overflowing history in Chromium and
+`mobile-client-ui.test.sh` suite exercises this with overflowing history in Chromium and
 WebKit, including a 24 px upward scroll, real wheel input and resize checks. Chromium
 uses trusted touch inputs; WebKit uses dispatched Touch Events for mic gestures and
 real browser layout. Neither substitutes for physical iPhone gesture acceptance.

@@ -25,24 +25,12 @@
 // code in this repository would be a second thing to get wrong. Nothing in the shipped app imports
 // anything from `tools/`.
 
-const fs = require('node:fs');
 const path = require('node:path');
 const https = require('node:https');
 const crypto = require('node:crypto');
 
 const { createCertificateAuthority, createServerCertificate } = require('../../../tools/phone-probe/lib/x509.js');
 const pcm = require('../lib/pcm.js');
-
-const APP_DIR = path.join(__dirname, '..');
-const SHARED_OXFORD = path.join(APP_DIR, '..', '..', 'app', 'ui', 'oxford-comma.js');
-
-const TYPES = {
-	'.html': 'text/html; charset=utf-8',
-	'.js': 'text/javascript; charset=utf-8',
-	'.css': 'text/css; charset=utf-8',
-	'.png': 'image/png',
-	'.webmanifest': 'application/manifest+json'
-};
 
 function spkiPin(certPem) {
 	const spki = crypto.createPublicKey(certPem).export({ type: 'spki', format: 'der' });
@@ -310,21 +298,12 @@ function createStubMac(options) {
 			return;
 		}
 
-		// --- static: the app itself ---------------------------------------------------------
+		// --- not the API: the flat 404 -----------------------------------------------------
+		// The phone web page this stub used to serve was retired on 2026-10-30; the real Mac now
+		// answers `/` with a plain page and everything else outside `/api/` with a 404
+		// (`app/src-tauri/src/phone/routes.rs`). The stub keeps only the API.
 		if (!url.pathname.startsWith('/api/')) {
-			const rel = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\//, '');
-			// The one file the Mac serves from the desktop app rather than from this directory
-			// (`src-tauri/build.rs` SHARED_WITH_PHONE): the Oxford comma rule, one copy for both.
-			const file = rel === 'lib/oxford-comma.js' ? SHARED_OXFORD : path.join(APP_DIR, rel);
-			// No path can escape the app directory. The Mac serves four routes and a static app,
-			// and nothing else (§2.5 item 5).
-			if ((file !== SHARED_OXFORD && !file.startsWith(APP_DIR)) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-				flat404(res);
-				return;
-			}
-			const type = TYPES[path.extname(file)] || 'application/octet-stream';
-			res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
-			res.end(fs.readFileSync(file));
+			flat404(res);
 			return;
 		}
 

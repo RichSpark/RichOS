@@ -4,7 +4,7 @@ const { rmSync } = require('node:fs');
 const { join } = require('node:path');
 const { createScratch, StorageUnavailable } = require('./storage.cjs');
 const target = process.argv[2];
-if (!['headless', 'pwa', 'ios'].includes(target)) throw new Error('Expected headless, pwa or ios');
+if (!['headless', 'client-ui', 'ios'].includes(target)) throw new Error('Expected headless, client-ui or ios');
 let scratch;
 try { scratch = createScratch(`suite-${target}`); }
 catch (error) {

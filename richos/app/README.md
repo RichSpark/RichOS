@@ -777,13 +777,10 @@ richos/app/
                               is why a rollback cannot happen by accident
     src/events.rs            the relay: one LiveObserver that puts §13's payloads on the
                               webview, and nothing that can widen them
-    src/phone/assets.rs      THE PHONE APP, COMPILED INTO THIS EXECUTABLE. The source tree is
-                              `richos/web/web-app/` (moved there from `app/phone/` on
-                              2026-09-18 by CEO instruction); build.rs's `embed_phone` stages
-                              it into $OUT_DIR and generates the include_bytes! table, so the
-                              developer run and the shipped bundle serve the same bytes and
-                              no path is needed to find them. It is NOT a Tauri resource and
-                              NOT a directory in Contents/Resources — build.rs says why.
+    (src/phone/assets.rs)    gone since 2026-10-30, when the phone web page it embedded from
+                              `richos/web/web-app/` was retired. A browser at the phone
+                              address now gets a plain "Use the RichConnect app" page
+                              (src/phone/routes.rs, RETIRED_PAGE).
                               A build that embeds nothing does not compile
     src/timeline_view.rs     the get_timeline command body — Timeline::view(Ceo) -> payload
     examples/timeline_payload.rs prints that payload from a real ledger (what realbytes.js

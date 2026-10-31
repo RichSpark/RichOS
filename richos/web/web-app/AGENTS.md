@@ -1,9 +1,6 @@
-# PWA development
+# Reference client modules
 
-The Android PWA remains a supported phone client alongside the iOS app. Use the common [mobile development loop](../../mobile/DEVELOPMENT.md) for PWA work:
+The phone web page that used to live here was retired on 2026-10-30; the native RichConnect apps replaced it. Do not add a screen, a service worker or anything a browser loads to this directory. See [README.md](README.md) for what remains and who loads it.
 
-- Keep application logic in headless modules with injectable dependencies. Extend the real shared modules and focused Node checks before connecting UI controls. Do not duplicate queue or retry rules for another platform.
-- Use `node richos/mobile/cli/mobile.mjs pwa prepare` and the same CLI's PWA state, action, fixture, scenario and refresh commands from the repository root. This target serves the actual PWA and drives its visible controls.
-- Run `pwa verify` for queue, persistence or reconnect changes. Use relevant existing browser checks and physical Android checks for microphone, permissions, notifications and lifecycle changes. Desktop Chromium emulation does not prove physical Android behavior.
-- Keep fixtures and command access in development tooling. Do not add a remote development API to the shipped PWA.
-- End browser sessions with `pwa stop`. Keep generated artifacts on the external SSD and private timing evidence in `richos-hq`.
+- The `lib/` modules are the reference client the protocol conformance corpus is generated from (`richos/mobile/conformance`). A change here changes what both native apps are held to: regenerate the corpus with `node richos/mobile/conformance/generate.mjs` and keep both native apps passing.
+- Keep these modules headless with injectable dependencies and test them with `node --test test/*.test.js` in this directory.
