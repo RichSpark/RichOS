@@ -124,6 +124,11 @@ with tempfile.TemporaryDirectory() as root:
     figures = usage_answer()
     check(figures['rate_limits_available'] is True and figures['rate_limits']['five_hour']['utilization'] == 41,
           'get_usage answers the usage file\'s figures', figures)
+    # An account with no five-hour limit (Anthropic, 2026-10-31): "five": null answers the week alone.
+    (walk / 'usage-1.json').write_text('{"five": null, "weekly": 49}')
+    weekly = usage_answer()
+    check(list(weekly['rate_limits']) == ['seven_day'] and weekly['rate_limits']['seven_day']['utilization'] == 49,
+          'with "five": null, get_usage answers only seven_day', weekly)
     (walk / 'usage-1.json').write_text('{"null": true}')
     null = usage_answer()
     check(null == {'rate_limits_available': True, 'rate_limits': None},

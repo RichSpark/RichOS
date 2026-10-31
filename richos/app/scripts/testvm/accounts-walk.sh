@@ -41,6 +41,10 @@
 #                       in-use account's WEEKLY figure ("Work 12% weekly"; its five-hour is 0%)
 #   11-menu-1024-{light,dark}  The window at 1024x700: the "Using Work, switched <time>" row,
 #                       with its box in 11-row-{light,dark}.json, for qa/frame.py and contrast.py
+#   12-no-five-{dark,light}  ACCOUNTS_WALK_UNTIL=no-five, and nothing else: the one account answers
+#                       with only its week (49%), as an account with no five-hour limit does since
+#                       2026-10-31 (the CEO: "If no 5-hour-limit data, then don't show/don't handle
+#                       it"). The sheet shows the Weekly limit meter alone, no 5-hour limit.
 # Steps 9 to 11 were added by the nightly 41 walk (ray-opus-walk41): no walk pressed Use this one
 # now, read the quota row with Technical view on, or looked at the row in the smallest window.
 # EXIT STATUS: 1 when the setup fails or any capture or check below fails (named at the end);
@@ -161,7 +165,11 @@ field() {  # field <label> <text>: type into the input a label names
 "$T/guest.sh" "$VM" 'mkdir -p /Users/admin/fill-first' || setup_failed "the fixture folder" # machine-path-exempt: isolated test VM account/path; never a customer default
 "$T/guest.sh" "$VM" --push "$T/fake-claude-fill-first.pl" /Users/admin/fill-first/claude || setup_failed "pushing the fake claude" # machine-path-exempt: isolated test VM account/path; never a customer default
 "$T/guest.sh" "$VM" 'chmod 755 /Users/admin/fill-first/claude' || setup_failed "the fake claude's mode" # machine-path-exempt: isolated test VM account/path; never a customer default
-usage /Users/admin/fill-first/usage-1.json 20 86 || setup_failed "the one account's usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
+if [ "${ACCOUNTS_WALK_UNTIL:-}" = no-five ]; then
+  usage /Users/admin/fill-first/usage-1.json null 49 || setup_failed "the weekly-only usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
+else
+  usage /Users/admin/fill-first/usage-1.json 20 86 || setup_failed "the one account's usage fixture" # machine-path-exempt: isolated test VM account/path; never a customer default
+fi
 relaunch_app || setup_failed "relaunching the app with the fake claude"
 
 # This build opens on the start screen, with its door into the conversation: "Talk to Rich" (as
@@ -189,6 +197,30 @@ done
 ax find --role AXTextArea --first >/dev/null 2>&1 || note "no composer after the company was added"
 
 # The guest starts on the system theme (light); the shots named -dark are taken in Dark.
+if [ "${ACCOUNTS_WALK_UNTIL:-}" = no-five ]; then
+  note "12 an account with no five-hour window: the Weekly limit meter alone"
+  for t in Dark Light; do
+    if [ "$t" = Light ]; then lower=light; else lower=dark; fi
+    theme "$t"
+    open_sheet || fail "12 the sheet ($lower)"
+    has 'Weekly limit' "12 the Weekly limit meter ($lower)"
+    has '49' "12 the week's 49% ($lower)"
+    if ax find --title '5-hour limit' --contains --first >/dev/null 2>&1 || ax find --value '5-hour limit' --contains --first >/dev/null 2>&1; then
+      fail "12 a 5-hour limit meter is on screen ($lower)"
+    else
+      note "read: no 5-hour limit on screen ($lower)"
+    fi
+    ax tree > "$S/12-no-five-$lower.tree" 2>&1 || true
+    shot "12-no-five-$lower"
+    close_sheet
+  done
+  if [ "${#FAILS[@]}" -gt 0 ]; then
+    note "done at 12, with ${#FAILS[@]} failed step(s): $(printf '%s; ' "${FAILS[@]}")"
+    exit 1
+  fi
+  note "done at 12 (ACCOUNTS_WALK_UNTIL=no-five)"
+  exit 0
+fi
 theme Dark
 note "0 Settings with Technical view off: the row is there, with its plain line"
 menu open
