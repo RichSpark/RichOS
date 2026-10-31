@@ -84,7 +84,13 @@
          string on it that changes — and the push line, which is the only line that asks the
          reader to go and do something, is the one that takes --ink. -->
     <div id="phone-paired" hidden>
-      <h3 class="phone-step-title" id="phone-device-name"></h3>
+      <!-- ROUND 49: THE PHONE'S NAME, AND ITS CONNECTION BESIDE IT. The chip is a status, not a
+           second button: no hover, no cursor, no focus stop. Its dot is the non-text indicator
+           and its word is text in --ink. Hidden while the pairing itself is still a question. -->
+      <div class="phone-card-head">
+        <h3 class="phone-step-title" id="phone-device-name"></h3>
+        <span class="phone-chip" id="phone-chip" role="status" hidden><span class="phone-chip-dot" aria-hidden="true"></span><span id="phone-chip-word"></span></span>
+      </div>
       <!-- THE MAC DOES NOT SETTLE A QUESTION THE PERSON HAS NOT ANSWERED YET. This line was the
            fixed string "It is paired. Open Rich on it and keep talking." and it was on screen
            while the phone, beside it, was still asking "They match — pair this phone" /
@@ -117,11 +123,10 @@
       <!-- THE SPENT-CODE ALARM, AFTER HE HAD ALREADY CONFIRMED (Sage F1 item 4, "keep it and
            warn"): the phone stays and he is told somebody else used its code. -->
       <p class="overlay-note" id="phone-code-reused" role="status" hidden></p>
-      <!-- THE ONE LINE ON THIS CARD WITH AN ERRAND IN IT. Either it says the phone can reach him
-           — which is the finish — or it names the thing on the phone that has not been done yet,
-           in that phone's own menu names. Both are the point of the card and both were set in
-           the same ink as the sentence about removing a certificate. -->
-      <p class="overlay-note phone-push-line" id="phone-push-state"></p>
+      <!-- THE ONE LINE ON THIS CARD WITH AN ERRAND IN IT, in --ink, with the icon that says which
+           kind (round 49): the bell when the phone can reach him, the struck bell or the phone
+           when something is still to do on it, the circular arrow when there is nothing to do. -->
+      <p class="overlay-note phone-push-line" id="phone-push-state"><span class="phone-push-icon" id="phone-push-icon" aria-hidden="true"></span><span id="phone-push-text"></span></p>
       <!-- SCREEN 6's LIMIT, on the one screen where they live with it. The route chooser used
            to carry it too, on the option it was a condition of; that screen is gone (CEO 61), so
            this is the one place it is said — and it is not repeated on the screens in between,
@@ -134,6 +139,9 @@
            that had paired over Tailscale and had nothing installed on it at all. One node,
            filled from status.pairedVia, is the only shape in which the two cannot disagree —
            see forgetNoteFor below. -->
+      <!-- ROUND 49: the divider between the phone's own lines and the forget note, so the errand
+           is not read as part of the housekeeping under it. Decoration, as the app's dividers are. -->
+      <hr class="phone-card-rule" id="phone-card-rule">
       <p class="overlay-note" id="phone-forget-note"></p>
       <div class="desk-card-actions">
         <button id="phone-forget" class="desk-btn" type="button">Forget this phone</button>
@@ -501,41 +509,71 @@
     }
   }
 
-  /// **WHAT THE PAIRED PHONE HAS TO DO BEFORE IT CAN BE REACHED — in that phone's own words.**
-  ///
-  /// Ray's candidate .11 defect 4.5. The card said *"Add Rich to your phone's Home Screen and
-  /// allow notifications when it asks."* On his Android phone, Chrome's menu offers **"Install and
-  /// create shortcut"** and has no item by the other name at all — so the Mac named a control
-  /// the device does not have.
-  ///
-  /// **AND ON ANDROID THE INSTRUCTION IS WRONG, NOT ONLY MISNAMED.** Chrome on Android
-  /// subscribes to push from a tab; nothing has to be installed first. It is iOS Safari that
-  /// cannot take a push until the app is on the Home Screen. The phone page records the same
-  /// division (`web/web-app/app.js`, `installControlName` / `installSentence`), and the two
-  /// surfaces now say the same thing about the same phone.
-  ///
-  /// The menu and item names are exactly the phone page's, so a person reading the Mac and then
-  /// his phone is not reading two names for one control. `null`-equivalent — a phone this Mac
-  /// cannot name — gets the sentence that is true of both and names neither as the one to use.
-  const PUSH_NOT_READY = {
-    ios:
-      "It cannot send you notifications yet. On your phone, open the Share menu in Safari and " +
-      "choose \u201cAdd to Home Screen\u201d, then allow notifications when Rich asks.",
-    android:
-      "It cannot send you notifications yet. Allow notifications on your phone when Rich asks. " +
-      "Chrome on Android does not need Rich installed first.",
-    other:
-      "It cannot send you notifications yet. Allow notifications on your phone when Rich asks. " +
-      "On an iPhone you have to add Rich to the Home Screen first, from Safari\u2019s Share menu.",
+  /// **THE PAIRED CARD, ROUND 49** (CEO, 2026-10-31: round 49 "OK"; the design is
+  /// richos-hq design/mockups/rounds/round-49, its README "The states"). The phone web page is
+  /// retired (CEO, 2026-10-30), so a phone reaches Rich only through the RichConnect app, on
+  /// iPhone and Android alike. Both apps name the same controls (Settings, then the switch
+  /// "Notify me when Rich replies"), so ONE set of sentences serves both phones and nothing on
+  /// the card names a browser, the Home Screen or a web page. Each state is the chip beside the
+  /// phone's name, the one pairing sentence, and the one errand line with the icon that says
+  /// which kind. The errand lines carry markup (the phone's control names in strong) and are
+  /// constants written here, never data.
+  const CARD_ICONS = {
+    bell: '<svg viewBox="0 0 20 20"><path d="M5 8.5a5 5 0 0 1 10 0c0 3.6 1.4 5 1.9 5.5H3.1c.5-.5 1.9-1.9 1.9-5.5Z"/><path d="M8.2 16.4a2 2 0 0 0 3.6 0"/></svg>',
+    bellOff: '<svg viewBox="0 0 20 20"><path d="M7 4.3A5 5 0 0 1 15 8.5c0 2 .4 3.3.9 4.2M13.6 14H3.1c.5-.5 1.9-1.9 1.9-5.5 0-.6.1-1.1.3-1.6"/><path d="M8.2 16.4a2 2 0 0 0 3.6 0"/><path d="M2.5 2.5l15 15"/></svg>',
+    phone: '<svg viewBox="0 0 20 20"><rect x="5.5" y="2.5" width="9" height="15" rx="2"/><path d="M9 14.8h2"/></svg>',
+    wait: '<svg viewBox="0 0 20 20"><path d="M16 10a6 6 0 1 1-1.8-4.3"/><path d="M16.2 3.2v3.3h-3.3"/></svg>',
+  };
+  const PAIRED_IN_THE_APP = "It is paired. Open RichConnect on it and keep talking.";
+  const PAIRED_CARD = {
+    ready: {
+      chip: ["ok", "Connected"],
+      state: PAIRED_IN_THE_APP,
+      line: ["ok", CARD_ICONS.bell,
+        "It can reach you with a notification when Rich has something for you. You can switch that off in RichConnect on the phone, under <strong>Settings</strong>."],
+    },
+    off: {
+      chip: ["ok", "Connected"],
+      state: PAIRED_IN_THE_APP,
+      line: ["todo", CARD_ICONS.bellOff,
+        "It cannot send you notifications yet. In RichConnect on the phone, open <strong>Settings</strong> and switch on <strong>Notify me when Rich replies</strong>, then allow notifications when the phone asks."],
+    },
+    // NOT REACHABLE claims only what this Mac knows (round 49 README): its listener is down and
+    // the recovery monitor is restoring it. The Mac has no "phone last seen", so it cannot tell a
+    // phone that is switched off from a connection being restored, and it does not try.
+    away: {
+      chip: ["wait", "Reconnecting"],
+      state: "Its pairing is saved. RichOS is trying to restore the connection.",
+      line: ["info", CARD_ICONS.wait,
+        "There is nothing to do on the phone. It reconnects by itself while this Mac is awake with RichOS open."],
+    },
+    // OLDER PAIRING: a record the retired phone web page made (push_transport "web-push"). The
+    // retirement left the Mac's records alone, so the record survives and the phone side it was
+    // made with does not.
+    old: {
+      chip: ["todo", "Pair again"],
+      state: "This phone was paired by an older version of RichOS and cannot reach Rich anymore.",
+      line: ["todo", CARD_ICONS.phone,
+        "To keep using Rich on it, install RichConnect on the phone, then press <strong>Forget this phone</strong> below and pair it again."],
+    },
   };
 
-  /// Which of the three, from the platform on the device record. Anything unrecognized —
-  /// including a record written before the field existed — gets the sentence that is true
-  /// whatever the phone is, rather than a guess at which menu it has.
-  function pushNotReadyFor(platform) {
-    return Object.prototype.hasOwnProperty.call(PUSH_NOT_READY, platform)
-      ? PUSH_NOT_READY[platform]
-      : PUSH_NOT_READY.other;
+  /// **WHICH OF THE FOUR, FROM THE MAC'S OWN STATUS.** `null` while the pairing itself is still
+  /// a question (the six words, the press on this Mac, the phone's first request): round 49
+  /// draws a finished pairing, so those screens keep their own sentences with no chip and no
+  /// errand line. A RichConnect phone names its push service ("apns" or "fcm") when it answers
+  /// They match (`phone/routes.rs`), so a confirmed record with anything else was made by the
+  /// retired page. Older pairing outranks Not reachable: that phone cannot come back by itself.
+  function pairedCardState(status) {
+    const native = status.pushTransport === "apns" || status.pushTransport === "fcm";
+    if (status.fingerprintConfirmed && !native) return "old";
+    // Not reachable is this Mac's listener down OR, for a phone paired over RichConnect, the
+    // connector restoring its link while the listener is up: the line above the card says
+    // "Reconnecting this Mac" then, and the chip must not say Connected beside it.
+    const connector = status.connect && status.connect.health && status.connect.health.state;
+    if (status.listening === false || (status.pairedVia === "connect" && connector === "reconnecting")) return "away";
+    if (status.macConfirmed === false || !status.fingerprintConfirmed || status.completed === false) return null;
+    return status.notificationsOn ? "ready" : "off";
   }
 
   /// **THE PAIRED CARD'S COPY, DERIVED FROM THE RECORD AND FROM NOTHING THE SHEET REMEMBERS.**
@@ -637,8 +675,8 @@
   /// `It is paired` waits for `status.completed`, the phone's first ordinary request, and this is
   /// what is true until then. The sentence is Sage's, from his table of end states; Urban has not
   /// reviewed it yet.
+  /// The finish itself is round 49's (`PAIRED_CARD` above).
   const PAIRED_AWAITING_FINISH = "This Mac accepted it. Waiting for your phone to finish.";
-  const PAIRED_CONFIRMED = "It is paired. Open Rich on it and keep talking.";
 
   /// **THE SPENT-CODE ALARM, AFTER THE PRESS** (Sage F1 item 4): somebody used this phone's code
   /// again after he had confirmed it here. The phone is kept; he is told, and pointed at the one
@@ -1034,12 +1072,15 @@
       // that Mac did.
       const awaitingMac = status.macConfirmed === false;
       const words = (status.fingerprintWords || []).join("  ");
-      field("phone-paired-state").textContent = status.listening === false
-        ? "Your phone's pairing is saved. RichOS is trying to restore its connection."
+      // ROUND 49: one of its four states once the pairing is settled, or null while it is not.
+      const card = PAIRED_CARD[pairedCardState(status)] || null;
+      field("phone-paired-state").textContent = card ? card.state
         : awaitingMac ? PAIRED_AWAITING_WORDS
         : !status.fingerprintConfirmed ? PAIRED_AWAITING_PHONE
-        : status.completed === false ? PAIRED_AWAITING_FINISH
-        : PAIRED_CONFIRMED;
+        : PAIRED_AWAITING_FINISH;
+      field("phone-chip").hidden = !card;
+      field("phone-chip").dataset.tone = card ? card.chip[0] : "";
+      field("phone-chip-word").textContent = card ? card.chip[1] : "";
       field("phone-paired-words").textContent = words;
       field("phone-paired-words").hidden = !awaitingMac || !words;
       field("phone-mac-answer").hidden = !awaitingMac || status.listening === false;
@@ -1047,14 +1088,14 @@
       field("phone-code-reused").hidden = !status.codeReused;
       // Nothing about notifications, limits or forgetting while the pairing itself is still a
       // question: those are about a phone that is paired, and "They do not match" is the way out.
-      for (const id of ["phone-push-state", "phone-ts-limit", "phone-forget-note", "phone-forget"]) {
+      for (const id of ["phone-ts-limit", "phone-card-rule", "phone-forget-note", "phone-forget"]) {
         field(id).hidden = awaitingMac;
       }
-      field("phone-push-state").textContent = status.pushTransport === "apns"
-        ? "Manage reply notifications in the RichOS iPhone app under Settings."
-        : status.pushReady
-        ? "It can reach you with a notification when Rich has something for you."
-        : pushNotReadyFor(status.platform);
+      // The errand line belongs to round 49's four states and to nothing before them.
+      field("phone-push-state").hidden = awaitingMac || !card;
+      field("phone-push-state").dataset.tone = card ? card.line[0] : "";
+      field("phone-push-icon").innerHTML = card ? card.line[1] : "";
+      field("phone-push-text").innerHTML = card ? card.line[2] : "";
       // **SCREEN 6, DERIVED FROM THE RECORD.** What the phone paired over is a fact the Mac
       // wrote down at pairing, and it is the only thing that decides these two lines — on the
       // first open and on every reopen alike. The sheet's own memory is deliberately not

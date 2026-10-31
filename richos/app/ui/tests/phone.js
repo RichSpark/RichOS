@@ -977,72 +977,147 @@ async function openSheet(browser, theme, preset) {
     }
   );
 
-  // ---- 9d. DEFECT 4.5 — the Mac names the control the paired phone actually has -------------
+  // ---- 9d. ROUND 49 — the paired card after the phone web page is gone ---------------------
 
   await run.check(
-    "9d  the install instruction names the phone's own control, and is not given where it is wrong",
+    "9d  round 49: each paired-card state says its own words for both phones, none of the retired ones, its marks clear 3:1",
     async () => {
-      // RAY'S CANDIDATE .11 DEFECT 4.5. The card said "Add Rich to your phone's Home Screen and
-      // allow notifications when it asks." Chrome on his Android phone offers "Install and create
-      // shortcut" and has no item by the other name at all — the Mac named a control the device
-      // does not have.
-      //
-      // AND ON ANDROID THE INSTRUCTION IS WRONG RATHER THAN MISNAMED: Chrome on Android
-      // subscribes to push from a tab, so nothing has to be installed first. It is iOS Safari
-      // that cannot take a push until the app is on the Home Screen. The phone page draws the
-      // same division (web/web-app/app.js, installControlName / installSentence).
-      const cases = [
-        {
-          platform: "ios", transport: "apns",
-          must: [/RichOS iPhone app/, /Settings/],
-          mustNot: [/Add to Home Screen/, /Safari/],
+      // CEO, 2026-10-31: "round-49/index.html: OK" (richos-hq design/mockups/rounds/round-49,
+      // README "The states"). The phone web page is retired (CEO, 2026-10-30), so the card names
+      // the RichConnect app and nothing else. On main a RichConnect Android phone ("fcm") was told
+      // the Chrome sentence whatever it had done, because push_ready read only the retired web
+      // subscription, and an iPhone ("apns") was pointed at "the RichOS iPhone app". The words
+      // below are round 49's, character for character; the same sentences serve both phones.
+      const { measureIndicatorCrop } = require("./lib/contrast");
+      const PAIRED = "It is paired. Open RichConnect on it and keep talking.";
+      const WORDS = {
+        ready: {
+          chip: "Connected", tone: "ok", state: PAIRED,
+          line: "It can reach you with a notification when Rich has something for you. You can switch that off in RichConnect on the phone, under Settings.",
+          strong: ["Settings"],
         },
-        {
-          platform: "ios",
-          must: [/Share menu/, /Add to Home Screen/],
-          mustNot: [/Install and create shortcut/],
+        off: {
+          chip: "Connected", tone: "ok", state: PAIRED,
+          line: "It cannot send you notifications yet. In RichConnect on the phone, open Settings and switch on Notify me when Rich replies, then allow notifications when the phone asks.",
+          strong: ["Settings", "Notify me when Rich replies"],
         },
-        {
-          platform: "android",
-          must: [/does not need Rich installed first/],
-          // The defect, in one pattern: an Android phone must never be sent to look for this.
-          mustNot: [/Add to Home Screen/, /Home Screen and allow/],
+        away: {
+          chip: "Reconnecting", tone: "wait",
+          state: "Its pairing is saved. RichOS is trying to restore the connection.",
+          line: "There is nothing to do on the phone. It reconnects by itself while this Mac is awake with RichOS open.",
+          strong: [],
         },
-        {
-          // A phone this Mac cannot name gets what is true of both and names neither as the
-          // one to use — the same "null means say nothing" rule the phone page follows.
-          platform: "",
-          must: [/Allow notifications on your phone/],
-          mustNot: [/Install and create shortcut/],
+        old: {
+          chip: "Pair again", tone: "todo",
+          state: "This phone was paired by an older version of RichOS and cannot reach Rich anymore.",
+          line: "To keep using Rich on it, install RichConnect on the phone, then press Forget this phone below and pair it again.",
+          strong: ["Forget this phone"],
         },
-      ];
+      };
+      // What the Mac's status says in each state (`PhoneStatus`): a RichConnect phone names its
+      // push service when it answers They match; the retired page left "web-push".
+      const PRESET = {
+        ready: (transport) => ({ phonePushTransport: transport, phoneNotificationsOn: true }),
+        off: (transport) => ({ phonePushTransport: transport }),
+        away: (transport) => ({ phonePushTransport: transport, phoneListenerStopped: true }),
+        old: () => ({ phonePushTransport: "web-push" }),
+      };
+      const PHONES = { ios: "apns", android: "fcm" };
+      // Round 49's own walk refuses these four on the card; the last three are what main showed.
+      const RETIRED = [/Safari/i, /Chrome/i, /Home Screen/i, /web page/i, /RichOS iPhone app/i, /Share menu/i, /Open Rich on it/];
 
-      const said = [];
-      for (const one of cases) {
-        const page = await openSheet(browser, "dark", {
-          phonePaired: true,
-          phonePlatform: one.platform,
-          phonePushTransport: one.transport,
-          phonePairedVia: "tailnet",
-        });
-        const text = (await page.textContent("#phone-push-state")).replace(/\s+/g, " ").trim();
-        await page.close();
-        for (const pattern of one.must) {
-          assert(
-            pattern.test(text),
-            (one.platform || "unknown") + " is missing " + pattern + ": " + JSON.stringify(text)
-          );
+      const out = [];
+      for (const theme of ["dark", "light"]) {
+        for (const [platform, transport] of Object.entries(PHONES)) {
+          for (const [state, want] of Object.entries(WORDS)) {
+            const which = theme + " " + platform + " " + state;
+            const page = await openSheet(browser, theme, Object.assign(
+              { phonePaired: true, phonePlatform: platform, phonePairedVia: "connect",
+                phoneConnect: { enabled: true, phase: "active", health: { state: state === "away" ? "reconnecting" : "connected" } } },
+              PRESET[state](transport)
+            ));
+            await page.waitForFunction(() => {
+              const chip = document.getElementById("phone-chip-word");
+              return chip && chip.textContent.trim().length > 0;
+            });
+            await awaitSettled(page);
+            const seen = await page.evaluate(() => {
+              const text = (id) => document.getElementById(id).textContent.replace(/\s+/g, " ").trim();
+              const chip = document.getElementById("phone-chip");
+              const line = document.getElementById("phone-push-state");
+              return {
+                chip: text("phone-chip-word"),
+                chipShown: !chip.hidden && chip.getBoundingClientRect().width > 0,
+                tone: chip.dataset.tone,
+                state: text("phone-paired-state"),
+                line: text("phone-push-state"),
+                lineShown: !line.hidden,
+                lineTone: line.dataset.tone,
+                strong: Array.from(line.querySelectorAll("strong")).map((s) => s.textContent),
+                icon: !!line.querySelector(".phone-push-icon svg"),
+                card: document.getElementById("phone-paired").innerText,
+                headFirst: document.getElementById("phone-paired").firstElementChild.contains(document.getElementById("phone-device-name")),
+              };
+            });
+            assertEqual(seen.chip, want.chip, which + ": the chip");
+            assert(seen.chipShown, which + ": the chip is not on screen");
+            assertEqual(seen.tone, want.tone, which + ": the chip's tone");
+            assertEqual(seen.state, want.state, which + ": the pairing sentence");
+            assert(seen.lineShown, which + ": the errand line is hidden");
+            assertEqual(seen.line, want.line, which + ": the errand line");
+            assertEqual(seen.strong, want.strong, which + ": the phone's control names set in strong");
+            assert(seen.icon, which + ": the errand line has no icon");
+            assert(seen.headFirst, which + ": the phone's name is not at the top of the card");
+            for (const pattern of RETIRED) {
+              assert(!pattern.test(seen.card), which + ": the card still says " + pattern + ": " + JSON.stringify(seen.card));
+            }
+            // THE MARKS, MEASURED FROM THE PIXELS (3:1, non-text): the chip's dot and the icon.
+            const marks = [];
+            for (const sel of ["#phone-chip .phone-chip-dot", "#phone-push-state .phone-push-icon svg"]) {
+              const box = await page.evaluate((s) => {
+                const el = document.querySelector(s);
+                el.scrollIntoView({ block: "center" });
+                const r = el.getBoundingClientRect();
+                return { x: r.x, y: r.y, w: r.width, h: r.height };
+              }, sel);
+              await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+              const png = await page.screenshot({
+                clip: { x: Math.round(box.x - 3), y: Math.round(box.y - 3), width: Math.round(box.w + 6), height: Math.round(box.h + 6) },
+                animations: "disabled",
+              });
+              const m = measureIndicatorCrop(png, 3);
+              assert(!m.unresolvable, which + " " + sel + ": " + m.unresolvable);
+              assert(m.ratio >= 3, which + ": " + sel + " is " + m.ratio + ":1 (" + m.ink + " on " + m.ground + "), under the 3:1 floor for a non-text indicator");
+              marks.push(m.ratio);
+            }
+            await page.close();
+            out.push(which + " dot " + marks[0] + ":1 icon " + marks[1] + ":1");
+          }
         }
-        for (const pattern of one.mustNot) {
-          assert(
-            !pattern.test(text),
-            (one.platform || "unknown") + " names a control that phone does not have (" +
-              pattern + "): " + JSON.stringify(text)
-          );
-        }
-        said.push((one.platform || "unknown") + ": " + JSON.stringify(text.slice(0, 56) + "…"));
       }
-      return said.length + " platform(s), each named in its own phone's words — " + said.join("; ");
+      // AN ORDINARY NETWORK BLIP: RichConnect reconnecting while this Mac's listener is still up.
+      // The line above the card says "Reconnecting this Mac", so the chip must not say Connected.
+      for (const platform of Object.keys(PHONES)) {
+        const page = await openSheet(browser, "dark", {
+          phonePaired: true, phonePlatform: platform, phonePairedVia: "connect", phoneNotificationsOn: true,
+          phoneConnect: { enabled: true, phase: "active", health: { state: "reconnecting" } },
+        });
+        await page.waitForFunction(() => {
+          const chip = document.getElementById("phone-chip-word");
+          return chip && chip.textContent.trim().length > 0;
+        });
+        const seen = await page.evaluate(() => ({
+          chip: document.getElementById("phone-chip-word").textContent.trim(),
+          state: document.getElementById("phone-paired-state").textContent.trim(),
+          line: document.getElementById("phone-push-state").textContent.replace(/\s+/g, " ").trim(),
+        }));
+        await page.close();
+        assertEqual(seen.chip, WORDS.away.chip, platform + " reconnecting, listener up: the chip");
+        assertEqual(seen.state, WORDS.away.state, platform + " reconnecting, listener up: the pairing sentence");
+        assertEqual(seen.line, WORDS.away.line, platform + " reconnecting, listener up: the errand line");
+        out.push(platform + " reconnecting with the listener up: " + seen.chip);
+      }
+      return out.length + " cards in round 49's words, no retired word on any; " + out.join("; ");
     }
   );
 
@@ -1982,7 +2057,8 @@ async function openSheet(browser, theme, preset) {
           heading: Object.assign(styleOf(heading), { text: heading.textContent.trim(), cls: heading.className }),
           push: Object.assign(styleOf(push), { text: push.textContent.trim() }),
           note: styleOf(note),
-          first: document.getElementById("phone-paired").firstElementChild.id,
+          // Round 49 puts the status chip beside the name, in one top row that holds the heading.
+          first: document.getElementById("phone-paired").firstElementChild.contains(heading) ? "phone-device-name" : document.getElementById("phone-paired").firstElementChild.id,
         };
       });
       await page.close();
@@ -2557,7 +2633,7 @@ async function openSheet(browser, theme, preset) {
   await run.check("Connect keeps a saved pairing visible while the listener recovers", async () => {
     const page = await openSheet(browser, "dark", { phoneConnect:{enabled:true,phase:"active"}, phonePaired:true, phonePairedVia:"connect", phoneListenerStopped:true });
     assert(await page.locator("#phone-paired").isVisible());
-    assert(/pairing is saved.*restore its connection/.test(await page.locator("#phone-paired-state").textContent()));
+    assert(/pairing is saved.*restore the connection/.test(await page.locator("#phone-paired-state").textContent()));
     assert(!await page.locator("#phone-connect-start").isVisible(), "Recovery offers to replace the pairing");
     await page.close(); return "Saved pairing and recovery remain distinct from first use";
   });

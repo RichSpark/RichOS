@@ -42,6 +42,12 @@ def pair(state, link, reject=False):
     return run('pair', state, '--link', link, *(['--reject'] if reject else []))
 
 
+def notifications(state, on=True, seconds=60):
+    """The paired phone switches "Notify me when Rich replies" on (or off), as the RichConnect app's
+    Settings do, and its registration reaches the Mac. Returns {"on", "status", "error"}."""
+    return run('notifications', state, *([] if on else ['--off']), '--seconds', seconds, timeout=seconds + 60)
+
+
 def send(state, thread, text, seconds=60):
     """The paired phone sends TEXT on conversation THREAD from its composer and waits for the Mac's
     receipt. Returns {"thread", "text"}."""
