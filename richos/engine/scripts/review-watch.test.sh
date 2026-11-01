@@ -173,6 +173,7 @@ echo "review-watch.test.sh"
 # --- isolation -------------------------------------------------------------
 unset CLAUDE_PROJECT_DIR CLAUDE_PLUGIN_ROOT RICHOS_ENGINE_ROOT CODEX_HOME REVIEW_WATCH_NOW
 mkdir -p "$SB/bin" "$SB/calls" "$SB/claude" "$SB/workspaces/agents" "$SB/workspaces/done" "$SB/projects" "$SB/codex"
+export CODEX_COORDINATION_ROOT="$SB/coord"
 export CLAUDE_CONFIG_DIR="$SB/claude"
 export RICHOS_WORKSPACES_DIR="$SB/workspaces"
 export RICHOS_PROJECTS_DIR="$SB/projects"

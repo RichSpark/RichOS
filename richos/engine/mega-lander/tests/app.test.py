@@ -231,7 +231,7 @@ class DesktopWork(unittest.TestCase):
         hook=self.root/"spawn-hooks.json";hook.write_text(json.dumps({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":f"/bin/bash '{ENGINE}/scripts/hooks/guard-worktree-isolation.sh'"}]}]}}))
         self.registry=self.root/"entities.json";self.registry.write_text(json.dumps({"version":2,"entities":[{"id":"depot","roots":[str(self.repo)],"connected_repositories":[str(self.repo)]}]}))
         self.scope_path=self.root/"scope.json"
-        env={"RICHOS_APP_STATE":str(self.root/"engine-state"),"RICHOS_APP_REGISTRY":str(self.registry),"RICHOS_APP_SCOPE":str(self.scope_path),
+        env={"CODEX_COORDINATION_ROOT":str(self.root/"codex channels"),"RICHOS_APP_STATE":str(self.root/"engine-state"),"RICHOS_APP_REGISTRY":str(self.registry),"RICHOS_APP_SCOPE":str(self.scope_path),
              "RICHOS_ENGINE_ROOT":str(ENGINE),"RICHOS_ENGINE_DIR":str(ENGINE),"RICHOS_ENTITY_ROOT":str(self.coord),"CLAUDE_PROJECT_DIR":str(self.coord),
              "RICHOS_APP_ENTITY":"depot","RICHOS_APP_THREAD":"thread-a",
              "RICHOS_WORKSPACES_DIR":str(self.root/"engine-state/workspaces"/hashlib.sha256(b'["depot","thread-a"]').hexdigest()),"RICHOS_SESSION_ID":self.session,"RICHOS_SESSION_PID":str(os.getpid()),

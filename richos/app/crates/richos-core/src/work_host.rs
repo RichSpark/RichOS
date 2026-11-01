@@ -989,7 +989,7 @@ impl WorkHost {
                     if crate::session_tools::previous_attempt(&scope,"stu",&input_id)?.as_ref()
                         .and_then(|attempt|attempt["session_id"].as_str())==Some(session) {continue}
                     let instruction=self.question_answer_instruction(&answer)?;
-                    let message=crate::session_tools::Message {handoff:false,from:"user".into(),text:answer.text.clone(),instruction,work:None};
+                    let message=crate::session_tools::Message {bridge:None,handoff:false,from:"user".into(),text:answer.text.clone(),instruction,work:None};
                     let text=serde_json::to_string(&message).map_err(|e|e.to_string())?;
                     use sha2::Digest;
                     let digest=sha2::Sha256::digest(format!("{}\0{}\0{input_id}",scope.entity_id,scope.thread_id));
@@ -1881,7 +1881,7 @@ impl WorkHost {
                 Next::Answer(binding, delivery) => self
                     .question_answer_instruction(&delivery)
                     .and_then(|instruction| {
-                        let message = crate::session_tools::Message {
+                        let message = crate::session_tools::Message {bridge:None,
                             handoff: false,
                             from: "user".into(),
                             text: delivery.text.clone(),
@@ -4900,7 +4900,7 @@ mod tests {
             session:"same-stu".into(),prompts:h.work_prompts.clone(),commands:h.commands.clone(),team:h.team.clone(),settings:None,
         }));
         h.team.lock().unwrap().turn_results.push_back("max_tokens");
-        let message=crate::session_tools::Message {handoff:false,from:"rich".into(),text:"Receiving turn".into(),instruction:None,work:None};
+        let message=crate::session_tools::Message {bridge:None,handoff:false,from:"rich".into(),text:"Receiving turn".into(),instruction:None,work:None};
         assert!(h.host.run_message(&backend,&h.binding,&message,"live-input-receiving-turn").is_err());
         let after=backend.inner.lock().unwrap().peer_active_through.unwrap();
         assert!(crate::session_tools::pending_after(&scope,"stu",after).unwrap().is_none(),"accepted live input became new after the receiving turn failed");
@@ -4947,7 +4947,7 @@ mod tests {
                     instruction_sha256:format!("{:x}",sha2::Sha256::digest(label)),..registration(&h)};
                 let receipt=assignment::register(&h.state,&request).unwrap();
                 let instruction=crate::ecs::UserInstruction::with_text(request.instruction_ledger_ref,request.instruction_sha256,Some(label));
-                let message = crate::session_tools::Message {
+                let message = crate::session_tools::Message {bridge:None,
                     handoff: true,
                     from: "rich".into(),
                     text: label.into(),
@@ -5498,7 +5498,7 @@ mod tests {
             std::fs::write(folder.join(".lock"), "").unwrap();
         }
         let backend = Backend::new();
-        let message = crate::session_tools::Message {
+        let message = crate::session_tools::Message {bridge:None,
             handoff: false, from: "rich".into(), text: "Carry on".into(), instruction: None, work: None,
         };
         let run = |n| h.host.run_message(&backend, &h.binding, &message, &format!("settings-test:{n}")).unwrap();
@@ -5570,7 +5570,7 @@ mod tests {
             .unwrap()
             .is_none());
         let backend = h.host.backend_for("thread-one").unwrap();
-        let message = crate::session_tools::Message {
+        let message = crate::session_tools::Message {bridge:None,
             handoff: true,
             from: "rich".into(),
             text: "Use the saved teammate for this authorized work".into(),

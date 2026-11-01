@@ -72,6 +72,9 @@ pub fn tools() -> Value {
          "description":"Read the scoped background-work record for this conversation. Lists starting, running, waiting and finished assignments, including each work kind and observed state. Registration is distinct from execution; a running state does not prove progress. This tool changes nothing and cannot start, stop, approve or retry work.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
          "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}
+        ,{"name":crate::codex_bridge::TOOL,
+          "description":"Use a dedicated Codex channel for this company/conversation. designate: only when the user explicitly chooses this chat as the future coordinator; also associates old shared input once. connect: create a fresh pair with original task text/provenance and hand its returned locator/instructions to Codex. send: reply on a specified pair with a REQUIRED stable message_id and optional reply_to. read: inspect one pair including sent history before an uncertain retry. Never use titles/current screen as routing, reassign existing pairs or create a new pair to retry an unknown send.",
+          "inputSchema":{"type":"object","required":["action"],"properties":{"action":{"enum":["designate","connect","send","read"]},"locator":{"type":"string"},"message_id":{"type":"string"},"text":{"type":"string"},"provenance":{"type":"string"},"reply_to":{"type":"string"},"direction":{"enum":["to-rich","to-codex"]},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}
         ,{"name":"sessions","description":"List recorded native Rich and Stu sessions in this company and conversation.",
           "inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
         ,{"name":"transcript","description":"Read original native session JSONL directly, including live messages, tool calls and results. No peer request or turn lock. Defaults to the latest 64 KiB; use byte offsets to page earlier content. Optional worker selects a native subagent transcript within that session.",
@@ -137,6 +140,7 @@ pub fn call(
         let scope = read_scope(scope_path)?;
         return serde_json::to_value(crate::system_resources::read(&scope.state_root)).map_err(|e| e.to_string());
     }
+    if name == crate::codex_bridge::TOOL {return crate::codex_bridge::call(scope_path,&read_scope(scope_path)?,arguments)}
     if name == "delegate" {return crate::session_tools::delegate(scope_path, &read_scope(scope_path)?, arguments)}
     if name == "send" {return crate::session_tools::send(scope_path, &read_scope(scope_path)?, arguments)}
     if name == "transcript" || name == "sessions" {
@@ -671,10 +675,19 @@ mod tests {
         // Direct session reads are read-only; peer send has a separate host-bound contract.
         let listed = tools();
         let listed = listed["tools"].as_array().unwrap();
-        assert_eq!(listed.len(), 6);
-        assert!(listed[..4].iter().all(|t|t["annotations"]["readOnlyHint"]==true));
-        assert_eq!(listed[4]["name"],"send");
-        assert_eq!(listed[5]["name"],"delegate");
+        assert_eq!(listed.len(), 7);
+        for name in [crate::system_resources::TOOL, LOOK_TOOL_NAME, "sessions", "transcript"] {
+            let tool=listed.iter().find(|tool|tool["name"]==name).unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"],true,"{name}");
+        }
+        for name in ["send", "delegate", crate::codex_bridge::TOOL] {
+            assert!(listed.iter().any(|tool|tool["name"]==name),"{name}");
+        }
+        let channel=listed.iter().find(|tool|tool["name"]==crate::codex_bridge::TOOL).unwrap();
+        assert_eq!(channel["inputSchema"]["additionalProperties"],false);
+        for identity in ["entity_id", "thread_id", "state_root"] {
+            assert!(channel["inputSchema"]["properties"].get(identity).is_none(),"{identity} must remain host-owned");
+        }
         assert!(call(&scope,&UnknownScreen,"delegate",json!({"text":"hello","from":"stu"})).is_err());
         assert!(call(&scope,&UnknownScreen,"send",json!({"text":"hello","from":"stu"})).is_err());
         std::fs::remove_dir_all(root).unwrap();

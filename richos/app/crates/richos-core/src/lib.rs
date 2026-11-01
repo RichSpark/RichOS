@@ -309,3 +309,6 @@ mod thread_title;
 
 /// Shared live host resource observations for the desktop and its agents.
 pub mod system_resources;
+
+/// Host-scoped acceptance of dedicated engine channels.
+pub mod codex_bridge;
