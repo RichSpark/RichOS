@@ -3450,16 +3450,34 @@ class DesktopWork(unittest.TestCase):
         subprocess.run(["git","init","--template=","-q","-b","main",str(second)],check=True)
         self.assertNotEqual(self.app.W.land_record_path(second),record)
         first_args=self.reviewed_pair("rec1")
-        first=self.call("integrate",first_args)
+        # THE LAND IS RECORDED WHERE THE REF MOVES, EVEN WHEN THE CALL THEN FAILS:
+        # this integrate crashes after the terminal's merge_and_land moved the
+        # branch and before the receipt says it is integrated (the worktrees stay,
+        # as in the interrupted-integrate case above).
+        original=self.app.W.merge_and_land
+        def crash_after_merge(*argv,**kw):
+            original(*argv,**kw)
+            raise RuntimeError("synthetic crash after the merge")
+        with patch.object(self.app.W,"merge_and_land",side_effect=crash_after_merge), \
+                patch.object(self.app.W,"remove_workspace",return_value=(False,"synthetic busy workspace")):
+            with self.assertRaisesRegex(RuntimeError,"synthetic crash"):self.call("integrate",first_args)
         rows=self.app.W.land_records(self.repo)
         self.assertEqual(len(rows),1)
+        # THE RECOVERY: integrate again. The receipt is not yet integrated, so this
+        # call walks the whole land path, finds the branch already holds the reviewed
+        # commit, merges nothing and records nothing. Recording here is the defect: the
+        # history would answer for a move that never happened. (A repeat AFTER the
+        # receipt is integrated, below, never reaches the land at all.)
+        first=self.call("integrate",first_args)
+        self.assertTrue(first["work_integrated"])
+        self.assertEqual(self.app.W.land_records(self.repo),rows)
         self.assertEqual(rows[0]["thread_id"],"thread-a")            # the conversation that landed
         self.assertEqual(rows[0]["entity_id"],"depot")
         self.assertEqual(rows[0]["branch"],"main")
         self.assertEqual(rows[0]["reviewed_commit"],first["commit"])
         self.assertEqual(rows[0]["commit"],self.app.git(self.repo,"rev-parse","main"))     # the land's merge commit
-        # A REPEATED integrate merges nothing, so it records no land: the record
-        # is written where the ref actually moves, not where the call ends.
+        # A REPEATED integrate of integrated work merges nothing, so it records no land:
+        # the record is written where the ref actually moves, not where the call ends.
         self.assertTrue(self.call("integrate",first_args)["work_integrated"])
         self.assertEqual(self.app.W.land_records(self.repo),rows)
         # A SECOND LAND APPENDS. The first row survives it byte for byte, and
