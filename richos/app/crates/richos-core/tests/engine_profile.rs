@@ -90,7 +90,18 @@ fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() 
     assert_eq!(manifest["hooks"]["PreToolUse"].as_array().unwrap().len(), 3);
     assert_eq!(manifest["hooks"]["PreToolUse"][1], before["hooks"]["PreToolUse"][1]);
     assert_eq!(manifest["hooks"]["PreToolUse"][2], before["hooks"]["PreToolUse"][2]);
-    assert_eq!(manifest["hooks"].as_object().unwrap().len(), 9);
+    // The hold itself is at PostToolBatch, after a helper's tool calls ran (the CEO's §153): the
+    // gate alone, with nothing behind it, as long as the hold may last.
+    let hold = &manifest["hooks"]["PostToolBatch"];
+    assert!(before["hooks"].get("PostToolBatch").is_none(), "the canonical hooks have no PostToolBatch");
+    assert_eq!(hold.as_array().unwrap().len(), 1);
+    assert!(hold[0].get("matcher").is_none());
+    let command = hold[0]["hooks"][0]["command"].as_str().unwrap();
+    assert!(command.ends_with("--claude-quota-gate"), "{command}");
+    assert!(!command.contains("app-engine-hook.py"), "{command}");
+    assert_eq!(hold[0]["hooks"][0]["timeout"], richos_core::quota::gate::HOLD_TIMEOUT_SECS);
+    assert_eq!(hold[0]["hooks"][0]["timeout"], 1_209_600, "fourteen days: a weekly hold outlasts 21,600 s");
+    assert_eq!(manifest["hooks"].as_object().unwrap().len(), 10);
 }
 
 #[test]

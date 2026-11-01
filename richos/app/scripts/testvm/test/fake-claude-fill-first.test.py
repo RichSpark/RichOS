@@ -173,15 +173,20 @@ with tempfile.TemporaryDirectory() as root:
     # 6: helper steps. The fake calls the gate command of the lease's hooks.json for each listed
     # helper; a refusal ends nothing and is logged with the gate's words, an admitted step writes
     # nothing, and with no helpers listed nothing runs.
-    def stops_for(gate_body, agents, session):
-        """Run one lease whose hooks.json names a stub gate; the SubagentStop agent ids it journaled."""
-        gate = root / f'gate-{session}.sh'
-        gate.write_text('#!/bin/sh\n' + gate_body)
-        gate.chmod(0o755)
+    def stops_for(gate_body, agents, session, batch_body=None):
+        """Run one lease whose hooks.json names a stub gate (and a stub PostToolBatch gate with
+        batch_body); the SubagentStop agent ids it journaled."""
+        def stub(name, body):
+            path = root / f'{name}-{session}.sh'
+            path.write_text('#!/bin/sh\n' + body)
+            path.chmod(0o755)
+            return [{'hooks': [{'type': 'command', 'command': str(path), 'timeout': 5}]}]
+        registered = {'PreToolUse': stub('gate', gate_body)}
+        if batch_body is not None:
+            registered['PostToolBatch'] = stub('batch', batch_body)
         plug = data / 'engine-profiles' / f'profile-{session}'
         (plug / 'hooks').mkdir(parents=True)
-        (plug / 'hooks' / 'hooks.json').write_text(json.dumps(
-            {'hooks': {'PreToolUse': [{'hooks': [{'type': 'command', 'command': str(gate), 'timeout': 5}]}]}}))
+        (plug / 'hooks' / 'hooks.json').write_text(json.dumps({'hooks': registered}))
         if agents:
             (walk / 'agents').write_text(agents)
         elif (walk / 'agents').exists():
@@ -204,6 +209,27 @@ with tempfile.TemporaryDirectory() as root:
     check(stops_for(allow, 'Mark\nAndy\n', 'gate-allows') == [], 'a gate that admits the step ends no helper')
     check(stops_for(refuse, '', 'no-helpers') == [] and 'gate' not in (walk / 'calls.log').read_text(),
           'with no helpers listed the gate is never called and nothing ends (as on main)')
+    # A step is one tool call as Claude Code runs it (the CEO's §153: the app holds a helper at
+    # its batch, after the call ran): PreToolUse, the tool, then PostToolBatch, which gets the
+    # helper's agent_id and the call. A call PreToolUse refused does not run, and its batch
+    # still comes (measured on Claude Code 2.1.316, gate.rs HOLD_EVENT).
+    seen = root / 'batch-seen.json'
+    record = f'cat > {seen}\nexit 0\n'
+    stops_for(allow, 'Mark\n', 'batch-allows', batch_body=record)
+    steps = [line.split()[2:5] for line in (walk / 'calls.log').read_text().splitlines() if ' walk-agent-1' in line]
+    check(steps[:4] == [['gate', 'walk-agent-1', 'exit'], ['ran', 'walk-agent-1', 'Read'], ['batch-start', 'walk-agent-1'],
+                        ['batch', 'walk-agent-1', 'exit']], 'gate, the tool, then its batch, in that order', steps)
+    batch = json.loads(seen.read_text())
+    check(batch['hook_event_name'] == 'PostToolBatch' and batch['agent_id'] == 'walk-agent-1'
+          and [c['tool_name'] for c in batch['tool_calls']] == ['Read'], 'the batch carries the helper and its call', batch)
+    stops_for(refuse, 'Mark\n', 'batch-after-refusal', batch_body=record)
+    log = (walk / 'calls.log').read_text()
+    check('ran walk-agent-1' not in log and 'batch walk-agent-1 exit 0' in log,
+          'a refused call does not run, and its batch still comes', log)
+    (walk / 'thinking').touch()
+    stops_for(allow, 'Mark\n', 'thinking', batch_body=record)
+    (walk / 'thinking').unlink()
+    check('walk-agent-1' not in (walk / 'calls.log').read_text(), 'while thinking exists no helper takes a step')
 
     (walk / 'log-turns').touch()
     stops_for(allow, '', 'turn-log')
