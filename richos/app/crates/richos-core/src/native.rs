@@ -2088,15 +2088,24 @@ fn record_on_account(profile: &crate::engine_profile::EngineProfile, scope: &cra
     // Every account's records are in one folder now (`claude_accounts::Accounts::share_records`):
     // a record named under an account folder that was removed since is the same project and name
     // in this account's records folder, and the chat resumes from it.
+    // And a chat is always resumed from the record's permanent path, never through an account's
+    // `projects` link (`claude_accounts::permanent`): Claude Code keeps writing the path it resumed,
+    // and the link goes when that account is removed, while this chat runs on.
+    let settle = |path: std::path::PathBuf, named: &Path| -> Result<std::path::PathBuf, NativeError> {
+        let path = crate::claude_accounts::permanent(&path);
+        if path != named {
+            crate::session_tools::record_moved(scope, session, &path).map_err(NativeError::Protocol)?;
+        }
+        Ok(path)
+    };
     if !path.exists() {
         let Some(found) = crate::claude_accounts::record_in(&path, &projects) else { return Ok(path) };
-        crate::session_tools::record_moved(scope, session, &found).map_err(NativeError::Protocol)?;
-        return Ok(found);
+        return settle(found, &path);
     }
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    if path.starts_with(&projects) || canonical(&path).starts_with(canonical(&projects)) { return Ok(path) }
+    if path.starts_with(&projects) || canonical(&path).starts_with(canonical(&projects)) { return settle(path.clone(), &path) }
     let (Some(project), Some(name)) = (path.parent().and_then(Path::file_name), path.file_name()) else { return Ok(path) };
-    let target = projects.join(project).join(name);
+    let target = crate::claude_accounts::permanent(&projects.join(project).join(name));
     carry_record(&path, &target)?;
     carry_folder(&path.with_extension(""), &target.with_extension(""))?;
     crate::session_tools::record_moved(scope, session, &target).map_err(NativeError::Protocol)?;
@@ -6083,6 +6092,51 @@ while True:
         let (_,after)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).expect("the chat resumes after its account is removed").unwrap();
         assert_eq!(after,in_home);
         assert!(std::fs::read_to_string(&after).unwrap().contains("started on Work"),"its history is there");
+        assert_eq!(crate::session_tools::native_path(&scope,&session).unwrap(),in_home,"where it lives is on record");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **A chat started on Work and resumed on Account 1 keeps writing after Work is removed**
+    /// (second review rv-20261101T183042Z, P1). Resumed through the path Claude Code named under
+    /// Work's folder, the Account 1 process would keep writing through Work's `projects` link, and
+    /// removing Work would break its next write. The resume path is the record's permanent path in
+    /// Account 1's folder, so the live chat's next turn is written after the removal.
+    #[test]
+    fn a_chat_resumed_on_account_one_keeps_writing_after_the_account_it_started_on_is_removed() {
+        let root=fixture_root().join(format!("resume-then-remove-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),&engine,&root.join("ecs")).unwrap();
+        let mut profile=fixture_profile(&root);
+        profile.work_scope=Some(("company".into(),"conversation".into()));
+        let scope=crate::status_tools::StatusToolScope{version:1,state_root:profile.state.clone(),entity_id:"company".into(),thread_id:"conversation".into()};
+        let session=uuid::Uuid::new_v4().to_string();
+        bridge.bind("company","conversation",&session,"original",Some("stu-thread:conversation"),"rich").unwrap();
+        crate::session_tools::bind(&root.join("stu-scope.json"),&scope,&session,"stu",None).unwrap();
+        let home=root.join("home");
+        let accounts=crate::claude_accounts::Accounts::open(&root.join("data")).unwrap();
+        accounts.share_records(&home).unwrap();
+        let work=accounts.add("Work").unwrap();
+        // Started on Work: Claude Code writes, and names, the record under Work's folder.
+        let named=work.folder.clone().unwrap().join("projects/-coordination").join(format!("{session}.jsonl"));
+        std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::write(&named,"started on Work\n").unwrap();
+        std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":named}}))).unwrap();
+        let in_home=home.join("projects/-coordination").join(format!("{session}.jsonl"));
+
+        // Switched to Account 1 and resumed there, with Work still on the list.
+        profile.claude_account=Some(crate::claude_accounts::Account{id:"1".into(),label:"Account 1".into(),folder:Some(home.clone())});
+        let (_,resumed)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
+        assert_eq!(resumed,in_home,"resumed from the permanent path, not through Work's folder");
+        let append=|path:&Path,line:&str| { use std::io::Write; std::fs::OpenOptions::new().append(true).open(path).map(|mut f| f.write_all(line.as_bytes())) };
+        append(&resumed,"a turn on Account 1\n").unwrap().unwrap();
+
+        // Work removed while the chat runs on Account 1: its next turn is still written.
+        accounts.remove(&work.id).unwrap();
+        append(&resumed,"the next turn on Account 1\n").expect("the live chat's path survives the removal").unwrap();
+        assert_eq!(std::fs::read_to_string(&in_home).unwrap(),"started on Work\na turn on Account 1\nthe next turn on Account 1\n");
+        assert_eq!(native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap().1,in_home);
         assert_eq!(crate::session_tools::native_path(&scope,&session).unwrap(),in_home,"where it lives is on record");
         std::fs::remove_dir_all(root).unwrap();
     }

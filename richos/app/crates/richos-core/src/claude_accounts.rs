@@ -431,6 +431,24 @@ pub fn record_in(path: &Path, shared: &Path) -> Option<PathBuf> {
     Some(shared.join(project).join(name)).filter(|p| p.is_file())
 }
 
+/// **The permanent path of a record named through an account's `projects` link**: the link
+/// replaced by where it points (Account 1's records folder), so a chat resumed from it keeps
+/// writing to a path that outlives the account (second review rv-20261101T183042Z, P1: a chat
+/// started on Work and resumed on Account 1 kept writing through Work's link, and removing Work
+/// broke its next write). A path through no such link is returned as it is. Nothing else is
+/// resolved, so a path is never rewritten into another spelling of the same folder.
+pub fn permanent(path: &Path) -> PathBuf {
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.file_name().is_none_or(|n| n != RECORDS) { continue; }
+        let is_link = fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink());
+        let Ok(target) = fs::read_link(ancestor) else { continue };
+        if !is_link || !target.is_absolute() { continue; }
+        let Ok(rest) = path.strip_prefix(ancestor) else { continue };
+        return target.join(rest);
+    }
+    path.to_path_buf()
+}
+
 #[cfg(unix)]
 fn link(target: &Path, at: &Path) -> io::Result<()> { std::os::unix::fs::symlink(target, at) }
 #[cfg(windows)]
