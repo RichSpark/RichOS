@@ -2697,6 +2697,9 @@ impl Outbox {
             match answer {
                 Ok(done) => {
                     unchecked.checked = Some(done.clone());
+                    // His check has taken the changed words in (they were what he checked): the
+                    // field must not be read later as a hand change made after it (CEO §156).
+                    unchecked.edited = None;
                     self.write_unchecked(&unchecked)?;
                     out.push((unchecked.id, done));
                 }

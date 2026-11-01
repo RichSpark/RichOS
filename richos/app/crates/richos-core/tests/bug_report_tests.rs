@@ -2103,6 +2103,29 @@ fn words_the_user_changed_by_hand_are_kept_beside_the_card_and_survive_a_relaunc
 }
 
 #[test]
+fn words_that_waited_for_rich_come_back_as_his_check_after_a_relaunch_not_as_a_new_hand_edit() {
+    let dir = scratch("edit-then-check");
+    let outbox = Outbox::open(&dir);
+    let sheet = Sheet {
+        title: "The window froze".into(),
+        sections: vec![SheetSection { heading: "What happened".into(), paragraphs: vec!["Jane Doe saw the window freeze.".into()], steps: vec![] }],
+    };
+    let id = report_id();
+    // No card was kept (it went to waiting and was being changed): the words wait for his check.
+    outbox.keep_edit(&id, Edited { sheet: sheet.clone(), private: vec![] }, &screen(), 0).unwrap();
+    let jane = vec![PrivateTerm::new("Jane Doe", Kind::PersonName)];
+    // Rich recovers and checks them: he covers the name.
+    let ready = outbox.check_due(0, |u| checked_edit(u.edited.as_ref().unwrap(), &jane, rich_keeps)).unwrap();
+    assert_eq!(ready.len(), 1);
+    assert!(draft_words(&ready[0].1.draft).contains("[a person] saw the window freeze"));
+    // After a relaunch the kept entry is his check alone: no edit field to be read as a later hand change.
+    let after = Outbox::open(&dir).unchecked().unwrap();
+    assert!(after[0].edited.is_none(), "his check left the earlier edit behind: {:?}", after[0].edited);
+    assert_eq!(after[0].checked.as_ref(), Some(&ready[0].1));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_written_up_card_is_kept_and_comes_back_after_a_relaunch_until_it_is_done_with() {
     let dir = scratch("kept-card");
     let written = checked_with("The window froze.", "[]");
