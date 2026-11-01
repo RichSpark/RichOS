@@ -13,23 +13,34 @@ struct Watch {_watcher:Mutex<notify::RecommendedWatcher>}
 fn drain(app:&AppHandle)->Result<(),String> {
     let state=app.state::<AppState>();
     let view=state.reader.snapshot();
+    let mut held=Vec::new();
     for thread in view.threads() {
-        let Ok(binding)=view.ledger().thread_binding(&thread.id) else {continue};
+        // One unreadable inbox holds its owner, never the other conversations.
+        let result=(||->Result<(),String> {
+        let binding=view.ledger().thread_binding(&thread.id).map_err(|e|e.to_string())?;
         let scope=StatusToolScope { version:1,state_root:state.data_dir.join("engine-state"),
             entity_id:binding.entity_id().to_string(),thread_id:thread.id.clone()};
+        drain_inboxes(app,&state,&thread.id,&binding,&scope)
+        })();
+        if let Err(error)=result {held.push(format!("{}: {error}",thread.id));}
+    }
+    if held.is_empty() {Ok(())} else {Err(held.join("; "))}
+}
+
+fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core::entity::ThreadBinding,scope:&StatusToolScope)->Result<(),String> {
         let mut delivered=false;
-        while let Some((message,through))=session_tools::pending(&scope,"rich")? {
-            state.control.submit_agent_message(&thread.id,Some(binding.entity_id().clone()),
+        while let Some((message,through))=session_tools::pending(scope,"rich")? {
+            state.control.submit_agent_message(thread,Some(binding.entity_id().clone()),
                 &serde_json::to_string(&message).map_err(|e|e.to_string())?,&message.from,
                 &format!("peer:{}:{}:{through}",scope.entity_id,scope.thread_id)).map_err(|e|e.to_string())?;
-            session_tools::acknowledge(&scope,"rich",through)?;
+            session_tools::acknowledge(scope,"rich",through)?;
             delivered=true;
         }
-        if delivered {crate::dispatch_incoming_messages(app,&thread.id)?;}
-        if session_tools::pending(&scope,"stu")?.is_some() {state.work.wake_messages(&binding);}
-    }
-    Ok(())
+        if delivered {crate::dispatch_incoming_messages(app,thread)?;}
+        if session_tools::pending(scope,"stu")?.is_some() {state.work.wake_messages(binding);}
+        Ok(())
 }
+
 
 fn receive(event:notify::Result<notify::Event>, tx:&mpsc::SyncSender<()>) {
         match event {
@@ -79,11 +90,13 @@ pub fn start(app:AppHandle)->Result<(),Box<dyn std::error::Error>> {
     app.manage(Watch {_watcher:Mutex::new(watcher)});
     std::thread::Builder::new().name("richos-peer-input".into()).spawn(move || {
         // Drain before waiting, including input saved before a restart or watch registration.
+        let mut said=None;
         loop {
             match drain(&app) {
-                Ok(())=>if rx.recv().is_err() {return},
+                Ok(())=>{said=None;if rx.recv().is_err() {return}},
                 Err(error)=>{
-                    eprintln!("[richos] peer input remains on disk: {error}");
+                    if said.as_ref()!=Some(&error) {eprintln!("[richos] peer input remains on disk: {error}");said=Some(error);}
+
                     if matches!(rx.recv_timeout(std::time::Duration::from_secs(5)),Err(mpsc::RecvTimeoutError::Disconnected)) {return}
                 }
             }

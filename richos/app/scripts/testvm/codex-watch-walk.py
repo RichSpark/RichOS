@@ -32,7 +32,7 @@ def load(name, filename):
 stu = load('codex_walk_stu', 'stu-reminder-walk.py')
 multi = load('codex_walk_multi', 'multico-walk.py')
 StepFailed = stu.StepFailed
-STEPS = ['identity', 'first-run', 'pair', 'parallel', 'rename-restart', 'reconcile']
+STEPS = ['identity', 'first-run', 'pair', 'parallel', 'rename-restart', 'blocked', 'reconcile']
 DEFAULT_STEPS = STEPS
 
 
@@ -194,6 +194,29 @@ class CodexWatchWalk(stu.StuReminderWalk):
         self.after_relaunch()
         result = self.exchange('after-restart-archived')
         return dict(relaunch=launch, exchange=result, endpoints=self.connections())
+
+    def blocked(self):
+        acme, beta = self.facts['connections'][0], self.facts['connections'][2]
+        acme_row = self.facts['first_exchange']['exchanges'][0]['inbox']
+        inbox = acme_row['file']
+        marker = 'blocked-' + uuid.uuid4().hex[:12]
+        healthy = 'healthy-' + uuid.uuid4().hex[:12]
+        def request(path, ident):
+            return dict(locator=path, message_id=ident, text='Harmless transport observation %s. Reply on this bridge.locator with text ACK-%s, message_id ack-%s and reply_to %s. No other action.' % (ident, ident, ident, ident))
+        saved = []
+        try:
+            guest(self.vm, 'chmod 000 ' + shlex.quote(inbox), 60)
+            saved.append(self.helper_call('send', **request(acme, marker)))
+            saved.append(self.helper_call('send', **request(beta, healthy)))
+            response = self.wait_fact('healthy chat reply while another inbox is unreadable',
+                lambda: self.helper_call('read', locator=beta),
+                lambda v: any(r.get('reply_to') == healthy and 'ACK-' + healthy in r['text'] for r in v['records']), self.a.answer_within)
+        finally:
+            guest(self.vm, 'chmod 600 ' + shlex.quote(inbox), 60)
+        restored = self.wait_fact('restored original inbox resumes its own pending input',
+            lambda: self.helper_call('read', locator=acme),
+            lambda v: any(r.get('reply_to') == marker and 'ACK-' + marker in r['text'] for r in v['records']), self.a.answer_within)
+        return dict(saved=saved, healthy_response=response, restored_response=restored)
 
     def reconcile(self):
         first = self.facts['first_exchange']['exchanges'][0]['request']
