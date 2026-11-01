@@ -3205,7 +3205,7 @@
     },
     "scripts/hooks/guard-ci-turn-gate.py": {
       "source": "scripts/hooks/guard-ci-turn-gate.py",
-      "sha256": "e7b351262d555a9bd23b544c20aca381f03a0a0993220e6d183ba901c9acd091",
+      "sha256": "3fa89839602831471c38a16eb84becc5106797f6599af260409102239cdad758",
       "evidence": "Standard-library transcript/CI-state predicate imports fixed ci_pause.pause_for only. It parses shell text as data; actual subprocesses are fixed Git queries and gh api. No orchestration config values are sourced or read.",
       "keys": [],
       "edges": [
@@ -18160,7 +18160,7 @@
         "scripts/lib/ceo-ruled.py": "e92586fdd79f1c648c2f764613f47a56bc7f2d843061c70053611d7f2e23ce30",
         "scripts/hooks/guard-ceo-todos-commits.sh": "f5f1d0a12fdf1fb2e94cb64b8d58c1765f80134270e125e510e05f83e3e37904",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
-        "scripts/hooks/guard-ci-turn-gate.py": "e7b351262d555a9bd23b544c20aca381f03a0a0993220e6d183ba901c9acd091",
+        "scripts/hooks/guard-ci-turn-gate.py": "3fa89839602831471c38a16eb84becc5106797f6599af260409102239cdad758",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/guard-completeness-commits.sh": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
@@ -18819,7 +18819,7 @@
         "scripts/lib/ceo-ruled.sh": "737879339e074a0c41011974a8dcdc74bbbbf7118ffda2904e2f8da7a0b10e91",
         "scripts/lib/ceo-ruled.py": "e92586fdd79f1c648c2f764613f47a56bc7f2d843061c70053611d7f2e23ce30",
         "scripts/hooks/guard-ci-turn-gate.sh": "e65b19ac6441e3f07454cfb99fe3a8b6ccc984539923caa91833cd464847347f",
-        "scripts/hooks/guard-ci-turn-gate.py": "e7b351262d555a9bd23b544c20aca381f03a0a0993220e6d183ba901c9acd091",
+        "scripts/hooks/guard-ci-turn-gate.py": "3fa89839602831471c38a16eb84becc5106797f6599af260409102239cdad758",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/guard-definition-drift.sh": "f8a3998ce46f399049256b3c67b8b1836794e130d29c28dc75d509e6090fedcb",
         "scripts/hooks/guard-failure-type-answer.sh": "2ee4e179524f1e1cb385c53c79ac20e7d2aedd103254b17b8925e86bbda31484",
