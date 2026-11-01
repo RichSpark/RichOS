@@ -412,7 +412,22 @@ const MEASURE = `(() => {
   };
 })()`;
 
-const measure = (page) => page.evaluate(MEASURE);
+/// Read once every finite animation has ended: since round 51 the first character glides Talk to
+/// Rich into the row (240ms), and a read inside the glide measures where it is passing, not where
+/// it sits. Only the composer's own running animations are waited for: endless loops (the pressed
+/// icon's bars) never finish, and the held opening screen keeps its own animations paused.
+const measure = async (page) => {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#composer-zone"))
+        .filter((a) => a.effect.getComputedTiming().endTime !== Infinity && a.playState === "running")
+        .map((a) => a.finished.catch(() => {}))
+    )
+  );
+  return page.evaluate(MEASURE);
+};
 
 /// Round 51's row, as a predicate, per control: on the plus's center line (+/-1px, the sum of two
 /// layout computations) and 36px tall (one declaration, `--control-h`).

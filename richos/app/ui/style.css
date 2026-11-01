@@ -1765,8 +1765,15 @@ body.bp-narrow .first-run {
   padding: 14px 16px 2px;
 }
 
-.composer-field[hidden] {
-  display: none;
+/* Talking: the text area gives way to the listening panel. Collapsed, never `display: none`:
+   it keeps its words for when voice ends, it cannot take the caret (`visibility: hidden`), and it
+   stays rendered, because WebKit cannot take :hover off elements in a `display: none` subtree and
+   Talk to Rich was under the pointer in this field's placeholder when he pressed it. */
+#input-shell.is-voice .composer-field {
+  visibility: hidden;
+  height: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 #input {
@@ -1841,8 +1848,11 @@ body.bp-narrow .first-run {
   -webkit-user-select: none;
 }
 
+/* Hidden, not removed: `visibility` takes it out of sight and out of hit-testing alike, and
+   keeps it rendered so WebKit can take :hover off it once Talk to Rich has left it (see
+   `#input-shell.is-voice .composer-field`). */
 #input-shell:not(.is-blank) .composer-hint {
-  display: none;
+  visibility: hidden;
 }
 
 /* Line two, here and in the listening panel: a text line (24px) on which the 36px button

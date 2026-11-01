@@ -72,17 +72,19 @@ const READ = `(() => {
     out: r(document.getElementById("out-bottom")),
     send: r(document.getElementById("send")),
     slot: talk.parentElement.dataset.slot,
-    hintShown: getComputedStyle(hint).display !== "none",
+    hintShown: getComputedStyle(hint).visibility !== "hidden",
     hintText: hint.textContent.replace(/\\s+/g, " ").trim(),
     blank: shell.classList.contains("is-blank"),
     hasContent: shell.classList.contains("has-content"),
     voice: !document.getElementById("voice-panel").hidden,
-    fieldHidden: document.getElementById("composer-field").hidden,
+    fieldHidden: getComputedStyle(document.getElementById("composer-field")).visibility === "hidden",
     sendHidden: document.getElementById("send").hidden,
     sendBg: getComputedStyle(document.getElementById("send")).backgroundColor,
     value: document.getElementById("input").value,
     focus: document.activeElement && document.activeElement.id,
     talks: document.querySelectorAll("#talk-toggle").length,
+    // Talk to Rich must stay in the accessibility tree wherever it sits: no hidden ancestor.
+    talkHidden: !!talk.closest('[aria-hidden="true"], [hidden]'),
     fadeTop: document.getElementById("input").classList.contains("fade-top"),
     lineH: parseFloat(getComputedStyle(document.getElementById("input")).lineHeight),
   };
@@ -177,6 +179,7 @@ async function main() {
       assertEqual(s.hintText, "Type here… OR… ← Click to talk to Rich.", "the placeholder's words");
       assertEqual(s.slot, "hint", "Talk to Rich is not at the start of the placeholder's second line");
       assertEqual(s.talks, 1, "there must be exactly one Talk to Rich button");
+      assert(!s.talkHidden, "Talk to Rich sits inside an aria-hidden or hidden ancestor in the empty box: out of the accessibility tree");
       assert(near(s.input.h, s.lineH * 2), `the empty field is not two lines: ${s.input.h}px for ${s.lineH}px lines`);
       assert(near(s.talk.cx, s.add.cx), `Talk to Rich (${s.talk.cx}) is not centered over the plus (${s.add.cx})`);
       assert(s.talk.y < s.add.y, "Talk to Rich is not above the plus");
@@ -255,8 +258,8 @@ async function main() {
   });
 
   // ---- 5. his correction: talk never moves the button ------------------------------------------
-  for (const words of ["", "Draft the reply to Acme"]) {
-    const label = words ? "with words in the box" : "in the empty box";
+  for (const words of ["", "Draft the reply to Acme\nat list minus 3%\nand keep it firm"]) {
+    const label = words ? "with three lines in the box" : "in the empty box";
     await run.check(`5. ${label}: starting and stopping talk moves Talk to Rich not at all, and the box keeps its height`, async () => {
       const page = await openApp(browser, { theme: "dark" });
       if (words) await setValue(page, words);
@@ -269,6 +272,7 @@ async function main() {
       const talking = await read(page);
       assert(talking.voice && talking.fieldHidden, "the box did not become the listening panel");
       assert(talking.sendHidden, "Send is still offered while talking, with nothing typed to send");
+      assert(!talking.talkHidden, "Talk to Rich is inside an aria-hidden or hidden ancestor while talking");
       for (const [when, s] of [["at once", during], ["after 400ms", talking]]) {
         assert(near(s.talk.x, before.talk.x) && near(s.talk.y, before.talk.y), `Talk to Rich moved when talk started (${when}): (${before.talk.x},${before.talk.y}) -> (${s.talk.x},${s.talk.y})`);
       }

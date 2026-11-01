@@ -635,11 +635,14 @@
                        [Talk to Rich]  ← Click to talk to Rich.
                      Talk to Rich is the real `#talk-toggle`, moved into line two's slot while the box
                      is empty and back into the row on the first character (main.js `placeTalk`).
-                     The lines take no clicks, so a click on them lands in the text area. Hidden to
-                     assistive technology: the field's own `placeholder` still says its state. -->
-                <div id="composer-hint" class="composer-hint" aria-hidden="true">
-                  <span class="composer-hint-line">Type here… OR…</span>
-                  <span class="composer-hint-line composer-hint-talk"><span class="talk-slot" data-slot="hint"></span><span class="composer-hint-words"><span class="composer-hint-arrow">←</span> Click to talk to Rich.</span></span>
+                     The lines take no clicks, so a click on them lands in the text area. The WORDS
+                     are hidden to assistive technology (the field's own `placeholder` still says its
+                     state); the slot is not, because the button in it must stay reachable: an
+                     `aria-hidden` ancestor would take Talk to Rich out of the accessibility tree
+                     whenever the box is empty (seen on the guest, 2026-11-01). -->
+                <div id="composer-hint" class="composer-hint">
+                  <span class="composer-hint-line" aria-hidden="true">Type here… OR…</span>
+                  <span class="composer-hint-line composer-hint-talk"><span class="talk-slot" data-slot="hint"></span><span class="composer-hint-words" aria-hidden="true"><span class="composer-hint-arrow">←</span> Click to talk to Rich.</span></span>
                 </div>
                 </div>
                 <!-- Voice mode replaces the text field inline, inside the same box — never a separate

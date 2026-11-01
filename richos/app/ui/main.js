@@ -125,9 +125,8 @@ const threadMenuEl = el("thread-menu");
 const messagesEl = el("messages");
 const conversationEl = el("conversation");
 const composerEl = el("composer");
-/// Round 51's one box (`#input-shell`), the text area's own wrapper inside it, and the plus.
+/// Round 51's one box (`#input-shell`) and the plus.
 const inputShellEl = el("input-shell");
-const composerFieldEl = el("composer-field");
 const attachAddBtn = el("attach-add");
 /// Talk to Rich's three places (`placeTalk`), and the one it is in. Declared up here because
 /// `autoGrow` places it and runs from the first thread that opens.
@@ -5189,7 +5188,15 @@ async function enterVoiceMode() {
 /// line and Output stay in the row. Talk to Rich does not move (`placeTalk`).
 function showVoicePanel(on) {
   if (on && document.activeElement === inputEl) inputEl.blur();
-  composerFieldEl.hidden = on;
+  // NOT `hidden`: the field is collapsed by `#input-shell.is-voice .composer-field` (style.css),
+  // which keeps it rendered. Talk to Rich was under the pointer in the field's placeholder when he
+  // pressed it, and WebKit cannot take :hover off elements in a `display: none` subtree, so they
+  // stayed hovered after the pointer left (contrast.js's parkPointer, 2026-11-01).
+  // AND THE BOX KEEPS ITS HEIGHT (his correction: no button jumping when talk is toggled). With
+  // several lines typed, the listening panel takes the text area's height, so the row under it,
+  // and Talk to Rich in that row, stay where they were.
+  voicePanelEl.style.minHeight = on ? inputEl.offsetHeight + "px" : "";
+  inputShellEl.classList.toggle("is-voice", on);
   voicePanelEl.hidden = !on;
   syncComposerMode();
 }
