@@ -11,6 +11,12 @@ Run by run-walk.py, which holds one guest slot for this run only, boots the gues
 WHAT IT DOES, reusing adopt-walk.py's identity and first-run steps, never on the host's screen (CEO §65):
   identity    the running app says it was built from --expect-sha
   first-run   memory question declined, the company "Acme" with a folder, the first conversation
+  richdoctor  (run right after identity, before first-run) RichDoctor, started by RichOS's installer, is
+              running with no window and is not frontmost; the RichOS window and its first-run sheet are
+              still up; opening RichDoctor by hand (open <its .app>) then shows its window
+  footer      (run after resources, so Readout is on) with no saved name the sidebar footer says "Set your
+              name" on one line at 100% text size; at 120% (two presses of Larger text) it may wrap but no
+              glyph reaches the Readout percentages; one frame per state in the light and dark appearance
   resources   the square (#res-square, "Mac resources") at the foot of the sidebar is drawn; pointed
               at with the real mouse it shows the "This Mac" card with CPU, RAM and the last 60
               seconds; clicked, the card stays (aria-expanded); right-clicked, the "Mac resources
@@ -31,6 +37,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -52,7 +59,7 @@ class NotRun(Exception):
     PASS and not a FAIL, and the reason is the evidence."""
 
 
-STEPS = ['identity', 'first-run', 'resources', 'cleaner', 'accounts']
+STEPS = ['identity', 'richdoctor', 'first-run', 'resources', 'footer', 'cleaner', 'accounts']
 
 
 class Walk(adopt.Walk):
@@ -326,6 +333,97 @@ class Walk(adopt.Walk):
         if ev['classification'] == 'no visible effect':
             raise StepFailed('the press changed nothing and showed no refusal (before=%s on=%s off=%s): %s'
                              % (before, after_on, after_off, ev['after_on_text'][:300]))
+        return ev
+
+    def frontmost(self):
+        return guest(self.vm, "osascript -e 'tell application \"System Events\" to get name of first "
+                              "application process whose frontmost is true'")
+
+    def richdoctor_windows(self):
+        out = guest(self.vm, "osascript -e 'tell application \"System Events\"' -e 'if exists process \"RichDoctor\" then' "
+                             "-e 'return (count of windows of process \"RichDoctor\")' -e 'else' -e 'return \"no process\"' "
+                             "-e 'end if' -e 'end tell'")
+        return out
+
+    def richdoctor(self):
+        ev = {}
+        end = time.monotonic() + 120
+        ps = ''
+        while time.monotonic() < end:
+            ps = guest(self.vm, "ps -axo pid,etime,command | grep '[R]ichDoctor' | cut -c1-220 || true", 60)
+            if ps.strip():
+                break
+            time.sleep(3)
+        (self.out / 'richdoctor.ps.txt').write_text(ps + '\n')
+        ev['ps'] = ps.splitlines()[:3]
+        if not ps.strip():
+            self.shot('richdoctor-no-process.png')
+            raise StepFailed('RichDoctor was never started by the installer within 120 s')
+        time.sleep(8)  # long enough for a window that was going to open to open
+        ev['frontmost_after_start'] = self.frontmost()
+        ev['richdoctor_windows_after_start'] = self.richdoctor_windows()
+        ev['richos_sheet_up'] = self.present('Not now') or self.present('Add this company')
+        self.shot('richdoctor-first-start.png')
+        self.dump('richdoctor-first-start')
+        (self.out / 'richdoctor.json').write_text(json.dumps(ev, indent=2) + '\n')
+        if ev['frontmost_after_start'] == 'RichDoctor' or ev['richdoctor_windows_after_start'] not in ('0',):
+            raise StepFailed('RichDoctor shows a window or is frontmost on first start: ' + json.dumps(ev))
+        if not ev['richos_sheet_up']:
+            raise StepFailed('the RichOS first-run sheet is not on screen: ' + json.dumps(ev))
+        # opened by hand: its window shows
+        path = guest(self.vm, "ps -axo command | grep '[R]ichDoctor.app/Contents/MacOS' | head -1 | sed 's#/Contents/MacOS.*##'", 60)
+        ev['app_path'] = path
+        guest(self.vm, "open " + shlex.quote(path), 60)
+        end = time.monotonic() + 30
+        while time.monotonic() < end and self.richdoctor_windows() in ('0', 'no process'):
+            time.sleep(2)
+        ev['richdoctor_windows_after_open'] = self.richdoctor_windows()
+        ev['frontmost_after_open'] = self.frontmost()
+        self.shot('richdoctor-opened-by-hand.png')
+        (self.out / 'richdoctor.json').write_text(json.dumps(ev, indent=2) + '\n')
+        if ev['richdoctor_windows_after_open'] in ('0', 'no process'):
+            raise StepFailed('opening RichDoctor by hand showed no window: ' + json.dumps(ev))
+        # put RichOS back in front for the steps after this one (RichDoctor stays running)
+        guest(self.vm, "osascript -e 'tell application \"RichDoctor\" to quit'", 60)
+        self.activate()
+        return ev
+
+    def footer_measure(self, tag):
+        n = self.node('rail-user-name')
+        nodes = self.dump('footer-' + tag)
+        row = {'name_node': {k: (n or {}).get(k) for k in ('title', 'value', 'x', 'y', 'w', 'h')}}
+        row['frame'] = 'footer-%s.png' % tag
+        self.shot(row['frame'])
+        sqn = self.node('res-square')
+        if sqn:
+            row['square'] = {k: sqn.get(k) for k in ('x', 'y', 'w', 'h')}
+            crop = [str(sqn['x'] - 330), str(sqn['y'] - 40), str(int(sqn['w']) + 345), str(int(sqn['h']) + 70)]
+            subprocess.run([sys.executable, str(HERE.parent / 'qa' / 'frame.py'), 'crop', str(self.out / row['frame']),
+                            str(self.out / ('footer-%s-crop.png' % tag)), *crop, '--scale', '3'],
+                           check=True, capture_output=True, text=True, timeout=60)
+        return row
+
+    def footer(self):
+        ev = {}
+        self.activate()
+        if not self.node('rail-user-name'):
+            self.until_node('rail-user-name', 15)
+        ev['100_light'] = self.footer_measure('100-light')
+        self.appearance(True)
+        ev['100_dark'] = self.footer_measure('100-dark')
+        self.appearance(False)
+        self.settings(True)
+        for _ in range(2):  # 100 -> 110 -> 120
+            self.ax('click', '--id', 'font-up', '--first')
+            time.sleep(1)
+        ev['font_val'] = (self.node('font-val') or {}).get('value') or (self.node('font-val') or {}).get('title')
+        self.settings(False)
+        time.sleep(1)
+        ev['120_light'] = self.footer_measure('120-light')
+        self.appearance(True)
+        ev['120_dark'] = self.footer_measure('120-dark')
+        self.appearance(False)
+        (self.out / 'footer.json').write_text(json.dumps(ev, indent=2) + '\n')
         return ev
 
     def accounts(self):
