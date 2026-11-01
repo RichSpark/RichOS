@@ -1,6 +1,6 @@
 # How to write a RichOS changelog entry
 
-The changelog worker (`changelog-worker-brief.md`, beside this file) follows these instructions before publication, from the candidate request. It establishes the net user-visible changes between the pinned published source and candidate source, including work merged through release branches. Its draft stays on its branch until QA accepts that candidate and Rich lands it. Publication requires the matching approved entry on remote main.
+The changelog worker (`changelog-worker-brief.md`, beside this file) follows these instructions before publication, from the candidate request. It establishes the net user-visible changes between the pinned published source and candidate source, including work merged through release branches. Its draft stays on its branch until the candidate is cleared and Rich lands it: a nightly's notes land on QA's READY; a stable's notes land once the stable build's own proofs pass, with no QA walk. Publication requires the matching approved entry on remote main.
 
 ## What the entry is
 

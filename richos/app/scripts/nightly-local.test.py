@@ -3721,8 +3721,19 @@ class PublishedReportTests(unittest.TestCase):
         self.assertIn("Keep this job open", row["question"])
         self.assertIn("remove its entry and record through the normal gate", row["question"])
         self.assertIn("--type newt --model opus --brief", row["question"])
+        self.assertIn("while QA walks it", row["question"])
+        self.assertIn("After QA READY", row["question"])
         self.assertEqual([args[0] for args in self.started], [str(m.ESCALATE)])
         self.main_untouched()
+
+    def test_a_stable_notes_job_says_no_qa_walk_gates_it(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.prepare(channel="stable")
+        (row,) = self.rows()
+        self.assertIn("a stable has no QA walk", row["question"])
+        self.assertIn("Once the stable build proofs pass (no QA walk)", row["question"])
+        self.assertNotIn("while QA walks it", row["question"])
+        self.assertNotIn("After QA", row["question"])
 
     def test_richer_source_packet_keeps_the_existing_job_and_refreshes_its_brief(self):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -3827,7 +3838,8 @@ class PublishedReportTests(unittest.TestCase):
         self.assertEqual(row["title"], "v1.2.1 published; bump main's next release version.")
         self.assertIn("next-version-worker-brief.md", row["question"])
         self.assertIn("already published", row["question"])
-        self.assertIn("zach-sonnet-next-version-v1-2-1", row["question"])
+        self.assertIn("zach-sonnet-nv121 ", row["question"] + " ")
+        self.assertRegex(row["question"], r"zach-sonnet-[a-z0-9]{1,12} --repo")
         self.assertIn("--repo richos --type zach --model sonnet --brief", row["question"])
         brief = self.runner.state / "next-versions/v1-2-1/next-version-worker-brief.md"
         self.assertIn(shlex.quote(str(brief)), row["question"])
@@ -3858,7 +3870,7 @@ class PublishedReportTests(unittest.TestCase):
 
     def test_the_brief_keeps_rejected_notes_off_main_and_makes_newt_own_source_facts(self):
         brief = (m.ROOT / m.CHANGELOG_WORKER_BRIEF).read_text()
-        for text in ("<TAG>", "<REQUEST>", "QA accepts", "facts.md", "changed_files",
+        for text in ("<TAG>", "<REQUEST>", "QA's READY", "no QA walk", "facts.md", "changed_files",
                      "Never land a rejected", "changelog-instructions.md", "notes-draft"):
             self.assertIn(text, brief)
 

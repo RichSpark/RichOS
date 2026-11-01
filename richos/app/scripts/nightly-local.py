@@ -8,7 +8,8 @@ engine-pinned candidate for QA to walk; only an explicit later `publish --run
 channel. `candidate --run <run-id>` prints what a walker needs to open it.
 Only `release` and `publish` may publish. Keys remain in the local
 Keychain/private files. A completed build automatically requests its changelog worker
-before publication. QA accepts the candidate and Rich reviews and lands its notes;
+before publication. A nightly's notes land on QA's READY; a stable's notes land once the stable
+build's own proofs pass, with no QA walk. Rich reviews and lands them;
 the publisher refuses until remote main contains those exact notes. After stable,
 only the next-version bump remains. This command never commits to or pushes main.
 """
@@ -1681,6 +1682,7 @@ class Runner:
             if (prior.get("identity_sha256") == identity_digest
                     or prior.get("request_sha256") == digest or old_identity == identity):
                 return remember(prior["escalation"])
+        stable_candidate = packet["channel"] == "stable"
         title = f"Prepare {info['tag']} changelog before publication ({identity_digest[:12]})"
         model = "opus"
         start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
@@ -1688,9 +1690,11 @@ class Runner:
                             "--type", "newt", "--model", model, "--brief", str(brief)])
         question = (f"Start Newt, the Release Notes Writer, with this exact command: `{start}`. "
                     f"The brief already names the tag and request. The candidate's run is "
-                    f"{info['run_id']}. Draft now while QA walks it. Keep rejected drafts off main. "
+                    f"{info['run_id']}. Draft now{' while QA walks it' if not stable_candidate else ' (a stable has no QA walk)'}. "
+                    "Keep rejected drafts off main. "
                     "Newt must establish the release facts from the pinned implementation and account for "
-                    "the complete changed-file inventory before writing. After QA acceptance, "
+                    "the complete changed-file inventory before writing. "
+                    f"{'Once the stable build proofs pass (no QA walk)' if stable_candidate else 'After QA READY'}, "
                     "land the matching notes and record, "
                     f"then immediately run nightly-local.py publish --run {info['run_id']} yourself. "
                     "Keep this job open until the release body and installable channel are verified. "
@@ -3516,9 +3520,10 @@ BRIEF_TAG = "<TAG>"
 
 
 def published_escalation(tag, stable, brief):
-    slug = re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")[:40].rstrip("-")
+    # The spawn guard wants <role>-<model>-<identifier>, identifier lower-case alphanumeric, at most 12.
+    slug = "nv" + re.sub(r"[^a-z0-9]+", "", tag.lower().lstrip("v"))[:10]
     start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
-                        f"zach-sonnet-next-version-{slug}", "--repo", "richos",
+                        f"zach-sonnet-{slug}", "--repo", "richos",
                         "--type", "zach", "--model", "sonnet", "--brief", str(brief)])
     title = f"{tag} published; bump main's next release version."
     return title, (f"The changelog is already published with {tag}. Start Zach with this exact "
