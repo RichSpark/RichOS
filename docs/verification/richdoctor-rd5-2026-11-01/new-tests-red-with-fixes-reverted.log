@@ -1,0 +1,6 @@
+test engine::tests::a_reopened_claude_investigation_keeps_its_question_for_claude_even_in_the_built_in_words ... FAILED
+test engine::tests::an_investigation_keeps_retrying_a_failure_that_keeps_failing_and_shows_no_card_while_open has been running for over 60 seconds
+test engine::tests::an_investigation_keeps_retrying_a_failure_that_keeps_failing_and_shows_no_card_while_open ... FAILED
+thread 'engine::tests::a_reopened_claude_investigation_keeps_its_question_for_claude_even_in_the_built_in_words' (297037822) panicked at src/engine.rs:1993:9:
+thread 'engine::tests::an_investigation_keeps_retrying_a_failure_that_keeps_failing_and_shows_no_card_while_open' (297037823) panicked at src/engine.rs:1972:13:
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 44 filtered out; finished in 60.25s

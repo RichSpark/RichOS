@@ -61,8 +61,8 @@ struct Inner {
     auto_tries: u32,
 }
 
-/// How many times RichDoctor tries again by itself before the failure card (with its Retry
-/// button) is shown.
+/// How many times RichDoctor tries again by itself while preparing the report before it builds the
+/// report without Claude. An investigation has no such limit.
 const AUTO_RETRIES: u32 = 3;
 
 /// How long RichDoctor rests before trying again by itself, for a failure that can clear up
@@ -583,19 +583,17 @@ impl Engine {
     }
 
     /// A failure that can clear up by itself (a timeout, the service, a usage limit) is tried again
-    /// by itself while the window is open, after the rest its kind needs; only when it keeps
-    /// failing does the card with its Retry button show. `true`: a retry is scheduled.
+    /// by itself while the window is open, after the rest its kind needs, for as long as it takes:
+    /// the Retry card shows only for a failure that cannot clear up. `true`: a retry is scheduled.
     fn rest_then_retry(&self, failure: Failure, message: &str) -> bool {
         let Some(default_rest) = auto_retry_rest(failure) else { return false };
         if !self.auto_retry.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
             return false;
         }
         let (draft, operation) = {
-            let mut inner = self.inner.lock().unwrap();
-            if inner.auto_tries >= AUTO_RETRIES {
-                return false;
-            }
-            inner.auto_tries += 1;
+            // No cap: an investigation keeps trying while the window is open, until it recovers,
+            // the person cancels or the window closes (CEO §156: no step left for the person).
+            let inner = self.inner.lock().unwrap();
             (inner.draft.as_ref().map(|d| d.id.clone()), inner.operation)
         };
         let fixed = self.rest_ms.load(Ordering::SeqCst);
@@ -1605,13 +1603,16 @@ impl Engine {
         let inner = self.inner.lock().unwrap();
         let Some(d) = inner.draft.as_ref() else { return };
         let q = d.questions.iter().rev().find(|q| q.1.is_none()).map(|q| q.0.clone());
+        let without_ai = d.without_ai;
         drop(inner);
+        // RichDoctor's own two questions are restored only for a report prepared without AI: with
+        // Claude, the same words are Claude's question, and its answer goes to Claude.
         let pending = match q.as_deref() {
             Some(when::QUESTION) => Pending::When,
             Some(when::ROUGH_QUESTION) => Pending::Rough,
             Some(when::WHICH_QUESTION) => Pending::Which,
-            Some(q) if q == report::WITHOUT_AI_QUESTIONS[1] => Pending::Own(1),
-            Some(q) if q == report::WITHOUT_AI_QUESTIONS[2] => Pending::Own(2),
+            Some(q) if without_ai && q == report::WITHOUT_AI_QUESTIONS[1] => Pending::Own(1),
+            Some(q) if without_ai && q == report::WITHOUT_AI_QUESTIONS[2] => Pending::Own(2),
             Some(other) => Pending::Claude(other.to_string()),
             None => Pending::None,
         };
@@ -1955,19 +1956,49 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_that_keeps_failing_shows_the_card_with_retry_after_the_automatic_tries() {
-        let root = scratch("auto-retry-gives-up");
+    fn an_investigation_keeps_retrying_a_failure_that_keeps_failing_and_shows_no_card_while_open() {
+        let root = scratch("auto-retry-no-cap");
         let (e, events, _) = asked_by_claude(&root);
         e.set_auto_retry(Some(Duration::from_millis(10)));
         // Every attempt fails, on the process that was running and on each fresh one after it.
         std::fs::write(e.env().store.work_dir().join("fail-next"), "").unwrap();
         std::fs::write(e.env().store.work_dir().join("fail-first"), "").unwrap();
         e.answer("It closes every time".into());
-        wait_for(&events, &["ai-failed"]);
-        let all = captured_all(&e);
+        // load-bound: local stand-in; waits for more attempts than the old limit of 1 + AUTO_RETRIES.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while captured_all(&e).lines().filter(|l| l.contains("It closes every time")).count() as u32 <= 2 + AUTO_RETRIES {
+            assert!(Instant::now() < deadline, "it stopped retrying: {}", captured_all(&e));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let card = events.lock().unwrap().iter().any(|v| v["t"] == "ai-failed");
         e.close();
-        assert_eq!(all.lines().filter(|l| l.contains("It closes every time")).count() as u32, 1 + AUTO_RETRIES, "{all}");
-        assert!(events.lock().unwrap().iter().any(|v| v["t"] == "ai-failed" && v["retry"] == true));
+        assert!(!card, "no Retry card while the window is open and the failure can clear up");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_reopened_claude_investigation_keeps_its_question_for_claude_even_in_the_built_in_words() {
+        let root = scratch("reopen-ai-own-words");
+        let (e, _events) = engine_at(&root.join("store"), Some(fake_cli(&root)));
+        let mut d = reviewed_draft("");
+        d.stage = Stage::Investigating;
+        d.report = None;
+        d.without_ai = false;
+        d.questions.push((report::WITHOUT_AI_QUESTIONS[2].to_string(), None));
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        e.resume_pending();
+        assert_eq!(e.inner.lock().unwrap().pending, Pending::Claude(report::WITHOUT_AI_QUESTIONS[2].to_string()));
+        let mut n = reviewed_draft("");
+        n.stage = Stage::Investigating;
+        n.report = None;
+        n.without_ai = true;
+        n.questions.push((report::WITHOUT_AI_QUESTIONS[2].to_string(), None));
+        e.env().store.save(&mut n, 2).unwrap();
+        e.open(&n.id).unwrap();
+        e.resume_pending();
+        assert_eq!(e.inner.lock().unwrap().pending, Pending::Own(2), "a no-AI report still restores its own question");
+        e.close();
         std::fs::remove_dir_all(root).ok();
     }
 
