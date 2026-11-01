@@ -125,9 +125,12 @@ mutant land-record-overwritten-not-appended "test_the_land_record_is_appended_be
     "each land would erase the one before it, so of two lands in a row only the second could ever be named -- and an agent whose snapshot predates the first would be told its base moved by nobody. That is the defect this record was moved off the lock file to fix."
 
 # --- 10. IT IS WRITTEN WHERE THE REF MOVES, NOT WHERE THE CALL ENDS -----
-# `integrate` is idempotent and is re-run after a partial cleanup. A record
+# `integrate` is idempotent and is re-run after an interruption. A record
 # written at the end of the call rather than at the merge would count those
-# repeats as lands that never happened.
+# repeats as lands that never happened. The repeat that reaches the land is the
+# one after a crash between the merge and the receipt being marked integrated;
+# a repeat of integrated work (a partial cleanup's) never reaches it, so the
+# test crashes its first integrate after the merge and then integrates again.
 mutant land-recorded-without-a-merge "test_the_land_record_is_appended_beside_the_lock_and_names_the_conversation" "$A" \
     '                pending=[r for r in repositories_to_land if not plan[r]["already"]]' \
     '                pending=list(repositories_to_land)' \
