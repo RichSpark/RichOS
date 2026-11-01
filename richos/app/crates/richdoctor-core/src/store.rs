@@ -272,7 +272,23 @@ impl Store {
         id.len() == 14 && id.starts_with("d-") && id[2..].bytes().all(|b| b.is_ascii_hexdigit())
     }
 
+    /// Save `draft` only if it changed. A draft that is the same as the one on disk is not
+    /// rewritten and keeps its saved time: opening a report and closing the window again must
+    /// never restamp it with the time it was looked at.
     pub fn save(&self, draft: &mut Draft, now: u64) -> Result<(), SaveError> {
+        if let Some(on_disk) = self.load(&draft.id) {
+            let mut same = draft.clone();
+            same.updated_at = on_disk.updated_at;
+            if same == on_disk {
+                draft.updated_at = on_disk.updated_at;
+                return Ok(());
+            }
+        }
+        self.save_now(draft, now)
+    }
+
+    /// Save `draft` and stamp it with `now`, changed or not: the person chose Save for later.
+    pub fn save_now(&self, draft: &mut Draft, now: u64) -> Result<(), SaveError> {
         if !Self::valid_id(&draft.id) {
             return Err(SaveError { disk_full: false, message: "not a draft id".into() });
         }
@@ -376,6 +392,26 @@ mod tests {
         s.delete(&d.id).unwrap();
         assert!(s.list().is_empty());
         assert!(s.load("../settings").is_none());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn saving_an_unchanged_draft_keeps_its_file_and_its_saved_time() {
+        let (root, s) = store();
+        let mut d = Draft::new(1).unwrap();
+        d.description = "RichOS closes before its window opens.".into();
+        s.save(&mut d, 5).unwrap();
+        let path = s.draft_dir(&d.id).join("draft.json");
+        let before = std::fs::read(&path).unwrap();
+        let mut opened = s.load(&d.id).unwrap();
+        s.save(&mut opened, 999).unwrap();
+        assert_eq!(opened.updated_at, 5, "opening does not restamp");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "and does not rewrite the file");
+        opened.left = "draft, saved to finish later".into();
+        s.save(&mut opened, 1000).unwrap();
+        assert_eq!(s.load(&d.id).unwrap().updated_at, 1000, "a real change is stamped");
+        s.save_now(&mut opened, 2000).unwrap();
+        assert_eq!(s.load(&d.id).unwrap().updated_at, 2000, "Save for later is stamped");
         std::fs::remove_dir_all(root).ok();
     }
 

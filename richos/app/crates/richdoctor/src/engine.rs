@@ -120,8 +120,15 @@ impl Engine {
 
     /// Save the current draft; report the storage state to the window either way.
     fn save(&self, inner: &mut Inner) {
+        self.save_with(inner, false);
+    }
+
+    /// `stamp`: the person chose Save for later, so the saved time is now even when nothing
+    /// else changed. Otherwise an unchanged draft is left alone ([`Store::save`]).
+    fn save_with(&self, inner: &mut Inner, stamp: bool) {
         let Some(d) = inner.draft.as_mut() else { return };
-        match self.env.store.save(d, util::now_millis()) {
+        let now = util::now_millis();
+        match if stamp { self.env.store.save_now(d, now) } else { self.env.store.save(d, now) } {
             Ok(()) => {
                 if inner.unsaved.take().is_some() {
                     self.send(json!({"t": "storage", "ok": true}));
@@ -159,7 +166,8 @@ impl Engine {
     /// draft to resume.
     pub fn first_screen(&self) -> Value {
         let found = install::richos(&self.env.home);
-        let resume = self.env.store.list().into_iter().find(|d| d.stage != Stage::Approved && !d.description.trim().is_empty());
+        // A report that was sent is never unfinished, whatever stage an earlier version left on it.
+        let resume = self.env.store.list().into_iter().find(|d| d.stage != Stage::Approved && !d.description.trim().is_empty() && !matches!(d.delivery.as_ref().map(|x| &x.state), Some(State::Submitted { .. })));
         json!({
             "installation": install::installation_line(&found),
             "ambiguous": install::ambiguous(&found),
@@ -773,7 +781,7 @@ impl Engine {
         if let Some(d) = inner.draft.as_mut() {
             d.left = "draft, saved to finish later".into();
         }
-        self.save(&mut inner);
+        self.save_with(&mut inner, true);
         match &inner.unsaved {
             None => "Saved on this Mac. Nothing was sent.".into(),
             Some(e) if e.disk_full => "Could not save: the disk is full. Copy the report or choose another location.".into(),
@@ -910,6 +918,9 @@ impl Engine {
                 del.state = state.clone();
             }
             d.left = left_words(state);
+            if matches!(state, State::Submitted { .. }) {
+                d.stage = Stage::Approved;
+            }
             self.save(&mut inner);
             let view = self.view(&inner);
             drop(inner);
@@ -923,6 +934,9 @@ impl Engine {
             if let Some(del) = d.delivery.as_mut() {
                 del.state = state.clone();
                 d.left = left_words(state);
+                if matches!(state, State::Submitted { .. }) {
+                    d.stage = Stage::Approved;
+                }
                 self.env.store.save(&mut d, util::now_millis()).ok();
             }
         }
@@ -2003,6 +2017,49 @@ mod tests {
             e.use_image(&util::base64_std(&png(seed)), 0, false).unwrap();
         }
         e
+    }
+
+    /// A sent report is never offered as unfinished: not after its own send, and not a draft an
+    /// earlier version left at Review with a submitted delivery (the 2026-11-01 screenshot).
+    #[test]
+    fn a_sent_report_is_not_offered_on_the_next_open() {
+        let root = scratch("sent-not-offered");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        assert!(e.first_screen()["resume"].is_object(), "before the send it is offered");
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "submitted", "{v}");
+        let id = e.inner.lock().unwrap().draft.as_ref().unwrap().id.clone();
+        assert_eq!(e.env().store.load(&id).unwrap().stage, Stage::Approved, "finished when the send succeeds");
+        assert!(e.first_screen()["resume"].is_null(), "{}", e.first_screen());
+        // A leftover from an earlier version: Review stage, delivery submitted.
+        let mut d = e.env().store.load(&id).unwrap();
+        d.stage = Stage::Review;
+        d.left = "draft, saved to finish later".into();
+        e.env().store.save(&mut d, 5).unwrap();
+        assert!(e.first_screen()["resume"].is_null(), "recognized as sent: {}", e.first_screen());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// A report saved to finish later is offered with the time it was saved, and opening it and
+    /// closing the window does not rewrite it or move that time.
+    #[test]
+    fn a_saved_for_later_report_is_offered_with_its_own_time_and_opening_does_not_rewrite_it() {
+        let root = scratch("saved-time");
+        let (e, _) = engine_at(&root.join("store"), None);
+        let mut d = reviewed_draft("");
+        d.left = "draft, saved to finish later".into();
+        e.env().store.save_now(&mut d, 1_793_254_000_000).unwrap();
+        let path = e.env().store.draft_dir(&d.id).join("draft.json");
+        let before = std::fs::read(&path).unwrap();
+        let offered = e.first_screen();
+        assert_eq!(offered["resume"]["id"], d.id.as_str());
+        assert_eq!(offered["resume"]["saved_at"], util::local_clock(1_793_254_000_000).as_str());
+        e.open(&d.id).unwrap();
+        e.close();
+        assert_eq!(std::fs::read(&path).unwrap(), before, "opening and closing leave the draft file as it was");
+        assert_eq!(e.first_screen()["resume"]["saved_at"], util::local_clock(1_793_254_000_000).as_str());
+        std::fs::remove_dir_all(root).ok();
     }
 
     /// §140: Send runs the live relay's calls straight through; success shows the issue link.
