@@ -71,8 +71,9 @@ The terminal retains unmigrated Markdown handling and shares the handover parser
 The originating locator/READY ID is carried in existing pending/lock/attempt
 records. Review results use the shared writer on that pair and an incoming
 `review_result` observation labelled `review-watch`, never Codex or user authority.
-A handover sent as one message may start with `READY TO LAND: codex/...`;
-a `## ` heading is optional. Both use the existing READY parser and gates.
+A plain handover starts its first line with uppercase `READY TO LAND: codex/...`.
+A `## ` heading also works. Both use the existing READY parser and gates;
+ordinary status and acknowledgement prose does not start a review.
 A failed result write reconciles by the same ID on the next look. Review policy,
 quota controls and landing gates remain in the existing scheduler.
 

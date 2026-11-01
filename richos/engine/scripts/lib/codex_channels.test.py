@@ -209,6 +209,7 @@ class Channels(unittest.TestCase):
         env.pop("CODEX_COORDINATION_ROOT", None)
         out = subprocess.check_output(shlex.split(command) + ["read", "--locator", p], env=env, text=True)
         self.assertEqual(json.loads(out)["records"][0]["text"], "Exact user task")
+        self.assertIn("READY TO LAND:", json.loads(out)["instructions"])
         source = Path(p) / "to-rich.jsonl"
         original = source.with_suffix(".preserved")
         source.rename(original)

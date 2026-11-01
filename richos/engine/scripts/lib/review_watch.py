@@ -740,7 +740,7 @@ class World(object):
                     if row.get("kind", "message") == "message":
                         text = row["text"]
                         first = text.lstrip().split("\n", 1)[0]
-                        if re.match(r"READY\s+TO\s+LAND\b", first, re.I):
+                        if first.startswith("READY TO LAND:"):
                             text = "## " + text.lstrip()
                         for header, body in split_entries(text):
                             got = self.codex_handover(header, body, str(source), str(path / "to-codex.jsonl"), now,

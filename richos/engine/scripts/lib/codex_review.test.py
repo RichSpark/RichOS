@@ -108,6 +108,8 @@ class Reviews(unittest.TestCase):
         path = Path(c.connect("Original task", "fixture source", scope=self.scope)["locator"])
         c.send(path, "not-ready", "Not ready yet: codex/fixture is still running author proof")
         c.send(path, "ack-ready", "Acknowledged; I will post READY TO LAND for codex/fixture once the walk passes")
+        c.send(path, "soon-ready", "Ready to land soon: codex/fixture still waits for its walk")
+        c.send(path, "caps-soon-ready", "READY TO LAND soon: codex/fixture still waits for its walk")
         state = {}
         items, problems = self.world.channel_items(100, state, [c.connection(path)])
         self.assertFalse(problems)

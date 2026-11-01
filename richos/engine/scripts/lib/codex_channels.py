@@ -190,7 +190,9 @@ def handoff(path):
             "the handoff/transcript, never silently replace it. Send requires --id: "
             "record it in your command; after an uncertain response read --direction "
             "to-rich and retry that SAME ID/text/reply-to. A fresh ID is a new message. "
-            "Read to-codex during work and while awaiting replies. Saved is not completed."
+            "Read to-codex during work and while awaiting replies. Saved is not completed. "
+            "Start a plain review handover's first line with uppercase READY TO LAND: "
+            "followed by your actual codex/ branch. Existing ## headings also work."
             % (path, helper))
 
 
