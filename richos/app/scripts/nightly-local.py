@@ -2089,6 +2089,10 @@ class Runner:
         self.command(sys.executable, self.source / SCRIPTS / "proof-run.py",
                      "--commands", selection, "--log-dir", logdir,
                      "--slot-wait", str(MUTATION_SLOT_WAIT),
+                     # The build's own run goes ahead of teammates' runs (proof_slots.py): named
+                     # here, on this command line only, so no test a gate runs from the source
+                     # tree is mistaken for it (run 20261101T104504Z-3ecb70df).
+                     "--release-state", self.state,
                      # The engine never reads this output-only nightly generation id.
                      # Keep the actual id on the coordinator, normalize only this batch.
                      # ci-shard.sh stops a unit at min(3600, max(900, 3 x weight)) unless

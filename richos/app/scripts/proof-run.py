@@ -181,8 +181,10 @@ run ahead of it still has checks waiting to be admitted (2026-10-29: six runs at
 one run's 37 checks never admitted), so starting beside it cannot starve it; a free slot is taken
 at once (2026-11-01). Only a check the run would start the moment the Mac lets it counts, never
 one waiting for its own lane or prerequisite (waiting_to_be_admitted, 2026-10-31). Ahead means a
-nightly or release command's own run first (it never waits in the line, 2026-11-01), then the
-order slots were taken, except a land holding integration priority, which goes first.
+nightly or release command's own run first (it never waits in the line, 2026-11-01; only the run
+the nightly names with --release-state, never a fixture run a test starts inside the build's
+tree), then the order slots were taken, except a land holding integration priority, which goes
+first.
 """
 import argparse
 import copy
@@ -2949,6 +2951,10 @@ def run_main(argv, run_state):
                    help="an explicit bound on the wait for the large engine-plan slot (default: none, a run waits its turn)")
     p.add_argument("--admission-wait", type=float, default=1800)
     p.add_argument("--slot-wait", type=float, default=proof_slots.DEFAULT_WAIT_SECONDS)
+    p.add_argument("--release-state",
+                   help="the state folder of the nightly or release command this run belongs to "
+                        "(nightly-local.py mutation_units only): with this checkout as its source tree "
+                        "and its release.lock held, the run goes first (proof_slots.py)")
     p.add_argument("--max-cpu", type=float, default=reserve.DEFAULT_MAX_CPU)
     p.add_argument("--budget", type=float, default=BUDGET_SECONDS)
     p.add_argument("--deadline", type=float, default=3 * BUDGET_SECONDS)
@@ -3046,7 +3052,8 @@ def run_main(argv, run_state):
     global SLOT
     try:
         SLOT, slot_wait = proof_slots.acquire(
-            {"checkout": ROOT, "logs": logdir, "selection": " ".join(argv if argv is not None else sys.argv[1:])[:300]},
+            {"checkout": ROOT, "logs": logdir, "selection": " ".join(argv if argv is not None else sys.argv[1:])[:300],
+             "release_state": args.release_state},
             args.slot_wait, say=lambda line: print("[%s] %s" % (stamp(), line), flush=True), checks=len(items))
     except TimeoutError as exc:
         print("proof-run: NOT ADMITTED: %s. Nothing was run. Logs: %s" % (exc, logdir), flush=True)

@@ -789,6 +789,18 @@ Path(sys.argv[1]).write_text(str(p.pid))
     def test_a_worker_wait_after_the_proof_slot_never_spends_the_mutation_deadline(self):
         self.mutation_admission_wait(inner_worker=True)
 
+    def test_only_the_mutation_batch_names_the_nightly_state_to_go_first(self):
+        # Run 20261101T104504Z-3ecb70df: the nightly's script-suites gate ran the queue tests
+        # from the source tree while release.lock was held, and every fixture run there went
+        # first. The build's own proof run is named on its command line, by this method only.
+        r = m.Runner(self.root, self.root / "state", {}, io.StringIO())
+        calls = []
+        with patch.object(r, "command", side_effect=lambda *a, **kw: calls.append([str(x) for x in a])):
+            r.mutation_units(["fixture.test.sh"], {}, "fixture")
+        args = calls[0]
+        self.assertEqual(args[args.index("--release-state") + 1], str(self.root / "state"))
+        self.assertEqual(args[1], str(self.root / "state" / "source" / m.SCRIPTS / "proof-run.py"))
+
     def mutation_admission_wait(self, inner_worker=False):
         # Review rv-20261011T232800Z-6d2774ef-374f P1: the deadline's clock started at the
         # machine token, before proof-run.py waited for its proof-run slot, so a long wait in
