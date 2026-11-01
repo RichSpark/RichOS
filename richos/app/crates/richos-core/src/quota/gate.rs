@@ -1,5 +1,9 @@
-//! Desktop hook wrapper. A hold keeps the provider's tool call pending, so the
-//! worker retains its context and never emits a false SubagentStop receipt.
+//! Desktop hook wrapper. A hold keeps a helper's next call to Claude pending, so the worker
+//! retains its context and never emits a false SubagentStop receipt. **It holds the Claude call,
+//! never the command** (the CEO's §153, 2026-10-31: "THE WHOLE FUCKING QUOTA THING IS ONLY EVER AN
+//! ISSUE IF THE WORK IS CONSUMING QUOTA/TOKENS"): a helper's tool calls run, its build, test or
+//! wait included, and the hold applies at [`HOLD_EVENT`], after they have resolved and before
+//! their results go back to the model, which is the next thing that spends quota.
 //! A new agent's dispatch during a hold is refused at once with the reason instead.
 use super::{Admission, Policy, ReadError, Snapshot, View};
 use serde_json::Value;
@@ -217,12 +221,52 @@ pub(super) fn held_named(state: &Path, account: &str) -> String {
 }
 
 /// One tool call of helper `agent` on `account` through the gate, answered at once (no wait):
-/// what the call is told when refused. For the work host's tests.
+/// what the call is told when refused, at the point the hold applies (its batch's
+/// [`HOLD_EVENT`]). For the work host's tests.
 #[cfg(test)]
 pub(crate) fn helper_call(state: &Path, scope: &Path, account: &str, agent: &str) -> Result<(), String> {
-    let payload = serde_json::json!({"hook_event_name": "PreToolUse", "agent_id": agent, "session_id": "stu-session",
-        "tool_name": "Bash", "tool_input": {"command": "cargo test"}});
-    wait(&payload, state, scope, account, Duration::ZERO, Duration::ZERO).map_err(|e| refusal(&e))
+    let payload = serde_json::json!({"hook_event_name": HOLD_EVENT, "agent_id": agent, "session_id": "stu-session",
+        "tool_calls": [{"tool_name": "Bash", "tool_input": {"command": "cargo test"}}]});
+    gate(&payload, state, scope, account, Duration::ZERO, Duration::ZERO).map_err(|e| refusal(&e))
+}
+
+/// **Where a helper is held: Claude Code's `PostToolBatch`**, which "runs once after every tool
+/// call in a batch has resolved, before Claude Code sends the next request to the model"
+/// (code.claude.com/docs/en/hooks). Measured on Claude Code 2.1.316 (2026-11-01, a haiku
+/// subagent running `echo first`, a refused `echo blockme` and `echo third`, with every hook
+/// logging and the batch hook sleeping 4 s): it fires inside a subagent with the subagent's
+/// `agent_id`; it fires for a call a `PreToolUse` hook refused, where no `PostToolUse` does; and
+/// the subagent's next tool call (its next model call's output) came 1.06 s after the batch hook
+/// returned, never during it. So the point after the tool has run is also the one point every
+/// next model call of a helper passes, whatever happened to its calls.
+pub const HOLD_EVENT: &str = "PostToolBatch";
+
+/// **The gate, by hook event** (the CEO's §153, 2026-10-31: quota handling acts only on what
+/// spends quota). At `PreToolUse` a helper's tool call is never held for quota: its command
+/// runs, whatever the allowance, and only a closed grant refuses it, as before. A new agent's
+/// dispatch is judged there, as before, so one during a hold is refused at once. At
+/// [`HOLD_EVENT`], once the batch has run, a helper's next call to Claude waits while the hold
+/// applies (`wait`), with when a hold starts and releases unchanged. The lead is held at
+/// neither: the 93% rule pauses what the lead runs and starts, never the lead itself.
+fn gate(
+    payload: &Value,
+    state: &Path,
+    scope: &Path,
+    account: &str,
+    tick: Duration,
+    budget: Duration,
+) -> io::Result<()> {
+    let worker = payload.get("agent_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty());
+    if payload["hook_event_name"] == HOLD_EVENT {
+        return if worker { wait(payload, state, scope, account, tick, budget) } else { Ok(()) };
+    }
+    if payload["tool_name"] == "Agent" {
+        return wait(payload, state, scope, account, tick, budget);
+    }
+    if worker && !authorized(scope, worker) {
+        return Err(work_ended(scope));
+    }
+    Ok(())
 }
 
 fn wait(
@@ -289,8 +333,11 @@ fn wait(
         if started.elapsed() >= budget {
             // Named (follow-ups 7fed0bef item 3): the hold is this call's account's, and a reader
             // of this refusal must not take it for another account's.
+            // At `HOLD_EVENT` the batch has already run: what is held is the next model call.
+            let ran = if payload["hook_event_name"] == HOLD_EVENT { "Your tool calls ran; their results go back now." }
+                else { "No tool action was run." };
             return Err(io::Error::other(format!(
-                "Still waiting for a current allowance reading on {}. No tool action was run.",
+                "Still waiting for a current allowance reading on {}. {ran}",
                 held_named(state, account),
             )));
         }
@@ -423,14 +470,27 @@ pub fn run_cli() -> i32 {
         if !Path::new(&state).is_absolute() || !Path::new(&scope).is_absolute() {
             return Err(io::Error::other("invalid desktop roots"));
         }
-        wait(
+        let held = gate(
             &payload,
             Path::new(&state),
             Path::new(&scope),
             &account_of_this_process(),
             Duration::from_millis(250),
             Duration::from_secs(21500),
-        )?;
+        );
+        // Nothing stands behind the gate at `HOLD_EVENT` (`install_quota_gate` registers it alone:
+        // the canonical hook has no branch for it). Its answer never stops the helper: exit 2 or a
+        // block there ends the agentic loop (code.claude.com/docs/en/hooks, PostToolBatch decision
+        // control), and a hold pauses, never ends. A refusal reaches the model as context.
+        if payload["hook_event_name"] == HOLD_EVENT {
+            if let Err(e) = held {
+                let context = serde_json::json!({"hookSpecificOutput": {"hookEventName": HOLD_EVENT,
+                    "additionalContext": refusal(&e)}});
+                writeln!(io::stdout(), "{context}")?;
+            }
+            return Ok(0);
+        }
+        held?;
         let mut args = std::env::args_os().skip(2);
         let program = args
             .next()
@@ -1144,6 +1204,79 @@ mod tests {
         // A helper's own call still waits for the release, keeping its context.
         assert!(wait(&json!({"agent_id":"worker-1","tool_name":"Bash"}), &state, &scope, "1",
             Duration::ZERO, Duration::ZERO).unwrap_err().to_string().starts_with("Still waiting"));
+    }
+
+    /// **The hold holds the Claude call, never the command** (the CEO's §153, 2026-10-31: "THE
+    /// WHOLE FUCKING QUOTA THING IS ONLY EVER AN ISSUE IF THE WORK IS CONSUMING QUOTA/TOKENS").
+    /// One account at 94% of its five hours, an hour before the reset: the hold stands. A
+    /// helper's `cargo build` is admitted at `PreToolUse` at once, with no pause record, so it
+    /// runs to completion; on main the gate held it there until the quota freed, though a build
+    /// spends none. Its batch (`HOLD_EVENT`, after the call has run and before its result goes
+    /// back to the model) is where it waits, keeping its pause record, until a reading under the
+    /// pause point releases it, as before. A new agent's dispatch is still refused at once, and
+    /// the lead is held at neither point.
+    #[test]
+    fn during_a_hold_a_helpers_tool_call_runs_and_the_hold_applies_before_its_result_returns() {
+        let (_root, service, state, scope) = setup();
+        publish(&service, 3_600_000);
+        assert!(matches!(admission(&state, crate::util::now_millis()), Admission::Held { .. }), "94% did not hold");
+        let command = json!({"hook_event_name": "PreToolUse", "agent_id": "helper-a", "session_id": "s-1",
+            "tool_name": "Bash", "tool_input": {"command": "cargo build"}, "tool_use_id": "toolu_build"});
+        gate(&command, &state, &scope, "1", Duration::ZERO, Duration::ZERO)
+            .expect("the helper's build was held before it ran, though it spends no quota");
+        assert!(super::super::holds::held_calls(&state).unwrap().is_empty(), "the command was recorded as held");
+
+        let batch = json!({"hook_event_name": HOLD_EVENT, "agent_id": "helper-a", "session_id": "s-1",
+            "tool_calls": [{"tool_name": "Bash", "tool_input": {"command": "cargo build"}, "tool_use_id": "toolu_build",
+                "tool_response": "Finished `dev` profile"}]});
+        let (tx, rx) = std::sync::mpsc::channel();
+        // A hang guard, never a verdict (audit R9): the verdict is the helper's own answer.
+        const HANG_GUARD: Duration = Duration::from_secs(60);
+        let waiter = {
+            let (state, scope, batch) = (state.clone(), scope.clone(), batch.clone());
+            std::thread::spawn(move || {
+                tx.send(gate(&batch, &state, &scope, "1", Duration::from_millis(5), HANG_GUARD * 2))
+                    .expect("the test thread holds rx until the verdict arrives");
+            })
+        };
+        // The fact, not a clock: its pause record is written once it is held, before any wait.
+        let started = Instant::now();
+        while !super::super::holds::held_calls(&state).unwrap().iter().any(|row| row.id == "helper-a") {
+            assert!(started.elapsed() < HANG_GUARD, "the helper's batch never entered the hold");
+            if let Ok(answer) = rx.try_recv() {
+                panic!("the result went back to the model during the hold: {answer:?}");
+            }
+            std::thread::yield_now();
+        }
+        assert!(rx.try_recv().is_err(), "the result went back to the model during the hold");
+
+        // The dispatch of a new agent is still refused at once, with the hold's reason.
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":true,"background_work_allowed":true})).unwrap();
+        let dispatch = refusal(&gate(&json!({"hook_event_name": "PreToolUse", "tool_name": "Agent", "session_id": "s-1"}),
+            &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(dispatch.starts_with("RichOS desktop quota: No new agent was started"), "{dispatch}");
+        // The lead: its calls run and its batch goes straight back.
+        for lead in [json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "stu"}),
+                     json!({"hook_event_name": HOLD_EVENT, "session_id": "stu", "tool_calls": []})] {
+            gate(&lead, &state, &scope, "1", Duration::ZERO, Duration::ZERO).expect("the lead was held");
+        }
+
+        // A reading under the pause point releases it, as before.
+        let now = crate::util::now_millis();
+        *service.snapshot.lock().unwrap() = Snapshot { checked_at: Some(now), windows: vec![Window { id: "five_hour".into(),
+            label: "Five-hour".into(), used_percent: 40., resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 }],
+            ..Default::default() };
+        service.publish().unwrap();
+        rx.recv_timeout(HANG_GUARD).expect("the helper's model call never resumed").expect("the helper was refused");
+        waiter.join().unwrap();
+        // Held with no reading left in the budget, the batch says its calls ran.
+        publish(&service, 3_600_000);
+        let said = refusal(&gate(&batch, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(said.contains("Your tool calls ran; their results go back now."), "{said}");
+        // A closed grant still refuses the helper's next command before it runs.
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":false,"background_work_allowed":false})).unwrap();
+        let said = refusal(&gate(&command, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(said.starts_with("RichOS desktop: This app work has ended or was stopped."), "{said}");
     }
 
     // ---- a document written for him comes out American (CEO §93) ----------------------------

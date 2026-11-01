@@ -679,6 +679,13 @@ impl EngineProfile {
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
     /// do not implement that CLI entrypoint keep their canonical hooks unchanged.
+    ///
+    /// Two registrations (the CEO's §153: quota handling acts only on what spends quota). The
+    /// wrapper around the canonical `PreToolUse` hook judges a new agent's dispatch and a closed
+    /// grant, and lets every other tool call run. The gate alone at `PostToolBatch`
+    /// ([`crate::quota::gate::HOLD_EVENT`]) holds a helper's next call to Claude while a hold
+    /// applies, after its tool calls have run; the canonical hook has no branch for that event,
+    /// so nothing stands behind it there.
     pub fn install_quota_gate(&self, executable: &Path) -> Result<(), RuntimeError> {
         let path = self.plugin.join("hooks/hooks.json");
         let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)
@@ -686,6 +693,8 @@ impl EngineProfile {
         let command = format!("{} --claude-quota-gate {} {}", quote(executable),
             quote(&self.runtime.python), quote(&self.engine.join("scripts/app-engine-hook.py")));
         manifest["hooks"]["PreToolUse"][0] = json!({"hooks":[{"type":"command", "command":command, "timeout":21600}]});
+        manifest["hooks"][crate::quota::gate::HOLD_EVENT] = json!([{"hooks":[{"type":"command",
+            "command":format!("{} --claude-quota-gate", quote(executable)), "timeout":21600}]}]);
         write(&path, &manifest.to_string())
     }
     /// **Make the team's first save in a connected folder wait for the user's Git name**
