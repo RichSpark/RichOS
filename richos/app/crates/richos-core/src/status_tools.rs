@@ -675,10 +675,19 @@ mod tests {
         // Direct session reads are read-only; peer send has a separate host-bound contract.
         let listed = tools();
         let listed = listed["tools"].as_array().unwrap();
-        assert_eq!(listed.len(), 6);
-        assert!(listed[..4].iter().all(|t|t["annotations"]["readOnlyHint"]==true));
-        assert_eq!(listed[4]["name"],"send");
-        assert_eq!(listed[5]["name"],"delegate");
+        assert_eq!(listed.len(), 7);
+        for name in [crate::system_resources::TOOL, LOOK_TOOL_NAME, "sessions", "transcript"] {
+            let tool=listed.iter().find(|tool|tool["name"]==name).unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"],true,"{name}");
+        }
+        for name in ["send", "delegate", crate::codex_bridge::TOOL] {
+            assert!(listed.iter().any(|tool|tool["name"]==name),"{name}");
+        }
+        let channel=listed.iter().find(|tool|tool["name"]==crate::codex_bridge::TOOL).unwrap();
+        assert_eq!(channel["inputSchema"]["additionalProperties"],false);
+        for identity in ["entity_id", "thread_id", "state_root"] {
+            assert!(channel["inputSchema"]["properties"].get(identity).is_none(),"{identity} must remain host-owned");
+        }
         assert!(call(&scope,&UnknownScreen,"delegate",json!({"text":"hello","from":"stu"})).is_err());
         assert!(call(&scope,&UnknownScreen,"send",json!({"text":"hello","from":"stu"})).is_err());
         std::fs::remove_dir_all(root).unwrap();
