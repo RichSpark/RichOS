@@ -3205,7 +3205,7 @@
     },
     "scripts/hooks/guard-ci-turn-gate.py": {
       "source": "scripts/hooks/guard-ci-turn-gate.py",
-      "sha256": "e7b351262d555a9bd23b544c20aca381f03a0a0993220e6d183ba901c9acd091",
+      "sha256": "3fa89839602831471c38a16eb84becc5106797f6599af260409102239cdad758",
       "evidence": "Standard-library transcript/CI-state predicate imports fixed ci_pause.pause_for only. It parses shell text as data; actual subprocesses are fixed Git queries and gh api. No orchestration config values are sourced or read.",
       "keys": [],
       "edges": [
@@ -12833,14 +12833,14 @@
     },
     "scripts/provider-supervisor.py#fixture-providers": {
       "source": "scripts/provider-supervisor.py",
-      "sha256": "fb6d761e3570c96eb8bcf89e8bd508f6b43bdaedecaa080c87cd1d9043d5ca23",
+      "sha256": "0756ca0b0c5ed6ee568a1dcb0d30124d814b9b8fb2e24d1aaa89c2a619ee3407",
       "evidence": "Called by provider-supervisor.test.py with generated Python provider/launcher scripts and fixed sleep commands. Supervisor imports stdlib and native libproc only, observes process tables and executes only caller fixture argv. No engine helper or orchestration config. Renewal 2026-10-28 (zero-CPU waits): operator_main blocks on a standard-library kqueue (the provider's and the owner's exit, the signal wakeup descriptor) between its once-a-second snapshots instead of waking every 100 ms; still standard library and native libproc only. Renewal 2026-10-31 (Tom's P0 finding 1, a nohup command): each snapshot also reads, in process (KERN_PROCARGS2 through libc sysctl on macOS, /proc/<pid>/environ on Linux), the environment of processes reparented to launchd since the provider started, to find its own RICHOS_SESSION_PID tag; no file, configuration or engine helper is read. Renewal 2026-10-31 (review rv-20261031T063529Z-4ca7addc-9ce9): the kqueue also watches the provider's forks (NOTE_FORK) and takes a snapshot at once and twice more within 30 ms; a recorded group stays the provider's while it still has a member and its leader id is not reused. Still standard library and native libproc only.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/provider-supervisor.test.py": {
       "source": "scripts/lib/provider-supervisor.test.py",
-      "sha256": "00b29e9994052c9e6787c022f102ce6699fe4068cceb974d96203bf2765fc5e0",
+      "sha256": "9891629bce5f946b4598d9e9a09f3a0a172622cfbaccde610118cd76d2d94448",
       "evidence": "Loads/calls supervisor with private generated provider/desktop scripts and native sleep/ps. Tests process identity, signals and private JSON logs, no config or live provider command.",
       "keys": [],
       "edges": [
@@ -18160,7 +18160,7 @@
         "scripts/lib/ceo-ruled.py": "e92586fdd79f1c648c2f764613f47a56bc7f2d843061c70053611d7f2e23ce30",
         "scripts/hooks/guard-ceo-todos-commits.sh": "f5f1d0a12fdf1fb2e94cb64b8d58c1765f80134270e125e510e05f83e3e37904",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
-        "scripts/hooks/guard-ci-turn-gate.py": "e7b351262d555a9bd23b544c20aca381f03a0a0993220e6d183ba901c9acd091",
+        "scripts/hooks/guard-ci-turn-gate.py": "3fa89839602831471c38a16eb84becc5106797f6599af260409102239cdad758",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/guard-completeness-commits.sh": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
@@ -18819,7 +18819,7 @@
         "scripts/lib/ceo-ruled.sh": "737879339e074a0c41011974a8dcdc74bbbbf7118ffda2904e2f8da7a0b10e91",
         "scripts/lib/ceo-ruled.py": "e92586fdd79f1c648c2f764613f47a56bc7f2d843061c70053611d7f2e23ce30",
         "scripts/hooks/guard-ci-turn-gate.sh": "e65b19ac6441e3f07454cfb99fe3a8b6ccc984539923caa91833cd464847347f",
-        "scripts/hooks/guard-ci-turn-gate.py": "e7b351262d555a9bd23b544c20aca381f03a0a0993220e6d183ba901c9acd091",
+        "scripts/hooks/guard-ci-turn-gate.py": "3fa89839602831471c38a16eb84becc5106797f6599af260409102239cdad758",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/guard-definition-drift.sh": "f8a3998ce46f399049256b3c67b8b1836794e130d29c28dc75d509e6090fedcb",
         "scripts/hooks/guard-failure-type-answer.sh": "2ee4e179524f1e1cb385c53c79ac20e7d2aedd103254b17b8925e86bbda31484",

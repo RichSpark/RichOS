@@ -355,6 +355,28 @@ def _command_word_index(toks):
     return None
 
 
+_REDIRECT = re.compile(r"^(\d*|&)(>>?|<)(&\d*-?)?")
+
+
+def _unreadable(text):
+    """A word the shell would expand (`$R`, `$(...)`, a backtick): this gate reads text, it
+    cannot know what the word becomes, so it must not guess a repository or branch from it."""
+    return "$" in text or "`" in text
+
+
+def _without_redirects(toks):
+    """The words of a command with its redirects removed: `2>&1`, `>/dev/null`, `> file`."""
+    out, k = [], 0
+    while k < len(toks):
+        m = _REDIRECT.match(toks[k])
+        if not m:
+            out.append(toks[k])
+        elif m.end() == len(toks[k]) and not m.group(3):
+            k += 1          # a bare `>` or `2>`: the next word is the file, not an argument
+        k += 1
+    return out
+
+
 def parse_pushes(command, cwd):
     """Every `git push` in one command string, with the directory it ran in.
 
@@ -369,7 +391,7 @@ def parse_pushes(command, cwd):
     out = []
     here = cwd or ""
     for seg in _segments(command):
-        toks = _tokens(seg)
+        toks = _without_redirects(_tokens(seg))
         if not toks:
             continue
         if toks[0] == "cd" and len(toks) >= 2 and not toks[1].startswith("-"):
@@ -430,6 +452,8 @@ def parse_pushes(command, cwd):
                 branch = ""
             if branch not in branches:
                 branches.append(branch)
+        if _unreadable(where) or _unreadable(remote) or any(_unreadable(b) for b in branches):
+            continue        # not readable literally: say nothing
         for branch in branches or [branch]:
             out.append({"dir": where, "remote": remote, "branch": branch})
     return out

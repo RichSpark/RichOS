@@ -28,6 +28,17 @@ class Rows(unittest.TestCase):
             got = push_cmd(cmd)
             self.assertEqual([p["branch"] for p in got], ["main"], cmd)
 
+    def test_unreadable_words_are_no_repository_or_branch(self):
+        for cmd in ("cd $R && git push origin main", "git -C $R push origin main",
+                    "git push origin $B", "git push $REMOTE main"):
+            self.assertEqual(push_cmd(cmd), [], cmd)
+
+    def test_redirects_are_not_branch_names(self):
+        for cmd in ("git push origin main 2>&1", "git push origin main >/dev/null 2>&1",
+                    "git push origin main > /tmp/out", "git push origin main &>/dev/null"):
+            self.assertEqual([p["branch"] for p in push_cmd(cmd)], ["main"], cmd)
+        self.assertEqual([p["branch"] for p in push_cmd("git push 2>&1")], [""])
+
     def test_p3_16_every_pushed_ref(self):
         got = push_cmd("git push origin main release")
         self.assertEqual(sorted(p["branch"] for p in got), ["main", "release"])
