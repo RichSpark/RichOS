@@ -1,0 +1,117 @@
+{
+  "vm": "walk-315e065f8340",
+  "expect_sha": "2433aae77db83a93214653eb081551b30024f6c9",
+  "steps": [
+    {
+      "step": "identity",
+      "evidence": {
+        "built_from": "2433aae77db83a93214653eb081551b30024f6c9"
+      },
+      "outcome": "PASS",
+      "seconds": 0.3
+    },
+    {
+      "step": "first-run",
+      "evidence": {
+        "thread": "thr_91f2f9faa26c4beb94c724e738cf27b5",
+        "title": "Onboarding"
+      },
+      "outcome": "PASS",
+      "seconds": 21.9
+    },
+    {
+      "step": "accounts",
+      "evidence": {
+        "accounts_file": {
+          "accounts": [
+            {
+              "id": "1",
+              "label": "Account 1"
+            },
+            {
+              "id": "2",
+              "label": "Work",
+              "folder": "/Users/admin/testvm/walk-315e065f8340/home/Library/Application Support/com.richos.app/claude-accounts/2"
+            }
+          ],
+          "inUse": "2"
+        },
+        "work_signed_in": "claude login: guest logged in",
+        "work_projects_link": "/Users/admin/testvm/walk-315e065f8340/home/.claude/projects"
+      },
+      "outcome": "PASS",
+      "seconds": 61.8
+    },
+    {
+      "step": "chat",
+      "evidence": {
+        "code": "kiwi-889d6f",
+        "sent_between_guest_ms": [
+          1793555859722,
+          1793555863640
+        ],
+        "prompts": [
+          {
+            "session": "7a6a50f3-bc27-49eb-8165-592bed907615",
+            "transcript_path": "/Users/admin/testvm/walk-315e065f8340/home/Library/Application Support/com.richos.app/claude-accounts/2/projects/-Users-admin-testvm-walk-315e065f8340-home-Library-Application-Support-com-richos-app-coordination/7a6a50f3-bc27-49eb-8165-592bed907615.jsonl"
+          }
+        ],
+        "records_with_code": [
+          "/Users/admin/testvm/walk-315e065f8340/home/.claude/projects/-Users-admin-testvm-walk-315e065f8340-home-Library-Application-Support-com-richos-app-coordination/7a6a50f3-bc27-49eb-8165-592bed907615.jsonl"
+        ],
+        "rich_turns_since_send": [
+          "noted"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 21.0
+    },
+    {
+      "step": "remove",
+      "evidence": {
+        "accounts_file": {
+          "accounts": [
+            {
+              "id": "1",
+              "label": "Account 1"
+            }
+          ],
+          "inUse": "1",
+          "atThreshold": "pause",
+          "limitedUntil": {}
+        },
+        "work_folder": "ls: /Users/admin/testvm/walk-315e065f8340/home/Library/Application Support/com.richos.app/claude-accounts/2: No such file or directory"
+      },
+      "outcome": "PASS",
+      "seconds": 21.0
+    },
+    {
+      "step": "continue",
+      "evidence": {
+        "sent_between_guest_ms": [
+          1793555901740,
+          1793555906999
+        ],
+        "prompts": [
+          {
+            "session": "7a6a50f3-bc27-49eb-8165-592bed907615",
+            "transcript_path": "/Users/admin/testvm/walk-315e065f8340/home/.claude/projects/-Users-admin-testvm-walk-315e065f8340-home-Library-Application-Support-com-richos-app-coordination/7a6a50f3-bc27-49eb-8165-592bed907615.jsonl"
+          }
+        ],
+        "codeword_session": "7a6a50f3-bc27-49eb-8165-592bed907615",
+        "codeword_lines_in_its_record": "5",
+        "rich_turns_since_send": [
+          "kiwi-889d6f"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 43.3
+    }
+  ],
+  "logs_kept": {
+    "app.log": 8263,
+    "relaunch-1793555800201943000.log": 10715,
+    "callbacks.txt": 4730,
+    "refusals.txt": 0
+  }
+}

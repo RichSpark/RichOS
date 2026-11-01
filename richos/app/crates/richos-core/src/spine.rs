@@ -253,6 +253,7 @@ impl Drop for SubmissionTurn {
 /// Submit every available input before waiting. Claude Code owns its scheduling.
 pub fn drive_shared_turns(spine: &std::sync::Mutex<Spine>) -> Result<(), SpineError> {
     let mut failure = None;
+    let mut start_failures: std::collections::HashMap<String, (u32, CognitionError)> = Default::default();
     loop {
         let ran = std::thread::scope(|workers| {
             let mut submitted = Vec::new();
@@ -260,7 +261,28 @@ pub fn drive_shared_turns(spine: &std::sync::Mutex<Spine>) -> Result<(), SpineEr
                 let Some((mut delivery, place)) = spine.lock().unwrap().take_pending_delivery() else { break };
                 // Preserve stdin submission order. Each reply then waits independently.
                 let turn = place.wait_for_its_turn();
-                prepare_delivery_io(&mut &*spine, &mut delivery);
+                // **A chat that cannot start is not started once per queued message** (the
+                // 2026-11-01 start: 44 queued turns each tried and failed). After it failed
+                // to start twice in a row (the second is the `Repeated` card), the rest of
+                // this chat's queue fails at once with the same reason, writing nothing and
+                // starting nothing. Only this drive: the next message he sends tries again.
+                let thread = delivery.binding.thread_id().to_string();
+                match start_failures.get(&thread) {
+                    Some((failures, why)) if *failures >= 2 => {
+                        delivery.preparation_failed = true;
+                        delivery.preparation = Err(copy_cognition_error(why));
+                    }
+                    _ => {
+                        prepare_delivery_io(&mut &*spine, &mut delivery);
+                        if let Err(why) = &delivery.preparation {
+                            if delivery.preparation_failed && delivery.response.is_none() && !delivery.stopped_before_prompt {
+                                let entry = start_failures.entry(thread).or_insert((0, copy_cognition_error(why)));
+                                entry.0 += 1;
+                                entry.1 = copy_cognition_error(why);
+                            }
+                        }
+                    }
+                }
                 drop(turn);
                 let queued = enqueue_delivery(&mut delivery);
                 submitted.push(workers.spawn(move || {
@@ -285,6 +307,14 @@ pub fn drive_shared_turns(spine: &std::sync::Mutex<Spine>) -> Result<(), SpineEr
         if !ran { break; }
     }
     match failure { Some(error) => Err(error), None => Ok(()) }
+}
+
+fn copy_cognition_error(error: &CognitionError) -> CognitionError {
+    match error {
+        CognitionError::PrimingStopped(s) => CognitionError::PrimingStopped(s.clone()),
+        CognitionError::Io(s) => CognitionError::Io(s.clone()),
+        CognitionError::Protocol(s) => CognitionError::Protocol(s.clone()),
+    }
 }
 
 // Shared state is needed for durable commits, never for provider I/O.
@@ -3321,7 +3351,9 @@ impl Spine {
         reason: &str,
     ) -> (crate::interruption::InterruptionCause, String) {
         let mut cause = crate::interruption::classify(reason);
-        if cause.offers_retry() && self.last_turn_offered_another_try(turn_id) {
+        // A lost history is told as itself every time; it is never the "stopped again" card,
+        // which sends him to his sign-in.
+        if cause.offers_retry() && cause != crate::interruption::InterruptionCause::HistoryGone && self.last_turn_offered_another_try(turn_id) {
             cause = crate::interruption::InterruptionCause::Repeated;
         }
         let loss = self.turn_loss(turn_id);
@@ -3332,6 +3364,9 @@ impl Spine {
         eprintln!("[richos] turn interrupted [{}]: {reason}", cause.tag());
         if let Err(e) = self.ledger.record_interruption_cause(turn_id, &record) {
             eprintln!("[richos] the reason for that interruption could not be written down: {e}");
+        } else if cause == crate::interruption::InterruptionCause::HistoryGone {
+            // Told only now that the message is on record.
+            crate::native::commit_history_gone(reason);
         }
         (cause, statement)
     }

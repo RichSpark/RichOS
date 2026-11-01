@@ -1135,7 +1135,12 @@ impl WorkHost {
         crate::session_tools::observe_work_status(&self.message_scope(binding), serde_json::json!({
             "event":"upstream_turn","input_id":input,"session_id":session,"work":message.and_then(|message|message.work.as_ref()),
             "stop_reason":result.as_ref().ok(),"error":result.as_ref().err()
-        }))
+        }))?;
+        // Stu's lost saved history is told to Rich by the status just recorded, so it is marked
+        // told now: the next handoff starts a new work session (conversation priming marks its
+        // own through `Spine::record_interruption`).
+        if let Err(reason) = result { crate::native::commit_history_gone(reason); }
+        Ok(())
     }
 
     fn publish_peer_input(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
@@ -5547,6 +5552,39 @@ mod tests {
         let (notice,_)=crate::session_tools::pending(&scope,"rich").unwrap().unwrap();
         let facts:serde_json::Value=serde_json::from_str(&notice.text).unwrap();
         assert_eq!(facts["input_id"],format!("peer:{second_through}"),"dedup hid a different failed request");
+        host.shutdown();
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    /// **Stu's lost saved history is told once, then the next handoff starts a new session**
+    /// (CEO 2026-11-01). `native_resume` only notes the loss as pending; the failed start Rich is
+    /// told about is what marks it, so a restart never meets the same lost session again.
+    #[test]
+    fn a_handoff_to_stu_whose_saved_history_is_gone_fails_once_then_starts_anew() {
+        let h=harness(0);
+        let marker=h.root.join("history-gone-marker");
+        let session="lost-stu-session-1";
+        crate::native::history_gone_pending(session,marker.clone());
+        let reason=crate::native::NativeError::HistoryGone{session:session.into()}.to_string();
+        struct Lost(String);
+        impl LeaseFactory for Lost {
+            fn spawn(&self)->Result<Box<dyn Cognition>,CognitionError> {unreachable!()}
+            fn spawn_work(&self,_:&ThreadBinding)->Result<Box<dyn Cognition>,CognitionError> {
+                Err(CognitionError::Io(self.0.clone()))
+            }
+        }
+        let host=WorkHost::new(&h.state,Box::new(Lost(reason)),Arc::new(SilentNotifier));
+        let scope=host.message_scope(&h.binding);
+        let path=h.state.join("rich-status.json");
+        crate::session_tools::bind(&path,&scope,"native-rich","rich",None).unwrap();
+        crate::session_tools::send(&path,&scope,serde_json::json!({"text":"Prepare the report"})).unwrap();
+        let (message,through)=crate::session_tools::pending(&scope,"stu").unwrap().unwrap();
+        assert!(!marker.exists());
+        assert!(host.run_message(&Backend::new(),&h.binding,&message,&format!("peer:{through}")).is_err());
+        assert!(marker.exists(),"the reported failed start did not mark Stu's lost history as told");
+        let (notice,_)=crate::session_tools::pending(&scope,"rich").unwrap().unwrap();
+        assert!(notice.text.contains(crate::native::HISTORY_GONE),"Rich was not told the history is gone");
         host.shutdown();
         h.host.shutdown();
         std::fs::remove_dir_all(h.root).unwrap();

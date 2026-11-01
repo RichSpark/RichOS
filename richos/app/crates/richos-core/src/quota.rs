@@ -1119,6 +1119,13 @@ impl Service {
         let mut service = Self::open_with_reset_dir(data_dir, &reset_dir)?;
         let nonempty = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
         service.transcripts_one = nonempty("CLAUDE_CONFIG_DIR").or_else(|| nonempty("HOME").map(|h| h.join(".claude")));
+        // Every account's chats in Account 1's records folder (`Accounts::share_records`): an
+        // account that could not be linked keeps its records where they are, and the app starts.
+        if let Some(home) = &service.transcripts_one {
+            if let Err(error) = service.accounts.share_records(home) {
+                eprintln!("[richos] claude accounts: an account's chats could not be moved to the shared records folder ({error})");
+            }
+        }
         Ok(service)
     }
     fn open_with_reset_dir(data_dir: &Path, reset_dir: &Path) -> io::Result<Self> {
@@ -1405,17 +1412,35 @@ impl Service {
         self.spend.add(self.sink.take_for_spend(), now);
         self.spend.save(now, false);
         let (mut learned, mut moved) = (false, false);
+        // What a lease streamed is its account's, wherever its transcript is (every account's
+        // chats share one records folder, `claude_accounts::RECORDS`): taken first, and out of
+        // any other account's track that read it from that folder before the stream arrived.
+        {
+            let mut tracks = self.tokens.lock().unwrap();
+            for (account, found) in &streamed {
+                for (id, track) in tracks.iter_mut() {
+                    if id != account { track.forget(&found.id); }
+                }
+                tracks.entry(account.clone()).or_default().add_use(found);
+            }
+        }
+        let readers = self.record_readers();
         for account in self.accounts.list() {
             let one = account.id == crate::claude_accounts::ACCOUNT_ONE;
-            let folder = if one { self.transcripts_one.clone() } else { account.folder.clone() };
             let week = |s: &Snapshot| s.windows.iter().find(|w| w.id == "seven_day").cloned().zip(s.checked_at);
             let reading = if one { week(&self.snapshot.lock().unwrap()) }
                 else { self.extra.lock().unwrap().get(&account.id).and_then(|(_, s)| week(s)) };
             let (speed, since) = {
                 let mut tracks = self.tokens.lock().unwrap();
+                // A records folder is read once, by its first account (Account 1's: Claude Code
+                // used outside the app is the terminal's, on its sign-in), and a message another
+                // account's lease streamed stays that account's.
+                if let Some(folder) = readers.get(&account.id) {
+                    let others: std::collections::HashSet<String> = tracks.iter()
+                        .filter(|(id, _)| **id != account.id).flat_map(|(_, t)| t.ids()).collect();
+                    tracks.entry(account.id.clone()).or_default().scan_except(folder, now, &others);
+                }
                 let track = tracks.entry(account.id.clone()).or_default();
-                if let Some(folder) = &folder { track.scan(folder, now); }
-                for (_, found) in streamed.iter().filter(|(id, _)| *id == account.id) { track.add_use(found); }
                 let since = reading.as_ref().map_or(0., |(_, at)| track.points_since(*at, now));
                 if let Some((window, at)) = reading { learned |= track.reading(&window, at, now); }
                 (track.speed(now), since)
@@ -1646,9 +1671,27 @@ impl Service {
     /// entrypoint set it (`transcripts_one`), as for the token speed, so tests and simulations
     /// never read the developer's history.
     fn spend_folders(&self) -> Vec<PathBuf> {
-        self.accounts.list().into_iter().filter_map(|account| {
-            if account.id == crate::claude_accounts::ACCOUNT_ONE { self.transcripts_one.clone() } else { account.folder }
-        }).collect()
+        self.record_readers().into_values().collect()
+    }
+
+    /// **Which account reads each records folder**: every account's folder (Account 1's only
+    /// when the desktop entrypoint set it), with a records folder several accounts share
+    /// (`claude_accounts::Accounts::share_records`) read once, by the first of them, Account 1
+    /// first. Read twice, the shared folder would count every chat on every account.
+    fn record_readers(&self) -> BTreeMap<String, PathBuf> {
+        let mut accounts = self.accounts.list();
+        accounts.sort_by_key(|a| a.id != crate::claude_accounts::ACCOUNT_ONE);
+        let (mut seen, mut readers) = (Vec::new(), BTreeMap::new());
+        for account in accounts {
+            let folder = if account.id == crate::claude_accounts::ACCOUNT_ONE { self.transcripts_one.clone() } else { account.folder };
+            let Some(folder) = folder else { continue };
+            let records = folder.join(crate::claude_accounts::RECORDS);
+            let real = fs::canonicalize(&records).unwrap_or(records);
+            if seen.contains(&real) { continue; }
+            seen.push(real);
+            readers.insert(account.id, folder);
+        }
+        readers
     }
 
     /// **Bring the spend up to date** (§118): the leases' requests, then what every account's
@@ -2117,6 +2160,46 @@ pub(crate) mod tests {
         let per_minute = after.speeds["seven_day"] * minute as f64;
         assert!((per_minute - 2.).abs() < 1e-9, "2,000,000 / 1,000,000 tokens a point = 2 points a minute, got {per_minute}");
         assert!(after.act_at["seven_day"] < 99., "the switch point moved: {}", after.act_at["seven_day"]);
+    }
+
+    /// **The shared records folder is read once, and a lease's message stays its account's**
+    /// (`claude_accounts::Accounts::share_records`): Work's folder links to Account 1's records,
+    /// so reading it again would count every chat on both accounts. A message Claude Code used
+    /// in the terminal wrote is Account 1's; one a lease on Work streamed is Work's, though its
+    /// transcript is in the same folder; and the spend reads the folder once.
+    #[test]
+    fn the_shared_records_folder_is_read_once_and_a_leases_message_stays_on_its_account() {
+        let root = Scratch::new();
+        let mut service = Service::open(&root.path().join("app")).unwrap();
+        let home = root.path().join("claude");
+        service.transcripts_one = Some(home.clone());
+        service.accounts.share_records(&home).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let now = crate::util::now_millis();
+        let t = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(now - 5_000) * 1_000_000).unwrap();
+        let stamp = format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", t.year(), u8::from(t.month()), t.day(),
+            t.hour(), t.minute(), t.second(), t.millisecond());
+        let row = |id: &str| json!({"type": "assistant", "timestamp": stamp, "message": {"id": id, "model": "claude-opus-5-5",
+            "usage": {"input_tokens": 10, "output_tokens": 10, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}});
+        let write = |path: PathBuf, id: &str| { fs::create_dir_all(path.parent().unwrap()).unwrap(); fs::write(path, format!("{}\n", row(id))).unwrap(); };
+        write(home.join("projects/p/terminal.jsonl"), "msg_terminal");
+        write(work.folder.clone().unwrap().join("projects/p/lease.jsonl"), "msg_work");
+        let lease = row("msg_work");
+        service.sink.push(&work.id, tokens::message_use(&lease["message"], &lease, now - 5_000).unwrap());
+        service.track_tokens();
+        let held = |id: &str| { let tracks = service.tokens.lock().unwrap(); let mut ids: Vec<String> = tracks.get(id).map(|t| t.ids().collect()).unwrap_or_default(); ids.sort(); ids };
+        assert_eq!(held("1"), vec!["msg_terminal".to_string()], "the terminal's message is Account 1's, and Work's lease message is not");
+        assert_eq!(held(&work.id), vec!["msg_work".to_string()], "Work's lease message is Work's, the terminal's is not");
+        // A transcript row read before its lease's stream arrived moves to the lease's account then.
+        write(work.folder.clone().unwrap().join("projects/p/late.jsonl"), "msg_late");
+        service.track_tokens();
+        assert!(held("1").contains(&"msg_late".to_string()));
+        let late = row("msg_late");
+        service.sink.push(&work.id, tokens::message_use(&late["message"], &late, now - 5_000).unwrap());
+        service.track_tokens();
+        assert_eq!(held("1"), vec!["msg_terminal".to_string()]);
+        assert_eq!(held(&work.id), vec!["msg_late".to_string(), "msg_work".to_string()]);
+        assert_eq!(service.spend_folders(), vec![home], "the spend reads the shared folder once");
     }
 
     /// Home (Account 1) at 99% of its week and Work (Account 2) in use at `weekly`% of its week
