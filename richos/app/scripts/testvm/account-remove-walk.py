@@ -18,7 +18,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
              `projects` is then a link to Account 1's records folder
   chat       a message with a codeword, answered on Work: the turn's record names Work's folder
              (the provider's transcript_path), and the record is in Account 1's records folder
-  switch     Account 1's "Use this one now", then a turn in the same chat: answered in the same
+  switch     Account 1's "Use this one now" (offered once Account 1 has a reading; waited for up to
+             --reading-wait seconds), then a turn in the same chat: answered in the same
              session, on Account 1, from the record's permanent path in Account 1's records folder
              (never through Work's folder, which goes with Work)
   remove     the Work card's Remove, then its confirmation, in the Claude accounts sheet, as a
@@ -190,19 +191,33 @@ class AccountRemoveWalk(toolchain_walk.ToolchainAskWalk):
         Account 1, resumed from the record's permanent path in Account 1's records folder, never
         through Work's folder (second review rv-20261101T183042Z, P1: removing Work then broke the
         live chat's next write)."""
-        self.open_sheet()
+        # The button is offered only once Account 1 has a reading with room (accounts.js "use"),
+        # which comes with the quota service's next check (every 5 minutes). Not a relaunch: a
+        # relaunch opens the chat on a fresh lease and would not resume this record at all.
+        offered = False
+        end = time.monotonic() + self.a.reading_wait
+        while time.monotonic() < end and not offered:
+            self.open_sheet()
+            offered = self.present('Use Account 1 now')
+            if not offered:
+                self.press('Close Claude accounts')
+                time.sleep(20)
+        self.shot('switch-sheet.png')
+        if not offered:
+            raise StepFailed('the sheet never offered "Use this one now" on Account 1 within %d s (no reading of it)'
+                             % self.a.reading_wait)
         self.press('Use Account 1 now', contains=False)
         end = time.monotonic() + 30
         while time.monotonic() < end and self.accounts_file().get('inUse') != '1':
             time.sleep(2)
-        self.shot('switch-sheet.png')
         self.press('Close Claude accounts')
+        switched_by = 'Use this one now'
         if self.accounts_file().get('inUse') != '1':
             raise StepFailed('Account 1 was not put in use')
         words = 'Here is one more thing to note, the word {w}. Reply with one word: noted.'.format(w='harbor')
         sent, turns = self.answered(words, lambda text: 'noted' in text.lower())
         prompts = self.prompt_sessions('one more thing to note, the word harbor')
-        evidence = {'sent_between_guest_ms': [round(v) for v in sent], 'prompts': prompts,
+        evidence = {'switched_by': switched_by, 'sent_between_guest_ms': [round(v) for v in sent], 'prompts': prompts,
                     'rich_turns_since_send': [t['text'][:400] for t in turns]}
         self.write('switch.json', evidence)
         self.shot('switch.png')
@@ -278,6 +293,8 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
     p.add_argument('--within', type=float, default=240, help='seconds for each of Rich\'s answers')
+    p.add_argument('--reading-wait', type=int, default=420,
+                   help='seconds to wait for Account 1\'s reading, which offers its "Use this one now"')
     p.add_argument('--host-item', default='Claude Code-credentials',
                    help="this Mac's keychain item Work is signed in from (default: this Mac's own sign-in)")
     p.add_argument('--steps', default=','.join(STEPS))
