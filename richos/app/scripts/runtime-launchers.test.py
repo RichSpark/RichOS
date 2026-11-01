@@ -111,6 +111,11 @@ class PythonBytecode(unittest.TestCase):
             self.assertEqual(sorted(p.name.split(".")[0] for p in caches), ["__init__", "sitecustomize"], caches)
             for cache in caches:
                 self.assertEqual(struct.unpack("<I", cache.read_bytes()[4:8])[0], 3, f"{cache.name} is hash-checked")
+                # 2026-11-01: the compiled-in name was the build directory, so the engine archive was
+                # refused for machine-specific storage paths. It is the source's path in the runtime.
+                self.assertNotIn(temporary.encode(), cache.read_bytes(), f"{cache.name} names the build directory")
+                relative = str(Path(importlib.util.source_from_cache(str(cache))).relative_to(runtime))
+                self.assertIn(relative.encode(), cache.read_bytes(), f"{cache.name} names its runtime path")
             # Relocation: the installer gives every source a new mtime.
             later = source.stat().st_mtime + 3600
             os.utime(source, (later, later))

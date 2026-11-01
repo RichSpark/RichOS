@@ -418,17 +418,25 @@ sys.dont_write_bytecode = True
 # every installed Mac and was rewritten by the first Python without -B. sitecustomize.py itself is
 # imported before it has run. All of them are delivered as CHECKED_HASH caches (PEP 552): valid
 # wherever the unchanged source lands, still checked against it, never rewritten. Run by the
-# runtime's own interpreter, so the magic number is its own. Arguments: caches to compile again
-# from their sources, and sources (`.py`) to give a cache.
+# runtime's own interpreter, so the magic number is its own. Arguments: the runtime directory,
+# then caches to compile again from their sources, and sources (`.py`) to give a cache.
+#
+# THE NAME COMPILED INTO EACH CACHE IS ITS SOURCE'S PATH INSIDE THE RUNTIME (`dfile`), never the
+# build directory (2026-11-01: without it every cache carried this Mac's
+# `.../richos-public-runtime-build-XXXX/runtime/...` temporary path, and the engine archive was
+# refused for machine-specific storage paths). Import replaces the name with the real source path
+# (`_imp._fix_co_filename`), so nothing reads it; the build directory's random name also made the
+# runtime's bytes differ on every build.
 RECOMPILE_CHECKED_HASH = (
     "import importlib.util, os, py_compile, sys\n"
-    "for name in sys.argv[1:]:\n"
+    "root = sys.argv[1]\n"
+    "for name in sys.argv[2:]:\n"
     "    source, cache = (name, importlib.util.cache_from_source(name)) if name.endswith('.py') else \\\n"
     "        (importlib.util.source_from_cache(name), name)\n"
     "    if os.path.isfile(source):\n"
     "        level = int(cache.rsplit('.opt-', 1)[1][0]) if '.opt-' in cache else -1\n"
-    "        py_compile.compile(source, cfile=cache, doraise=True, optimize=level,\n"
-    "                           invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)\n")
+    "        py_compile.compile(source, cfile=cache, dfile=os.path.relpath(source, root), doraise=True,\n"
+    "                           optimize=level, invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)\n")
 
 
 def prepare_python_bytecode(runtime):
@@ -444,7 +452,7 @@ def prepare_python_bytecode(runtime):
     (library / "sitecustomize.py").write_text(SITECUSTOMIZE)
     caches = sorted(str(p) for p in (runtime / "python").rglob("*.pyc") if p.parent.name == "__pycache__")
     subprocess.run([str(runtime / "python/bin/python3"), "-I", "-B", "-c", RECOMPILE_CHECKED_HASH,
-                    *caches, str(library / "sitecustomize.py")],
+                    str(runtime), *caches, str(library / "sitecustomize.py")],
                    env={"PATH": "/usr/bin:/bin", "HOME": str(runtime)}, check=True)
 
 
