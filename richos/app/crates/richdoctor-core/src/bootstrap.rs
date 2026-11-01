@@ -23,8 +23,12 @@
 //!     replaced and reopened quietly; busy, unsaved, refusing or silent for five seconds defers
 //!     the refresh to a later RichOS launch. Nothing is ever swapped under a running process or
 //!     force-closed.
-//!   - A first install opens the new copy once, in the background, for its own explanation and
-//!     login registration.
+//!   - A first install opens the new copy once, in the background, for its login registration.
+//!     Every open from here ([`open_args`]) carries [`QUIET_FLAG`], so RichDoctor starts in the
+//!     menu bar only, as a login launch does, and never puts its window in front of the RichOS
+//!     window the person just opened: `open -g` alone does not stop that, because a window that
+//!     opens takes focus and activates its app. Its explanation is on its first screen, whenever
+//!     the person opens it.
 use flate2::read::GzDecoder;
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
@@ -36,6 +40,8 @@ use std::time::{Duration, Instant};
 pub const APP: &str = "RichDoctor.app";
 pub const PAYLOAD_DIR: &str = "RichDoctor";
 pub const PAYLOAD: &str = "RichDoctor.app.tar.gz";
+/// The argument RichOS's installer opens RichDoctor with: start in the menu bar only, no window.
+pub const QUIET_FLAG: &str = "--menu-bar-only";
 const MAX_ENTRIES: usize = 20_000;
 const MAX_BYTES: u64 = 512 << 20;
 
@@ -351,8 +357,14 @@ fn quit_running(places: &Places) -> Result<bool, String> {
     Err("RichDoctor did not quit within five seconds".into())
 }
 
+/// The arguments to `/usr/bin/open` that start `app` in the background, with [`QUIET_FLAG`] in
+/// its own arguments (`--args`), so it shows no window.
+pub fn open_args(app: &Path) -> Vec<std::ffi::OsString> {
+    vec!["-g".into(), app.as_os_str().to_os_string(), "--args".into(), QUIET_FLAG.into()]
+}
+
 fn open_quietly(app: &Path) {
-    std::process::Command::new("/usr/bin/open").arg("-g").arg(app).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().ok();
+    std::process::Command::new("/usr/bin/open").args(open_args(app)).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().ok();
 }
 
 /// **INSTALL OR REFRESH** from `payload` (the archive inside RichOS.app), whose signer must be
@@ -482,6 +494,13 @@ mod tests {
         assert!(older("1.0.0-dev.abc", "1.0.0"));
         assert!(!older("1.0.0", "1.0.0"));
         assert!(!older("1.10.0", "1.9.9"));
+    }
+
+    /// RichOS opens RichDoctor in the background and asks it, in its own arguments, for no window.
+    #[test]
+    fn richos_opens_richdoctor_in_the_background_with_the_quiet_flag() {
+        let args = open_args(Path::new("/Applications/RichDoctor.app"));
+        assert_eq!(args, ["-g", "/Applications/RichDoctor.app", "--args", QUIET_FLAG]);
     }
 
     #[test]

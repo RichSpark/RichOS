@@ -51,15 +51,26 @@ pub fn main() {
     std::env::remove_var("CLAUDE_CONFIG_DIR");
     std::env::remove_var("CLAUDECODE");
     let store = Store::for_home(&home());
-    // A copy already runs: it shows its window, and this one ends.
-    if instance::ask(store.root(), "open").is_some() {
+    let quiet = starts_quietly(&args, || mac::launched_at_login(richdoctor_core::util::now_millis()));
+    // A copy already runs: it shows its window, and this one ends. A quiet start asks it nothing.
+    if quiet && std::os::unix::net::UnixStream::connect(instance::path(store.root())).is_ok() {
         return;
     }
-    run(store);
+    if !quiet && instance::ask(store.root(), "open").is_some() {
+        return;
+    }
+    run(store, quiet);
 }
 
-fn run(store: Store) {
-    let quiet = mac::launched_at_login(richdoctor_core::util::now_millis());
+/// Whether this start shows no window, only the menu bar item: RichOS's installer opened it
+/// ([`richdoctor_core::bootstrap::QUIET_FLAG`]), or macOS started it at login. Its window opens
+/// only when the person opens RichDoctor, so it never takes the front from the RichOS window the
+/// person just opened.
+fn starts_quietly(args: &[String], at_login: impl FnOnce() -> bool) -> bool {
+    args.iter().skip(1).any(|a| a == richdoctor_core::bootstrap::QUIET_FLAG) || at_login()
+}
+
+fn run(store: Store, quiet: bool) {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -467,4 +478,31 @@ fn images(engine: State<Engine>) -> Vec<Value> {
 #[tauri::command]
 fn close_help(engine: State<Engine>) {
     engine.close()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::starts_quietly;
+    use richdoctor_core::bootstrap;
+
+    /// RichOS's installer opens RichDoctor with the arguments `bootstrap::open_args` gives
+    /// `/usr/bin/open`; RichDoctor receives the part after `--args`. That start shows no window,
+    /// so RichDoctor cannot take the front from the RichOS window the person just opened.
+    #[test]
+    fn a_start_by_richos_installer_shows_no_window() {
+        let open = bootstrap::open_args(std::path::Path::new("/Applications/RichDoctor.app"));
+        let after = open.iter().position(|a| a == "--args").expect("open passes RichDoctor its own arguments");
+        let mut argv = vec!["/Applications/RichDoctor.app/Contents/MacOS/RichDoctor".to_string()];
+        argv.extend(open[after + 1..].iter().map(|a| a.to_string_lossy().into_owned()));
+        assert!(starts_quietly(&argv, || false), "the installer's start is quiet: {argv:?}");
+    }
+
+    /// The person opening it (Spotlight, Applications, Finder) gets the window; a login start
+    /// does not.
+    #[test]
+    fn a_person_opening_it_gets_the_window_and_a_login_start_does_not() {
+        let argv = vec!["RichDoctor".to_string()];
+        assert!(!starts_quietly(&argv, || false));
+        assert!(starts_quietly(&argv, || true));
+    }
 }
