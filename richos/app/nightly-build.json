@@ -1,0 +1,19 @@
+{
+  "build": true,
+  "version": "1.2.5",
+  "tag": "v1.2.5",
+  "source_commit": "6fdba7facff70906012638befd8f6339e34e5a7a",
+  "created_at": "2026-11-01T14:20:45.612382+00:00",
+  "run_id": "20261101T142037Z-8298ab1b",
+  "run_attempt": "1",
+  "channel": "stable",
+  "platform": "darwin-aarch64",
+  "endpoint": "https://github.com/RichSpark/RichOS/releases/latest/download/latest.json",
+  "promoted_from": "v1.2.5-nightly.20261101.85",
+  "promoted_from_version": "1.2.5-nightly.20261101.85",
+  "promotion_decided_on": "2026-11-01",
+  "promotion_words": "Once the nightly is published, turn it into the stable version.",
+  "reservation_ref": "refs/candidates/stable/v1.2.5",
+  "reservation_base": "",
+  "new_user_walk_required": true
+}
