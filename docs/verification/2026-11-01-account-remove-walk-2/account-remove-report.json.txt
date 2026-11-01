@@ -1,0 +1,161 @@
+{
+  "vm": "walk-648f90152106",
+  "expect_sha": "3bb988e6e4e66d70522a074ad564eaabeb41ee9b",
+  "steps": [
+    {
+      "step": "identity",
+      "evidence": {
+        "built_from": "3bb988e6e4e66d70522a074ad564eaabeb41ee9b"
+      },
+      "outcome": "PASS",
+      "seconds": 0.2
+    },
+    {
+      "step": "first-run",
+      "evidence": {
+        "thread": "thr_1ffcddbffc2744c88cc6a41fbef9135f",
+        "title": "Onboarding"
+      },
+      "outcome": "PASS",
+      "seconds": 30.2
+    },
+    {
+      "step": "accounts",
+      "evidence": {
+        "accounts_file": {
+          "accounts": [
+            {
+              "id": "1",
+              "label": "Account 1"
+            },
+            {
+              "id": "2",
+              "label": "Work",
+              "folder": "/Users/admin/testvm/walk-648f90152106/home/Library/Application Support/com.richos.app/claude-accounts/2"
+            }
+          ],
+          "inUse": "2"
+        },
+        "work_signed_in": "claude login: guest logged in",
+        "work_projects_link": "/Users/admin/testvm/walk-648f90152106/home/.claude/projects"
+      },
+      "outcome": "PASS",
+      "seconds": 51.0
+    },
+    {
+      "step": "chat",
+      "evidence": {
+        "code": "kiwi-f428f6",
+        "sent_between_guest_ms": [
+          1793565115961,
+          1793565119941
+        ],
+        "prompts": [
+          {
+            "session": "dec32d1f-3b6e-416d-83b5-369b4d42fc29",
+            "transcript_path": "/Users/admin/testvm/walk-648f90152106/home/Library/Application Support/com.richos.app/claude-accounts/2/projects/-Users-admin-testvm-walk-648f90152106-home-Library-Application-Support-com-richos-app-coordination/dec32d1f-3b6e-416d-83b5-369b4d42fc29.jsonl"
+          }
+        ],
+        "records_with_code": [
+          "/Users/admin/testvm/walk-648f90152106/home/.claude/projects/-Users-admin-testvm-walk-648f90152106-home-Library-Application-Support-com-richos-app-coordination/dec32d1f-3b6e-416d-83b5-369b4d42fc29.jsonl"
+        ],
+        "rich_turns_since_send": [
+          "Noted."
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 26.8
+    },
+    {
+      "step": "switch",
+      "evidence": {
+        "switched_by": "Use this one now",
+        "sent_between_guest_ms": [
+          1793565164385,
+          1793565174428
+        ],
+        "prompts": [
+          {
+            "session": "dec32d1f-3b6e-416d-83b5-369b4d42fc29",
+            "transcript_path": "/Users/admin/testvm/walk-648f90152106/home/.claude/projects/-Users-admin-testvm-walk-648f90152106-home-Library-Application-Support-com-richos-app-coordination/dec32d1f-3b6e-416d-83b5-369b4d42fc29.jsonl"
+          }
+        ],
+        "rich_turns_since_send": [
+          "Noted."
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 186.5
+    },
+    {
+      "step": "remove",
+      "evidence": {
+        "accounts_file": {
+          "accounts": [
+            {
+              "id": "1",
+              "label": "Account 1"
+            }
+          ],
+          "inUse": "1",
+          "atThreshold": "pause",
+          "limitedUntil": {},
+          "changes": [
+            {
+              "at": 1793565159495,
+              "kind": "chose",
+              "id": "1",
+              "label": "Account 1"
+            }
+          ]
+        },
+        "work_folder": "total 0\ndrwxr-xr-x  3 admin  staff  96  1 Nov 20:35 .\ndrwxr-xr-x  3 admin  staff  96  1 Nov 20:31 ..\nlrwxr-xr-x  1 admin  staff  59  1 Nov 20:31 projects -> /Users/admin/testvm/walk-648f90152106/home/.claude/projects"
+      },
+      "outcome": "PASS",
+      "seconds": 23.5
+    },
+    {
+      "step": "relaunch",
+      "evidence": {
+        "home_after_s": 65.1,
+        "opened_row_by": "odeword",
+        "work_folder": [
+          "projects"
+        ],
+        "work_projects_link": "/Users/admin/testvm/walk-648f90152106/home/.claude/projects",
+        "codeword_lines_read_through_work": "4"
+      },
+      "outcome": "PASS",
+      "seconds": 72.4
+    },
+    {
+      "step": "continue",
+      "evidence": {
+        "sent_between_guest_ms": [
+          1793565425078,
+          1793565428397
+        ],
+        "prompts": [
+          {
+            "session": "dec32d1f-3b6e-416d-83b5-369b4d42fc29",
+            "transcript_path": "/Users/admin/testvm/walk-648f90152106/home/.claude/projects/-Users-admin-testvm-walk-648f90152106-home-Library-Application-Support-com-richos-app-coordination/dec32d1f-3b6e-416d-83b5-369b4d42fc29.jsonl"
+          }
+        ],
+        "codeword_session": "dec32d1f-3b6e-416d-83b5-369b4d42fc29",
+        "codeword_lines_in_its_record": "5",
+        "rich_turns_since_send": [
+          "kiwi-f428f6"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 15.4
+    }
+  ],
+  "logs_kept": {
+    "app.log": 8241,
+    "relaunch-1793565068245484000.log": 11091,
+    "relaunch-1793565353184876000.log": 3768,
+    "callbacks.txt": 7296,
+    "refusals.txt": 0
+  }
+}
