@@ -1633,17 +1633,26 @@ def as_the_run_started(repo, run, env):
     return {**{k: v for k, v in recorded["values"].items() if k not in LAND_ONLY}, **own}
 
 
-def coverage_of(run, repo=None):
-    """(exit, summary or None, output lines, the run's checkout or None) of
-    `proof-run.py --coverage RUN`, asked in the run's own checkout. Exit 2: no answer."""
+def author_env(repo, run):
+    """The environment an author run is asked about, or an author job run, in: the land's own
+    without git's hook variables or the land's own names, with every value the saved `run` started
+    its checks with in place (as_the_run_started). `run` None: no saved run to take values from."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     # The land's own variables, which no check reads (clean_env takes them from every check the
     # gate runs) and no author run has: every check without a reviewed contract binds each RICHOS_
     # name, so the lander's LAND_TARGET here read an unchanged pass as changed (2026-10-21).
     for name in LAND_ONLY:
         env.pop(name, None)
+    if run is None:
+        return env
     env.update(cargo_root_as_the_run_named_it(repo, run, env))
-    env = as_the_run_started(repo, run, env)
+    return as_the_run_started(repo, run, env)
+
+
+def coverage_of(run, repo=None):
+    """(exit, summary or None, output lines, the run's checkout or None) of
+    `proof-run.py --coverage RUN`, asked in the run's own checkout. Exit 2: no answer."""
+    env = author_env(repo, run)
     try:
         root = json.loads((Path(run) / "plan.json").read_text())["root"]
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -1686,57 +1695,171 @@ def range_gap(repo, summary):
     return None
 
 
+def author_verdict(repo, what, head, runs, asked):
+    """None when an author run of `runs` proves `head`'s whole selected plan, or its range selects
+    nothing; else (the lines naming what is unresolved, the one job that resolves it)."""
+    answers = []
+    for run in runs:
+        if run not in asked:
+            asked[run] = coverage_of(run, repo)
+        rc, summary, out, root = asked[run]
+        if summary and summary.get("candidate") != head:
+            continue  # a run of another commit proves nothing about this one
+        gap = range_gap(repo, summary) if summary else None
+        answers.append((run, rc, summary, out + ([f"but {gap}"] if gap else []), root, gap))
+        if rc == 0 and summary and not gap:
+            break
+    if answers and answers[-1][1] == 0 and answers[-1][2] and not answers[-1][5]:
+        run, _rc, summary, _out, _root, _gap = answers[-1]
+        say(f"autocheck: {what}: author proof of {head[:12]}: {summary.get('line', '')} ({run})")
+        return None
+    base = git("merge-base", "HEAD", head, check=False, cwd=repo.top).stdout.strip()
+    lines = [f"{head[:12]}, the branch this land merges:"]
+    if not any(summary for _run, _rc, summary, _out, _root, _gap in answers):
+        found, _rc = select(repo, [f"{base}..{head}"]) if base else (None, 1)
+        if found == []:
+            say(f"autocheck: {what}: author proof of {head[:12]}: its range {base[:12]}..{head[:12]} selects no "
+                "check, so it needs none")
+            return None
+        lines.append("  no author run of it was offered or is held for it, so its whole plan is unproven:")
+        lines += ["    " + c for c in found or ["(the selector refused the range; its output is above)"]]
+    for run, rc, summary, out, _root, _gap in answers:
+        lines.append(f"  {run}:")
+        lines += ["    " + line for line in out[-40:]]
+    # The coverage's own job reruns the run's own range: right only when that range is whole.
+    recovery = next((summary.get("recovery") for _run, _rc, summary, _out, _root, gap in answers
+                     if summary and summary.get("recovery") and not gap), None)
+    if not recovery:
+        # Only a checkout AT the head: the runner checks the bytes of the checkout it runs in
+        # (a run that answered with its summary was asked in one: --coverage checks that).
+        seats = [root for _run, _rc, summary, _out, root, _gap in answers if summary and root] + \
+            author_checkouts(repo, head)
+        at_head = [seat for seat in seats if not author_seat_refusal(repo, head, seat)]
+        seat = (at_head or seats or [f"<a checkout of {head[:12]}>"])[0]
+        # Every author run made in that checkout, an earlier candidate's included: the runner
+        # reuses what still matches and executes only the rest.
+        reuse = "".join(f" --reuse {shlex.quote(run)}" for run in runs
+                        if run in asked and asked[run][3] and os.path.realpath(asked[run][3]) == os.path.realpath(seat))
+        recovery = f"cd {shlex.quote(seat)} && python3 {PROOF_RUN} {base or '<base>'}..{head}{reuse}"
+    return lines, recovery
+
+
+def author_seat_refusal(repo, head, seat):
+    """Why the gate cannot run the author's job in `seat` itself, or None. The seat must exist, be
+    another checkout than the one this land merges into, and be at exactly `head`: the runner
+    proves the bytes of the checkout it runs in."""
+    if seat.startswith("<"):
+        return f"no checkout of {head[:12]} exists (git worktree list), so there is nowhere to run it"
+    if not os.path.isdir(seat):
+        return f"its checkout {seat} is gone"
+    if os.path.realpath(seat) == os.path.realpath(repo.top):
+        return f"its checkout {seat} is the one this land merges into"
+    at = git("rev-parse", "HEAD", env=repo.env, check=False, cwd=seat)
+    if at.returncode or at.stdout.strip() != head:
+        return (f"its checkout {seat} is at {at.stdout.strip()[:12] or 'no commit'}, not at {head[:12]}, "
+                "so a run there would prove other bytes")
+    return None
+
+
+def run_author_job(repo, what, head, recovery):
+    """Run the one job `recovery` names (`cd <checkout> && python3 proof-run.py ...`) once, in that
+    checkout, exactly as printed: under the runner's own proof-run slot and handover hold, in the
+    environment the run it reuses started with (author_env). (logs directory, None, None) when it
+    passed or left only checks NOT RUN; (None, refusal lines, None) when it failed; (None, None,
+    why not) when the gate cannot run it."""
+    try:
+        words = shlex.split(recovery)
+    except ValueError as exc:
+        return None, None, f"its line cannot be read ({exc})"
+    if len(words) < 6 or words[0] != "cd" or words[2] != "&&" or words[3:5] != ["python3", PROOF_RUN]:
+        return None, None, "it is not a proof-run.py job in a named checkout"
+    seat, argv = words[1], words[3:]
+    if any("<" in word for word in argv):
+        return None, None, "the base of its range is unknown"
+    why = author_seat_refusal(repo, head, seat)
+    if why:
+        return None, None, why
+    reused = next((argv[i + 1] for i, word in enumerate(argv[:-1]) if word == "--reuse"), None)
+    env = author_env(repo, reused)
+    env.pop(ACTIVE, None)  # the author's own job, not a check of this land
+    say(f"autocheck: {what}: the author's proof does not cover {head[:12]}, so the gate runs the one job "
+        f"itself, once, in that checkout: {recovery}")
+    started, logs = time.monotonic(), None
+    with tempfile.TemporaryDirectory(prefix="autocheck-author-job-") as scratch:
+        summary_path = Path(scratch) / "summary.json"
+        proc = subprocess.Popen([*argv, "--summary-out", str(summary_path)], cwd=seat, env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, errors="replace")
+        try:
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                say("    " + line)
+                found = re.match(r"^\s*logs: (\S.*)$", line)
+                if found and logs is None:
+                    logs = found.group(1)
+            rc = proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.terminate()  # the runner's own handler stops its checks (proof-run.py stop_all)
+                proc.wait()
+        try:
+            checks = json.loads(summary_path.read_text()).get("checks")
+        except (OSError, ValueError, AttributeError):
+            checks = None
+    say(f"autocheck: {what}: the author's job for {head[:12]} exited {rc} after {time.monotonic() - started:.0f} s"
+        + (f"; its run: {logs}" if logs else ""))
+    if rc in (0, 3) and logs:
+        return logs, None, None
+    failing = [row for row in checks or [] if isinstance(row, dict) and row.get("result") not in ("passed", "not-run")]
+    lines = [f"{head[:12]}, the branch this land merges: the gate ran its one job, once, in its checkout:",
+             f"  {recovery}"]
+    lines += [f"  FAILED: {row.get('check')} ({row.get('result')})" + (f", log {row['log']}" if row.get("log") else "")
+              for row in failing]
+    if not failing:
+        lines.append(f"  it exited {rc} " + ("and named no failing check" if checks is not None
+                                             else "with no readable summary") + ("" if logs else ", and printed no logs line"))
+    if logs:
+        lines.append(f"  its run: {logs}")
+    return None, lines, None
+
+
 def author_preflight(repo, what, heads, runs):
     """0 when each incoming head's author run proves its candidate's whole selected plan, or its
-    range selects nothing; else 1, after naming what is unresolved and the one job per head."""
+    range selects nothing. Else the gate runs the one job that resolves it, once, in the author's
+    checkout (run_author_job), and that run joins `runs` as this land's author proof. 1, after
+    naming what is unresolved, when that job fails or there is no checkout at the head to run it in.
+
+    2026-10-31 and 11-01: the lands of codex/richcleaner-20261031 and of zach-opus-queue5 were each
+    refused with the one job named, and each job was run by hand exactly as printed before the land
+    passed (§136: a mechanical step needed by hand a second time is built into the tool)."""
     if not heads:
         say(f"autocheck: {what}: author proof: no branch is merged here, so there is no handover to ask "
             "about; the gate runs its whole plan")
         return 0
     asked, refusal = {}, []
     for head in heads:
-        answers = []
-        for run in runs:
-            if run not in asked:
-                asked[run] = coverage_of(run, repo)
-            rc, summary, out, root = asked[run]
-            if summary and summary.get("candidate") != head:
-                continue  # a run of another commit proves nothing about this one
-            gap = range_gap(repo, summary) if summary else None
-            answers.append((run, rc, summary, out + ([f"but {gap}"] if gap else []), root, gap))
-            if rc == 0 and summary and not gap:
-                break
-        if answers and answers[-1][1] == 0 and answers[-1][2] and not answers[-1][5]:
-            run, _rc, summary, _out, _root, _gap = answers[-1]
-            say(f"autocheck: {what}: author proof of {head[:12]}: {summary.get('line', '')} ({run})")
+        verdict = author_verdict(repo, what, head, runs, asked)
+        if verdict is None:
             continue
-        base = git("merge-base", "HEAD", head, check=False, cwd=repo.top).stdout.strip()
-        lines = [f"{head[:12]}, the branch this land merges:"]
-        if not any(summary for _run, _rc, summary, _out, _root, _gap in answers):
-            found, _rc = select(repo, [f"{base}..{head}"]) if base else (None, 1)
-            if found == []:
-                say(f"autocheck: {what}: author proof of {head[:12]}: its range {base[:12]}..{head[:12]} selects no "
-                    "check, so it needs none")
+        lines, recovery = verdict
+        logs, failed, why = run_author_job(repo, what, head, recovery)
+        if failed:
+            banner(f"{what.upper()} REFUSED: the author's proof job failed", [
+                *failed,
+                "A check that fails there needs a fix on the branch, never another run of the same inputs.",
+                "Nothing was committed. A merge with --no-verify skips this check; the ledger records each one.",
+            ])
+            return 1
+        if logs:
+            runs.append(logs)
+            verdict = author_verdict(repo, what, head, runs, asked)
+            if verdict is None:
                 continue
-            lines.append("  no author run of it was offered or is held for it, so its whole plan is unproven:")
-            lines += ["    " + c for c in found or ["(the selector refused the range; its output is above)"]]
-        for run, rc, summary, out, _root, _gap in answers:
-            lines.append(f"  {run}:")
-            lines += ["    " + line for line in out[-40:]]
-        # The coverage's own job reruns the run's own range: right only when that range is whole.
-        recovery = next((summary.get("recovery") for _run, _rc, summary, _out, _root, gap in answers
-                         if summary and summary.get("recovery") and not gap), None)
-        if not recovery:
-            # Only a checkout AT the head: the runner checks the bytes of the checkout it runs in
-            # (a run that answered with its summary was asked in one: --coverage checks that).
-            seats = [root for _run, _rc, summary, _out, root, _gap in answers if summary and root] + \
-                author_checkouts(repo, head)
-            seat = seats[0] if seats else f"<a checkout of {head[:12]}>"
-            # Every author run made in that checkout, an earlier candidate's included: the runner
-            # reuses what still matches and executes only the rest.
-            reuse = "".join(f" --reuse {shlex.quote(run)}" for run in runs
-                            if run in asked and asked[run][3] and os.path.realpath(asked[run][3]) == os.path.realpath(seat))
-            recovery = f"cd {shlex.quote(seat)} && python3 {PROOF_RUN} {base or '<base>'}..{head}{reuse}"
+            lines, recovery = verdict
+            lines.append(f"  the gate ran the one job once, in that checkout ({logs}); the coverage above still")
+            lines.append("  does not prove the head, so it is not run again here")
+        else:
+            lines.append(f"  the gate did not run it itself because {why}")
         lines.append(f"  the one job: {recovery}")
         refusal.append(lines)
     if not refusal:
@@ -1747,7 +1870,7 @@ def author_preflight(repo, what, heads, runs):
         "rest, as the author's last step would have. Then land again: the next attempt finds that run by",
         f"its handover hold in that checkout (or name it: {AUTHOR_RUNS}=<its logs directory>).",
         "A check that fails there needs a fix on the branch, never another run of the same inputs.",
-        "Nothing was run here and nothing was committed.",
+        "Nothing was committed.",
         "git's --no-verify skips this, and every skip is recorded in the lead's escalation ledger.",
     ])
     return 1

@@ -28,6 +28,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -216,6 +217,34 @@ if "--coverage" in sys.argv:
     if "--summary-out" in sys.argv:
         Path(sys.argv[sys.argv.index("--summary-out") + 1]).write_text(json.dumps(summary))
     sys.exit(1 if missing else 0)
+if "--commands" not in sys.argv and "--resume" not in sys.argv:
+    # The author's own job (proof-run.py BASE..HEAD [--reuse RUN]), run in the author's checkout:
+    # its run goes to that checkout's log directory with a handover hold, as the real runner's,
+    # and runs the owning suite there. Its arguments and checkout go to <log>.author-job.
+    import hashlib
+    import time
+    with open(os.environ["AUTOCHECK_FIXTURE_LOG"] + ".author-job", "a") as log:
+        log.write(os.getcwd() + " " + " ".join(sys.argv[1:]) + "\\n")
+    span = next(a for a in sys.argv[1:] if ".." in a)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    logs = (Path(os.environ["RICHOS_PROOF_RUN_DIR"]) / hashlib.sha256(root.encode()).hexdigest()[:12]
+            / ("%d-job" % time.time_ns()))
+    logs.mkdir(parents=True)
+    (logs / "plan.json").write_text(json.dumps({"root": root}))
+    (logs / "candidate").write_text(head + "\\n")
+    (logs / "base").write_text(span.split("..")[0] + "\\n")
+    (logs / "retain").write_text(json.dumps({"holder": "handover", "candidate": head, "checkout": root}))
+    print("  logs: %s" % logs, flush=True)
+    check = "cd richos/app && bash scripts/suite.sh"
+    done = subprocess.run(["bash", "-c", check], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    sys.stdout.write(done.stdout)
+    row = {"check": check, "result": "failed" if done.returncode else "passed", "log": str(logs / "01.log")}
+    Path(row["log"]).write_text(done.stdout)
+    (logs / "outcomes.json").write_text(json.dumps({check: row}))
+    if "--summary-out" in sys.argv:
+        Path(sys.argv[sys.argv.index("--summary-out") + 1]).write_text(json.dumps({"checks": [row]}))
+    sys.exit(1 if done.returncode else 0)
 with open(os.environ["AUTOCHECK_FIXTURE_LOG"] + ".runner", "a") as log:
     log.write(" ".join(sys.argv[1:]) + "\\n")
 directory = (Path(sys.argv[sys.argv.index("--log-dir") + 1]) if "--log-dir" in sys.argv
@@ -2587,6 +2616,8 @@ class AuthorProof(Fixture):
         self.assertIn("cd richos/app && bash scripts/suite.sh", text)      # the whole unproven plan
         base = self.head("main")
         self.assertIn(f"python3 richos/app/scripts/proof-run.py {base}..{tip}", text)   # the one job
+        self.assertIn(f"the gate did not run it itself because no checkout of {tip[:12]} exists", text)
+        self.assertEqual(self.side_log(".author-job"), "")
         self.assertEqual(self.side_log(".runner"), "", "the gate ran with the author proof missing")
         self.assertNotIn("run cd richos/app", self.tools())
         self.assertEqual(self.head("main"), before)
@@ -2638,6 +2669,59 @@ class AuthorProof(Fixture):
         (self.author_run / "base").write_text(self.head("main") + "\n")
         self.git("merge", "--no-ff", "-m", "land feature", "feature")
         self.assertEqual(self.head("main^2"), self.head("feature"))
+
+    def partial_author_proof_in_its_checkout(self, text):
+        """zach-opus-queue5's land (2026-11-01): a branch of two commits, checked out in the author's
+        own worktree, whose author run made there proves only its last commit."""
+        self.make()
+        self.author_proves = False
+        self.branch_with("feature", "richos/app/src/thing.txt", "fine, first\n")
+        self.git("checkout", "-q", "feature")
+        self.write("richos/app/src/thing.txt", text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "second", "--no-verify")
+        self.git("checkout", "-q", "main")
+        self.log.unlink(missing_ok=True)
+        tip = self.head("feature")
+        seat = self.base / "author-seat"
+        self.git("worktree", "add", "-q", "--detach", str(seat), tip)
+        (self.author_run / "plan.json").write_text(json.dumps({"root": str(seat)}))
+        (self.author_run / "candidate").write_text(tip + "\n")
+        (self.author_run / "base").write_text(self.head("feature^") + "\n")
+        return tip, seat
+
+    def test_a_partial_author_proof_runs_its_one_job_in_the_authors_checkout_and_lands(self):
+        """§136: the job the refusal named was run by hand twice (2026-10-31, 11-01). The gate runs
+        it itself, once, in the author's checkout, and that run is the land's author proof."""
+        tip, seat = self.partial_author_proof_in_its_checkout("fine, second\n")
+        main = self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        text = out.stdout + out.stderr
+        self.assertNotIn("REFUSED", text)
+        self.assertIn("so the gate runs the one job itself, once, in that checkout", text)
+        jobs = self.side_log(".author-job").splitlines()
+        self.assertEqual(len(jobs), 1, jobs)
+        where, argv = jobs[0].split(" ", 1)
+        self.assertEqual(os.path.realpath(where), os.path.realpath(seat))
+        self.assertTrue(argv.startswith(f"{main}..{tip} --reuse {self.author_run}"), argv)   # as printed
+        logs = re.search(r"its run: (\S+)", text).group(1)
+        self.assertIn(f"author proof of {tip[:12]}: fixture author coverage: 0 missing ({logs})", text)
+        self.assertIn(f"--reuse {logs}", self.side_log(".runner"))                # offered to the gate
+        self.assertEqual(self.head("main^2"), tip)
+        self.assertFalse((Path(logs) / "retain").exists())                        # consumed by the land
+
+    def test_a_partial_author_proof_whose_one_job_fails_refuses_naming_the_failing_check(self):
+        tip, seat = self.partial_author_proof_in_its_checkout("BROKEN\n")
+        before = self.head("main")
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature", expect=1)
+        text = out.stdout + out.stderr
+        self.assertIn("MERGE INTO MAIN REFUSED: the author's proof job failed", text)
+        self.assertIn("FAILED: cd richos/app && bash scripts/suite.sh (failed), log ", text)
+        self.assertIn("suite: FAIL src/thing.txt is broken", text)
+        self.assertEqual(len(self.side_log(".author-job").splitlines()), 1)      # once, never again
+        self.assertEqual(self.side_log(".runner"), "", "the gate ran after the author's job failed")
+        self.assertEqual(self.head("main"), before)
+        self.git("merge", "--abort")
 
     def test_a_run_of_another_commit_proves_nothing_about_this_one(self):
         self.make()
