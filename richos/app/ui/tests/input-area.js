@@ -229,6 +229,29 @@ async function main() {
     return `4 lines ${four.input.h}px; 20 lines capped at ${long.input.h}px, top faded`;
   });
 
+  await run.check("3b. a narrower window rewraps the words and the field grows with them, never hiding a line", async () => {
+    // Mid-job review rv-20261101T215812Z-f1f1fca9-a259: no keystroke happens on a resize, so the
+    // field is measured again when the box's width changes.
+    const page = await openApp(browser, { theme: "dark" });
+    const words = Array.from({ length: 4 }, () => "Pull the signed term sheet and the Q3 numbers and check the counter letter twice").join(" ");
+    await setValue(page, words);
+    const wide = await read(page);
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.waitForFunction(() => {
+      const i = document.getElementById("input");
+      return i.scrollHeight <= i.clientHeight + 1 || getComputedStyle(i).overflowY === "auto";
+    });
+    await settle(page);
+    const narrow = await page.evaluate(() => {
+      const i = document.getElementById("input");
+      return { h: i.getBoundingClientRect().height, scroll: i.scrollHeight, client: i.clientHeight, overflow: getComputedStyle(i).overflowY };
+    });
+    assert(narrow.h > wide.input.h, `the field did not grow when its words rewrapped: ${wide.input.h}px -> ${narrow.h}px`);
+    assert(narrow.scroll <= narrow.client + 1, `a line is hidden below the field: scrollHeight ${narrow.scroll} > ${narrow.client} (overflow ${narrow.overflow})`);
+    await page.close();
+    return `${wide.input.h}px at 1440 -> ${narrow.h}px at 1024, nothing hidden`;
+  });
+
   // ---- 4. the row ----------------------------------------------------------------------------
   for (const width of [1440, 1100]) {
     await run.check(`4. at ${width}px: Output is centered on the box, the status line has no "⋯ ", Send is in the corner`, async () => {

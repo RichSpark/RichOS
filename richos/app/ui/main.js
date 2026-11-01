@@ -3901,6 +3901,21 @@ function fadeComposerEdges() {
 }
 inputEl.addEventListener("scroll", fadeComposerEdges, { passive: true });
 
+// THE WIDTH MOVES TOO. A window, sidebar or Output-panel resize rewraps the words without a
+// keystroke, and `autoGrow` keeps scrolling off while the words fit, so a draft that fitted could
+// wrap past its height with nothing to scroll (mid-job review rv-20261101T215812Z-f1f1fca9-a259).
+// The box is measured again whenever its WIDTH changes; its own height changes are ignored, so the
+// height `autoGrow` writes does not call it again.
+if (typeof ResizeObserver === "function") {
+  let lastShellWidth = 0;
+  new ResizeObserver((entries) => {
+    const width = Math.round(entries[entries.length - 1].contentRect.width);
+    if (!width || width === lastShellWidth) return;
+    lastShellWidth = width;
+    autoGrow();
+  }).observe(inputShellEl);
+}
+
 // ---- TALK TO RICH'S PLACE (round 51) ---------------------------------------------------------
 //
 // His follow-up recording: before anything is typed, "click to talk to Rich … and this icon of
