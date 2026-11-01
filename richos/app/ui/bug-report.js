@@ -103,7 +103,7 @@ window.RichBug = (function () {
       notSaved: "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.",
       canceled: "Canceled. Nothing was sent.",
       savedToast: "Your bug report is saved on this Mac and goes out by itself when it can.",
-      draftToast: "Your bug report is saved on this Mac, not sent. Press Bust a bug to come back to it.",
+      draftToast: "Your bug report is saved on this Mac, not sent and Bust a bug brings it back.",
       uncheckedToast: "Your bug report is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
     idea: {
@@ -129,7 +129,7 @@ window.RichBug = (function () {
       notSaved: "I couldn't save your idea on this Mac, so nothing was posted. Press Post idea to try again.",
       canceled: "Canceled. Nothing was posted.",
       savedToast: "Your idea is saved on this Mac and is posted by itself when it can.",
-      draftToast: "Your idea is saved on this Mac, not posted. Press Request a feature to come back to it.",
+      draftToast: "Your idea is saved on this Mac, not posted and Request a feature brings it back.",
       uncheckedToast: "Your idea is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
   };
@@ -1280,7 +1280,7 @@ window.RichBug = (function () {
     if (changedNow && f.report) {
       f.keeping = true;
       bridge.invoke("bug_report_keep_edit", { report: f.report, sheet: sheetOf(f), private: f.private || [], screen: publicScreen(f.screen), post: postOf(f) })
-        .catch(function () { richSays(f, ["I couldn't save your changes on this Mac. If you close this and quit, they won't be here when you come back."]); })
+        .catch(function () { richSays(f, ["I couldn't save your changes on this Mac, so they may be gone after a quit."]); })
         .then(function () { f.keeping = false; paintDock(); });
     }
     paintComposers();
