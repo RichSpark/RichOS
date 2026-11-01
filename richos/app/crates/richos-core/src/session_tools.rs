@@ -574,14 +574,30 @@ pub(crate) fn undelivered(scope:&StatusToolScope,role:&str)->Result<bool,String>
 /// its handoffs are not returned and are given once, as before. A found one is marked on its
 /// entry (`received`), so a later start reads the mark rather than the whole record again; the
 /// next `begin_attempt` (a delivery to a session) replaces the entry and the mark with it.
+///
+/// **An entry that names no session** is one an older build's receipt was repaired into
+/// (`retain_legacy_handoffs`, run here first so the repair never comes after this read): it
+/// was given to Stu's saved session, so it is checked against that session's record
+/// ([`saved_stu_session`]), and a found one is marked with that session as well as `received`
+/// (review rv-20261101T181827Z-aee06997-e9c7: an upgrade from those cursors re-sent it once).
 pub(crate) fn received_handoffs(scope:&StatusToolScope)->Result<Vec<(u64,String)>,String> {
-    let path=inbox(scope,"stu")?;let cursor=cursor_state(&path)?;
+    let path=inbox(scope,"stu")?;let mut cursor=cursor_state(&path)?;
+    if cursor["handoffs_retained"]!=true && path.is_file() {
+        retain_legacy_handoffs(scope)?;
+        cursor=cursor_state(&path)?;
+    }
     let mut received=Vec::new();
     let mut wanted:std::collections::HashMap<String,Vec<(u64,Message)>>=Default::default();
+    let mut saved:Option<Option<String>>=None;
     for (input,entry) in cursor["active"].as_object().unwrap() {
         let Some(offset)=input.strip_prefix("peer:").and_then(|offset|offset.parse::<u64>().ok()) else {continue};
-        let Some(session)=entry["session_id"].as_str().filter(|session|component(session)) else {continue};
-        if entry["received"]==true {received.push((offset,session.to_string()));continue}
+        let session=match entry["session_id"].as_str() {
+            Some(session)=>Some(session.to_string()).filter(|session|component(session)),
+            None if entry["session_id"].is_null()=>saved.get_or_insert_with(||saved_stu_session(scope)).clone(),
+            None=>None,
+        };
+        let Some(session)=session else {continue};
+        if entry["received"]==true {received.push((offset,session));continue}
         let message=input_at(&path,offset)?;
         if message.handoff {wanted.entry(session.to_string()).or_default().push((offset,message));}
     }
@@ -594,13 +610,29 @@ pub(crate) fn received_handoffs(scope:&StatusToolScope)->Result<Vec<(u64,String)
         for offset in found {
             let input=format!("peer:{offset}");
             update_cursor(scope,"stu",|cursor| {
-                if cursor["active"][&input]["session_id"]==session.as_str() {cursor["active"][&input]["received"]=json!(true);}
+                let Some(entry)=cursor["active"].get_mut(&input) else {return Ok(())};
+                if entry["session_id"]==session.as_str() || entry["session_id"].is_null() {
+                    entry["session_id"]=json!(session);
+                    entry["received"]=json!(true);
+                }
                 Ok(())
             })?;
             received.push((offset,session.clone()));
         }
     }
     Ok(received)
+}
+
+/// **Stu's saved session on this conversation, as the app's own files say**: of the sessions
+/// bound to it as Stu ([`sessions`]), the one whose binding was written last, since every lease
+/// writes its session's binding when it starts (`bind`) and the next lease resumes the session
+/// the last one ran (`native::native_resume`). `None` when there is none or it cannot be read.
+fn saved_stu_session(scope:&StatusToolScope)->Option<String> {
+    let written=|session:&str| std::fs::metadata(scope.state_root.join("evidence").join(session).join("binding.json"))
+        .and_then(|meta|meta.modified()).ok();
+    sessions(scope).ok()?.into_iter().filter(|record|record.role=="stu")
+        .filter_map(|record|Some((written(&record.session_id)?,record.session_id)))
+        .max().map(|(_,session)|session)
 }
 
 /// The inbox offsets of `messages` whose message is a user turn in the native record at `record`.
@@ -871,6 +903,53 @@ mod tests {
         crate::assignment::advance(&root,"company","thread",&jobs[1],crate::assignment::AssignmentState::Settled,"Stu completed the resumed job").unwrap();
         assert!(pending(&scope,"stu").unwrap().is_none(),"completed jobs restarted again");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **An upgrade from an older cursor never re-sends a handoff Stu's saved session holds**
+    /// (review rv-20261101T181827Z-aee06997-e9c7, its fixture `legacy-receipt.py`): the repair of
+    /// those cursors restores the open handoff with no session named, so its receiver is Stu's
+    /// saved session, the one whose binding was written last. Found in that record, it is a
+    /// receipt marked with that session; in a record without it, it is still given once.
+    #[test]
+    fn a_repaired_legacy_receipt_is_checked_against_stus_saved_session() {
+        for held in [true,false] {
+        for legacy in [json!("THROUGH"),json!({"through":"THROUGH"}),json!({"through":"THROUGH","active":{},"accepted":{}})] {
+            let root=std::env::temp_dir().join(format!("richos-legacy-receipt-{}",uuid::Uuid::new_v4()));
+            let scope=StatusToolScope {version:1,state_root:root.clone(),entity_id:"company".into(),thread_id:"thread".into()};
+            let message=Message {bridge:None,handoff:true,from:"rich".into(),text:"Build nightly 78".into(),
+                instruction:Some(crate::ecs::UserInstruction {ledger_ref:"ledger:thread:turn".into(),sha256:"a".repeat(64),text:None}),work:None};
+            append(&scope,"stu",&message).unwrap();
+            let path=inbox(&scope,"stu").unwrap();let through=std::fs::metadata(&path).unwrap().len();
+            // An older session of Stu's, then the one the next lease resumes: its binding is newer.
+            let (older,saved)=("stu-older","stu-saved");
+            for session in [older,saved] {
+                bind(&root.join(format!("{session}.json")),&scope,session,"stu",None).unwrap();
+                let record=root.join("projects").join(format!("{session}.jsonl"));
+                std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+                record_moved(&scope,session,&record).unwrap();
+                let text=serde_json::to_string(&message).unwrap();
+                let row=json!({"type":"user","message":{"role":"user","content":[{"type":"text","text":text}]}});
+                // The older session holds it in both cases, so only the saved one decides.
+                std::fs::write(&record,if held || session==older {row.to_string()+"\n"} else {String::new()}).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let cursor=legacy.to_string().replace("\"THROUGH\"",&through.to_string());
+            crate::doctrine::write_verified(&path.with_extension("cursor"),&cursor).unwrap();
+            let found=received_handoffs(&scope).unwrap();
+            let input=format!("peer:{through}");
+            let entry=cursor_state(&path).unwrap()["active"][&input].clone();
+            if held {
+                assert_eq!(found,vec![(through,saved.to_string())],"{legacy}: the saved session's record holds it");
+                assert_eq!((entry["session_id"].clone(),entry["received"].clone()),(json!(saved),json!(true)),"{legacy}: {entry}");
+                assert_eq!(received_handoffs(&scope).unwrap(),vec![(through,saved.to_string())],"{legacy}: the mark is read back");
+            } else {
+                assert!(found.is_empty(),"{legacy}: the saved session never received it: {found:?}");
+                assert!(entry["session_id"].is_null() && entry["received"].is_null(),"{legacy}: {entry}");
+            }
+            assert_eq!(pending(&scope,"stu").unwrap().map(|(_,at)|at),Some(through),"{legacy}: the job is still open");
+            std::fs::remove_dir_all(root).unwrap();
+        }
+        }
     }
 
     #[test]
