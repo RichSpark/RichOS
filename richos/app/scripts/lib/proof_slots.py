@@ -82,7 +82,10 @@ attempt (`refused_by_the_mac`: a host sample over the CPU line or its memory rul
 controller, the resource envelope). A check the CPU rule admits is admitted, whichever run it
 belongs to; the order between runs decides only who goes first when there is not room for both:
 while the Mac refuses a run's checks, the runs behind it give way, so the run ahead takes the
-first sample under the line.
+first sample under the line. Every run loads this file from its own checkout, so a run started
+from an older one still publishes the old count; its `.waiting` file does not say `counts:
+mac-refused` (`COUNTS`), and no run gives way to it: each check of either run is still admitted
+by the CPU rule.
 
 A NIGHTLY OR RELEASE COMMAND'S RUN GOES FIRST (2026-11-01). On 2026-11-01 08:47-08:57Z the
 nightly's mutation batch (nightly-local.py `mutation_units`) stood #1 in line for 10 min behind a
@@ -147,6 +150,10 @@ POLL_SECONDS = 1.0
 DEFAULT_WAIT_SECONDS = 3 * 3600
 STALE_WAITER_SECONDS = 5.0
 SAY_EVERY_SECONDS = 120.0
+# What a `.waiting` file counts (header, ONLY CHECKS THE MAC REFUSED COUNT). A file without it was
+# written by a runner from an older checkout, whose count includes checks waiting for that run's
+# own work, so it never holds a run back.
+COUNTS = "mac-refused"
 
 
 def directory():
@@ -326,17 +333,19 @@ def _publish(holder, count):
             pass
         return
     with open(path + ".new", "w") as fh:
-        json.dump({"pid": os.getpid(), "waiting": count, "since": time.time()}, fh)
+        json.dump({"pid": os.getpid(), "waiting": count, "since": time.time(), "counts": COUNTS}, fh)
     os.replace(path + ".new", path)
 
 
 def waiting_holders(d=None):
     """Holders with checks the Mac refused (header): their record plus `waiting`, the count.
-    A `.waiting` file counts only while its slot's holder lock is held by the pid it names."""
+    A `.waiting` file counts only while its slot's holder lock is held by the pid it names, and
+    only when it says it counts what the Mac refused (`COUNTS`)."""
     rows = []
     for rec in holders(d):
         sidecar = _read(rec["holder_file"][:-len(".holder")] + ".waiting")
-        if sidecar.get("pid") == rec.get("pid") and isinstance(sidecar.get("waiting"), int) and sidecar["waiting"] > 0:
+        if (sidecar.get("pid") == rec.get("pid") and sidecar.get("counts") == COUNTS
+                and isinstance(sidecar.get("waiting"), int) and sidecar["waiting"] > 0):
             rows.append(dict(rec, waiting=sidecar["waiting"]))
     return rows
 

@@ -1292,6 +1292,26 @@ try:
           "the first run's while that run's other check waits for its own worker, without giving way, "
           "and both runs' checks are admitted and pass",
           (p_seen, output("p16-p-a")[-400:], output("p16-p-b")[-400:]))
+    # P16p2 — ... and a run started from an older checkout, whose `.waiting` count still includes
+    # checks waiting for its own work, holds nobody back: only a count that says it counts what
+    # the Mac refused does. The same older holder, the same count of 5, read twice.
+    p2_dir = os.path.join(tmp, "p16-p2")
+    os.makedirs(p2_dir)
+    p2_old = pr.proof_slots._try(p2_dir, 2, {"waiter": "p16-p2-older-checkout"}, checks=5)
+    p2_new = pr.proof_slots._try(p2_dir, 2, {"waiter": "p16-p2-newer"}, checks=0)
+    p2_seen = {}
+    try:
+        p2_seen["refused_count"] = [r.get("waiter") for r in pr.proof_slots.ahead_of(p2_new)]
+        p2_sidecar = p2_old.holder_path[:-len(".holder")] + ".waiting"
+        with open(p2_sidecar, "w") as fh:   # what proof_slots.py before 2026-11-01 wrote
+            json.dump({"pid": os.getpid(), "waiting": 5, "since": time.time()}, fh)
+        p2_seen["older_count"] = [r.get("waiter") for r in pr.proof_slots.ahead_of(p2_new)]
+    finally:
+        p2_new.release()
+        p2_old.release()
+    check(p2_seen == {"refused_count": ["p16-p2-older-checkout"], "older_count": []},
+          "P16p2 a run gives way to a count of checks the Mac refused, never to an older checkout's count, "
+          "which includes checks waiting for that run's own work", p2_seen)
     slots("set", "1")
 
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine

@@ -14577,7 +14577,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_slots.py",
-          "sha256": "4a6b382b702e7912217476f076e584ef81365166178f0f0dc471d889948df996",
+          "sha256": "e53394c438c587597cb71b169830bb9b47401d7499cd76eefc9a3ace92afb3db",
           "evidence": "Sources() loads it by fixed path beside the engine (module level: standard-library imports and constants); review_watch.py never calls it. Bind against the current repository, never another worktree."
         }
       ]
@@ -15596,7 +15596,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_slots.py",
-          "sha256": "4a6b382b702e7912217476f076e584ef81365166178f0f0dc471d889948df996",
+          "sha256": "e53394c438c587597cb71b169830bb9b47401d7499cd76eefc9a3ace92afb3db",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
