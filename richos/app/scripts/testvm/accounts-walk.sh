@@ -33,6 +33,10 @@
 #                       runs 5d after 5 (before 5b) and ends there: 5d-job-running, 5d-switch-helper-running,
 #                       5d-after-move, with 5d-calls.log, 5d-calls-running.log, 5d-journal.txt and
 #                       5d-records-{at-switch,end}.txt (the block's own comment says what is checked).
+#   5e-*                The CEO's §153: during a hold a helper's command runs and finishes, and its
+#                       next model call waits until the hold releases. ACCOUNTS_WALK_UNTIL=hold-helper
+#                       runs 5e after 5 and ends there: 5e-held-helper, with 5e-calls.log,
+#                       5e-steps-held.txt, 5e-waits-held.txt and the rest the block names.
 #   6-switched-chat     Home's week at 99%: Rich's line, with See your accounts
 #   7-switched-{dark,light}  The sheet: the banner (when and why) and Recent changes
 #   8-menu-two          Settings: "Using Work, switched <time>"
@@ -273,29 +277,40 @@ close_sheet; theme Dark
 #     quota refusal and no hold, although the weekly hold stands on Home's row, at least 3 in
 #     45 s, which is past the app's 30 s idle check (work_host.rs ACCOUNT_CHECK_EVERY).
 #     Admitted is exit 0 or a refusal by the engine's hook behind the gate, which the gate runs
-#     only once it has admitted the call, and whose own guards refuse the fake's stand-in
-#     command ("Lock-out: REFUSED (no registration)": not a registered worker's). The quota
-#     gate's own refusals start "RichOS desktop quota:" or "RichOS desktop:", the old order
-#     said "Stop the task now", and a held step never returns;
+#     only once it has admitted the call. The quota gate's own refusals start "RichOS desktop
+#     quota:" or "RichOS desktop:", the old order said "Stop the task now", and a held step
+#     never returns;
 #   - no back-end session opens on Work while the helper runs, and Stu is told `account_switch`
 #     on Home, where he keeps his session;
 #   - once it finishes on its own (work-agents-finish), a back-end session opens on Work and Stu
 #     is told `account_moved` there;
 #   - nothing says stop or handoff, no handoff marker exists, no work record says failed.
 # ACCOUNTS_WALK_UNTIL=weekly-helper runs 5d after 5 and ends there.
+# What 5d and 5e share: the fake's folder, the job, a wait on its calls.log, the app's records and
+# the automatic-pause check.
+G=/Users/admin/fill-first # machine-path-exempt: isolated test VM account/path; never a customer default
+JOB='Start the Northwind job and keep Mark on it.'
+wait_calls() {  # wait_calls <extended regex> [tries of 5 s, default 24]
+  for _ in $(seq 1 "${2:-24}"); do
+    "$T/guest.sh" "$VM" "grep -Eq '$1' $G/calls.log" >/dev/null 2>&1 && return 0
+    sleep 5
+  done
+  return 1
+}
+records() {  # the work records, anything under engine-state/handoffs, the quota file, the accounts, the policy
+  "$T/guest.sh" "$VM" "find \"$DATA/engine-state/assignments\" \"$DATA/engine-state/handoffs\" -type f -name '*.json' 2>/dev/null | sort | while IFS= read -r f; do echo \"== \$f\"; cat \"\$f\"; echo; done; echo '== claude-quota.json'; cat \"$DATA/engine-state/claude-quota.json\" 2>&1; echo; echo '== claude-accounts.json'; cat \"$DATA/claude-accounts.json\" 2>&1; echo; echo '== claude-quota-policy.json'; cat \"$DATA/claude-quota-policy.json\" 2>&1; echo; true" > "$1" 2>&1
+}
+# The guest command that succeeds when automatic pause is on: claude-quota-policy.json once a
+# choice was saved, else the published file's own (quota/gate.rs decide). 5b found no saved file
+# and the switch on.
+policy_on() {
+  if "$T/guest.sh" "$VM" "test -f \"$DATA/claude-quota-policy.json\"" >/dev/null 2>&1; then
+    echo "grep -Eq '\"enabled\": *true' \"$DATA/claude-quota-policy.json\""
+  else
+    echo "grep -Eq '\"policy\": *\\{ *\"enabled\": *true' \"$DATA/engine-state/claude-quota.json\""
+  fi
+}
 if [ "${ACCOUNTS_WALK_UNTIL:-}" = weekly-helper ]; then
-  G=/Users/admin/fill-first # machine-path-exempt: isolated test VM account/path; never a customer default
-  JOB='Start the Northwind job and keep Mark on it.'
-  wait_calls() {  # wait_calls <extended regex> [tries of 5 s, default 24]
-    for _ in $(seq 1 "${2:-24}"); do
-      "$T/guest.sh" "$VM" "grep -Eq '$1' $G/calls.log" >/dev/null 2>&1 && return 0
-      sleep 5
-    done
-    return 1
-  }
-  records() {  # the work records, anything under engine-state/handoffs, the quota file, the accounts, the policy
-    "$T/guest.sh" "$VM" "find \"$DATA/engine-state/assignments\" \"$DATA/engine-state/handoffs\" -type f -name '*.json' 2>/dev/null | sort | while IFS= read -r f; do echo \"== \$f\"; cat \"\$f\"; echo; done; echo '== claude-quota.json'; cat \"$DATA/engine-state/claude-quota.json\" 2>&1; echo; echo '== claude-accounts.json'; cat \"$DATA/claude-accounts.json\" 2>&1; echo; echo '== claude-quota-policy.json'; cat \"$DATA/claude-quota-policy.json\" 2>&1; echo; true" > "$1" 2>&1
-  }
   collect5d() {
     "$T/guest.sh" "$VM" "cat $G/calls.log" > "$S/5d-calls.log" 2>&1 || fail "5d calls.log"
     "$T/guest.sh" "$VM" "find \"$DATA/engine-state/evidence\" -type f -name callbacks.jsonl 2>/dev/null | sort | while IFS= read -r f; do echo \"== \$f\"; cat \"\$f\"; done" > "$S/5d-journal.txt" 2>&1 \
@@ -322,14 +337,7 @@ if [ "${ACCOUNTS_WALK_UNTIL:-}" = weekly-helper ]; then
   note "5d a job with a helper on Home, then Home's week reaches 99%"
   "$T/guest.sh" "$VM" "rm -f $G/work-agents-finish $G/work-agents-started; : > $G/calls.log; touch $G/log-turns; printf 'Mark\n' > $G/work-agents; printf '%s\n' '$JOB' > $G/register" \
     || stop5d "5d the job fixtures"
-  # The policy the gate judges on: claude-quota-policy.json once a choice was saved, else the
-  # published file's own (quota/gate.rs decide). 5b found no saved file and the switch on.
-  if "$T/guest.sh" "$VM" "test -f \"$DATA/claude-quota-policy.json\"" >/dev/null 2>&1; then
-    policy_on="grep -Eq '\"enabled\": *true' \"$DATA/claude-quota-policy.json\""
-  else
-    policy_on="grep -Eq '\"policy\": *\\{ *\"enabled\": *true' \"$DATA/engine-state/claude-quota.json\""
-  fi
-  "$T/guest.sh" "$VM" "$policy_on" >/dev/null 2>&1 \
+  "$T/guest.sh" "$VM" "$(policy_on)" >/dev/null 2>&1 \
     || fail "5d automatic pause is not on: the weekly hold would not stand on Home"
   send_turn "$JOB"
   wait_calls 'register ok' || stop5d "5d the front desk never wrote the job down (no 'register ok')"
@@ -429,6 +437,155 @@ if [ "${ACCOUNTS_WALK_UNTIL:-}" = weekly-helper ]; then
     note "5d ok: no work record says failed (at the switch: $(work_states "$S/5d-records-at-switch.txt" | tr '\n' ' '); now: $(work_states "$S/5d-records-end.txt" | tr '\n' ' '))"
   fi
   end5d
+fi
+# 5e (the CEO's §153, 2026-10-31: "THE WHOLE FUCKING QUOTA THING IS ONLY EVER AN ISSUE IF THE
+# WORK IS CONSUMING QUOTA/TOKENS"): DURING A HOLD A HELPER'S COMMAND RUNS AND FINISHES; ITS NEXT
+# MODEL CALL WAITS. Two accounts with the 5-hour choice on Pause (the default, which 5b reads on
+# screen), automatic pause on: Home's five hours at 95% hold the team on Home and move nobody.
+# The front desk writes a job down and the back end launches one helper (the fake's `register`
+# and `work-agents`), whose steps are tool calls as Claude Code runs them: PreToolUse through the
+# app's gate, the tool ("ran"), then PostToolBatch, where the app holds (quota/gate.rs
+# HOLD_EVENT). While the fake's `thinking` file exists the helper takes no step (a model call in
+# flight), so the hold is in force before its next tool call comes. Checked from the fake's
+# calls.log, after the guest clock at which the published reading says held:
+#   - the helper's next PreToolUse comes straight back through the quota gate: exit 0, or the
+#     answer of the engine's hook, which the gate runs only once it has let the call through. On
+#     main the gate held the call there, before the engine saw it, until the quota freed. The
+#     fake's helper was launched by the fake, not dispatched by the app, so it has no worker
+#     receipt, and the engine refuses its tool for that ("worker identity has not joined its app
+#     receipt"), with or without a hold: "ran" comes only for a call the engine lets run;
+#   - its batch started and has not come back 45 s later (past the app's 30 s idle check), with
+#     the app's own pause record for work-agent-1 (engine-state/quota-waits) and a gate process
+#     still waiting: its next model call waits;
+#   - the hold releases (at Home's five-hour reset, five_at, or by the unchanged staggered release
+#     inside its last twenty minutes): the batch comes back, exit 0, and the helper's next tool
+#     call comes through the quota gate again.
+# ACCOUNTS_WALK_UNTIL=hold-helper runs 5e after 5 and ends there. Evidence: 5e-calls.log,
+# 5e-calls-held.log, 5e-steps-held.txt, 5e-records-{held,end}.txt, 5e-waits-held.txt,
+# 5e-gates-held.txt, 5e-journal.txt, 5e-app.log and the shot 5e-held-helper.
+# shellcheck disable=SC2016  # wait_after's conditions are awk programs: awk expands their $3 and $4 in the guest
+if [ "${ACCOUNTS_WALK_UNTIL:-}" = hold-helper ]; then
+  collect5e() {
+    "$T/guest.sh" "$VM" "cat $G/calls.log" > "$S/5e-calls.log" 2>&1 || fail "5e calls.log"
+    "$T/guest.sh" "$VM" "find \"$DATA/engine-state/evidence\" -type f -name callbacks.jsonl 2>/dev/null | sort | while IFS= read -r f; do echo \"== \$f\"; cat \"\$f\"; done" > "$S/5e-journal.txt" 2>&1 \
+      || fail "5e the evidence journals"
+    records "$S/5e-records-end.txt" || fail "5e the app's records"
+    # shellcheck disable=SC2016  # the $(...) is meant to expand in the guest's shell, not here
+    "$T/guest.sh" "$VM" 'cat "$(ls -t /Users/admin/testvm/*/relaunch-*.log 2>/dev/null | head -1)"' > "$S/5e-app.log" 2>&1 || true # machine-path-exempt: isolated test VM account/path; never a customer default
+  }
+  end5e() {
+    "$T/guest.sh" "$VM" "rm -f $G/thinking" >/dev/null 2>&1 || true
+    collect5e
+    if [ "${#FAILS[@]}" -gt 0 ]; then
+      note "done at 5e, with ${#FAILS[@]} failed step(s): $(printf '%s; ' "${FAILS[@]}")"
+      exit 1
+    fi
+    note "done at 5e (ACCOUNTS_WALK_UNTIL=hold-helper)"
+    exit 0
+  }
+  stop5e() { fail "$1; nothing after it can pass"; end5e; }
+  wait_after() {  # wait_after <guest clock> <awk condition on a calls.log line> [tries of 5 s, default 24]
+    for _ in $(seq 1 "${3:-24}"); do
+      "$T/guest.sh" "$VM" "awk -v at=$1 '\$1 >= at && $2 {found = 1} END {exit !found}' $G/calls.log" >/dev/null 2>&1 && return 0
+      sleep 5
+    done
+    return 1
+  }
+  last_step() {  # the kind of the last calls.log line about work-agent-1: gate, ran, batch-start or batch
+    "$T/guest.sh" "$VM" "awk '\$4 == \"work-agent-1\" {last = \$3} END {print last}' $G/calls.log"
+  }
+  waits() {  # the app's pause records still waiting (not released)
+    "$T/guest.sh" "$VM" "for f in \"$DATA/engine-state/quota-waits\"/*.json; do case \"\$f\" in *.released.json) ;; *) [ -e \"\$f\" ] && { echo \"== \$f\"; cat \"\$f\"; echo; } ;; esac; done; true"
+  }
+
+  note "5e a job with a helper on Home, then Home's five hours reach 95% (Pause: a hold, no switch)"
+  "$T/guest.sh" "$VM" "rm -f $G/work-agents-finish $G/work-agents-started $G/thinking; : > $G/calls.log; touch $G/log-turns; printf 'Mark\n' > $G/work-agents; printf '%s\n' '$JOB' > $G/register" \
+    || stop5e "5e the job fixtures"
+  "$T/guest.sh" "$VM" "$(policy_on)" >/dev/null 2>&1 || fail "5e automatic pause is not on: no hold would stand on Home"
+  if "$T/guest.sh" "$VM" "grep -Eq '\"atThreshold\": *\"switch\"' \"$DATA/claude-accounts.json\"" >/dev/null 2>&1; then
+    stop5e "5e the 5-hour choice is Switch: Home at its line would move the team to Work, not hold it"
+  fi
+  send_turn "$JOB"
+  wait_calls 'register ok' || stop5e "5e the front desk never wrote the job down (no 'register ok')"
+  wait_calls 'batch work-agent-1 exit 0' || stop5e "5e the helper never completed a step (no 'batch work-agent-1 exit 0')"
+  note "5e ok: the helper runs, one tool call after another"
+  # Its model call in flight: no step until the hold stands. A step under way ends first.
+  "$T/guest.sh" "$VM" "touch $G/thinking" || stop5e "5e the thinking fixture"
+  settled=""
+  for _ in $(seq 1 24); do
+    sleep 5
+    [ "$(last_step)" = batch ] && { settled=1; break; }
+  done
+  [ -n "$settled" ] || stop5e "5e the helper's step under way never came back before the hold"
+  RESET=$(( $("$T/guest.sh" "$VM" 'date +%s') + 300 ))
+  "$T/guest.sh" "$VM" "printf '{\"five\":95,\"weekly\":86,\"five_at\":$RESET}' > $G/usage-1.json" || stop5e "5e Home's 95% five-hour fixture"
+  send_turn 'How is the Northwind job going?'
+  send_turn 'And the pairing screens?'
+  held=""
+  for _ in $(seq 1 24); do
+    if "$T/guest.sh" "$VM" "tr -d ' \\n' < \"$DATA/engine-state/claude-quota.json\" | grep -q '\"admission\":{\"state\":\"held\"'" >/dev/null 2>&1; then
+      held=1; break
+    fi
+    sleep 5
+  done
+  [ -n "$held" ] || stop5e "5e the hold never stood on Home (the published admission is not held)"
+  AT=$("$T/guest.sh" "$VM" 'date +%s')
+  [ "$AT" -lt "$RESET" ] || stop5e "5e the hold was published only after Home's reset ($AT >= $RESET)"
+  note "5e ok: the hold stands on Home (guest clock $AT; Home's five hours reset at $RESET)"
+  records "$S/5e-records-held.txt" || fail "5e the records at the hold"
+  if wait_after "$AT" '$4 == "work-agent-1"' 1; then
+    fail "5e the helper stepped while its model call was in flight (the thinking fixture did not hold it)"
+  fi
+
+  note "5e the helper's next tool call comes during the hold"
+  "$T/guest.sh" "$VM" "rm -f $G/thinking" || stop5e "5e removing the thinking fixture"
+  if ! wait_after "$AT" '$3 == "batch-start" && $4 == "work-agent-1"' 12; then
+    "$T/guest.sh" "$VM" "cat $G/calls.log" > "$S/5e-calls-held.log" 2>&1 || true
+    stop5e "5e the helper's tool call never reached its batch during the hold (held before it ran?)"
+  fi
+  note "5e the batch waits (45 s)"
+  sleep 45
+  "$T/guest.sh" "$VM" "cat $G/calls.log" > "$S/5e-calls-held.log" 2>&1 || fail "5e calls.log during the hold"
+  waits > "$S/5e-waits-held.txt" 2>&1 || true
+  "$T/guest.sh" "$VM" "ps -axo pid,etime,command | grep -e '--claude-quota-gate' | grep -v grep; true" > "$S/5e-gates-held.txt" 2>&1 || true
+  awk -v at="$AT" '$1 >= at && $4 == "work-agent-1"' "$S/5e-calls-held.log" > "$S/5e-steps-held.txt"
+  # Through the quota gate: exit 0, or an answer that is not the quota gate's own ("RichOS
+  # desktop quota:" or "RichOS desktop:"; the engine's hook says "RichOS desktop engine:").
+  if awk '$3 == "gate" && !/ said: RichOS desktop( quota)?: /' "$S/5e-steps-held.txt" | grep -q .; then
+    note "5e ok: during the hold the helper's PreToolUse came straight back through the quota gate: $(awk '$3 == "gate"' "$S/5e-steps-held.txt" | head -1 | cut -d' ' -f5-)"
+  else
+    fail "5e during the hold no PreToolUse of the helper came back through the quota gate (5e-steps-held.txt)"
+  fi
+  if awk '$3 == "ran"' "$S/5e-steps-held.txt" | grep -q .; then
+    note "5e ok: its tool ran during the hold"
+  else
+    note "5e its tool did not run: the engine's hook refused it, not the quota gate (the fake's helper has no worker receipt)"
+  fi
+  if awk '$3 == "batch-start"' "$S/5e-steps-held.txt" | grep -q . && ! awk '$3 == "batch"' "$S/5e-steps-held.txt" | grep -q .; then
+    note "5e ok: its batch has not come back after 45 s: its next model call waits"
+  else
+    fail "5e its batch did not wait during the hold (5e-steps-held.txt)"
+  fi
+  if grep -q 'work-agent-1' "$S/5e-waits-held.txt"; then
+    note "5e ok: the app's pause record for work-agent-1 is there"
+  else
+    fail "5e no pause record for work-agent-1 in engine-state/quota-waits (5e-waits-held.txt)"
+  fi
+  grep -q -e '--claude-quota-gate' "$S/5e-gates-held.txt" || fail "5e no gate process is waiting (5e-gates-held.txt)"
+  shot 5e-held-helper
+
+  note "5e the hold releases and the batch comes back"
+  now=$("$T/guest.sh" "$VM" 'date +%s')
+  wait_after "$AT" '$3 == "batch" && $4 == "work-agent-1" && $6 == "0"' $(( (RESET - now) / 5 + 24 )) \
+    || stop5e "5e the batch never came back after Home's reset"
+  BACK=$("$T/guest.sh" "$VM" "awk -v at=$AT '\$1 >= at && \$3 == \"batch\" && \$4 == \"work-agent-1\" {print \$1; exit}' $G/calls.log")
+  note "5e ok: the batch came back at $BACK (the hold stood from $AT; Home's reset at $RESET)"
+  if wait_after "$BACK" '$3 == "gate" && $4 == "work-agent-1" && !/ said: RichOS desktop( quota)?: /' 6; then
+    note "5e ok: the helper steps on after the release"
+  else
+    fail "5e the helper took no step after the release"
+  fi
+  end5e
 fi
 # D13 (walk of nightly 41): on a fresh install the sheet's "When a 5-hour limit is almost used up"
 # showed neither choice selected, while Pause says "The default." Nothing above presses either
