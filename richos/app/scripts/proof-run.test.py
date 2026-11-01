@@ -796,12 +796,14 @@ try:
     check(waited, "P16i naming the holder's slot in the environment does not let an unrelated run skip the line",
           output("p16-fake")[-400:])
 
-    # P16j — a free slot is not a reason to start while a running run's checks still wait for the
-    # CPU (2026-10-29, work-6ec9b429: slots set to 6, six runs at once, one ran 46 min and 30 of its
-    # 37 checks were never admitted). Two runs started together under a limit of 2 on a host that
-    # refuses the first run's second check (its sampler reads busy while a flag file exists): the
-    # second run waits, names the run it waits behind, and starts only after that check was
-    # admitted; the first finishes with no check not admitted.
+    # P16j — a run's checks never start while an older run's checks still wait for the CPU
+    # (2026-10-29, work-6ec9b429: slots set to 6, six runs at once, one ran 46 min and 30 of its 37
+    # checks were never admitted), and the free slot is taken at once all the same (2026-11-01: a
+    # run kept in line, unstarted, behind another's waiting checks while the Mac sampled 19% busy).
+    # Two runs under a limit of 2 on a host that refuses the first run's second check (its sampler
+    # reads busy while a flag file exists): the second run takes its slot without waiting in line,
+    # its check gives way naming the first run, and starts only after that check was admitted; the
+    # first finishes with no check not admitted.
     slots("set", "2")
     flag = os.path.join(mark, "j.busy")
     busy_boot = runner_boot.replace(
@@ -819,7 +821,7 @@ try:
                          stdout=a_out, stderr=subprocess.STDOUT, env=a_env)
     until(lambda: exists(os.path.join(mark, "j.a1")), a)
     b = start_run("p16-j-b", "touch %s/j.b" % mark)
-    behind = until(lambda: "waiting behind p16-j-a" in output("p16-j-b"), b)
+    behind = until(lambda: "gives way to an older run: p16-j-a" in output("p16-j-b"), b)
     b_early = exists(os.path.join(mark, "j.b"))
     os.unlink(flag)           # the Mac frees up: the first run's second check is admitted
     until(lambda: exists(os.path.join(mark, "j.a2")), a)
@@ -831,9 +833,10 @@ try:
     with open(os.path.join(tmp, "p16-j-a.log", "summary.json")) as fh:
         a_states = [row.get("result") for row in json.load(fh).get("checks", [])]
     check(behind and not b_early and a_rc == 0 and b_rc == 0 and a2 is not None and jb is not None and jb >= a2
-          and "not-admitted" not in a_states,
-          "P16j under a limit of 2, a second run waits behind a run whose checks still wait for the CPU, "
-          "and starts only once they were admitted; the first has no check not admitted",
+          and "not-admitted" not in a_states and "waiting for a proof-run slot" not in output("p16-j-b"),
+          "P16j under a limit of 2, a second run takes the free slot at once, its check gives way to a run "
+          "whose checks still wait for the CPU and starts only once they were admitted; the first has no "
+          "check not admitted",
           (behind, b_early, a_rc, b_rc, a2, jb, a_states, output("p16-j-b")[-500:]))
     slots("set", "1")
 

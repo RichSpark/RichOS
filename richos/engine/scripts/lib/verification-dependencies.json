@@ -14577,7 +14577,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_slots.py",
-          "sha256": "fccdfa94370c1c298f5b8700018cdd2799094ddb3190be1ce14742bc15172919",
+          "sha256": "cbd80736d0b1c98d0cce9ff8d99a480bb865b8f8d57aff039825664f1bcaac03",
           "evidence": "Sources() loads it by fixed path beside the engine (module level: standard-library imports and constants); review_watch.py never calls it. Bind against the current repository, never another worktree."
         }
       ]
@@ -15491,7 +15491,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "3817df955adfb366cce98164c8b772175266736d0100eb29150f31a25ac663f5",
+          "sha256": "8941b72f0bfac78b147444c9eb6cfba4475aefa9b5be2fa6ea401e2ec480dde6",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         }
       ]
@@ -15596,7 +15596,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_slots.py",
-          "sha256": "fccdfa94370c1c298f5b8700018cdd2799094ddb3190be1ce14742bc15172919",
+          "sha256": "cbd80736d0b1c98d0cce9ff8d99a480bb865b8f8d57aff039825664f1bcaac03",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15614,7 +15614,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "3817df955adfb366cce98164c8b772175266736d0100eb29150f31a25ac663f5",
+          "sha256": "8941b72f0bfac78b147444c9eb6cfba4475aefa9b5be2fa6ea401e2ec480dde6",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {

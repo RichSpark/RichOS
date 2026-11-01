@@ -176,13 +176,12 @@ default is one run at a time, and the lead sets another number for the whole Mac
 wait for the lead's turn-end gate; `python3 scripts/lib/proof_slots.py status` shows who holds and
 who waits. The slot is an flock the kernel drops with the run's last descriptor (the run's checks'
 supervisors hold it too), so a killed run releases it once its checks are stopped. A proof run
-started by a check of a proof run works inside its caller's slot. Under a limit above one, a free
-slot is still not taken while a running run has checks waiting to be admitted (2026-10-29: six
-runs at once left 30 of one run's 37 checks never admitted); the new run says which it waits behind.
-Only a check the run would start the moment the Mac lets it counts, never one waiting for its own
-lane or prerequisite (waiting_to_be_admitted, 2026-10-31), and a run's checks give way while a run
-that took its slot earlier still has checks waiting to be admitted, so starting beside it cannot
-starve it, except a land holding integration priority, which goes first (one priority order).
+started by a check of a proof run works inside its caller's slot. A run's checks give way while a
+run that took its slot earlier still has checks waiting to be admitted (2026-10-29: six runs at
+once left 30 of one run's 37 checks never admitted), so starting beside it cannot starve it; a
+free slot is taken at once (2026-11-01). Only a check the run would start the moment the Mac lets
+it counts, never one waiting for its own lane or prerequisite (waiting_to_be_admitted,
+2026-10-31), except a land holding integration priority, which goes first (one priority order).
 """
 import argparse
 import copy
