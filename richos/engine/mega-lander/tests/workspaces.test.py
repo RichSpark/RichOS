@@ -4510,12 +4510,14 @@ class AnEndedConversationsFinishedWorkIsCleanedUp(Base):
     handled by the next gate of any registry; a live or undecidable conversation's is not."""
 
     def setUp(self):
-        super().setUp()
         self.proc_name = "ws-spec-session-%d" % os.getpid()
-        # The machine's real `claude` processes are not this sandbox's sessions.
+        # The machine's real `claude` processes are not this sandbox's sessions. Patched BEFORE
+        # the sandbox is made: the cleanup restores the environment it saw, and one taken after
+        # Env() would put this test's deleted sandbox back for every later test.
         names = patch.dict(os.environ, {"SCRATCH_SESSION_PROCESS_NAMES": self.proc_name})
         names.start()
         self.addCleanup(names.stop)
+        super().setUp()
 
     def conversation(self, tag, sid, workers):
         """An app conversation's registry with one session (a real process) and finished
