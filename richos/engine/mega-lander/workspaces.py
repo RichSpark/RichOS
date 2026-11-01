@@ -4278,7 +4278,13 @@ def ended_conversations(me, dry=False, auto=True, deadline=None, report=None):
 
     The record is claimed first, inside that registry's lock, with this session's process
     identity beside the claim (that registry has no session record for it), so a second gate or
-    the conversation itself, resumed, leaves it alone while this session lives."""
+    the conversation itself, resumed, leaves it alone while this session lives.
+
+    A DELETION LEFT OUTSTANDING THERE IS FINISHED HERE TOO (2026-11-01 handover review). land()
+    records the disposition before it deletes, so a gate whose budget ran out mid-deletion left
+    a landed record with a deletion retry in that registry, and retry_due() reads only its own.
+    A due retry in an ended conversation's registry is claimed the same way and retried under
+    that registry, exactly as retry_due() would there."""
     if Lock._depth:
         return []                        # inside this registry's lock: never switch registries here
     own = load_session(me) if me else None
@@ -4287,7 +4293,8 @@ def ended_conversations(me, dry=False, auto=True, deadline=None, report=None):
     out, table = [], False
     for root in other_registries():
         recs = [r for r in all_agents(root=root)
-                if not r.get("disposition") and not r.get("orphan") and live_workspaces(r)]
+                if (not r.get("disposition") and not r.get("orphan") and live_workspaces(r))
+                or _deletion_due(r)]
         if not recs:
             continue
         if _past(deadline):
@@ -4308,6 +4315,9 @@ def _settle_ended(root, recs, me, ident, why, dry, auto, deadline, report):
     out = []
     try:
         for rec in recs:
+            if _deletion_due(rec):
+                _retry_ended_deletion(rec, me, ident, why, dry, deadline, report)
+                continue
             label = "%s (ended conversation %s)" % (rec.get("name") or rec["key"], os.path.basename(root)[:8])
             item = {"key": "", "name": label, "registry": root, "waiting": "outside",
                     "waiting_on": "its conversation has ended; a decision on work that is not in its "
@@ -4353,6 +4363,35 @@ def _settle_ended(root, recs, me, ident, why, dry, auto, deadline, report):
         os.environ.clear()
         os.environ.update(saved)
     return out
+
+
+def _deletion_due(rec):
+    d = rec.get("deletion")
+    return bool(d) and d.get("next_at", 0) <= now()
+
+
+def _retry_ended_deletion(rec, me, ident, why, dry, deadline, report):
+    """retry_due() for one record of an ended conversation's registry (the caller has pointed
+    RICHOS_WORKSPACES_DIR at it): claimed inside that registry's lock first, so a live claimer
+    keeps it; a busy lock or no budget leaves it due for the next gate. Dry writes nothing."""
+    if dry or not ident:
+        return
+    if _past(deadline):
+        _deferred(report, rec)
+        return
+    try:
+        with Lock(timeout=0):
+            fresh = load_agent(rec["key"])
+            if not fresh or not _deletion_due(fresh) or _claimed_elsewhere(fresh, me, {}):
+                return
+            fresh["claimed_by"], fresh["claimed_identity"] = me, ident
+            save_agent(fresh)
+    except SpecError:
+        return
+    event("ended-conversation-claimed", key=rec["key"], session_id=me, why=why)
+    d = fresh["deletion"]
+    _delete(fresh, [w for w in live_workspaces(fresh) if w.get("path")], branches=d.get("branches", True),
+            why="retry %d" % (d.get("attempts", 0) + 1), deadline=deadline)
 
 
 def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dry=False):

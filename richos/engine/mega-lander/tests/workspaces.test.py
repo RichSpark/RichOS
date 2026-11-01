@@ -4620,6 +4620,54 @@ class AnEndedConversationsFinishedWorkIsCleanedUp(Base):
         self.assertTrue(ok)
         self.assert_kept(ended_root, "conv-ended-1111", "echo-opus-ended1", *ended["echo-opus-ended1"])
 
+    def defer_the_first_deletion(self):
+        """The reviewer's fixture (rv-20261101T122408Z-58204ae5-6cc5): the first gate lands the
+        ended conversation's merged worker, and its budget runs out at the deletion, an ordinary
+        outcome of the gate's finite budget. The disposition is written, the deletion deferred."""
+        (ended_root, ended), _live, _und = self.three_conversations()
+        real = ws._delete_chain
+
+        def expire_at_deletion(chain, why, processes=None, deadline=None, memo=None):
+            return real(chain, why, processes=processes, deadline=ws.now() - 1, memo=memo)
+
+        with patch.object(ws, "_delete_chain", expire_at_deletion):
+            ok, _person, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        path, branch = ended["echo-opus-ended1"]
+        rec = self.record_in(ended_root, "conv-ended-1111", "echo-opus-ended1")
+        self.assertEqual((rec.get("disposition") or {}).get("kind"), "landed")
+        self.assertTrue((rec.get("deletion") or {}).get("deferred"), rec.get("deletion"))
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn(branch, branches(self.entity))
+        return ended_root, path, branch
+
+    def test_a_deletion_cut_short_in_an_ended_conversations_registry_is_finished_by_the_next_gate(self):
+        ended_root, path, branch = self.defer_the_first_deletion()
+        ok, _person, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assertFalse(os.path.isdir(path), "the deferred deletion was never retried: the workspace is still there")
+        self.assertNotIn(path, worktrees(self.entity))
+        self.assertNotIn(branch, branches(self.entity), "the deferred deletion was never retried: the branch is still there")
+        key = ws.named_key("conv-ended-1111", "echo-opus-ended1")
+        self.assertFalse(os.path.exists(os.path.join(ended_root, "agents", key + ".json")))
+        self.assertTrue(os.path.exists(os.path.join(ended_root, "done", key + ".json")))
+
+    def test_a_deletion_cut_short_is_not_retried_while_the_conversation_could_be_running(self):
+        """Same liveness rule as the land: a session process no session file names could be the
+        conversation resumed, so its outstanding deletion is left for a later gate."""
+        ended_root, path, branch = self.defer_the_first_deletion()
+        link = os.path.join(self.env.root, self.proc_name)
+        os.symlink(shutil.which("sleep"), link)
+        stray = subprocess.Popen([link, "300"])
+        self.env.procs.append(stray)
+        ok, _person, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn(branch, branches(self.entity))
+        rec = self.record_in(ended_root, "conv-ended-1111", "echo-opus-ended1")
+        self.assertTrue(rec.get("deletion"), "the outstanding deletion was dropped")
+
+
 
 ANY_REGISTRY_ENTRANCES = ("gate_stop", "session_start", "post_merge_pending", "retry_due", "land", "discard",
                           "merge_and_land", "dry_status")
