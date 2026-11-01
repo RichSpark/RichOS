@@ -377,7 +377,10 @@ fn link_records(folder: &Path, shared: &Path) -> io::Result<()> {
     let own = folder.join(RECORDS);
     match fs::symlink_metadata(&own) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            if fs::read_link(&own)? == shared { return Ok(()); }
+            if fs::read_link(&own)? == shared {
+                // Linked already; the retention still follows Account 1's, which may have changed.
+                return shared.parent().map_or(Ok(()), |home| same_retention(folder, home));
+            }
             fs::remove_file(&own)?;
         }
         Ok(meta) if meta.is_dir() => move_own_records(folder, shared)?,
@@ -385,7 +388,40 @@ fn link_records(folder: &Path, shared: &Path) -> io::Result<()> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
+    if let Some(home) = shared.parent() { same_retention(folder, home)?; }
     link(shared, &own)
+}
+
+/// Claude Code's setting for how long it keeps a chat's record (`cleanupPeriodDays`).
+const RETENTION: &str = "cleanupPeriodDays";
+
+/// **An added account keeps records exactly as long as Account 1 does.** A `claude` started with
+/// its settings under an account's folder deletes every record in that folder's `projects` older
+/// than its `cleanupPeriodDays` (30 days when unset), and that folder is now Account 1's records:
+/// measured on 2.1.316, a default start under a linked folder with no setting deleted a 60-day
+/// record of the shared folder, and with 120 days kept it. So the account's `settings.json` carries
+/// Account 1's value (none when Account 1 has none, so both use Claude Code's own default); its
+/// other settings are left as they are. The app's own starts read no settings at all
+/// (`--setting-sources ''`); this covers a `claude` run by hand inside a lease's shell.
+fn same_retention(folder: &Path, home: &Path) -> io::Result<()> {
+    // A missing file is no settings; one that is not a JSON object is left untouched.
+    let read = |path: &Path| -> Option<serde_json::Map<String, serde_json::Value>> {
+        match fs::read(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Some(Default::default()),
+            Err(_) => None,
+            Ok(bytes) => serde_json::from_slice(&bytes).ok(),
+        }
+    };
+    let Some(mut theirs) = read(&home.join("settings.json")) else { return Ok(()) };
+    let wanted = theirs.remove(RETENTION);
+    let path = folder.join("settings.json");
+    let Some(mut own) = read(&path) else { return Ok(()) };
+    if own.get(RETENTION) == wanted.as_ref() { return Ok(()); }
+    match wanted {
+        Some(days) => { own.insert(RETENTION.into(), days); }
+        None => { own.remove(RETENTION); }
+    }
+    crate::quota::atomic_write(&path, &own)
 }
 
 /// **The record `path` names, in `shared`**: the same project folder and file name, when it is
@@ -1407,6 +1443,27 @@ pub(crate) mod tests {
         Accounts::open(&dir.path().join("data")).unwrap().share_records(&home).unwrap();
         assert_eq!(fs::read_to_string(home.join("projects/-p/s.jsonl")).unwrap(), "kept\n");
         assert!(!work.join("projects").exists());
+    }
+
+    /// **An added account keeps records as long as Account 1 does**: its `settings.json` carries
+    /// Account 1's `cleanupPeriodDays`, follows a change at the next launch, keeps its own other
+    /// settings, and drops the value when Account 1 has none.
+    #[test]
+    fn an_added_account_keeps_records_exactly_as_long_as_account_one() {
+        let dir = Scratch::new();
+        let home = dir.path().join("home");
+        write(&home.join("settings.json"), "{\"cleanupPeriodDays\":120,\"theme\":\"dark\"}");
+        let (_, accounts) = shared(&dir);
+        let work = accounts.add("Work").unwrap().folder.unwrap();
+        let days = |folder: &Path| -> serde_json::Value { serde_json::from_slice(&fs::read(folder.join("settings.json")).unwrap()).unwrap() };
+        assert_eq!(days(&work), serde_json::json!({"cleanupPeriodDays": 120}), "Account 1's value, nothing else of its");
+        write(&work.join("settings.json"), "{\"cleanupPeriodDays\":120,\"model\":\"opus\"}");
+        write(&home.join("settings.json"), "{\"cleanupPeriodDays\":200}");
+        Accounts::open(&dir.path().join("data")).unwrap().share_records(&home).unwrap();
+        assert_eq!(days(&work), serde_json::json!({"cleanupPeriodDays": 200, "model": "opus"}), "it follows a change, and keeps its own");
+        write(&home.join("settings.json"), "{}");
+        Accounts::open(&dir.path().join("data")).unwrap().share_records(&home).unwrap();
+        assert_eq!(days(&work), serde_json::json!({"model": "opus"}), "no value of Account 1's, none of its own");
     }
 
     /// **(b) A chat started on one account resumes on another**: both accounts' Claude Code
