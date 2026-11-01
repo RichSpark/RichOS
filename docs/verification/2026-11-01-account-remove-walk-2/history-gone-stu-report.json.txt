@@ -1,0 +1,98 @@
+{
+  "vm": "walk-eba929cd3e4a",
+  "expect_sha": "3bb988e6e4e66d70522a074ad564eaabeb41ee9b",
+  "steps": [
+    {
+      "step": "identity",
+      "evidence": {
+        "built_from": "3bb988e6e4e66d70522a074ad564eaabeb41ee9b"
+      },
+      "outcome": "PASS",
+      "seconds": 0.1
+    },
+    {
+      "step": "first-run",
+      "evidence": {
+        "thread": "thr_b1a9d757c42649c2a4aa445bed2d65e1",
+        "title": "Onboarding"
+      },
+      "outcome": "PASS",
+      "seconds": 17.3
+    },
+    {
+      "step": "stu-job",
+      "evidence": {
+        "job": {
+          "id": "62f57b2c-5cac-475f-804d-06f75576dbbd",
+          "state": "settled",
+          "title": "Stu walk: add a file named notes.md whose whole content is the line \"Notes for the walk test.\" to the Acme repository and commit it, and land it",
+          "work_session": "c0141774-da04-40cb-9023-474f756c34dd"
+        },
+        "approvals_pressed": 0
+      },
+      "outcome": "PASS",
+      "seconds": 279.1
+    },
+    {
+      "step": "stu-idle",
+      "evidence": {
+        "session": "c0141774-da04-40cb-9023-474f756c34dd",
+        "started": 1793566290,
+        "turn_ended": 1793566565
+      },
+      "outcome": "PASS",
+      "seconds": 9.5
+    },
+    {
+      "step": "stu-lose",
+      "evidence": {
+        "removed": [
+          "/Users/admin/testvm/walk-eba929cd3e4a/home/.claude/projects/-Users-admin-testvm-walk-eba929cd3e4a-home-Library-Application-Support-com-richos-app-coordination/c0141774-da04-40cb-9023-474f756c34dd.jsonl"
+        ],
+        "session": "c0141774-da04-40cb-9023-474f756c34dd"
+      },
+      "outcome": "PASS",
+      "seconds": 0.8
+    },
+    {
+      "step": "stu-handoff",
+      "evidence": {
+        "lost_session": "c0141774-da04-40cb-9023-474f756c34dd",
+        "relaunched": {
+          "pid": 22962,
+          "log": "/Users/admin/testvm/walk-eba929cd3e4a/relaunch-1793566568253074000.log",
+          "app": "/Users/admin/testvm/walk-eba929cd3e4a/RichOS.app"
+        },
+        "history_gone_notices": [
+          "{\"error\":\"cognition io: this chat's earlier history is gone from this Mac (the saved record of session c0141774-da04-40cb-9023-474f756c34dd is not on this Mac)\",\"event\":\"upstream_turn\",\"input_id\":\"peer:3256\",\"session_id\":\"\",\"stop_reason\":null,\"work\":{\"assignment_id\":\"39e2ff9a-0a3b-4c35-bc69-a4aaf4e7d027\",\"obligation_id\":\"work-8d71f46b4be54d199dca4e1d567eba36\"}}"
+        ],
+        "job": {
+          "id": "39e2ff9a-0a3b-4c35-bc69-a4aaf4e7d027",
+          "state": "settled",
+          "title": "Stu walk again: add a file named more-notes.md whose whole content is the line \"More notes.\" to the Acme repository and commit it, and land it",
+          "work_session": "5887d460-e558-429f-b14e-58894ee9d1d0"
+        },
+        "new_records": [
+          "/Users/admin/testvm/walk-eba929cd3e4a/home/.claude/projects/-Users-admin-testvm-walk-eba929cd3e4a-home-Library-Application-Support-com-richos-app-coordination/5887d460-e558-429f-b14e-58894ee9d1d0.jsonl",
+          "/Users/admin/testvm/walk-eba929cd3e4a/home/.claude/projects/-Users-admin-testvm-walk-eba929cd3e4a-home-Library-Application-Support-com-richos-app-coordination/5887d460-e558-429f-b14e-58894ee9d1d0/subagents/agent-a8d77d8e230729a8f.jsonl"
+        ],
+        "lead_files": [
+          {
+            "session": "c0141774-da04-40cb-9023-474f756c34dd",
+            "started": 1793566290,
+            "turn_ended": 1793566565,
+            "mtime": 1793566565.7639856
+          },
+          {
+            "session": "5887d460-e558-429f-b14e-58894ee9d1d0",
+            "started": 1793566632,
+            "turn_ended": 1793566858,
+            "mtime": 1793566858.2931547
+          }
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 344.3
+    }
+  ]
+}

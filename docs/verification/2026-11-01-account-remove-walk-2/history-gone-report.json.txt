@@ -1,0 +1,83 @@
+{
+  "vm": "walk-3d2f4bf6fb9a",
+  "expect_sha": "3bb988e6e4e66d70522a074ad564eaabeb41ee9b",
+  "steps": [
+    {
+      "step": "identity",
+      "evidence": {
+        "built_from": "3bb988e6e4e66d70522a074ad564eaabeb41ee9b"
+      },
+      "outcome": "PASS",
+      "seconds": 0.1
+    },
+    {
+      "step": "first-run",
+      "evidence": {
+        "thread": "thr_f546e7edd4f24f4e9ad84116b4bdb5a7",
+        "title": "Onboarding"
+      },
+      "outcome": "PASS",
+      "seconds": 16.4
+    },
+    {
+      "step": "chat",
+      "evidence": {
+        "turn": "turn_60811f2bc9854254823d9e66cdfeb3f2",
+        "records": 1,
+        "continuity_files_before": 2
+      },
+      "outcome": "PASS",
+      "seconds": 14.5
+    },
+    {
+      "step": "lose",
+      "evidence": {
+        "removed": [
+          "/Users/admin/testvm/walk-3d2f4bf6fb9a/home/.claude/projects/-Users-admin-testvm-walk-3d2f4bf6fb9a-home-Library-Application-Support-com-richos-app-coordination/002d05f3-2ac2-440d-9025-2391c3a91200.jsonl"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 0.8
+    },
+    {
+      "step": "queue",
+      "evidence": {
+        "gone_turns": [
+          {
+            "turn_id": "turn_fd6a96535385403e81faff826a811b76",
+            "at": 1793564710836,
+            "reason": "cognition io: this chat's earlier history is gone from this Mac (the saved record of session 002d05f3-2ac2-440d-9025-2391c3a91200 is not on this Mac)"
+          }
+        ],
+        "on_screen": true,
+        "gone_after_settle": 1
+      },
+      "outcome": "PASS",
+      "seconds": 102.2
+    },
+    {
+      "step": "answer",
+      "evidence": {
+        "words": "Is anyone there? Reply with one word: here. (history-walk-last)",
+        "turn": {
+          "event": "TurnCompleted",
+          "turn_id": "turn_06600669a6a54ff5b74557db296d2d96",
+          "reason": null,
+          "at": 1793564801391
+        },
+        "reply_chars": 4,
+        "new_records": [
+          "/Users/admin/testvm/walk-3d2f4bf6fb9a/home/.claude/projects/-Users-admin-testvm-walk-3d2f4bf6fb9a-home-Library-Application-Support-com-richos-app-coordination/9f507ac2-42da-4b09-9e46-6c44b92591a6.jsonl"
+        ],
+        "continuity_files": {
+          "before": 2,
+          "after-quit": 2,
+          "after-queue": 4,
+          "after-answer": 4
+        }
+      },
+      "outcome": "PASS",
+      "seconds": 29.7
+    }
+  ]
+}

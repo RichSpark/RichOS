@@ -2101,34 +2101,22 @@ fn native_resume(profile: Option<&crate::engine_profile::EngineProfile>,
     let scope = crate::status_tools::StatusToolScope { version: 1,
         state_root: profile.state.clone(), entity_id: entity.clone(), thread_id: thread.clone() };
     let path = crate::session_tools::native_path(&scope, &binding.session_id).map_err(NativeError::Protocol)?;
-    let path = match std::fs::metadata(&path) {
-        Ok(_) => path,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match relocated_record(profile, &path) {
-            Some(found) => found,
-            None => {
-                // Only noticed here. Opening the chat primes it in the background, where the
-                // failure is logged and nobody is told; the loss is marked lost by
-                // [`commit_history_gone`] once the visible message is recorded, so his first
-                // message still gets the card and only the one after it starts anew.
-                history_gone_pending(&binding.session_id, profile.state.join("evidence").join(&binding.session_id).join(HISTORY_GONE_MARK));
-                return Err(NativeError::HistoryGone { session: binding.session_id });
-            }
-        },
-        Err(e) => return Err(e.into()),
-    };
+    // Where the record is now first (every account's records are in one folder, and a chat is
+    // resumed from the record's permanent path: `record_on_account`), and only then whether it
+    // exists at all.
     let path = record_on_account(profile, &scope, &binding.session_id, path)?;
-    Ok(Some((binding.session_id, path)))
-}
-
-/// The record of a session whose first path is gone, where removing an account carried it
-/// (`claude_accounts::Accounts::remove`): the same project folder and name under the lease's own
-/// account, or under the machine's own Claude folder.
-fn relocated_record(profile: &crate::engine_profile::EngineProfile, path: &Path) -> Option<std::path::PathBuf> {
-    let (project, name) = (path.parent().and_then(Path::file_name)?, path.file_name()?);
-    profile.claude_account.as_ref().and_then(|a| a.folder.clone()).into_iter()
-        .chain(crate::engine_profile::machine_claude_home())
-        .map(|folder| folder.join("projects").join(project).join(name))
-        .find(|candidate| candidate.is_file())
+    match std::fs::metadata(&path) {
+        Ok(_) => Ok(Some((binding.session_id, path))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Only noticed here. Opening the chat primes it in the background, where the
+            // failure is logged and nobody is told; the loss is marked lost by
+            // [`commit_history_gone`] once the visible message is recorded, so his first
+            // message still gets the card and only the one after it starts anew.
+            history_gone_pending(&binding.session_id, profile.state.join("evidence").join(&binding.session_id).join(HISTORY_GONE_MARK));
+            Err(NativeError::HistoryGone { session: binding.session_id })
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// **A resumed session's record lives in the folder of the account it runs on** (Hank's parity
@@ -2146,11 +2134,28 @@ fn record_on_account(profile: &crate::engine_profile::EngineProfile, scope: &cra
     session: &str, path: std::path::PathBuf) -> Result<std::path::PathBuf, NativeError> {
     let Some(account) = profile.claude_account.as_ref() else { return Ok(path) };
     let Some(folder) = account.folder.clone().or_else(crate::engine_profile::machine_claude_home) else { return Ok(path) };
-    let projects = folder.join("projects");
+    let projects = folder.join(crate::claude_accounts::RECORDS);
+    // Every account's records are in one folder now (`claude_accounts::Accounts::share_records`):
+    // a record named under an account folder that was removed since is the same project and name
+    // in this account's records folder, and the chat resumes from it.
+    // And a chat is always resumed from the record's permanent path, never through an account's
+    // `projects` link (`claude_accounts::permanent`): Claude Code keeps writing the path it resumed,
+    // and the link goes when that account is removed, while this chat runs on.
+    let settle = |path: std::path::PathBuf, named: &Path| -> Result<std::path::PathBuf, NativeError> {
+        let path = crate::claude_accounts::permanent(&path);
+        if path != named {
+            crate::session_tools::record_moved(scope, session, &path).map_err(NativeError::Protocol)?;
+        }
+        Ok(path)
+    };
+    if !path.exists() {
+        let Some(found) = crate::claude_accounts::record_in(&path, &projects) else { return Ok(path) };
+        return settle(found, &path);
+    }
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    if path.starts_with(&projects) || canonical(&path).starts_with(canonical(&projects)) { return Ok(path) }
+    if path.starts_with(&projects) || canonical(&path).starts_with(canonical(&projects)) { return settle(path.clone(), &path) }
     let (Some(project), Some(name)) = (path.parent().and_then(Path::file_name), path.file_name()) else { return Ok(path) };
-    let target = projects.join(project).join(name);
+    let target = crate::claude_accounts::permanent(&projects.join(project).join(name));
     carry_record(&path, &target)?;
     carry_folder(&path.with_extension(""), &target.with_extension(""))?;
     crate::session_tools::record_moved(scope, session, &target).map_err(NativeError::Protocol)?;
@@ -6122,6 +6127,101 @@ while True:
         assert!(helper("helper1").unwrap().contains("msg-h1"));
         assert!(helper("helper2").expect("the helper Work ran, back on Home").contains("msg-h2"));
         assert_eq!((counted(&home),counted(&work)),(1700.0,300.0));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **(b) The CEO 2026-11-01: a chat that ran on Work resumes on Account 1 after Work is
+    /// removed.** With every account's records in Account 1's folder
+    /// (`claude_accounts::Accounts::share_records`), the record of a session Work started is
+    /// Account 1's record too, nothing copied; Work is removed while the chat is still on it, and
+    /// the chat resumes on Account 1 with its history from the path Claude Code named under Work.
+    #[test]
+    fn a_chat_started_on_an_account_resumes_on_another_after_that_account_is_removed() {
+        let root=fixture_root().join(format!("resume-removed-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),&engine,&root.join("ecs")).unwrap();
+        let mut profile=fixture_profile(&root);
+        profile.work_scope=Some(("company".into(),"conversation".into()));
+        let scope=crate::status_tools::StatusToolScope{version:1,state_root:profile.state.clone(),entity_id:"company".into(),thread_id:"conversation".into()};
+        let session=uuid::Uuid::new_v4().to_string();
+        bridge.bind("company","conversation",&session,"original",Some("stu-thread:conversation"),"rich").unwrap();
+        crate::session_tools::bind(&root.join("stu-scope.json"),&scope,&session,"stu",None).unwrap();
+        let home=root.join("home");
+        let accounts=crate::claude_accounts::Accounts::open(&root.join("data")).unwrap();
+        accounts.share_records(&home).unwrap();
+        let work=accounts.add("Work").unwrap();
+        // Started on Work: Claude Code writes, and names, the record under Work's folder.
+        let named=work.folder.clone().unwrap().join("projects/-coordination").join(format!("{session}.jsonl"));
+        std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::write(&named,"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"started on Work\"}}\n").unwrap();
+        std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":named}}))).unwrap();
+        let in_home=home.join("projects/-coordination").join(format!("{session}.jsonl"));
+
+        // The record Work wrote is already Account 1's record, before any resume moved anything.
+        assert!(std::fs::read_to_string(&in_home).expect("one record for every account").contains("started on Work"));
+
+        // Work removed while the chat was still on it (the CEO's case), then resumed on Account 1:
+        // it resumes, with its history.
+        accounts.remove(&work.id).unwrap();
+        // The next launch keeps Work's records link, so the path Claude Code named under Work's
+        // folder still reads; a version before this one deleted it at that launch, and the chat
+        // still resumes from the same project and name in Account 1's records.
+        accounts.share_records(&home).unwrap();
+        assert!(std::fs::read_to_string(&named).unwrap().contains("started on Work"),"the path under Work's folder still reads");
+        std::fs::remove_file(work.folder.clone().unwrap().join("projects")).unwrap();
+        assert!(!named.exists(),"the path under Work's folder is gone, as an earlier version left it");
+        profile.claude_account=Some(crate::claude_accounts::Account{id:"1".into(),label:"Account 1".into(),folder:Some(home.clone())});
+        let (_,after)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).expect("the chat resumes after its account is removed").unwrap();
+        assert_eq!(after,in_home);
+        assert!(std::fs::read_to_string(&after).unwrap().contains("started on Work"),"its history is there");
+        assert_eq!(crate::session_tools::native_path(&scope,&session).unwrap(),in_home,"where it lives is on record");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// **A chat started on Work and resumed on Account 1 keeps writing after Work is removed**
+    /// (second review rv-20261101T183042Z, P1). Resumed through the path Claude Code named under
+    /// Work's folder, the Account 1 process would keep writing through Work's `projects` link, and
+    /// removing Work would break its next write. The resume path is the record's permanent path in
+    /// Account 1's folder, so the live chat's next turn is written after the removal.
+    #[test]
+    fn a_chat_resumed_on_account_one_keeps_writing_after_the_account_it_started_on_is_removed() {
+        let root=fixture_root().join(format!("resume-then-remove-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let python=std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let engine=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine");
+        let bridge=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),&engine,&root.join("ecs")).unwrap();
+        let mut profile=fixture_profile(&root);
+        profile.work_scope=Some(("company".into(),"conversation".into()));
+        let scope=crate::status_tools::StatusToolScope{version:1,state_root:profile.state.clone(),entity_id:"company".into(),thread_id:"conversation".into()};
+        let session=uuid::Uuid::new_v4().to_string();
+        bridge.bind("company","conversation",&session,"original",Some("stu-thread:conversation"),"rich").unwrap();
+        crate::session_tools::bind(&root.join("stu-scope.json"),&scope,&session,"stu",None).unwrap();
+        let home=root.join("home");
+        let accounts=crate::claude_accounts::Accounts::open(&root.join("data")).unwrap();
+        accounts.share_records(&home).unwrap();
+        let work=accounts.add("Work").unwrap();
+        // Started on Work: Claude Code writes, and names, the record under Work's folder.
+        let named=work.folder.clone().unwrap().join("projects/-coordination").join(format!("{session}.jsonl"));
+        std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::write(&named,"started on Work\n").unwrap();
+        std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":named}}))).unwrap();
+        let in_home=home.join("projects/-coordination").join(format!("{session}.jsonl"));
+
+        // Switched to Account 1 and resumed there, with Work still on the list.
+        profile.claude_account=Some(crate::claude_accounts::Account{id:"1".into(),label:"Account 1".into(),folder:Some(home.clone())});
+        let (_,resumed)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
+        assert_eq!(resumed,in_home,"resumed from the permanent path, not through Work's folder");
+        let append=|path:&Path,line:&str| { use std::io::Write; std::fs::OpenOptions::new().append(true).open(path).map(|mut f| f.write_all(line.as_bytes())) };
+        append(&resumed,"a turn on Account 1\n").unwrap().unwrap();
+
+        // Work removed while the chat runs on Account 1: its next turn is still written.
+        accounts.remove(&work.id).unwrap();
+        append(&resumed,"the next turn on Account 1\n").expect("the live chat's path survives the removal").unwrap();
+        assert_eq!(std::fs::read_to_string(&in_home).unwrap(),"started on Work\na turn on Account 1\nthe next turn on Account 1\n");
+        assert_eq!(native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap().1,in_home);
+        assert_eq!(crate::session_tools::native_path(&scope,&session).unwrap(),in_home,"where it lives is on record");
         std::fs::remove_dir_all(root).unwrap();
     }
 
