@@ -15,8 +15,13 @@
 // remove control, a file is a chip with its name, type and size, and "what you type goes in the
 // same bubble". The Mac composer's own tokens are used for every color; there is no new one.
 //
-// WHAT THIS DOES NOT DO, said rather than discovered: no file picker (the brief is drop and
-// paste), no thumbnail for a DROPPED image (the page never receives its bytes, by design — see
+// THE PLUS (round 50/51) opens macOS's own file picker (`attach_pick_files` in
+// `mac_attachments.rs`); what he picks is shelved in Rust exactly like a drop and takes the
+// drop's road from here (`addPicked` → `addDropped`), so the page never names a path either way.
+//
+// WHAT THIS DOES NOT DO, said rather than discovered: no folders (the desk takes files; a
+// dropped folder is refused in its words, and the picker offers files only), no thumbnail for a
+// DROPPED or PICKED image (the page never receives its bytes, by design — see
 // the Rust module), and the tray does not survive a relaunch (the staged files do, and are swept
 // after seven days by the desk).
 "use strict";
@@ -310,6 +315,22 @@
     }
   }
 
+  // ---- the plus: macOS's own file picker --------------------------------------------------
+
+  /// The picker answers like a drop (`{ drop, files }`), or null when he cancels; a refusal to
+  /// open it at all comes back as the shell's sentence, on the tray's line.
+  async function addPicked() {
+    if (!composerKey()) return;
+    let view = null;
+    try {
+      view = await bridge.invoke("attach_pick_files");
+    } catch (e) {
+      note(String(e));
+      return;
+    }
+    if (view && Array.isArray(view.files) && view.files.length) await addDropped(view);
+  }
+
   // ---- a file the thread produced (Add to chat, Output side panel PRD §12.7) --------------
 
   /// The sentence the panel says when a file is on the tray (PRD §6.7, "Action succeeded").
@@ -408,6 +429,8 @@
       changed();
     },
     addRecorded,
+    /// The plus: the file picker, then the drop's road.
+    pick: addPicked,
     note,
     STILL_ADDING,
   };

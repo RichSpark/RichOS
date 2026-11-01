@@ -2807,7 +2807,7 @@
   /// Where the mock "keeps" a committed file. A path of the real shape, under a folder that
   /// cannot exist on anybody's Mac.
   const MOCK_ATTACH_HOME = "/mock/Library/Application Support/com.richos.app/attachments";
-  const mockAttach = { staged: new Map(), drops: new Map(), nextDrop: 0, calls: [], missingNext: null };
+  const mockAttach = { staged: new Map(), drops: new Map(), nextDrop: 0, calls: [], missingNext: null, pickNext: null };
 
   function mockKindFor(declared, name) {
     const bare = String(declared || "").split(";")[0].trim().toLowerCase();
@@ -3271,6 +3271,18 @@
           const h = (options && options.headers) || {};
           mockAttach.calls.push({ cmd, name: decodeURIComponent(h["x-richos-name"] || ""), type: h["x-richos-type"] || "", size: args.length });
           return mockStage(h["x-richos-draft"], h["x-richos-attachment"], decodeURIComponent(h["x-richos-name"] || ""), h["x-richos-type"], args);
+        }
+        // The plus (round 50/51): `attach_pick_files` in `mac_attachments.rs`. The picker's next
+        // answer is set by `__mock.pickFiles(files)`; files picked are shelved like a drop and
+        // answered `{ drop, files }`; no answer set is Cancel (null).
+        case "attach_pick_files": {
+          const files = mockAttach.pickNext;
+          mockAttach.pickNext = null;
+          mockAttach.calls.push({ cmd, picked: files ? files.map((f) => f.name) : null });
+          if (!files || !files.length) return null;
+          const id = ++mockAttach.nextDrop;
+          mockAttach.drops.set(id, files.map((f) => ({ name: f.name, folder: false, bytes: Uint8Array.from(f.bytes || []) })));
+          return { drop: id, files: files.map((f, index) => ({ index, name: f.name })) };
         }
         case "attach_dropped_file": {
           const drop = mockAttach.drops.get(args.drop);
@@ -5332,6 +5344,11 @@
       emit("rich://file-drag", { phase: "leave", count: 0 });
       emit("rich://file-drop", { drop: id, files: files.map((f, index) => ({ index, name: f.name })) });
       return id;
+    },
+    /// The file picker's next answer, for the composer's plus: `[{ name, bytes }]`, or null for
+    /// Cancel.
+    pickFiles(files) {
+      mockAttach.pickNext = files;
     },
     /// A drag hovering over the window, without landing.
     dragOver(on) {

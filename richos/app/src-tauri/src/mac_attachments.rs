@@ -139,6 +139,8 @@ pub struct Committed {
 }
 
 const NOT_A_FILE: &str = "This is a folder, not a file. Drop the files inside it instead. Nothing was attached.";
+/// The picker could not be shown or did not answer. Nothing was attached and nothing changed.
+const PICKER_FAILED: &str = "The file picker did not open. Nothing was attached; try the plus again or drop the files on the window.";
 const UNREADABLE: &str = "RichOS couldn't read this file. Nothing was attached.";
 const DROP_GONE: &str = "That drop is no longer available. Drop the file again.";
 const NOT_SAVED: &str = "RichOS couldn't save this file just now. Nothing was attached; try again.";
@@ -404,6 +406,38 @@ pub fn attach_dropped_file(
 ) -> Result<AttachedView, String> {
     let Some(path) = state.take_dropped(drop, index) else { return Err(DROP_GONE.into()) };
     state.attach_path(&draft_id, &attachment_id, &path)
+}
+
+/// **The composer's plus (round 50/51): macOS's own file picker, directly.** A sheet on the
+/// asking window, several files at once. What he picks is shelved exactly as a drop is
+/// ([`MacAttachments::record_drop`]), so the page gets a drop number and the files' names, takes
+/// each with [`attach_dropped_file`], and never names a path. `None` when he cancels.
+///
+/// FILES ONLY: the desk refuses a folder ([`NOT_A_FILE`]), and the dialog plugin has no mode that
+/// offers files and folders in one panel, so the picker offers what the desk takes.
+///
+/// The dialog plugin is run from Rust only, as for *Save a copy…*; none of its commands is granted
+/// to the page.
+#[richos_command::command]
+pub async fn attach_pick_files(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<Option<DropView>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        app.dialog().file().set_parent(&window).set_title("Add files").blocking_pick_files().map(|files| {
+            let paths: Vec<PathBuf> = files.into_iter().filter_map(|f| f.into_path().ok()).collect();
+            (app, paths)
+        })
+    })
+    .await
+    .map_err(|e| {
+        eprintln!("[richos] attachments: the file picker's task did not finish: {e}");
+        PICKER_FAILED.to_string()
+    })?;
+    let Some((app, paths)) = picked else { return Ok(None) };
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let Some(state) = app.try_state::<MacAttachments>() else { return Err(PICKER_FAILED.into()) };
+    Ok(Some(state.record_drop(paths)))
 }
 
 /// The body is the file's raw bytes. Headers: `x-richos-draft`, `x-richos-attachment`,
