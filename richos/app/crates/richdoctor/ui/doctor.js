@@ -167,6 +167,7 @@
       case "ai-failed": aiFailed(e.message, e.retry); $("conv-sub").textContent = "Claude Code is not available right now"; break;
       case "canceled": canceledCard(); break;
       case "ready": readyFooter(); break;
+      case "resumed": document.querySelectorAll("#log .fail").forEach(function (f) { f.remove(); }); break;
       case "answer-open": showAnswer(); break;
       case "busy":
         S.busy = e.on;
@@ -706,7 +707,12 @@
         replay(d.conversation);
         invoke("resume_pending");
         const last = d.conversation[d.conversation.length - 1];
-        if (!d.pending_question && !(last && (last.t === "ai-failed"))) canceledCard();
+        // Claude said it was ready: show that again. Claude was working when the window closed, or
+        // failed in a way that can clear up: the investigation continues by itself, nothing to press.
+        if (d.preparing) { progress("Preparing your report…"); invoke("prepare"); }
+        else if (d.ready) readyFooter();
+        else if (d.resuming) invoke("continue_investigation");
+        else if (!d.pending_question && !(last && (last.t === "ai-failed"))) canceledCard();
         if (d.pending_question) showAnswer();
         return d;
       });
@@ -778,7 +784,7 @@
       case "continue": begin(false); break;
       case "no-ai": begin(true); break;
       case "resume": openSaved(S.boot.resume.id); break;
-      case "new-report": $("resume-card").hidden = true; $("desc").value = ""; $("desc").focus(); break;
+      case "new-report": if (S.boot && S.boot.resume) { invoke("decline_resume", { id: S.boot.resume.id }); S.boot.resume = null; } $("resume-card").hidden = true; $("desc").value = ""; $("desc").focus(); break;
       case "send-answer": sendAnswer($("answer-field").value.trim()); break;
       case "cancel-inv": invoke("cancel"); break;
       case "resume-inv": case "retry-ai": document.querySelectorAll("#log .fail").forEach(function (f) { f.remove(); }); invoke("retry"); break;
