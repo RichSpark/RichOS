@@ -507,6 +507,10 @@ button {
 /* Only an offer when there is something to accept — see `.is-unset` below. */
 .rail-identity.is-unset {
   cursor: pointer;
+  /* 4px tighter than a name's nameplate: with Readout on, "Set your name" on one line is 2px
+     wider than the room the default 300px rail leaves it (measured: 108px against 106px). */
+  gap: 6px;
+  padding-right: 0;
 }
 .rail-identity.is-unset:hover {
   background: var(--tint-weak);
@@ -554,6 +558,9 @@ button {
    and it is `--ink-faint` rather than a whisper: 5.51:1 dark, 4.85:1 light. */
 .rail-identity.is-unset .rail-user-name {
   color: var(--ink-faint);
+  /* A fixed two-word offer, never a name: it stays on one line beside the Readout at the
+     default 300px rail (`tests/resources.js` check 7b). */
+  white-space: nowrap;
 }
 
 /* The live Mac resources square (`resources.js`): opposite the name on the footer's
