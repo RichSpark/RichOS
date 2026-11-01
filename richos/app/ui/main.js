@@ -3905,14 +3905,23 @@ inputEl.addEventListener("scroll", fadeComposerEdges, { passive: true });
 // keystroke, and `autoGrow` keeps scrolling off while the words fit, so a draft that fitted could
 // wrap past its height with nothing to scroll (mid-job review rv-20261101T215812Z-f1f1fca9-a259).
 // The box is measured again whenever its WIDTH changes; its own height changes are ignored, so the
-// height `autoGrow` writes does not call it again.
+// height `autoGrow` writes does not call it again. The measuring waits for the next frame: a height
+// written inside the observer's own callback is a layout change in the same pass, which WebKit
+// reports as "ResizeObserver loop completed with undelivered notifications" (output.js, the
+// Output panel's drag).
 if (typeof ResizeObserver === "function") {
   let lastShellWidth = 0;
+  let regrowQueued = false;
   new ResizeObserver((entries) => {
     const width = Math.round(entries[entries.length - 1].contentRect.width);
     if (!width || width === lastShellWidth) return;
     lastShellWidth = width;
-    autoGrow();
+    if (regrowQueued) return;
+    regrowQueued = true;
+    window.requestAnimationFrame(() => {
+      regrowQueued = false;
+      autoGrow();
+    });
   }).observe(inputShellEl);
 }
 
