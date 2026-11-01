@@ -685,7 +685,9 @@ impl EngineProfile {
     /// grant, and lets every other tool call run. The gate alone at `PostToolBatch`
     /// ([`crate::quota::gate::HOLD_EVENT`]) holds a helper's next call to Claude while a hold
     /// applies, after its tool calls have run; the canonical hook has no branch for that event,
-    /// so nothing stands behind it there.
+    /// so nothing stands behind it there. Its `timeout` is fourteen days
+    /// ([`crate::quota::gate::HOLD_TIMEOUT_SECS`]), so a weekly hold keeps the next model call
+    /// held for as long as it stands.
     pub fn install_quota_gate(&self, executable: &Path) -> Result<(), RuntimeError> {
         let path = self.plugin.join("hooks/hooks.json");
         let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)
@@ -694,7 +696,8 @@ impl EngineProfile {
             quote(&self.runtime.python), quote(&self.engine.join("scripts/app-engine-hook.py")));
         manifest["hooks"]["PreToolUse"][0] = json!({"hooks":[{"type":"command", "command":command, "timeout":21600}]});
         manifest["hooks"][crate::quota::gate::HOLD_EVENT] = json!([{"hooks":[{"type":"command",
-            "command":format!("{} --claude-quota-gate", quote(executable)), "timeout":21600}]}]);
+            "command":format!("{} --claude-quota-gate", quote(executable)),
+            "timeout":crate::quota::gate::HOLD_TIMEOUT_SECS}]}]);
         write(&path, &manifest.to_string())
     }
     /// **Make the team's first save in a connected folder wait for the user's Git name**

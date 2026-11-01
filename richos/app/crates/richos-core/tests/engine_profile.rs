@@ -92,7 +92,8 @@ fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() 
     let command = hold[0]["hooks"][0]["command"].as_str().unwrap();
     assert!(command.ends_with("--claude-quota-gate"), "{command}");
     assert!(!command.contains("app-engine-hook.py"), "{command}");
-    assert_eq!(hold[0]["hooks"][0]["timeout"], 21600);
+    assert_eq!(hold[0]["hooks"][0]["timeout"], richos_core::quota::gate::HOLD_TIMEOUT_SECS);
+    assert_eq!(hold[0]["hooks"][0]["timeout"], 1_209_600, "fourteen days: a weekly hold outlasts 21,600 s");
     assert_eq!(manifest["hooks"].as_object().unwrap().len(), 10);
 }
 
