@@ -149,6 +149,8 @@ class CodexWatchWalk(stu.StuReminderWalk):
 
     def pair(self):
         acme = self.facts['thread']
+        if any(row.get('bridge', {}).get('connection_id') == 'setup' for row in self.inboxes()):
+            raise StepFailed('fresh user without legacy Codex input received a setup observation')
         self.send('Perform this harmless transport test yourself here. Explicitly designate THIS chat as the future Codex coordinator using codex_channel designate. Then use codex_channel connect with text "Harmless parallel roundtrip test: acknowledge marked transport observations on their own bridge locator only" and provenance "Guest user transport test". Return the handoff. Do not delegate or start repository work.')
         first = self.wait_fact('Rich-first connection', self.connections, lambda rows: len(rows) == 1)[0]
         if first['thread_id'] != acme:
@@ -173,7 +175,7 @@ class CodexWatchWalk(stu.StuReminderWalk):
             raise StepFailed('two companies did not have the same chat title')
         self.facts.update(connections=paths, owners=[acme, acme, beta], beta_thread=beta)
         self.save()
-        return dict(connections=rows, original_context=rich_context, default=target)
+        return dict(connections=rows, original_context=rich_context, default=target, unsolicited_setup_observations=0)
 
     def inboxes(self):
         return self.run_python('import glob,json,sys;out=[]\nfor p in glob.glob(sys.argv[1]+"/engine-state/messages/*/*/stu.jsonl"):\n for l in open(p):\n  r=json.loads(l)\n  if r.get("bridge"):out.append(dict(r,file=p,thread=p.split("/")[-2]))\nprint(json.dumps(out))', self.data)
