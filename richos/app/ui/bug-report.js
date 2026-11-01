@@ -698,6 +698,8 @@ window.RichBug = (function () {
     showDock(f);
     var lead = earlier ? W(f).earlier : f.card ? "I've checked your changes now. " : "I've checked it now. ";
     showDraft(f, c, lead + W(f).hereItIs, null);
+    // Words he changed by hand before the quit come back as changed words: Send checks them.
+    if (c.handEdited) { f.edited = true; f.handEdited = true; paintCard(f); }
   }
 
   /// Rich folds one change in. While he does, the report is "changing": Send, Change it and
@@ -1268,9 +1270,19 @@ window.RichBug = (function () {
     f.edited = true;
     // Only says what Send will be doing first ("Rich is checking your changes…"): whether the
     // words may go is the shell's to decide, against Rich's own check, never this flag's.
-    if (JSON.stringify(sheetOf(f)) !== f.beforeEdit) f.handEdited = true;
+    var changedNow = JSON.stringify(sheetOf(f)) !== f.beforeEdit;
+    if (changedNow) f.handEdited = true;
     f.step = "draft";
     paintCard(f);
+    // **SAVED BEFORE THE PANEL MAY CLOSE** (CEO §156): the words he changed are kept on this Mac
+    // now, and the close button waits for that (`paintDock`), so closing and relaunching never
+    // brings back the card without his edit. Not sent: at Send they still get the scanner and then Rich.
+    if (changedNow && f.report) {
+      f.keeping = true;
+      bridge.invoke("bug_report_keep_edit", { report: f.report, sheet: sheetOf(f), private: f.private || [], screen: publicScreen(f.screen), post: postOf(f) })
+        .catch(function () { richSays(f, ["I couldn't save your changes on this Mac. If you close this and quit, they won't be here when you come back."]); })
+        .then(function () { f.keeping = false; paintDock(); });
+    }
     paintComposers();
   }
 
@@ -1508,7 +1520,7 @@ window.RichBug = (function () {
     // A written-up card waiting for Send is kept on this Mac (CEO §156), so the panel may close
     // over it and the press that opens it again comes back to it (`start`). Only a step that is
     // mid-air (Rich working, a words being changed, a send in flight) holds the panel open.
-    var busy = f && ["checking", "editing", "changing", "sending", "withdrawing"].indexOf(f.step) !== -1;
+    var busy = f && (f.keeping || ["checking", "editing", "changing", "sending", "withdrawing"].indexOf(f.step) !== -1);
     var x = $("bugdock-x");
     if (x) x.hidden = !!busy;
   }

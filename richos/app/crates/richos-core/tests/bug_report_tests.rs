@@ -2069,6 +2069,40 @@ fn a_change_rich_makes_is_his_last_word_and_send_sends_it_without_asking_him_aga
 }
 
 #[test]
+fn words_the_user_changed_by_hand_are_kept_beside_the_card_and_survive_a_relaunch() {
+    let dir = scratch("kept-edit");
+    let written = checked_with("The window froze.", "[]");
+    let id = report_id();
+    let outbox = Outbox::open(&dir);
+    outbox.keep_card(&id, "the window froze", &screen(), written.clone(), 1_000).unwrap();
+    let mut sheet = sheet_of(&written.draft);
+    sheet.sections[0].paragraphs[0].push_str(" It happens twice.");
+    outbox.keep_edit(&id, Edited { sheet: sheet.clone(), private: vec![] }, &screen(), 2_000).unwrap();
+
+    // A relaunch: the card is still there, and his words are kept with it, not as Rich's check.
+    let kept = Outbox::open(&dir).unchecked().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].checked.as_ref(), Some(&written));
+    assert_eq!(kept[0].edited.as_ref().map(|e| &e.sheet), Some(&sheet));
+    assert!(Outbox::open(&dir).pending().unwrap().is_empty());
+    // Their redraft is what the window is shown, and it is not a Check: Send still asks Rich.
+    let shown = redraft(&sheet, &[], &[]);
+    let mut turns = 0;
+    let _ = at_send(&sheet_of(&shown), Some(&Check::of(&written.draft)), &[], |p| { turns += 1; rich_keeps(p) });
+    assert_eq!(turns, 1, "his hand change went without the check at Send");
+
+    // Rich's own new card replaces the hand changes it was made from.
+    assert!(outbox.update_card(&id, written.clone()).unwrap());
+    assert!(Outbox::open(&dir).unchecked().unwrap()[0].edited.is_none());
+    // With no card kept (it went to waiting and is being changed) the words wait for his check.
+    let other = report_id();
+    outbox.keep_edit(&other, Edited { sheet, private: vec![] }, &screen(), 3_000).unwrap();
+    let alone = Outbox::open(&dir).unchecked().unwrap().into_iter().find(|u| u.id == other).unwrap();
+    assert!(alone.checked.is_none() && alone.edited.is_some());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_written_up_card_is_kept_and_comes_back_after_a_relaunch_until_it_is_done_with() {
     let dir = scratch("kept-card");
     let written = checked_with("The window froze.", "[]");

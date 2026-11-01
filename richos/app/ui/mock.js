@@ -3159,10 +3159,13 @@
       bugMock.unchecked.forEach((u) => {
         // Changed words he could not check at Send: the scanner and then he go over those (the
         // core's `checked_edit`).
-        const draft = u.card ? u.card.draft : u.edited ? bugRedraft(u.edited.sheet, u.edited.private.concat(preset.bugRichCheck || [])) : bugDraft(u.answer, u.screen, u.post);
-        if (!bugMock.checks[u.id]) bugKeepCheck(u.id, draft);
-        const digest = u.card ? u.card.digest : u.edited ? "Checked your changes for private details" : bugDigest(u.screen);
-        emit("rich://bug-report", { checked: { id: u.id, report: u.id, draft, digest, here: u.screen.here || "", post: u.post || "bug" } });
+        // A kept card with hand changes beside it comes back as those words, scanned and never
+        // taken as Rich's check of them (the shell's `check_once`).
+        const hand = !!(u.card && u.edited);
+        const draft = hand ? bugRedraft(u.edited.sheet, u.edited.private) : u.card ? u.card.draft : u.edited ? bugRedraft(u.edited.sheet, u.edited.private.concat(preset.bugRichCheck || [])) : bugDraft(u.answer, u.screen, u.post);
+        if (!bugMock.checks[u.id] && !hand) bugKeepCheck(u.id, draft);
+        const digest = hand ? "Checked your changes for private details" : u.card ? u.card.digest : u.edited ? "Checked your changes for private details" : bugDigest(u.screen);
+        emit("rich://bug-report", { checked: { id: u.id, report: u.id, draft, digest, here: u.screen.here || "", post: u.post || "bug", handEdited: hand } });
       });
     },
     releaseSendCheck: () => bugRelease("sendcheck"),
@@ -4611,6 +4614,15 @@
           bugMock.unchecked.push({ id: report, answer: String(args.answer || ""), screen: args.screen || {}, post: args.post || "bug", card: { draft, digest: bugDigest(args.screen) } });
           return { state: "checked", report, draft, digest: bugDigest(args.screen), workedMs: 9000 };
         }
+        case "bug_report_keep_edit": {
+          // The user's hand changes, kept beside the card (the shell's `keep_edit`).
+          bugMock.calls.push({ cmd, report: args.report, sheet: args.sheet, post: args.post });
+          const at = bugMock.unchecked.find((u) => u.id === args.report);
+          const edited = { sheet: args.sheet, private: args.private || [] };
+          if (at) at.edited = edited;
+          else bugMock.unchecked.push({ id: args.report, answer: "", screen: args.screen || {}, post: args.post || "bug", edited });
+          return null;
+        }
         case "bug_report_take_unchecked": {
           bugMock.calls.push({ cmd, id: args.id, post: args.post });
           const at = bugMock.unchecked.findIndex((u) => u.id === args.id);
@@ -4639,7 +4651,7 @@
           const report = args.report || "00000000-0000-4000-a000-" + String(++bugMock.seq).padStart(12, "0");
           bugKeepCheck(report, draft);
           const card = bugMock.unchecked.find((u) => u.id === report);
-          if (card) card.card = { draft, digest: "Checked your changes for private details" };
+          if (card) { card.card = { draft, digest: "Checked your changes for private details" }; delete card.edited; }
           else if (args.screen) bugMock.unchecked.push({ id: report, answer: "", screen: args.screen, post: args.post || "bug", card: { draft, digest: "Checked your changes for private details" } });
           return { section: target.heading, report, draft, digest: "Checked your changes for private details", workedMs: 4000 };
         }
@@ -4662,7 +4674,7 @@
             bugKeepCheck(report, again);
             if (JSON.stringify(bugSheetOf(again)) !== JSON.stringify(args.sheet)) {
               const card = bugMock.unchecked.find((u) => u.id === report);
-              if (card) card.card = { draft: again, digest: "Checked your changes for private details" };
+              if (card) { card.card = { draft: again, digest: "Checked your changes for private details" }; delete card.edited; }
               return { state: "checked", report, draft: again, digest: "Checked your changes for private details" };
             }
           }

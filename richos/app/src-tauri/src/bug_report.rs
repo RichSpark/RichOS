@@ -651,6 +651,29 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
     .await
 }
 
+/// **THE USER'S HAND CHANGES, SAVED BEFORE THE PANEL MAY CLOSE** (CEO §156): `sheet` is the card's
+/// words after Done. They are kept beside the card on this Mac and come back after a relaunch as
+/// a hand-changed card, which still goes through the scanner and then Rich at Send. Sends nothing.
+#[richos_command::command]
+pub async fn bug_report_keep_edit(
+    app: AppHandle,
+    report: String,
+    sheet: bug::Sheet,
+    private: Option<Vec<bug::PrivateTerm>>,
+    screen: bug::Screen,
+    post: Option<bug::Post>,
+) -> Result<(), String> {
+    let bugs = app.state::<Arc<BugReports>>().inner().clone();
+    off_the_ipc_threads(move || {
+        let private = private.unwrap_or_default();
+        bugs.outbox(post.unwrap_or_default()).keep_edit(&report, bug::Edited { sheet, private }, &screen, now_ms()).map_err(|e| {
+            eprintln!("[richos] bug report {report}: the changed words could not be kept on this Mac ({e})");
+            "RichOS couldn't save your changes on this Mac.".to_string()
+        })
+    })
+    .await
+}
+
 /// *Try now*. `None` when it is no longer waiting.
 #[richos_command::command]
 pub async fn bug_report_try_now(app: AppHandle, id: String, post: Option<bug::Post>) -> Result<Option<bug::Delivery>, String> {
@@ -803,7 +826,15 @@ fn check_once(app: &AppHandle, bugs: &Arc<BugReports>, post: bug::Post) {
                 // His check is kept under the report's own id for Send, once: a pass that
                 // says it again must not undo a change he wrote into it since.
                 bugs.checks().entry(id.clone()).or_insert_with(|| bug::Check::of(&done.draft));
-                let payload = serde_json::json!({ "checked": { "id": id, "report": id, "draft": done.draft, "digest": done.digest, "here": here(&id), "post": post } });
+                // A card whose words the user changed by hand after Rich's check comes back as
+                // those words, scanned (never his check of them: Send gives them the scanner and
+                // then Rich, CEO §115), marked as changed so the window says so.
+                let hand = waiting.iter().find(|u| u.id == id && u.checked.is_some()).and_then(|u| u.edited.clone());
+                let (draft, digest) = match &hand {
+                    Some(e) => (bug::redraft(&e.sheet, &e.private, scrubber.terms()), bug::EDIT_DIGEST.to_string()),
+                    None => (done.draft.clone(), done.digest.clone()),
+                };
+                let payload = serde_json::json!({ "checked": { "id": id, "report": id, "draft": draft, "digest": digest, "here": here(&id), "post": post, "handEdited": hand.is_some() } });
                 if let Err(e) = app.emit(EVENT, payload) {
                     eprintln!("[richos] bug report: the window could not be told Rich checked it: {e}");
                 }

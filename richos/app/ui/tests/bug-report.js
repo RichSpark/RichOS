@@ -783,6 +783,34 @@ async function main() {
     return "closed and reopened, canceled off this Mac, restored and sent";
   });
 
+  await run.check("words the user changed by hand are saved on this Mac before the panel may close, and come back after a relaunch as changed words", async () => {
+    const page = await open("dark");
+    await bustABug(page);
+    await answer(page, ANSWER);
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    await page.keyboard.type(" It happens twice.");
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
+    // Saved on this Mac (beside the card), as the close button becomes available.
+    await page.waitForSelector("#bugdock-x:visible");
+    const savedSheet = await page.evaluate(() => (window.__RICHOS_MOCK_BUG__.unchecked()[0].edited || {}).sheet);
+    assert(JSON.stringify(savedSheet || {}).includes("It happens twice."), "the hand change was not kept on this Mac: " + JSON.stringify(savedSheet));
+    assertEqual((await calls(page, "bug_report_send")).length, 0, "saving the change sent something");
+    await page.close();
+
+    // After a quit: the kept card with his changes beside it comes back as his words, changed,
+    // and Send still gives them the check (the card is not marked as Rich's last word).
+    const later = await open("dark");
+    const id = await later.evaluate(() => window.__RICHOS_MOCK_BUG__.keptCardBefore("The names on the left get cut off.", { here: "the Acme deal conversation" }));
+    await later.evaluate(([id, sheet]) => window.RichBridge.invoke("bug_report_keep_edit", { report: id, sheet, private: [], screen: {}, post: "bug" }), [id, savedSheet]);
+    await later.evaluate(() => window.__RICHOS_MOCK_BUG__.claudeAnswers());
+    await later.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet · changed')");
+    assert((await later.locator("#bugdock .bug-doc").innerText()).includes("It happens twice."), "the hand change did not come back");
+    await later.close();
+    return "saved before close; restored as changed words";
+  });
+
   await run.check("a change Rich made is his last word: Send sends it with one press, and a change by hand is still checked at Send", async () => {
     const page = await open("dark", { bugRichPrivate: [{ text: "Jane Doe", kind: "person_name" }] });
     await bustABug(page);

@@ -3967,6 +3967,7 @@ fn main() {
             bug_report::bug_report_look,
             bug_report::bug_report_write,
             bug_report::bug_report_take_unchecked,
+            bug_report::bug_report_keep_edit,
             bug_report::bug_report_change,
             bug_report::bug_report_send,
             bug_report::bug_report_try_now,

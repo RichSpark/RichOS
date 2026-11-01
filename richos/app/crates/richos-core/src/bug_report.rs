@@ -2637,8 +2637,35 @@ impl Outbox {
         let Ok(bytes) = std::fs::read(&path) else { return Ok(false) };
         let Ok(mut kept) = serde_json::from_slice::<Unchecked>(&bytes) else { return Ok(false) };
         kept.checked = Some(checked);
+        // Rich's words are the card now; hand changes made before them are in them.
+        kept.edited = None;
         self.write_unchecked(&kept)?;
         Ok(true)
+    }
+
+    /// **WORDS THE USER CHANGED BY HAND, KEPT BEFORE THE PANEL MAY CLOSE** (CEO §156: closing and
+    /// relaunching must not lose an edit). They are kept beside Rich's last card of this report
+    /// (`id`), or, when no card is kept (it went to waiting and is being changed), as words waiting
+    /// for his check ([`Outbox::keep_edited`]'s shape: `check_due` asks him). Never sent from here:
+    /// a kept edit comes back as a hand-changed card, which goes through the scanner and then Rich
+    /// at Send ([`at_send_for`]).
+    pub fn keep_edit(&self, id: &str, edited: Edited, screen: &Screen, now_ms: u64) -> io::Result<()> {
+        if let Some(path) = self.unchecked_path(id) {
+            if let Some(mut kept) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Unchecked>(&b).ok()) {
+                kept.edited = Some(edited);
+                return self.write_unchecked(&kept);
+            }
+        }
+        self.write_unchecked(&Unchecked {
+            id: id.to_string(),
+            created_at_ms: now_ms,
+            answer: String::new(),
+            screen: screen.clone(),
+            attempts: 1,
+            next_try_at_ms: now_ms,
+            checked: None,
+            edited: Some(edited),
+        })
     }
 
     /// Every report Rich has not checked yet, or whose check the window has not taken, oldest
