@@ -706,7 +706,13 @@ impl Accounts {
             return Err(io::Error::other("RichOS cannot create an account folder in a location whose name has non-ASCII characters."));
         }
         fs::create_dir_all(&folder)?;
-        if let Some(shared) = self.records() { link_records(&folder, &shared)?; }
+        if let Some(shared) = self.records() {
+            // Without the link (a system that refuses one) its chats stay in its folder, which
+            // removing it never deletes (`remove_sign_in`).
+            if let Err(error) = link_records(&folder, &shared) {
+                eprintln!("[richos] claude accounts: a new account's chats could not be linked to the shared records ({error})");
+            }
+        }
         let label = label.trim();
         let label = if label.is_empty() { format!("Account {id}") } else { label.chars().filter(|c| !c.is_control()).take(40).collect() };
         let account = Account { id, label, folder: Some(folder) };
@@ -720,7 +726,7 @@ impl Accounts {
     /// Remove an added account: its sign-in, never a chat. Account 1 is the user's own Claude
     /// Code folder and is never removed. The caller signs the folder out first (`claude auth
     /// logout`). Any record still inside the folder is first moved into the shared place
-    /// ([`link_records`]); when that cannot be done the account stays, so nothing is lost.
+    /// ([`move_own_records`]); one that cannot be moved is left where it is.
     pub fn remove(&self, id: &str) -> io::Result<()> {
         if id == ACCOUNT_ONE {
             return Err(io::Error::other("Account 1 is your own Claude Code sign-in and cannot be removed here."));
@@ -729,9 +735,10 @@ impl Accounts {
         let Some(account) = state.accounts.iter().find(|a| a.id == id).cloned() else { return Ok(()) };
         let own = account.folder.clone().filter(|f| f.starts_with(&self.root));
         if let (Some(folder), Some(shared)) = (&own, self.records()) {
-            if folder.is_dir() {
-                link_records(folder, &shared).map_err(|e| io::Error::other(format!(
-                    "{} was not removed: its chats could not be moved to where every account keeps them ({e}).", account.label)))?;
+            // Anything still inside joins the others; what could not be moved stays, with the
+            // folder around it (`remove_sign_in`), and the next launch moves it (`share_records`).
+            if let Err(error) = move_own_records(folder, &shared) {
+                eprintln!("[richos] claude accounts: {}'s chats stay in its folder for now ({error})", account.label);
             }
         }
         let mut next = state.clone();
@@ -1381,6 +1388,25 @@ pub(crate) mod tests {
         assert_eq!(fs::read_to_string(home.join("projects/-coordination/s1/subagents/agent-h.jsonl")).unwrap(), "helper\n");
         assert_eq!(record_in(&record, &home.join(RECORDS)), Some(home.join("projects/-coordination/s1.jsonl")),
             "the path Claude Code named under Work finds the record");
+    }
+
+    /// **Removing never deletes a record, even with nowhere to move it**: before the shared place
+    /// is named (or where a link is refused), Work's records stay in its folder when it is removed
+    /// and everything else goes; the next launch moves them into the shared place.
+    #[test]
+    fn removing_an_account_with_nowhere_to_move_its_records_keeps_them_and_the_next_launch_moves_them() {
+        let dir = Scratch::new();
+        let accounts = Accounts::open(&dir.path().join("data")).unwrap();
+        let work = accounts.add("Work").unwrap().folder.unwrap();
+        write(&work.join(".claude.json"), "{}");
+        write(&work.join("projects/-p/s.jsonl"), "kept\n");
+        accounts.remove("2").unwrap();
+        assert!(!work.join(".claude.json").exists(), "the sign-in goes");
+        assert_eq!(fs::read_to_string(work.join("projects/-p/s.jsonl")).unwrap(), "kept\n", "the record stays");
+        let home = dir.path().join("home");
+        Accounts::open(&dir.path().join("data")).unwrap().share_records(&home).unwrap();
+        assert_eq!(fs::read_to_string(home.join("projects/-p/s.jsonl")).unwrap(), "kept\n");
+        assert!(!work.join("projects").exists());
     }
 
     /// **(b) A chat started on one account resumes on another**: both accounts' Claude Code
