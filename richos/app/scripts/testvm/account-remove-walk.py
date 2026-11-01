@@ -25,7 +25,7 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   remove     the Work card's Remove, then its confirmation, in the Claude accounts sheet, as a
              person removes it, while the chat runs on Account 1: Work is gone from the list and
              its sign-in is gone and its records link stays
-  relaunch   the app is relaunched: Work's folder still holds only its `projects` link to Account
+  relaunch   the app is relaunched and the codeword's chat opened from the sidebar: Work's folder still holds only its `projects` link to Account
              1's records (kept for good: a saved transcript names paths under Work's folder,
              handover review rv-20261101T200002Z)
   continue   after that relaunch, a message asking for the codeword: answered, in the SAME session as the codeword (its
@@ -275,12 +275,27 @@ class AccountRemoveWalk(toolchain_walk.ToolchainAskWalk):
         a saved transcript names under Work's folder still reads the shared records."""
         relaunch(self.vm)
         took = self.through_home()
+        # A relaunch opens a NEW chat (history-gone-walk.py open_lost_chat), so the codeword's chat
+        # is opened by its sidebar row; the title is written from the first message and varies
+        # ("Remember codeword kiwi-…"), so it is found by the codeword part, else the code itself.
+        opened = None
+        for needle in ('odeword', self.facts['code']):
+            try:
+                self.ax('click', '--title', needle, '--first', '--contains')
+            except StepFailed:
+                continue
+            opened = needle
+            break
+        if opened is None:
+            raise StepFailed("the codeword's chat has no row in the sidebar after the relaunch")
+        time.sleep(3)
+        self.shot('relaunch.png')
         left = guest(self.vm, 'ls -A ' + shlex.quote(self.work) + ' 2>/dev/null || true').split()
         link = guest(self.vm, 'readlink ' + shlex.quote(self.work + '/projects') + ' || true').strip()
         session = self.facts.get('session', 'none')
         through = guest(self.vm, 'grep -c ' + shlex.quote(self.facts['code']) + ' ' + shlex.quote(self.work)
                         + '/projects/*/' + shlex.quote(session) + '.jsonl 2>/dev/null || true').strip()
-        evidence = {'home_after_s': took, 'work_folder': left, 'work_projects_link': link,
+        evidence = {'home_after_s': took, 'opened_row_by': opened, 'work_folder': left, 'work_projects_link': link,
                     'codeword_lines_read_through_work': through}
         self.write('relaunch.json', evidence)
         failures = []
