@@ -463,11 +463,13 @@ def terminal_messages(path, seen=None, cutoff=None, written_note=None, sources=N
     return messages
 
 
-def desktop_messages(payload):
-    """Read original text/Jam turns in the host-bound company and conversation.
+def desktop_turns(payload):
+    """(scope, binding, {turn id: text}) of the original text/Jam turns in the
+    host-bound company and conversation, in ledger order.
 
     This ledger survives provider rotation. Hidden priming, tool results and
-    other companies/conversations are not user requests.
+    other companies/conversations are not user requests. blocking_ask.py reads
+    the same words to tell his answer from a teammate's message in the app.
     """
     scope_path = Path(os.environ["RICHOS_APP_SCOPE"])
     if not scope_path.is_absolute() or scope_path.stat().st_size > 256 * 1024:
@@ -482,7 +484,7 @@ def desktop_messages(payload):
                    for key in ("entity_id", "thread_id", "session_id"))):
         raise ValueError("desktop authority does not match this company/conversation/session")
     ledger = Path(os.environ["RICHOS_APP_STATE"]).parent / "conversation-ledger.jsonl"
-    messages, turns = [], {}
+    turns = {}
     for row in transcript_rows(ledger, complete=True):
         if (row.get("event") != "PromptReceived" or row.get("entity_id") != binding["entity_id"]
                 or row.get("thread_id") != binding["thread_id"] or row.get("source") not in ("text", "jam")):
@@ -491,8 +493,15 @@ def desktop_messages(payload):
         if not isinstance(text, str) or not isinstance(turn, str) or turn in turns:
             raise ValueError("invalid or duplicate original desktop request")
         turns[turn] = text
-        if text.strip():
-            messages.append(text)
+    return scope, binding, turns
+
+
+def desktop_messages(payload):
+    """Original text/Jam turns in the host-bound company and conversation
+    (desktop_turns), bounded for review, with the host's original instruction
+    checked against them."""
+    scope, binding, turns = desktop_turns(payload)
+    messages = [text for text in turns.values() if text.strip()]
     original = None
     instruction = scope.get("user_instruction")
     if instruction:

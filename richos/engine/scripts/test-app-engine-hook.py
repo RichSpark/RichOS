@@ -453,20 +453,51 @@ class DesktopHooks(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
         self.assertIn("PUSHED", result.stderr)
 
-    def test_a_question_left_unanswered_in_an_earlier_turn_is_put_back_in_front_of_the_lead(self):
-        """notice-unanswered-question.sh reads earlier replies and whose turn each input started.
-        On 0aa9a71f60cf the app's guard transcript had neither, so the check never fired in the app
-        (the second review of that commit, finding 2). Here: the lead asks, a notification wakes it,
-        and at that turn's end the question is put back."""
+    def test_a_question_left_unanswered_is_put_back_until_his_own_words_answer_it(self):
+        """notice-unanswered-question.sh reads earlier replies and whose turn each input started
+        from Claude Code's own transcript. The app sends every input over the SDK (turnOrigin
+        sdk), his words and his teammates' messages alike, so in the app his answer is the input
+        whose text is his original words in the app's ledger. Here: the lead asks, a teammate's
+        message wakes it and the question is put back; then his answer clears it. On 2f9632e77
+        (w4c merged onto main) his answer was never his (no turnOrigin human in the app), so the
+        question was put back after he had answered it."""
+        self.scope.write_text(json.dumps({"version": 1, "actions_allowed": True, "binding": {
+            "entity_id": "fictional-company", "thread_id": "fictional-thread", "session_id": "fictional-session"}}))
+        ledger = self.root / "conversation-ledger.jsonl"
+        transcript = self.root / "transcript.jsonl"
+
+        def said(text):
+            turn = "turn-%d" % (len(ledger.read_text().splitlines()) if ledger.exists() else 0)
+            with ledger.open("a") as out:
+                out.write(json.dumps({"event": "PromptReceived", "entity_id": "fictional-company",
+                    "thread_id": "fictional-thread", "source": "text", "turn_id": turn, "text": text}) + "\n")
+
+        def row(kind, text, at):
+            body = ({"type": "user", "turnOrigin": "sdk", "promptSource": "sdk",
+                     "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+                    if kind == "user" else
+                    {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
+            with transcript.open("a") as out:
+                out.write(json.dumps({**body, "isSidechain": False, "timestamp": at}) + "\n")
+
         question = "QUESTION FOR YOU: Should I publish the website?"
-        self.assertEqual(self.hook("UserPromptSubmit", prompt_id="turn-1", prompt="Prepare the website.").returncode, 0)
-        asked = self.hook("Stop", prompt_id="turn-1", last_assistant_message=question, stop_hook_active=False)
+        said("Prepare the website.")
+        row("user", "Prepare the website.", "2026-11-01T10:00:00Z")
+        row("assistant", question, "2026-11-01T10:01:00Z")
+        asked = self.hook("Stop", transcript_path=str(transcript), last_assistant_message=question, stop_hook_active=False)
         self.assertEqual(asked.returncode, 0, asked.stderr + asked.stdout)
         self.assertNotIn("STILL WAITING FOR YOUR ANSWER", asked.stdout)
-        self.assertEqual(self.hook("UserPromptSubmit", prompt_id="turn-2", prompt="The worker finished.").returncode, 0)
-        later = self.hook("Stop", prompt_id="turn-2", last_assistant_message="Noted.", stop_hook_active=False)
+        row("user", json.dumps({"from": "stu", "text": "The worker finished."}), "2026-11-01T10:05:00Z")
+        later = self.hook("Stop", transcript_path=str(transcript), last_assistant_message="Noted.", stop_hook_active=False)
         self.assertEqual(later.returncode, 0, later.stderr + later.stdout)
         self.assertIn("STILL WAITING FOR YOUR ANSWER", later.stdout)
+        row("assistant", "Noted.", "2026-11-01T10:05:30Z")
+        said("Yes, publish it.")
+        row("user", "Yes, publish it.", "2026-11-01T10:09:00Z")
+        answered = self.hook("Stop", transcript_path=str(transcript), last_assistant_message="Publishing.", stop_hook_active=False)
+        self.assertEqual(answered.returncode, 0, answered.stderr + answered.stdout)
+        self.assertNotIn("STILL WAITING FOR YOUR ANSWER", answered.stdout + answered.stderr)
+        self.assertNotIn("WATCH DID NOT RUN", answered.stdout + answered.stderr)
 
     def test_a_turn_end_check_the_terminal_runs_refuses_stus_false_claim_in_the_app(self):
         """guard-unresolved-claims.sh refuses a reply that says a role is working when none was ever
