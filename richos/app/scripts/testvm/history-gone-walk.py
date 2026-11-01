@@ -270,7 +270,9 @@ class HistoryGoneWalk(base.StuReminderWalk):
         """Open the chat by its sidebar row (a relaunch opens a NEW chat, not this one) and wait for the
         app's own log to say that chat's background preparation ended, either way."""
         before = self.primed_count(log)
-        self.ax('click', '--title', 'History walk chat', '--first', '--contains')
+        # The row's title is written from the first message and varies by run ("History walk chat",
+        # "History walk ready" on 2026-11-01), so the row is found by the part every run shares.
+        self.ax('click', '--title', 'History walk', '--first', '--contains')
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
             if self.primed_count(log) > before:
