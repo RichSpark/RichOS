@@ -248,7 +248,7 @@ module.exports = [
       "deliberate stop as an error. It issues no instruction and asks for nothing.",
   },
   {
-    s: "Rich's earlier words in this chat are gone from this Mac, so he can't pick up where you left off. Press Restore my message, then send it again, and he will start a new conversation in this chat.",
+    s: "Rich's earlier words in this chat are gone from this Mac, so he can't pick up where you left off. Press Restore my message, then send it again and he will start a new conversation in this chat.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",
     fixture: null,
