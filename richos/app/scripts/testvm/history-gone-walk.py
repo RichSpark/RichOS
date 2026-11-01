@@ -98,6 +98,12 @@ def queue_verdict(record):
 
 
 class HistoryGoneWalk(base.StuReminderWalk):
+    # The home screen, read by OCR after a relaunch (StuReminderWalk.after_relaunch). Once Stu's job
+    # has hired a specialist the home shows the team, and OCR reads its "Talk to Rich" pill as
+    # "( rawtonch ) Rich" (2026-11-01, two runs at 3bb988e6e: stu-handoff never left the home); the
+    # team's "AI SPECIALIST" label on the same screen is read.
+    HOME_TEXT = 'Talk to Rich|SPECIALIST'
+
     def ledger(self):
         text = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
         rows = []
