@@ -11,6 +11,15 @@
 //! - **Account 1 is the folder used today.** It has no folder of its own here (`folder: None`),
 //!   so a lease on it inherits the app's environment exactly as before, and a user with one
 //!   subscription sees no change.
+//! - **Every chat's records are in ONE place, whichever account it ran on** (the CEO
+//!   2026-11-01: removing an account broke the chats that had run on it). In the terminal there
+//!   is one `~/.claude` and signing in to another account never touches its history; so Claude
+//!   Code's records (`projects/`) are Account 1's folder's, and an added account's own
+//!   `projects` is only a link to it ([`Accounts::share_records`]). An added account's folder
+//!   holds its sign-in and nothing a chat needs: removing it removes only the sign-in, and a
+//!   chat started on one account resumes on any other. An install that kept records inside an
+//!   added account's folder has them moved into the shared place once, losing nothing
+//!   ([`move_records`]); nothing is ever moved out of Account 1's folder.
 //! - **Staying is fill-first:** the account in use stays in use until it must be left.
 //! - **Left BEFORE the wall, never at it** (plan §15 answers 6-8; ruling §108). An account is
 //!   left at a turn boundary, checked before EVERY turn from the freshest reading (the
@@ -357,6 +366,143 @@ fn fully_added(state: &Stored, id: &str) -> bool {
         .is_some_and(|c| c.kind == "added")
 }
 
+/// The folder in a Claude Code folder that holds its chats' records (a session's `.jsonl`, its
+/// helpers' transcripts and saved tool output beside it, and the project's memory).
+pub const RECORDS: &str = "projects";
+
+/// **`folder/projects` becomes a link to `shared`**, after every record in it was moved there.
+/// A link that already points at `shared` is left as it is; a link to anywhere else is replaced
+/// (a link is never followed, so nothing it points at is touched).
+fn link_records(folder: &Path, shared: &Path) -> io::Result<()> {
+    let own = folder.join(RECORDS);
+    match fs::symlink_metadata(&own) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if fs::read_link(&own)? == shared { return Ok(()); }
+            fs::remove_file(&own)?;
+        }
+        Ok(meta) if meta.is_dir() => move_own_records(folder, shared)?,
+        Ok(_) => return Err(io::Error::other(format!("{} is not a folder", own.display()))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    link(shared, &own)
+}
+
+/// **The record `path` names, in `shared`**: the same project folder and file name, when it is
+/// there. For a path written under an account folder that is gone now.
+pub fn record_in(path: &Path, shared: &Path) -> Option<PathBuf> {
+    let (project, name) = (path.parent()?.file_name()?, path.file_name()?);
+    Some(shared.join(project).join(name)).filter(|p| p.is_file())
+}
+
+#[cfg(unix)]
+fn link(target: &Path, at: &Path) -> io::Result<()> { std::os::unix::fs::symlink(target, at) }
+#[cfg(windows)]
+fn link(target: &Path, at: &Path) -> io::Result<()> { std::os::windows::fs::symlink_dir(target, at) }
+
+/// Move every record in `folder/projects` (a real folder, never a link) into `shared`, then
+/// remove the emptied `projects`. Anything that could not be moved stays, and so does the
+/// folder holding it.
+fn move_own_records(folder: &Path, shared: &Path) -> io::Result<()> {
+    let own = folder.join(RECORDS);
+    match fs::symlink_metadata(&own) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    let tag = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    move_records(&own, shared, &tag)?;
+    remove_empty(&own)
+}
+
+/// **Move one folder's records into another, losing nothing.** A file `to` does not have is
+/// moved (renamed, or copied then removed across volumes). A file `to` has with the same bytes
+/// is the same record twice, and the extra copy goes. Two different copies of one record (a
+/// session an earlier version carried between accounts, then continued on both) are both kept:
+/// the one written last keeps the record's name, so the chat resumes from its newest turn, and
+/// the other is kept beside it as `<name>.from-account-<tag>`, a name no reader takes for a
+/// transcript, so no turn is counted twice.
+pub fn move_records(from: &Path, to: &Path, tag: &str) -> io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        if entry.file_type()?.is_dir() {
+            move_records(&source, &target, tag)?;
+            continue;
+        }
+        match fs::symlink_metadata(&target) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => move_file(&source, &target)?,
+            Err(e) => return Err(e),
+            Ok(_) if same_bytes(&source, &target)? => fs::remove_file(&source)?,
+            Ok(meta) => {
+                let modified = |m: &fs::Metadata| m.modified().ok();
+                let kept = kept_name(&target, tag);
+                if modified(&entry.metadata()?) > modified(&meta) {
+                    move_file(&target, &kept)?;
+                    move_file(&source, &target)?;
+                } else {
+                    move_file(&source, &kept)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn move_file(from: &Path, to: &Path) -> io::Result<()> {
+    if fs::rename(from, to).is_ok() { return Ok(()); }
+    fs::copy(from, to)?;
+    fs::remove_file(from)
+}
+
+fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
+    if fs::metadata(a)?.len() != fs::metadata(b)?.len() { return Ok(false); }
+    Ok(fs::read(a)? == fs::read(b)?)
+}
+
+/// `<name>.from-account-<tag>`, numbered when that is taken too.
+fn kept_name(target: &Path, tag: &str) -> PathBuf {
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut candidate = target.with_file_name(format!("{name}.from-account-{tag}"));
+    let mut n = 2;
+    while candidate.symlink_metadata().is_ok() {
+        candidate = target.with_file_name(format!("{name}.from-account-{tag}-{n}"));
+        n += 1;
+    }
+    candidate
+}
+
+/// Remove `dir` and the folders under it once they are empty; an error when anything is left.
+fn remove_empty(dir: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() { remove_empty(&entry.path())?; }
+    }
+    fs::remove_dir(dir)
+}
+
+/// **Remove an account's sign-in folder, never a record in it**: its `projects` link is
+/// unlinked (never followed), and a real `projects` still there (no shared place was named, so
+/// nothing could be moved) is left with the folder around it; everything else goes.
+fn remove_sign_in(folder: &Path) -> io::Result<()> {
+    let own = folder.join(RECORDS);
+    if fs::symlink_metadata(&own).is_ok_and(|m| m.file_type().is_symlink()) {
+        fs::remove_file(&own)?;
+    }
+    for entry in fs::read_dir(folder)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == own { continue; }
+        if entry.file_type()?.is_dir() { fs::remove_dir_all(&path)?; } else { fs::remove_file(&path)?; }
+    }
+    match fs::remove_dir(folder) {
+        Err(_) if own.exists() => Ok(()),
+        done => done,
+    }
+}
+
 /// A switch that is decided but has not happened yet: no conversation turn has run under `to`,
 /// or a back end is still on another account.
 struct PendingSwitch {
@@ -372,6 +518,10 @@ struct PendingSwitch {
 pub struct Accounts {
     path: PathBuf,
     root: PathBuf,
+    /// **The one records folder every account's chats are kept in** (Account 1's `projects`,
+    /// [`Accounts::share_records`]). `None` until the desktop entrypoint names Account 1's folder:
+    /// tests and simulations never touch the developer's own.
+    records: Mutex<Option<PathBuf>>,
     state: Mutex<Stored>,
     /// The switch notice waits here until a turn really runs under the new account
     /// ([`Accounts::ran_on`]) and no back end is still on another one
@@ -414,7 +564,7 @@ impl Accounts {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Stored::default(),
             Err(e) => return Err(e),
         };
-        Ok(Self { path, root: data_dir.join("claude-accounts"), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), replies: Mutex::new(BTreeMap::new()), waiting: Mutex::new(std::collections::BTreeSet::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
+        Ok(Self { path, root: data_dir.join("claude-accounts"), records: Mutex::new(None), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), replies: Mutex::new(BTreeMap::new()), waiting: Mutex::new(std::collections::BTreeSet::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
     }
 
     fn save(&self, state: &Stored) -> io::Result<()> {
@@ -556,6 +706,7 @@ impl Accounts {
             return Err(io::Error::other("RichOS cannot create an account folder in a location whose name has non-ASCII characters."));
         }
         fs::create_dir_all(&folder)?;
+        if let Some(shared) = self.records() { link_records(&folder, &shared)?; }
         let label = label.trim();
         let label = if label.is_empty() { format!("Account {id}") } else { label.chars().filter(|c| !c.is_control()).take(40).collect() };
         let account = Account { id, label, folder: Some(folder) };
@@ -566,14 +717,23 @@ impl Accounts {
         Ok(account)
     }
 
-    /// Remove an added account and its folder. Account 1 is the user's own Claude Code folder
-    /// and is never removed. The caller signs the folder out first (`claude auth logout`).
+    /// Remove an added account: its sign-in, never a chat. Account 1 is the user's own Claude
+    /// Code folder and is never removed. The caller signs the folder out first (`claude auth
+    /// logout`). Any record still inside the folder is first moved into the shared place
+    /// ([`link_records`]); when that cannot be done the account stays, so nothing is lost.
     pub fn remove(&self, id: &str) -> io::Result<()> {
         if id == ACCOUNT_ONE {
             return Err(io::Error::other("Account 1 is your own Claude Code sign-in and cannot be removed here."));
         }
         let mut state = self.state.lock().unwrap();
         let Some(account) = state.accounts.iter().find(|a| a.id == id).cloned() else { return Ok(()) };
+        let own = account.folder.clone().filter(|f| f.starts_with(&self.root));
+        if let (Some(folder), Some(shared)) = (&own, self.records()) {
+            if folder.is_dir() {
+                link_records(folder, &shared).map_err(|e| io::Error::other(format!(
+                    "{} was not removed: its chats could not be moved to where every account keeps them ({e}).", account.label)))?;
+            }
+        }
         let mut next = state.clone();
         // An account whose sign-in never finished (Cancel in round 18's add flow) leaves no row
         // in Recent changes; one that was added says it was removed.
@@ -587,11 +747,50 @@ impl Accounts {
         self.save(&next)?;
         *state = next;
         drop(state);
-        // Only a folder this file created is ever deleted.
-        if let Some(folder) = account.folder.filter(|f| f.starts_with(&self.root)) {
-            let _best_effort = fs::remove_dir_all(folder);
+        // Only a folder this file created is ever deleted, and never a chat's record in it.
+        if let Some(folder) = own {
+            let _best_effort = remove_sign_in(&folder);
         }
         Ok(())
+    }
+
+    /// The one records folder, once [`Accounts::share_records`] named it.
+    pub fn records(&self) -> Option<PathBuf> { self.records.lock().unwrap().clone() }
+
+    /// **Keep every account's chats in Account 1's records folder** (`home/projects`, `home`
+    /// being Account 1's Claude Code folder: the app's `CLAUDE_CONFIG_DIR`, else `~/.claude`).
+    /// Each added account's folder gets `projects` as a link to it; records an earlier version
+    /// kept inside an added account's folder, a removed one's left behind included, are moved
+    /// there first ([`move_records`]). Run at every launch; once everything is linked it moves
+    /// nothing. An account whose records could not all be moved keeps them where they are and
+    /// is not linked (the first such error is returned; every other account is still done).
+    pub fn share_records(&self, home: &Path) -> io::Result<()> {
+        if home.starts_with(&self.root) {
+            return Err(io::Error::other("Account 1's folder is inside the added accounts' folder"));
+        }
+        let shared = home.join(RECORDS);
+        fs::create_dir_all(&shared)?;
+        *self.records.lock().unwrap() = Some(shared.clone());
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let listed: Vec<PathBuf> = self.list().into_iter().filter_map(|a| a.folder).collect();
+        let mut first_error = None;
+        for entry in entries.flatten() {
+            let folder = entry.path();
+            if !entry.file_type().is_ok_and(|t| t.is_dir()) { continue; }
+            let done = if listed.contains(&folder) {
+                link_records(&folder, &shared)
+            } else {
+                // A folder no account owns any more (removed by a version that left its records):
+                // its records join the others; the folder itself is not this launch's to delete.
+                move_own_records(&folder, &shared)
+            };
+            if let Err(e) = done { first_error.get_or_insert(e); }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// `fresh_at` is when the account being left is fresh again (the reset of the window that
@@ -1147,5 +1346,113 @@ pub(crate) mod tests {
         ];
         assert_eq!(rows(&accounts), expected);
         assert_eq!(rows(&Accounts::open(dir.path()).unwrap()), expected, "Recent changes survive a relaunch");
+    }
+
+    /// Account 1's Claude Code folder (`home`) and the app's data folder, side by side, with the
+    /// records shared as the desktop entrypoint shares them.
+    fn shared(dir: &Scratch) -> (PathBuf, Accounts) {
+        let home = dir.path().join("home");
+        let accounts = Accounts::open(&dir.path().join("data")).unwrap();
+        accounts.share_records(&home).unwrap();
+        (home, accounts)
+    }
+    fn write(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    /// **(a) The CEO 2026-11-01: removing an account removed the chats that had run on it.** A
+    /// chat run on Work is written by Claude Code under Work's folder (`CLAUDE_CONFIG_DIR`); that
+    /// is Account 1's records folder now, so removing Work removes its sign-in and nothing else.
+    #[test]
+    fn removing_an_account_removes_only_its_sign_in_and_every_chats_record_stays() {
+        let dir = Scratch::new();
+        let (home, accounts) = shared(&dir);
+        let work = accounts.add("Work").unwrap();
+        let folder = work.folder.clone().unwrap();
+        write(&folder.join(".claude.json"), "{\"oauthAccount\":{}}");
+        let record = folder.join("projects/-coordination/s1.jsonl");
+        write(&record, "{\"type\":\"user\",\"message\":\"hello from Work\"}\n");
+        write(&folder.join("projects/-coordination/s1/subagents/agent-h.jsonl"), "helper\n");
+        accounts.remove(&work.id).unwrap();
+        assert!(!folder.exists(), "the sign-in folder is gone");
+        assert_eq!(fs::read_to_string(home.join("projects/-coordination/s1.jsonl")).unwrap(),
+            "{\"type\":\"user\",\"message\":\"hello from Work\"}\n", "the chat's record stays");
+        assert_eq!(fs::read_to_string(home.join("projects/-coordination/s1/subagents/agent-h.jsonl")).unwrap(), "helper\n");
+        assert_eq!(record_in(&record, &home.join(RECORDS)), Some(home.join("projects/-coordination/s1.jsonl")),
+            "the path Claude Code named under Work finds the record");
+    }
+
+    /// **(b) A chat started on one account resumes on another**: both accounts' Claude Code
+    /// write and read the same records folder, so a session Work wrote is the file Account 1
+    /// resumes, and one Account 1 wrote is the file Work resumes.
+    #[test]
+    fn a_chat_started_on_one_account_is_the_same_record_on_every_other() {
+        let dir = Scratch::new();
+        let (home, accounts) = shared(&dir);
+        let work = accounts.add("Work").unwrap().folder.unwrap();
+        let spare = accounts.add("Spare").unwrap().folder.unwrap();
+        write(&work.join("projects/-p/on-work.jsonl"), "work turn\n");
+        write(&home.join("projects/-p/on-home.jsonl"), "home turn\n");
+        for folder in [&home, &work, &spare] {
+            assert_eq!(fs::read_to_string(folder.join("projects/-p/on-work.jsonl")).unwrap(), "work turn\n");
+            assert_eq!(fs::read_to_string(folder.join("projects/-p/on-home.jsonl")).unwrap(), "home turn\n");
+        }
+        // Continued on Spare: the turn is in the one record every account reads.
+        use std::io::Write;
+        fs::OpenOptions::new().append(true).open(spare.join("projects/-p/on-work.jsonl")).unwrap().write_all(b"spare turn\n").unwrap();
+        assert_eq!(fs::read_to_string(home.join("projects/-p/on-work.jsonl")).unwrap(), "work turn\nspare turn\n");
+    }
+
+    /// **(c) An install whose records are inside an added account's folder** (every version
+    /// before this one) has them moved into the shared place once, losing nothing: a record only
+    /// Work had is moved; one both had with the same bytes is kept once; one both had differently
+    /// keeps the newer under its name and the other beside it; a removed account's left-behind
+    /// records join too; Account 1's own records are untouched; and a second launch moves nothing.
+    #[test]
+    fn an_install_with_records_in_an_account_folder_moves_them_once_into_the_shared_place_without_loss() {
+        let dir = Scratch::new();
+        let home = dir.path().join("home");
+        let accounts = Accounts::open(&dir.path().join("data")).unwrap();
+        let work = accounts.add("Work").unwrap().folder.unwrap();
+        let orphan = dir.path().join("data/claude-accounts/7");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let aged = |path: &Path| fs::File::options().write(true).open(path).unwrap().set_modified(old).unwrap();
+        write(&work.join("projects/-p/only-work.jsonl"), "only work\n");
+        write(&work.join("projects/-p/only-work/subagents/agent-a.jsonl"), "helper\n");
+        write(&work.join("projects/-p/memory/MEMORY.md"), "memory\n");
+        write(&work.join("projects/-p/same.jsonl"), "same\n");
+        write(&work.join("projects/-p/both.jsonl"), "home turn\nwork turn\n");
+        write(&home.join("projects/-p/same.jsonl"), "same\n");
+        write(&home.join("projects/-p/both.jsonl"), "home turn\n");
+        aged(&home.join("projects/-p/both.jsonl"));
+        write(&home.join("projects/-t/terminal.jsonl"), "terminal\n");
+        write(&orphan.join("projects/-q/removed.jsonl"), "removed account\n");
+        write(&work.join(".claude.json"), "{}");
+
+        accounts.share_records(&home).unwrap();
+        let shared = home.join("projects");
+        assert_eq!(fs::read_link(work.join("projects")).unwrap(), shared, "Work's records folder is the shared one");
+        let read = |rel: &str| fs::read_to_string(shared.join(rel)).unwrap();
+        assert_eq!(read("-p/only-work.jsonl"), "only work\n");
+        assert_eq!(read("-p/only-work/subagents/agent-a.jsonl"), "helper\n");
+        assert_eq!(read("-p/memory/MEMORY.md"), "memory\n");
+        assert_eq!(read("-p/same.jsonl"), "same\n");
+        assert!(!shared.join("-p/same.jsonl.from-account-2").exists(), "the same record twice is kept once");
+        assert_eq!(read("-p/both.jsonl"), "home turn\nwork turn\n", "the newer copy keeps the record's name");
+        assert_eq!(read("-p/both.jsonl.from-account-2"), "home turn\n", "the other copy is kept beside it");
+        assert_eq!(read("-t/terminal.jsonl"), "terminal\n", "Account 1's own records are untouched");
+        assert_eq!(read("-q/removed.jsonl"), "removed account\n", "a removed account's records join");
+        assert!(!orphan.join("projects").exists() && orphan.exists(), "only the emptied records folder goes");
+        assert!(work.join(".claude.json").exists(), "the sign-in stays where it is");
+
+        let listing = |root: &Path| { let mut all = Vec::new(); let mut stack = vec![root.to_path_buf()];
+            while let Some(d) = stack.pop() { for e in fs::read_dir(&d).unwrap().flatten() {
+                if e.file_type().unwrap().is_dir() { stack.push(e.path()) } else { all.push((e.path(), fs::read(e.path()).unwrap())) } } }
+            all.sort(); all };
+        let before = listing(&shared);
+        let again = Accounts::open(&dir.path().join("data")).unwrap();
+        again.share_records(&home).unwrap();
+        assert_eq!(listing(&shared), before, "a second launch moves nothing");
     }
 }

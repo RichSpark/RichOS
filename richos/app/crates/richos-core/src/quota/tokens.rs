@@ -115,6 +115,12 @@ impl Track {
     /// Read what the account's transcripts gained since the last scan. The first scan skips
     /// every transcript untouched for the live window: nothing older is needed yet.
     pub fn scan(&mut self, folder: &Path, now: u64) {
+        self.scan_except(folder, now, &std::collections::HashSet::new());
+    }
+
+    /// [`Track::scan`], leaving out the messages in `skip` (another account's track holds them:
+    /// a lease on that account streamed them, and its transcript is in the shared records folder).
+    pub fn scan_except(&mut self, folder: &Path, now: u64, skip: &std::collections::HashSet<String>) {
         let mut files = Vec::new();
         transcripts(&folder.join("projects"), &mut files);
         for path in files {
@@ -138,19 +144,27 @@ impl Track {
             // Only complete lines; a line still being written is read next time.
             let Some(end) = bytes.iter().rposition(|b| *b == b'\n') else { continue };
             for line in bytes[..end].split(|b| *b == b'\n') {
-                self.line(line);
+                self.line(line, skip);
             }
             self.offsets.insert(path, offset + end as u64 + 1);
         }
         self.scanned = true;
     }
 
-    fn line(&mut self, line: &[u8]) {
+    fn line(&mut self, line: &[u8], skip: &std::collections::HashSet<String>) {
         if !line.windows(7).any(|w| w == b"\"usage\"") { return; }
         let Ok(row) = serde_json::from_slice::<Value>(line) else { return };
         let Some(at) = row["timestamp"].as_str().and_then(stamp) else { return };
-        if let Some(found) = message_use(&row["message"], &row, at) { self.add_use(&found); }
+        if let Some(found) = message_use(&row["message"], &row, at) {
+            if !skip.contains(&found.id) { self.add_use(&found); }
+        }
     }
+
+    /// The messages this track holds now.
+    pub fn ids(&self) -> impl Iterator<Item = String> + '_ { self.events.keys().cloned() }
+
+    /// Drop a message another account's lease streamed (it is that account's).
+    pub fn forget(&mut self, id: &str) { self.events.remove(id); }
 
     /// One message's usage, from a transcript or from a lease's stream ([`Sink`]).
     pub fn add_use(&mut self, found: &Use) {

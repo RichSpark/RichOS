@@ -79,7 +79,19 @@ pub(crate) fn record_moved(scope: &StatusToolScope, session: &str, path: &Path) 
     crate::doctrine::write_verified(&scope.state_root.join("evidence").join(session).join(RECORD),&text).map_err(|e|e.to_string())
 }
 
+/// **A record is found wherever the shared records folder holds it** (the CEO 2026-11-01:
+/// removing an account broke the chats that had run on it). The provider names the path it wrote
+/// under the account the session ran on (`claude-accounts/<id>/projects/…`, a link to Account 1's
+/// records folder, `claude_accounts::Accounts::share_records`); once that account is removed the
+/// path is gone, and the same project and name in Account 1's records folder is the record.
 pub(crate) fn native_path(scope: &StatusToolScope, session: &str) -> Result<PathBuf,String> {
+    let path=named_path(scope,session)?;
+    if path.exists() {return Ok(path)}
+    let shared=crate::engine_profile::machine_claude_home().map(|home|home.join(crate::claude_accounts::RECORDS));
+    Ok(shared.and_then(|shared|crate::claude_accounts::record_in(&path,&shared)).unwrap_or(path))
+}
+
+fn named_path(scope: &StatusToolScope, session: &str) -> Result<PathBuf,String> {
     if !component(session) {return Err("Invalid native session identity".into())}
     let record:Session=serde_json::from_slice(&std::fs::read(scope.state_root.join("evidence").join(session).join("binding.json"))
         .map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
