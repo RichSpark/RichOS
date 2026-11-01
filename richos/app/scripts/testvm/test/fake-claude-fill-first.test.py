@@ -212,11 +212,11 @@ with tempfile.TemporaryDirectory() as root:
     record = f'cat > {seen}\nexit 0\n'
     stops_for(allow, 'Mark\n', 'batch-allows', batch_body=record)
     steps = [line.split()[2:5] for line in (walk / 'calls.log').read_text().splitlines() if ' walk-agent-1' in line]
-    check(steps[:4] == [['gate', 'walk-agent-1', 'exit'], ['ran', 'walk-agent-1'], ['batch-start', 'walk-agent-1'],
+    check(steps[:4] == [['gate', 'walk-agent-1', 'exit'], ['ran', 'walk-agent-1', 'Read'], ['batch-start', 'walk-agent-1'],
                         ['batch', 'walk-agent-1', 'exit']], 'gate, the tool, then its batch, in that order', steps)
     batch = json.loads(seen.read_text())
     check(batch['hook_event_name'] == 'PostToolBatch' and batch['agent_id'] == 'walk-agent-1'
-          and [c['tool_name'] for c in batch['tool_calls']] == ['Bash'], 'the batch carries the helper and its call', batch)
+          and [c['tool_name'] for c in batch['tool_calls']] == ['Read'], 'the batch carries the helper and its call', batch)
     stops_for(refuse, 'Mark\n', 'batch-after-refusal', batch_body=record)
     log = (walk / 'calls.log').read_text()
     check('ran walk-agent-1' not in log and 'batch walk-agent-1 exit 0' in log,

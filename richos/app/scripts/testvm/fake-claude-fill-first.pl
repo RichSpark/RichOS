@@ -28,10 +28,15 @@
 # turn) is one step of every helper that has not ended, as Claude Code runs one tool call: the
 # fake runs the PreToolUse gate command from the lease's <plugin-dir>/hooks/hooks.json, with a
 # helper payload (agent_id walk-agent-N) on stdin and the lease's own environment; then the tool
-# itself unless that was refused (a stand-in `true`: calls.log "ran <agent>"); then, refused or
-# not, the PostToolBatch command when hooks.json has one ("batch-start <agent>", then "batch
-# <agent> exit <n>" once it returns), which Claude Code runs after every call of a batch has
-# resolved and before its next model request. A held step waits as long as either command holds
+# itself unless that was refused (a stand-in Read of this script, which the fake performs:
+# calls.log "ran <agent> Read <bytes>B"; a Read, because the engine's sealed-worktree guard lets
+# a read-only tool through for a helper with no worker registration and refuses any other one,
+# "Lock-out: REFUSED (no registration)". A helper this fake launched has no worker receipt either,
+# so the engine's hook refuses its Read too, "worker identity has not joined its app receipt":
+# the engine's answer, never the quota gate's, given only once the gate let the call through);
+# then, refused or not, the PostToolBatch command when hooks.json has one ("batch-start
+# <agent>", then "batch <agent> exit <n>" once it returns), which Claude Code runs after every
+# call of a batch has resolved and before its next model request. A held step waits as long as either command holds
 # it; a refused step ends nothing. Each gate call is a line in calls.log ("gate <agent> exit
 # <n>", with the gate's first words when it said any; the batch's with its additionalContext).
 # While /Users/admin/fill-first/thinking exists no helper takes a step: each one's model call is # machine-path-exempt: isolated guest fixture documentation; no customer default
@@ -73,13 +78,12 @@
 #                 its last: it finishes on its own, its SubagentStop row is written and calls.log
 #                 says "gate work-agent-N exit <n> finished" (after the step's batch line).
 #                 Admitted is a PreToolUse exit 0, or a refusal by the engine's hook behind the
-#                 gate (`--claude-quota-gate` runs it only once it has admitted the call): the
-#                 stand-in command is not a registered worker's, and the engine's own guards
-#                 refuse it ("Lock-out: REFUSED (no registration)"); and a batch that came back
-#                 with no gate refusal in its context. A step the quota gate holds never returns,
-#                 and one it refuses says so first ("RichOS desktop quota: ..." or "RichOS
-#                 desktop: This app work has ended"): neither finishes it (weekly switch, the
-#                 CEO's §153: a helper on the account being left carries on to its own end).
+#                 gate (`--claude-quota-gate` runs it only once it has admitted the call); and a
+#                 batch that came back with no gate refusal in its context. A step the quota
+#                 gate holds never returns, and one it refuses says so first ("RichOS desktop
+#                 quota: ..." or "RichOS desktop: This app work has ended"): neither finishes it
+#                 (weekly switch, the CEO's §153: a helper on the account being left carries on
+#                 to its own end).
 #
 # THE TASK FRAMES. The app counts Stu's running helpers from his stream (agent_tasks.rs TaskBook),
 # not from the journal: Claude Code prints the Agent tool call, its async_launched answer and a
@@ -204,13 +208,16 @@ sub step_one {  # one tool call of one helper (HELPER STEPS); true when that ste
   # A tool_use_id, a prompt_id and the cwd, as every Claude Code tool call's hook payload has: the
   # engine's evidence hook refuses a call without them ("Tool callback has no tool identity",
   # "Callback has no prompt identity").
-  my %call = (tool_name => 'Bash', tool_input => { command => 'true' }, tool_use_id => 'toolu_fake_' . $id . '_' . (++$steps));
+  my %call = (tool_name => 'Read', tool_input => { file_path => $0 }, tool_use_id => 'toolu_fake_' . $id . '_' . (++$steps));
   my ($code, $first) = gate_run($command, $id, { hook_event_name => 'PreToolUse', session_id => $session, agent_id => $id,
     agent_type => $type, %call, prompt_id => "fake-prompt-$session", cwd => getcwd() });
   # A refusal carries the gate's first words: an exit 2 alone does not say why.
   my $quota_refused = $code != 0 && $first =~ /\ARichOS desktop(?: quota)?: /;
   calls_line('gate', $id, 'exit', $code, length $first ? ('said:', substr($first, 0, 200)) : ());
-  calls_line('ran', $id) unless $code;
+  if (!$code) {  # the tool itself: the Read, done
+    my $bytes = -1; if (open(my $r, '<', $0)) { local $/; $bytes = length(<$r> // ''); close $r; }
+    calls_line('ran', $id, 'Read', "${bytes}B");
+  }
   # Its batch, refused or not: after the call resolved and before the helper's next model request.
   my $batch_ok = 1;
   if (my $batch = gate_command('PostToolBatch')) {
