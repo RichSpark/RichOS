@@ -416,6 +416,8 @@ declare_rules() {
   # below, so B8 fails on the fact rather than on a side effect of it.
   routine '^\[richos\] company registry: [0-9]+ compan\(ies\), /.+ \(file\)$' \
     'how many companies are on disk and where; the trusting of the file is the proof above'
+  routine '^\[richos\] launch opens in no conversation; he picks one$' \
+    'a launch with conversations on disk selects none (main.rs open_launch_context); a decision, not a finding'
   routine '^\[richos\] boot complete' \
     'the terminator, printed by setup as its last act'
   # `engine::source_commit_note` (54e79b7f): the artifact under test is built inside this checkout
