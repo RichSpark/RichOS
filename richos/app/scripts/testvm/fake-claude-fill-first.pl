@@ -245,9 +245,10 @@ while (my $line = <STDIN>) {
     my $answer = {};
     if ($kind eq 'get_usage') {
       my $u = usage();
+      # "five": null is an account with no five-hour limit (Anthropic, 2026-10-31): only the week.
       $answer = $u->{null} ? { rate_limits_available => JSON::PP::true, rate_limits => undef }
         : { rate_limits_available => JSON::PP::true, rate_limits => {
-        five_hour => { utilization => $u->{five} + 0, resets_at => iso($u->{five_at} // $five_reset) },
+        (defined $u->{five} ? (five_hour => { utilization => $u->{five} + 0, resets_at => iso($u->{five_at} // $five_reset) }) : ()),
         seven_day => { utilization => $u->{weekly} + 0, resets_at => iso($u->{week_at} // $week_reset) } } };
     }
     print $json->encode({ type => 'control_response', response => { subtype => 'success', request_id => $msg->{request_id}, response => $answer } }), "\n";
@@ -314,7 +315,7 @@ while (my $line = <STDIN>) {
     }
     my $u = usage();
     print $json->encode({ type => 'rate_limit_event', rate_limit_info => { status => 'allowed', unifiedWindows => {
-      five_hour => { utilization => $u->{five} / 100, resetsAt => $u->{five_at} // $five_reset },
+      (defined $u->{five} ? (five_hour => { utilization => $u->{five} / 100, resetsAt => $u->{five_at} // $five_reset }) : ()),
       seven_day => { utilization => $u->{weekly} / 100, resetsAt => $u->{week_at} // $week_reset } } } }), "\n" unless $u->{null};
     my $who = $folder =~ /claude-accounts\/(\d+)/ ? "account $1" : 'Account 1';
     my $text = "Answered on $who.";

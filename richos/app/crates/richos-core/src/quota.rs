@@ -770,10 +770,19 @@ impl Snapshot {
                 && w.used_percent >= resets::WEEKLY_THRESHOLD).cloned()).flatten();
         let error = missing_held_weekly.as_ref().map(|_| ReadError::Malformed);
         if let Some(previous) = missing_held_weekly { windows.push(previous); }
-        let speeds = std::mem::take(&mut self.speeds);
-        let bases = std::mem::take(&mut self.bases);
-        let rises = std::mem::take(&mut self.rises);
-        let rise_log = std::mem::take(&mut self.rise_log);
+        let mut speeds = std::mem::take(&mut self.speeds);
+        let mut bases = std::mem::take(&mut self.bases);
+        let mut rises = std::mem::take(&mut self.rises);
+        let mut rise_log = std::mem::take(&mut self.rise_log);
+        // A window the reading no longer carries takes its speed with it (the CEO, 2026-10-31:
+        // an account whose five-hour window disappears stops handling it from that reading on).
+        // Kept, a fast five-hour speed went on shortening the check interval to a minute and
+        // published a five-hour pre-hold for a window that was gone.
+        let present = |id: &String| windows.iter().any(|w| &w.id == id);
+        speeds.retain(|id, _| present(id));
+        bases.retain(|id, _| present(id));
+        rises.retain(|id, _| present(id));
+        rise_log.retain(|id, _| present(id));
         let (rise_until, token_speed, handoff) = (self.rise_until, self.token_speed, self.handoff);
         // Only a signed-in account reports a reading.
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
@@ -953,6 +962,12 @@ impl Snapshot {
                     Admission::Held { resets_at }
                 }
                 Some(w) if fresh && w.resets_at.is_some_and(|t| t > now) => Admission::Ready,
+                // **No five-hour window, no five-hour rule** (the CEO, 2026-10-31: "If no
+                // 5-hour-limit data, then don't show/don't handle it"; Anthropic removed the
+                // limit for verified accounts while newer ones keep it). A current reading that
+                // carries only the week is complete: the weekly rule above judged it, and it is
+                // never Unknown for want of a five-hour figure.
+                None if fresh => Admission::Ready,
                 _ if answered_empty => Admission::NoReading,
                 _ => Admission::Unknown,
             }
@@ -3434,9 +3449,10 @@ for line in sys.stdin:
     v = json.loads(line)
     kind = v["request"]["subtype"]
     five, weekly, weekly_reset = json.load(open(usage))
-    payload = {{}} if kind == "initialize" else {{"rate_limits_available": True, "rate_limits": {{
-        "five_hour": {{"utilization": five, "resets_at": "2099-01-01T00:00:00Z"}},
-        "seven_day": {{"utilization": weekly, "resets_at": weekly_reset}}}}}}
+    limits = {{"seven_day": {{"utilization": weekly, "resets_at": weekly_reset}}}}
+    if five is not None:
+        limits["five_hour"] = {{"utilization": five, "resets_at": "2099-01-01T00:00:00Z"}}
+    payload = {{}} if kind == "initialize" else {{"rate_limits_available": True, "rate_limits": limits}}
     print(json.dumps({{"type": "control_response", "response": {{"subtype": "success", "request_id": v["request_id"], "response": payload}}}}), flush=True)
 "#, root.join("usage-1.json").display())).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
@@ -3456,6 +3472,12 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
 
     pub(crate) fn usage(path: &Path, five: f64, weekly: f64, weekly_reset: &str) {
         fs::write(path, serde_json::to_vec(&json!([five, weekly, weekly_reset])).unwrap()).unwrap();
+    }
+    /// An account with no five-hour limit: Claude Code's answer carries only `seven_day`, as the
+    /// CEO's own account did on 2026-10-31 (`~/.claude/statusline-payload.json` at 18:23Z:
+    /// `{"seven_day": {"used_percentage": 49, ...}}`, no `five_hour`).
+    pub(crate) fn usage_weekly_only(path: &Path, weekly: f64, weekly_reset: &str) {
+        fs::write(path, serde_json::to_vec(&json!([null, weekly, weekly_reset])).unwrap()).unwrap();
     }
 
     /// **His answer 2, both settings, on readings taken by the real probe under each folder.**
@@ -3498,6 +3520,109 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
             Some(("1", work.id.as_str(), "fiveHour", Some(93.))), "the card after a switch reads it from the view");
         let published: View = gate::read_json(&root.path().join("engine-state/claude-quota.json")).unwrap();
         assert_eq!(published.windows[0].used_percent, 10.);
+    }
+
+    /// **An account with no five-hour limit** (the CEO, 2026-10-31: "If no 5-hour-limit data,
+    /// then don't show/don't handle it"). A current reading with only the week is a complete
+    /// reading: work is admitted (never Unknown for want of a five-hour figure), no five-hour
+    /// point is computed, and the weekly rule alone holds it, at 99% until the week resets.
+    /// Old is still old: a weekly-only reading past the check interval is Unknown, as any is.
+    #[test]
+    fn a_reading_with_only_the_week_is_complete_and_only_the_weekly_rule_holds_it() {
+        let week = |used: f64| Snapshot { windows: vec![Window { id: "seven_day".into(), label: "Weekly".into(),
+            used_percent: used, resets_at: Some(NOW + 48 * 3_600_000), duration_ms: 168 * 3_600_000 }],
+            checked_at: Some(NOW), ..Default::default() };
+        let view = week(49.).view(policy(), NOW);
+        assert_eq!(view.admission, Admission::Ready, "a weekly-only reading is not an unknown one");
+        assert_eq!(view.act_at, [("seven_day".to_string(), 99.)].into(), "no five-hour point");
+        assert!(view.release.is_none() && view.pre_hold.is_empty(), "no five-hour release or pre-hold");
+        assert_eq!(week(99.).view(policy(), NOW).admission, Admission::Held { resets_at: NOW + 48 * 3_600_000 });
+        assert_eq!(week(49.).view(policy(), NOW + REFRESH_INTERVAL_MS).admission, Admission::Unknown, "old is old");
+        // With a five-hour window too, today's rule, unchanged: 93% holds, 92% is ready.
+        let mut both = week(49.);
+        both.windows.push(Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: 93.,
+            resets_at: Some(NOW + 3 * 3_600_000), duration_ms: 18_000_000 });
+        assert_eq!(both.view(policy(), NOW).admission, Admission::Held { resets_at: NOW + 3 * 3_600_000 });
+        both.windows[1].used_percent = 92.;
+        assert_eq!(both.view(policy(), NOW).admission, Admission::Ready);
+        // A five-hour window that disappears takes its speed with it: 7% -> 11% in a minute is
+        // fast (checks every minute); the next reading has only the week, and the check is every
+        // 5 minutes again, with no five-hour pre-hold left to publish.
+        let mut gone = Snapshot::default();
+        gone.accept(five_hour_at(7.), NOW);
+        gone.accept(five_hour_at(11.), NOW + 60_000);
+        assert_eq!(gone.view(policy(), NOW + 60_000).refresh_interval_ms, FAST_REFRESH_INTERVAL_MS);
+        gone.accept(week(49.).windows, NOW + 120_000);
+        let view = gone.view(policy(), NOW + 120_000);
+        assert_eq!((view.refresh_interval_ms, view.admission), (REFRESH_INTERVAL_MS, Admission::Ready));
+        assert!(view.speeds.is_empty() && view.pre_hold.is_empty() && view.rises.is_empty(), "{:?}", view.speeds);
+    }
+
+    /// **The same, through the real probe and the account switch.** Both accounts answer with
+    /// only the week. Nothing is shown or held for a five-hour window; with Switch chosen
+    /// nothing moves at 40%; at 99% of Account 1's week the switch moves to Work, on the weekly
+    /// rule. An account whose five-hour window disappears stops carrying it from that reading on.
+    #[test]
+    #[cfg(unix)]
+    fn an_account_with_no_five_hour_window_switches_on_the_weekly_rule_alone() {
+        let root = Scratch::new();
+        let bin = fake_claude(root.path());
+        let service = Service::open(root.path()).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let one = root.path().join("usage-1.json");
+        usage(&one, 50., 40., "2099-01-05T00:00:00Z");
+        usage_weekly_only(&work.folder.clone().unwrap().join("usage.json"), 20., "2099-01-06T00:00:00Z");
+        service.set_policy(policy()).unwrap();
+        service.set_at_threshold(crate::claude_accounts::AtThreshold::Switch).unwrap();
+        let view = service.refresh(&bin, true);
+        assert!(view.windows.iter().any(|w| w.id == "five_hour"), "Account 1 still has its five-hour window");
+        assert_eq!(view.accounts[1].windows.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), ["seven_day"]);
+
+        // Account 1's five-hour window disappears: from this reading on it is neither shown nor judged.
+        usage_weekly_only(&one, 40., "2099-01-05T00:00:00Z");
+        // Past the 5-second double-click cooldown (`due`), as the other refresh-again tests do.
+        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() - 10_000);
+        let view = service.refresh(&bin, true);
+        assert_eq!(view.windows.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), ["seven_day"], "one meter");
+        assert!(!view.act_at.contains_key("five_hour"), "{:?}", view.act_at);
+        assert_eq!(view.admission, Admission::Ready, "no unknown reading for want of a five-hour window");
+        assert_eq!(view.message, None);
+        assert_eq!(service.accounts.in_use().id, "1", "40% of the week: nothing moves");
+
+        usage_weekly_only(&one, 99., "2099-01-05T00:00:00Z");
+        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() - 10_000);
+        service.refresh(&bin, true);
+        assert_eq!(service.accounts.in_use().id, work.id, "at 99% of the week the switch moves to Work");
+        service.accounts.ran_on("reply-on-work", &work.id);
+        let view = service.view();
+        assert_eq!(view.admission, Admission::Ready, "Work's weekly-only reading admits work");
+        assert_eq!(view.last_switch.as_ref().map(|s| s.why.as_str()), Some("weekly"));
+    }
+
+    /// **A five-hour hold in place ends when the window disappears** (mid-job review
+    /// rv-20261031T192316Z-d2322984-98af, the app's side of it). At 95% the separate-process gate
+    /// holds work; the next reading carries only the week, and from that reading the gate admits
+    /// work: there is no five-hour limit left to wait for. Nothing waits for the old reset.
+    #[test]
+    #[cfg(unix)]
+    fn a_five_hour_hold_in_place_ends_when_the_window_disappears() {
+        let root = Scratch::new();
+        let bin = fake_claude(root.path());
+        let service = Service::open(root.path()).unwrap();
+        let one = root.path().join("usage-1.json");
+        let state = root.path().join("engine-state");
+        usage(&one, 95., 40., "2099-01-05T00:00:00Z");
+        service.set_policy(policy()).unwrap();
+        let view = service.refresh(&bin, true);
+        assert!(matches!(view.admission, Admission::Held { .. }), "{:?}", view.admission);
+        assert!(!gate::admission(&state, crate::util::now_millis()).allows_work(), "the gate holds at 95%");
+
+        usage_weekly_only(&one, 40., "2099-01-05T00:00:00Z");
+        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() - 10_000);
+        let view = service.refresh(&bin, true);
+        assert_eq!(view.admission, Admission::Ready, "no five-hour window: the hold is over");
+        assert!(view.release.is_none());
+        assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "the gate admits the held work now");
     }
 
     /// **Feedback item 8 (the CEO 2026-10-06), on readings taken by the real probe under each

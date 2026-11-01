@@ -318,6 +318,22 @@ async function main() {
     assert((await page.locator("#quota-freshness").innerText()).includes("5 min"));
     await page.close();
   });
+  // THE CEO, 2026-10-31: "If no 5-hour-limit data, then don't show/don't handle it." Red on main,
+  // where a weekly-only reading drew a "Five-hour window: not reported" row and the status card
+  // said "No current reading" and waited for "a reading [that] shows the five-hour window past 93%".
+  for (const theme of ["dark", "light"]) await run.check(theme + " no five-hour window: the weekly window alone, no five-hour row, and the card acts on the week", async () => {
+    const weekOnly = {...quota, windows: quota.windows.filter(w => w.id !== "five_hour").map(w => ({...w, usedPercent: w.id === "seven_day" ? 49 : w.usedPercent}))};
+    const page = await open(theme, weekOnly, 100, null, true);
+    await enableTechnical(page); await page.click("#set-quota-open");
+    await page.waitForSelector(".quota-window");
+    assertEqual(await page.locator(".quota-hero").count(), 0, "no five-hour ruler");
+    assert(!/five-hour/i.test(await page.locator("#quota-windows").innerText()), "no five-hour row");
+    await page.waitForFunction(() => document.getElementById("quota-hold-status").textContent.includes("On. Nothing is waiting."));
+    const card = await page.locator("#quota-status-card").innerText();
+    assert(!/five-hour|No current reading/i.test(card), card);
+    assert(card.includes("49% used") && card.includes("99%"), card);
+    await page.close();
+  });
   await run.check("paused conversation status is scoped and quota details require Technical view", async () => {
     const held = [{kind: "agent", id: "agt_frank_1", name: "Frank", sinceAt: now, threadId: "general"},
       {kind: "agent", id: "other", name: "Another thread", sinceAt: now, threadId: "elsewhere"}];
