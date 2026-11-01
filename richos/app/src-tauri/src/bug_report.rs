@@ -231,7 +231,7 @@ fn outcome_of(state: delivery::State) -> bug::Outcome {
         NotSent::NoAnswer => bug::Outcome::TimedOut,
         // Closed for now, or busy: it is tried again in a few minutes.
         NotSent::Refused { until: Some(_), .. } => bug::Outcome::Status { code: 429 },
-        NotSent::Refused { until: None, .. } | NotSent::Screenshot { .. } => bug::Outcome::Status { code: 422 },
+        NotSent::Refused { until: None, .. } | NotSent::Screenshot { .. } | NotSent::Withdrawn => bug::Outcome::Status { code: 422 },
     }
 }
 

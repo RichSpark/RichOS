@@ -135,6 +135,7 @@ fn run(store: Store, quiet: bool) {
             }
             engine.expire();
             engine.interrupted_sends_not_sent();
+            engine.start_outbox();
             if !quiet {
                 open_window(&handle, None);
             }
