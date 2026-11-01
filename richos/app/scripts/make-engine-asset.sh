@@ -360,6 +360,9 @@ fi
 # The archive is what the app will check, so check it here too — the same shape check
 # `install_engine` performs, run before anybody uploads anything.
 VERIFY="$(mktemp -d "${TMPDIR:-/tmp}/richos-engine-verify.XXXXXX")"
+# Removed on EVERY exit, so a refusal by any `die` below leaves nothing behind (CEO rule, scratch is
+# always cleaned up however its maker ends).
+trap 'rm -rf "$VERIFY"' EXIT
 /usr/bin/tar -x -z --no-same-owner -f "$TARBALL" -C "$VERIFY" || die "the archive does not open"
 [ -d "$VERIFY/engine/scripts/hooks" ] || die "the archive has no engine/scripts/hooks"
 [ -f "$VERIFY/engine/VERSION" ] || die "the archive has no engine/VERSION"

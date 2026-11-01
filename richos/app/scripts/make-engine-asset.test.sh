@@ -278,6 +278,17 @@ if [ "$CODE" -ne 0 ] && printf '%s' "$OUT" | grep -q 'machine-specific storage p
     ok "L26 binary host path refuses despite text marker"
 else bad "L26 binary marker cannot waive host path" "exit $CODE: $(printf '%s' "$OUT" | tail -2)"; fi
 
+# L27 — a refusal after the verify folder exists leaves that folder behind no longer.
+F="$WORK/verify-cleanup"; make_fixture "$F"
+# machine-path-exempt: negative control that must refuse a shipped machine volume
+printf 'ROOT="/Volumes/Fixture/cache"\n' > "$F/richos/engine/active.py"; fixture_commit "$F"
+SCRATCH27="$WORK/scratch27"; mkdir -p "$SCRATCH27"
+OUT="$(TMPDIR="$SCRATCH27" run_fixture "$F")"; CODE=$?
+LEFT="$(find "$SCRATCH27" -maxdepth 1 -name 'richos-engine-verify.*' | wc -l | tr -d ' ')"
+if [ "$CODE" -ne 0 ] && printf '%s' "$OUT" | grep -q 'machine-specific storage paths' && [ "$LEFT" = 0 ]; then
+    ok "L27 a refused build removes its verify folder"
+else bad "L27 a refused build removes its verify folder" "exit $CODE, $LEFT verify folder(s) left"; fi
+
 # # L9–L12 — the REAL tree. A fixture proving a refusal works says nothing about this one.
 # ---------------------------------------------------------------------------------------
 REAL_SHA="$(/usr/bin/shasum -a 256 "$ROOT/LICENSE" 2>/dev/null | awk '{print $1}')"
