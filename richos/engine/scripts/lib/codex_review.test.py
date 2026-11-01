@@ -90,6 +90,20 @@ class Reviews(unittest.TestCase):
         self.assertEqual(incoming, result)
         self.assertEqual(list(rw.due(items, rw.Book([row], {}, []), 102, {}, 3600)), [])
 
+    def test_unheaded_ready_uses_the_existing_scoped_handler(self):
+        path = Path(c.connect("Original plain-message task", "fixture source", scope=self.scope)["locator"])
+        text = "READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip + "\nClaims: same work"
+        c.send(path, "plain-ready", text)
+        state = {}
+        items, problems = self.world.channel_items(100, state, [c.connection(path)])
+        self.assertFalse(problems)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].channel, dict(locator=str(path), message_id="plain-ready"))
+        self.assertEqual((items[0].repo, items[0].tip), (str(self.repo), self.tip))
+        self.assertIn("Original plain-message task", Path(items[0].words[0]).read_text())
+        self.assertIn(text, Path(items[0].claims[0]).read_text())
+        self.assertEqual(c.read(path, "to-rich")["records"][0]["text"], text, "normalization never rewrites the source")
+
     def test_world_uses_same_handler_but_managed_terminal_does_not_compete(self):
         world = rw.World.__new__(rw.World)
         world.repos = ["work"]

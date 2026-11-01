@@ -71,11 +71,15 @@ The terminal retains unmigrated Markdown handling and shares the handover parser
 The originating locator/READY ID is carried in existing pending/lock/attempt
 records. Review results use the shared writer on that pair and an incoming
 `review_result` observation labelled `review-watch`, never Codex or user authority.
+A handover sent as one message may start with `READY TO LAND: codex/...`;
+a `## ` heading is optional. Both use the existing READY parser and gates.
 A failed result write reconciles by the same ID on the next look. Review policy,
 quota controls and landing gates remain in the existing scheduler.
 
-Before explicit designation, the app retains old Markdown observations in its
-existing spool and emits a fixed setup-only inbox notice once per conversation.
+Before explicit designation, an existing unassociated legacy input file or
+nonempty saved spool enables the fixed setup-only notice once per conversation.
+Users without legacy Codex input receive no notice or setup model turn.
+The app retains old Markdown observations in its existing spool.
 Designation freezes each old endpoint and writes migration instructions to the
 old reply file. The last legacy pass and designation share one lock; the existing
 pipe drains in order before framed imports. The first frozen legacy endpoint owns the old unaddressed spool (one flag

@@ -738,7 +738,11 @@ class World(object):
                             words.append(("Source excerpt (%s; %s)" % (direction, row.get("provenance", "explicit task amendment")), row["text"]))
                 for _, end, row in channels.records(source, offset):
                     if row.get("kind", "message") == "message":
-                        for header, body in split_entries(row["text"]):
+                        text = row["text"]
+                        first = text.lstrip().split("\n", 1)[0]
+                        if not first.startswith("## ") and re.search(r"\bREADY\b", first, re.I):
+                            text = "## " + text.lstrip()
+                        for header, body in split_entries(text):
                             got = self.codex_handover(header, body, str(source), str(path / "to-codex.jsonl"), now,
                                                       words=words, repo_map=repos, origin=endpoint["connection_id"])
                             if isinstance(got, str):
