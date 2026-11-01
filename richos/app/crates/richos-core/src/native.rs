@@ -540,6 +540,12 @@ pub enum NativeError {
     /// because on a rejected flag that single line IS the diagnosis.
     #[error("claude failed to start ({reason}); the child said: {stderr}")]
     Startup { reason: String, stderr: String },
+    /// **The saved session's record is not on this Mac any more** (2026-11-01: removing the
+    /// "Work" account deleted the folder four chats' records lived in). Told as what it is, not
+    /// as an `ENOENT` the sign-in card then blames on his account. The session is marked lost
+    /// as it is told, so his next message in the chat starts a new session in it.
+    #[error("{} (the saved record of session {} is not on this Mac)", HISTORY_GONE, session)]
+    HistoryGone { session: String },
     /// **LOUD, and the whole reason `--append-system-prompt-file` won over the alternatives.**
     /// RichOS's standing instruction (`doctrine.rs`) is not at the path we are about to hand
     /// the child. Raised BEFORE the spawn, so the failure names the file rather than arriving
@@ -598,6 +604,13 @@ pub fn stop_reason_of(result: &Value) -> String {
 /// nobody is signed in to the account the lease ran under. First-party, so `interruption.rs`
 /// matches it as its own structure (`OUR_CHILD_EXIT_SIGNED_OUT`), never as a vendor string.
 pub const CHILD_EXIT_SIGNED_OUT: &str = "Claude Code says no account is signed in on this Mac";
+
+/// RichOS's own words when a chat's saved session record is gone ([`NativeError::HistoryGone`]).
+/// First-party, so `interruption.rs` matches it as its own structure.
+pub const HISTORY_GONE: &str = "this chat's earlier history is gone from this Mac";
+/// Written in a session's evidence folder once its loss has been told; the next resume of that
+/// chat starts a new session.
+const HISTORY_GONE_MARK: &str = "history-gone";
 
 /// How long the turn's end waits for the child's last stderr lines once its stdout has closed.
 /// The two pipes close together when it exits; this only covers the drain thread's last read.
@@ -2055,6 +2068,9 @@ fn native_resume(profile: Option<&crate::engine_profile::EngineProfile>,
         return Err(NativeError::Protocol("The saved native session belongs to another conversation or role".into()));
     }
     uuid::Uuid::parse_str(&binding.session_id).map_err(|error|NativeError::Protocol(error.to_string()))?;
+    // A session already told as lost (below) is not resumed again: this is the next message,
+    // and it starts a new session in the same chat.
+    if profile.state.join("evidence").join(&binding.session_id).join(HISTORY_GONE_MARK).exists() { return Ok(None) }
     let record: crate::session_tools::Session = serde_json::from_slice(&std::fs::read(
         profile.state.join("evidence").join(&binding.session_id).join("binding.json"))?)
         .map_err(|error| NativeError::Protocol(error.to_string()))?;
@@ -2064,9 +2080,31 @@ fn native_resume(profile: Option<&crate::engine_profile::EngineProfile>,
     let scope = crate::status_tools::StatusToolScope { version: 1,
         state_root: profile.state.clone(), entity_id: entity.clone(), thread_id: thread.clone() };
     let path = crate::session_tools::native_path(&scope, &binding.session_id).map_err(NativeError::Protocol)?;
-    std::fs::metadata(&path)?;
+    let path = match std::fs::metadata(&path) {
+        Ok(_) => path,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match relocated_record(profile, &path) {
+            Some(found) => found,
+            None => {
+                // Told once, as what it is; marked so his next message starts anew.
+                std::fs::write(profile.state.join("evidence").join(&binding.session_id).join(HISTORY_GONE_MARK), b"")?;
+                return Err(NativeError::HistoryGone { session: binding.session_id });
+            }
+        },
+        Err(e) => return Err(e.into()),
+    };
     let path = record_on_account(profile, &scope, &binding.session_id, path)?;
     Ok(Some((binding.session_id, path)))
+}
+
+/// The record of a session whose first path is gone, where removing an account carried it
+/// (`claude_accounts::Accounts::remove`): the same project folder and name under the lease's own
+/// account, or under the machine's own Claude folder.
+fn relocated_record(profile: &crate::engine_profile::EngineProfile, path: &Path) -> Option<std::path::PathBuf> {
+    let (project, name) = (path.parent().and_then(Path::file_name)?, path.file_name()?);
+    profile.claude_account.as_ref().and_then(|a| a.folder.clone()).into_iter()
+        .chain(crate::engine_profile::machine_claude_home())
+        .map(|folder| folder.join("projects").join(project).join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// **A resumed session's record lives in the folder of the account it runs on** (Hank's parity
@@ -4486,17 +4524,28 @@ impl NativeCognition {
         std::fs::write(&continuity_tools, "{\"version\":1,\"actions_allowed\":false}\n")?;
         let assignments = scopes.join(format!("{identity}-assignments.json"));
         let status = scopes.join(format!("{identity}-status.json"));
-        // Prepare Haiku alongside Rich, before this conversation can be used.
-        let classifier=Some(Arc::new(Mutex::new(crate::request_classifier::RequestClassifier::new(bin,&profile,skills))));
         // And the Haiku that names this conversation from its first message, started only
         // when that message arrives (`thread_title.rs`).
         let title_writer:Option<crate::cognition::TitleWriter>={
             let (bin,profile)=(bin.to_path_buf(),profile.clone());
             Some(Arc::new(move |first:&str|crate::thread_title::write(&bin,&profile,first)))
         };
-        let client = NativeClient::spawn_with_tools(bin, &profile.coordination, Some((doctrine, skills)),
-            Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), Some(&profile), control, LeaseRole::Conversation)?;
+        // **A lease that did not start leaves nothing behind** (2026-11-01: 44 failed starts
+        // left two scope files and a started-and-killed Haiku each). The scope files go on a
+        // failed spawn, and Haiku is prepared only once Rich's own process is up.
+        let client = match NativeClient::spawn_with_tools(bin, &profile.coordination, Some((doctrine, skills)),
+            Some((executable, &scope, &assignments, &status)), Some((&bridge, &continuity_scope)), Some(continuity_tools.as_path()), Some(&profile), control, LeaseRole::Conversation) {
+            Ok(client) => client,
+            Err(error) => {
+                for path in [&scope, &continuity_scope, &continuity_tools, &assignments, &status] {
+                    drop(std::fs::remove_file(path));
+                }
+                return Err(error);
+            }
+        };
         let session_id = client.session_id().to_string();
+        // Prepare Haiku alongside Rich, before this conversation can be used.
+        let classifier=Some(Arc::new(Mutex::new(crate::request_classifier::RequestClassifier::new(bin,&profile,skills))));
         Ok(Self { client, session_id, onboarding_scope: Some(scope), assignments_scope: Some(assignments), status_scope: Some(status),
             continuity: Some((bridge, continuity_scope)), continuity_tools_scope: Some(continuity_tools), work_binding: None, engine_profile: Some(profile), role: LeaseRole::Conversation, ceo_thread_seats: None, classifier, routing_context: String::new(), app_messages: Vec::new(), prepared_scope: None, company_context: None, prepare_turn_supported: false, pending_onboarding: None, pending_channel: None, title_writer })
     }
@@ -5908,7 +5957,10 @@ while True:
             let reopened=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),&engine,&root.join("ecs")).unwrap();
             assert_eq!(native_resume(Some(&profile),Some((&reopened,&root)),role).unwrap(),Some((session,transcript.clone())));
             std::fs::remove_file(transcript).unwrap();
-            assert!(native_resume(Some(&profile),Some((&reopened,&root)),role).is_err(),"missing history silently created a replacement session");
+            let gone=native_resume(Some(&profile),Some((&reopened,&root)),role);
+            assert!(matches!(gone,Err(NativeError::HistoryGone{..})),"missing history silently created a replacement session, or was told as something else: {gone:?}");
+            assert!(crate::interruption::classify(&gone.unwrap_err().to_string())==crate::interruption::InterruptionCause::HistoryGone,"lost history was blamed on something else");
+            assert!(native_resume(Some(&profile),Some((&reopened,&root)),role).unwrap().is_none(),"his next message did not start a new session in the chat");
         }
         std::fs::remove_dir_all(root).unwrap();
     }
