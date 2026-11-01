@@ -1319,7 +1319,7 @@ def validate_changelog_entry(entry):
 
 
 def write_changelog_draft(request, entry):
-    """Write on the worker's branch only. Rich reviews and lands after QA accepts it."""
+    """Write on the worker's branch only. Rich reviews and lands it: after QA's READY for a nightly, after the stable build's own proofs for a stable."""
     if git("branch", "--show-current") in ("", "main"):
         raise ValueError("write changelog drafts on a work branch, never main or detached HEAD")
     identity = changelog_identity(request)
@@ -1369,7 +1369,7 @@ def write_changelog_draft(request, entry):
 
 
 def read_changelog_record(info):
-    """Only Rich lands reviewed, QA-accepted notes. Read remote main, never a draft."""
+    """Only Rich lands reviewed notes (QA-accepted for a nightly, proof-cleared for a stable). Read remote main, never a draft."""
     identity = changelog_identity(info)
     git("fetch", "--no-tags", "origin", "main")
     main = git("rev-parse", "FETCH_HEAD")
