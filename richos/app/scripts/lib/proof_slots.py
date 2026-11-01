@@ -42,7 +42,7 @@ lock that it drops at once; it never touches a slot file, so looking cannot dela
 A RUN WHOSE CHECKS STILL WAIT GOES FIRST (2026-10-29, work-6ec9b429; reshaped 2026-11-01). With
 the limit set to 6, six runs started together; one of them ran 46 min at 95% CPU and 30 of its 37
 checks were never admitted, so it proved almost nothing. Each holder publishes how many of its
-checks still wait to be admitted in its `slot-NNN.waiting` file (written by the run, removed when
+checks wait for the Mac (below) in its `slot-NNN.waiting` file (written by the run, removed when
 none wait or the slot is released, believed only while that holder's lock is held by the pid it
 names), and a run behind it starts none of its own checks while that count is above zero
 (`ahead_of`, below). Until 2026-11-01 that count ALSO kept a free slot from being taken: the next
@@ -71,6 +71,19 @@ priority (engine_pass.Admission) never gives way, because that priority is what 
 background run's checks waiting; giving way to them left both waiting until the 600 s turn
 expired (review rv-20261031T223851Z-0d748dd7-f9f7). Once its turn is over it gives way like any.
 
+ONLY CHECKS THE MAC REFUSED COUNT (2026-11-01, amending the paragraph above). The count still took
+in checks waiting for their own run's worker budget or ramp, and checks of a run that was itself
+giving way, and a run behind gave way on it without taking a sample: at 22:52-22:55Z three runs
+gave way to echo-opus-build51 ("11 of its checks still wait to be admitted") for 11 minutes while
+the Mac sampled 30-56% busy, and one of them, giving way, published its own 75 checks to the runs
+behind it. CEO ruling §77 admits a test by the CPU rule alone, and a free Mac is used whole (the
+header). So proof-run.py now publishes only the checks the Mac refused at its last admission
+attempt (`refused_by_the_mac`: a host sample over the CPU line or its memory rule, the pressure
+controller, the resource envelope). A check the CPU rule admits is admitted, whichever run it
+belongs to; the order between runs decides only who goes first when there is not room for both:
+while the Mac refuses a run's checks, the runs behind it give way, so the run ahead takes the
+first sample under the line.
+
 A NIGHTLY OR RELEASE COMMAND'S RUN GOES FIRST (2026-11-01). On 2026-11-01 08:47-08:57Z the
 nightly's mutation batch (nightly-local.py `mutation_units`) stood #1 in line for 10 min behind a
 teammate's run, and went on only after the lead asked the teammate to stop. The CEO's first point
@@ -86,9 +99,9 @@ build's own, never waited, and nine queue tests failed. A command-line flag is n
 a check, or a test, started from inside the build's tree carries none.
 Such a run never waits in the line: it takes a free slot, or one past the limit when none is free.
 In the order above it is ahead of every other run whenever it took its slot, so each teammate run
-gives way check by check while the build's run has checks waiting; nothing of the teammate's is
-stopped, its running checks finish and its waiting ones start once the build's run has none
-waiting. A teammate cannot claim it from its own worktree: the checkout must be the build's
+gives way check by check while the Mac refuses the build's run's checks; nothing of the teammate's
+is stopped, its running checks finish and its waiting ones start once the Mac refuses none of the
+build's. A teammate cannot claim it from its own worktree: the checkout must be the build's
 source tree. The engine nightly (nightly-engine.py) is not one: it yields to the app nightly.
 A run that gives way also withdraws its worker request (proof-run.py `schedule`): left live, a
 refused request ages past engine_pass BACKGROUND_PRIORITY_AGE and worker admission then favors it
@@ -256,7 +269,7 @@ class Slot(object):
         return {HELD_ENV: self.holder_path} if self.holder_path else {}
 
     def publish_waiting(self, count):
-        """How many of this run's checks still wait to be admitted (header); 0 removes the file.
+        """How many of this run's checks wait because the Mac refused them (header); 0 removes the file.
         Written only when the count changes; a borrowed slot is its caller's to describe."""
         if self.borrowed or not self._fds or count == getattr(self, "_published", None):
             return
@@ -296,7 +309,8 @@ def _try(d, n, meta, checks=0):
         os.write(hfd, (json.dumps(record) + "\n").encode())
         slot = Slot(i, [fd, hfd], holder)
         slot.since, slot.first = record["since"], bool(record.get("first"))
-        # Until its checks are admitted, every one of them waits: said before the next run looks.
+        # What the caller says waits for the Mac from the start (proof-run.py says none: nothing of
+        # it has been refused yet), said before the next run looks.
         _publish(holder, checks)
         slot._published = checks
         return slot
@@ -317,7 +331,7 @@ def _publish(holder, count):
 
 
 def waiting_holders(d=None):
-    """Holders with checks still waiting to be admitted: their record plus `waiting`, the count.
+    """Holders with checks the Mac refused (header): their record plus `waiting`, the count.
     A `.waiting` file counts only while its slot's holder lock is held by the pid it names."""
     rows = []
     for rec in holders(d):
@@ -329,9 +343,10 @@ def waiting_holders(d=None):
 
 def ahead_of(slot):
     """The holders ahead of `slot` in the admission order (`_rank`: a nightly or release command's
-    run first, then the order slots were taken) that still have checks waiting to be admitted
-    (header): while there is one, `slot`'s run starts none of its own. Empty for a borrowed slot (a
-    proof run inside a check of its caller is part of that caller's run) and for no slot at all."""
+    run first, then the order slots were taken) whose checks the Mac refused at their last attempt
+    (header): there is not room for both, so while there is one, `slot`'s run starts none of its
+    own. Empty for a borrowed slot (a proof run inside a check of its caller is part of that
+    caller's run) and for no slot at all."""
     if slot is None or slot.borrowed or not slot.fds or not slot.holder_path:
         return []
     record = _read(slot.holder_path)
@@ -343,7 +358,7 @@ def ahead_of(slot):
 
 
 def describe_behind(rows):
-    return "; ".join("%s (pid %s%s): %d of its checks still wait to be admitted" % (
+    return "; ".join("%s (pid %s%s): the Mac refused %d of its checks, so it goes first" % (
         r.get("waiter", "?"), r.get("pid", "?"), ", a nightly or release command's run" if r.get("first") else "",
         r["waiting"]) for r in rows)
 
@@ -526,8 +541,8 @@ def print_status(s):
             if h.get(key):
                 print("           %s: %s" % (key, h[key]))
         if h.get("checks_waiting"):
-            print("           checks still waiting to be admitted: %d (runs behind it start no check until "
-                  "none wait)" % h["checks_waiting"])
+            print("           checks the Mac refused: %d (runs behind it start no check until the Mac "
+                  "takes them)" % h["checks_waiting"])
     if not s["waiting"]:
         print("  waiting: nobody")
     for w in s["waiting"]:
