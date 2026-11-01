@@ -83,6 +83,10 @@ const VENDOR_NOT_SIGNED_IN: [&str; 2] = ["Not logged in", "OAuth access token is
 /// matched as our own structure. Checked ahead of the IO prefix the same message carries.
 const OUR_CHILD_EXIT_SIGNED_OUT: &str = crate::native::CHILD_EXIT_SIGNED_OUT;
 
+/// RichOS's own words when the chat's saved session record is gone (`native.rs`,
+/// [`crate::native::HISTORY_GONE`]). Ours; checked ahead of the IO prefix the message also carries.
+const OUR_HISTORY_GONE: &str = crate::native::HISTORY_GONE;
+
 /// A credential that is PRESENT and rejected — an API key, an auth token, or a header set in
 /// this machine's environment. Four vendor constants, all of them somebody else's to fix.
 const VENDOR_CREDENTIAL_REJECTED: [&str; 4] = [
@@ -141,6 +145,10 @@ pub enum InterruptionCause {
     /// Decided by `spine.rs::record_interruption` from the ledger, never by [`classify`],
     /// which sees one reason string and cannot know what came before it.
     Repeated,
+    /// **The chat's earlier history is gone from this Mac** (2026-11-01: removing an account
+    /// deleted the folder four chats' records lived in, and the sign-in card then blamed his
+    /// account). Told once as what it is; his next message starts a new session in the chat.
+    HistoryGone,
     /// Something RichOS has no story for. Named rather than guessed.
     Unknown,
 }
@@ -157,6 +165,7 @@ impl InterruptionCause {
             InterruptionCause::StoppedByCeo => "stopped-by-ceo",
             InterruptionCause::Transient => "transient",
             InterruptionCause::Repeated => "repeated",
+            InterruptionCause::HistoryGone => "history-gone",
             InterruptionCause::Unknown => "unknown",
         }
     }
@@ -169,6 +178,7 @@ impl InterruptionCause {
             "stopped-by-ceo" => InterruptionCause::StoppedByCeo,
             "transient" => InterruptionCause::Transient,
             "repeated" => InterruptionCause::Repeated,
+            "history-gone" => InterruptionCause::HistoryGone,
             _ => InterruptionCause::Unknown,
         }
     }
@@ -230,6 +240,9 @@ impl InterruptionCause {
             InterruptionCause::Repeated => {
                 "Rich could not answer again because Claude Code stopped before he replied, so sending again is unlikely to help. Open Settings and choose Claude accounts to check that your account is signed in on this Mac. If it is, press Bust a bug in Settings so we can see what went wrong."
             }
+            InterruptionCause::HistoryGone => {
+                "Rich's earlier words in this chat are gone from this Mac, so he can't pick up where you left off. Press Restore my message, then send it again and he will start a new conversation in this chat."
+            }
             InterruptionCause::Unknown => {
                 "Rich's answer stopped early and RichOS can't tell you why. Press Restore my message, then send it again."
             }
@@ -250,7 +263,7 @@ impl InterruptionCause {
             // Nothing failed. There is nothing to retry, and his words go back in the box
             // by the ordinary route rather than through a failure card's control.
             InterruptionCause::StoppedByCeo => false,
-            InterruptionCause::Transient | InterruptionCause::Unknown => true,
+            InterruptionCause::Transient | InterruptionCause::HistoryGone | InterruptionCause::Unknown => true,
         }
     }
 
@@ -282,6 +295,9 @@ pub fn classify(reason: &str) -> InterruptionCause {
     // caught by the generic Transient arm below, exactly as it was on 2026-09-17.
     if reason.contains(OUR_PROVIDER_COULD_NOT_START) {
         return InterruptionCause::ProviderMissing;
+    }
+    if reason.contains(OUR_HISTORY_GONE) {
+        return InterruptionCause::HistoryGone;
     }
     if reason.contains(OUR_IO_PREFIX) {
         return InterruptionCause::Transient;
