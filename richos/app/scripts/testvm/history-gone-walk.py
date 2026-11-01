@@ -117,7 +117,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
         self.save()
         return listing
 
-    def records(self):
+    def claude_records(self):
         """Claude Code's own session records in the guest: path to size."""
         text = guest(self.vm, 'find %s/.claude/projects -name "*.jsonl" 2>/dev/null | sort || true' % shlex.quote(self.home), 60)
         return text.splitlines()
@@ -160,7 +160,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
         if closed.get('event') != 'TurnCompleted':
             raise StepFailed('the first chat turn ended as %s, not TurnCompleted: %s' % (closed.get('event'), json.dumps(closed)[:300]))
         self.facts['chat_turn'] = row['turn_id']
-        self.facts['records_before'] = self.records()
+        self.facts['records_before'] = self.claude_records()
         self.scopes('before')
         self.save()
         self.shot('chat.png')
@@ -200,7 +200,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
         if guest(self.vm, 'ls %s/.claude/projects/*/%s.jsonl 2>/dev/null || true' % (shlex.quote(self.home), shlex.quote(session)), 60).strip():
             raise StepFailed("Stu's record is still there after removal")
         self.facts['stu_lost_records'] = found
-        self.facts['records_after_stu_loss'] = self.records()
+        self.facts['records_after_stu_loss'] = self.claude_records()
         self.save()
         return {'removed': found, 'session': session}
 
@@ -224,7 +224,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
             time.sleep(3)
         time.sleep(self.a.settle)
         told = [t for t in self.rich_notices()[notices_before:] if GONE_WORDS in t]
-        now = self.records()
+        now = self.claude_records()
         evidence = {'lost_session': lost, 'relaunched': launched, 'history_gone_notices': told,
                     'job': {k: (record or {}).get(k) for k in ('id', 'state', 'title', 'work_session')},
                     'new_records': [p for p in now if p not in before], 'lead_files': self.lead_files()}
@@ -257,7 +257,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
         if left.strip():
             raise StepFailed('the record is still there after removal: ' + left)
         self.facts['lost_records'] = found
-        self.facts['records_after_loss'] = self.records()
+        self.facts['records_after_loss'] = self.claude_records()
         self.save()
         return {'removed': found}
 
@@ -315,7 +315,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
         record['events_since'] = [{k: r.get(k) for k in ('event', 'turn_id', 'text', 'reason', 'at')}
                                   for r in self.ledger() if (r.get('at') or 0) >= start
                                   and r.get('event') in ('PromptReceived', 'TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed')]
-        record['records_after_queue'] = self.records()
+        record['records_after_queue'] = self.claude_records()
         record['scopes_after_queue'] = self.scopes('after-queue').splitlines()
         self.shot('queue-settled.png')
         (self.out / 'queue.json').write_text(json.dumps(record, indent=2) + '\n')
@@ -335,7 +335,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
         record['reply_chars'] = sum(len(r.get('text', '')) for r in replies)
         self.shot('answer.png')
         after = self.scopes('after-answer')
-        records = self.records()
+        records = self.claude_records()
         record['new_records'] = [p for p in records if p not in before]
         record['continuity_files'] = {phase: len(continuity_files('\n'.join(self.facts['scopes'][phase])))
                                       for phase in ('before', 'after-quit', 'after-queue', 'after-answer')}
