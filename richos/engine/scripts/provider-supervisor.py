@@ -112,6 +112,7 @@ class Settings(object):
 
 
 SETTINGS = Settings()
+SWEEP_SECONDS = 5.0   # the process-scratch sweep's own limit, long enough to finish
 
 
 def _darwin_libproc():
@@ -541,7 +542,9 @@ def _sweep_process_scratch():
     sweep = Path(__file__).with_name("scratch-reaper.sh")
     if not sweep.is_file():
         return
-    budget = max(0.1, _grace())
+    # Its own limit, never the provider's grace: the product passes --reap-grace=0, which
+    # gave this sweep 0.1 s and timed it out at nearly every end (§54).
+    budget = SWEEP_SECONDS
     try:
         result = subprocess.run(["bash", str(sweep), "--process-only", "--apply", "--deadline", str(budget * 0.8)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=budget)
