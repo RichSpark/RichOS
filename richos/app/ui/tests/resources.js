@@ -584,6 +584,22 @@ async function main() {
       assertEqual(m.text, "Set your name", "the unset label");
       assertEqual(m.lines, 1, "\"Set your name\" is on one line");
       assert(!m.clipped && !m.overlap, "the label is cut or overlaps the readout: " + JSON.stringify(m));
+      // A larger Text size: the label may wrap, but never paints into the Readout.
+      for (const scale of [120, 150]) {
+        await page.evaluate((v) => window.RichTheme.setScale(v), scale);
+        await flushFrames(page);
+        const big = await page.evaluate(() => {
+          const n = document.getElementById("rail-user-name");
+          const range = document.createRange(); range.selectNodeContents(n);
+          const glyphRight = Math.max(...[...range.getClientRects()].map((r) => r.right));
+          const readout = document.querySelector("#res-square .res-readout").getBoundingClientRect();
+          return { glyphRight, readoutLeft: readout.left, intrusion: Math.max(0, glyphRight - readout.left),
+            clipped: n.scrollWidth > n.clientWidth };
+        });
+        await page.evaluate(() => window.RichTheme.setScale(100));
+        assert(big.intrusion === 0 && !big.clipped, `at ${scale}% text size the label paints into the readout or is cut: ` + JSON.stringify(big));
+      }
+      await flushFrames(page);
       await page.evaluate(async () => {
         await window.RichBridge.invoke("set_user_name", { name: "Alex Booster" });
         await renderUserIdentity();
