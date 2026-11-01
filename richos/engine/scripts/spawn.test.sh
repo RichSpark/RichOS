@@ -689,28 +689,30 @@ if printf '%s' "$OUT" | grep -q "GUARD A REFUSES"; then
 else
     ok "app audience: the operator-session guard is not run at all, not run-and-ignored"
 fi
-if printf '%s' "$OUT" | grep -q "not run (its reason is the development session's"; then
+if printf '%s' "$OUT" | grep -q "not run (it needs a terminal-only thing)"; then
     ok "app audience: what was left out is NAMED, never dropped quietly"
 else
     bad "app audience: what was left out is named" "$OUT"
 fi
 
-# 3. A REFUSAL A USER CAN STILL SEE IS IN THE APP'S OWN WORDS. The user-work
-#    guard here is the real guard-worktree-isolation.sh, refusing on a real
-#    defect (a bare name), so this is not a fixture talking to itself.
+# 3. A REFUSAL IN THE APP OPENS WITH THE APP'S OWN SENTENCE AND CARRIES THE
+#    GUARD'S OWN MESSAGE, the one the terminal's lead reads (§154): without it
+#    the lead cannot tell what to fix. The user-work guard here is the real
+#    guard-worktree-isolation.sh, refusing on a real defect (a bare name), so
+#    this is not a fixture talking to itself.
 RICHOS_SPAWN_GUARD_AUDIENCE="$AUD" run "bare" --repo "$TARGET" --type zach \
     --brief "$BRIEF" --dry-run --audience app
-if [ "$RC" -eq 1 ] && printf '%s' "$OUT" \
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | head -1 \
        | grep -q "I could not give this work its own separate copy of your project"; then
-    ok "app audience: a user-work guard's refusal reaches the caller in the app's own words"
+    ok "app audience: a user-work guard's refusal opens with the app's own sentence"
 else
-    bad "app audience: a user-work refusal is in the app's own words" "rc=$RC $OUT"
+    bad "app audience: a user-work refusal opens with the app's own sentence" "rc=$RC $OUT"
 fi
 APP_OUT="$OUT"
 # THE POSITIVE PROBE FOR THE FIVE CASES BELOW. A list of "this string is absent"
 # checks passes on an empty string, so the SAME refusal is taken in operator
 # audience first and every one of those strings must be PRESENT in it. Without
-# this, five green cases would prove only that something went wrong.
+# this, the green cases would prove only that something went wrong.
 #
 # IT EARNED ITS KEEP THE FIRST TIME IT RAN. The list began with six strings,
 # and "cross-repo-worktree" is not in THIS refusal's operator text at all, so
@@ -724,17 +726,24 @@ for LEAK in "isolation" "REFUSES this spawn" "guards evaluated" \
     printf '%s' "$OPERATOR_OUT" | grep -qF "$LEAK" || MISSING="$MISSING $LEAK"
 done
 if [ -z "$MISSING" ]; then
-    ok "the five absent-string cases below can go red: the operator report contains all five"
+    ok "the string cases below can go red: the operator report contains all five"
 else
-    bad "the five absent-string cases below can go red" "operator report is missing:$MISSING"
+    bad "the string cases below can go red" "operator report is missing:$MISSING"
 fi
 
-for LEAK in "isolation" "REFUSES this spawn" "guards evaluated" \
-            "NOTHING WAS CREATED" "problem(s)"; do
+# The guard's own message, which the operator report quotes too.
+GUARD_WORDS="=== Teammate-spawn guard: BLOCKED ==="
+if printf '%s' "$OPERATOR_OUT" | grep -qF "$GUARD_WORDS" && printf '%s' "$APP_OUT" | grep -qF "$GUARD_WORDS"; then
+    ok "app audience: the refusal carries the guard's own message, as the terminal's lead reads it"
+else
+    bad "app audience: the refusal carries the guard's own message" "guard: $GUARD_WORDS | app: $APP_OUT"
+fi
+# The operator REPORT's frame (count, numbering, table) is spawn.py's, not the guard's.
+for LEAK in "REFUSES this spawn" "guards evaluated" "NOTHING WAS CREATED" "problem(s)"; do
     if printf '%s' "$APP_OUT" | grep -qF "$LEAK"; then
-        bad "app audience: the refusal carries no operator text ($LEAK)" "$APP_OUT"
+        bad "app audience: the refusal carries none of the operator report's frame ($LEAK)" "$APP_OUT"
     else
-        ok "app audience: the refusal carries no operator text ($LEAK)"
+        ok "app audience: the refusal carries none of the operator report's frame ($LEAK)"
     fi
 done
 

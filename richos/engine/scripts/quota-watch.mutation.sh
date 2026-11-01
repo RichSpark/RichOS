@@ -293,8 +293,8 @@ mutant jump-averaged-away "R11" "$L" \
     "A sudden jump would be averaged over 5 minutes, and the pause would come a check too late."
 
 mutant fast-never-ends "R12" "$L" \
-    '        fast = speed is not None and speed >= fast_speed(a){NL}' \
-    '        fast = (speed is not None and speed >= fast_speed(a)) or same_window(fast_alerted, r["resets_at"]){NL}' \
+    '        fast = speed is not None and has_five(r) and speed >= fast_speed(a){NL}' \
+    '        fast = (speed is not None and has_five(r) and speed >= fast_speed(a)) or same_window(fast_alerted, r["resets_at"]){NL}' \
     "After a burst the watcher would stay on 1-minute checks and the early pause point for the rest of the window."
 
 mutant fast-poll-clamped-back "R06" "$L" \

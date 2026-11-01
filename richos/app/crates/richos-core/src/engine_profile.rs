@@ -59,17 +59,12 @@ fn app_rules(engine: &Path, chain: &str, rules: &[&str]) -> String {
 /// **The guards that judge a dispatch the APP makes, read from the engine's own
 /// declaration rather than typed here.**
 ///
-/// The CEO's §57 is that RichOS is a free app for non-technical people and that nothing the
-/// user runs depends on our operator setup; §55 is that the work happens after "On it!", and
-/// that work is a background dispatch. Rich ruled on 2026-09-18 that such a dispatch is
-/// judged only by guards whose reason protects the user's own work on the user's own Mac.
-///
-/// **This used to be two script paths typed into [`EngineProfile::prepare`] below**, with an
-/// identical pair typed into `scripts/app-engine-hook.py`, and one of the two —
-/// `guard-brief-scope.sh` — is an operator-session guard: it judges a dispatch against a
-/// design-round specification recorded in the DEVELOPMENT project, and its way out is a line
-/// only an operator can write. Nothing said why those two, and nothing tied the two copies
-/// together. So the classification is data now, and this reads it.
+/// The CEO's §154 (2026-10-31) is that the app does the terminal's jobs with the terminal's own
+/// code: the declaration's `user-work` side is every dispatch guard the terminal's registration
+/// (`hooks/hooks.json`) runs, except the few that need a terminal-only thing. Each reads the
+/// user's own configuration through the coordination folder and stands down where its rule is
+/// not declared. This used to be two script paths typed here, with an identical pair typed into
+/// `scripts/app-engine-hook.py`; the classification is data now, and this reads it.
 ///
 /// Returns the `user-work` rows in declaration order. A declaration that is missing,
 /// unreadable or self-contradictory is an ERROR and never an empty list: the app's guard
@@ -640,8 +635,10 @@ impl EngineProfile {
         // root?"). What was wrong was that its reach was written down nowhere, so every
         // reader had to infer it and one inferred it narrow.
         for event in ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop", "Stop"] {
-            // Agent dispatch includes Pierce's bounded five-minute inspection.
-            let timeout = if event == "PreToolUse" { 330 } else { 25 };
+            // Agent dispatch includes Pierce's bounded five-minute inspection. The turn end runs
+            // the terminal's Stop checks together, each inside its own registered budget (the
+            // longest, guard-workspace-gate.sh, is 60 s), so the app's Stop gives them 90.
+            let timeout = match event { "PreToolUse" => 330, "Stop" => 90, _ => 25 };
             hooks.insert(event.into(), json!([{"hooks":[{"type":"command","command":command,"timeout":timeout}]}]));
         }
         hooks.get_mut("PreToolUse").unwrap().as_array_mut().unwrap().push(json!({
@@ -665,8 +662,7 @@ impl EngineProfile {
         // additionally enters the desktop scope/evidence gate at dispatch time.
         // WHICH guards is [`user_work_guards`]'s answer, read from the engine's
         // declaration — never a list typed here, which is what it was until
-        // 2026-09-18 and how an operator-session guard came to be judging a
-        // user's assignment.
+        // 2026-09-18.
         let preflight: Vec<_> = user_work_guards(&engine)?.into_iter()
             .map(|guard| json!({"type":"command",
                 "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks").join(guard)))}))
@@ -681,6 +677,15 @@ impl EngineProfile {
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
     /// do not implement that CLI entrypoint keep their canonical hooks unchanged.
+    ///
+    /// Two registrations (the CEO's §153: quota handling acts only on what spends quota). The
+    /// wrapper around the canonical `PreToolUse` hook judges a new agent's dispatch and a closed
+    /// grant, and lets every other tool call run. The gate alone at `PostToolBatch`
+    /// ([`crate::quota::gate::HOLD_EVENT`]) holds a helper's next call to Claude while a hold
+    /// applies, after its tool calls have run; the canonical hook has no branch for that event,
+    /// so nothing stands behind it there. Its `timeout` is fourteen days
+    /// ([`crate::quota::gate::HOLD_TIMEOUT_SECS`]), so a weekly hold keeps the next model call
+    /// held for as long as it stands.
     pub fn install_quota_gate(&self, executable: &Path) -> Result<(), RuntimeError> {
         let path = self.plugin.join("hooks/hooks.json");
         let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)
@@ -688,6 +693,9 @@ impl EngineProfile {
         let command = format!("{} --claude-quota-gate {} {}", quote(executable),
             quote(&self.runtime.python), quote(&self.engine.join("scripts/app-engine-hook.py")));
         manifest["hooks"]["PreToolUse"][0] = json!({"hooks":[{"type":"command", "command":command, "timeout":21600}]});
+        manifest["hooks"][crate::quota::gate::HOLD_EVENT] = json!([{"hooks":[{"type":"command",
+            "command":format!("{} --claude-quota-gate", quote(executable)),
+            "timeout":crate::quota::gate::HOLD_TIMEOUT_SECS}]}]);
         write(&path, &manifest.to_string())
     }
     /// **Make the team's first save in a connected folder wait for the user's Git name**

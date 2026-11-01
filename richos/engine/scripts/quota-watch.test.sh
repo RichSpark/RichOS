@@ -510,6 +510,12 @@ for line in sys.stdin:
         continue
     elif mode == "unavailable":
         body, sub = {"rate_limits_available": False}, "success"
+    elif mode == "weekly-only":
+        # An account with no five-hour limit (Anthropic, 2026-10-31): only the week comes back.
+        reset = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3)
+        body = {"rate_limits_available": True, "rate_limits": {
+            "seven_day": {"utilization": json.loads(used_override or read("used", "49")), "resets_at": reset.isoformat()}}}
+        sub = "success"
     else:
         used = used_override or read("used", "50")
         used = json.loads(used)
@@ -585,6 +591,32 @@ check "G11  claude starts in an empty directory this user cannot write, never / 
     "$([ -n "$GCWD" ] && [ "$GCWD" != "/" ] && [ -d "$GCWD" ] && [ -z "$(ls -A "$GCWD")" ] && [ ! -w "$GCWD" ] \
        && printf '%s' "$OUT" | grep -q 'via get_usage'; echo $?)" \
     "cwd=${GCWD:-none} entries=$(ls -A "${GCWD:-/nonexistent}" 2>/dev/null | head -3 | tr '\n' ' ') rc=$RC out=$OUT"
+fi
+
+# G12: AN ACCOUNT WITH NO FIVE-HOUR LIMIT (the CEO, 2026-10-31: "If no 5-hour-limit data, then
+# don't show/don't handle it"). get_usage answers with only the week, as Claude Code did for his
+# account that day; until then the watcher called it "a shape this watcher cannot read", fell back
+# to the status-line file, found no five_hour there either, and answered UNKNOWN (exit 2). Now it
+# is a complete reading: below the five-hour rule (exit 0), the week reported, no fallback, and at
+# 99% of the week the weekly rule holds it (exit 1). The status-line file with only seven_day
+# (his own file's shape at 18:23Z) is read the same way.
+if wants "G12*"; then
+write_payload 50 3600 10
+fake weekly-only 49; gonce; RCW=$RC; OUTW=$OUT
+fake weekly-only 99; gonce; RC99=$RC; OUT99=$OUT
+check "G12  get_usage with only the week: a complete reading (exit 0, no fallback, no five-hour figure, the week shown); 99% of the week holds (exit 1)" \
+    "$([ "$RCW" -eq 0 ] && printf '%s' "$OUTW" | grep -q 'no five-hour window: this account has no five-hour limit.*via get_usage.*seven_day: 49%' \
+       && ! printf '%s' "$OUTW" | grep -q 'status-line\|UNKNOWN\|cannot read' \
+       && [ "$RC99" -eq 1 ] && printf '%s' "$OUT99" | grep -q 'AT OR ABOVE'; echo $?)" "49: rc=$RCW $OUTW // 99: rc=$RC99 $OUT99"
+python3 - "$QUOTA_PAYLOAD" <<'PY'
+import json, os, sys, time
+now = int(time.time())
+json.dump({"session_id": "x", "rate_limits": {"seven_day": {"used_percentage": 49, "resets_at": now + 86400}}}, open(sys.argv[1], "w"))
+os.utime(sys.argv[1], (now - 10, now - 10))
+PY
+once
+check "G12b the status-line file with only seven_day (his own file, 2026-10-31): exit 0, no five-hour figure, never 'carries no rate_limits.five_hour'" \
+    "$([ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'no five-hour window' && ! printf '%s' "$OUT" | grep -q 'UNKNOWN\|carries no'; echo $?)" "rc=$RC out=$OUT"
 fi
 
 # G09 / G10: a refusal that says the login is dead raises the login alarm (a

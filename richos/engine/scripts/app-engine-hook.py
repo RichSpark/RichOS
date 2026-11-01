@@ -4,12 +4,14 @@
 The host supplies all roots and the active scope. There is no terminal-settings
 fallback. Provider callbacks are evidence, not proof of assignment completion.
 """
+import concurrent.futures
 import contextlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -45,6 +47,100 @@ def registered_timeout(guard, floor=20):
     except (OSError, ValueError, KeyError, TypeError):
         found = []
     return max([floor, *found])
+
+
+# THE TURN-END CHECKS THE APP LEAVES OUT, each with the terminal-only thing it needs. Every other
+# Stop check the engine's registration (hooks/hooks.json, the terminal's) runs is run at Rich's and
+# Stu's turn end too (the CEO's §154; Hank's audit finding 8, richos-hq docs/research/
+# 2026-10-31-app-terminal-differences.md). A name here that hooks.json no longer registers fails
+# test-app-engine-hook.py, so this list cannot go stale quietly.
+TERMINAL_ONLY_TURN_END = {
+    "notice-hook-staleness.sh": (
+        "It compares the hooks registered now with the snapshot the terminal's SessionStart hook "
+        "(snapshot-enforcing-hooks.sh) takes, and its remedy is restarting the terminal session. An app "
+        "lease's hooks are rendered fresh from the engine the app ships, at every lease start, so there is "
+        "no snapshot to compare and nothing a restart would arm."),
+}
+
+
+def registered(event):
+    """[(file name, argv, timeout)] for every command the engine's own registration (hooks/hooks.json,
+    the terminal's) runs on `event`, in its order, with the terminal's own arguments and budget."""
+    audience = load("richos_spawn_guard_audience", ENGINE / "scripts/lib/spawn-guard-audience.py")
+    out = []
+    for group in json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"].get(event, []):
+        for entry in group["hooks"]:
+            # Split first, then put the engine's path into each word: the app installs the engine
+            # under ~/Library/Application Support/, and a path with a space substituted before the
+            # split became two words (the second review of b9e7662d75af, P1).
+            argv = [word.replace("${CLAUDE_PLUGIN_ROOT}", str(ENGINE)) for word in shlex.split(entry["command"])]
+            if argv and argv[0] == "bash":
+                argv[0] = "/bin/bash"
+            out.append((audience.guard_file_name(entry["command"]), argv, entry.get("timeout", 60)))
+    return out
+
+
+def turn_end_checks(payload, coordination):
+    """Run the terminal's Stop checks at an app lead's turn end, together, as the terminal runs them,
+    each within its registered budget. Returns (contexts for the lead, messages for the person,
+    refusals). A check's answer is read the way Claude Code reads it: exit 2 refuses with its stderr,
+    a JSON `decision: block` refuses with its reason, `additionalContext` and `systemMessage` are
+    kept; any other exit is a non-blocking error, logged on stderr."""
+    checks = [check for check in registered("Stop") if check[0] not in TERMINAL_ONLY_TURN_END]
+    env = dict(os.environ, RICHOS_ENTITY_ROOT=str(coordination), CLAUDE_PLUGIN_ROOT=str(ENGINE))
+    # The lease's team folders are the app's (engine_profile.rs gives the stated-actions check
+    # RICHOS_SA_TEAMS_DIR); the claim check reads the same folders under its own name, and without
+    # them it looks in Claude Code's ~/.claude/teams, which an app lease never writes.
+    if os.environ.get("RICHOS_SA_TEAMS_DIR"):
+        env.setdefault("RICHOS_CLAIMS_TEAMS_DIR", os.environ["RICHOS_SA_TEAMS_DIR"])
+    # The terminal's governed repository sits beside the repositories its lead cites, so the claim
+    # check finds their commits as siblings; the app's coordination folder sits beside none of them.
+    # Its connected repositories are this lease's read roots (engine_profile.rs RICHOS_APP_READ_ROOTS),
+    # given one per line, so a folder name with a space stays one path. A value the user's own
+    # configuration sets still wins, as the wrapper sources it after this.
+    try:
+        roots = json.loads(os.environ.get("RICHOS_APP_READ_ROOTS") or "[]")
+    except ValueError:
+        roots = []
+    if roots and isinstance(roots, list):
+        env.setdefault("CLAIM_CHECK_EXTRA_REPOS", "".join(str(root) + "\n" for root in roots))
+    body = json.dumps(payload)
+
+    def one(check):
+        name, argv, timeout = check
+        try:
+            done = subprocess.run(argv, input=body, text=True, capture_output=True, timeout=timeout, env=env)
+            return name, done.returncode, done.stdout, done.stderr
+        except subprocess.TimeoutExpired:
+            return name, None, "", "%s did not finish inside its registered %s s\n" % (name, timeout)
+        except OSError as error:
+            return name, None, "", "%s could not start: %s\n" % (name, error)
+
+    contexts, messages, refusals = [], [], []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(checks))) as pool:
+        results = list(pool.map(one, checks))
+    for name, code, out, err in results:
+        for line in out.splitlines():
+            try:
+                answer = json.loads(line)
+            except ValueError:
+                answer = None
+            if not isinstance(answer, dict):
+                if line.strip():
+                    sys.stderr.write(line + "\n")
+                continue
+            context = (answer.get("hookSpecificOutput") or {}).get("additionalContext")
+            if context:
+                contexts.append(context)
+            if answer.get("systemMessage"):
+                messages.append(answer["systemMessage"])
+            if answer.get("decision") == "block":
+                refusals.append(answer.get("reason") or "%s refused the turn end" % name)
+        if code == 2:
+            refusals.append(err.strip() or "%s refused the turn end" % name)
+        elif err.strip():
+            sys.stderr.write(err if err.endswith("\n") else err + "\n")
+    return contexts, messages, refusals
 
 
 def scope():
@@ -217,17 +313,12 @@ def handle(payload):
         # WHICH GUARDS JUDGE A DISPATCH THE APP MAKES — read from
         # spawn-guard-audience.declaration, never typed here.
         #
-        # This list was two hand-written paths until 2026-09-18:
-        # guard-worktree-isolation.sh and guard-brief-scope.sh. Nothing said why
-        # those two, nothing connected them to the identical list in
-        # `EngineProfile::prepare`'s spawn-preflight.json, and the second of them
-        # is an operator-session guard — it judges a dispatch against a
-        # design-round specification recorded in the DEVELOPMENT project, with an
-        # escape line only an operator can write. It was silent on a user's own
-        # repository only because a user's repository happens to carry no such
-        # record. Rich's ruling (CEO §57) is that the app is judged only by
-        # guards whose reason protects the user's own work, so it is off this
-        # list and the classification is the source of what is on it.
+        # It is every guard the terminal's registration (hooks/hooks.json) runs on
+        # a dispatch except the few that need a terminal-only thing (the CEO's
+        # §154; Hank's audit finding 7). Each guard reads the user's own
+        # configuration through the coordination folder and stands down where
+        # its rule is not declared, as in a terminal that never adopted it. Its
+        # refusal reaches the lead in its own words, through `run` below.
         #
         # guard-sealed-worktree.sh is user-work and is deliberately NOT repeated
         # here: it ran above, for every tool, exactly as its matcherless
@@ -255,42 +346,29 @@ def handle(payload):
     if event in ("SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure"):
         work.observe(scope(), payload)
     if event == "Stop":
-        # ONE ANSWER FOR THE LEAD (orchestration reliability R1/R5/R6): the deferral check
-        # (the terminal's own wrapper, report only), the record check's alert and the
-        # due-work fallback reach the model as one Stop additionalContext. Claude Code reads
-        # a hook's stdout only as one JSON object (one_envelope below), and a bare alert line
-        # reached nobody.
-        contexts, failure = [], None
-        deferral = subprocess.run(["/bin/bash", str(ENGINE / "scripts/hooks/notice-unasked-deferral.sh")],
-                                  input=json.dumps(payload), text=True, capture_output=True, timeout=20,
-                                  env=dict(os.environ, RICHOS_ENTITY_ROOT=str(coordination)))
-        contexts += lead_contexts(deferral.stdout)
-        # Context-only priming is host machinery, not a new assignment or promise.
-        # The same host grant controls mutation tools and the visible-turn analyzer.
-        active = scope()
-        if active.get("actions_allowed") is True:
-            record = subprocess.run([sys.executable, str(ENGINE / "ass-kicker/ass-kicker.py")],
-                                    input=json.dumps(payload), text=True, capture_output=True, timeout=20)
-            for line in record.stdout.splitlines():
-                if line.startswith("RICHOS_RECORD_ALERT\t"):
-                    contexts.append(line.split("\t", 1)[1])
-                elif line.strip():
-                    sys.stdout.write(line + "\n")
-            if record.stderr:
-                sys.stderr.write(record.stderr)
-            if record.returncode:
-                failure = RuntimeError(f"Required engine control failed or refused (exit {record.returncode})")
-        try:
-            due = work.W.fallback_notice(str(payload.get("session_id") or ""))
-        except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
-            due = f"DUE WORK NOT READ this turn ({type(error).__name__}: {str(error)[:160]})"
-        if due:
-            contexts.append(due)
+        # THE TERMINAL'S TURN-END CHECKS, ALL OF THEM BUT THOSE IN TERMINAL_ONLY_TURN_END, as one
+        # answer: Claude Code reads a hook's stdout only as one JSON object, and a bare alert line
+        # reached nobody. This replaced the app's own short list (the deferral notice, ass-kicker.py
+        # called directly and its own due-work fallback, which guard-workspace-gate.sh gives).
+        # Context-only priming is host machinery, not a turn of the lead's: the same host grant that
+        # controls mutation tools decides whether the turn is judged.
+        if scope().get("actions_allowed") is not True:
+            return
+        # The checks read Claude Code's own transcript (payload transcript_path), which holds the
+        # lead's earlier replies and whose turn each input started, as the terminal's do.
+        contexts, messages, refusals = turn_end_checks(payload, coordination)
+        if refusals:
+            # Exit 2 refuses the turn end and hands stderr to the lead, as each refusing check does in
+            # the terminal; the notices of the same turn end go with it rather than being dropped.
+            sys.stderr.write("\n\n".join(refusals + contexts) + "\n")
+            raise RuntimeError("Required engine control failed or refused (exit 2)")
+        answer = {}
+        if messages:
+            answer["systemMessage"] = "\n\n".join(messages)
         if contexts:
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop",
-                                                     "additionalContext": "\n\n".join(contexts)}}))
-        if failure:
-            raise failure
+            answer["hookSpecificOutput"] = {"hookEventName": "Stop", "additionalContext": "\n\n".join(contexts)}
+        if answer:
+            print(json.dumps(answer))
 
 
 def lead_contexts(text):

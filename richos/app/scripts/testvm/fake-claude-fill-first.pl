@@ -25,12 +25,23 @@
 # the rows app_workers.rs reads). /Users/admin/fill-first/reply.txt, when present, is the answer. # machine-path-exempt: isolated guest fixture documentation; no customer default
 #
 # HELPER STEPS. While the agents file lists helpers, each user turn (and each second of a held
-# turn) is one step of every helper that has not ended: the fake runs the gate command from the
-# lease's <plugin-dir>/hooks/hooks.json (PreToolUse), with a helper payload (agent_id
-# walk-agent-N) on stdin and the lease's own environment, as Claude Code would. A held step waits
-# as long as the gate holds it; a refused step ends nothing. Every step is a line in calls.log
-# ("gate <agent> exit <n>", with the gate's first words when it said any). Without helpers, or
-# without a hooks.json, no step runs and nothing here changes.
+# turn) is one step of every helper that has not ended, as Claude Code runs one tool call: the
+# fake runs the PreToolUse gate command from the lease's <plugin-dir>/hooks/hooks.json, with a
+# helper payload (agent_id walk-agent-N) on stdin and the lease's own environment; then the tool
+# itself unless that was refused (a stand-in Read of this script, which the fake performs:
+# calls.log "ran <agent> Read <bytes>B"; a Read, because the engine's sealed-worktree guard lets
+# a read-only tool through for a helper with no worker registration and refuses any other one,
+# "Lock-out: REFUSED (no registration)". A helper this fake launched has no worker receipt either,
+# so the engine's hook refuses its Read too, "worker identity has not joined its app receipt":
+# the engine's answer, never the quota gate's, given only once the gate let the call through);
+# then, refused or not, the PostToolBatch command when hooks.json has one ("batch-start
+# <agent>", then "batch <agent> exit <n>" once it returns), which Claude Code runs after every
+# call of a batch has resolved and before its next model request. A held step waits as long as either command holds
+# it; a refused step ends nothing. Each gate call is a line in calls.log ("gate <agent> exit
+# <n>", with the gate's first words when it said any; the batch's with its additionalContext).
+# While /Users/admin/fill-first/thinking exists no helper takes a step: each one's model call is # machine-path-exempt: isolated guest fixture documentation; no customer default
+# in flight, so a walk can set a hold up before a helper's next tool call comes.
+# Without helpers, or without a hooks.json, no step runs and nothing here changes.
 #
 # THE BACK END'S JOB. A helper of Stu's runs only for a job the front desk wrote down; helpers
 # on the front desk's own lease are not his. Two files make a job with a helper on the back end,
@@ -65,14 +76,14 @@
 #                 minutes, and ends with this process.
 #   work-agents-finish  while it exists, a work-agent's next step the app's QUOTA gate admits is
 #                 its last: it finishes on its own, its SubagentStop row is written and calls.log
-#                 says "gate work-agent-N exit <n> finished". Admitted is exit 0, or a refusal
-#                 by the engine's hook behind the gate (`--claude-quota-gate` runs it only once
-#                 it has admitted the call): the stand-in command is not a registered worker's,
-#                 and the engine's own guards refuse it ("Lock-out: REFUSED (no registration)").
-#                 A step the quota gate holds never returns, and one it refuses says so first
-#                 ("RichOS desktop quota: ..." or "RichOS desktop: This app work has ended"):
-#                 neither finishes it (weekly switch, the CEO's §153: a helper on the account
-#                 being left carries on to its own end).
+#                 says "gate work-agent-N exit <n> finished" (after the step's batch line).
+#                 Admitted is a PreToolUse exit 0, or a refusal by the engine's hook behind the
+#                 gate (`--claude-quota-gate` runs it only once it has admitted the call); and a
+#                 batch that came back with no gate refusal in its context. A step the quota
+#                 gate holds never returns, and one it refuses says so first ("RichOS desktop
+#                 quota: ..." or "RichOS desktop: This app work has ended"): neither finishes it
+#                 (weekly switch, the CEO's §153: a helper on the account being left carries on
+#                 to its own end).
 #
 # THE TASK FRAMES. The app counts Stu's running helpers from his stream (agent_tasks.rs TaskBook),
 # not from the journal: Claude Code prints the Agent tool call, its async_launched answer and a
@@ -170,34 +181,57 @@ if ($evidence) {
 }
 journal({ hook_event_name => 'SessionStart', ($transcript ? (transcript_path => $transcript) : ()) });
 my %ended;
-sub gate_command {  # the PreToolUse command of the lease's hooks.json, or undef
+sub gate_command {  # the first command hooks.json registers for an event (PreToolUse when none is named), or undef
+  my ($event) = @_; $event //= 'PreToolUse';
   return undef unless $profile && open(my $fh, '<', "$profile/hooks/hooks.json");
   local $/; my $text = <$fh>; close $fh;
   my $m = eval { $json->decode($text) } or return undef;
-  return $m->{hooks}{PreToolUse}[0]{hooks}[0]{command};
+  return $m->{hooks}{$event}[0]{hooks}[0]{command};
+}
+sub gate_run {  # one gate command run with a payload on stdin: (exit code, first stderr line, stdout)
+  my ($command, $id, $payload) = @_;
+  my $in = "$dir/gate-in-$$-$id.json"; my $err = "$dir/gate-err-$$-$id.txt"; my $out = "$dir/gate-out-$$-$id.txt";
+  open(my $w, '>', $in) or return (1, '', ''); print $w $json->encode($payload); close $w;
+  system("($command) < '$in' > '$out' 2> '$err'");
+  my $code = $? >> 8;
+  my ($said, $answer) = ('', '');
+  if (open(my $e, '<', $err)) { local $/; $said = <$e> // ''; close $e; }
+  if (open(my $o, '<', $out)) { local $/; $answer = <$o> // ''; close $o; }
+  unlink $in, $err, $out;
+  my ($first) = split /\n/, $said; $first //= '';
+  return ($code, $first, $answer);
 }
 my $steps = 0;
 my $between_turns = 0;  # set in the background stepper: its frames arrive between the back end's turns
-sub step_one {  # one gate step of one helper; true when that step was its last (it finished)
+sub step_one {  # one tool call of one helper (HELPER STEPS); true when that step was its last (it finished)
   my ($command, $id, $type) = @_;
   # A tool_use_id, a prompt_id and the cwd, as every Claude Code tool call's hook payload has: the
   # engine's evidence hook refuses a call without them ("Tool callback has no tool identity",
   # "Callback has no prompt identity").
-  my $payload = $json->encode({ hook_event_name => 'PreToolUse', session_id => $session, agent_id => $id,
-    agent_type => $type, tool_name => 'Bash', tool_input => { command => 'true' },
-    tool_use_id => 'toolu_fake_' . $id . '_' . (++$steps), prompt_id => "fake-prompt-$session", cwd => getcwd() });
-  my $in = "$dir/gate-in-$$-$id.json"; my $err = "$dir/gate-err-$$-$id.txt";
-  open(my $w, '>', $in) or return 0; print $w $payload; close $w;
-  system("($command) < '$in' > /dev/null 2> '$err'");
-  my $code = $? >> 8;
-  my $said = ''; if (open(my $e, '<', $err)) { local $/; $said = <$e> // ''; close $e; }
-  unlink $in, $err;
+  my %call = (tool_name => 'Read', tool_input => { file_path => $0 }, tool_use_id => 'toolu_fake_' . $id . '_' . (++$steps));
+  my ($code, $first) = gate_run($command, $id, { hook_event_name => 'PreToolUse', session_id => $session, agent_id => $id,
+    agent_type => $type, %call, prompt_id => "fake-prompt-$session", cwd => getcwd() });
   # A refusal carries the gate's first words: an exit 2 alone does not say why.
-  my ($first) = split /\n/, $said; $first //= '';
   my $quota_refused = $code != 0 && $first =~ /\ARichOS desktop(?: quota)?: /;
-  my $finished = !$quota_refused && $id =~ /\Awork-agent-\d+\z/ && -e "$dir/work-agents-finish";
-  if (open(my $l, '>>', "$dir/calls.log")) { print $l join(' ', time(), ($folder || 'account-1'), 'gate', $id, 'exit', $code,
-    $finished ? 'finished' : (), length $first ? ('said:', substr($first, 0, 200)) : ()), "\n"; close $l; }
+  calls_line('gate', $id, 'exit', $code, length $first ? ('said:', substr($first, 0, 200)) : ());
+  if (!$code) {  # the tool itself: the Read, done
+    my $bytes = -1; if (open(my $r, '<', $0)) { local $/; $bytes = length(<$r> // ''); close $r; }
+    calls_line('ran', $id, 'Read', "${bytes}B");
+  }
+  # Its batch, refused or not: after the call resolved and before the helper's next model request.
+  my $batch_ok = 1;
+  if (my $batch = gate_command('PostToolBatch')) {
+    calls_line('batch-start', $id);
+    my ($bcode, $bfirst, $answer) = gate_run($batch, $id, { hook_event_name => 'PostToolBatch', session_id => $session,
+      agent_id => $id, agent_type => $type, prompt_id => "fake-prompt-$session", cwd => getcwd(),
+      tool_calls => [ { %call, tool_response => ($code ? $first : '') } ] });
+    my $context = ((eval { $json->decode($answer) } || {})->{hookSpecificOutput} || {})->{additionalContext} // '';
+    $batch_ok = !$bcode && $context !~ /\ARichOS desktop(?: quota)?: /;
+    calls_line('batch', $id, 'exit', $bcode, length $context ? ('said:', substr($context, 0, 200)) : (),
+      length $bfirst ? ('err:', substr($bfirst, 0, 200)) : ());
+  }
+  my $finished = !$quota_refused && $batch_ok && $id =~ /\Awork-agent-\d+\z/ && -e "$dir/work-agents-finish";
+  calls_line('gate', $id, 'exit', $code, 'finished') if $finished;
   return 0 unless $finished;
   journal({ hook_event_name => 'SubagentStop', agent_id => $id, agent_type => $type });
   # Its end on the lease's stream (THE TASK FRAMES): task_notification, and between the back
@@ -225,6 +259,7 @@ sub open_work_helpers {  # [id, type] of every work-agent this lease launched th
   return map { [$_, $type{$_}] } grep { !$stopped{$_} } @order;
 }
 sub helper_steps {  # one step of every listed helper that has not ended
+  return if -e "$dir/thinking";  # HELPER STEPS: every helper's model call is in flight
   my $command = $evidence ? gate_command() : undef;
   return unless $command;
   if (open(my $names, '<', "$dir/agents")) {
@@ -355,9 +390,10 @@ while (defined(my $line = next_line())) {
     my $answer = {};
     if ($kind eq 'get_usage') {
       my $u = usage();
+      # "five": null is an account with no five-hour limit (Anthropic, 2026-10-31): only the week.
       $answer = $u->{null} ? { rate_limits_available => JSON::PP::true, rate_limits => undef }
         : { rate_limits_available => JSON::PP::true, rate_limits => {
-        five_hour => { utilization => $u->{five} + 0, resets_at => iso($u->{five_at} // $five_reset) },
+        (defined $u->{five} ? (five_hour => { utilization => $u->{five} + 0, resets_at => iso($u->{five_at} // $five_reset) }) : ()),
         seven_day => { utilization => $u->{weekly} + 0, resets_at => iso($u->{week_at} // $week_reset) } } };
     }
     print $json->encode({ type => 'control_response', response => { subtype => 'success', request_id => $msg->{request_id}, response => $answer } }), "\n";
@@ -437,7 +473,7 @@ while (defined(my $line = next_line())) {
     }
     my $u = usage();
     print $json->encode({ type => 'rate_limit_event', rate_limit_info => { status => 'allowed', unifiedWindows => {
-      five_hour => { utilization => $u->{five} / 100, resetsAt => $u->{five_at} // $five_reset },
+      (defined $u->{five} ? (five_hour => { utilization => $u->{five} / 100, resetsAt => $u->{five_at} // $five_reset }) : ()),
       seven_day => { utilization => $u->{weekly} / 100, resetsAt => $u->{week_at} // $week_reset } } } }), "\n" unless $u->{null};
     my $who = $folder =~ /claude-accounts\/(\d+)/ ? "account $1" : 'Account 1';
     my $text = "Answered on $who.";

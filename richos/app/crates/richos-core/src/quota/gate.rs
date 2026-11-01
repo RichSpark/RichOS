@@ -1,5 +1,9 @@
-//! Desktop hook wrapper. A hold keeps the provider's tool call pending, so the
-//! worker retains its context and never emits a false SubagentStop receipt.
+//! Desktop hook wrapper. A hold keeps a helper's next call to Claude pending, so the worker
+//! retains its context and never emits a false SubagentStop receipt. **It holds the Claude call,
+//! never the command** (the CEO's §153, 2026-10-31: "THE WHOLE FUCKING QUOTA THING IS ONLY EVER AN
+//! ISSUE IF THE WORK IS CONSUMING QUOTA/TOKENS"): a helper's tool calls run, its build, test or
+//! wait included, and the hold applies at [`HOLD_EVENT`], after they have resolved and before
+//! their results go back to the model, which is the next thing that spends quota.
 //! A new agent's dispatch during a hold is refused at once with the reason instead.
 use super::{Admission, Policy, ReadError, Snapshot, View};
 use serde_json::Value;
@@ -217,12 +221,69 @@ pub(super) fn held_named(state: &Path, account: &str) -> String {
 }
 
 /// One tool call of helper `agent` on `account` through the gate, answered at once (no wait):
-/// what the call is told when refused. For the work host's tests.
+/// what the call is told when refused, at the point the hold applies (its batch's
+/// [`HOLD_EVENT`]). For the work host's tests.
 #[cfg(test)]
 pub(crate) fn helper_call(state: &Path, scope: &Path, account: &str, agent: &str) -> Result<(), String> {
-    let payload = serde_json::json!({"hook_event_name": "PreToolUse", "agent_id": agent, "session_id": "stu-session",
-        "tool_name": "Bash", "tool_input": {"command": "cargo test"}});
-    wait(&payload, state, scope, account, Duration::ZERO, Duration::ZERO).map_err(|e| refusal(&e))
+    let payload = serde_json::json!({"hook_event_name": HOLD_EVENT, "agent_id": agent, "session_id": "stu-session",
+        "tool_calls": [{"tool_name": "Bash", "tool_input": {"command": "cargo test"}}]});
+    gate(&payload, state, scope, account, Duration::ZERO, Duration::ZERO).map_err(|e| refusal(&e))
+}
+
+/// **Where a helper is held: Claude Code's `PostToolBatch`**, which "runs once after every tool
+/// call in a batch has resolved, before Claude Code sends the next request to the model"
+/// (code.claude.com/docs/en/hooks). Measured on Claude Code 2.1.316 (2026-11-01, a haiku
+/// subagent running `echo first`, a refused `echo blockme` and `echo third`, with every hook
+/// logging and the batch hook sleeping 4 s): it fires inside a subagent with the subagent's
+/// `agent_id`; it fires for a call a `PreToolUse` hook refused, where no `PostToolUse` does; and
+/// the subagent's next tool call (its next model call's output) came 1.06 s after the batch hook
+/// returned, never during it. So the point after the tool has run is also the one point every
+/// next model call of a helper passes, whatever happened to its calls.
+pub const HOLD_EVENT: &str = "PostToolBatch";
+
+/// **The registration's `timeout` at [`HOLD_EVENT`], in seconds: fourteen days, so one batch
+/// is held for as long as any hold lasts** (review rv-20261101T020629Z-624d7de4-c108, finding
+/// 1: a weekly hold can last days, and with 21,600 s the gate gave up at 21,500 s and the
+/// helper's next model call went out while the hold still stood). A hold ends at its window's
+/// reset, and the longest window, the weekly one, resets at most 7 days ahead; 14 days is that
+/// twice over. "By default, hooks block Claude's execution until they complete", up to this
+/// `timeout` ("Seconds before canceling"), and the docs name no ceiling (code.claude.com/docs/
+/// en/hooks). Measured on Claude Code 2.1.316 (2026-11-01, a plugin-registered batch hook as
+/// the app registers it, with this timeout): a 660 s hold, past the 600 s default, finished
+/// with status 0 after 660,029 ms, and Claude Code sent no model request during it, the next one
+/// 57 ms after it returned. Kept under 2^31 - 1 ms, the runtime's timer limit.
+pub const HOLD_TIMEOUT_SECS: u64 = 1_209_600;
+
+/// The gate's own limit at [`HOLD_EVENT`]: 100 s under [`HOLD_TIMEOUT_SECS`], so the gate
+/// answers and clears its pause record itself rather than being canceled by Claude Code.
+const HOLD_BUDGET: Duration = Duration::from_secs(HOLD_TIMEOUT_SECS - 100);
+
+/// **The gate, by hook event** (the CEO's §153, 2026-10-31: quota handling acts only on what
+/// spends quota). At `PreToolUse` a helper's tool call is never held for quota: its command
+/// runs, whatever the allowance, and only a closed grant refuses it, as before. A new agent's
+/// dispatch is judged there, as before, so one during a hold is refused at once. At
+/// [`HOLD_EVENT`], once the batch has run, a helper's next call to Claude waits while the hold
+/// applies (`wait`), with when a hold starts and releases unchanged. The lead is held at
+/// neither: the 93% rule pauses what the lead runs and starts, never the lead itself.
+fn gate(
+    payload: &Value,
+    state: &Path,
+    scope: &Path,
+    account: &str,
+    tick: Duration,
+    budget: Duration,
+) -> io::Result<()> {
+    let worker = payload.get("agent_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty());
+    if payload["hook_event_name"] == HOLD_EVENT {
+        return if worker { wait(payload, state, scope, account, tick, budget) } else { Ok(()) };
+    }
+    if payload["tool_name"] == "Agent" {
+        return wait(payload, state, scope, account, tick, budget);
+    }
+    if worker && !authorized(scope, worker) {
+        return Err(work_ended(scope));
+    }
+    Ok(())
 }
 
 fn wait(
@@ -286,16 +347,30 @@ fn wait(
         if payload["tool_name"] == "Agent" {
             return Err(io::Error::other(dispatch_held(state, account, &admission, now)));
         }
-        if started.elapsed() >= budget {
+        if elapsed(started) >= budget {
             // Named (follow-ups 7fed0bef item 3): the hold is this call's account's, and a reader
             // of this refusal must not take it for another account's.
+            // At `HOLD_EVENT` the batch has already run: what is held is the next model call.
+            let ran = if payload["hook_event_name"] == HOLD_EVENT { "Your tool calls ran; their results go back now." }
+                else { "No tool action was run." };
             return Err(io::Error::other(format!(
-                "Still waiting for a current allowance reading on {}. No tool action was run.",
+                "Still waiting for a current allowance reading on {}. {ran}",
                 held_named(state, account),
             )));
         }
         std::thread::sleep(tick);
     }
+}
+
+/// How long a held call has waited. A test moves its own thread's clock forward
+/// (`tests::skew`), so days of hold are judged without days of waiting.
+#[cfg(not(test))]
+fn elapsed(started: Instant) -> Duration {
+    started.elapsed()
+}
+#[cfg(test)]
+fn elapsed(started: Instant) -> Duration {
+    started.elapsed() + tests::skew()
 }
 
 /// The refusal of an Agent call during the usage hold: which account is held, why, and until
@@ -406,27 +481,48 @@ fn run_canonical(
     Ok(code)
 }
 
+/// The most a tool callback may carry: one call's input, which goes on to the canonical hook.
+const CALLBACK_LIMIT: usize = 262_144;
+
+/// The most a [`HOLD_EVENT`] payload is read to. It carries the result of every call in its batch
+/// (`tool_calls[].tool_response`, "the same content the model receives"), so an ordinary batch
+/// passes [`CALLBACK_LIMIT`]: four parallel 1,200-line Reads are 306,237 bytes (review
+/// rv-20261101T012525Z-4a5a9883-0b47), and that limit ended the loop of whoever made them, the
+/// lead included. The gate needs only its metadata ([`BatchHead`]); the results are skipped.
+const BATCH_LIMIT: u64 = 256 << 20;
+
+/// What the gate reads of a [`HOLD_EVENT`] payload: whose batch it is. Everything else in it,
+/// the results above all, is skipped unread.
+#[derive(serde::Deserialize)]
+struct BatchHead {
+    hook_event_name: String,
+    #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
 /// Runs before Tauri initialization in the desktop executable. The canonical
 /// hook still decides permissions, targets and receipts after this gate opens.
 pub fn run_cli() -> i32 {
+    let mut bytes = Vec::new();
+    if let Err(e) = io::stdin().take(BATCH_LIMIT + 1).read_to_end(&mut bytes) {
+        eprintln!("{}", refusal(&e));
+        return 2;
+    }
+    if let Some(head) = serde_json::from_slice::<BatchHead>(&bytes).ok().filter(|h| h.hook_event_name == HOLD_EVENT) {
+        return run_batch(head);
+    }
     let result = (|| -> io::Result<i32> {
-        let mut bytes = Vec::new();
-        io::stdin().take(262145).read_to_end(&mut bytes)?;
-        if bytes.len() > 262144 {
+        if bytes.len() > CALLBACK_LIMIT {
             return Err(io::Error::other("oversized tool callback"));
         }
         let payload: Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        let state = std::env::var_os("RICHOS_APP_STATE")
-            .ok_or_else(|| io::Error::other("missing desktop state"))?;
-        let scope = std::env::var_os("RICHOS_APP_SCOPE")
-            .ok_or_else(|| io::Error::other("missing desktop scope"))?;
-        if !Path::new(&state).is_absolute() || !Path::new(&scope).is_absolute() {
-            return Err(io::Error::other("invalid desktop roots"));
-        }
-        wait(
+        let (state, scope) = desktop_roots()?;
+        gate(
             &payload,
-            Path::new(&state),
-            Path::new(&scope),
+            &state,
+            &scope,
             &account_of_this_process(),
             Duration::from_millis(250),
             Duration::from_secs(21500),
@@ -444,6 +540,48 @@ pub fn run_cli() -> i32 {
             2
         }
     }
+}
+
+fn desktop_roots() -> io::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let state = std::env::var_os("RICHOS_APP_STATE").ok_or_else(|| io::Error::other("missing desktop state"))?;
+    let scope = std::env::var_os("RICHOS_APP_SCOPE").ok_or_else(|| io::Error::other("missing desktop scope"))?;
+    if !Path::new(&state).is_absolute() || !Path::new(&scope).is_absolute() {
+        return Err(io::Error::other("invalid desktop roots"));
+    }
+    Ok((state.into(), scope.into()))
+}
+
+/// **The gate at [`HOLD_EVENT`] always exits 0.** Nothing stands behind it there
+/// (`install_quota_gate` registers it alone: the canonical hook has no branch for it), and exit
+/// 2 or a block at this event ends the agentic loop (code.claude.com/docs/en/hooks, PostToolBatch
+/// decision control), while a hold pauses and never ends anything. So the lead's batch goes
+/// straight back, before anything is read from the environment, and a refusal or a failure
+/// reaches a helper's model as context.
+///
+/// **A helper's batch waits for as long as the hold stands** ([`HOLD_BUDGET`], under the
+/// registration's [`HOLD_TIMEOUT_SECS`]), so its next model call goes out only once quota is
+/// released, or once its grant is closed (a Stop, the end of the work, a quit), whose reason it
+/// is told. Its command has already run and finished; nothing is ended when the release comes,
+/// the results simply go back.
+fn run_batch(head: BatchHead) -> i32 {
+    let BatchHead { hook_event_name, agent_id, session_id } = head;
+    if agent_id.as_deref().is_none_or(str::is_empty) {
+        return 0;
+    }
+    let payload = serde_json::json!({"hook_event_name": hook_event_name, "agent_id": agent_id, "session_id": session_id});
+    let held = desktop_roots().and_then(|(state, scope)| hold_batch(&payload, &state, &scope,
+        &account_of_this_process(), Duration::from_millis(250)));
+    if let Err(e) = held {
+        let context = serde_json::json!({"hookSpecificOutput": {"hookEventName": HOLD_EVENT,
+            "additionalContext": refusal(&e)}});
+        drop(writeln!(io::stdout(), "{context}"));
+    }
+    0
+}
+
+/// A helper's batch through the gate, checked every `tick`, within [`HOLD_BUDGET`].
+fn hold_batch(payload: &Value, state: &Path, scope: &Path, account: &str, tick: Duration) -> io::Result<()> {
+    gate(payload, state, scope, account, tick, HOLD_BUDGET)
 }
 
 /// **The refusal when this call's grant is gone, which is not a quota reading.** The scope's
@@ -1144,6 +1282,207 @@ mod tests {
         // A helper's own call still waits for the release, keeping its context.
         assert!(wait(&json!({"agent_id":"worker-1","tool_name":"Bash"}), &state, &scope, "1",
             Duration::ZERO, Duration::ZERO).unwrap_err().to_string().starts_with("Still waiting"));
+    }
+
+    /// **The hold holds the Claude call, never the command** (the CEO's §153, 2026-10-31: "THE
+    /// WHOLE FUCKING QUOTA THING IS ONLY EVER AN ISSUE IF THE WORK IS CONSUMING QUOTA/TOKENS").
+    /// One account at 94% of its five hours, an hour before the reset: the hold stands. A
+    /// helper's `cargo build` is admitted at `PreToolUse` at once, with no pause record, so it
+    /// runs to completion; on main the gate held it there until the quota freed, though a build
+    /// spends none. Its batch (`HOLD_EVENT`, after the call has run and before its result goes
+    /// back to the model) is where it waits, keeping its pause record, until a reading under the
+    /// pause point releases it, as before. A new agent's dispatch is still refused at once, and
+    /// the lead is held at neither point.
+    #[test]
+    fn during_a_hold_a_helpers_tool_call_runs_and_the_hold_applies_before_its_result_returns() {
+        let (_root, service, state, scope) = setup();
+        publish(&service, 3_600_000);
+        assert!(matches!(admission(&state, crate::util::now_millis()), Admission::Held { .. }), "94% did not hold");
+        let command = json!({"hook_event_name": "PreToolUse", "agent_id": "helper-a", "session_id": "s-1",
+            "tool_name": "Bash", "tool_input": {"command": "cargo build"}, "tool_use_id": "toolu_build"});
+        gate(&command, &state, &scope, "1", Duration::ZERO, Duration::ZERO)
+            .expect("the helper's build was held before it ran, though it spends no quota");
+        assert!(super::super::holds::held_calls(&state).unwrap().is_empty(), "the command was recorded as held");
+
+        let batch = json!({"hook_event_name": HOLD_EVENT, "agent_id": "helper-a", "session_id": "s-1",
+            "tool_calls": [{"tool_name": "Bash", "tool_input": {"command": "cargo build"}, "tool_use_id": "toolu_build",
+                "tool_response": "Finished `dev` profile"}]});
+        let (tx, rx) = std::sync::mpsc::channel();
+        // A hang guard, never a verdict (audit R9): the verdict is the helper's own answer.
+        const HANG_GUARD: Duration = Duration::from_secs(60);
+        let waiter = {
+            let (state, scope, batch) = (state.clone(), scope.clone(), batch.clone());
+            std::thread::spawn(move || {
+                tx.send(gate(&batch, &state, &scope, "1", Duration::from_millis(5), HANG_GUARD * 2))
+                    .expect("the test thread holds rx until the verdict arrives");
+            })
+        };
+        // The fact, not a clock: its pause record is written once it is held, before any wait.
+        let started = Instant::now();
+        while !super::super::holds::held_calls(&state).unwrap().iter().any(|row| row.id == "helper-a") {
+            assert!(started.elapsed() < HANG_GUARD, "the helper's batch never entered the hold");
+            if let Ok(answer) = rx.try_recv() {
+                panic!("the result went back to the model during the hold: {answer:?}");
+            }
+            std::thread::yield_now();
+        }
+        assert!(rx.try_recv().is_err(), "the result went back to the model during the hold");
+
+        // The dispatch of a new agent is still refused at once, with the hold's reason.
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":true,"background_work_allowed":true})).unwrap();
+        let dispatch = refusal(&gate(&json!({"hook_event_name": "PreToolUse", "tool_name": "Agent", "session_id": "s-1"}),
+            &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(dispatch.starts_with("RichOS desktop quota: No new agent was started"), "{dispatch}");
+        // The lead: its calls run and its batch goes straight back.
+        for lead in [json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "stu"}),
+                     json!({"hook_event_name": HOLD_EVENT, "session_id": "stu", "tool_calls": []})] {
+            gate(&lead, &state, &scope, "1", Duration::ZERO, Duration::ZERO).expect("the lead was held");
+        }
+
+        // A reading under the pause point releases it, as before.
+        let now = crate::util::now_millis();
+        *service.snapshot.lock().unwrap() = Snapshot { checked_at: Some(now), windows: vec![Window { id: "five_hour".into(),
+            label: "Five-hour".into(), used_percent: 40., resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 }],
+            ..Default::default() };
+        service.publish().unwrap();
+        rx.recv_timeout(HANG_GUARD).expect("the helper's model call never resumed").expect("the helper was refused");
+        waiter.join().unwrap();
+        // Held with no reading left in the budget, the batch says its calls ran.
+        publish(&service, 3_600_000);
+        let said = refusal(&gate(&batch, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(said.contains("Your tool calls ran; their results go back now."), "{said}");
+        // A closed grant still refuses the helper's next command before it runs.
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":false,"background_work_allowed":false})).unwrap();
+        let said = refusal(&gate(&command, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
+        assert!(said.starts_with("RichOS desktop: This app work has ended or was stopped."), "{said}");
+    }
+
+    // ---- a hold longer than one hook call's time --------------------------------------------
+
+    /// A held call's clock in a test: the seconds it is told it has already waited, and how
+    /// many times it has looked ([`elapsed`]), so a test waits for the gate to have judged a
+    /// moved clock, never for a time.
+    #[derive(Default)]
+    struct TestClock {
+        secs: std::sync::atomic::AtomicU64,
+        reads: std::sync::atomic::AtomicU64,
+    }
+
+    thread_local! {
+        static CLOCK: std::cell::RefCell<Option<std::sync::Arc<TestClock>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn skew() -> Duration {
+        use std::sync::atomic::Ordering::SeqCst;
+        CLOCK.with(|c| c.borrow().as_ref().map_or(Duration::ZERO, |clock| {
+            let secs = clock.secs.load(SeqCst);
+            clock.reads.fetch_add(1, SeqCst);
+            Duration::from_secs(secs)
+        }))
+    }
+
+    /// One account, its weekly window at 99% and resetting two days from now: the hold stands,
+    /// with no staggered release (a weekly limit is never released early).
+    fn weekly_hold(service: &Service) {
+        let now = crate::util::now_millis();
+        *service.snapshot.lock().unwrap() = Snapshot { checked_at: Some(now), windows: vec![
+            Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: 10.,
+                resets_at: Some(now + 3_600_000), duration_ms: 18_000_000 },
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: 99.,
+                resets_at: Some(now + 48 * 3_600_000), duration_ms: 604_800_000 }],
+            ..Default::default() };
+        service.publish().unwrap();
+    }
+
+    /// **A weekly hold keeps the helper's next model call held past any one hook call's time,
+    /// until quota is released** (review rv-20261101T020629Z-624d7de4-c108, finding 1, built
+    /// from its fixture `hold-budget.py`: at 624d7de43 a batch still held after 21,500 s came
+    /// back, "elapsed=21500s; allowance_still_held=true; PostToolBatch exit=0", and the helper
+    /// called the model while the hold stood). The batch goes through [`hold_batch`], the path
+    /// `run_batch` takes, with this thread's clock moved forward: at 21,500 s and at 7 days it
+    /// is still held; a reading under the pause point releases it, with nothing ended and
+    /// nothing said. A closed grant is the other way out, with its reason.
+    #[test]
+    fn a_weekly_hold_keeps_the_helpers_next_model_call_held_past_the_old_budget_until_release() {
+        use std::sync::{atomic::Ordering, Arc};
+        let (_root, service, state, scope) = setup();
+        weekly_hold(&service);
+        let now = crate::util::now_millis();
+        assert!(matches!(admission(&state, now), Admission::Held { .. }), "99% weekly did not hold");
+        assert_eq!(decide(&state, Some("1"), now).1, None, "a weekly hold is never released early");
+        let batch = json!({"hook_event_name": HOLD_EVENT, "agent_id": "helper-1", "session_id": "s",
+            "tool_calls": [{"tool_name": "Bash", "tool_input": {"command": "cargo test"}, "tool_use_id": "toolu_t",
+                "tool_response": "test result: ok"}]});
+        // A hang guard, never a verdict (audit R9).
+        const HANG_GUARD: Duration = Duration::from_secs(60);
+        let held = |clock: Arc<TestClock>| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (here, scope, batch) = (state.clone(), scope.clone(), batch.clone());
+            let thread = std::thread::spawn(move || {
+                CLOCK.with(|c| *c.borrow_mut() = Some(clock));
+                tx.send(hold_batch(&batch, &here, &scope, "1", Duration::from_millis(5)))
+                    .expect("the test thread holds rx until the verdict arrives");
+            });
+            let started = Instant::now();
+            while !super::super::holds::held_calls(&state).unwrap().iter().any(|row| row.id == "helper-1") {
+                assert!(started.elapsed() < HANG_GUARD, "the helper's batch never entered the hold");
+                if let Ok(answer) = rx.try_recv() {
+                    panic!("the result went back to the model during the hold: {answer:?}");
+                }
+                std::thread::yield_now();
+            }
+            (rx, thread)
+        };
+
+        let clock = Arc::new(TestClock::default());
+        let (rx, thread) = held(clock.clone());
+        for waited in [21_500, 7 * 86_400] {
+            clock.secs.store(waited, Ordering::SeqCst);
+            // The fact, not a clock: the gate has judged the moved clock twice since, with the
+            // hold standing, and the batch has not come back.
+            let target = clock.reads.load(Ordering::SeqCst) + 2;
+            let started = Instant::now();
+            while clock.reads.load(Ordering::SeqCst) < target {
+                if let Ok(answer) = rx.try_recv() {
+                    panic!("after {waited} s with the weekly hold standing, the batch came back and the \
+                            helper's next model call went out: {answer:?}");
+                }
+                assert!(started.elapsed() < HANG_GUARD, "the held batch stopped judging its clock");
+                std::thread::yield_now();
+            }
+            assert!(rx.try_recv().is_err(), "after {waited} s the batch came back during the hold");
+        }
+        // The release: the weekly reading falls under the pause point.
+        let now = crate::util::now_millis();
+        service.snapshot.lock().unwrap().windows[1].used_percent = 40.;
+        service.snapshot.lock().unwrap().checked_at = Some(now);
+        service.publish().unwrap();
+        rx.recv_timeout(HANG_GUARD).expect("the helper's model call never resumed after the release")
+            .expect("the helper was refused at the release instead of carrying on");
+        thread.join().unwrap();
+        assert!(!super::super::holds::held_calls(&state).unwrap().iter().any(|row| row.id == "helper-1"),
+            "the pause record outlived the release");
+
+        // The way out other than a release: a closed grant (a Stop), told with its reason.
+        weekly_hold(&service);
+        let clock = Arc::new(TestClock::default());
+        clock.secs.store(3 * 86_400, Ordering::SeqCst);
+        let (rx, thread) = held(clock);
+        atomic_write(&scope, &json!({"version":1,"actions_allowed":false,"background_work_allowed":false})).unwrap();
+        let said = refusal(&rx.recv_timeout(HANG_GUARD).expect("a Stop never reached the held batch").unwrap_err());
+        assert!(said.starts_with("RichOS desktop: This app work has ended or was stopped."), "{said}");
+        thread.join().unwrap();
+    }
+
+    /// The registration outlasts the longest hold (a weekly reset, at most 7 days ahead), and the
+    /// gate answers before Claude Code would cancel it, inside the runtime's 32-bit millisecond
+    /// timer.
+    #[test]
+    fn the_batch_registration_outlasts_the_longest_hold() {
+        assert!(HOLD_BUDGET > Duration::from_secs(7 * 86_400 + 3_600));
+        assert!(HOLD_BUDGET < Duration::from_secs(HOLD_TIMEOUT_SECS));
+        assert!(HOLD_TIMEOUT_SECS * 1000 <= i32::MAX as u64);
     }
 
     // ---- a document written for him comes out American (CEO §93) ----------------------------

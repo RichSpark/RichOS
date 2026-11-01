@@ -152,19 +152,53 @@ def _assistant_text(d):
                      if isinstance(b, dict) and b.get("type") == "text")
 
 
-def unanswered_question(transcript):
+def _user_text(d):
+    msg = d.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        return [content]
+    if not isinstance(content, list):
+        return []
+    return [b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+
+
+def _his_turn(d, app_words):
+    """The CEO's own prompt starts this turn. In the terminal Claude Code marks
+    it turnOrigin human. The app sends every input over the SDK (turnOrigin
+    sdk): his words, and also the messages his teammates send the lead, so
+    there his turn is an sdk input whose text is one of his original words in
+    the app's conversation ledger (pierce.py desktop_turns), exactly."""
+    if d.get("turnOrigin") == "human":
+        return True
+    return (app_words is not None and d.get("turnOrigin") == "sdk"
+            and any(text in app_words for text in _user_text(d)))
+
+
+def app_user_words(payload):
+    """His original words in this app conversation, or None outside the app
+    (no RICHOS_APP_SCOPE). Raises when the app's ledger cannot be read."""
+    if not os.environ.get("RICHOS_APP_SCOPE"):
+        return None
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pierce.py")
+    spec = importlib.util.spec_from_file_location("blocking_ask_pierce", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return set(mod.desktop_turns(payload)[2].values())
+
+
+def unanswered_question(transcript, app_words=None):
     """(question text, asked-at timestamp) of a `QUESTION FOR YOU:` the lead
     put in an EARLIER turn that no human prompt has answered yet, or None.
 
     The question's own turn is skipped: at its Stop the question is the last
     thing on screen already. Any later turn start that is the CEO's own prompt
-    (turnOrigin human) answers it; a notification turn does not."""
+    (_his_turn) answers it; a notification turn does not."""
     pending = None
     later_turn = False
     try:
         for d in _rows(transcript):
             if _is_turn_start(d):
-                if d.get("turnOrigin") == "human":
+                if _his_turn(d, app_words):
                     pending = None
                 elif pending is not None:
                     later_turn = True
@@ -285,6 +319,21 @@ def main(argv):
                           "this turn." % tpath}))
         return 0
     found = unanswered_question(tpath)
+    if found:
+        # In the app, his answer is told from a teammate's message by his words in the
+        # app's ledger, read only when a question is still pending without them.
+        try:
+            words = app_user_words(payload)
+        except (OSError, ValueError, KeyError) as error:
+            # Without his words his answer would look like no answer: say the watch did
+            # not run rather than repeat a question he answered.
+            print(json.dumps({"suppressOutput": True, "systemMessage":
+                              "UNANSWERED-QUESTION WATCH DID NOT RUN: the app's conversation "
+                              "record could not be read (%s), so an unanswered question is not "
+                              "repeated this turn." % error}))
+            return 0
+        if words is not None:
+            found = unanswered_question(tpath, words)
     if not found:
         return 0
     text, at = found

@@ -128,9 +128,11 @@ QATOOLS = _load("richos_qa_toolkit", os.path.join(HERE, "qa-toolkit.py"))
 # places instead of being derived from anything.
 #
 # In `app` audience this command evaluates ONLY the guards
-# spawn-guard-audience.declaration puts on the `user-work` side, and a refusal
-# is reported in the APP'S OWN WORDS from that same declaration. `operator` is
-# the default and is byte-for-byte today's behavior.
+# spawn-guard-audience.declaration puts on the `user-work` side (every guard
+# the terminal runs except the ones that need a terminal-only thing, §154), and
+# a refusal opens with the APP'S OWN SENTENCE from that declaration followed by
+# the guard's own message. `operator` is the default and is byte-for-byte
+# today's behavior.
 APP, OPERATOR = "app", "operator"
 
 
@@ -498,25 +500,22 @@ def for_audience(guards, audience):
         elif row["audience"] == AUDIENCE.USER_WORK:
             kept.append((label, source, cmd))
         else:
-            notes.append("not run (its reason is the development session's, not this user's): %s"
-                         % guard_name(cmd))
+            notes.append("not run (it needs a terminal-only thing): %s" % guard_name(cmd))
     return kept, notes
 
 
 def app_problems_from(results):
-    """A refusal the app's user can still see, IN THE APP'S OWN WORDS.
+    """A refusal in the app: the app's own sentence, then THE GUARD'S OWN MESSAGE.
 
-    THE RAW GUARD OUTPUT NEVER LEAVES THIS FUNCTION, on either channel. Not
-    because it would be embarrassing, but because the sentence the front desk
-    says is read off whatever this command printed: `mega-lander/app.py`'s
-    `run()` raises with our stderr, the work tool hands that to the model, and
-    the model says it. A guard's own text is written for an operator in a
-    terminal — it names files, flags and acknowledgement lines — and on a
-    user's screen it is noise wearing the costume of an explanation. So the
-    declaration carries the app's sentence for every guard the app runs, and
-    that sentence is the only thing that comes out of here. A developer who
-    needs the guard's own words re-runs the same command with `--audience
-    operator`, which prints all of it."""
+    `mega-lander/app.py`'s `run()` raises with our stderr and the work tool hands
+    it to the lead that prepared the dispatch, as a refused dispatch reaches the
+    terminal's lead. Until 2026-10-31 only the declared sentence came out, so a
+    brief refused for a missing `reference:` line came back as "I did not start
+    it" with nothing saying what to fix, and the lead could only guess and retry.
+    The CEO's §154 is that the app does the terminal's job with the terminal's
+    own code: the guard's message is the terminal's answer, so it follows the
+    sentence unchanged (the lead says the sentence; it fixes the brief from the
+    message)."""
     out = []
     for r in results:
         if r["verdict"] != "blocked":
@@ -524,7 +523,7 @@ def app_problems_from(results):
         message = AUDIENCE.user_message(r["name"])
         out.append({"headline": message or
                     "I could not set this work up safely, so I did not start it. "
-                    "Nothing was created.", "detail": ""})
+                    "Nothing was created.", "detail": r.get("output") or ""})
     return out
 
 
@@ -667,17 +666,13 @@ def report_problems(title, problems, out=sys.stderr):
 
 
 def report_app_refusal(problems, out=sys.stderr):
-    """What the app says. Nothing else is on this channel.
-
-    The operator's report opens `spawn: refused by 1 of 9 guard(s) - NOTHING
-    WAS CREATED.`, numbers each problem, quotes the guard verbatim and prints a
-    table of every guard's verdict. Every one of those is right for a terminal
-    and wrong for a person who asked Rich to get something done: the count of
-    guards is not his business, `spawn` is not a word he has, and the table
-    describes machinery he does not have to know exists. So this prints the
-    declared sentence and stops."""
+    """What the app says: each refusal's declared sentence, then the guard's own
+    message (app_problems_from says why). The operator report's frame (the
+    count of guards, the numbering, the table of every verdict) stays out."""
     for p in problems:
         print(p["headline"], file=out)
+        if p.get("detail"):
+            print(p["detail"], file=out)
 
 
 def problems_from(results):
@@ -729,7 +724,8 @@ USAGE = """usage: spawn.sh <teammate-name> --repo <repo> [--repo <repo> ...]
                        the RichOS desktop app dispatching work on its user's own
                        Mac: it runs only the guards
                        spawn-guard-audience.declaration puts on the `user-work`
-                       side, and reports a refusal in the app's own words.
+                       side, and reports a refusal as the app's own sentence
+                       followed by the guard's own message.
   --dry-run            evaluate everything and create nothing
   --json               machine-readable result on stdout instead of the payload
 
