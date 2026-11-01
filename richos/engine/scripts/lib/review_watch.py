@@ -615,7 +615,7 @@ class World(object):
         to_codex = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_CODEX") or DEFAULT_TO_CODEX)
         # App-associated input has one review host. Terminal monitors retain only
         # unmigrated Markdown; their separate review state cannot fence the app's.
-        if channels.legacy_owner(os.path.dirname(to_rich)):
+        if channels.legacy_associated(os.path.dirname(to_rich)):
             return [], []
         problems = []
         pending = codex_state.setdefault("pending", [])

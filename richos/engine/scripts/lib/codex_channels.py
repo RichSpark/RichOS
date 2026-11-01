@@ -16,6 +16,16 @@ import shlex
 import sys
 import uuid
 
+_diagnostics = {}  # changed failures only, no persistent routing state
+
+
+def diagnostic(path, error):
+    message = str(error)
+    if _diagnostics.get(str(path)) != message:
+        print("Channel held at %s: %s" % (path, message), file=sys.stderr)
+        _diagnostics[str(path)] = message
+
+
 VERSION = 1
 TEXT_LIMIT = 128 * 1024
 FRAME_LIMIT = 256 * 1024
@@ -115,9 +125,11 @@ def connection(locator, scope=None):
 def registered():
     for p in sorted((root() / "connections").glob("*/*/*/connection.json")):
         try:
-            yield connection(p)
+            value = connection(p)
+            _diagnostics.pop(str(p), None)
+            yield value
         except (OSError, ValueError) as e:
-            print("Channel registration held at %s: %s" % (p, e), file=sys.stderr)
+            diagnostic(p, e)
 
 
 def scope_read(path):
@@ -274,7 +286,7 @@ def designate(scope, legacy_folders):
         # The old spool had no per-channel address. Its first explicit frozen
         # association owns it permanently. Later folders/defaults cannot move it.
         # An unavailable existing legacy directory also prevents reassignment.
-        has_legacy = any((root() / "connections").glob("*/*/legacy-*"))
+        has_legacy = any((root() / "connections").glob("*/*/legacy-*/connection.json"))
         for folder in legacy_folders:
             folder = Path(folder).absolute()
             if not (folder / "to-rich.md").exists():
@@ -284,6 +296,8 @@ def designate(scope, legacy_folders):
             if found:
                 p, _ = connection(found[0])
             else:
+                if legacy_associated(folder):
+                    raise ValueError("Legacy association is preserved but its endpoint is unavailable; restore the original endpoint, never retarget it")
                 p = endpoint(target["entity_id"], target["thread_id"], ident)
                 mkdir(p)
                 try:
@@ -314,6 +328,28 @@ def designate(scope, legacy_folders):
             sync_dir(folder)
         save(root() / "coordinator.json", target)
     return dict(coordinator=target)
+
+
+def legacy_associated(folder):
+    """A damaged/unavailable endpoint never reactivates the old live transport.
+
+    Endpoint publication and the synced old reply handoff are existing evidence
+    of association. An unpublished setup directory alone is not an endpoint.
+    """
+    folder = Path(folder).absolute()
+    ident = "legacy-" + hashlib.sha256(str(folder).encode()).hexdigest()[:24]
+    if any((root() / "connections").glob("*/*/%s/connection.json" % ident)):
+        return True
+    try:
+        marker = ("\n## RICHOS CHANNEL MIGRATION %s\n" % ident).encode()
+        associated = marker in (folder / "to-codex.md").read_bytes()
+        _diagnostics.pop(str(folder), None)
+        return associated
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        diagnostic(folder, error)
+        return True  # unknown association holds old transport; never fall back
 
 
 def legacy_owner(folder):

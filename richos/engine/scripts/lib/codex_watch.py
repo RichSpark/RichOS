@@ -232,7 +232,7 @@ def _legacy_tick(sd, now=None, out=None, json_lines=False, config=""):
     told = stall_watch._read_json(told_path)
     printed = 0
     for ch in channels(config):
-        if codex_channels.legacy_owner(os.path.dirname(ch)):
+        if codex_channels.legacy_associated(os.path.dirname(ch)):
             continue
         blocks, new, told_to = look_one(ch, state.get(ch), told, now)
         for b in blocks:

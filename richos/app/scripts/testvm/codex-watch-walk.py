@@ -32,7 +32,7 @@ def load(name, filename):
 stu = load('codex_walk_stu', 'stu-reminder-walk.py')
 multi = load('codex_walk_multi', 'multico-walk.py')
 StepFailed = stu.StepFailed
-STEPS = ['identity', 'first-run', 'pair', 'parallel', 'rename-restart', 'blocked', 'reconcile']
+STEPS = ['identity', 'first-run', 'pair', 'parallel', 'rename-restart', 'blocked', 'reconcile', 'idle']
 DEFAULT_STEPS = STEPS
 
 
@@ -173,8 +173,9 @@ class CodexWatchWalk(stu.StuReminderWalk):
             reply = self.wait_fact('reply on original pair', lambda: self.helper_call('read', locator=request['locator']),
                 lambda v: any(r.get('reply_to') == request['message_id'] and 'ACK-' + request['message_id'] in r['text'] for r in v['records']), self.a.answer_within)
             heard = self.wait_fact('owning background Stu transcript', lambda: self.stu_heard(request['message_id'], owner), bool)
-            evidence.append(dict(request=request, inbox=match[0], reply=reply, stu=heard, source_save_to_inbox_seconds=arrivals[request['message_id']]))
-        return dict(receipts=receipts, exchanges=evidence)
+            evidence.append(dict(request=request, inbox=match[0], reply=reply, stu=heard, source_save_to_inbox_upper_bound_seconds=arrivals[request['message_id']]))
+        return dict(receipts=receipts, exchanges=evidence,
+                    timing='Producer launch to first inbox observation is an upper bound on source-save-to-inbox latency. Receiving-model reply and transcript waits are separate.')
 
     def parallel(self):
         result = self.exchange('before')
@@ -240,6 +241,39 @@ class CodexWatchWalk(stu.StuReminderWalk):
         if len(own) != 1 or history['records'] != incoming['records']:
             raise StepFailed('replay changed source or duplicated the accepted observation')
         return dict(relaunch=launch, replay_receipt=result, positions=positions, original_rows=own, source_retained=True)
+
+    def idle(self):
+        # Darwin's published rusage_info_v2 layout, sys/resource.h. Read-only
+        # kernel counters in the owned guest, not a new product telemetry path.
+        program = r'''
+import ctypes,json,subprocess,sys,time
+from pathlib import Path
+fields='user_time system_time pkg_idle_wkups interrupt_wkups pageins wired_size resident_size phys_footprint proc_start_abstime proc_exit_abstime child_user_time child_system_time child_pkg_idle_wkups child_interrupt_wkups child_pageins child_elapsed_abstime diskio_bytesread diskio_byteswritten'.split()
+class Usage(ctypes.Structure):
+    _fields_=[('uuid',ctypes.c_uint8*16)]+[(name,ctypes.c_uint64) for name in fields]
+lib=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True)
+lib.proc_pid_rusage.argtypes=[ctypes.c_int,ctypes.c_int,ctypes.c_void_p]
+lib.proc_pid_rusage.restype=ctypes.c_int
+data=Path(sys.argv[1]);pid=json.loads((data/'engine-state/codex-watch/host-child.json').read_text())['pid']
+def sample():
+    usage=Usage()
+    if lib.proc_pid_rusage(pid,2,ctypes.byref(usage)):raise OSError(ctypes.get_errno(),'proc_pid_rusage failed')
+    processes=subprocess.check_output(['ps','-axo','pid=,ppid=,command='],text=True).splitlines()
+    receivers=[line for line in processes if any(arg.endswith('/scripts/lib/codex_watch.py') for arg in line.split()[2:6])]
+    inboxes={str(p):p.stat().st_size for p in (data/'engine-state/messages').glob('*/*/stu.jsonl')}
+    return dict(pid=pid,counters={name:getattr(usage,name) for name in fields},receivers=receivers,inboxes=inboxes,at=time.monotonic())
+before=sample();time.sleep(32);after=sample()
+print(json.dumps(dict(before=before,after=after,elapsed_seconds=after['at']-before['at'],
+                     wakeups={k:after['counters'][k]-before['counters'][k] for k in ['pkg_idle_wkups','interrupt_wkups']},
+                     cpu_time_raw_delta={k:after['counters'][k]-before['counters'][k] for k in ['user_time','system_time']})))
+'''
+        result = self.run_python(program, self.data)
+        before, after = result['before'], result['after']
+        if len(before['receivers']) != 1 or len(after['receivers']) != 1:
+            raise StepFailed('dedicated connections did not share one receiver: ' + str(result))
+        if before['counters']['proc_start_abstime'] != after['counters']['proc_start_abstime'] or before['inboxes'] != after['inboxes']:
+            raise StepFailed('idle receiver restarted or generated extra inbox input: ' + str(result))
+        return result
 
     def stu_heard(self, mark, thread=None):
         """The native transcripts of THIS conversation's Stu sessions that carry `mark`: each

@@ -135,6 +135,24 @@ class Channels(unittest.TestCase):
         self.assertEqual(len(imported), 1)
         self.assertEqual(imported[0]["connection"]["thread_id"], self.a["thread_id"])
 
+    def test_missing_legacy_endpoint_holds_without_reactivating_markdown(self):
+        import codex_watch
+        old = c.root() / "old"
+        c.mkdir(old)
+        (old / "to-rich.md").write_text("retained old input\n")
+        c.designate(self.a, [old])
+        path, record = c.legacy_owner(old)
+        metadata = (path / "connection.json").read_bytes()
+        (path / "connection.json").unlink()
+        self.assertTrue(c.legacy_associated(old), "synced handoff preserves association when metadata is unavailable")
+        with self.assertRaises(ValueError):
+            c.designate(self.b, [old])
+        with mock.patch.dict(os.environ, {"CODEX_WATCH_CHANNELS": str(old / "to-rich.md"),
+                                         "CODEX_WATCH_STATE_DIR": str(self.root / "watch")}):
+            self.assertEqual(codex_watch.tick(str(self.root / "watch/session")), 0)
+        (path / "connection.json").write_bytes(metadata)
+        self.assertEqual(c.connection(path)[1], record)
+
     def test_send_failure_does_not_claim_saved_and_requires_id(self):
         p = self.connect(self.a)
         result = subprocess.run([sys.executable, "-B", c.__file__, "send", "--locator", p,
