@@ -5554,11 +5554,14 @@ body.bp-narrow .tl-user-bubble {
 
 /* ---- §15 jump to latest ---------------------------------------------------------------- */
 
+/* "Centered just above the composer" at whatever height the input box has (round 51: two lines
+   to ten and a half, the tray, the listening panel). `--composer-zone-h` is the composer zone's
+   own measured height, kept on `#stage` by main.js; 16px of air above it. */
 #jump-latest {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 96px;
+  bottom: calc(var(--composer-zone-h, 80px) + 16px);
   z-index: 5;
   width: 32px;
   height: 32px;
@@ -5773,7 +5776,7 @@ body.bp-narrow .tl-user-bubble {
     max-width: 100%;
   }
   #jump-latest {
-    bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(var(--composer-zone-h, 80px) + 8px + env(safe-area-inset-bottom, 0px));
   }
 }
 

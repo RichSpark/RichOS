@@ -4086,6 +4086,20 @@ if (window.RichOutput) {
 // it was (a move takes it away), and the field is re-measured for its new width.
 const composerZoneEl = el("composer-zone");
 const composerHome = { parent: composerZoneEl.parentNode, next: composerZoneEl.nextSibling };
+
+// JUMP TO LATEST SITS JUST ABOVE THE COMPOSER, WHATEVER ITS HEIGHT (§15; round 51's box grows from
+// two lines to ten and a half and carries the tray). The zone's height is kept on the stage as
+// `--composer-zone-h`, which `#jump-latest`'s `bottom` adds to; while the zone floats in the Output
+// panel (§9.4) it takes no room in the stage, so the value is 0 there.
+if (typeof ResizeObserver === "function") {
+  const keepComposerHeight = () => {
+    const home = composerZoneEl.parentNode === composerHome.parent;
+    const h = home ? Math.round(composerZoneEl.getBoundingClientRect().height) : 0;
+    composerHome.parent.style.setProperty("--composer-zone-h", h + "px");
+  };
+  new ResizeObserver(() => window.requestAnimationFrame(keepComposerHeight)).observe(composerZoneEl);
+  keepComposerHeight();
+}
 function moveComposer(into) {
   const target = into || composerHome.parent;
   if (composerZoneEl.parentNode === target) return;

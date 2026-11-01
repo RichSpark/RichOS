@@ -252,6 +252,38 @@ async function main() {
     return `${wide.input.h}px at 1440 -> ${narrow.h}px at 1024, nothing hidden`;
   });
 
+  await run.check("3c. Jump to latest stays just above the box: two lines, ten and a half lines, talking", async () => {
+    // Mid-job review rv-20261101T225840Z-67f9d981-8a44: a fixed 96px put it over the taller box.
+    // Shown by hand here (the mock thread is too short to scroll it into view); only its place is
+    // under test, and that place is the same however it comes to be shown.
+    const page = await openApp(browser, { theme: "dark" });
+    const place = async () => {
+      await page.evaluate(() => { document.getElementById("jump-latest").hidden = false; });
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      return page.evaluate(() => {
+        const j = document.getElementById("jump-latest").getBoundingClientRect();
+        const s = document.getElementById("input-shell").getBoundingClientRect();
+        const z = document.getElementById("composer-zone").getBoundingClientRect();
+        return { jumpBottom: Math.round(j.bottom), boxTop: Math.round(s.top), zoneTop: Math.round(z.top), jumpTop: Math.round(j.top) };
+      });
+    };
+    const two = await place();
+    await setValue(page, Array.from({ length: 20 }, (_, i) => "line " + (i + 1)).join("\n"));
+    const tall = await place();
+    await setValue(page, "");
+    await page.click("#talk-toggle");
+    await page.waitForSelector("#voice-panel:not([hidden])");
+    await settle(page);
+    const talking = await place();
+    for (const [name, p] of [["two lines", two], ["ten and a half lines", tall], ["talking", talking]]) {
+      assert(p.jumpBottom <= p.zoneTop && p.jumpBottom >= p.zoneTop - 24, `${name}: Jump to latest is not just above the composer: ${JSON.stringify(p)}`);
+    }
+    assert(tall.jumpTop < two.jumpTop - 100, `Jump to latest did not rise with the taller box: ${two.jumpTop} -> ${tall.jumpTop}`);
+    assert(page.__errors.length === 0, "page errors: " + page.__errors.join(" | "));
+    await page.close();
+    return `bottom edge 16px above the composer: ${two.jumpBottom}/${two.zoneTop}, ${tall.jumpBottom}/${tall.zoneTop}, ${talking.jumpBottom}/${talking.zoneTop}`;
+  });
+
   // ---- 4. the row ----------------------------------------------------------------------------
   for (const width of [1440, 1100]) {
     await run.check(`4. at ${width}px: Output is centered on the box, the status line has no "⋯ ", Send is in the corner`, async () => {
