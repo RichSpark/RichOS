@@ -45,6 +45,13 @@ _spec.loader.exec_module(adopt)
 StepFailed = adopt.StepFailed
 command = adopt.command
 
+
+
+class NotRun(Exception):
+    """The step ran but its coverage was not met (the account under test had the wrong shape): not a
+    PASS and not a FAIL, and the reason is the evidence."""
+
+
 STEPS = ['identity', 'first-run', 'resources', 'cleaner', 'accounts']
 
 
@@ -236,6 +243,10 @@ class Walk(adopt.Walk):
         nodes = self.dump('cleaner-sheet')
         self.shot('cleaner-sheet-off.png')
         ev['sheet_text'] = self.texts(nodes)[:900]
+        # the refusal is a node of its own, so it is counted over the WHOLE tree (the text kept in the
+        # record is cut at 900 characters), before and after the press
+        refusal = lambda ns: [n for n in ns if str(n.get('value') or '').startswith('Turn on RichScribe first')]  # noqa: E731
+        refusals_before = len(refusal(nodes))
         sw = None
         for n in nodes:
             if n.get('desc') == 'RichCleaner' or n.get('title') == 'RichCleaner':
@@ -256,6 +267,7 @@ class Walk(adopt.Walk):
         try:
             # a hand's click: the real mouse at the switch's center
             self.pointer(self.center(sw))
+            pressed_at = time.monotonic()
             time.sleep(3)
             ev['main_process_after_press'] = alive()
             nodes = self.dump('cleaner-on')
@@ -265,6 +277,7 @@ class Walk(adopt.Walk):
             self.pull_logs('cleaner-after-press')
             raise
         self.shot('cleaner-sheet-on.png')
+        nodes_on = nodes
         ev['after_on_text'] = self.texts(nodes)[:900]
         ev['switch_on'] = next(({k: n.get(k) for k in ('role', 'value')} for n in nodes
                                 if n.get('desc') == 'RichCleaner' and n.get('role') == sw['role']), None)
@@ -272,11 +285,47 @@ class Walk(adopt.Walk):
         time.sleep(3)
         nodes = self.dump('cleaner-off')
         self.shot('cleaner-sheet-off-again.png')
+        # the process again at least 10 s after the FIRST press (a quit that follows the press by a few
+        # seconds is told from one that was never going to happen); the count read is the whole story
+        time.sleep(max(0, 12 - (time.monotonic() - pressed_at)))
+        ev['main_process_12s_after_press'] = alive()
+        ev['seconds_since_press_at_last_check'] = round(time.monotonic() - pressed_at, 1)
         ev['switch_off'] = next(({k: n.get(k) for k in ('role', 'value')} for n in nodes
                                  if n.get('desc') == 'RichCleaner' and n.get('role') == sw['role']), None)
+        # the verdict: the press must have DONE something a person can see. Either the refusal is on
+        # screen (RichScribe off) or the switch really went on and came back off. A press that left
+        # the switch OFF and the sheet silent is a dead switch, not a pass.
+        def on(v):
+            return str(v).strip().lower() in ('1', 'true', 'on', 'yes')
+        before = on((ev['switch_before'] or {}).get('value'))
+        after_on = on((ev['switch_on'] or {}).get('value'))
+        after_off = on((ev['switch_off'] or {}).get('value'))
+        new = refusal(nodes_on)
+        refused = len(new) > refusals_before
+        win = next((n for n in nodes_on if n.get('title') == 'RichOS' and n.get('role') == 'AXWindow'), None) \
+            or next((n for n in nodes_on if n.get('role') == 'AXWindow'), None)
+        ev['refusals_before_press'], ev['refusals_after_press'] = refusals_before, len(new)
+        ev['refusal_nodes'] = [{k: n.get(k) for k in ('value', 'y', 'h')} for n in new]
+        ev['window'] = win and {k: win.get(k) for k in ('y', 'h')}
+        ev['refusal_on_screen'] = refused
+        ev['refusal_visible_without_scrolling'] = bool(
+            refused and win and all(win['y'] <= n['y'] and n['y'] + n['h'] <= win['y'] + win['h'] for n in new))
+        ev['alive_after_press'] = all(ev.get(k) not in ('', '0', None)
+                                      for k in ('main_process_after_press', 'main_process_12s_after_press'))
+        if refused:
+            ev['classification'] = 'refused: RichScribe off, the sheet says so'
+        elif not before and after_on and not after_off:
+            ev['classification'] = 'toggled: off, then on, then off again'
+        else:
+            ev['classification'] = 'no visible effect'
         (self.out / 'cleaner.json').write_text(json.dumps(ev, indent=2) + '\n')
         self.facts['cleaner'] = ev
         self.save()
+        if not ev['alive_after_press']:
+            raise StepFailed('RichOS was gone after the switch was pressed: ' + json.dumps(ev))
+        if ev['classification'] == 'no visible effect':
+            raise StepFailed('the press changed nothing and showed no refusal (before=%s on=%s off=%s): %s'
+                             % (before, after_on, after_off, ev['after_on_text'][:300]))
         return ev
 
     def accounts(self):
@@ -305,9 +354,18 @@ class Walk(adopt.Walk):
                 self.ax('click', '--id', 'quota-close', '--first')
         else:
             ev['quota'] = 'no quota row in Settings'
+        # coverage: this step is about an account WITHOUT a five-hour window, so it passes only when a
+        # weekly meter is read and no five-hour meter or choice is. Anything else says what was seen.
+        q = ev['quota'] if isinstance(ev['quota'], dict) else {}
+        five = ev['accounts']['five_hour_meter'] or ev['accounts']['five_hour_choice'] or q.get('five_hour')
+        weekly = ev['accounts']['weekly_meter'] or q.get('weekly')
+        ev['coverage'] = ('five-hour window present' if five else
+                          'no five-hour window, weekly meter read' if weekly else 'no usage reading seen')
         (self.out / 'accounts.json').write_text(json.dumps(ev, indent=2) + '\n')
         self.facts['accounts'] = ev
         self.save()
+        if ev['coverage'] != 'no five-hour window, weekly meter read':
+            raise NotRun('the account has no five-hour-less reading to test: ' + ev['coverage'])
         return ev
 
 
@@ -327,6 +385,9 @@ def main():
         try:
             row['evidence'] = getattr(walk, step.replace('-', '_'))()
             row['outcome'] = 'PASS'
+        except NotRun as exc:
+            row['outcome'] = 'NOT RUN'
+            row['detail'] = str(exc)[:1500]
         except (StepFailed, RuntimeError, subprocess.TimeoutExpired) as exc:
             row['outcome'] = 'FAIL'
             row['detail'] = str(exc)[:1500]
