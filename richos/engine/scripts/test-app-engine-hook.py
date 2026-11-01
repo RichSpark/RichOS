@@ -30,7 +30,12 @@ class DesktopHooks(unittest.TestCase):
             "RICHOS_SA_TEAMS_DIR": str(self.root / "teams"),
             "RICHOS_WORKSPACES_DIR": str(self.root / "workspaces"),
             "STALL_WATCH_STATE_DIR": str(self.root / "stall-watch"),
-            "CLAUDE_PROJECT_DIR": str(self.coordination), "PYTHONDONTWRITEBYTECODE": "1"}
+            "CLAUDE_PROJECT_DIR": str(self.coordination), "PYTHONDONTWRITEBYTECODE": "1",
+            # The turn end runs every registered Stop check, and some read machine-wide stores
+            # (the escalation ledger, the land leases): the engine's own sandbox convention keeps
+            # them in the fixture (machine_settings.claude_home).
+            "CLAUDE_CONFIG_DIR": str(self.root / "claude-home"), "HOME": str(self.root / "home")}
+        (self.root / "home").mkdir()
         subprocess.run(["git", "init", "-q", str(self.coordination)], check=True, capture_output=True)
 
     def hook(self, event, **fields):
@@ -321,6 +326,158 @@ class DesktopHooks(unittest.TestCase):
         for guard, timeout in given.items():
             if guard in registered and guard != "guard-pierce.sh":
                 self.assertGreaterEqual(timeout, registered[guard], guard)
+
+    # --- §154: the app runs the terminal's own dispatch guards and turn-end checks ----------------
+    # (Hank's audit, richos-hq docs/research/2026-10-31-app-terminal-differences.md, findings 7, 8)
+
+    def _hook_in_process(self, name):
+        """The production hook, loaded here, with the app's evidence capture and dispatch adapter
+        stubbed so only the engine guards and checks it starts are real."""
+        import importlib.util, types
+        spec = importlib.util.spec_from_file_location(name, ENGINE / "scripts/app-engine-hook.py")
+        hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
+        work = types.SimpleNamespace(
+            validate_shell_target=lambda payload: None, worker_context=lambda active, payload: None,
+            dispatch_intent=lambda *args, **kwargs: None,
+            W=types.SimpleNamespace(fallback_notice=lambda *args: "", _recovery_adapter=lambda: (
+                types.SimpleNamespace(cancellation_notice=lambda host, session: None), None)))
+        real_load = hook.load
+        def load(module, path):
+            if path.name == "app-evidence.py":
+                return types.SimpleNamespace(capture=lambda payload, *args, **kwargs: payload)
+            if path.name == "app.py":
+                return work
+            return real_load(module, path)
+        hook.load, hook.mid_job_notice = load, lambda *args: False
+        saved = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
+        os.environ.update(self.env)
+        return hook
+
+    def test_a_dispatch_the_terminal_refuses_is_refused_in_the_app_with_the_same_message(self):
+        """A brief that rebuilds a surface the adoption ledger answered, with no `reference:` line, is
+        refused by guard-reference-ledger.sh in the terminal (§66). On 47e314bb6 the app never ran
+        that guard (spawn-guard-audience.declaration had it operator-session), so the same dispatch
+        went through. Every other guard is passed through here so the one under test is reached."""
+        tool_input = {"subagent_type": "worker", "name": "worker-sonnet-1", "description": "Fix the link",
+                      "prompt": "## Scope\nFix `richos/web/web-app/lib/link.js` outbox reconnect.\n"}
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "session_id": "fictional-session",
+                   "tool_use_id": "fictional-call", "cwd": str(self.coordination), "tool_input": tool_input}
+        terminal = subprocess.run(["/bin/bash", str(ENGINE / "scripts/hooks/guard-reference-ledger.sh")],
+                                  input=json.dumps(payload), text=True, capture_output=True, env=self.env, timeout=30)
+        self.assertEqual(terminal.returncode, 2, terminal.stderr + terminal.stdout)
+        self.assertIn("ALREADY ANSWERED", terminal.stderr)
+
+        hook = self._hook_in_process("app_engine_hook_reference")
+        ran, real_run = [], hook.run
+        def run(command, payload, timeout=20):
+            ran.append(Path(command[-1]).name)
+            if Path(command[-1]).name == "guard-reference-ledger.sh":
+                return real_run(command, payload, timeout)
+        hook.run = run
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            with self.assertRaises(RuntimeError):
+                hook.handle(dict(payload))
+        self.assertIn(terminal.stderr.strip(), err.getvalue(), "the app's refusal is not the terminal's message")
+        # With every guard passing, the terminal's other dispatch guards are run too, and femcboost's
+        # own proof-scope guard, which the CEO ruled off in the app (§146 #3), is not.
+        ran.clear()
+        hook.run = lambda command, payload, timeout=20: ran.append(Path(command[-1]).name)
+        with contextlib.redirect_stdout(io.StringIO()):
+            hook.handle(dict(payload))
+        for guard in ("guard-owned-state.sh", "guard-brief-scope.sh",
+                      "guard-no-home-network-phone.sh", "guard-reference-ledger.sh", "guard-public-record-repo.sh"):
+            self.assertIn(guard, ran)
+        self.assertNotIn("guard-brief-verification-scope.sh", ran)
+        # The staging guard reads the governed repository's main and deployment record, and the app's
+        # governed folder is the private coordination folder, not the user's product repository: run
+        # there it asked the wrong Git database (the second review of 2d5f7ded561a), so it stays out.
+        self.assertNotIn("guard-stale-staging.sh", ran)
+
+    def test_stus_turn_end_runs_every_check_the_terminal_registers_except_the_terminal_only_ones(self):
+        """The terminal ends a lead's turn with every Stop command in hooks/hooks.json; on 47e314bb6
+        the app ran the deferral notice and ass-kicker.py, and nothing else."""
+        hook = self._hook_in_process("app_engine_hook_turn_end")
+        ran = []
+        import types
+        def fake(argv, **kwargs):
+            ran.append(Path(argv[1]).name)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        hook.subprocess = types.SimpleNamespace(run=fake, TimeoutExpired=subprocess.TimeoutExpired)
+        (self.root / "state/evidence/fictional-session").mkdir(parents=True)
+        (self.root / "state/evidence/fictional-session/binding.json").write_text('{"role": "stu"}')
+        with contextlib.redirect_stdout(io.StringIO()):
+            hook.handle({"hook_event_name": "Stop", "session_id": "fictional-session", "cwd": str(self.coordination),
+                         "last_assistant_message": "Done.", "stop_hook_active": False})
+        registered = [entry["command"].split("/")[-1].split()[0]
+                      for group in json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"]["Stop"]
+                      for entry in group["hooks"]]
+        for name in hook.TERMINAL_ONLY_TURN_END:
+            self.assertIn(name, registered, "a terminal-only check that is no longer registered")
+        self.assertEqual(sorted(ran), sorted(n for n in registered if n not in hook.TERMINAL_ONLY_TURN_END))
+
+    def test_a_registered_command_keeps_an_engine_path_with_a_space_in_one_word(self):
+        """The app installs its engine under ~/Library/Application Support/RichOS/engine. On
+        b9e7662d75af the path was substituted before the command was split, so every check ran as
+        bash .../Library/Application and failed (the second review of that commit, P1)."""
+        hook = self._hook_in_process("app_engine_hook_spaces")
+        installed = self.root / "Library/Application Support/RichOS"
+        installed.mkdir(parents=True)
+        (installed / "engine").symlink_to(ENGINE)
+        hook.ENGINE = installed / "engine"
+        checks = hook.registered("Stop")
+        self.assertTrue(checks)
+        for name, argv, _timeout in checks:
+            self.assertEqual(argv[1], str(hook.ENGINE / "scripts/hooks" / name), argv)
+        disk = [argv for name, argv, _timeout in checks if name == "notice-disk-alert.sh"]
+        self.assertEqual(disk[0][2:], ["--event", "Stop"])
+
+    def test_the_claim_check_sees_the_connected_repositories_in_the_app(self):
+        """The terminal refuses "commit X has been pushed" for a commit only on the local branch;
+        it finds the commit because its repository sits beside the lead's. The app's coordination
+        folder sits beside nothing: on 0aa9a71f60cf the app let the same false claim through (the
+        second review of that commit, finding 1). A connected repository whose path has a space."""
+        product = self.root / "my projects/website"
+        product.mkdir(parents=True)
+        git_env = {**self.env, "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                   "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+        def git(*args, body=None):
+            return subprocess.run(["git", "-C", str(product), *args], input=body, text=True, env=git_env,
+                                  capture_output=True, check=True, timeout=10).stdout.strip()
+        git("init", "-q", "--template=", "--initial-branch=main")
+        sha = git("commit-tree", git("mktree", body=""), body="fixture\n")
+        git("update-ref", "refs/heads/main", sha)
+        self.env["RICHOS_APP_READ_ROOTS"] = json.dumps([str(product)])
+        result = self.hook("Stop", last_assistant_message="Commit %s has been pushed." % sha, stop_hook_active=False)
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("PUSHED", result.stderr)
+
+    def test_a_question_left_unanswered_in_an_earlier_turn_is_put_back_in_front_of_the_lead(self):
+        """notice-unanswered-question.sh reads earlier replies and whose turn each input started.
+        On 0aa9a71f60cf the app's guard transcript had neither, so the check never fired in the app
+        (the second review of that commit, finding 2). Here: the lead asks, a notification wakes it,
+        and at that turn's end the question is put back."""
+        question = "QUESTION FOR YOU: Should I publish the website?"
+        self.assertEqual(self.hook("UserPromptSubmit", prompt_id="turn-1", prompt="Prepare the website.").returncode, 0)
+        asked = self.hook("Stop", prompt_id="turn-1", last_assistant_message=question, stop_hook_active=False)
+        self.assertEqual(asked.returncode, 0, asked.stderr + asked.stdout)
+        self.assertNotIn("STILL WAITING FOR YOUR ANSWER", asked.stdout)
+        self.assertEqual(self.hook("UserPromptSubmit", prompt_id="turn-2", prompt="The worker finished.").returncode, 0)
+        later = self.hook("Stop", prompt_id="turn-2", last_assistant_message="Noted.", stop_hook_active=False)
+        self.assertEqual(later.returncode, 0, later.stderr + later.stdout)
+        self.assertIn("STILL WAITING FOR YOUR ANSWER", later.stdout)
+
+    def test_a_turn_end_check_the_terminal_runs_refuses_stus_false_claim_in_the_app(self):
+        """guard-unresolved-claims.sh refuses a reply that says a role is working when none was ever
+        dispatched. It reads the session's team folder; the app's are under RICHOS_SA_TEAMS_DIR."""
+        (self.root / "teams/session-fictiona").mkdir(parents=True)
+        self.env["RICHOS_SA_TEAMS_DIR"] = str(self.root / "teams")
+        result = self.hook("Stop", last_assistant_message="Worker is fixing the login page now.",
+                           stop_hook_active=False)
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("A CLAIM IN THE FINAL MESSAGE CONTRADICTS THE REPOSITORY", result.stderr)
+        self.assertIn("Worker is fixing", result.stderr)
 
 
 if __name__ == "__main__":
