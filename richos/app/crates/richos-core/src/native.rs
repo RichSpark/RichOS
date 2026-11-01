@@ -6087,6 +6087,9 @@ while True:
         // Work removed while the chat was still on it (the CEO's case), then resumed on Account 1:
         // it resumes, with its history.
         accounts.remove(&work.id).unwrap();
+        // The next launch removes what removing Work left (its records link), so the path Claude
+        // Code named under Work's folder is gone.
+        accounts.share_records(&home).unwrap();
         assert!(!named.exists(),"the path under Work's folder is gone with its sign-in");
         profile.claude_account=Some(crate::claude_accounts::Account{id:"1".into(),label:"Account 1".into(),folder:Some(home.clone())});
         let (_,after)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).expect("the chat resumes after its account is removed").unwrap();
