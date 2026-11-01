@@ -104,6 +104,17 @@ class Reviews(unittest.TestCase):
         self.assertIn(text, Path(items[0].claims[0]).read_text())
         self.assertEqual(c.read(path, "to-rich")["records"][0]["text"], text, "normalization never rewrites the source")
 
+    def test_unheaded_status_or_acknowledgment_does_not_start_a_review(self):
+        path = Path(c.connect("Original task", "fixture source", scope=self.scope)["locator"])
+        c.send(path, "not-ready", "Not ready yet: codex/fixture is still running author proof")
+        c.send(path, "ack-ready", "Acknowledged; I will post READY TO LAND for codex/fixture once the walk passes")
+        state = {}
+        items, problems = self.world.channel_items(100, state, [c.connection(path)])
+        self.assertFalse(problems)
+        self.assertEqual(items, [], "ordinary status must not create unsolicited review work")
+        self.assertEqual(state["channel_pending"], [])
+        self.assertEqual(len(c.read(path)["records"]), 1, "no review result or held notice was generated")
+
     def test_world_uses_same_handler_but_managed_terminal_does_not_compete(self):
         world = rw.World.__new__(rw.World)
         world.repos = ["work"]
