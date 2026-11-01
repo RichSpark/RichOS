@@ -4110,7 +4110,288 @@ def _claimable(rec, me, cache):
 def _claimed_elsewhere(rec, me, cache):
     """Another session claimed this record and has not ended: the work is that lead's."""
     claim = rec.get("claimed_by")
-    return bool(claim) and claim != me and session_state(claim, None, cache)[0] != "ended"
+    # A claim made from another registry (ended_conversations) carries the claimer's process
+    # identity, because that registry holds no session record for it.
+    return bool(claim) and claim != me and session_state(claim, rec.get("claimed_identity"), cache)[0] != "ended"
+
+
+# ---------------------------------------------------------------------------
+# point 12, across registries — a conversation that has ended for good
+# ---------------------------------------------------------------------------
+#
+# THE NEXT SESSION HANDLES AN ENDED SESSION'S WORK, AND IN THE APP THERE MAY BE NO NEXT SESSION
+# (2026-11-01). The app gives every conversation its own registry (other_registries), and
+# pending() lands only its own registry's records. On 2026-11-01 the CEO still saw dozens of cc/
+# worktrees in richos: finished workers of app conversation 4a6bb38c, whose process had gone
+# and which never ran again, so no gate ever read its registry. The 2026-10-28 rule stands: no
+# gate touches another registry's LIVE work. What is added is the other half of point 12: work
+# whose whole conversation has PROVABLY ended is handled by whichever session runs a gate next.
+
+def _session_process_names():
+    """The process names that ARE sessions on this machine: the declaration the scratch reaper
+    uses (SCRATCH_SESSION_PROCESS_NAMES, from the environment, else this engine's
+    orchestration.config). An empty set when neither declares it, and then nothing is ended."""
+    v = (os.environ.get("SCRATCH_SESSION_PROCESS_NAMES") or "").strip()
+    if not v:
+        cfg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestration.config")
+        try:
+            with open(cfg, encoding="utf-8") as f:
+                m = re.search(r'^SCRATCH_SESSION_PROCESS_NAMES="([^"]*)"', f.read(), re.M)
+            v = m.group(1) if m else ""
+        except OSError:
+            v = ""
+    return set(v.split())
+
+
+def _platform_session_dirs():
+    """Every folder Claude Code's own session files (<pid>.json) are in on this machine: this
+    account's, the terminal's, and each account the app added (claude-accounts.json and
+    <app data>/claude-accounts/<id>, as scratch-reaper.py app_account_session_dirs reads them)."""
+    home = os.path.expanduser("~")
+    data = os.path.join(home, "Library", "Application Support", APP_IDENTIFIER)
+    out = [_platform_sessions_dir(), os.path.join(home, ".claude", "sessions")]
+    out += sorted(glob.glob(os.path.join(data, "claude-accounts", "*", "sessions")))
+    listed = read_json(os.path.join(data, "claude-accounts.json")) or {}
+    for account in listed.get("accounts") or []:
+        folder = account.get("folder") if isinstance(account, dict) else None
+        if isinstance(folder, str) and os.path.isabs(folder):
+            out.append(os.path.join(folder, "sessions"))
+    seen, dirs = set(), []
+    for d in out:
+        if d and realpath(d) not in seen:
+            seen.add(realpath(d))
+            dirs.append(d)
+    return dirs
+
+
+def _same_start(a, b):
+    """Start times compared word by word (`ps` pads a day below 10; scratch-reaper.same_start)."""
+    return " ".join(str(a or "").split()) == " ".join(str(b or "").split())
+
+
+def session_table(timeout=20):
+    """The machine's sessions, read once, the way the scratch reaper decides them (scratch-
+    reaper.py Liveness): {"starts": {pid: lstart} for every process, "running": {session id: pid}
+    for every session process a platform session file names with its own start time,
+    "unattributed": [pids of session processes no session file names]}. None when the process
+    table cannot be read or no session process name is declared: then nothing is ended."""
+    names = _session_process_names()
+    if not names or not shutil.which("ps"):
+        return None
+    try:
+        r = subprocess.run(["ps", "-Ao", "pid=,uid=,lstart=,comm="], capture_output=True, text=True,
+                           timeout=timeout, env=_ps_env())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    uid = str(os.getuid())
+    starts, sessions = {}, {}
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 8 or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        starts[pid] = " ".join(parts[2:7])
+        if parts[1] == uid and os.path.basename(" ".join(parts[7:])) in names:
+            sessions[pid] = starts[pid]
+    running = {}
+    for d in _platform_session_dirs():
+        for path in glob.glob(os.path.join(d, "*.json")):
+            rec = read_json(path) or {}
+            pid, sid = rec.get("pid"), str(rec.get("sessionId") or "")
+            if isinstance(pid, int) and sid and pid in sessions and _same_start(sessions[pid], rec.get("procStart")):
+                running[sid] = pid
+    named = set(running.values())
+    return {"starts": starts, "running": running,
+            "unattributed": sorted(p for p in sessions if p not in named)}
+
+
+def _registry_session_state(root, sid, fallback, table):
+    """('running'|'ended'|'unknown', why) for one session of the registry at `root`: running
+    when a platform session file names it with a live process; ended only on a positive signal
+    (its recorded end, or its recorded process gone or now a different process); unknown
+    otherwise. A missing session record with no recorded identity is unknown, never ended."""
+    if sid in table["running"]:
+        return "running", "process %s of session %s runs" % (table["running"][sid], sid[:8])
+    rec = read_json(os.path.join(root, "sessions", _key_segment(sid) + ".json")) or {}
+    if rec.get("ended_at"):
+        return "ended", "session %s recorded its end at %s" % (sid[:8], rec["ended_at"])
+    ident = rec if rec.get("pid") else (fallback or {})
+    try:
+        pid = int(ident.get("pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid <= 0 or not ident.get("pid_start"):
+        return "unknown", "session %s has no recorded process identity" % sid[:8]
+    start = table["starts"].get(pid)
+    if start is None:
+        return "ended", "process %d of session %s no longer exists" % (pid, sid[:8])
+    if not _same_start(start, ident["pid_start"]):
+        return "ended", "process %d is no longer session %s's" % (pid, sid[:8])
+    return "running", "process %d of session %s runs" % (pid, sid[:8])
+
+
+def conversation_ended(root, recs, table, me=""):
+    """(True|False, why): has the conversation whose registry is `root` PROVABLY ended?
+
+    Every session it recorded, and every session that owns or claimed one of `recs`, must be
+    ended by a positive signal, and every session process on this machine must be accounted
+    for by a platform session file: an unattributed one could be this conversation resumed,
+    so it leaves the answer undecided (the reaper's INDETERMINATE), never ended. No session
+    recorded at all is undecided too: absence is never death. `me`, the session asking,
+    is not counted: its own claim is not the conversation."""
+    if table is None:
+        return False, "the process table could not be read, or no session process name is declared"
+    if table["unattributed"]:
+        return False, ("running session process(es) %s are named by no session file and could be this "
+                       "conversation's" % ", ".join(str(p) for p in table["unattributed"]))
+    sessions = {}
+    try:
+        names = sorted(os.listdir(os.path.join(root, "sessions")))
+    except OSError:
+        names = []
+    for n in names:
+        rec = read_json(os.path.join(root, "sessions", n)) if n.endswith(".json") else None
+        if rec and rec.get("session_id"):
+            sessions[str(rec["session_id"])] = None
+    for r in recs:
+        if r.get("session_id"):
+            sessions.setdefault(r["session_id"], r.get("session_identity"))
+        if r.get("claimed_by"):
+            sessions.setdefault(r["claimed_by"], r.get("claimed_identity"))
+    sessions.pop(me, None)
+    if not sessions:
+        return False, "the registry records no session, so nothing says the conversation ended"
+    for sid in sorted(sessions, key=lambda s: s not in table["running"]):
+        st, why = _registry_session_state(root, sid, sessions[sid], table)
+        if st != "ended":
+            return False, why
+    return True, "every session of the conversation has ended (%d)" % len(sessions)
+
+
+def ended_conversations(me, dry=False, auto=True, deadline=None, report=None):
+    """Point 4 for the finished work of every OTHER registry whose conversation has provably
+    ended (conversation_ended): landed work is landed here, its workspaces and branches deleted,
+    and work that is not landed is KEPT and returned as an item (waiting "outside") that blocks
+    nothing, so a status names it. Dry asks the same question and writes nothing.
+
+    The record is claimed first, inside that registry's lock, with this session's process
+    identity beside the claim (that registry has no session record for it), so a second gate or
+    the conversation itself, resumed, leaves it alone while this session lives.
+
+    A DELETION LEFT OUTSTANDING THERE IS FINISHED HERE TOO (2026-11-01 handover review). land()
+    records the disposition before it deletes, so a gate whose budget ran out mid-deletion left
+    a landed record with a deletion retry in that registry, and retry_due() reads only its own.
+    A due retry in an ended conversation's registry is claimed the same way and retried under
+    that registry, exactly as retry_due() would there."""
+    if Lock._depth:
+        return []                        # inside this registry's lock: never switch registries here
+    own = load_session(me) if me else None
+    ident = ({"pid": own["pid"], "pid_start": own["pid_start"]}
+             if own and own.get("pid") and own.get("pid_start") else None)
+    out, table = [], False
+    for root in other_registries():
+        recs = [r for r in all_agents(root=root)
+                if (not r.get("disposition") and not r.get("orphan") and live_workspaces(r))
+                or _deletion_due(r)]
+        if not recs:
+            continue
+        if _past(deadline):
+            for r in recs:
+                _deferred(report, r)
+            continue
+        if table is False:
+            table = session_table(timeout=_bounded(deadline, 20))
+        ended, why = conversation_ended(root, recs, table, me)
+        if ended:
+            out += _settle_ended(root, recs, me, ident, why, dry, auto, deadline, report)
+    return out
+
+
+def _settle_ended(root, recs, me, ident, why, dry, auto, deadline, report):
+    saved = dict(os.environ)
+    os.environ["RICHOS_WORKSPACES_DIR"] = root
+    out = []
+    try:
+        for rec in recs:
+            if _deletion_due(rec):
+                _retry_ended_deletion(rec, me, ident, why, dry, deadline, report)
+                continue
+            label = "%s (ended conversation %s)" % (rec.get("name") or rec["key"], os.path.basename(root)[:8])
+            item = {"key": "", "name": label, "registry": root, "waiting": "outside",
+                    "waiting_on": "its conversation has ended; a decision on work that is not in its "
+                                  "integration branch",
+                    "blocks_new_work": False, "blocks_turn_end": False,
+                    "workspaces": [(w.get("path") or "(branch only)", w.get("branch"))
+                                   for w in live_workspaces(rec)]}
+            refused = ""
+            if dry or not auto or not ident:
+                try:
+                    if auto and not _past(deadline):
+                        _require_landed(rec, _chain(rec), "", deadline, record=False)
+                        item["would_land"] = True
+                except Deadline:
+                    _deferred(report, rec)
+                except SpecError as e:
+                    refused = " ".join(str(e).split())[:400]
+            elif _past(deadline):
+                _deferred(report, rec)
+            else:
+                try:
+                    with Lock(timeout=0):
+                        fresh = load_agent(rec["key"])
+                        if not fresh or fresh.get("disposition"):
+                            continue
+                        if _claimed_elsewhere(fresh, me, {}):
+                            continue
+                        fresh["claimed_by"], fresh["claimed_identity"] = me, ident
+                        save_agent(fresh)
+                    event("ended-conversation-claimed", key=rec["key"], session_id=me, why=why)
+                    res = land(rec["key"], me, auto=True, deadline=deadline)
+                    if res.get("landed"):
+                        continue
+                except Deadline:
+                    _deferred(report, rec)
+                except SpecError as e:
+                    refused = " ".join(str(e).split())[:400]
+            item["why"] = "finished work of a conversation that has ended (%s); %s" % (
+                why, "it lands at the next gate" if item.get("would_land") else
+                ("kept: " + refused if refused else "kept"))
+            out.append(item)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    return out
+
+
+def _deletion_due(rec):
+    d = rec.get("deletion")
+    return bool(d) and d.get("next_at", 0) <= now()
+
+
+def _retry_ended_deletion(rec, me, ident, why, dry, deadline, report):
+    """retry_due() for one record of an ended conversation's registry (the caller has pointed
+    RICHOS_WORKSPACES_DIR at it): claimed inside that registry's lock first, so a live claimer
+    keeps it; a busy lock or no budget leaves it due for the next gate. Dry writes nothing."""
+    if dry or not ident:
+        return
+    if _past(deadline):
+        _deferred(report, rec)
+        return
+    try:
+        with Lock(timeout=0):
+            fresh = load_agent(rec["key"])
+            if not fresh or not _deletion_due(fresh) or _claimed_elsewhere(fresh, me, {}):
+                return
+            fresh["claimed_by"], fresh["claimed_identity"] = me, ident
+            save_agent(fresh)
+    except SpecError:
+        return
+    event("ended-conversation-claimed", key=rec["key"], session_id=me, why=why)
+    d = fresh["deletion"]
+    _delete(fresh, [w for w in live_workspaces(fresh) if w.get("path")], branches=d.get("branches", True),
+            why="retry %d" % (d.get("attempts", 0) + 1), deadline=deadline)
 
 
 def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dry=False):
@@ -4259,6 +4540,8 @@ def pending(me, entity="", scan=False, auto=True, deadline=None, report=None, dr
                 continue
             fresh_items.append(_item(fresh, it["why"], cache, me) if fresh else it)
         items = fresh_items
+    # Another registry's finished work, once its whole conversation has provably ended.
+    items += ended_conversations(me, dry=dry, auto=auto, deadline=deadline, report=report)
     return items
 
 

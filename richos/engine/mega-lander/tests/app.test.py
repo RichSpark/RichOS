@@ -3264,6 +3264,28 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.app.git(self.repo,"rev-parse",head+"^2"),landed["commit"])
         self.assertIn("Reviewer receipt: "+args["reviewer_id"],self.app.git(self.repo,"log","-1","--format=%B","main"))
 
+    def test_a_stu_land_leaves_no_worktree_and_no_cc_branch_behind(self):
+        """CEO 2026-11-01 ("why am I still seeing like a gazillion worktrees in richos under
+        `cc/`?"), §54: a land Stu makes deletes every workspace of the work and every cc/ branch,
+        the worker's and its reviewer's, in the repository itself, not only in the registry."""
+        args=self.reviewed_pair("noleftover")
+        folder=self.app.folder(self.scope)
+        spaces=[w for rid in (args["worker_id"],args["reviewer_id"])
+                for w in self.app.target_workspaces(self.app.read_record(folder,rid)).values()]
+        self.assertEqual(len(spaces),2)
+        for w in spaces:     # POSITIVE CONTROL: both exist before the land, so their absence after it means something
+            self.assertTrue(Path(w["path"]).is_dir(),w["path"])
+            self.assertEqual(self.app.git(self.repo,"branch","--list",w["branch"]).strip().lstrip("*+ "),w["branch"])
+        landed=self.call("integrate",args)
+        self.assertTrue(landed["work_integrated"])
+        self.assertEqual(landed["cleanup_pending"],[])
+        listed=self.app.git(self.repo,"worktree","list","--porcelain")
+        for w in spaces:
+            self.assertFalse(Path(w["path"]).exists(),"the land left its worktree: "+w["path"])
+            self.assertNotIn(str(Path(w["path"]).resolve()),listed,"git still lists the landed worktree")
+            self.assertEqual(self.app.git(self.repo,"branch","--list",w["branch"]),"","the land left "+w["branch"])
+        self.assertEqual(self.app.git(self.repo,"branch","--list","cc/*"),"","a cc/ branch outlived the land")
+
     def test_an_app_land_onto_a_release_branch_never_switches_the_main_checkout(self):
         """Hank's finding 3, where the copy differed: the terminal merges into a release branch
         nobody has checked out in a temporary checkout of it (workspaces.py
