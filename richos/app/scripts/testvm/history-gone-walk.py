@@ -96,7 +96,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
 
     def scopes(self, phase):
         """The files in every `onboarding-scopes` folder under the guest's home, one path a line."""
-        listing = guest(self.vm, 'find %s -type d -name onboarding-scopes -exec find {} -type f \\; 2>/dev/null | sort || true'
+        listing = guest(self.vm, 'find %s -type d \\( -name scopes -o -name onboarding-scopes \\) -exec find {} -type f \\; 2>/dev/null | sort || true'
                         % shlex.quote(self.home), 60)
         (self.out / ('scopes-%s.txt' % phase)).write_text(listing + '\n')
         self.facts.setdefault('scopes', {})[phase] = listing.splitlines()
@@ -171,14 +171,21 @@ class HistoryGoneWalk(base.StuReminderWalk):
         self.save()
         return {'removed': found}
 
-    def primed(self, log):
-        """Wait for the app's own log to say the chat's background preparation ended, either way."""
+    def primed_count(self, log):
+        out = guest(self.vm, 'grep -cE "conversation preparation finished|front desk was not made ready" %s 2>/dev/null || true'
+                    % shlex.quote(log), 60)
+        return int(out.strip() or 0)
+
+    def open_lost_chat(self, log):
+        """Open the chat by its sidebar row (a relaunch opens a NEW chat, not this one) and wait for the
+        app's own log to say that chat's background preparation ended, either way."""
+        before = self.primed_count(log)
+        self.ax('click', '--title', 'History walk chat', '--first', '--contains')
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
-            tail = guest(self.vm, 'grep -E "conversation preparation finished|front desk was not made ready" %s 2>/dev/null | tail -n 3 || true'
-                         % shlex.quote(log), 60)
-            if tail.strip():
-                return tail.splitlines()
+            if self.primed_count(log) > before:
+                return guest(self.vm, 'grep -E "conversation preparation finished|front desk was not made ready|background prime" %s | tail -n 3'
+                             % shlex.quote(log), 60).splitlines()
             time.sleep(3)
         raise StepFailed('the chat\'s background preparation did not end within %g s of opening it' % self.a.within)
 
@@ -190,7 +197,7 @@ class HistoryGoneWalk(base.StuReminderWalk):
         # OPEN THE CHAT FIRST (handover review of 31c6b73ac, finding 1): opening it primes it in the
         # background, which meets the lost record before any message is sent. Messages are sent only
         # once that priming has ended, so the first message must still be told the loss.
-        record['opened'] = self.primed(launched['log'])
+        record['opened'] = self.open_lost_chat(launched['log'])
         start = self.clock()
         record['started_at_ms'] = start
         for words in QUEUED:
