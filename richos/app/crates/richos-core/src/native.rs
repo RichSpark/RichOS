@@ -5979,6 +5979,7 @@ while True:
             std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":transcript}}))).unwrap();
             // Reopen the actual durable engine connection, as app restart/eviction does.
             let reopened=crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),&engine,&root.join("ecs")).unwrap();
+            let saved=session.clone();
             assert_eq!(native_resume(Some(&profile),Some((&reopened,&root)),role).unwrap(),Some((session,transcript.clone())));
             std::fs::remove_file(transcript).unwrap();
             let gone=native_resume(Some(&profile),Some((&reopened,&root)),role);
@@ -5988,6 +5989,14 @@ while True:
             // first message must meet the same loss and show it.
             let again=native_resume(Some(&profile),Some((&reopened,&root)),role);
             assert!(matches!(again,Err(NativeError::HistoryGone{..})),"opening the chat consumed the warning: {again:?}");
+            if role==LeaseRole::Work {
+                // Stu's loss is marked by the failed start `WorkHost::observe_turn_result` reports
+                // (test `a_handoff_to_stu_whose_saved_history_is_gone_fails_once_then_starts_anew`);
+                // resuming alone never marks it.
+                assert!(!profile.state.join("evidence").join(&saved).join(HISTORY_GONE_MARK).exists(),"resuming marked Stu's loss as told before it was reported");
+                continue;
+            }
+            // Rich's chat is marked by the interruption card (`Spine::record_interruption`).
             commit_history_gone(&again.unwrap_err().to_string());
             assert!(native_resume(Some(&profile),Some((&reopened,&root)),role).unwrap().is_none(),"his next message did not start a new session in the chat");
         }
