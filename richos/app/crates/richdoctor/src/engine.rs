@@ -65,7 +65,9 @@ const OUTBOX_TICK: Duration = Duration::from_secs(5);
 /// sent by itself, and it is an unfinished report again (offered with its own saved time).
 fn withdraw_queued(d: &mut Draft) {
     if let Some(del) = d.delivery.as_mut() {
-        if matches!(&del.state, State::NotSent { why, .. } if why.is_transport()) {
+        // Any send that failed on the way, queued or not: the approval is withdrawn, the report
+        // is unfinished again and sent only when the person presses Send.
+        if matches!(&del.state, State::NotSent { why, .. } if *why != NotSent::Withdrawn) {
             del.state = State::NotSent { why: NotSent::Withdrawn, at: util::now_millis() };
             d.stage = Stage::Review;
         }
@@ -1173,6 +1175,7 @@ impl Engine {
                 r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
                 r.fit();
             }
+            withdraw_queued(d);
             let without_ai = d.without_ai;
             if let Some(old) = &old {
                 inner.pictures.retain(|p| p.0 != old.id);
@@ -1206,6 +1209,7 @@ impl Engine {
             r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
             r.fit();
         }
+        withdraw_queued(d);
         // A removed screenshot is not sent to Claude either.
         inner.pictures.retain(|p| p.0 != shot.id);
         self.save(&mut inner);
@@ -1917,6 +1921,11 @@ mod tests {
         lose_complete_answer: bool,
         /// The relay is busy: registration answers "limited, try after this many seconds".
         limited_for: Option<u64>,
+        /// The relay is still creating the report: registration answers "pending, check again
+        /// in this many seconds" (report-worker.mjs:94).
+        pending_for: Option<u64>,
+        /// The relay refuses without a retry time ("reports are paused").
+        refuse: bool,
     }
 
     /// A stand-in for the reporting relay, protocol 2, over plain HTTP on loopback: it registers
@@ -2018,6 +2027,12 @@ mod tests {
             }
             if let Some(secs) = s.limited_for {
                 return Some(json!({"state": "limited", "retry_after_seconds": secs}));
+            }
+            if s.refuse {
+                return Some(json!({"state": "closed", "detail": "Reports are paused for today."}));
+            }
+            if let Some(secs) = s.pending_for {
+                return Some(json!({"state": "pending", "stage": "creating", "check_after_seconds": secs}));
             }
             if method == "POST" && path == "/v1/reports" {
                 let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
@@ -2283,6 +2298,82 @@ mod tests {
         relay.st.0.lock().unwrap().down = false;
         assert_eq!(e.retry_queued(util::now_millis() + 10 * RETRY_EVERY.as_millis() as u64), 0, "not sent by itself");
         assert_eq!(relay.st.0.lock().unwrap().issues, 0);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// rv-20261101T221231Z-569ad7fe-8335 #1: send offline with one screenshot, Edit report, add
+    /// another, send again: the approval that goes out is the report as shown (two screenshots).
+    #[test]
+    fn a_changed_screenshot_set_withdraws_the_queued_approval_and_send_approves_what_is_shown() {
+        let root = scratch("outbox-shots-changed");
+        let relay = FakeRelay::start();
+        let (e, _) = engine_for(&root, &relay);
+        let mut d = draft_for(&relay);
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        e.use_image(&util::base64_std(&png(41)), 0, false).unwrap();
+        relay.st.0.lock().unwrap().down = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        e.use_image(&util::base64_std(&png(42)), 0, false).unwrap();
+        assert!(e.first_screen()["resume"].is_object(), "an edited report is unfinished again");
+        relay.st.0.lock().unwrap().down = false;
+        assert_eq!(e.retry_queued(util::now_millis() + 10 * RETRY_EVERY.as_millis() as u64), 0, "the old approval is not sent");
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "submitted", "{v}");
+        assert_eq!(relay.st.0.lock().unwrap().registered["manifest"].as_array().map(|m| m.len()), Some(2), "approved exactly what was shown");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// Same, for a removed screenshot.
+    #[test]
+    fn a_removed_screenshot_withdraws_the_queued_approval() {
+        let root = scratch("outbox-shot-removed");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().down = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        e.remove_image(1).unwrap();
+        relay.st.0.lock().unwrap().down = false;
+        assert_eq!(e.retry_queued(util::now_millis() + 10 * RETRY_EVERY.as_millis() as u64), 0);
+        assert_eq!(send_and_wait(&e, false)["kind"], "submitted");
+        assert_eq!(relay.st.0.lock().unwrap().registered["manifest"].as_array().map(|m| m.len()), Some(1));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// #2: "pending, check again in N s" keeps the report queued and the same approval is asked
+    /// again after that time, under the same report ID and receipt.
+    #[test]
+    fn a_pending_relay_answer_keeps_the_report_queued_and_checks_the_same_approval_again() {
+        let root = scratch("outbox-pending");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().pending_for = Some(5);
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "notsent", "{v}");
+        assert_eq!(v["extra"]["queued"], true, "{v}");
+        let id = e.inner.lock().unwrap().draft.as_ref().unwrap().id.clone();
+        let first = e.env().store.load(&id).unwrap().delivery.unwrap().approved.report_id;
+        relay.st.0.lock().unwrap().pending_for = None;
+        let now = util::now_millis();
+        assert_eq!(e.retry_queued(now + 2_000), 0, "not before the time the relay gave");
+        assert_eq!(e.retry_queued(now + 7_000), 1);
+        assert_eq!(e.delivery()["kind"], "submitted", "{}", e.delivery());
+        assert_eq!(relay.st.0.lock().unwrap().report_id, first, "same report ID");
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// #3: a send the relay refused (paused, no retry time), then Save for later: the report is
+    /// offered with its own time and is sent only when the person presses Send.
+    #[test]
+    fn a_refused_send_then_save_for_later_is_offered() {
+        let root = scratch("outbox-refused-later");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().refuse = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        assert_eq!(e.save_later(), "Saved on this Mac. Nothing was sent.");
+        assert!(e.first_screen()["resume"].is_object(), "{}", e.first_screen());
         std::fs::remove_dir_all(root).ok();
     }
 

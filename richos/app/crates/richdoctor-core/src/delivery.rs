@@ -284,9 +284,13 @@ fn read(t: &Transport, next: &[&str], repository: &str, kind: &str, now: u64) ->
                 (Some(d), _) => d.chars().take(400).collect(),
                 (None, "limited") => "it is busy right now.".into(),
                 (None, "closed") => "it is not taking reports right now.".into(),
+                (None, "pending") => "it is still filing this report.".into(),
                 _ => "it could not be filed this time.".into(),
             };
-            let until = b["retry_after_seconds"].as_u64().or(*retry_after).map(|s| now + s * 1000);
+            // "pending, check again in N s" is the relay still creating this report: the same
+            // approval is asked again after that time (it stays queued, never dropped).
+            let wait = b["retry_after_seconds"].as_u64().or(if state == "pending" { b["check_after_seconds"].as_u64() } else { None }).or(*retry_after);
+            let until = wait.map(|s| now + s * 1000);
             Err(not_sent(NotSent::Refused { detail, until }))
         }
     }
@@ -427,6 +431,18 @@ mod tests {
         let s = send(&a, &|e: &Entry| images.get(e.order as usize - 1).cloned(), &dest(), &r, 5);
         assert!(matches!(s, State::NotSent { .. }), "only delivered is success: {s:?}");
         assert!(s.may_send(), "Send again is offered");
+    }
+
+    /// The live relay answers a registration it is still creating with `pending` and
+    /// `check_after_seconds` (report-worker.mjs:94): queued, checked again after that time.
+    #[test]
+    fn a_pending_answer_stays_queued_for_the_time_the_relay_gives() {
+        let (a, images) = approved_with(1);
+        let r = script(vec![Transport::Answer { status: 202, body: Some(json!({"state": "pending", "stage": "creating", "check_after_seconds": 5})), retry_after: None }]);
+        let s = send(&a, &|e: &Entry| images.get(e.order as usize - 1).cloned(), &dest(), &r, 1_000);
+        let State::NotSent { why, .. } = &s else { panic!("{s:?}") };
+        assert!(why.is_transport(), "queued, not dropped: {why:?}");
+        assert_eq!(why.retry_at(1_000, 30_000), 6_000, "checked again after the 5 s the relay gave");
     }
 
     #[test]
