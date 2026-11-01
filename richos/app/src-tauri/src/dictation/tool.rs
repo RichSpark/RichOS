@@ -1287,6 +1287,13 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
         log::line("no speech model is verified on this Mac; nothing written, model-missing");
         return Err(Problem::ModelMissing);
     };
+    // **The engine is looked for again at the first dictation, as the start line promises.** A
+    // tool whose single look at its own start found no verified runtime (the engine was being
+    // replaced as the app started, 2026-11-01 16:43Z) kept looking at nothing for good, because
+    // `DELIVERED_RUNTIME_BIN` is only ever set at start.
+    if stt::delivered_runtime_bin_dir().is_none() {
+        log::line(&resolve_runtime_bin_alone());
+    }
     let recognizer = stt::Recognizer::for_model(id).map_err(|e| {
         log::line(&format!("the recognizer for {id} could not be resolved: {e}"));
         Problem::ModelMissing
