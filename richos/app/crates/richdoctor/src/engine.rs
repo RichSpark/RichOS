@@ -57,6 +57,24 @@ struct Inner {
     /// A saved report was reopened: its next fresh Claude Code process gets the record so far,
     /// whatever the operation count.
     resumed: bool,
+    /// Automatic retries of the current message after a failure that can clear up by itself.
+    auto_tries: u32,
+}
+
+/// How many times RichDoctor tries again by itself before the failure card (with its Retry
+/// button) is shown.
+const AUTO_RETRIES: u32 = 3;
+
+/// How long RichDoctor rests before trying again by itself, for a failure that can clear up
+/// (Bust a bug's rule: a waiting report rests by its reason, `bug_report::Reason::retry_after_ms`):
+/// a timeout or a service error soon, an asked-for wait (a usage limit) longer.
+fn auto_retry_rest(f: Failure) -> Option<Duration> {
+    match f {
+        Failure::Timeout => Some(Duration::from_secs(5)),
+        Failure::Service => Some(Duration::from_secs(20)),
+        Failure::RateLimited => Some(Duration::from_secs(90)),
+        _ => None,
+    }
 }
 
 /// The fixed facts of this Mac and this run.
@@ -75,13 +93,31 @@ pub struct Engine {
     /// A cancel made by Prepare report now: the operation ends without the "canceled" card.
     quiet: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
+    /// The window closed (or RichDoctor quit) since a report was last opened or started: an
+    /// operation ended by it is interrupted, not canceled by the person, and nothing retries.
+    closed: Arc<AtomicBool>,
+    /// A fixed rest before an automatic retry, in milliseconds (`u64::MAX`: by failure, see
+    /// [`auto_retry_rest`]); `0` with [`Engine::set_auto_retry`] off: never retry by itself.
+    rest_ms: Arc<std::sync::atomic::AtomicU64>,
+    auto_retry: Arc<AtomicBool>,
     env: Arc<Env>,
     emit: Emit,
 }
 
 impl Clone for Engine {
     fn clone(&self) -> Self {
-        Engine { inner: self.inner.clone(), session: self.session.clone(), canceled: self.canceled.clone(), quiet: self.quiet.clone(), busy: self.busy.clone(), env: self.env.clone(), emit: self.emit.clone() }
+        Engine {
+            inner: self.inner.clone(),
+            session: self.session.clone(),
+            canceled: self.canceled.clone(),
+            quiet: self.quiet.clone(),
+            busy: self.busy.clone(),
+            closed: self.closed.clone(),
+            rest_ms: self.rest_ms.clone(),
+            auto_retry: self.auto_retry.clone(),
+            env: self.env.clone(),
+            emit: self.emit.clone(),
+        }
     }
 }
 
@@ -92,11 +128,14 @@ fn ctx(env: &Env) -> Context {
 impl Engine {
     pub fn new(env: Env, emit: Emit) -> Engine {
         Engine {
-            inner: Arc::new(Mutex::new(Inner { draft: None, pending: Pending::None, operation: 0, last_message: None, stopper: None, pictures: Vec::new(), unsaved: None, resumed: false })),
+            inner: Arc::new(Mutex::new(Inner { draft: None, pending: Pending::None, operation: 0, last_message: None, stopper: None, pictures: Vec::new(), unsaved: None, resumed: false, auto_tries: 0 })),
             session: Arc::new(Mutex::new(None)),
             canceled: Arc::new(AtomicBool::new(false)),
             quiet: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(AtomicBool::new(false)),
+            rest_ms: Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+            auto_retry: Arc::new(AtomicBool::new(true)),
             env: Arc::new(env),
             emit,
         }
@@ -104,6 +143,13 @@ impl Engine {
 
     pub fn env(&self) -> &Env {
         &self.env
+    }
+
+    /// Tests only: a fixed rest before an automatic retry, or `None` to never retry by itself.
+    #[cfg(test)]
+    fn set_auto_retry(&self, rest: Option<Duration>) {
+        self.auto_retry.store(rest.is_some(), Ordering::SeqCst);
+        self.rest_ms.store(rest.map_or(u64::MAX, |d| d.as_millis() as u64), Ordering::SeqCst);
     }
 
     fn send(&self, v: Value) {
@@ -206,7 +252,9 @@ impl Engine {
             inner.pictures.clear();
             inner.operation = 0;
             inner.resumed = false;
+            inner.auto_tries = 0;
         }
+        self.closed.store(false, Ordering::SeqCst);
         self.canceled.store(false, Ordering::SeqCst);
         self.write_scope();
         self.line(Entry::Person { text: description.trim().to_string() });
@@ -298,7 +346,11 @@ impl Engine {
         if text.is_empty() || self.busy.load(Ordering::SeqCst) {
             return;
         }
-        let pending = self.inner.lock().unwrap().pending.clone();
+        let pending = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.auto_tries = 0;
+            inner.pending.clone()
+        };
         self.line(Entry::Person { text: text.clone() });
         match pending {
             Pending::Which => {
@@ -423,6 +475,16 @@ impl Engine {
             Ok(text) if report => Some(text),
             Ok(text) => {
                 let turn = adapter::parse_turn(&text);
+                {
+                    let mut inner = self.inner.lock().unwrap();
+                    inner.auto_tries = 0;
+                    if let Some(d) = inner.draft.as_mut() {
+                        d.in_flight = false;
+                        // "Ready" is kept with the report, so a reopened one shows it again.
+                        d.ready = turn.ready;
+                    }
+                    self.save(&mut inner);
+                }
                 if !turn.say.is_empty() {
                     self.line(Entry::Doctor { text: turn.say.clone() });
                 }
@@ -436,17 +498,91 @@ impl Engine {
                 }
                 None
             }
-            Err(None) if self.quiet.swap(false, Ordering::SeqCst) => None,
+            // Prepare report now ended it: it takes over.
+            Err(None) if self.quiet.swap(false, Ordering::SeqCst) => {
+                self.set_in_flight(false);
+                None
+            }
+            // The window closed or RichDoctor quit: the operation is interrupted, not canceled. It
+            // stays in flight in the saved report, so reopening it continues the investigation.
+            Err(None) if self.closed.load(Ordering::SeqCst) => {
+                let mut inner = self.inner.lock().unwrap();
+                if let Some(d) = inner.draft.as_mut() {
+                    d.left = "draft, interrupted during the investigation".into();
+                }
+                self.save(&mut inner);
+                None
+            }
             Err(None) => {
+                self.set_in_flight(false);
                 self.line(Entry::Note { text: "canceled".into() });
                 self.send(json!({"t": "canceled"}));
                 None
             }
             Err(Some(failure)) => {
+                if !report && self.rest_then_retry(failure, &message) {
+                    return None;
+                }
+                self.set_in_flight(false);
                 self.ai_failed(failure);
                 None
             }
         }
+    }
+
+    fn set_in_flight(&self, on: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(d) = inner.draft.as_mut() {
+            d.in_flight = on;
+        }
+        self.save(&mut inner);
+    }
+
+    /// A failure that can clear up by itself (a timeout, the service, a usage limit) is tried again
+    /// by itself while the window is open, after the rest its kind needs; only when it keeps
+    /// failing does the card with its Retry button show. `true`: a retry is scheduled.
+    fn rest_then_retry(&self, failure: Failure, message: &str) -> bool {
+        let Some(default_rest) = auto_retry_rest(failure) else { return false };
+        if !self.auto_retry.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
+            return false;
+        }
+        let (draft, operation) = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.auto_tries >= AUTO_RETRIES {
+                return false;
+            }
+            inner.auto_tries += 1;
+            (inner.draft.as_ref().map(|d| d.id.clone()), inner.operation)
+        };
+        let fixed = self.rest_ms.load(Ordering::SeqCst);
+        let rest = if fixed == u64::MAX { default_rest } else { Duration::from_millis(fixed) };
+        self.send(json!({"t": "progress", "text": "Claude Code did not answer. Trying again shortly…"}));
+        let this = self.clone();
+        let message = message.to_string();
+        std::thread::spawn(move || {
+            let until = Instant::now() + rest;
+            while Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(100).min(until.saturating_duration_since(Instant::now())));
+                if !this.retry_still_wanted(&draft, operation) {
+                    return;
+                }
+            }
+            if this.retry_still_wanted(&draft, operation) {
+                this.claude_now(message, false);
+            }
+        });
+        true
+    }
+
+    /// Nothing happened since the failure that makes a waiting retry wrong: the window did not
+    /// close, the person did not cancel, answer or prepare the report, no other report opened.
+    fn retry_still_wanted(&self, draft: &Option<String>, operation: u64) -> bool {
+        let inner = self.inner.lock().unwrap();
+        !self.closed.load(Ordering::SeqCst)
+            && !self.canceled.load(Ordering::SeqCst)
+            && inner.operation == operation
+            && inner.draft.as_ref().map(|d| &d.id) == draft.as_ref()
+            && inner.draft.as_ref().is_some_and(|d| d.stage == Stage::Investigating)
     }
 
     /// `Err(None)`: canceled. `Err(Some(f))`: Claude Code could not help.
@@ -487,6 +623,17 @@ impl Engine {
             let mut inner = self.inner.lock().unwrap();
             inner.operation += 1;
             inner.last_message = Some(message.to_string());
+            // Kept with the report: an interrupted operation is continued, and Prepare report now
+            // still asks Claude, after the window was closed and opened again. The report draft
+            // request itself is not a message to continue from.
+            if message != adapter::PREPARE_REPORT {
+                if let Some(d) = inner.draft.as_mut() {
+                    d.last_message = Some(message.to_string());
+                    d.in_flight = true;
+                    d.ready = false;
+                }
+                self.save(&mut inner);
+            }
             (inner.operation, inner.resumed)
         };
         mcp::write_operation(&dir, op).ok();
@@ -615,7 +762,11 @@ impl Engine {
     }
 
     /// The window closed or RichDoctor quits: end the Claude Code process, keep everything.
+    ///
+    /// An operation it ends is interrupted, never "canceled": nothing is written to the
+    /// conversation, and the saved report keeps it in flight so reopening it continues.
     pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
         self.canceled.store(true, Ordering::SeqCst);
         let mut inner = self.inner.lock().unwrap();
         self.stop_session_locked(&mut inner);
@@ -677,6 +828,9 @@ impl Engine {
         } else {
             "Your report is ready to review. It contains your description, your answers and the RichOS version; nothing else was collected."
         };
+        if let Some(d) = self.inner.lock().unwrap().draft.as_mut() {
+            d.ready = true;
+        }
         self.line(Entry::Doctor { text: text.into() });
         self.send(json!({"t": "ready"}));
     }
@@ -1207,8 +1361,12 @@ impl Engine {
             let mut inner = self.inner.lock().unwrap();
             self.stop_session_locked(&mut inner);
             inner.pending = Pending::None;
-            inner.last_message = None;
+            // The last message to Claude is kept with the report: a reopened one continues from it,
+            // and Prepare report now still builds the report with Claude.
+            inner.last_message = d.last_message.clone();
             inner.operation = 0;
+            inner.auto_tries = 0;
+            self.closed.store(false, Ordering::SeqCst);
             // Screenshots queued for the report that was open never go out with this one; this
             // report's own approved screenshots Claude has not been sent yet are queued again.
             inner.pictures = if d.without_ai {
@@ -1234,7 +1392,41 @@ impl Engine {
             "has_report": d.report.is_some(),
             "pending_question": d.questions.iter().rev().find(|q| q.1.is_none()).map(|q| q.0.clone()),
             "without_ai": d.without_ai,
+            "ready": d.ready && d.stage == Stage::Investigating,
+            "resuming": self.should_continue(&d),
         }))
+    }
+
+    /// Whether a reopened report continues its investigation by itself: Claude was working when
+    /// the window closed or RichDoctor quit, or it failed in a way a retry can clear, and no
+    /// question waits for the person.
+    fn should_continue(&self, d: &Draft) -> bool {
+        d.stage == Stage::Investigating
+            && !d.without_ai
+            && !d.ready
+            && d.delivery.is_none()
+            && self.env.claude.is_some()
+            && d.questions.iter().all(|q| q.1.is_some())
+            && (d.in_flight || d.ai_failure.is_some_and(|f| f.offers_retry()))
+    }
+
+    /// **A REOPENED REPORT CONTINUES BY ITSELF** (called by the window right after `open`): the
+    /// last message to Claude again, on a fresh process primed with the record. Nothing the
+    /// person already did is asked again.
+    pub fn continue_investigation(&self) {
+        let this = self.clone();
+        std::thread::spawn(move || {
+            // The operation the closed window interrupted may still be ending.
+            let until = Instant::now() + Duration::from_secs(5);
+            while this.busy.load(Ordering::SeqCst) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let go = this.inner.lock().unwrap().draft.as_ref().is_some_and(|d| this.should_continue(d));
+            if go {
+                this.send(json!({"t": "resumed"}));
+                this.retry();
+            }
+        });
     }
 
     /// Continue a reopened draft: an open question waits for its answer; otherwise the person
@@ -1489,6 +1681,122 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
+    /// A started report whose first question from Claude is on screen; `events` is cleared.
+    fn asked_by_claude(root: &std::path::Path) -> (Engine, Arc<Mutex<Vec<Value>>>, String) {
+        let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(root)));
+        e.start("RichOS closes before its window opens".into(), true, false).unwrap();
+        wait_for(&events, &["question"]);
+        events.lock().unwrap().clear();
+        e.answer("Just now".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        events.lock().unwrap().clear();
+        let id = e.env().store.list()[0].id.clone();
+        (e, events, id)
+    }
+
+    /// Wait (a stand-in on this machine answers in milliseconds; only a hang reaches the bound)
+    /// until `what` is in everything the stand-in was given.
+    fn wait_captured(e: &Engine, what: &str) {
+        // load-bound: a bound on a local shell stand-in reading one line; only a hang reaches it.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !captured_all(e).contains(what) {
+            assert!(Instant::now() < deadline, "the stand-in was never given {what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wait_idle(events: &Arc<Mutex<Vec<Value>>>) {
+        // load-bound: the closed operation ends within one poll (500 ms); only a hang reaches the bound.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !events.lock().unwrap().iter().any(|v| v["t"] == "busy" && v["on"] == false) {
+            assert!(Instant::now() < deadline, "the operation never ended");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn closing_the_window_mid_investigation_does_not_cancel_and_reopening_continues_with_claude() {
+        let root = scratch("close-mid");
+        let (e, events, id) = asked_by_claude(&root);
+        let work = e.env().store.work_dir();
+        std::fs::write(work.join("hang-next"), "").unwrap();
+        e.answer("It closes every time".into());
+        wait_captured(&e, "It closes every time");
+        e.close(); // the window closed while Claude was working
+        wait_idle(&events);
+        assert!(!events.lock().unwrap().iter().any(|v| v["t"] == "canceled"), "closing is not a cancel");
+        let saved = e.env().store.load(&id).unwrap();
+        assert!(!saved.conversation.iter().any(|x| matches!(x, Entry::Note { text } if text == "canceled")), "no canceled line in the saved report");
+        // Reopened: the investigation continues by itself, with Claude, from where it was.
+        std::fs::remove_file(work.join("hang-next")).unwrap();
+        let v = e.open(&id).unwrap();
+        assert_eq!(v["resuming"], true, "{v}");
+        events.lock().unwrap().clear();
+        e.continue_investigation();
+        wait_for(&events, &["question", "ai-failed", "ready"]);
+        let failed = events.lock().unwrap().iter().any(|v| v["t"] == "ai-failed");
+        let all = captured_all(&e);
+        e.close();
+        assert!(!failed);
+        let sends = all.lines().filter(|l| l.contains("It closes every time")).count();
+        assert_eq!(sends, 2, "Claude was given the interrupted message again, once more: {all}");
+        assert!(all.contains("conversation_restarted"), "on a fresh process primed with the record: {all}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn claude_being_ready_is_saved_and_a_reopened_report_is_prepared_with_claude() {
+        let root = scratch("ready-saved");
+        let (e, events, id) = asked_by_claude(&root);
+        std::fs::write(e.env().store.work_dir().join("ready-next"), "").unwrap();
+        e.answer("It closes every time".into());
+        wait_for(&events, &["ready"]);
+        e.close();
+        let (again, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        let v = again.open(&id).unwrap();
+        assert_eq!(v["ready"], true, "Claude's ready is shown again after reopening");
+        assert_eq!(v["resuming"], false, "nothing re-runs when Claude was already ready");
+        again.prepare();
+        wait_for(&events, &["review"]);
+        let all = captured_all(&again);
+        again.close();
+        assert!(all.contains(adapter::PREPARE_REPORT), "Claude was asked to draft the report: {all}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_failure_that_can_clear_up_is_retried_by_itself_without_a_card() {
+        let root = scratch("auto-retry");
+        let (e, events, _) = asked_by_claude(&root);
+        e.set_auto_retry(Some(Duration::from_millis(50)));
+        std::fs::write(e.env().store.work_dir().join("fail-once"), "").unwrap(); // one 503
+        e.answer("It closes every time".into());
+        wait_for(&events, &["question", "ai-failed"]);
+        let failed = events.lock().unwrap().iter().any(|v| v["t"] == "ai-failed");
+        let all = captured_all(&e);
+        e.close();
+        assert!(!failed, "one service error does not stop the investigation");
+        assert_eq!(all.lines().filter(|l| l.contains("It closes every time")).count(), 2, "tried again by itself: {all}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_failure_that_keeps_failing_shows_the_card_with_retry_after_the_automatic_tries() {
+        let root = scratch("auto-retry-gives-up");
+        let (e, events, _) = asked_by_claude(&root);
+        e.set_auto_retry(Some(Duration::from_millis(10)));
+        // Every attempt fails, on the process that was running and on each fresh one after it.
+        std::fs::write(e.env().store.work_dir().join("fail-next"), "").unwrap();
+        std::fs::write(e.env().store.work_dir().join("fail-first"), "").unwrap();
+        e.answer("It closes every time".into());
+        wait_for(&events, &["ai-failed"]);
+        let all = captured_all(&e);
+        e.close();
+        assert_eq!(all.lines().filter(|l| l.contains("It closes every time")).count() as u32, 1 + AUTO_RETRIES, "{all}");
+        assert!(events.lock().unwrap().iter().any(|v| v["t"] == "ai-failed" && v["retry"] == true));
+        std::fs::remove_dir_all(root).ok();
+    }
+
     #[test]
     fn start_a_new_report_is_remembered_and_the_draft_is_not_offered_again() {
         let root = scratch("declined");
@@ -1729,7 +2037,10 @@ mod tests {
         let init = json!({"type":"system","subtype":"init","tools":["mcp__richdoctor__collect_diagnostics","mcp__richdoctor__read_evidence"],"mcp_servers":[{"name":"richdoctor","status":"connected"}],"permissionMode":"dontAsk","slash_commands":[],"skills":[],"plugins":[]});
         let result = json!({"type":"result","is_error":false,"result":"{\"say\":\"ok\",\"question\":\"What happened next?\",\"choices\":[],\"ready\":false}"});
         let failure = json!({"type":"result","is_error":true,"result":"503 service unavailable"});
-        std::fs::write(&p, format!("#!/bin/sh\nIFS= read -r first\nprintf '%s\\n' \"$first\" >> captured.jsonl\nprintf '%s\\n' '{init}' '{result}'\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> captured.jsonl; if [ -f fail-next ]; then printf '%s\\n' '{failure}'; else printf '%s\\n' '{result}'; fi; done\n")).unwrap();
+        let ready = json!({"type":"result","is_error":false,"result":"{\"say\":\"ok\",\"ready\":true}"});
+        // Per turn: `hang-next` waits (until RichDoctor ends the process), `fail-once` fails the
+        // next turn only, `fail-next` fails every turn, `ready-next` says it is ready.
+        std::fs::write(&p, format!("#!/bin/sh\nIFS= read -r first\nprintf '%s\\n' \"$first\" >> captured.jsonl\nprintf '%s\\n' '{init}'\nif [ -f fail-first ]; then printf '%s\\n' '{failure}'; else printf '%s\\n' '{result}'; fi\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> captured.jsonl; if [ -f hang-next ]; then cat > /dev/null; fi; if [ -f fail-once ]; then rm fail-once; printf '%s\\n' '{failure}'; elif [ -f fail-next ]; then printf '%s\\n' '{failure}'; elif [ -f ready-next ]; then printf '%s\\n' '{ready}'; else printf '%s\\n' '{result}'; fi; done\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
     }
@@ -1804,6 +2115,7 @@ mod tests {
     fn answers_claude_got_before_it_failed_are_in_the_fallback_report() {
         let root = scratch("fallback");
         let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        e.set_auto_retry(None); // this test is about the failure card and Prepare report now
         e.start("RichOS closes before its window opens".into(), true, false).unwrap();
         wait_for(&events, &["question"]);
         events.lock().unwrap().clear();
@@ -1873,6 +2185,8 @@ mod tests {
     fn a_screenshot_sent_with_a_failed_operation_goes_with_the_retry() {
         let root = scratch("retry-images");
         let (e, events) = engine_at(&root.join("store"), Some(fake_cli_asking(&root)));
+        e.set_auto_retry(None); // this test is about the Retry button
+
         e.start("RichOS closes before its window opens".into(), true, false).unwrap();
         wait_for(&events, &["question"]);
         events.lock().unwrap().clear();

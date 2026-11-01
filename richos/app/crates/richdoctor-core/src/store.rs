@@ -167,6 +167,18 @@ pub struct Draft {
     /// offered again (it stays in Saved reports).
     #[serde(default)]
     pub resume_declined: bool,
+    /// A Claude operation was running when the window closed or RichDoctor quit or crashed: the
+    /// reopened report continues the investigation by itself.
+    #[serde(default)]
+    pub in_flight: bool,
+    /// Claude said it is ready for the report (or the questions are all answered); a reopened
+    /// report shows that again.
+    #[serde(default)]
+    pub ready: bool,
+    /// The last message sent to Claude (already cleaned of private details), so a reopened report
+    /// continues from it and Prepare report now still uses Claude.
+    #[serde(default)]
+    pub last_message: Option<String>,
 }
 
 impl Draft {
@@ -189,6 +201,9 @@ impl Draft {
             delivery: None,
             left: String::new(),
             resume_declined: false,
+            in_flight: false,
+            ready: false,
+            last_message: None,
         })
     }
 
