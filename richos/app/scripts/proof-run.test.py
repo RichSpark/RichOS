@@ -1104,7 +1104,8 @@ try:
     try:
         try:
             n_slot, n_seen["waited"] = pr.proof_slots.acquire(
-                {"checkout": os.path.join(n_state, "source"), "waiter": "p16-n-nightly"}, 5, checks=1)
+                {"checkout": os.path.join(n_state, "source"), "release_state": n_state, "waiter": "p16-n-nightly"},
+                5, checks=1)
         except TimeoutError as exc:
             n_seen["refused"] = str(exc)[:300]
         if n_slot is not None:
@@ -1138,6 +1139,51 @@ try:
           "only slot with checks waiting and another waits in line; its check never gives way, the holder "
           "gives way to it, and the teammate in line runs and passes afterwards",
           (n_seen, n_item.state, n_item.notes, n_buf.getvalue()[-400:], output("p16-n-line")[-300:]))
+
+    # P16n2 — only the run the nightly NAMES is its own (run 20261101T104504Z-3ecb70df).
+    # The nightly's script-suites gate ran this suite from its `source` tree while it held
+    # release.lock, and every fixture run here counted as the build's own and never waited. A run
+    # whose checkout is a held state folder's `source` tree but which names no state, or names a
+    # state whose source tree is not its checkout, waits in line like any other run.
+    import fcntl as fcntl16n2
+    n2_state = os.path.join(tmp, "p16-n2-state")
+    n2_other = os.path.join(tmp, "p16-n2-other")
+    for d16 in (n2_state, n2_other):
+        os.makedirs(os.path.join(d16, "source"))
+    n2_lock = open(os.path.join(n2_state, "release.lock"), "a")
+    n2_other_lock = open(os.path.join(n2_other, "release.lock"), "a")
+    fcntl16n2.flock(n2_lock, fcntl16n2.LOCK_EX)
+    fcntl16n2.flock(n2_other_lock, fcntl16n2.LOCK_EX)
+    n2_seen = {}
+    n2_src = os.path.join(n2_state, "source")
+    n2_holder = pr.proof_slots._try(slots_dir, 1, {"waiter": "p16-n2-holder"}, checks=0)
+    try:
+        n2_seen["named"] = pr.proof_slots.release_owned(n2_src, n2_state)
+        n2_seen["unnamed"] = pr.proof_slots.release_owned(n2_src, None)
+        n2_seen["other_state"] = pr.proof_slots.release_owned(n2_src, n2_other)
+        for key, meta in (("unnamed_run", {"checkout": n2_src}),
+                          ("other_state_run", {"checkout": n2_src, "release_state": n2_other})):
+            got = None
+            try:
+                got, _w = pr.proof_slots.acquire(dict(meta, waiter="p16-n2-" + key), 1)
+                n2_seen[key] = "admitted at slot %s" % got.index
+            except TimeoutError:
+                n2_seen[key] = "waited"
+            finally:
+                if got is not None:
+                    got.release()
+    finally:
+        n2_holder.release()
+        fcntl16n2.flock(n2_lock, fcntl16n2.LOCK_UN)
+        n2_lock.close()
+        fcntl16n2.flock(n2_other_lock, fcntl16n2.LOCK_UN)
+        n2_other_lock.close()
+    n2_seen["named_unlocked"] = pr.proof_slots.release_owned(n2_src, n2_state)
+    check(n2_seen == {"named": True, "unnamed": False, "other_state": False, "unnamed_run": "waited",
+                      "other_state_run": "waited", "named_unlocked": False},
+          "P16n2 a run from a held state folder's source tree goes first only when the nightly names "
+          "that folder: unnamed, or naming another folder, it waits in line under the limit",
+          n2_seen)
 
     # P16o — a run that gives way never holds the run ahead of it back at worker admission (review
     # rv-20261101T094016Z-2c1ea15a-8a00, its fixtures/nightly_worker_priority.py). A teammate run

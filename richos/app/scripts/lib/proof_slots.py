@@ -75,9 +75,15 @@ A NIGHTLY OR RELEASE COMMAND'S RUN GOES FIRST (2026-11-01). On 2026-11-01 08:47-
 nightly's mutation batch (nightly-local.py `mutation_units`) stood #1 in line for 10 min behind a
 teammate's run, and went on only after the lead asked the teammate to stop. The CEO's first point
 on builds: he says go and walks away, and the right app is built. A run is the build's own when
-its checkout is a nightly state folder's `source` tree while that folder's `release.lock` is held
-(nightly-local.py `Runner.source` and `exclusive()`, which every nightly-local command holds for
-its whole run).
+the nightly names its state folder for that run (`--release-state`, passed by nightly-local.py
+`mutation_units` on its own proof-run command line and on no other), its checkout is that
+folder's `source` tree, and that folder's `release.lock` is held (nightly-local.py
+`Runner.source` and `exclusive()`, which every nightly-local command holds for its whole run).
+The checkout and the lock alone are not enough (run 20261101T104504Z-3ecb70df): the
+nightly's script-suites gate runs proof-run.test.py and nightly-local.test.py from that same
+`source` tree while the lock is held, so every fixture run those suites start counted as the
+build's own, never waited, and nine queue tests failed. A command-line flag is never inherited:
+a check, or a test, started from inside the build's tree carries none.
 Such a run never waits in the line: it takes a free slot, or one past the limit when none is free.
 In the order above it is ahead of every other run whenever it took its slot, so each teammate run
 gives way check by check while the build's run has checks waiting; nothing of the teammate's is
@@ -219,14 +225,16 @@ def _read(path):
         return {}
 
 
-def release_owned(checkout):
-    """True when `checkout` is a nightly or release command's own source tree while that command
-    runs (header): `<state>/source` beside `<state>/release.lock`, and that lock held right now."""
-    if not checkout:
+def release_owned(checkout, state):
+    """True when `state` is the state folder a nightly or release command named for this run and
+    `checkout` is that folder's source tree while the command runs (header): `<state>/source`, and
+    `<state>/release.lock` held right now. Without `state` never: a run started from inside the
+    build's tree (a test's fixture run) is not the build's own."""
+    if not checkout or not state:
         return False
-    path = os.path.realpath(checkout)
-    return (os.path.basename(path) == "source"
-            and _locked(os.path.join(os.path.dirname(path), "release.lock")) is True)
+    state = os.path.realpath(state)
+    return (os.path.realpath(checkout) == os.path.join(state, "source")
+            and _locked(os.path.join(state, "release.lock")) is True)
 
 
 def _rank(record):
@@ -424,10 +432,10 @@ def describe_holders(rows, now=None):
 
 def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None, checks=0):
     """A slot for this run: at once when one is free and nobody waits, else in line; a nightly or
-    release command's run (`release_owned(meta["checkout"])`) never waits, taking a slot past the
-    limit when none is free (header). `checks`: how many this run plans, published as waiting
-    until it says otherwise. Returns (slot, seconds waited). Raises TimeoutError, naming the
-    holders, after `wait_seconds`."""
+    release command's run (`release_owned(meta["checkout"], meta["release_state"])`) never
+    waits, taking a slot past the limit when none is free (header). `checks`: how many this run
+    plans, published as waiting until it says otherwise. Returns (slot, seconds waited). Raises
+    TimeoutError, naming the holders, after `wait_seconds`."""
     say = say or (lambda line: None)
     d = directory()
     meta = dict(meta, waiter=_waiter_name(), cwd=os.getcwd())
@@ -435,7 +443,7 @@ def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None, checks=0):
     if borrowed is not None:
         return borrowed, 0.0
     n, _source = limit(d)
-    if release_owned(meta.get("checkout")):
+    if release_owned(meta.get("checkout"), meta.get("release_state")):
         meta["first"] = True
         slot = _try(d, n + cores(), meta, checks)
         if slot is not None:
