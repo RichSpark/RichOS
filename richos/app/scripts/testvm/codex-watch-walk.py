@@ -10,6 +10,7 @@ and after rename, archive and restart. No live operator channels are touched.
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -128,10 +129,22 @@ class CodexWatchWalk(stu.StuReminderWalk):
         self.ax('click', '--title', label, '--role', 'AXPopUpButton', '--in', 'sidebar', '--contains', '--first')
 
     def rename(self, thread, title):
+        self.wait_for('Send', seconds=120)
         self.chat_menu(thread)
         self.press('Rename…', 'AXMenuItem')
-        self.type_into(title, '--role', 'AXTextField', '--title', 'Chat name')
-        self.keys('tell application "System Events" to key code 36')
+        self.wait_for('Chat name', role='AXTextField', seconds=120)
+        state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
+        pid = int((state / 'app.pid').read_text())
+        # Inline rename focuses/selects its own field. Generic AX type reasserts
+        # focus and can invalidate this short-lived field without a DOM ID.
+        # Read fresh focus and use the normal keys only in this owned app field.
+        self.keys('tell application "System Events"\n'
+                  'set p to first process whose unix id is %d\n'
+                  'if frontmost of p is not true then error "owned app is not frontmost"\n'
+                  'set fe to value of attribute "AXFocusedUIElement" of p\n'
+                  'if (value of attribute "AXRole" of fe) is not "AXTextField" then error "rename field has no focus"\n'
+                  'if (value of attribute "AXDescription" of fe) is not "Chat name" then error "another field has focus"\n'
+                  'keystroke "a" using command down\nkeystroke %s\nkey code 36\nend tell' % (pid, json.dumps(title)))
         return self.wait_fact('rename saved', self.navigation, lambda v: v.get('renamed_threads', {}).get(thread) == title)
 
     def pair(self):
