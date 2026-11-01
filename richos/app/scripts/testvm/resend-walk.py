@@ -91,8 +91,9 @@ rows = [
     {"type": "assistant", "sessionId": session, "uuid": session[:8] + "-a1",
      "message": {"role": "assistant", "content": [{"type": "text", "text": "On it."}]}},
 ]
+# Compact, as Claude Code writes its records.
 with open(record, "w") as f:
-    f.write("".join(json.dumps(r) + "\n" for r in rows))
+    f.write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
 print(json.dumps({"inbox": inbox, "through": through, "record": record}))
 '''
 
@@ -115,7 +116,11 @@ for path in glob.glob(os.path.join(state, "evidence", "*", "binding.json")):
     if b.get("role") == "stu" and b.get("session_id") != session:
         others.append(b.get("session_id"))
 ps = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
-stu = [l.strip()[:300] for l in ps.splitlines() if "claude" in l and ":stu" in l]
+# Stu's provider is started with his agent flag naming the plugin's stu definition; the two
+# words are joined here, and this process is left out, so this script never counts itself.
+agent, role = "--" + "agent", ":" + "stu"
+stu = [l.strip()[:300] for l in ps.splitlines()
+       if agent in l and role in l and l.split(None, 1)[0] != str(os.getpid())]
 print(json.dumps({"record_lines": lines, "cursor_active": cursor.get("active"), "other_stu_sessions": others,
                   "stu_processes": stu}))
 '''

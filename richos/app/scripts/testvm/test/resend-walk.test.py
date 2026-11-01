@@ -68,6 +68,9 @@ class Fixture(unittest.TestCase):
             read = json.loads(subprocess.run([sys.executable, '-c', walk.READ, data, 'acme', 'thr_1', S, wrote['record']],
                                              capture_output=True, text=True, check=True).stdout)
             self.assertEqual((read['record_lines'], read['other_stu_sessions']), (2, []))
+            # Its own command line is not a process of Stu's (the walk's first run counted itself).
+            # Other processes on this Mac may be, so only its own is looked for.
+            self.assertFalse([p for p in read['stu_processes'] if 'import json, glob' in p], read['stu_processes'])
 
 
 if __name__ == '__main__':
