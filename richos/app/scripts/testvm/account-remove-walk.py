@@ -24,7 +24,7 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
              (never through Work's folder, which goes with Work)
   remove     the Work card's Remove, then its confirmation, in the Claude accounts sheet, as a
              person removes it, while the chat runs on Account 1: Work is gone from the list and
-             its sign-in is gone (its records link stays until the next launch)
+             its sign-in is gone (its records link stays, for good)
   continue   a message asking for the codeword: answered, in the SAME session as the codeword (its
              prompt is in the same session's callbacks, so the chat resumed its record and did not
              start over), and the answer names the codeword
@@ -257,8 +257,9 @@ class AccountRemoveWalk(toolchain_walk.ToolchainAskWalk):
         failures = []
         if any(a.get('id') == '2' for a in stored.get('accounts', [])):
             failures.append('Work is still in the account list')
-        # Its sign-in goes at once; its records link stays until the next launch, for anything
-        # started on Work that still runs (claude_accounts.rs remove_sign_in).
+        # Its sign-in goes at once; its records link stays for good, for anything started on Work
+        # that still runs and every path a saved transcript names under Work's folder
+        # (claude_accounts.rs remove_sign_in, remove_leftover).
         left = guest(self.vm, 'ls -A ' + shlex.quote(self.work) + ' 2>/dev/null || true').split()
         if left not in ([], ['projects']):
             failures.append("Work's sign-in is still there: " + folder[:300])

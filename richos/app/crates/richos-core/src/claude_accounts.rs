@@ -554,15 +554,17 @@ fn remove_empty(dir: &Path) -> io::Result<()> {
     fs::remove_dir(dir)
 }
 
-/// **Remove an account's sign-in folder, never a record in it**: its `projects` link is
-/// unlinked (never followed), and a real `projects` still there (no shared place was named, so
-/// nothing could be moved) is left with the folder around it; everything else goes.
+/// **Remove an account's sign-in, never a record**: everything in its folder goes except
+/// `projects`, which stays with the folder around it: the link to the shared records, or a real
+/// `projects` (no shared place was named, so nothing could be moved; the next launch moves it and
+/// links it, `remove_leftover`).
 fn remove_sign_in(folder: &Path) -> io::Result<()> {
-    // The `projects` link stays: a session started on this account (Stu's, with a command still
-    // running) keeps writing the path it started with, under this folder, and the link keeps that
-    // path in the shared records (second review rv-20261101T193138Z, P1; the CEO's §153: a switch
-    // waits for running work). The next launch, when nothing started here can still run, removes
-    // the link and the emptied folder (`Accounts::share_records`, `remove_leftover`).
+    // The `projects` link stays, for good: a session started on this account (Stu's, with a
+    // command still running) keeps writing the path it started with, under this folder (second
+    // review rv-20261101T193138Z, P1; the CEO's §153: a switch waits for running work), and every
+    // saved transcript names its long tool output by an absolute path under this folder
+    // (`.../projects/<project>/<session>/tool-results/...`, handover review
+    // rv-20261101T200002Z, P2). The link keeps every such path reading the shared records.
     let own = folder.join(RECORDS);
     for entry in fs::read_dir(folder)? {
         let entry = entry?;
@@ -576,17 +578,21 @@ fn remove_sign_in(folder: &Path) -> io::Result<()> {
     }
 }
 
-/// **What a removed account left at the last launch** (`remove_sign_in`): its records join the
-/// others if a real `projects` is there, its `projects` link goes (never followed), and the folder
-/// goes once nothing else is in it.
+/// **What a removed account left** (`remove_sign_in`), at every launch: its records join the
+/// others if a real `projects` is there, and the folder keeps a `projects` link to them for good.
+/// Every transcript a chat on that account saved names paths under that folder (a resumed
+/// session's file, a long tool output's `tool-results/...`), and they read the shared records
+/// through it. A link already there is left exactly as it is (never followed, never replaced);
+/// nothing else in the folder is touched.
 fn remove_leftover(folder: &Path, shared: &Path) -> io::Result<()> {
-    move_own_records(folder, shared)?;
     let own = folder.join(RECORDS);
-    if fs::symlink_metadata(&own).is_ok_and(|m| m.file_type().is_symlink()) {
-        fs::remove_file(&own)?;
+    match fs::symlink_metadata(&own) {
+        Ok(meta) if meta.file_type().is_symlink() => Ok(()),
+        Ok(meta) if meta.is_dir() => { move_own_records(folder, shared)?; link(shared, &own) }
+        Ok(_) => Err(io::Error::other(format!("{} is not a folder", own.display()))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => link(shared, &own),
+        Err(e) => Err(e),
     }
-    if fs::read_dir(folder)?.next().is_none() { fs::remove_dir(folder)?; }
-    Ok(())
 }
 
 /// A switch that is decided but has not happened yet: no conversation turn has run under `to`,
@@ -1475,15 +1481,46 @@ pub(crate) mod tests {
         assert_eq!(record_in(&record, &home.join(RECORDS)), Some(home.join("projects/-coordination/s1.jsonl")),
             "the path Claude Code named under Work finds the record");
         Accounts::open(&dir.path().join("data")).unwrap().share_records(&home).unwrap();
-        assert!(!folder.exists(), "the next launch removes what was left");
-        assert!(home.join("projects/-coordination/s1.jsonl").exists());
+        assert_eq!(fs::read_link(folder.join(RECORDS)).unwrap(), home.join(RECORDS), "the next launch keeps the records link");
+        assert_eq!(fs::read_to_string(&record).unwrap(), "{\"type\":\"user\",\"message\":\"hello from Work\"}\n",
+            "the path Claude Code named under Work still reads the record");
+    }
+
+    /// **A saved transcript's reference into a removed account's folder still reads, for good**
+    /// (handover review rv-20261101T200002Z, P2). Claude Code saves a long tool output beside the
+    /// session (`<session>/tool-results/...`) and writes its absolute path, under the account's
+    /// folder, into the transcript. Work is removed and the app relaunched: that path, read out of
+    /// the transcript, still gives the output, because Work's folder keeps its `projects` link.
+    #[test]
+    fn a_saved_tool_output_named_under_a_removed_account_still_reads_after_a_relaunch() {
+        let dir = Scratch::new();
+        let (home, accounts) = shared(&dir);
+        let work = accounts.add("Work").unwrap();
+        let folder = work.folder.clone().unwrap();
+        write(&folder.join(".claude.json"), "{\"oauthAccount\":{}}");
+        let output = folder.join("projects/-coordination/s1/tool-results/toolu_01.txt");
+        write(&output, "the whole long output\n");
+        let transcript = folder.join("projects/-coordination/s1.jsonl");
+        let line = serde_json::json!({"type": "user", "toolUseResult": format!("Output too large. Full output saved to: {}", output.display())});
+        write(&transcript, &format!("{line}\n"));
+        accounts.remove(&work.id).unwrap();
+        for launch in 1..=2 {
+            Accounts::open(&dir.path().join("data")).unwrap().share_records(&home).unwrap();
+            let text = fs::read_to_string(home.join("projects/-coordination/s1.jsonl")).unwrap();
+            let row: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+            let named = row["toolUseResult"].as_str().unwrap().rsplit("saved to: ").next().unwrap().to_owned();
+            assert_eq!(Path::new(&named), output.as_path(), "the transcript names the path under Work's folder");
+            assert_eq!(fs::read_to_string(&named).map_err(|e| e.kind()), Ok("the whole long output\n".to_owned()),
+                "launch {launch}: the saved output reads from the path the transcript names");
+        }
+        assert!(!folder.join(".claude.json").exists(), "Work's sign-in is gone");
     }
 
     /// **Removing an account while something started on it still runs** (second review
     /// rv-20261101T193138Z, P1; the CEO's §153: a switch waits for running work). A session started
     /// on Work (Stu's, with a command running) keeps writing the path it started with, under Work's
     /// folder. Work is removed: its sign-in goes at once, its records link stays, so that session's
-    /// next turns are still written to the shared record; the next launch removes the link.
+    /// next turns are still written to the shared record, and still are after a relaunch.
     #[test]
     fn removing_an_account_while_a_session_started_on_it_still_runs_keeps_its_writes_in_the_shared_record() {
         let dir = Scratch::new();
@@ -1501,13 +1538,15 @@ pub(crate) mod tests {
         let shared_record = home.join("projects/-coordination/stu.jsonl");
         assert_eq!(fs::read_to_string(&shared_record).unwrap(), "{\"uuid\":\"a\"}\n{\"uuid\":\"b\"}\n", "written to the shared record");
         Accounts::open(&dir.path().join("data")).unwrap().share_records(&home).unwrap();
-        assert!(!folder.exists(), "the next launch removes the link and the folder");
-        assert_eq!(fs::read_to_string(&shared_record).unwrap(), "{\"uuid\":\"a\"}\n{\"uuid\":\"b\"}\n");
+        fs::OpenOptions::new().append(true).open(&started).expect("the path survives the next launch too")
+            .write_all(b"{\"uuid\":\"c\"}\n").unwrap();
+        assert_eq!(fs::read_to_string(&shared_record).unwrap(), "{\"uuid\":\"a\"}\n{\"uuid\":\"b\"}\n{\"uuid\":\"c\"}\n");
     }
 
     /// **Removing never deletes a record, even with nowhere to move it**: before the shared place
     /// is named (or where a link is refused), Work's records stay in its folder when it is removed
-    /// and everything else goes; the next launch moves them into the shared place.
+    /// and everything else goes; the next launch moves them into the shared place and links
+    /// Work's `projects` to them, so a path under Work's folder still reads.
     #[test]
     fn removing_an_account_with_nowhere_to_move_its_records_keeps_them_and_the_next_launch_moves_them() {
         let dir = Scratch::new();
@@ -1521,7 +1560,8 @@ pub(crate) mod tests {
         let home = dir.path().join("home");
         Accounts::open(&dir.path().join("data")).unwrap().share_records(&home).unwrap();
         assert_eq!(fs::read_to_string(home.join("projects/-p/s.jsonl")).unwrap(), "kept\n");
-        assert!(!work.join("projects").exists());
+        assert_eq!(fs::read_link(work.join("projects")).unwrap(), home.join("projects"));
+        assert_eq!(fs::read_to_string(work.join("projects/-p/s.jsonl")).unwrap(), "kept\n");
     }
 
     /// **An added account keeps records as long as Account 1 does**: its `settings.json` carries
@@ -1611,7 +1651,8 @@ pub(crate) mod tests {
         assert_eq!(read("-p/partial.jsonl.from-account-2"), "{\"uuid\":\"a\",\"x\":1}\n", "and is kept beside it");
         assert_eq!(read("-t/terminal.jsonl"), "terminal\n", "Account 1's own records are untouched");
         assert_eq!(read("-q/removed.jsonl"), "removed account\n", "a removed account's records join");
-        assert!(!orphan.exists(), "a removed account's emptied folder goes");
+        assert_eq!(fs::read_link(orphan.join("projects")).unwrap(), shared, "a removed account's folder keeps a link to them");
+        assert_eq!(fs::read_to_string(orphan.join("projects/-q/removed.jsonl")).unwrap(), "removed account\n");
         assert!(work.join(".claude.json").exists(), "the sign-in stays where it is");
 
         let listing = |root: &Path| { let mut all = Vec::new(); let mut stack = vec![root.to_path_buf()];
