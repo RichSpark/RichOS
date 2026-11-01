@@ -1592,16 +1592,24 @@ def publish_channel_results(rows, owners):
             try:
                 channel_reply(channel["locator"], channel["message_id"], str(row.get("id")),
                               "Automatic independent review observation:\n" + "\n".join(render_verdict(row, {})))
+                for notice_key, block in convergence_notices(row, rows, "codex"):
+                    channel_reply(channel["locator"], channel["message_id"], notice_key, "\n".join(block))
             except (OSError, ValueError, KeyError) as exc:
                 print("review-watch: result retained in review ledger for %s: %s" % (channel, exc), file=sys.stderr)
-    for owner in owners:
-        if owner.get("channel") and owner.get("outcome") in ("lost", "held"):
-            channel = owner["channel"]
-            try:
-                channel_reply(channel["locator"], channel["message_id"], "attempt-%s-%s" % (owner.get("started_at"), owner.get("outcome")),
-                              "Automatic review %s for %s@%s: %s" % (owner["outcome"], owner.get("repo"), owner.get("tip"), owner.get("why")))
-            except (OSError, ValueError, KeyError) as exc:
-                print("review-watch: attempt notice retained for %s: %s" % (channel, exc), file=sys.stderr)
+    # Use the existing loss budget and notice text, not a new first-loss or
+    # quota-hold notification policy for dedicated channels.
+    book = Book(rows, {}, [o for o in owners if o.get("outcome")])
+    for key in lost_review_keys(book).values():
+        attempt = book.losses[key][-1]
+        channel = attempt.get("channel")
+        if not channel or (key[0] and git(key[0], "merge-base", "--is-ancestor", str(key[1]), "refs/heads/main") is not None):
+            continue
+        try:
+            channel_reply(channel["locator"], channel["message_id"], "lost:%s:%s" % key,
+                          "\n".join(lost_review_notice(key, attempt, None)))
+        except (OSError, ValueError, KeyError) as exc:
+            print("review-watch: attempt notice retained for %s: %s" % (channel, exc), file=sys.stderr)
+
 
 def _verdict_file(row):
     try:
@@ -1726,6 +1734,28 @@ def not_converging(row, rows):
     both = still(now_v) & still(prev_v)
     titles = dict((e.get("id"), e.get("title")) for e in now_v.get("earlier_findings_in") or [])
     return [(fid, titles.get(fid) or "") for fid in sorted(both)]
+
+
+def convergence_notices(row, rows, who):
+    return [("nc:%s:%s" % (row.get("work"), fid), [
+        "  [NOT CONVERGING] %s: finding %s (%s) is still open after two rechecks in a row." %
+        (who, fid, " ".join(title.split())[:100]),
+        "      You decide: another engineer, another model or a smaller slice. The CEO is not paged."])
+        for fid, title in not_converging(row, rows)]
+
+
+def lost_review_keys(book):
+    return dict(("lost:%s:%s" % key, key) for key, lost in book.losses.items() if len(lost) >= MAX_LOSSES)
+
+
+def lost_review_notice(key, attempt, item):
+    if item and item.source == "app" and item.state == "ended" and not item.stopped_early:
+        action = "The automatic handover review will retry at %s; fix the cause if it persists." % hhmm(
+            float(attempt.get("ended_at") or 0) + REPEAT_MINUTES * 60)
+    else:
+        action = "Nothing more starts for this commit by itself. You can: fix the cause, then run second-review.sh by hand."
+    return ["  [NO VERDICT TWICE] %s, %s@%s: %s" % (attempt.get("name"), os.path.basename(key[0] or ""),
+            str(key[1])[:12], " ".join(str(attempt.get("why")).split())[:300]), "      " + action]
 
 
 # --host-json (the operator host's child, richos-core review_watch.rs): every look's notices as
@@ -1907,14 +1937,10 @@ def tell(now, sstate, rows, book, items, problems, attempts):
         blocks = [render_verdict(row, items_by_key)]
         # NOT CONVERGING is kept until accepted, like its verdict (the real second review of
         # 0be50ade1, finding 1): an owned one carries its own delivery key, never a told mark.
-        nc = [(k, fid, title) for k, fid, title in (("nc:%s:%s" % (row.get("work"), fid), fid, title)
-                                                    for fid, title in not_converging(row, rows))
-              if k not in told and k not in delivered and k not in pending and k not in keys]
         who, _it = _who(row, items_by_key)
-        blocks += [["  [NOT CONVERGING] %s: finding %s (%s) is still open after two rechecks in a row." % (
-                        who, fid, " ".join(title.split())[:100]),
-                    "      You decide: another engineer, another model or a smaller slice. The CEO is not paged."]
-                   for _k, fid, title in nc]
+        nc = [(k, block) for k, block in convergence_notices(row, rows, who)
+              if k not in told and k not in delivered and k not in pending and k not in keys]
+        blocks += [block for _, block in nc]
         cost = sum(len(x) + 1 for b in blocks for x in b) if budget is not None and for_this_monitor(session) else 0
         if cost and used and used + cost > budget:
             stop = i                                # the cap: this row and every later one wait for the next look
@@ -1924,11 +1950,11 @@ def tell(now, sstate, rows, book, items, problems, attempts):
         add(blocks[0], session=session, key=key if owned else None, mark=(
             _cr_key(row.get("repo"), row.get("tip"), row.get("work")), {"first": now, "last": now, "count": 1})
             if cr else None)
-        for b, (k, _fid, _title) in zip(blocks[1:], nc):
+        for b, (k, _block) in zip(blocks[1:], nc):
             add(b, session=session, key=k if owned else None, mark=None if owned else (k, {"first": now}))
     sstate["rows"] = max(start, stop)
     shared["rows"] = max(stop, seen or 0)
-    lost_twice = dict(("lost:%s:%s" % key, key) for key, lost in book.losses.items() if len(lost) >= MAX_LOSSES)
+    lost_twice = lost_review_keys(book)
     ids = set(_row_key(r) for r in rows if r.get("verdict")) | set(lost_twice)
     shared["delivered"] = dict((k, t) for k, t in delivered.items() if k in ids or (
         (k.startswith("nc:") or k.startswith("recovery:")) and now - float(t or 0) <= KEEP_SECONDS))
@@ -1977,15 +2003,8 @@ def tell(now, sstate, rows, book, items, problems, attempts):
             continue
         a = book.losses[key][-1]
         item = items_by_key.get(key + (a.get("work") or "",)) or items_by_key.get(key)
-        if item and item.source == "app" and item.state == "ended" and not item.stopped_early:
-            action = "The automatic handover review will retry at %s; fix the cause if it persists." % hhmm(
-                float(a.get("ended_at") or 0) + REPEAT_MINUTES * 60)
-        else:
-            action = "Nothing more starts for this commit by itself. You can: fix the cause, then run second-review.sh by hand."
         session = a.get("session") or getattr(items_by_key.get(key + (a.get("work") or "",)), "session", "") or ""
-        add(["  [NO VERDICT TWICE] %s, %s@%s: %s" % (a.get("name"), os.path.basename(key[0] or ""),
-                                                    str(key[1])[:12], " ".join(str(a.get("why")).split())[:300]),
-             "      " + action], session=session, key=k if ours(session) else None,
+        add(lost_review_notice(key, a, item), session=session, key=k if ours(session) else None,
             mark=None if ours(session) else (k, {"first": now}))
     # -- what could not be read or started ------------------------------------------
     for p in problems:

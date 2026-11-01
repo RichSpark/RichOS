@@ -101,6 +101,30 @@ class Reviews(unittest.TestCase):
         with mock.patch.dict(os.environ, {"REVIEW_WATCH_TO_RICH": str(old / "to-rich.md")}):
             self.assertEqual(world.codex_items(100, {}), ([], []))
 
+    def test_existing_loss_budget_and_convergence_notices_return_on_origin(self):
+        state = {}
+        item = self.world.codex_items(100, state)[0][0]
+        owner = dict(repo=item.repo, work=item.work, tip=item.tip, channel=item.channel,
+                     outcome="lost", started_at=100, ended_at=101, name="codex", why="fixture failure")
+        rw.publish_channel_results([], [owner])
+        self.assertFalse(any(r.get("kind") == "review_result" for r in c.read(self.path)["records"]), "one loss must not create a new notification policy")
+        rw.publish_channel_results([], [owner, dict(owner, started_at=102, ended_at=103)])
+        rw.publish_channel_results([], [owner, dict(owner, started_at=102, ended_at=103)])
+        self.assertEqual(sum("NO VERDICT TWICE" in r["text"] for r in c.read(self.path)["records"]), 1)
+        rows = []
+        for index, tip in enumerate([self.base, self.tip]):
+            record = self.root / ("review-" + str(index))
+            record.mkdir()
+            (record / "verdict.json").write_text(json.dumps(dict(
+                answer=dict(earlier_findings=[dict(id="finding-1", status="still-open", blocks=True)]),
+                earlier_findings_in=[dict(id="finding-1", title="Unresolved issue")])) )
+            rows.append(dict(id="review-" + str(index), repo=item.repo, work=item.work, tip=tip,
+                             verdict="changes-requested", trigger="handover", record=str(record)))
+        rw.publish_channel_results(rows, state["channel_pending"])
+        result = c.read(self.path)["records"]
+        self.assertEqual(sum("NOT CONVERGING" in r["text"] for r in result), 1)
+        self.assertTrue(all(r.get("reply_to") == "ready" for r in result if r.get("kind") == "review_result"))
+
     def test_wrong_company_repository_and_split_result_write_remain_with_origin(self):
         other = Path(c.connect("Other task", "other transcript", scope=dict(self.scope, entity_id="company-b", thread_id="chat-b"))["locator"])
         c.send(other, "wrong", "## READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip)

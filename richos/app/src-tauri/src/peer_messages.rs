@@ -16,12 +16,10 @@ fn drain(app:&AppHandle)->Result<(),String> {
     let mut held=Vec::new();
     for thread in view.threads() {
         // One unreadable inbox holds its owner, never the other conversations.
-        let result=(||->Result<(),String> {
-        let binding=view.ledger().thread_binding(&thread.id).map_err(|e|e.to_string())?;
+        let Ok(binding)=view.ledger().thread_binding(&thread.id) else {continue};
         let scope=StatusToolScope { version:1,state_root:state.data_dir.join("engine-state"),
             entity_id:binding.entity_id().to_string(),thread_id:thread.id.clone()};
-        drain_inboxes(app,&state,&thread.id,&binding,&scope)
-        })();
+        let result=drain_inboxes(app,&state,&thread.id,&binding,&scope);
         if let Err(error)=result {held.push(format!("{}: {error}",thread.id));}
     }
     if held.is_empty() {Ok(())} else {Err(held.join("; "))}
