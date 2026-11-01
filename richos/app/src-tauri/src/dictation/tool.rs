@@ -1269,6 +1269,20 @@ fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::p
 /// What was pasted and where the selection began, when Accessibility could read it.
 type Landed = Option<(isize, String)>;
 
+/// Looks for the engine's decoder again when none is delivered, THEN picks the model: the pick's
+/// own check needs the decoder, so the order is the fix.
+fn pick_after_engine_lookup(
+    chosen: &str,
+    has_engine: impl Fn() -> bool,
+    look: impl FnOnce(),
+    verified: impl Fn(&str) -> bool,
+) -> ModelPick {
+    if !has_engine() {
+        look();
+    }
+    pick_model(chosen, verified)
+}
+
 /// The words in place: `Ok` with the problem to say afterwards (if any) and what was pasted where.
 fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool,target:Option<(&str,&Hub)>) -> Result<(Option<Problem>, Landed), Problem> {
     let secs = recording.secs();
@@ -1279,7 +1293,18 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
         }
         Stopped::Transcribe { then } => then,
     };
-    let pick = pick_model(chosen, |id| stt::model_verified(id).is_ok());
+    // **The engine is looked for again BEFORE the models are checked.** A tool whose single look
+    // at its own start found no verified runtime (the engine was being replaced as the app
+    // started, 2026-11-01 16:43Z) kept looking at nothing for good, because
+    // `DELIVERED_RUNTIME_BIN` is only set at start; and `model_verified` resolves whisper-cli
+    // first, so with no engine both models failed and this returned ModelMissing before any
+    // later retry could run.
+    let pick = pick_after_engine_lookup(
+        chosen,
+        || stt::delivered_runtime_bin_dir().is_some(),
+        || log::line(&resolve_runtime_bin_alone()),
+        |id| stt::model_verified(id).is_ok(),
+    );
     if let ModelPick::Fallback { wanted, using } = &pick {
         log::line(&format!("{wanted} is not verified on this Mac yet; using {using} for this dictation"));
     }
@@ -1349,6 +1374,22 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// A start that found no engine recovers: the lookup runs BEFORE the models are checked, so a
+    /// model check that needs the decoder (as `stt::model_verified` does) passes after it.
+    #[test]
+    fn the_engine_is_looked_for_before_the_models_are_checked() {
+        use std::cell::Cell;
+        let found = Cell::new(false);
+        let verified = |_: &str| found.get();
+        let none = pick_after_engine_lookup("large-v3-turbo-q5_0", || found.get(), || {}, verified);
+        assert!(none.id().is_none(), "control: without the lookup, no model verifies");
+        let recovered = pick_after_engine_lookup("large-v3-turbo-q5_0", || found.get(), || found.set(true), verified);
+        assert!(recovered.id().is_some(), "the lookup must run before the models are checked");
+        let calls = Cell::new(0);
+        let has = pick_after_engine_lookup("large-v3-turbo-q5_0", || true, || calls.set(1), |_| true);
+        assert!(has.id().is_some() && calls.get() == 0, "an engine already delivered is not looked for again");
     }
 
     /// INVARIANT: the tool takes exactly its two arguments. A data folder, when given, is

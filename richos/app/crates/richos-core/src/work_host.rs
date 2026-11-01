@@ -6589,8 +6589,13 @@ done
 
         // Controls: each live session keeps counting.
         // It started again after its end (resumed): SessionStart follows, and the record drops ended_at.
-        journal(&(ended.clone() + &row("SessionStart", serde_json::json!({"source": "resume"}))));
+        // A helper launched BEFORE that resume died with the process that ran it (no end was ever
+        // written), so it does not count; one launched after the resume does.
+        let resumed = ended.clone() + &row("SessionStart", serde_json::json!({"source": "resume"}));
+        journal(&resumed);
         std::fs::remove_file(&record).unwrap();
+        assert_eq!(h.host.background_work().running, 0, "a helper launched before the session's resume was counted as running");
+        journal(&(resumed + &launched));
         assert_eq!(h.host.background_work().running, 1, "a session that started again after its end was read as ended");
         // Its recorded provider process still runs (this process, with its own start).
         journal(&ended);
