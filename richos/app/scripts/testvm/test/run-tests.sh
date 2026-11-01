@@ -2025,6 +2025,10 @@ t "woken-turn-walk: Rich's background launch, his turn's end, then a run of his 
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/woken-turn-walk.test.py" >"$TMP/woken-turn-walk.log" 2>&1; ok $? "$(cat "$TMP/woken-turn-walk.log")"
 t_done
 
+t "resend-walk: an accepted open handoff whose session record holds it; no turn and the received mark pass"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/resend-walk.test.py" >"$TMP/resend-walk.log" 2>&1; ok $? "$(cat "$TMP/resend-walk.log")"
+t_done
+
 t "reap: WALL 2 admits the walk-* and probes-* clone names the harnesses create (R53)"
   # The stub-tart route is closed: reap.sh refuses an unsigned tart at its launch preflight, so
   # the wall is read from source, the way the claude-login tests above read theirs.
