@@ -134,7 +134,9 @@ done
 if has "We can still prepare your report."; then fail "A3 Claude Code could not help in the guest (see the capture)"; fi
 if has "Checked"; then pass "A3 a read-only tool ran (a folded progress line is on screen)"; else fail "A3 no tool progress was shown"; fi
 click "Review report" || click "Prepare report now" || fail "asking for the report"
-if wait_text "Review your report" 40; then pass "the review opened"; else fail "the review did not open"; fi
+# "What RichDoctor found" is painted only when the review is built; "Review your report" is on the page
+# already, so waiting on it let this check run before Claude's draft was in (a race seen 2026-11-01).
+if wait_text "What RichDoctor found" 40; then pass "the review opened"; else fail "the review did not open"; fi
 "$T/shot.sh" "$VM" "$S/3-review.png" || fail "capture 3-review"
 if has "What RichDoctor found"; then pass "A3 the review shows what RichDoctor found"; else fail "A3 the review has no What RichDoctor found section"; fi
 for leak in "Walker Probeson" "Probeson Holdings" "$TOKEN" "$GHOME"; do
@@ -162,6 +164,96 @@ if gs "test -e $G/SENTINEL"; then fail "A4 the sentinel file exists"; else pass 
 AFTER=$(gs "shasum -a 256 '$GHOME/Library/Logs/RichOS/startup.log' '$GHOME/Library/Application Support/com.richos.app/config.json'")
 if [ "$BEFORE" = "$AFTER" ]; then pass "A4 the fixture sources are byte-identical"; else fail "A4 a fixture source changed"; fi
 if gs "test -e '$GHOME/Library/Logs/DiagnosticReports' || test -e '$GHOME/Library/Application Support/RichOS'"; then fail "A4 an absent source root was created"; else pass "A4 absent source roots stay absent"; fi
+
+# ---- the three kinds of extra work the CEO's 2026-11-01 ruling (§156) removed ------------------
+# Each one is a step a person used to do again: B1 an investigation Claude had begun (closing the
+# window mid-investigation, reopening: it continues with Claude and the report is prepared with
+# Claude), B2 the unfinished-report offer asked again after Start a new report, B3 the questions
+# Prepare without AI left for the person to type in. Same app, same relay stand-in, same guest.
+DRAFTS="$GHOME/Library/Application Support/com.richos.richdoctor/drafts"
+draft_files() { gs "ls -t '$DRAFTS'/*/draft.json 2>/dev/null" | tr -d '\r'; }
+newest_draft() { draft_files | head -1; }
+close_window() {
+  "$T/ax.sh" "$VM" 'tell application "System Events" to tell process "RichDoctor" to click (first button of window 1 whose subrole is "AXCloseButton")' >/dev/null 2>&1
+}
+reopen_window() { gs "$AS open '$GHOME/Applications/RichDoctor.app'" >/dev/null 2>&1; }
+type_description() { # $1 the words; the first screen is open
+  "$T/ax.sh" "$VM" click --role AXTextArea --app RichDoctor --first >/dev/null 2>&1 || true
+  "$T/ax.sh" "$VM" "tell application \"System Events\" to keystroke \"$1\"" >/dev/null 2>&1
+  sleep 1
+}
+type_answer() { # $1 the words, into the answer field, then the Answer button (a Return key to the app is not reliable)
+  click "Your answer" || true
+  "$T/ax.sh" "$VM" "tell application \"System Events\" to keystroke \"$1\"" >/dev/null 2>&1
+  click "Answer" || fail "pressing Answer"
+}
+
+# B1: begin a second report, answer the time, and close the window while Claude is working.
+click "Done" || fail "B1 leaving the sent report"
+if wait_text "What went wrong?" 20; then pass "B1 the first screen is back after Done"; else fail "B1 the first screen did not return"; fi
+if has "Continue your unfinished report?"; then fail "B1 an approved, sent report is offered as unfinished"; else pass "B1 a sent report is not offered as unfinished"; fi
+type_description "RichOS shows a blank window after an update. It happened twice today."
+click "Continue" || fail "B1 pressing Continue"
+if wait_text "About when did it last happen?" 20; then pass "B1 the time question"; else fail "B1 the time question"; fi
+click "Just now" || fail "B1 answering Just now"
+sleep 2
+close_window
+sleep 3
+DRAFT=$(newest_draft)
+if has "What went wrong?" || has "Investigating with your Claude Code account"; then fail "B1 the window did not close"; else pass "B1 the window closed mid-investigation"; fi
+if [ -n "$DRAFT" ] && gs "grep -q '\"in_flight\": *true' '$DRAFT'"; then pass "B1 the saved report keeps the investigation in flight"; else fail "B1 the investigation had already finished or was not saved as in flight (the close was not mid-investigation)"; fi
+if [ -n "$DRAFT" ] && gs "grep -q 'canceled' '$DRAFT'"; then fail "B1 closing the window wrote 'canceled' into the report"; else pass "B1 closing the window wrote no 'canceled'"; fi
+reopen_window
+if wait_text "Continue your unfinished report?" 20; then pass "B1 the reopened window offers the unfinished report"; else fail "B1 no offer of the unfinished report"; fi
+click "Continue" || fail "B1 pressing Continue on the unfinished report"
+for _ in $(seq 1 60); do
+  has "Your answer" && break
+  has "Review report" && break
+  has "Investigation canceled." && break
+  has "We can still prepare your report." && break
+  sleep 3
+done
+"$T/shot.sh" "$VM" "$S/5-reopened.png" || fail "capture 5-reopened"
+if has "Investigation canceled."; then fail "B1 the reopened report says the investigation was canceled"; else pass "B1 the reopened report is not shown as canceled"; fi
+if has "We can still prepare your report."; then fail "B1 Claude Code could not help after reopening (see the capture)"; fi
+if has "Your answer" || has "Review report"; then pass "B1 the investigation continued by itself: Claude's next turn is on screen"; else fail "B1 Claude had no turn after reopening"; fi
+click "Prepare report now" || click "Review report" || fail "B1 asking for the report"
+# "What RichDoctor found" is painted only when the review is built (Claude's draft takes up to 90 s).
+if wait_text "What RichDoctor found" 40; then pass "B1 the review opened"; else fail "B1 the review did not open"; fi
+"$T/shot.sh" "$VM" "$S/6-reopened-review.png" || fail "capture 6-reopened-review"
+if has "Prepared without AI" || has "Claude did not check it for private details"; then fail "B1 the reopened report was prepared without Claude"; else pass "B1 the reopened report was prepared with Claude"; fi
+click "Save for later" || fail "B2 saving the report for later"
+sleep 2
+
+# B2: the unfinished report is offered; Start a new report; it is not offered again.
+close_window; sleep 2
+reopen_window
+if wait_text "Continue your unfinished report?" 20; then pass "B2 the saved unfinished report is offered"; else fail "B2 the unfinished report was not offered"; fi
+click "Start a new report" || fail "B2 pressing Start a new report"
+close_window; sleep 2
+reopen_window
+if wait_text "What went wrong?" 20; then pass "B2 the first screen after reopening"; else fail "B2 the first screen after reopening"; fi
+if has "Continue your unfinished report?"; then fail "B2 the offer came back after Start a new report"; else pass "B2 the offer did not come back after Start a new report"; fi
+if [ -n "$DRAFT" ] && gs "grep -q '\"resume_declined\": *true' '$DRAFT'"; then pass "B2 the choice is saved on the draft, which stays in Saved reports"; else fail "B2 the choice was not saved on the draft"; fi
+"$T/shot.sh" "$VM" "$S/7-not-offered-again.png" || fail "capture 7-not-offered-again"
+
+# B3: Prepare without AI asks when and the two questions, and the report carries the answers.
+type_description "RichOS will not open after I restart my Mac."
+click "Prepare without AI" || fail "B3 pressing Prepare without AI"
+if wait_text "About when did it last happen?" 30; then pass "B3 Prepare without AI asks when"; else fail "B3 no time question"; fi
+click "Just now" || fail "B3 answering Just now"
+if wait_text "What did you expect to happen?" 30; then pass "B3 it asks what the person expected"; else fail "B3 no expected question"; fi
+type_answer "RichOS should open with my conversations."
+if wait_text "What were you doing just before it happened?" 30; then pass "B3 it asks what the person was doing"; else fail "B3 no steps question"; fi
+type_answer "I had restarted the Mac and clicked the Dock icon."
+if wait_text "Review report" 30; then pass "B3 the report is ready after the last answer"; else fail "B3 the report was not ready"; fi
+click "Review report" || fail "B3 pressing Review report"
+if wait_text "What RichDoctor found" 40; then pass "B3 the review opened"; else fail "B3 the review did not open"; fi
+"$T/shot.sh" "$VM" "$S/8-without-ai-review.png" || fail "capture 8-without-ai-review"
+DRAFT3=$(newest_draft)
+if [ -n "$DRAFT3" ] && gs "grep -q 'RichOS should open with my conversations' '$DRAFT3' && grep -q 'I had restarted the Mac' '$DRAFT3'"; then pass "B3 the answers are in the report's Expected and steps"; else fail "B3 the answers are not in the report"; fi
+if has "Not known."; then fail "B3 the report says When: Not known."; else pass "B3 the report has its When"; fi
+if has "Not answered, unknown"; then fail "B3 a question is listed as unknown for the person to fill in"; else pass "B3 no question is left unknown"; fi
 
 # ---- A12: Quit leaves nothing running ----------------------------------------------------------
 # Quit as macOS quits an app (the menu's Quit RichDoctor does the same: RunEvent::Exit).
