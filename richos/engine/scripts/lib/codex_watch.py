@@ -60,8 +60,10 @@ tests), CODEX_WATCH_STATE_DIR, CODEX_WATCH_POLL_SECONDS (tests only).
 """
 
 import argparse
+import contextlib
 import os
 import shutil
+import signal
 import sys
 import time
 
@@ -219,8 +221,31 @@ def tick(sd, now=None, out=None, json_lines=False, config=""):
     # The pipe remains ordered: native keeps any already emitted legacy lines
     # before accepting the following framed import events. No post-cutover raw
     # parsing or new spool writer survives that pass.
-    with codex_channels.locked(codex_channels.root() / "coordinator.lock"):
+    with _one_whole_look(), codex_channels.locked(codex_channels.root() / "coordinator.lock"):
         return _legacy_tick(sd, now, out, json_lines, config)
+
+
+# What ends a watcher: the app's quit (SIGTERM, richos-core owned_process.rs), a terminal
+# closing (SIGHUP) and Ctrl-C.
+_STOPS = {getattr(signal, name) for name in ("SIGTERM", "SIGHUP", "SIGINT") if hasattr(signal, name)}
+
+
+@contextlib.contextmanager
+def _one_whole_look():
+    """A look tells its entries and then saves how far it told. A stop that landed between
+    the two left the old offset on disk, and the next start told the same entries again
+    (nightly gate 2026-11-01: quitting and reopening the app gave Stu each waiting entry
+    twice). So a stop that arrives during a look takes effect the moment the look has saved,
+    never in between; between looks it ends the watcher at once, as it always did."""
+    block = getattr(signal, "pthread_sigmask", None)
+    if block is None:
+        yield
+        return
+    before = block(signal.SIG_BLOCK, _STOPS)
+    try:
+        yield
+    finally:
+        block(signal.SIG_SETMASK, before)
 
 
 def _legacy_tick(sd, now=None, out=None, json_lines=False, config=""):

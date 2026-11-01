@@ -30,6 +30,8 @@
 #   C10  the user's setting: CODEX_CHANNELS in orchestration.config names the
 #        channel folders; an entry in a configured folder is told, one in a
 #        folder the setting leaves out is not; an empty value watches none
+#   C11  a SIGTERM that lands after a look told an entry but before it saved
+#        how far it told: the next start tells each entry exactly once
 #
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
@@ -217,6 +219,89 @@ cfg_tick; cfg_tick; Y="$OUT"
 check "C10  CODEX_CHANNELS names the watched folders: the configured one is told, one it leaves out is not; empty watches none" \
     "$( [ "$(headers "$X")" -eq 1 ] && has "$X" "team-codex/to-rich.md" && has "$X" "configured-line" \
         && ! has "$X" "left-out-line" && ! has "$X" "configured-backlog" && [ -z "$Y" ]; echo $?)" "x=$X y=$Y"
+
+# --- C11: a stop between telling and saving -----------------------------------
+# The app stops its child with SIGTERM (richos-core owned_process.rs terminate_leader). One
+# that lands after a look has told an entry but before it saved how far it told used to leave
+# the old offset on disk, and the next start told the same entries again (nightly gate
+# 2026-11-01, codex_watch.rs legacy_spool_survives_quit...). The second entry here is larger
+# than any pipe holds, and nothing reads past the first line until the SIGTERM has gone, so
+# the stop lands inside that window every time, never by luck.
+python3 - "$CW" "$SB" <<'PY'; RC=$?
+import json, os, signal, subprocess, sys, threading, time
+cw, sb = sys.argv[1:3]
+lib = os.path.join(os.path.dirname(cw), "lib", "codex_watch.py")
+channel = os.path.join(sb, "c11", "to-rich.md")
+state = os.path.join(sb, "state-c11")
+os.makedirs(os.path.dirname(channel))
+with open(channel, "w") as fh:
+    fh.write("## old\nold backlog\n")
+env = dict(os.environ, CODEX_WATCH_POLL_SECONDS="0.2", CODEX_WATCH_STATE_DIR=state,
+           CODEX_WATCH_CHANNELS=channel)
+for key in ("RICHOS_WATCH_HOST", "RICHOS_CODEX_CHANNEL_STATE"):
+    env.pop(key, None)
+offsets = os.path.join(state, "app-host", "offsets.json")
+
+def ino():
+    try:
+        return os.stat(offsets).st_ino
+    except OSError:
+        return None
+
+def looks(n, deadline=30):
+    """Waits until the watcher has saved its state n more times (each save is a new file)."""
+    seen, last, began = 0, ino(), time.time()
+    while seen < n and time.time() - began < deadline:
+        now = ino()
+        if now is not None and now != last:
+            seen, last = seen + 1, now
+        time.sleep(0.02)
+    return seen >= n
+
+def start():
+    return subprocess.Popen([sys.executable, lib, "--monitor", "--host-json"], env=env,
+                            stdout=subprocess.PIPE, stderr=open(os.path.join(sb, "c11.err"), "a"))
+
+def told(raw):
+    out = []
+    for line in raw.split(b"\n")[:-1]:      # a cut-off last line is not delivered
+        try:
+            out.append(json.loads(line)["text"])
+        except ValueError:
+            pass
+    return out
+
+first = start()
+if not looks(2):
+    print("watcher did not start looking", file=sys.stderr); first.kill(); sys.exit(1)
+with open(channel, "a") as fh:
+    fh.write("## first\nfirst task\n## second\n" + "x" * (2 << 20) + "\n")
+raw = b""
+while b"\n" not in raw:
+    chunk = os.read(first.stdout.fileno(), 4096)
+    if not chunk:
+        break
+    raw += chunk
+first.send_signal(signal.SIGTERM)          # the first entry is told; the second cannot be yet
+raw += first.stdout.read()
+first.wait(timeout=30)
+second = start()
+heard = []                                 # read as it comes, as the app's reader does
+reader = threading.Thread(target=lambda: heard.append(second.stdout.read()))
+reader.start()
+ok = looks(3)
+second.send_signal(signal.SIGTERM)
+reader.join(timeout=30)
+second.wait(timeout=30)
+again = b"".join(heard)
+texts = told(raw) + told(again)
+firsts = sum("## first\nfirst task" in t for t in texts)
+seconds = sum("\n## second\n" in t for t in texts)
+print("C11 restart looked=%s told 'first' %d time(s), 'second' %d time(s)" % (ok, firsts, seconds), file=sys.stderr)
+sys.exit(0 if ok and firsts == 1 and seconds == 1 else 1)
+PY
+check "C11  a stop that lands after an entry is told but before it is saved: the next start tells each entry once" \
+    "$RC" "see the C11 line above; err=$(cat "$SB/c11.err" 2>/dev/null)"
 
 if [ "$FAIL" -gt 0 ]; then
     echo "=== codex-watch tests: $FAIL FAILED, $PASS passed ==="
