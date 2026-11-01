@@ -453,44 +453,52 @@ fn run_canonical(
     Ok(code)
 }
 
+/// The most a tool callback may carry: one call's input, which goes on to the canonical hook.
+const CALLBACK_LIMIT: usize = 262_144;
+
+/// The most a [`HOLD_EVENT`] payload is read to. It carries the result of every call in its batch
+/// (`tool_calls[].tool_response`, "the same content the model receives"), so an ordinary batch
+/// passes [`CALLBACK_LIMIT`]: four parallel 1,200-line Reads are 306,237 bytes (review
+/// rv-20261101T012525Z-4a5a9883-0b47), and that limit ended the loop of whoever made them, the
+/// lead included. The gate needs only its metadata ([`BatchHead`]); the results are skipped.
+const BATCH_LIMIT: u64 = 256 << 20;
+
+/// What the gate reads of a [`HOLD_EVENT`] payload: whose batch it is. Everything else in it,
+/// the results above all, is skipped unread.
+#[derive(serde::Deserialize)]
+struct BatchHead {
+    hook_event_name: String,
+    #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
 /// Runs before Tauri initialization in the desktop executable. The canonical
 /// hook still decides permissions, targets and receipts after this gate opens.
 pub fn run_cli() -> i32 {
+    let mut bytes = Vec::new();
+    if let Err(e) = io::stdin().take(BATCH_LIMIT + 1).read_to_end(&mut bytes) {
+        eprintln!("{}", refusal(&e));
+        return 2;
+    }
+    if let Some(head) = serde_json::from_slice::<BatchHead>(&bytes).ok().filter(|h| h.hook_event_name == HOLD_EVENT) {
+        return run_batch(head);
+    }
     let result = (|| -> io::Result<i32> {
-        let mut bytes = Vec::new();
-        io::stdin().take(262145).read_to_end(&mut bytes)?;
-        if bytes.len() > 262144 {
+        if bytes.len() > CALLBACK_LIMIT {
             return Err(io::Error::other("oversized tool callback"));
         }
         let payload: Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        let state = std::env::var_os("RICHOS_APP_STATE")
-            .ok_or_else(|| io::Error::other("missing desktop state"))?;
-        let scope = std::env::var_os("RICHOS_APP_SCOPE")
-            .ok_or_else(|| io::Error::other("missing desktop scope"))?;
-        if !Path::new(&state).is_absolute() || !Path::new(&scope).is_absolute() {
-            return Err(io::Error::other("invalid desktop roots"));
-        }
-        let held = gate(
+        let (state, scope) = desktop_roots()?;
+        gate(
             &payload,
-            Path::new(&state),
-            Path::new(&scope),
+            &state,
+            &scope,
             &account_of_this_process(),
             Duration::from_millis(250),
             Duration::from_secs(21500),
-        );
-        // Nothing stands behind the gate at `HOLD_EVENT` (`install_quota_gate` registers it alone:
-        // the canonical hook has no branch for it). Its answer never stops the helper: exit 2 or a
-        // block there ends the agentic loop (code.claude.com/docs/en/hooks, PostToolBatch decision
-        // control), and a hold pauses, never ends. A refusal reaches the model as context.
-        if payload["hook_event_name"] == HOLD_EVENT {
-            if let Err(e) = held {
-                let context = serde_json::json!({"hookSpecificOutput": {"hookEventName": HOLD_EVENT,
-                    "additionalContext": refusal(&e)}});
-                writeln!(io::stdout(), "{context}")?;
-            }
-            return Ok(0);
-        }
-        held?;
+        )?;
         let mut args = std::env::args_os().skip(2);
         let program = args
             .next()
@@ -504,6 +512,37 @@ pub fn run_cli() -> i32 {
             2
         }
     }
+}
+
+fn desktop_roots() -> io::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let state = std::env::var_os("RICHOS_APP_STATE").ok_or_else(|| io::Error::other("missing desktop state"))?;
+    let scope = std::env::var_os("RICHOS_APP_SCOPE").ok_or_else(|| io::Error::other("missing desktop scope"))?;
+    if !Path::new(&state).is_absolute() || !Path::new(&scope).is_absolute() {
+        return Err(io::Error::other("invalid desktop roots"));
+    }
+    Ok((state.into(), scope.into()))
+}
+
+/// **The gate at [`HOLD_EVENT`] always exits 0.** Nothing stands behind it there
+/// (`install_quota_gate` registers it alone: the canonical hook has no branch for it), and exit
+/// 2 or a block at this event ends the agentic loop (code.claude.com/docs/en/hooks, PostToolBatch
+/// decision control), while a hold pauses and never ends anything. So the lead's batch goes
+/// straight back, before anything is read from the environment, and a refusal or a failure
+/// reaches a helper's model as context.
+fn run_batch(head: BatchHead) -> i32 {
+    let BatchHead { hook_event_name, agent_id, session_id } = head;
+    if agent_id.as_deref().is_none_or(str::is_empty) {
+        return 0;
+    }
+    let payload = serde_json::json!({"hook_event_name": hook_event_name, "agent_id": agent_id, "session_id": session_id});
+    let held = desktop_roots().and_then(|(state, scope)| gate(&payload, &state, &scope, &account_of_this_process(),
+        Duration::from_millis(250), Duration::from_secs(21500)));
+    if let Err(e) = held {
+        let context = serde_json::json!({"hookSpecificOutput": {"hookEventName": HOLD_EVENT,
+            "additionalContext": refusal(&e)}});
+        drop(writeln!(io::stdout(), "{context}"));
+    }
+    0
 }
 
 /// **The refusal when this call's grant is gone, which is not a quota reading.** The scope's

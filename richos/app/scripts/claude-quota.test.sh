@@ -106,9 +106,31 @@ for line in sys.stdin:
     # result goes back to the model) is what waits.
     command = json.dumps({"hook_event_name": "PreToolUse", "agent_id": "same-agent", "tool_name": "Bash",
                           "tool_input": {"command": "cargo build"}})
+    # The batch carries every call's result. Review rv-20261101T012525Z-4a5a9883-0b47's fixture:
+    # four ordinary parallel Reads of 1,200 lines from these sources pass the 262,144-byte limit
+    # one tool call's input has, and that limit made the gate exit 2 there, which ends the loop.
+    calls = []
+    for name in ["quota/gate.rs", "engine_profile.rs", "native.rs", "work_host.rs"]:
+        lines = (Path("crates/richos-core/src") / name).read_text().splitlines()[:1200]
+        calls.append({"tool_name": "Read", "tool_input": {"file_path": f"/project/{name}", "limit": 1200},
+                      "tool_use_id": f"toolu_{len(calls)}",
+                      "tool_response": "".join(f"{i}\t{line}\n" for i, line in enumerate(lines, 1))})
     batch = json.dumps({"hook_event_name": "PostToolBatch", "agent_id": "same-agent", "session_id": "session",
-                        "tool_calls": [{"tool_name": "Bash", "tool_input": {"command": "cargo build"},
-                                        "tool_response": "Finished"}]})
+                        "tool_calls": calls})
+    assert len(batch.encode()) > 262144, len(batch.encode())
+
+    def run_batch(payload, extra):
+        return subprocess.run([executable, "--claude-quota-gate"], input=payload, capture_output=True, text=True,
+                              env={**{k: v for k, v in env.items() if not k.startswith("RICHOS_APP_")}, **extra})
+    lead = json.loads(batch)
+    del lead["agent_id"]
+    result = run_batch(json.dumps(lead), {})
+    assert result.returncode == 0 and not result.stdout, (result.returncode, result.stdout, result.stderr)
+    result = run_batch(batch, {})
+    assert result.returncode == 0, (result.returncode, result.stderr)
+    assert "missing desktop state" in json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"], result.stdout
+    print(f"PASS a {len(batch.encode())}-byte batch never ends the loop: the lead's goes straight back, "
+          "a helper's failure is context")
 
     def publish(path, value):
         staging = path.with_suffix(".pending")
