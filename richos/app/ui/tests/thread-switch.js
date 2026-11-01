@@ -226,7 +226,8 @@ async function main() {
     // CEO, nightly 65 (2026-10-19): a right-click on the company name showed WebKit's Look Up /
     // Translate / Search with Google / Share / Speech / Services menu and selected part of the
     // name. no-native-menu.js removes it for the whole window; a text field keeps its editing menu.
-    const probeContextClick = async (locator, fieldHint) => {
+    // `dy` places the click that far below the element's top instead of at its middle.
+    const probeContextClick = async (locator, fieldHint, dy) => {
       await page.keyboard.press("Escape");
       await page.evaluate(() => {
         window.getSelection().removeAllRanges();
@@ -234,7 +235,7 @@ async function main() {
         window.addEventListener("contextmenu", e => { window.__ctx = { prevented: e.defaultPrevented }; }, { once: true });
       });
       const box = await locator.boundingBox();
-      await page.mouse.click(box.x + Math.min(box.width / 2, 20), box.y + box.height / 2, { button: "right" });
+      await page.mouse.click(box.x + Math.min(box.width / 2, 20), box.y + (dy == null ? box.height / 2 : dy), { button: "right" });
       await page.waitForTimeout(50);
       return page.evaluate(() => ({ ...window.__ctx, selection: window.getSelection().toString() }));
     };
@@ -466,7 +467,9 @@ async function main() {
     // Last on purpose: in a text field the native editing menu really opens, and in headless
     // WebKit an open native menu holds the pointer, so nothing after it would receive a click.
     await run.check("a right-click in the composer keeps the editing menu (Cut, Copy, Paste)", async () => {
-      const seen = await probeContextClick(page.locator("#input"), true);
+      // On the first line: the empty box's second line starts with the Talk to Rich button
+      // (round 51), whose own right-click is not a text field's.
+      const seen = await probeContextClick(page.locator("#input"), true, 12);
       assertEqual(seen.prevented, false, "the text field's own menu must stay");
     });
     await run.check("no browser errors", () => assertEqual(errors.length, 0, errors.join("\n")));

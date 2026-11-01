@@ -712,7 +712,9 @@ async function main() {
           w: Math.round(sr.width),
           h: Math.round(sr.height),
           insideViewport: sr.left >= 0 && sr.right <= window.innerWidth + 1,
-          overlapsInput: sr.left < ir.right - 1,
+          // A real overlap is on both axes: since round 51 Stop sits in the row under the text,
+          // inside the same box, so it shares the field's columns and never its lines.
+          overlapsInput: sr.left < ir.right - 1 && sr.right > ir.left + 1 && sr.top < ir.bottom - 1 && sr.bottom > ir.top + 1,
           composerWidth: Math.round(document.getElementById("composer").getBoundingClientRect().width),
         };
       });

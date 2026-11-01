@@ -1456,21 +1456,33 @@ body.bp-narrow .first-run {
    spinner noise §17.4 forbids. */
 
 .drill-chip {
-  margin-top: 6px;
+  margin: 0;
   background: none;
   border: none;
-  padding: 2px 0;
+  padding: 6px 8px;
+  border-radius: 8px;
   font-size: 1rem;
-  color: var(--ink-faint);
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
   cursor: pointer;
 }
 
 .drill-chip:hover {
-  color: var(--ink-soft);
+  color: var(--ink);
+  background: var(--gold-soft);
+}
+
+.drill-chip:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 0;
 }
 
 /* ---------------------------------------------------------------------------------------
-   Composer — spare: text field, talk toggle, send. Nothing else.
+   Composer — round 51: one box, the text on top and one row of controls under it.
 --------------------------------------------------------------------------------------- */
 #composer-zone {
   border-top: 1px solid var(--line);
@@ -1678,79 +1690,83 @@ body.bp-narrow .first-run {
   }
 }
 
-/* THE TWO BUTTONS ARE THE SAME HEIGHT AS THE TEXT INPUT — CEO, 2026-09-19, on the nightly he
-   watched the evening before: *"the 2 buttons at the bottom need to be either vertically
-   center aligned relative to the text input or have the same height as the text input
-   because otherwise it looks weird."*
+/* THE BUTTONS BESIDE THE FIELD (CEO, 2026-09-19: "the 2 buttons at the bottom need to be either
+   vertically center aligned relative to the text input or have the same height as the text
+   input") are gone from beside it: his round 51 (2026-11-01) put every control inside the box,
+   on one row under the text. `tests/chrome-align.js` holds the row's geometry now. */
+/* ROUND 51: THE INPUT AREA AS THE CEO ASKED FOR IT (richos-hq `design/mockups/rounds/round-51`,
+   his recordings of 2026-11-01 and his notes in that session). One wide box holds everything,
+   the shape of the Codex app's input area he compared it with: text on top, one row of
+   controls along the bottom.
 
-   HIS FIRST OPTION IS NOT AVAILABLE IN EVERY STATE AND THE SECOND ONE IS, which is why this
-   file takes the second. The field GROWS with what he types (`#input`'s `max-height: 112px`),
-   and `align-items: flex-end` below is what keeps the two controls beside the LAST line of a
-   long message rather than beside its middle. Centering them would be right at one line and
-   would float them in the middle of a four-line box; matching their height is right at one
-   line and degrades to bottom-flush, which is the shape every composer he has ever used has.
-   So: same height, bottom-aligned.
+     empty:    Type here… OR…
+               [Talk to Rich]  ← Click to talk to Rich.
+               [+]  status ..................   [Output]                   [Send]
+     typing:   what he typed (two lines, growing to ten and a half, then scrolling)
+               [+] [Talk to Rich] status .....  [Output]            [Stop] [Send]
 
-   WHAT WAS MEASURED BEFORE THE FIX, in this repository's own WebKit harness at 1024x700 and
-   1400x950, both identical: the field's box (`#input-shell`) 46px tall with its center at
-   y=661; `#talk-toggle` and `#send` 40px tall with theirs at y=664. Six pixels shorter and
-   three pixels low, in both themes and at both window sizes. That is the "weird" — a row of
-   three boxes that agree on neither edge.
+   Nearly the full width of the main pane (28px each side, the composer's own padding), two
+   lines tall when empty, growing one line at a time to ten and a half lines, then scrolling
+   with the top line fading out. Every control in the row is 36px (`--control-h`).
 
-   THE HEIGHT IS DERIVED, NEVER TYPED, so the buttons cannot drift from the field the way they
-   had: `--field-h` is `#input`'s own height declaration, and `--control-h` adds the 1px border
-   `#input-shell` draws on the top and on the bottom. Everything here is rem + px exactly as
-   `#input` declares it, so the Text size row in the settings menu (`--app-font-scale`, which
-   multiplies the root font size) moves the field and the two buttons by the same amount. At
-   scale 1: 1.5rem = 24px, + 20px of field padding = 44px, + 2px of shell border = 46px.
-   `1.5rem` and the `1.5em` this was written as are the same number here because the field's
-   own `font-size` is `1rem` — the variable is what lets the buttons share it. */
+   CONTRAST, COMPUTED (WCAG 2.x relative luminance on this file's token values; round 51's
+   `build/contrast.js` measured the rendered mockup and `tests/contrast.js` walks the app):
+                                                       need   dark   light
+     box edge (--line-control) on the page (--ground)   3:1    4.57   3.35
+     box edge focused (--gold-text) on the page         3:1    7.68   5.48
+     typed text (--ink) on the box (--surface)          4.5    12.06  18.07
+     placeholder (--ink-faint) on the box               4.5    5.52   5.35
+     arrow, status line (--ink-soft) on the box         4.5    5.78   6.38
+     plus glyph (--ink-soft) on the box                 3:1    5.78   6.38
+     Send at rest: edge (--line-control) on the box     3:1    3.79   4.06
+     Send ready: fill (--gold) on the box               3:1    6.36   3.83
+     Send ready: arrow (--on-gold) on the fill          3:1    7.68   4.72
+     Stop square (--danger) on the box                  3:1    5.84   8.12
+   Nothing here is declared exempt; everything meant to be read is 16px or larger. */
 #composer-row {
-  --field-h: calc(1.5rem + 20px);
-  --control-h: calc(var(--field-h) + 2px);
-  max-width: 680px;
+  /* one line of typed text, in rem so the Text size row scales the box with it */
+  --line-h: 1.5rem;
+  --control-h: 36px;
+  max-width: 1200px; /* a cap for very wide windows only */
   margin: 0 auto;
-  padding: 16px 28px;
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  padding: 12px 28px 16px;
 }
 
-#composer {
-  flex: 1;
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  min-width: 0;
-}
-
-/* N1 (dev-walk audit, 2026-09-17): a white NATIVE scrollbar was rendering straight through
-   this box's rounded corner and its own gold focus ring, on an EMPTY textarea with nothing
-   to scroll, in both themes. Two separate defects, both fixed by moving the border/radius/
-   fill off the scrolling element and onto a non-scrolling wrapper:
-
-   (1) `<textarea rows="1">`'s own intrinsic-height algorithm does not agree with the
-       `line-height: 1.5` this file sets on it, so an empty box's `scrollHeight` came out a
-       few px taller than the `clientHeight` the `rows` attribute produced — genuine (if
-       tiny) overflow, not a paint glitch. `#input`'s `height` below is derived from the
-       same padding/line-height this rule declares, in the same units, so the two can never
-       disagree the way the attribute and the stylesheet did.
-   (2) a NATIVE, OS-drawn scrollbar is a platform widget WebKit does not clip to the
-       scrolling element's own `border-radius` — only an ANCESTOR's `overflow: hidden` does.
-       So the border, radius, fill and focus ring now live on `#input-shell`, which never
-       scrolls; `#input` is the plain, borderless field inside it, and any scrollbar it ever
-       draws is clipped to the shell's rounded corner rather than poking through it. */
+/* THE BOX. The border, radius and fill live here, on a wrapper that never scrolls (N1,
+   dev-walk audit 2026-09-17): a NATIVE scrollbar the textarea draws is a platform widget
+   WebKit does not clip to the scrolling element's own `border-radius`, only to an ancestor's
+   `overflow: hidden`, so it can never poke through the rounded corner. */
 #input-shell {
-  flex: 1;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   border: 1px solid var(--line-control);
-  border-radius: var(--radius);
+  border-radius: 16px;
   background: var(--surface);
   overflow: hidden;
+  box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.55);
+  transition: box-shadow 0.18s ease;
 }
 
-#input-shell:focus-within {
-  border-color: var(--accent);
+:root[data-theme="light"] #input-shell {
+  box-shadow: 0 10px 28px -20px rgba(12, 19, 34, 0.35);
+}
+
+/* Focused, and talking: the accent edge, so the mode reads at a glance. */
+#input-shell:focus-within,
+#input-shell.is-voice {
+  border-color: var(--gold-text);
+}
+
+/* THE TEXT. Two lines empty, then one line at a time to ten and a half (`autoGrow` in main.js
+   sets the height from `scrollHeight`; this eases each new line in), then it scrolls. */
+.composer-field {
+  position: relative;
+  padding: 14px 16px 2px;
+}
+
+.composer-field[hidden] {
+  display: none;
 }
 
 #input {
@@ -1758,25 +1774,18 @@ body.bp-narrow .first-run {
   width: 100%;
   resize: none;
   border: none;
-  padding: 10px 14px;
+  padding: 0;
   font: inherit;
   font-size: 1rem;
-  line-height: 1.5;
+  line-height: var(--line-h);
   background: transparent;
   color: var(--ink);
-  /* One line's content box, in the exact units `line-height`/`padding` above use, so it can
-     never disagree with them: 1.5 line-heights of text plus the 10px top/bottom padding this
-     rule declares. `box-sizing: border-box` is the page-wide reset (`style.css:268`), so this
-     is the element's TOTAL height, matching what `scrollHeight` reports for one empty line.
-
-     IT IS A VARIABLE NOW (`--field-h` on `#composer-row`) AND THE VALUE IS UNCHANGED: this
-     rule's `font-size` is `1rem`, so the `1.5em` it was written as and the `1.5rem` the
-     variable is written as compute to the identical 24px at every text scale. The variable
-     exists so the two composer buttons can take their height FROM this declaration rather
-     than from a second copy of it — see the header above `#composer-row`. */
-  height: var(--field-h);
-  max-height: 112px;
-  overflow-y: auto;
+  height: calc(var(--line-h) * 2);
+  min-height: calc(var(--line-h) * 2);
+  max-height: calc(var(--line-h) * 10.5);
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  transition: height 0.12s ease-out;
 }
 
 #input:focus {
@@ -1787,19 +1796,197 @@ body.bp-narrow .first-run {
   color: var(--ink-faint);
 }
 
-/* THE HEIGHT IS THE FIELD'S HEIGHT, NOT A NUMBER OF ITS OWN — see the header above
-   `#composer-row` for the CEO's sentence and the geometry this replaces. `width` stays 40px:
-   his complaint is about the vertical, and a 46px-square button is a different control.
-   `#talk-toggle` left this rule on 2026-10-08: it is now the CEO's round icon itself, with no
+/* While the round 51 placeholder is drawn, the field's own placeholder (its state, for
+   assistive technology) is not painted under it. */
+#input-shell.is-blank #input::placeholder {
+  color: transparent;
+}
+
+/* "At line 11 it stops expanding and starts blurring out line one": text above what is shown
+   fades the top line; text below what is shown fades the bottom line. */
+#input.fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--line-h));
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--line-h));
+}
+
+#input.fade-bottom {
+  -webkit-mask-image: linear-gradient(to top, transparent 0, #000 var(--line-h));
+  mask-image: linear-gradient(to top, transparent 0, #000 var(--line-h));
+}
+
+#input.fade-top.fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--line-h), #000 calc(100% - var(--line-h)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--line-h), #000 calc(100% - var(--line-h)), transparent 100%);
+}
+
+/* THE EMPTY BOX'S PLACEHOLDER (round 51; his follow-up recordings for the words, the size and
+   the place, and his session notes for the caret, the single space and the alignment):
+     Type here… OR…
+     [Talk to Rich]  ← Click to talk to Rich.
+   Drawn over the empty text area at exactly the caret's place, so the caret blinks in front
+   of "Type here". The lines take no clicks, so a click on them lands in the text area; the
+   button in line two is the real `#talk-toggle` and is live. */
+.composer-hint {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 14px;
+  display: flex;
+  flex-direction: column;
+  font-size: 1rem;
+  line-height: var(--line-h);
+  color: var(--ink-faint);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#input-shell:not(.is-blank) .composer-hint {
+  display: none;
+}
+
+/* Line two, here and in the listening panel: a text line (24px) on which the 36px button
+   centers, hanging into the gap above the row, so the box keeps its height when the button
+   moves. It starts 8px left of the text column, where the row's controls start, so Talk to
+   Rich sits exactly over the plus (his note: "aren't vertically aligned … too much left
+   padding"); 4px lower than a text line so the circle clears line one's descenders. */
+.composer-hint-talk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--line-h);
+  margin-left: -8px;
+  margin-top: 4px;
+}
+
+/* The arrow and the words are one run joined by one ordinary space ("Only a single space
+   between '<-' and 'Click'"); the 10px gap is only between the button and that run. */
+.composer-hint-words {
+  white-space: nowrap;
+}
+
+.composer-hint-arrow {
+  color: var(--ink-soft);
+}
+
+/* WHERE TALK TO RICH SITS. One button, moved between three slots (main.js `placeTalk`), all
+   36px square: line two of the placeholder, the row after the plus, line two of the listening
+   panel. The row's slot closes while the button is elsewhere, so the status line follows the
+   plus directly. */
+.talk-slot {
+  flex: none;
+  display: flex;
+  width: var(--control-h);
+  height: var(--control-h);
+}
+
+.composer-hint-talk .talk-slot {
+  margin: calc((var(--line-h) - var(--control-h)) / 2) 0;
+  pointer-events: auto;
+}
+
+.composer-bar .talk-slot {
+  transition: width 0.24s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.composer-bar .talk-slot.is-empty {
+  width: 0;
+  margin-left: -8px;
+}
+
+/* Talking with words in the box: Talk to Rich stays where it is, in the row, so line two of
+   the listening panel has no slot and no arrow, only its words, at the text column. */
+#voice-panel .talk-slot.is-empty,
+#voice-panel .talk-slot.is-empty + .composer-hint-words .composer-hint-arrow {
+  display: none;
+}
+
+#voice-panel .composer-hint-talk:has(.talk-slot.is-empty) {
+  margin-left: 0;
+}
+
+/* THE ROW. Round 51: "make the output button centered here … if the whole text here doesn't
+   fit when the button is centered, then just truncate this text here." Three columns, the
+   outer two equal, so Output's center is the box's center at every width. */
+.composer-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+  padding: 6px 8px 8px;
+  min-width: 0;
+}
+
+.composer-bar-left,
+.composer-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-bar-right {
+  justify-content: flex-end;
+}
+
+.composer-bar-mid {
+  display: flex;
+  justify-content: center;
+}
+
+/* The plus: macOS's own file picker, directly. */
+.composer-add {
+  width: var(--control-h);
+  height: var(--control-h);
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.composer-add svg {
+  width: 20px;
+  height: 20px;
+}
+
+.composer-add:hover {
+  background: var(--gold-soft);
+  color: var(--ink);
+}
+
+.composer-add:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 1px;
+}
+
+/* The status line: the work chip (opens the work summary) and the engine-task line, one line,
+   an ellipsis when the window is narrow. Round 51 dropped the chip's leading "⋯ " (main.js). */
+.composer-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-left: 4px;
+  overflow: hidden;
+}
+
+/* Stop and Send, round like every control in the box's row (round 51), `--control-h` square.
+   `#talk-toggle` left this rule on 2026-10-08: it is the CEO's round icon itself, with no
    frame, and has its own block below `.send-glyph`. */
 #stop,
 #send {
-  width: 40px;
+  width: var(--control-h);
   height: var(--control-h);
   flex-shrink: 0;
-  border-radius: var(--radius);
+  border-radius: 50%;
   border: 1px solid var(--line-control);
-  background: var(--surface);
+  background: transparent;
   color: var(--ink-soft);
   display: flex;
   align-items: center;
@@ -1810,6 +1997,29 @@ body.bp-narrow .first-run {
 #send:hover {
   border-color: var(--accent);
   color: var(--accent-text);
+}
+
+/* Send "at the right-most corner" (round 50/51): at rest an outline; with something to send it
+   fills with the accent, so the one thing Return will do is the one thing lit. */
+#input-shell.has-content #send:not(:disabled) {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--on-gold);
+}
+
+#input-shell.has-content #send:not(:disabled):hover {
+  background: var(--gold-text);
+  border-color: var(--gold-text);
+}
+
+:root[data-theme="light"] #input-shell.has-content #send:not(:disabled):hover {
+  color: #fdfcf8;
+}
+
+#send:focus-visible,
+#stop:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
 }
 
 /* §9.3's stop. A SQUARE, which is the one glyph that means "stop" without a word — and it
@@ -1837,7 +2047,7 @@ body.bp-narrow .first-run {
 }
 
 .send-glyph {
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
   transform: translateX(1px);
 }
 
@@ -1904,8 +2114,8 @@ body.bp-narrow .first-run {
 }
 
 .talk-icon {
-  width: calc(var(--control-h) - 2px);
-  height: calc(var(--control-h) - 2px);
+  width: calc(var(--control-h) - 4px);
+  height: calc(var(--control-h) - 4px);
   display: block;
   flex-shrink: 0;
   border-radius: 50%;
@@ -1999,17 +2209,54 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   outline-offset: 2px;
 }
 
-/* Voice panel — inline, replaces the text field. Never a separate call screen. Shares the
-   same flex slot in #composer-row that #composer occupies, so the talk-toggle button
-   never moves and is never hidden by the mode switch. */
+/* Voice panel — inline, inside the box, in place of the text field. Never a separate call
+   screen. Round 51 (his note: "once the user clicks the Talk to Rich button, then the whole
+   input area needs to adjust accordingly because at that point we know that the user wants to
+   talk and doesn't want to type"): the box becomes a listening panel with the placeholder's
+   exact geometry,
+     ● listening… ▮▮▮▮▮
+     [Talk to Rich, pressed]  ← Click to stop talking · headphones recommended
+   so with an empty box the button does not move at all, and with words in the box it stays in
+   the row (his correction: no button jumping when talk is toggled). At least two lines tall,
+   the text field's own height; a longer sentence (the speech-model offer) wraps and the panel
+   grows rather than cutting it off. */
 #voice-panel {
-  flex: 1;
-  min-width: 0;
+  flex: none;
+  min-height: calc(var(--line-h) * 2);
+  box-sizing: content-box;
+  padding: 14px 16px 2px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 8px;
-  padding: 4px 0;
+  justify-content: flex-start;
+  gap: 0;
+  font-size: 1rem;
+  line-height: var(--line-h);
+}
+
+#voice-panel[hidden] {
+  display: none;
+}
+
+#voice-panel > * {
+  flex: none;
+}
+
+#voice-panel .voice-state {
+  min-height: var(--line-h);
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+#voice-panel #voice-state-listening .voice-label {
+  color: var(--ink);
+}
+
+/* The placeholder's line two hangs 4px into the gap above the row without adding height (it
+   is drawn over the field); here it is in the flow, so the 4px is given back below it and the
+   listening box is exactly the empty box's height. Nothing moves when talk is toggled. */
+.voice-talk-line {
+  color: var(--ink-soft);
+  margin-bottom: -4px;
 }
 
 .voice-state {
@@ -2213,16 +2460,6 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   .voice-progress i {
     transition: none;
   }
-}
-
-.voice-footnote {
-  font-size: 0.875rem;
-  color: var(--ink-faint);
-  margin: 2px 0 0;
-}
-
-.voice-footnote-glyph {
-  font-weight: 600;
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -3609,10 +3846,30 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
    repeats what the 16px `.attach-meta` line beside it says in words. It still clears 4.5:1
    in both themes and is measured with everything else; it is exempt from the 16px size floor
    only, never from contrast. */
+/* Round 51: inside the box, above the text. */
 #attach-tray {
-  max-width: 680px;
-  margin: 0 auto;
-  padding: 12px 28px 0;
+  padding: 12px 12px 0;
+}
+
+.attach-chip {
+  animation: attach-chip-in 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes attach-chip-in {
+  from {
+    transform: translateY(6px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attach-chip {
+    animation: none;
+  }
 }
 
 .attach-list {
@@ -4584,7 +4841,6 @@ body.bp-narrow #rail-resizer {
 }
 
 body.bp-narrow #messages,
-body.bp-narrow #quota-work-status,
 body.bp-narrow .pane-inner {
   padding-left: 18px;
   padding-right: 18px;
@@ -5319,10 +5575,14 @@ body.bp-narrow .tl-user-bubble {
   position: relative;
 }
 
+/* In the box's row since round 51 (`.composer-status`): one line, an ellipsis when narrow. */
 #drill-chip-zone {
-  max-width: var(--reading-width);
-  margin: 0 auto;
-  padding: 0 28px 6px;
+  display: flex;
+  min-width: 0;
+}
+
+#drill-chip-zone[hidden] {
+  display: none;
 }
 
 
@@ -8984,28 +9244,25 @@ body.home-open {
 .quota-boundary b { color: var(--ink); }
 .quota-boundary p + p { margin-top: 6px; }
 #quota-sheet [hidden], #quota-draft-actions[hidden], .quota-mini[hidden] { display: none !important; }
-/* Round 16's working row ("• 3 agents working on Work", quota.html `.working-row`): it sits in
-   the message column, so it takes the column rules `#messages` and `#drill-chip-zone` use
-   (reading width, centered, 28px sides); before, it spanned the composer zone from the pane's
-   edge. Its side padding steps with `#messages`' (24px under 1180px, 20px under 820px, 18px
-   in `bp-narrow`), so the text edge stays on the message text's at every width. Its color is
-   round 16's `--trim-text`: 5.91:1 dark, 5.90:1 light on `--ground`.
+/* Round 16's working row ("• 3 agents working on Work", quota.html `.working-row`): since round
+   51 it is part of the status line in the box's row (`.composer-status`), one line with an
+   ellipsis, in the status line's `--ink-soft`: 5.78:1 dark, 6.38:1 light on the box's
+   `--surface`.
    The dot is round 16's gold, but at FULL opacity, breathing by size the way `.tl-pulse`
    does: round 16 breathes its opacity down to .35, which is 1.95:1 dark and 1.43:1 light, under
    the 3:1 owed by a non-text indicator; full gold is 7.68:1 dark and 3.15:1 light. Only the
    working row has the dot (`data-state`, main.js `renderQuotaWorkStatus`); a paused row does not. */
 #quota-work-status {
-  max-width: var(--reading-width);
-  margin: 0 auto;
-  padding: 0 28px 6px;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--trim-text);
+  color: var(--ink-soft);
   font-size: 1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-@media (max-width: 1179px) { #quota-work-status { padding-left: 24px; padding-right: 24px; } }
-@media (max-width: 819px) { #quota-work-status { padding-left: 20px; padding-right: 20px; } }
 #quota-work-status[hidden] { display: none; }
 #quota-work-status[data-state="working"]::before {
   content: "";
