@@ -243,6 +243,10 @@ class Walk(adopt.Walk):
         nodes = self.dump('cleaner-sheet')
         self.shot('cleaner-sheet-off.png')
         ev['sheet_text'] = self.texts(nodes)[:900]
+        # the refusal is a node of its own, so it is counted over the WHOLE tree (the text kept in the
+        # record is cut at 900 characters), before and after the press
+        refusal = lambda ns: [n for n in ns if str(n.get('value') or '').startswith('Turn on RichScribe first')]  # noqa: E731
+        refusals_before = len(refusal(nodes))
         sw = None
         for n in nodes:
             if n.get('desc') == 'RichCleaner' or n.get('title') == 'RichCleaner':
@@ -272,6 +276,7 @@ class Walk(adopt.Walk):
             self.pull_logs('cleaner-after-press')
             raise
         self.shot('cleaner-sheet-on.png')
+        nodes_on = nodes
         ev['after_on_text'] = self.texts(nodes)[:900]
         ev['switch_on'] = next(({k: n.get(k) for k in ('role', 'value')} for n in nodes
                                 if n.get('desc') == 'RichCleaner' and n.get('role') == sw['role']), None)
@@ -289,8 +294,16 @@ class Walk(adopt.Walk):
         before = on((ev['switch_before'] or {}).get('value'))
         after_on = on((ev['switch_on'] or {}).get('value'))
         after_off = on((ev['switch_off'] or {}).get('value'))
-        refused = 'RichScribe first' in ev['after_on_text'] or 'RichScribe first' in ev['sheet_text']
+        new = refusal(nodes_on)
+        refused = len(new) > refusals_before
+        win = next((n for n in nodes_on if n.get('title') == 'RichOS' and n.get('role') == 'AXWindow'), None) \
+            or next((n for n in nodes_on if n.get('role') == 'AXWindow'), None)
+        ev['refusals_before_press'], ev['refusals_after_press'] = refusals_before, len(new)
+        ev['refusal_nodes'] = [{k: n.get(k) for k in ('value', 'y', 'h')} for n in new]
+        ev['window'] = win and {k: win.get(k) for k in ('y', 'h')}
         ev['refusal_on_screen'] = refused
+        ev['refusal_visible_without_scrolling'] = bool(
+            refused and win and all(win['y'] <= n['y'] and n['y'] + n['h'] <= win['y'] + win['h'] for n in new))
         ev['alive_after_press'] = ev.get('main_process_after_press') not in ('', '0', None)
         if refused:
             ev['classification'] = 'refused: RichScribe off, the sheet says so'
