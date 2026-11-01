@@ -403,6 +403,10 @@ class ReapDescendants(unittest.TestCase):
                 self.assertNotIn("env", kwargs)  # inherit the allocating job, never host defaults
                 self.assertEqual(os.environ["TMPDIR"], str(job))
                 self.assertGreater(kwargs["timeout"], 0)
+                with patch.object(mod.SETTINGS, "grace", 0.0):
+                    mod._sweep_process_scratch()
+                    self.assertGreaterEqual(run.call_args[1]["timeout"], 2.0,
+                                            "with --reap-grace=0 the sweep got a tenth of a second and timed out")
                 self.assertFalse(kwargs.get("start_new_session", False))
 
 
