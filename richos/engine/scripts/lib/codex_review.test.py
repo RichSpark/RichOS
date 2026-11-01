@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
+import shlex
 import unittest
 from unittest import mock
 
@@ -20,6 +22,10 @@ class Reviews(unittest.TestCase):
         self.environment = mock.patch.dict(os.environ, {
             "CODEX_COORDINATION_ROOT": str(self.root / "coord"),
             "REVIEW_WATCH_STATE_DIR": str(self.root / "review"),
+            "SECOND_REVIEW_STATE_DIR": str(self.root / "second-review"),
+            "CLAUDE_CONFIG_DIR": str(self.root / "claude"),
+            "RICHOS_CLAUDE_HOME": str(self.root / "claude"),
+            "RICHOS_ENTITY_ROOT": "",
         })
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -100,6 +106,67 @@ class Reviews(unittest.TestCase):
         c.designate(self.scope, [old])
         with mock.patch.dict(os.environ, {"REVIEW_WATCH_TO_RICH": str(old / "to-rich.md")}):
             self.assertEqual(world.codex_items(100, {}), ([], []))
+
+    def test_real_watcher_starts_one_worker_and_preserves_result_correspondence(self):
+        fifo = self.root / "review-finish"
+        os.mkfifo(fifo)
+        calls = self.root / "review-calls"
+        calls.mkdir()
+        fifo_fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+        fake_python = self.root / "review-worker.py"
+        fake_python.write_text("import json,os,sys\nfrom pathlib import Path\n"
+            "p=Path(sys.argv[1])/str(os.getpid())\n"
+            "with p.with_suffix('.incoming').open('w') as f:\n f.write(json.dumps(sys.argv[3:]));f.flush();os.fsync(f.fileno())\n"
+            "os.replace(p.with_suffix('.incoming'),p.with_suffix('.json'))\n"
+            "with open(sys.argv[2],'rb') as f:f.read(1)\n")
+        fake = self.root / "second-review.sh"
+        fake.write_text("#!/bin/bash\nexec " + shlex.join([os.sys.executable, "-B", str(fake_python), str(calls), str(fifo)]) + ' "$@"\n')
+        self.world.registry_items = lambda now, seen: ([], [])
+        watcher = rw.Watcher(self.world.engine_root, "", self.world)
+        state = {}
+        now = time.time()
+        with mock.patch.dict(os.environ, {"REVIEW_WATCH_SECOND_REVIEW": str(fake)}):
+            try:
+                watcher.look(now, state)
+                # Hang guard only; the written invocation and owned live lock
+                # establish the verdict, never a worker's measured start speed.
+                deadline = time.monotonic() + 30
+                while not list(calls.glob("*.json")) and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(list(calls.glob("*.json")), "review worker did not publish its invocation")
+                locks = list((self.root / "review/locks").glob("*.lock"))
+                self.assertEqual(len(locks), 1)
+                lock = json.loads(locks[0].read_text())
+                self.assertEqual(lock["channel"], dict(locator=str(self.path), message_id="ready"))
+                saved = rw.stall_watch._read_json(rw._p("shared.json"))
+                saved["codex"]["channels"] = {}
+                rw.stall_watch._write_json(rw._p("shared.json"), saved)
+                watcher.look(now + 1, state)
+                self.assertEqual(len(list(calls.glob("*.json"))), 1, "replay started another review")
+                argv = json.loads(next(calls.glob("*.json")).read_text())
+                self.assertEqual(argv[argv.index("--author") + 1], "codex")
+                self.assertIn("Exact user words", Path(argv[argv.index("--words-file") + 1]).read_text())
+                row = dict(id="fixture-verdict", repo=lock["repo"], work=lock["work"], tip=lock["tip"],
+                           at=rw._dt.datetime.fromtimestamp(now, rw._dt.timezone.utc).isoformat(),
+                           trigger="handover", verdict="passed", reviewer="claude", reviewer_model="fixture")
+                rw.append_jsonl(rw.review_ledger(), row)
+                # Release the fixture worker through its owned FIFO, then let
+                # the real watcher settle it into the existing attempts ledger.
+                os.write(fifo_fd, b"x")
+                watcher.children[lock["pid"]].wait(timeout=30)
+                watcher.look(now + 2, state)
+                attempts = rw.read_jsonl(rw._p("attempts.jsonl"))
+                self.assertEqual(attempts[-1]["outcome"], "verdict")
+                self.assertEqual(attempts[-1]["channel"], lock["channel"])
+                result = [r for r in c.read(self.path)["records"] if r.get("kind") == "review_result"]
+                self.assertEqual(len(result), 1)
+                self.assertEqual(result[0]["reply_to"], "ready")
+                watcher.look(now + 3, state)
+                self.assertEqual(len(list(calls.glob("*.json"))), 1)
+                self.assertEqual(sum(r.get("kind") == "review_result" for r in c.read(self.path)["records"]), 1)
+            finally:
+                os.close(fifo_fd)
+                watcher.stop_own(time.time())
 
     def test_existing_loss_budget_and_convergence_notices_return_on_origin(self):
         state = {}
