@@ -202,15 +202,35 @@ class CodexWatchWalk(stu.StuReminderWalk):
         return result
 
     def rename_restart(self):
-        # Rename both through their own company-labelled rows in the normal UI.
-        self.rename(self.facts['owners'][0], 'Transport renamed Acme')
-        self.rename(self.facts['beta_thread'], 'Transport renamed Beta')
-        self.chat_menu(self.facts['owners'][0])
-        self.press('Archive', 'AXMenuItem')
-        launch = relaunch(self.vm)
-        self.after_relaunch()
+        path = self.facts['connections'][0]
+        inbox = self.facts['first_exchange']['exchanges'][0]['inbox']['file']
+        marker = 'pending-restart-' + uuid.uuid4().hex[:12]
+        request = dict(locator=path, message_id=marker,
+                       text='Harmless transport observation %s. Reply once on bridge.locator with text ACK-%s, message_id ack-%s and reply_to %s using codex_channel send. No other action.' % (marker, marker, marker, marker))
+        # Keep a saved input pending while navigation changes and both app and
+        # provider restart. Restore only the same inbox, never reconnect.
+        try:
+            guest(self.vm, 'chmod 000 ' + shlex.quote(inbox), 60)
+            saved = self.helper_call('send', **request)
+            self.rename(self.facts['owners'][0], 'Transport renamed Acme')
+            self.rename(self.facts['beta_thread'], 'Transport renamed Beta')
+            self.chat_menu(self.facts['owners'][0])
+            self.press('Archive', 'AXMenuItem')
+            launch = relaunch(self.vm)
+            self.after_relaunch()
+        finally:
+            guest(self.vm, 'chmod 600 ' + shlex.quote(inbox), 60)
+        pending_reply = self.wait_fact('saved pending input replies after rename/archive/restart',
+            lambda: self.helper_call('read', locator=path),
+            lambda v: any(r.get('reply_to') == marker and 'ACK-' + marker in r['text'] for r in v['records']), self.a.answer_within)
+        pending_rows = [r for r in self.inboxes() if r.get('bridge', {}).get('message_id') == marker]
+        if len(pending_rows) != 1 or pending_rows[0]['thread'] != self.facts['owners'][0]:
+            raise StepFailed('pending input was duplicated or changed destination: ' + str(pending_rows))
+        heard = self.wait_fact('pending input reached its background Stu after restart',
+                              lambda: self.stu_heard(marker, self.facts['owners'][0]), bool)
         result = self.exchange('after-restart-archived')
-        return dict(relaunch=launch, exchange=result, endpoints=self.connections())
+        return dict(relaunch=launch, pending=dict(request=request, saved=saved, inbox=pending_rows[0], reply=pending_reply, stu=heard),
+                    exchange=result, endpoints=self.connections())
 
     def blocked(self):
         acme, beta = self.facts['connections'][0], self.facts['connections'][2]
