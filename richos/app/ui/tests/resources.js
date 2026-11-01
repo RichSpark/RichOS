@@ -562,6 +562,54 @@ async function main() {
       return `rail ${f.railWidth}px, name whole, readout ${widths[0]}px for every figure`;
     });
 
+    await run.check(`7b ${theme}  with no name saved, "Set your name" stays on one line beside the Readout at the default 300 px rail`, async () => {
+      await page.click("#res-square", { button: "right" });
+      await page.click('#res-menu [data-view="readout"]');
+      await setKind(page, "full");
+      await page.evaluate(async () => {
+        await window.RichBridge.invoke("set_user_name", { name: "" });
+        await renderUserIdentity();
+      });
+      await flushFrames(page);
+      const m = await page.evaluate(() => {
+        const n = document.getElementById("rail-user-name");
+        const range = document.createRange(); range.selectNodeContents(n);
+        const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top)));
+        const identity = document.getElementById("rail-identity").getBoundingClientRect();
+        const resource = document.getElementById("res-square").getBoundingClientRect();
+        return { text: n.textContent, lines: lines.size, clipped: n.scrollWidth > n.clientWidth,
+          overlap: identity.right > resource.left + 1, railWidth: document.getElementById("rail").getBoundingClientRect().width };
+      });
+      assertEqual(m.railWidth, 300, "the rail's default width");
+      assertEqual(m.text, "Set your name", "the unset label");
+      assertEqual(m.lines, 1, "\"Set your name\" is on one line");
+      assert(!m.clipped && !m.overlap, "the label is cut or overlaps the readout: " + JSON.stringify(m));
+      // A larger Text size: the label may wrap, but never paints into the Readout.
+      for (const scale of [120, 150]) {
+        await page.evaluate((v) => window.RichTheme.setScale(v), scale);
+        await flushFrames(page);
+        const big = await page.evaluate(() => {
+          const n = document.getElementById("rail-user-name");
+          const range = document.createRange(); range.selectNodeContents(n);
+          const glyphRight = Math.max(...[...range.getClientRects()].map((r) => r.right));
+          const readout = document.querySelector("#res-square .res-readout").getBoundingClientRect();
+          return { glyphRight, readoutLeft: readout.left, intrusion: Math.max(0, glyphRight - readout.left),
+            clipped: n.scrollWidth > n.clientWidth };
+        });
+        await page.evaluate(() => window.RichTheme.setScale(100));
+        assert(big.intrusion === 0 && !big.clipped, `at ${scale}% text size the label paints into the readout or is cut: ` + JSON.stringify(big));
+      }
+      await flushFrames(page);
+      await page.evaluate(async () => {
+        await window.RichBridge.invoke("set_user_name", { name: "Alex Booster" });
+        await renderUserIdentity();
+      });
+      await page.click("#res-square", { button: "right" });
+      await page.click('#res-menu [data-view="ink"]');
+      await setKind(page, "live");
+      return "one line at 300px, Readout on";
+    });
+
     await run.check(`8 ${theme}  measuring, not current, unavailable and a failed read never show 0%`, async () => {
       await page.click("#res-square", { button: "right" });
       await page.click('#res-menu [data-view="readout"]');
