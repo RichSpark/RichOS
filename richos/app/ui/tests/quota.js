@@ -768,14 +768,18 @@ async function main() {
     // The preview's worker status has one agent active (mock.js get_worker_status).
     await page.waitForFunction(() => !document.getElementById("quota-work-status").hidden);
     assertEqual(await page.locator("#quota-work-status").innerText(), "1 agent working on Home");
-    // Round 16 draws the row in the message column with a gold dot before it, not at the pane's edge.
+    // Round 16's gold dot before the row. Since round 51 (CEO, 2026-11-01) the row is part of the
+    // status line in the input box's own row (`.composer-status`), on the plus's center line,
+    // rather than above the box in the message column.
     const row = await page.evaluate(() => {
-      const box = e => { const r = e.getBoundingClientRect(), s = getComputedStyle(e); return {left: r.left + parseFloat(s.paddingLeft), width: r.width}; };
-      const dot = getComputedStyle(document.getElementById("quota-work-status"), "::before");
-      return {row: box(document.getElementById("quota-work-status")), messages: box(document.getElementById("messages")),
+      const el = document.getElementById("quota-work-status");
+      const r = el.getBoundingClientRect(), add = document.getElementById("attach-add").getBoundingClientRect();
+      const dot = getComputedStyle(el, "::before");
+      return {inStatusLine: !!el.closest("#input-shell .composer-status"), width: r.width,
+        offCenter: Math.round((r.top + r.height / 2) - (add.top + add.height / 2)),
         dot: dot.content !== "none" && dot.width === "8px"};
     });
-    assert(row.messages.width > 0 && Math.abs(row.row.left - row.messages.left) < 1, `the row starts at the message column's text edge: ${JSON.stringify(row)}`);
+    assert(row.inStatusLine && row.width > 0 && Math.abs(row.offCenter) <= 1, `the row sits in the input box's status line, on the plus's line: ${JSON.stringify(row)}`);
     assert(row.dot, `the working row has round 16's 8 px dot: ${JSON.stringify(row)}`);
     await page.click("#set-btn"); await enableTechnical(page); await page.click("#set-quota-open");
     await page.waitForSelector(".quota-lane");

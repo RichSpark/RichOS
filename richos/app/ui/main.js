@@ -125,6 +125,17 @@ const threadMenuEl = el("thread-menu");
 const messagesEl = el("messages");
 const conversationEl = el("conversation");
 const composerEl = el("composer");
+/// Round 51's one box (`#input-shell`) and the plus.
+const inputShellEl = el("input-shell");
+const attachAddBtn = el("attach-add");
+/// Talk to Rich's three places (`placeTalk`), and the one it is in. Declared up here because
+/// `autoGrow` places it and runs from the first thread that opens.
+const talkSlots = {
+  hint: inputShellEl.querySelector('.talk-slot[data-slot="hint"]'),
+  row: inputShellEl.querySelector('.talk-slot[data-slot="row"]'),
+  voice: inputShellEl.querySelector('.talk-slot[data-slot="voice"]'),
+};
+let talkPlace = "row";
 const inputEl = el("input");
 /// **WHILE A REPORT IS OPEN IN THE RICH PANEL, NOTHING MOVES FOCUS TO THE CONVERSATION'S
 /// MESSAGE BOX** (nightly 49's walk, D28). The conversation behind the panel keeps working:
@@ -154,8 +165,6 @@ const voiceNoAudioEl = el("voice-state-no-audio");
 const voiceSpeakingEl = el("voice-state-speaking");
 const bargeInBtn = el("voice-barge-in");
 const voiceRetryBtn = el("voice-retry");
-// D17: the voice row's "tap ◉ to end voice" shows the Talk-to-Rich icon, not the old glyph.
-document.querySelectorAll(".voice-footnote-glyph").forEach((n) => window.RichTimeline.inlineTalkIcon(n));
 // Getting the speech model (2026-09-17). Four rows in the SAME panel — the CEO pressed  to
 // talk, and answering "not yet" on a different screen answers a different question.
 const voiceModelOfferEl = el("voice-state-model-offer");
@@ -1403,6 +1412,10 @@ async function openThread(threadId, opts) {
   flushRender();
   syncComposerMode();
   renderRail();
+  // THE CARET IS ALREADY IN THE BOX (round 51, his note: "The cursor should be blinking in
+  // front of 'Type here' so that the user doesn't have to click into the input field but can
+  // start typing right away"). A conversation he opened by hand takes the keyboard to its box.
+  if (!opts.restore) inputEl.focus({ preventScroll: true });
   startOrStopWaitTimer();
   announce("Opening conversation.");
   // THE SENDS HE PRESSED BEFORE THE LAUNCH HAD A CONVERSATION OPEN go now, the moment there is
@@ -2697,6 +2710,8 @@ async function send(explicitText, opts) {
   }
   const keptDraft = preserveDraft ? inputEl.value : "";
   if (!preserveDraft) inputEl.value = "";
+  // The box is empty again: Talk to Rich glides back up into the placeholder (round 51).
+  placeTalk(true);
   autoGrow();
   // THE SENT WORDS STOP BEING A DRAFT, on disk as well as in the box. Without this the
   // parked copy outlives the send and a crash would put a sentence he has already sent back
@@ -3090,6 +3105,11 @@ function anyStoppingTurn() {
 ///           field stays editable, because taking the keyboard away mid-sentence would lose
 ///           whatever he was in the middle of typing.
 function syncComposerMode() {
+  syncComposerModeControls();
+  syncComposerShell(false);
+}
+
+function syncComposerModeControls() {
   if (mainView === "opening" && openingThread) {
     const turns = [...openingThread.previousModel.turns.values()];
     const working = turns.some(t => t.live);
@@ -3104,6 +3124,7 @@ function syncComposerMode() {
   }
   if (mainView !== "conversation" || sendBlockedReason) {
     stopBtn.hidden = true;
+    sendBtn.hidden = false;
     return;
   }
   const working = anyLiveTurn();
@@ -3846,16 +3867,128 @@ inputEl.addEventListener("keydown", (e) => {
   }
 });
 
-// Auto-growing single field — a few lines, then it scrolls; never dominates.
+// THE FIELD GROWS (round 51): "by default two lines", then one line at a time, "expand up to
+// ten and a half lines", then it scrolls with the top line fading out. The limits are read off
+// the field's own line height, so the Text size row moves them with the text.
 function autoGrow() {
-  inputEl.style.height = "auto";
-  const max = 5 * 22; // ~5 lines
-  inputEl.style.height = Math.min(inputEl.scrollHeight, max) + "px";
+  const line = parseFloat(getComputedStyle(inputEl).lineHeight) || 24;
+  const min = line * 2;
+  const max = line * 10.5;
+  // Measured at zero height without the ease, so `scrollHeight` is the text's own height; then
+  // the ease is put back for the step to the new height.
+  const before = inputEl.style.height;
+  inputEl.style.transition = "none";
+  inputEl.style.height = "0px";
+  const want = Math.min(max, Math.max(min, inputEl.scrollHeight));
+  inputEl.style.height = before || min + "px";
+  void inputEl.offsetHeight;
+  inputEl.style.transition = "";
+  inputEl.style.height = want + "px";
+  inputEl.style.overflowY = inputEl.scrollHeight > max + 1 ? "auto" : "hidden";
+  window.requestAnimationFrame(fadeComposerEdges);
   // Every place the composer's words are swapped for another thread's calls this, so it is
-  // also where the attachment tray follows them (a no-op when nothing moved).
+  // also where the attachment tray and Talk to Rich's place follow them.
   if (window.RichAttachments) window.RichAttachments.sync();
+  syncComposerShell(false);
 }
+
+/// "At line 11 it stops expanding and starts blurring out line one": text above what is shown
+/// fades the top line, text below what is shown fades the bottom one.
+function fadeComposerEdges() {
+  const over = inputEl.scrollHeight - inputEl.clientHeight > 1;
+  inputEl.classList.toggle("fade-top", over && inputEl.scrollTop > 1);
+  inputEl.classList.toggle("fade-bottom", over && inputEl.scrollTop + inputEl.clientHeight < inputEl.scrollHeight - 1);
+}
+inputEl.addEventListener("scroll", fadeComposerEdges, { passive: true });
+
+// THE WIDTH MOVES TOO. A window, sidebar or Output-panel resize rewraps the words without a
+// keystroke, and `autoGrow` keeps scrolling off while the words fit, so a draft that fitted could
+// wrap past its height with nothing to scroll (mid-job review rv-20261101T215812Z-f1f1fca9-a259).
+// The box is measured again whenever its WIDTH changes; its own height changes are ignored, so the
+// height `autoGrow` writes does not call it again. The measuring waits for the next frame: a height
+// written inside the observer's own callback is a layout change in the same pass, which WebKit
+// reports as "ResizeObserver loop completed with undelivered notifications" (output.js, the
+// Output panel's drag).
+if (typeof ResizeObserver === "function") {
+  let lastShellWidth = 0;
+  let regrowQueued = false;
+  new ResizeObserver((entries) => {
+    const width = Math.round(entries[entries.length - 1].contentRect.width);
+    if (!width || width === lastShellWidth) return;
+    lastShellWidth = width;
+    if (regrowQueued) return;
+    regrowQueued = true;
+    window.requestAnimationFrame(() => {
+      regrowQueued = false;
+      autoGrow();
+    });
+  }).observe(inputShellEl);
+}
+
+// ---- TALK TO RICH'S PLACE (round 51) ---------------------------------------------------------
+//
+// His follow-up recording: before anything is typed, "click to talk to Rich … and this icon of
+// the same size that it is by default … you just put it here", at the start of the
+// placeholder's second line; "once the user starts typing … types the first character then …
+// the placeholder is going to disappear and then this talk to Rich button is going to move from
+// the second line to this current position" in the row after the plus. Emptying the box brings
+// it back up. ONE `#talk-toggle`, moved between slots and never doubled, so its handler, its
+// name and its pressed state are the same button's wherever it is.
+//
+// AND IT NEVER MOVES WHEN TALK IS TOGGLED (his correction, 2026-11-01: "there shouldn't be any
+// button jumping when the user toggles the talk to Rich button"). From the empty box it goes to
+// the listening panel's line-two slot, which has the placeholder's exact geometry, with no
+// glide; with words in the box it stays in the row while he talks. Only typing glides it.
+/// The placeholder is drawn only while it can be true: the box empty and taking words, and the
+/// button it points at there and pressable. A box switched off says why in its own placeholder,
+/// and a Mac with no voice has no button to point at; both keep the field's own placeholder.
+function composerBlank() {
+  return inputEl.value.length === 0 && !inputEl.disabled && !talkToggleBtn.hidden && !talkToggleBtn.disabled;
+}
+
+function placeTalk(glide) {
+  let want;
+  if (voiceMode) want = talkPlace === "row" ? "row" : "voice";
+  else want = composerBlank() ? "hint" : "row";
+  inputShellEl.classList.toggle("is-blank", !voiceMode && want === "hint");
+  if (want === talkPlace && talkToggleBtn.parentNode === talkSlots[want]) return;
+  const from = talkPlace;
+  const before = talkToggleBtn.getBoundingClientRect();
+  const focused = document.activeElement === talkToggleBtn;
+  talkSlots[want].appendChild(talkToggleBtn);
+  if (focused) talkToggleBtn.focus({ preventScroll: true });
+  for (const [name, slot] of Object.entries(talkSlots)) slot.classList.toggle("is-empty", name !== want);
+  talkPlace = want;
+  // The glide is typing's alone: between the placeholder's line two and the row.
+  const typed = (from === "hint" && want === "row") || (from === "row" && want === "hint");
+  if (!glide || !typed || !talkToggleBtn.animate || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const after = talkToggleBtn.getBoundingClientRect();
+  const dx = before.left - after.left;
+  const dy = before.top - after.top;
+  if (!before.width || (!dx && !dy)) return;
+  talkToggleBtn.animate(
+    [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }],
+    { duration: 240, easing: "cubic-bezier(0.2, 0.9, 0.3, 1)" }
+  );
+  if (want === "hint") {
+    const hint = el("composer-hint");
+    if (hint && hint.animate) hint.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: "ease-out" });
+  }
+}
+
+/// What the box shows besides the words: whether Send has something to send (it fills with the
+/// accent), Send gone while he talks (nothing typed to send), and Talk to Rich's place.
+function syncComposerShell(glide) {
+  const hasContent =
+    inputEl.value.trim().length > 0 || !!(window.RichAttachments && window.RichAttachments.hasItems());
+  inputShellEl.classList.toggle("has-content", hasContent);
+  inputShellEl.classList.toggle("is-voice", voiceMode);
+  if (voiceMode) sendBtn.hidden = true;
+  placeTalk(glide);
+}
+
 inputEl.addEventListener("input", () => {
+  placeTalk(true);
   autoGrow();
   // §9.2's "replaces or sits beside send when the composer is empty" is a function of what
   // is in the box, so it is re-evaluated as he types.
@@ -3878,6 +4011,12 @@ if (window.RichAttachments) {
       return null;
     },
     onChange: () => syncComposerMode(),
+  });
+  // THE PLUS (round 50/51): macOS's own file picker, directly; the caret is back in the box
+  // when it closes, whatever he chose.
+  attachAddBtn.addEventListener("click", async () => {
+    await window.RichAttachments.pick();
+    inputEl.focus({ preventScroll: true });
   });
 }
 
@@ -3947,6 +4086,20 @@ if (window.RichOutput) {
 // it was (a move takes it away), and the field is re-measured for its new width.
 const composerZoneEl = el("composer-zone");
 const composerHome = { parent: composerZoneEl.parentNode, next: composerZoneEl.nextSibling };
+
+// JUMP TO LATEST SITS JUST ABOVE THE COMPOSER, WHATEVER ITS HEIGHT (§15; round 51's box grows from
+// two lines to ten and a half and carries the tray). The zone's height is kept on the stage as
+// `--composer-zone-h`, which `#jump-latest`'s `bottom` adds to; while the zone floats in the Output
+// panel (§9.4) it takes no room in the stage, so the value is 0 there.
+if (typeof ResizeObserver === "function") {
+  const keepComposerHeight = () => {
+    const home = composerZoneEl.parentNode === composerHome.parent;
+    const h = home ? Math.round(composerZoneEl.getBoundingClientRect().height) : 0;
+    composerHome.parent.style.setProperty("--composer-zone-h", h + "px");
+  };
+  new ResizeObserver(() => window.requestAnimationFrame(keepComposerHeight)).observe(composerZoneEl);
+  keepComposerHeight();
+}
 function moveComposer(into) {
   const target = into || composerHome.parent;
   if (composerZoneEl.parentNode === target) return;
@@ -4509,7 +4662,9 @@ function renderDrillChip() {
   const chip = document.createElement("button");
   chip.type = "button";
   chip.className = "drill-chip";
-  chip.textContent = "⋯ " + parts.join(" · ");
+  // Round 51 (his note: "remove '...' in front of '64 team jobs'"): the parts alone, now that
+  // the line sits in the box's row.
+  chip.textContent = parts.join(" · ");
   chip.setAttribute("aria-label", parts.join(", ") + ". Open the work summary.");
   chip.addEventListener("click", openSlideOver);
   drillChipEl.appendChild(chip);
@@ -4939,6 +5094,8 @@ async function refreshVoiceReadiness() {
     talkToggleBtn.removeAttribute("aria-disabled");
   }
   setTalkPressed(voiceMode);
+  // The empty box's placeholder points at this button, so it follows whether there is one.
+  syncComposerShell(false);
   const note = (r && typeof r.reason === "string") ? r.reason : "";
   voiceUnavailableEl.textContent = refused ? note : "";
   voiceUnavailableEl.hidden = !(refused && note);
@@ -5039,8 +5196,7 @@ async function enterVoiceMode() {
   if (!voiceAvailable && voiceModelOffer) {
     voiceMode = true;
     setTalkPressed(true);
-    composerEl.hidden = true;
-    voicePanelEl.hidden = false;
+    showVoicePanel(true);
     voiceModelOfferLabel.textContent = voiceOfferSentence(voiceModelOffer);
     renderVoiceModelState(voiceModelBusy ? "progress" : "offer");
     return;
@@ -5059,18 +5215,34 @@ async function enterVoiceMode() {
   }
   voiceMode = true;
   setTalkPressed(true);
-  composerEl.hidden = true;
-  voicePanelEl.hidden = false;
+  showVoicePanel(true);
   renderVoiceModelState(null);
   renderVoiceState("listening", false);
   renderVoiceLevel(0);
 }
 
+/// Round 51: talking, the box itself becomes the listening panel. The text area gives way (what
+/// he had typed is kept, and comes back when voice ends), Send goes, and the plus, the status
+/// line and Output stay in the row. Talk to Rich does not move (`placeTalk`).
+function showVoicePanel(on) {
+  if (on && document.activeElement === inputEl) inputEl.blur();
+  // NOT `hidden`: the field is collapsed by `#input-shell.is-voice .composer-field` (style.css),
+  // which keeps it rendered. Talk to Rich was under the pointer in the field's placeholder when he
+  // pressed it, and WebKit cannot take :hover off elements in a `display: none` subtree, so they
+  // stayed hovered after the pointer left (contrast.js's parkPointer, 2026-11-01).
+  // AND THE BOX KEEPS ITS HEIGHT (his correction: no button jumping when talk is toggled). With
+  // several lines typed, the listening panel takes the text area's height, so the row under it,
+  // and Talk to Rich in that row, stay where they were.
+  voicePanelEl.style.minHeight = on ? inputEl.offsetHeight + "px" : "";
+  inputShellEl.classList.toggle("is-voice", on);
+  voicePanelEl.hidden = !on;
+  syncComposerMode();
+}
+
 async function exitVoiceMode() {
   voiceMode = false;
   setTalkPressed(false);
-  voicePanelEl.hidden = true;
-  composerEl.hidden = false;
+  showVoicePanel(false);
   inputEl.focus();
   try {
     await Bridge.invoke("stop_voice_capture", { threadId: activeThreadId });

@@ -85,11 +85,21 @@
 // show them (`shots-home/home-named.png`, `home-anonymized.png`, `home-returned.png`, decoded
 // at 1440x900: the button's top edge measures y=18 in each).
 //
+// ## THE COMPOSER HALF OF RULING 1 WAS REPLACED BY HIS ROUND 51 (2026-11-01)
+//
+// "Implement round-51" (richos-hq `design/mockups/rounds/round-51`) moved every composer control
+// INTO the box, on one row under the text: the plus, Talk to Rich (once he types), the status
+// line, Output centered, Stop and Send in the corner, every control 36px. "The same height as
+// the text input" no longer describes anything on screen, so checks 3 to 6 and 8 now hold his
+// newer order: the row's controls share one center line, keep their 36px, stay at the box's
+// bottom edge when the field grows, and the field follows the Text size row in both directions.
+// The settings-button half of ruling 1 and all of ruling 2 are unchanged.
+//
 // ## THE NEGATIVE CONTROLS ARE FIRST IN EACH HALF, AND THEY ARE NOT DESCRIPTIONS
 //
-// Check 1 puts the three pre-fix declarations back through the CSSOM and requires the defect to
-// measure EXACTLY as it measured on `f918f185` — 12px low, 18px of padding, 6px short and 3px
-// low. If that check ever comes back clean, the four after it are proving nothing and say so.
+// Check 1 puts the pre-fix settings declarations back through the CSSOM and requires the defect
+// to measure EXACTLY as it measured on `f918f185` — 12px low and 18px of padding. If that check
+// ever comes back clean, the checks after it are proving nothing and say so.
 //
 // Check 2b does the same for ruling 2, on both corner surfaces: it forces the regular-screen
 // pair onto the wrapper's own inline style — which outranks every selector in both stylesheets
@@ -130,7 +140,7 @@ const RIGHT_PADDING = 15;
 
 /// What `f918f185` shipped, so the negative control reproduces a geometry rather than asserting
 /// one. `style.css`'s own comments carry the same three numbers.
-const BEFORE = { settingsTop: 18, settingsRight: 18, controlHeight: 40 };
+const BEFORE = { settingsTop: 18, settingsRight: 18 };
 
 /// **THE HOME SCREEN AND THE HELD OPENING SCREEN SIT AT 18/18** — CEO, 2026-09-19, later the
 /// same day as the centering above, with a before-and-after pair of his own screenshots
@@ -387,30 +397,50 @@ const MEASURE = `(() => {
     settingsCenterDelta: header && setbtn ? +(setbtn.cy - header.cy).toFixed(2) : null,
     field,
     textarea: q("#input"),
-    controls: ["talk-toggle", "stop", "send"].reduce((acc, id) => {
+    lineH: parseFloat(getComputedStyle(document.getElementById("input")).lineHeight),
+    // Round 51: the controls in the box's row, measured against the plus that starts it. Talk to
+    // Rich counts only while it is in the row (in the empty box it is up in the placeholder).
+    add: q("#attach-add"),
+    controls: ["attach-add", "talk-toggle", "out-bottom", "stop", "send"].reduce((acc, id) => {
       const el = document.getElementById(id);
+      if (id === "talk-toggle" && el.parentElement.dataset.slot !== "row") return acc;
       const b = el && !el.hidden ? box(el) : null;
-      if (b && field) acc[id] = { box: b, dCenter: +(b.cy - field.cy).toFixed(2), dHeight: +(b.h - field.h).toFixed(2),
-                          dBottom: +(b.bottom - field.bottom).toFixed(2) };
+      const add = box(document.getElementById("attach-add"));
+      if (b && field && add) acc[id] = { box: b, dCenter: +(b.cy - add.cy).toFixed(2), dBottom: +(b.bottom - field.bottom).toFixed(2) };
       return acc;
     }, {}),
   };
 })()`;
 
-const measure = (page) => page.evaluate(MEASURE);
+/// Read once every finite animation has ended: since round 51 the first character glides Talk to
+/// Rich into the row (240ms), and a read inside the glide measures where it is passing, not where
+/// it sits. Only the composer's own running animations are waited for: endless loops (the pressed
+/// icon's bars) never finish, and the held opening screen keeps its own animations paused.
+const measure = async (page) => {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#composer-zone"))
+        .filter((a) => a.effect.getComputedTiming().endTime !== Infinity && a.playState === "running")
+        .map((a) => a.finished.catch(() => {}))
+    )
+  );
+  return page.evaluate(MEASURE);
+};
 
-/// His sentence, as a predicate, per control: centered on the field OR the same height as it.
-/// Tolerances are the brief's: +/-1px on a center (it is the sum of two layout computations),
-/// +/-0 on a height (it is one declaration).
+/// Round 51's row, as a predicate, per control: on the plus's center line (+/-1px, the sum of two
+/// layout computations) and 36px tall (one declaration, `--control-h`).
+const CONTROL_H = 36;
 function holdsForControl(c) {
-  return Math.abs(c.dCenter) <= 1 || c.dHeight === 0;
+  return Math.abs(c.dCenter) <= 1 && c.box.h === CONTROL_H;
 }
 
 function describeControls(m) {
   return Object.keys(m.controls)
     .map((id) => {
       const c = m.controls[id];
-      return `${id} ${c.box.h}px center ${c.box.cy} (dh ${c.dHeight}, dc ${c.dCenter})`;
+      return `${id} ${c.box.h}px center ${c.box.cy} (dc ${c.dCenter})`;
     })
     .join("; ");
 }
@@ -449,9 +479,7 @@ const STATES = {
     await page.waitForSelector('#composer-row[data-mode="stopping"]');
     return "stopping, both controls disabled";
   },
-  /// Voice mode: `#composer` is replaced inline by `#voice-panel` and `#talk-toggle` is the only
-  /// control left in the row. The field is gone, so this state is measured against the ROW's own
-  /// height rather than against the field — see the check.
+  /// Voice mode: the text area gives way to `#voice-panel` inside the same box (round 51).
   async voice(page) {
     await page.evaluate(() => {
       window.__overrides.start_voice_capture = { value: {} };
@@ -467,19 +495,18 @@ const STATES = {
 // ---------------------------------------------------------------------------------------
 
 async function main() {
-  const run = createRun("The settings button and the composer buttons line up (CEO, 2026-09-19)");
+  const run = createRun("The settings button lines up (CEO, 2026-09-19) and the box's row holds its controls (round 51)");
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();
 
   // ---- 1. the negative control ----------------------------------------------------------
   await run.check(
-    "NEGATIVE CONTROL: with the pre-fix declarations back, all three defects measure exactly as they did on f918f185",
+    "NEGATIVE CONTROL: with the pre-fix declarations back, the settings defects measure exactly as they did on f918f185",
     async () => {
       const page = await openApp(browser, SMALL);
       await page.addStyleTag({
         content:
-          `.settings { top: ${BEFORE.settingsTop}px; right: ${BEFORE.settingsRight}px; }\n` +
-          `#talk-toggle, #stop, #send { height: ${BEFORE.controlHeight}px; }\n`,
+          `.settings { top: ${BEFORE.settingsTop}px; right: ${BEFORE.settingsRight}px; }\n`,
       });
       const m = await measure(page);
       assertEqual(m.settingsCenterDelta, 12, "the settings button is not 12px below the header's center");
@@ -488,17 +515,10 @@ async function main() {
         m.setbtn.bottom > m.header.bottom,
         `the button no longer hangs through the header's bottom border (button ${m.setbtn.bottom}, header ${m.header.bottom})`
       );
-      for (const id of Object.keys(m.controls)) {
-        const c = m.controls[id];
-        assertEqual(c.dHeight, -6, `${id} is not 6px shorter than the field`);
-        assertEqual(c.dCenter, 3, `${id} is not 3px below the field's center`);
-        assert(!holdsForControl(c), `${id} satisfies the CEO's sentence at the PRE-FIX geometry`);
-      }
       await page.close();
       return (
         `settings center ${m.setbtn.cy} vs header ${m.header.cy} (+${m.settingsCenterDelta}), ` +
-        `right padding ${m.settingsRightPadding}px, box ends ${m.setbtn.bottom} through a border at ${m.header.bottom}; ` +
-        describeControls(m)
+        `right padding ${m.settingsRightPadding}px, box ends ${m.setbtn.bottom} through a border at ${m.header.bottom}`
       );
     }
   );
@@ -759,12 +779,12 @@ async function main() {
   for (const vp of [SMALL, LARGE]) {
     for (const state of ["idle", "working-stop-and-send", "stopping"]) {
       await run.check(
-        `the composer buttons match the text input in the "${state}" state, at ${vp.width}x${vp.height}`,
+        `the box's row holds its controls on one center line, 36px each, in the "${state}" state, at ${vp.width}x${vp.height}`,
         async () => {
           const page = await openApp(browser, vp);
           const label = await STATES[state](page);
           const m = await measure(page);
-          assert(m.field, "there is no #input-shell to match");
+          assert(m.field, "there is no #input-shell to measure");
           const ids = Object.keys(m.controls);
           assert(ids.length > 0, "no composer control is on screen in this state");
           if (state !== "idle") {
@@ -774,8 +794,8 @@ async function main() {
             const c = m.controls[id];
             assert(
               holdsForControl(c),
-              `${id} is ${c.box.h}px against the field's ${m.field.h}px and its center is ` +
-                `${c.dCenter}px from the field's — neither centered nor the same height`
+              `${id} is ${c.box.h}px and its center is ${c.dCenter}px off the plus's — ` +
+                `off the row's line or not the row's ${CONTROL_H}px`
             );
           }
           assertEqual(page.__errors, [], "the page reported errors");
@@ -788,73 +808,32 @@ async function main() {
 
   // ---- 4. voice mode ----------------------------------------------------------------------
   await run.check(
-    "in voice mode the talk control keeps the field's height and the row it lives in does not move",
+    "in voice mode the row keeps the plus, the status line and Output where they were, and Send goes",
     async () => {
-      // THE FIELD IS GONE IN THIS STATE, so there is nothing for the CEO's sentence to be
-      // about — `#composer` is replaced inline by `#voice-panel` and `#talk-toggle` is the only
-      // control left. What is measured instead is that the taller button did not push the
-      // composer around, and it is measured as a CONTROLLED comparison: the same page, same
-      // state, with the pre-fix 40px put back through the CSSOM.
-      //
-      // MEASURED, AND IT CORRECTED A GUESS. The guess was that the 40px talk control set the
-      // voice-mode row height, so growing it to 46 would grow the row. It does not: the voice
-      // panel is the tallest thing in that row at 59px, and the row reads 91px with the button
-      // at 40 and 91px with it at 46. That the composer is 78px in text mode and 91px in voice
-      // mode is pre-existing, is not what the CEO's sentence is about, and is untouched here.
+      // Round 51: talking, the box becomes the listening panel with the empty box's geometry, so
+      // the row under it does not move; Send goes because nothing is typed to send. Talk to
+      // Rich's own stillness is `input-area.js` check 5 (his correction of 2026-11-01).
       const page = await openApp(browser, SMALL);
-      const field = (await measure(page)).field.h;
-      const row = () =>
-        page.evaluate(() => {
-          const r = document.getElementById("composer-row").getBoundingClientRect();
-          const t = document.getElementById("talk-toggle").getBoundingClientRect();
-          const v = document.getElementById("voice-panel").getBoundingClientRect();
-          return {
-            row: +r.height.toFixed(2),
-            talk: +t.height.toFixed(2),
-            panel: +v.height.toFixed(2),
-            talkBottom: +t.bottom.toFixed(2),
-            panelBottom: +v.bottom.toFixed(2),
-          };
-        });
-      const textMode = await row();
+      const text = await measure(page);
       await STATES.voice(page);
-      const voiceMode = await row();
-      assertEqual(voiceMode.talk, field, "the talk control is not the field's height in voice mode");
-      assertEqual(voiceMode.talk, textMode.talk, "the talk control changed height with the mode");
-      assertEqual(
-        voiceMode.talkBottom,
-        voiceMode.panelBottom,
-        "the talk control is not flush with the bottom of the voice panel beside it"
-      );
-      const style = await page.addStyleTag({
-        content: `#talk-toggle, #stop, #send { height: ${BEFORE.controlHeight}px; }\n`,
-      });
-      const asShipped = await row();
-      await page.evaluate((el) => el.remove(), style);
-      assertEqual(
-        voiceMode.row,
-        asShipped.row,
-        "the taller talk control changed the height of the composer in voice mode"
-      );
+      const voice = await measure(page);
+      assert(voice.voiceOpen, "the listening panel did not open");
+      assertEqual(voice.add.top, text.add.top, "the plus moved when talk started");
+      assertEqual(voice.field.h, text.field.h, "the box changed height when talk started");
+      assert(!voice.controls.send, "Send is still in the row while talking, with nothing typed to send");
       assertEqual(page.__errors, [], "the page reported errors");
       await page.close();
-      return (
-        `text mode: row ${textMode.row}px, talk ${textMode.talk}px (field ${field}px); ` +
-        `voice mode: row ${voiceMode.row}px, panel ${voiceMode.panel}px, talk ${voiceMode.talk}px flush at ${voiceMode.talkBottom}; ` +
-        `same row at the pre-fix ${BEFORE.controlHeight}px: ${asShipped.row}px`
-      );
+      return `box ${text.field.h}px -> ${voice.field.h}px; plus at ${text.add.top} -> ${voice.add.top}; ` + describeControls(voice);
     }
   );
 
   // ---- 5. the field when it grows ---------------------------------------------------------
   await run.check(
-    "when the field grows past one line the buttons stay flush with its bottom edge",
+    "when the field grows the row stays along the box's bottom edge",
     async () => {
-      // THE DOCUMENTED DEGRADATION OF THE OPTION THIS FILE TOOK, asserted rather than left to
-      // be discovered. "Same height as the text input" is a statement about the resting field;
-      // `#input` grows to `max-height: 112px` with what he types, and `align-items: flex-end`
-      // is what keeps the two controls beside the LAST line rather than beside the middle. So
-      // the promise in this state is bottom-flush, and this check holds it to that.
+      // Round 51: the field grows to ten and a half lines above the row; the row is the box's
+      // last line, so every control ends the same distance above the box's bottom edge (the
+      // row's 8px padding and the 1px border) however tall the text gets.
       const page = await openApp(browser, SMALL);
       const restingField = (await measure(page)).field.h;
       await page.fill("#input", "one\ntwo\nthree\nfour\nfive\nsix");
@@ -870,7 +849,7 @@ async function main() {
       assert(m.field.h > restingField, `the field did not grow (still ${m.field.h}px)`);
       for (const id of Object.keys(m.controls)) {
         const c = m.controls[id];
-        assertEqual(c.dBottom, 0, `${id}'s bottom edge is ${c.dBottom}px from the grown field's`);
+        assertEqual(c.dBottom, -9, `${id}'s bottom edge is ${c.dBottom}px from the grown box's`);
       }
       assertEqual(page.__errors, [], "the page reported errors");
       await page.close();
@@ -885,41 +864,23 @@ async function main() {
 
   // ---- 6. the derivation, not the number ---------------------------------------------------
   await run.check(
-    "at 120% text size the buttons still track the field, so the match is derived and not a typed 46",
+    "at 120% text size the field is two of the larger lines and the row's controls keep their 36px",
     async () => {
-      // `--app-font-scale` multiplies the root font size and every size in `style.css` is rem,
-      // so a button whose height was TYPED as `46px` would come apart from the field by 4px the
-      // moment the CEO used the Text size row. That is what `--control-h:
-      // calc(var(--field-h) + 2px)` exists to prevent, and this is the check that would catch
-      // it: 120 is a real step in `RichTheme.STEPS` ([80, 90, 100, 110, 120, 135, 150]).
-      //
-      // THE TOLERANCE HERE IS 1px AND EVERY OTHER CHECK'S IS 0, WHICH IS A MEASUREMENT AND NOT
-      // A CONCESSION. `main.js`'s `autoGrow()` writes the field's height inline from
-      // `scrollHeight`, which is an INTEGER; the stylesheet's calc keeps the fraction. At 110%
-      // the field reads 48px and the buttons 48.39px. At 100% — the default, and what the CEO
-      // was looking at — both are exactly 46 and the other checks hold them to that.
+      // `--app-font-scale` multiplies the root font size and the field's line is `1.5rem`, so the
+      // empty box's two lines follow the Text size row; the row's controls are 36px by round 51's
+      // own declaration and do not.
       const page = await openApp(browser, SMALL, "dark", 120);
       const scale = await page.evaluate(() => window.RichTheme.scale());
       assertEqual(scale, 120, "the seeded text scale did not take, so this check is a re-run of the default");
       const m = await measure(page);
-      assert(
-        m.field.h > 46,
-        `the field did not respond to the text scale (${m.field.h}px, same as the default)`
-      );
+      assert(Math.abs(m.lineH - 28.8) <= 0.5, `the field's line did not follow the text scale (${m.lineH}px)`);
+      assert(Math.abs(m.textarea.h - m.lineH * 2) <= 1, `the empty field is not two lines at 120%: ${m.textarea.h}px for ${m.lineH}px lines`);
       for (const id of Object.keys(m.controls)) {
-        const c = m.controls[id];
-        assert(
-          Math.abs(c.dHeight) <= 1,
-          `${id} came apart from the field at 120%: ${c.box.h}px against ${m.field.h}px`
-        );
-        assert(
-          c.box.h > 46,
-          `${id} is still ${c.box.h}px at 120%, so its height is typed rather than derived`
-        );
+        assert(holdsForControl(m.controls[id]), `${id} left the row at 120%: ${describeControls(m)}`);
       }
       assertEqual(page.__errors, [], "the page reported errors");
       await page.close();
-      return `at 120%: field ${m.field.h}px (46 at the default); ` + describeControls(m);
+      return `at 120%: line ${m.lineH}px, field ${m.textarea.h}px; ` + describeControls(m);
     }
   );
 
@@ -958,7 +919,7 @@ async function main() {
 
   // ---- 8. the Text size row, used the way he uses it ---------------------------------------
   await run.check(
-    "changing the text size keeps the field and its buttons the same height, in BOTH directions",
+    "changing the text size re-measures the field, in BOTH directions",
     async () => {
       // **RAY'S CANDIDATE .13, DEFECT R1**, and it is the CEO's own sentence breaking at the one
       // moment he is looking hardest at the composer. Measured by Ray at 5x, both themes, both
@@ -985,9 +946,13 @@ async function main() {
         await page.click(id);
         await page.keyboard.press("Escape");
         await page.waitForSelector("#set-menu", { state: "hidden" });
-        // Two frames: one for the root's new font size to lay out, one for anything answering it.
+        // Two frames: one for the root's new font size to lay out, one for anything answering it;
+        // then the field's own 120ms height ease (round 51) to its end.
         await page.evaluate(
           () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+        );
+        await page.evaluate(() =>
+          Promise.all(document.getElementById("input").getAnimations().map((a) => a.finished.catch(() => {})))
         );
         return measure(page);
       };
@@ -998,17 +963,12 @@ async function main() {
       const bigger = await step("#font-up");
       assertEqual(await page.evaluate(() => window.RichTheme.scale()), 110, "the + control did not move the scale");
       assert(
-        bigger.field.h > start.field.h,
-        `the field did not follow the text size at all (${start.field.h}px -> ${bigger.field.h}px) — ` +
-          "it is stuck at the height autoGrow() wrote before the change"
+        bigger.field.h > start.field.h && Math.abs(bigger.textarea.h - bigger.lineH * 2) <= 1,
+        `the field did not follow the text size (${start.textarea.h}px -> ${bigger.textarea.h}px for ` +
+          `${bigger.lineH}px lines) — it is stuck at the height autoGrow() wrote before the change`
       );
       for (const id of Object.keys(bigger.controls)) {
-        const c = bigger.controls[id];
-        assert(
-          holdsForControl(c),
-          `LARGER: ${id} is ${c.box.h}px against the field's ${bigger.field.h}px (dh ${c.dHeight}, dc ${c.dCenter}) — ` +
-            "neither centered nor the same height, which is the CEO's sentence broken"
-        );
+        assert(holdsForControl(bigger.controls[id]), `LARGER: ${id} left the row: ${describeControls(bigger)}`);
       }
 
       // AND BACK DOWN, because Ray measured the defect in both directions and the shrinking one
@@ -1021,11 +981,7 @@ async function main() {
         `the field did not come back to its resting height (${start.field.h}px -> ${back.field.h}px)`
       );
       for (const id of Object.keys(back.controls)) {
-        const c = back.controls[id];
-        assert(
-          holdsForControl(c),
-          `SMALLER: ${id} is ${c.box.h}px against the field's ${back.field.h}px (dh ${c.dHeight}, dc ${c.dCenter})`
-        );
+        assert(holdsForControl(back.controls[id]), `SMALLER: ${id} left the row: ${describeControls(back)}`);
       }
       assertEqual(page.__errors, [], "the page reported errors");
       await page.close();

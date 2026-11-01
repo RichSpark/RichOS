@@ -94,6 +94,7 @@ module.exports = [
   {"s": "The screen is back, so this is carrying on.", "c": "INFORMATIONAL", "why": "The record's carrying-on detail (screen::says::carrying_on) that timeline.js reads to show the line above. Not drawn itself; the same fact, asking nothing."},
   {"s": "1 file attached", "c": "INFORMATIONAL", "why": "The accessible name of the tray's list (`#attach-list`), counting what is on the composer. It asks nothing."},
   {"s": "Attaching 1 file:", "c": "FRAGMENT", "why": "The head of the placeholder bubble a new thread's first message shows for the moment before the thread exists; the file names follow it, and the real bubble replaces it with the words Rich receives."},
+  {"s": "The file picker did not open. Nothing was attached; try the plus again or drop the files on the window.", "c": "ACTIONABLE", "control": "#attach-add", "fixture": null, "why": "Round 50/51's plus: `attach_pick_files` in `mac_attachments.rs` when the macOS file picker could not be shown or did not answer. `attachments.js` `addPicked` shows it on the tray's line (#attach-note); the plus that asked is in the same row, and a drop works too."},
   {"s": "Drop to attach to your message", "c": "ACTIONABLE", "control": "#input", "fixture": null, "why": "Shown only while a drag carrying files is over the window (`rich://file-drag`). The action is the drop he is already making; the composer it lands on is on screen. tests/attachments.js check 8 shows and hides it."},
   {"s": "A file is still being added. Press Send again in a moment.", "c": "ACTIONABLE", "control": "#send", "fixture": null, "why": "Send pressed while a pasted or dropped file is still crossing to the desk. Send stays enabled beside it."},
   {"s": "A message can carry at most 10 files.", "c": "INFORMATIONAL", "why": "The desk's count ceiling, prefixed with the name of the file that crossed it. Nothing was attached; the ten already on the composer stay. tests/attachments.js check 3."},
@@ -1019,6 +1020,8 @@ module.exports = [
       "with one name is the thing a screen reader cannot tell apart.",
   },
   { s: "Talk to Rich…", c: "CONTROL", why: "#input idle placeholder." },
+  { s: "Type here… OR…", c: "CONTROL", why: "Round 51: line one of the empty box's placeholder (#composer-hint), drawn over #input while it is empty and taking words; the box is the control and the caret is already in it. tests/input-area.js check 1." },
+  { s: "Click to talk to Rich.", c: "CONTROL", why: "Round 51: line two of the empty box's placeholder, after the arrow; the real #talk-toggle sits in front of it. tests/input-area.js check 1." },
   { s: "Add context or steer Rich…", c: "CONTROL", why: "#input working placeholder (§9.2)." },
   { s: "more threads in", c: "CONTROL", why: "'Show more' accessible name." },
 
@@ -1101,8 +1104,7 @@ module.exports = [
   },
   { s: "are no longer running", c: "FRAGMENT", why: "Worker group verb, completed with names." },
   { s: "is no longer running", c: "FRAGMENT", why: "Worker group verb, completed with a name." },
-  { s: "headphones recommended · tap", c: "FRAGMENT", why: "Voice footnote, completed by the ◉ glyph." },
-  { s: "to end voice", c: "FRAGMENT", why: "The tail of the same footnote." },
+  { s: "Click to stop talking · headphones recommended", c: "CONTROL", why: "Round 51: line two of the listening panel (`.voice-talk-line`), after the arrow; the pressed #talk-toggle in front of it ends voice. tests/input-area.js check 5 and check 7." },
 
 
   // -------------------------------------------------------------------------------------

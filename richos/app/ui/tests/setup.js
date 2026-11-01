@@ -741,12 +741,13 @@ async function main() {
     assert(inline, "the greeting shows no inline copy of the talk icon");
     assert(inline.h > inline.font * 0.9 && inline.h < inline.font * 1.5, "the inline icon is not sized to the text: " + JSON.stringify(inline));
     assertEqual(inline.disc, inline.btnDisc, "the inline icon must take the button's theme color");
-    // ... and the voice row's footnote says the same thing the same way.
+    // ... and the listening panel's second line (round 51) points at the real button, which
+    // sits in its slot while he talks: no old glyph and no copy of the icon.
     const foot = await page.evaluate(() => {
-      const f = document.querySelector(".voice-footnote");
-      return { text: f.textContent, svg: !!f.querySelector("svg.talk-icon-inline") };
+      const f = document.querySelector(".voice-talk-line");
+      return { text: f.textContent.replace(/\s+/g, " ").trim(), slot: !!f.querySelector('.talk-slot[data-slot="voice"]'), copy: !!f.querySelector("svg.talk-icon-inline") };
     });
-    assert(foot.svg && !foot.text.includes("◉") && /tap\s+to end voice/.test(foot.text), "the voice footnote still shows the old glyph: " + JSON.stringify(foot));
+    assert(foot.slot && !foot.copy && !foot.text.includes("◉") && foot.text === "← Click to stop talking · headphones recommended", "the listening line is not round 51's: " + JSON.stringify(foot));
     bump(2);
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     await page.close();
@@ -760,12 +761,10 @@ async function main() {
     const read = () =>
       page.evaluate(() => {
         const i = document.querySelector("#messages .tl-prose svg.talk-icon-inline");
-        const f = document.querySelector(".voice-footnote svg.talk-icon-inline");
         const fill = (n, c) => getComputedStyle(n.querySelector(c)).fill;
         return {
           label: i.getAttribute("aria-label"), role: i.getAttribute("role"), hidden: i.getAttribute("aria-hidden"),
           disc: fill(i, ".talk-icon-disc"), bar: fill(i, ".talk-icon-bar"),
-          fdisc: fill(f, ".talk-icon-disc"), flabel: f.getAttribute("aria-label"),
           bdisc: fill(document.querySelector("#talk-toggle"), ".talk-icon-disc"),
           bbar: fill(document.querySelector("#talk-toggle"), ".talk-icon-bar"),
           blabel: document.getElementById("talk-toggle").getAttribute("aria-label"),
@@ -780,10 +779,8 @@ async function main() {
     await page.evaluate(() => setTalkPressed(true));
     r = await read();
     assertEqual(r.disc, r.bdisc, "listening: the greeting icon's disc must follow the button: " + JSON.stringify(r));
-    assertEqual(r.fdisc, r.bdisc, "listening: the voice row icon's disc must follow the button: " + JSON.stringify(r));
     assertEqual(r.bar, r.bbar, "listening: the bars must follow the button: " + JSON.stringify(r));
     assertEqual(r.label, "Stop talking", "listening: the name follows the button");
-    assertEqual(r.flabel, "Stop talking", "listening: the voice row icon's name follows the button");
     await page.close();
     return "disc, bars and spoken name follow #talk-toggle at rest and listening";
   });

@@ -77,7 +77,7 @@ function makeShell() {
     const renderDrillChip = noop, closeSlideOver = noop, closeThreadMenu = noop;
     const closeWorkerInspector = noop, setRailOpen = noop, renderScopeHeader = noop;
     const flushRender = noop, syncComposerMode = noop, renderRail = noop;
-    const startOrStopWaitTimer = noop, announce = noop, autoGrow = noop;
+    const startOrStopWaitTimer = noop, announce = noop, autoGrow = noop, placeTalk = noop;
     const scheduleRender = noop, parkViewStateNow = noop, renderWaitBand = noop;
     const refreshActiveContext = noop, refreshTechy = noop, updateJumpButton = noop;
     const resetWaitBandForThread = noop, pollWorkerStatus = noop;
