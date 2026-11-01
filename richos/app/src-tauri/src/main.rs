@@ -2893,7 +2893,7 @@ fn main() {
             match &boot.entity {
                 Some(entity) => {
                     eprintln!("[richos] company: {entity} (via {})", boot.source.map(|s| s.describe()).unwrap_or("resolution"));
-                    let binding = spine.ensure_active_thread_in(entity).expect("ensure thread");
+                    let launch_binding = open_launch_context(&mut spine, entity);
                     if let Err(error) = spine.migrate_legacy_onboarding_declination() {
                         eprintln!("[richos] onboarding answer migration failed: {error}");
                     }
@@ -2904,7 +2904,10 @@ fn main() {
                     // and a reader had to infer it from a failure line not appearing. A CEO who
                     // will never be asked about his business is the single failure this work
                     // exists to remove, and a boot that says nothing about it cannot be checked.
-                    eprintln!("[richos] {}", spine.describe_onboarding(&binding));
+                    match &launch_binding {
+                        Some(binding) => eprintln!("[richos] {}", spine.describe_onboarding(binding)),
+                        None => eprintln!("[richos] launch opens in no conversation; he picks one"),
+                    }
                 }
                 // THE OPERATOR'S HALF of the same condition. `ENTITY_UNRESOLVED_MESSAGE`
                 // is written for the CEO and deliberately names no environment variable;
@@ -6267,6 +6270,23 @@ fn choose_entity(app: AppHandle, state: State<AppState>, entity_id: String) -> R
     Ok(entity_choice_view(&state))
 }
 
+/// **A LAUNCH OPENS IN NO CONVERSATION** (the CEO, 2026-11-01: "why the fuck is the app always
+/// opening in the chat titled RichScribe something? I never did anything in that chat"). The
+/// launch used to activate the company's most recently CREATED thread, which is whatever
+/// conversation the app itself opened last (the "RichScribe feature" one), never one he chose.
+/// Now an install that already has a conversation in the company opens with nothing active and
+/// the screen the app shows when no conversation is selected; he picks one himself.
+///
+/// Only an install with NO conversation in the company yet gets its first one ("Onboarding"),
+/// because the first-run flow needs a thread to stand in.
+fn open_launch_context(spine: &mut Spine, entity: &EntityId) -> Option<richos_core::entity::ThreadBinding> {
+    let has_conversation = spine.ledger().threads().iter().any(|t| t.entity_id() == Some(entity));
+    if has_conversation {
+        return None;
+    }
+    Some(spine.ensure_active_thread_in(entity).expect("ensure thread"))
+}
+
 /// The spine half of `choose_entity`, as a free function so property 1 above is a TEST
 /// rather than a sentence in a doc comment.
 ///
@@ -7616,6 +7636,33 @@ mod entity_choice_tests {
             refused.unwrap_err().to_string().contains("no active thread"),
             "the refusal must be the NoActiveThread one, not something that half-worked"
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    // ---- a launch opens in no conversation (the CEO, 2026-11-01) ---------------------------
+
+    #[test]
+    fn a_launch_selects_no_conversation_when_the_company_already_has_some() {
+        let (mut spine, path) = spine_for("launch-none");
+        let first = spine.create_thread("Something he used", &id("richos")).unwrap();
+        // The app's own newest conversation (the "RichScribe feature" one) used to win.
+        spine.create_thread("RichScribe feature", &id("richos")).unwrap();
+        // A fresh spine over the same ledger is what a relaunch is.
+        drop(spine);
+        let mut relaunched = Spine::new(Ledger::open(&path).expect("reopen"));
+        relaunched.set_entity_registry(reg());
+        let opened = open_launch_context(&mut relaunched, &id("richos"));
+        assert!(opened.is_none());
+        assert!(relaunched.active_thread().is_none(), "a launch must select no conversation");
+        assert!(relaunched.ledger().threads().iter().any(|t| t.id == first), "nothing was deleted");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_first_launch_with_no_conversation_still_gets_its_onboarding_one() {
+        let (mut spine, path) = spine_for("launch-first");
+        let opened = open_launch_context(&mut spine, &id("richos")).expect("first conversation");
+        assert_eq!(spine.active_thread(), Some(opened.thread_id()));
         std::fs::remove_file(&path).ok();
     }
 
