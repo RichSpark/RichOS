@@ -2,6 +2,47 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.5-nightly.20261101.85
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261101.85)
+
+- Added a live square at the foot of the sidebar, opposite your name, showing how busy your Mac's processor and memory are; point at it or click it for the last minute in detail and right-click it to choose Readout, which also shows both as percentages
+- Added RichCleaner (Settings, RichCleaner), which works with RichScribe: select a file on your Desktop, tap your RichScribe key and say what it is; RichOS files it in a fitting folder inside one you choose and keeps your note for you or Rich to find it by later; Recent files lets you search, change a note or undo a filing
+- Added Rich asking you before installing a tool your team's work needs and your Mac lacks, such as Apple's command line developer tools: yes installs it once and the work carries on, no is remembered and telling him to install whatever is needed lets him do so from then on without asking
+- Changed talking to Rich from your phone to go only through the RichConnect app: the phone web page is gone, its address now says to use the app and a copy installed on a phone removes itself the next time it reaches your Mac
+- Changed the paired phone's card (Settings, Use Rich from your phone): it shows Connected or Reconnecting beside the phone's name and whether it can send you notifications, with what to switch on in RichConnect if not; a phone paired through the old web page is shown as needing to be paired again
+- Changed switching to another Claude account, at the weekly or the five-hour limit, so it no longer stops teammates in the middle of their work: they finish on the old account and Stu moves once they are done
+- Changed the pause near a Claude usage limit so a teammate's commands still run and only its next request to Claude waits
+- Changed Settings, Claude accounts for an account with no five-hour limit: it shows only the weekly limit and your team is no longer paused for a five-hour limit that account doesn't have
+- Changed Rich so he no longer suggests switching Claude accounts just because another account's limit has reset; RichOS pauses or switches by itself when the account in use reaches its limit
+- Changed the setup screen to ask for an Ultra subscription on your Anthropic account instead of Max
+- Fixed Rich being unable to carry on when a command he had left running finished after his reply; he now continues in the conversation, where you see what he says and can press Stop
+- Fixed an update being held back after the work it waited on had ended: a damaged job record or a helper Rich started before his conversation closed no longer counts as work still running
+- Fixed your team staying paused for up to five minutes after a Claude usage limit reset, with Settings, Claude accounts still showing the old figures; both now catch up within seconds
+- Fixed your team staying on a Claude account after its weekly limit for one model, such as Fable, ran out, with automatic reviews still starting there; RichOS now treats that like the account's own weekly limit
+- Fixed Stu waiting for hours with nothing said when he started a teammate while your Claude usage was on hold; he is now told at once which account is held, why and until when
+- Fixed RichDoctor's window popping up over RichOS the first time RichOS starts; it now starts quietly in the menu bar
+- [technical] Added dedicated connections between Codex and your RichOS conversations: each Codex task gets its own, messages from Codex go to Stu and you can ask Rich to make a conversation the one new Codex tasks connect to
+- [technical] Added a way for Stu to mark a teammate's earlier attempt as replaced by redone work, so the job can close instead of staying open
+- [technical] Changed your teammates' and Stu's ordinary commands to run and return their result directly, as in Terminal, instead of being moved to the background; a teammate that is paused still gets the word at once
+- [technical] Changed Rich's and Stu's work to go through the same checks as in Terminal before a teammate starts and at the end of each turn; a refused teammate start now says what to fix
+- [technical] Improved how much of your Claude usage your team spends: notes about your company and ongoing work and the standing notices each teammate gets now go once per conversation and again only after it is compacted or when they change, instead of with every message or step
+- [technical] Improved how much of your Claude usage Rich and Stu spend: Stu's failed turns on RichOS's own reminders no longer wake Rich; Stu no longer gets a teammate's whole brief back each time he prepares or looks up a job
+- [technical] Fixed your team's commands running RichOS's own Python, Node and Git instead of yours, so your own Python packages were missing; RichOS's copies are still used where your Mac has only Apple's placeholders
+- [technical] Fixed commits by your team carrying a co-author line after you had turned that off in Claude Code's settings
+- [technical] Fixed a conversation's Claude usage still being counted to its old account after it moved to another one, which skewed when RichOS paused or switched
+- [technical] Fixed messages from Codex being lost when RichOS quit before a conversation was open to receive them
+- [technical] Fixed Stu's request to start a teammate being refused without a clear reason when RichOS's checks before the start took longer than 20 seconds
+- [technical] Fixed Stu being told that held work had gone quiet or was overdue while it was waiting on purpose, for a usage hold or for a time he had set
+- [technical] Fixed a command Stu started with nohup not counting as running work, so an update or Quit did not wait for it and Stop did not end it
+- [technical] Fixed pausing one teammate also freezing a shared build cache server, which hung other teammates' builds
+- [technical] Fixed your team staying paused until the reset when every Claude account reached its five-hour limit with Switch chosen; they now resume one at a time in the last 20 minutes, as with Pause
+- [technical] Fixed Stu's landing of finished work onto a release branch being refused when the repository's main folder was on another branch
+- [technical] Fixed finished teammates' folders and branches being left in your repositories when the conversation that started them had ended for good; the next check now cleans them up
+- [technical] Fixed the cleanup of leftover files deleting a live conversation's working folder when its session had started on the 1st to the 9th of a month and reporting a folder that was already gone as a failed cleanup
+- [technical] Fixed RichOS writing a second, ever-growing copy of each conversation's record on your Mac, which could reach hundreds of megabytes
+- [technical] Fixed your team sometimes reading your Mac's processor and memory use as unavailable when RichOS's data folder was reached through a link
+
 ## 1.2.5-nightly.20261030.82
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261030.82)
