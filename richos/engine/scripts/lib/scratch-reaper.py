@@ -306,6 +306,20 @@ def lstart_epoch(text):
         return None
 
 
+def same_start(read, recorded):
+    """Whether the start `process_start()` read is the one a record holds.
+
+    Compared word by word, never byte by byte. `ps -o lstart=` pads a day of the
+    month below 10 with a second space ("Sun Nov  1 00:34:09 2026"), Claude Code's
+    session file keeps that string as `ps` printed it, and workspaces.process_start
+    joins the words with one space ("Sun Nov 1 00:34:09 2026"). Byte equality made
+    every session started on the 1st to the 9th of a month a "stale registration":
+    its process went unattributed, so a resumed live session's scratch was deleted
+    and an ended one's was left undecidable (measured 2026-11-01, the land of
+    echo-opus-wk1). completion-proof.py compares the same way."""
+    return " ".join(str(read or "").split()) == " ".join(str(recorded or "").split())
+
+
 class Liveness(object):
     """Who is running, and what that lets us say about who is not."""
 
@@ -336,7 +350,7 @@ class Liveness(object):
             if not pid or not sid:
                 continue
             state, text = self.ws.process_start(pid)
-            if state == "ok" and text == str(rec.get("procStart") or ""):
+            if state == "ok" and same_start(text, rec.get("procStart")):
                 self.registered[int(pid)] = sid
                 self.running[sid] = (int(pid), "process %d of session %s runs"
                                      % (int(pid), sid[:8]))
@@ -3457,7 +3471,7 @@ class Reaper(object):
                     self.add(path, "app-profile", size, INDETERMINATE,
                              "cannot tell whether the app that made it (pid %s) runs: %s" % (pid, text))
                     continue
-                alive = state == "ok" and text == str(owner.get("procStart") or "")
+                alive = state == "ok" and same_start(text, owner.get("procStart"))
                 if alive and int(pid or 0) != int(exiting or 0):
                     self.add(path, "app-profile", size, KEEP,
                              "the app that made it (pid %s) is running and retires it itself" % pid)
@@ -3633,7 +3647,7 @@ class Reaper(object):
                              "cannot tell whether the dictation tool that made it (pid %s) runs: %s"
                              % (pid, text))
                     continue
-                if state == "ok" and text == str(owner.get("procStart") or ""):
+                if state == "ok" and same_start(text, owner.get("procStart")):
                     self.add(path, "app-dictation", size, KEEP,
                              "the dictation tool that made it (pid %s) is running: it may be "
                              "recording or decoding into it now" % pid)
