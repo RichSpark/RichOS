@@ -267,6 +267,7 @@ class Walk(adopt.Walk):
         try:
             # a hand's click: the real mouse at the switch's center
             self.pointer(self.center(sw))
+            pressed_at = time.monotonic()
             time.sleep(3)
             ev['main_process_after_press'] = alive()
             nodes = self.dump('cleaner-on')
@@ -284,6 +285,11 @@ class Walk(adopt.Walk):
         time.sleep(3)
         nodes = self.dump('cleaner-off')
         self.shot('cleaner-sheet-off-again.png')
+        # the process again at least 10 s after the FIRST press (a quit that follows the press by a few
+        # seconds is told from one that was never going to happen); the count read is the whole story
+        time.sleep(max(0, 12 - (time.monotonic() - pressed_at)))
+        ev['main_process_12s_after_press'] = alive()
+        ev['seconds_since_press_at_last_check'] = round(time.monotonic() - pressed_at, 1)
         ev['switch_off'] = next(({k: n.get(k) for k in ('role', 'value')} for n in nodes
                                  if n.get('desc') == 'RichCleaner' and n.get('role') == sw['role']), None)
         # the verdict: the press must have DONE something a person can see. Either the refusal is on
@@ -304,7 +310,8 @@ class Walk(adopt.Walk):
         ev['refusal_on_screen'] = refused
         ev['refusal_visible_without_scrolling'] = bool(
             refused and win and all(win['y'] <= n['y'] and n['y'] + n['h'] <= win['y'] + win['h'] for n in new))
-        ev['alive_after_press'] = ev.get('main_process_after_press') not in ('', '0', None)
+        ev['alive_after_press'] = all(ev.get(k) not in ('', '0', None)
+                                      for k in ('main_process_after_press', 'main_process_12s_after_press'))
         if refused:
             ev['classification'] = 'refused: RichScribe off, the sheet says so'
         elif not before and after_on and not after_off:
