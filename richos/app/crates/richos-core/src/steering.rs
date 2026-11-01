@@ -805,6 +805,10 @@ pub trait TurnCancel: Send + Sync {
     /// means the lease had nothing to cancel (no prompt in flight, or the child is gone),
     /// which the caller reports rather than hides.
     fn cancel(&self) -> bool;
+    /// Wire the host's notice for the turn the provider starts when this lead's own background
+    /// command ends (`native::CONTINUATION_CHANNEL`), with the notification's summary. A lease
+    /// that cannot hold such a turn ignores it.
+    fn on_continuation(&self, _notice: Arc<dyn Fn(String) + Send + Sync>) {}
     /// Settle owned processes on app exit even when no turn is in flight.
     fn shutdown(&self) { let _ = self.cancel(); }
     /// Ask the lease to stop ONE command its provider is running in the background, by the
@@ -949,7 +953,14 @@ struct Inner {
     /// durable intake writes. Lock order is SPINE then claims, or claims then INTAKE;
     /// no path takes SPINE while holding claims or holds INTAKE while taking claims.
     priming: Mutex<std::collections::HashSet<String>>,
+    /// The host's notice (conversation, summary) for a turn a lead's own ended background
+    /// command started; wired into every lease handle registered here ([`TurnCancel::on_continuation`]).
+    continuation: Mutex<Option<ContinuationNotice>>,
 }
+
+/// The host's answer to "Rich's own background command ended and the provider started his next
+/// turn": file it as an app turn of that conversation (`native::CONTINUATION_CHANNEL`).
+pub type ContinuationNotice = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 /// The shared, lock-free-with-respect-to-the-spine control surface for §9.2 and §9.3.
 ///
@@ -981,6 +992,7 @@ impl TurnControl {
                 intake: Mutex::new(Some(log)),
                 conversations: Mutex::new(std::collections::HashMap::new()),
                 priming: Mutex::new(Default::default()),
+                continuation: Mutex::new(None),
             }),
         })
     }
@@ -995,6 +1007,7 @@ impl TurnControl {
                 intake: Mutex::new(None),
                 conversations: Mutex::new(std::collections::HashMap::new()),
                 priming: Mutex::new(Default::default()),
+                continuation: Mutex::new(None),
             }),
         }
     }
@@ -1017,6 +1030,19 @@ impl TurnControl {
     /// A view of the same durable intake and controls for one conversation.
     pub fn for_thread(&self, thread: &str) -> ConversationControl {
         ConversationControl {shared:self.clone(),thread:thread.to_string()}
+    }
+
+    /// Set the host's continuation notice, and wire it into every lease handle already here.
+    pub fn set_continuation_notice(&self, notice: ContinuationNotice) {
+        *self.inner.continuation.lock().unwrap() = Some(notice.clone());
+        let handles: Vec<_> = self.inner.conversations.lock().unwrap().iter()
+            .filter_map(|(thread, state)| state.cancel.clone().map(|cancel| (thread.clone(), cancel))).collect();
+        for (thread, cancel) in handles { cancel.on_continuation(Self::notice_for(&notice, &thread)); }
+    }
+
+    fn notice_for(notice: &ContinuationNotice, thread: &str) -> Arc<dyn Fn(String) + Send + Sync> {
+        let (notice, thread) = (notice.clone(), thread.to_string());
+        Arc::new(move |summary: String| notice(&thread, &summary))
     }
 
     pub fn active_turn_count(&self) -> usize {
@@ -1370,6 +1396,8 @@ impl ConversationControl {
     }
 
     pub fn set_cancel(&self, cancel: Option<Arc<dyn TurnCancel>>) {
+        let notice=self.shared.inner.continuation.lock().unwrap().clone();
+        if let (Some(notice),Some(handle))=(notice,cancel.as_ref()) {handle.on_continuation(TurnControl::notice_for(&notice,self.key()));}
         let mut states=self.shared.inner.conversations.lock().unwrap();
         let state=states.entry(self.key().to_string()).or_default();
         if let Some(turn)=state.active.as_ref() {

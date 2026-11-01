@@ -2021,6 +2021,10 @@ t "toolchain-ask-walk: Rich's completed turns after a send, an ask about install
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/toolchain-ask-walk.test.py" >"$TMP/toolchain-ask-walk.log" 2>&1; ok $? "$(cat "$TMP/toolchain-ask-walk.log")"
 t_done
 
+t "woken-turn-walk: Rich's background launch, his turn's end, then a run of his own; a Stop after the press with no late line"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/woken-turn-walk.test.py" >"$TMP/woken-turn-walk.log" 2>&1; ok $? "$(cat "$TMP/woken-turn-walk.log")"
+t_done
+
 t "reap: WALL 2 admits the walk-* and probes-* clone names the harnesses create (R53)"
   # The stub-tart route is closed: reap.sh refuses an unsigned tart at its launch preflight, so
   # the wall is read from source, the way the claude-login tests above read theirs.

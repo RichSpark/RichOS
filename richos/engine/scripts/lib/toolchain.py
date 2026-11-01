@@ -51,9 +51,7 @@ report (his instruction file says how; nothing here writes the question), then r
                          never starts the installer while an install is already running (one
                          lock, one record), opens Apple's installer (`xcode-select --install`,
                          where the user presses Install) and returns at once so the user can be
-                         told; run again, each run waits up to CALL_WAIT seconds for the tool.
-                         The agent waits in its own turn: a background command's end cannot
-                         continue the work (the app grants actions only inside its own turns)
+                         told; run again, each run waits up to CALL_WAIT seconds for the tool
   permission [yes|no]    the general permission, `INSTALL_MISSING_TOOLS` in the user's own
                          settings file, the orchestration.config in their central folder
                          (RICHOS_USER_FOLDER, from the app; off unless it says yes). With it on,
@@ -234,9 +232,7 @@ PERMISSION_COMMENT = ("# Install a tool that work needs and this Mac does not ha
 INSTALL_WAIT = 3600
 # How long one `install` call waits before it says "still installing, run me again": under Claude
 # Code's default Bash timeout of 120 s, so the agent's call is never cut off or moved to the
-# background. A background command's end cannot continue the work in a conversation turn: the
-# app allows actions only inside a turn it granted (app-engine-hook.py), and the provider reports
-# a late ending in a turn of its own (measured on the test VM 2026-10-31, walk-f50bafc2bb48).
+# background.
 CALL_WAIT = 100
 
 
