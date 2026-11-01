@@ -20,6 +20,15 @@
 #       touching RichDoctor: the report is filed by itself, exactly one issue, its draft says
 #       "submitted", and no later request re-sends it.
 #
+#   R5  (rv-20261101T212128Z-4d4b000f-544e #1) a reviewed report is sent and the relay refuses it
+#       (no retry time); the person chooses Edit report, then Save for later: the draft is a
+#       review-stage draft with its approval withdrawn, and after a relaunch the card offers it.
+#   R6  (rv-20261101T221231Z-569ad7fe-8335 #1) a report is sent with the relay down (queued), the
+#       person chooses Edit report and changes the screenshot set (Remove screenshot 1; the file
+#       picker that adds one cannot be driven by the accessibility tree, and add and remove go
+#       through the same engine call, covered by the engine tests): with the relay back up nothing
+#       is sent by itself, and Send report registers exactly what is shown (no screenshot).
+#
 # Delivery points at a loopback address nothing listens on, so nothing can reach GitHub. run-walk.py
 # passes the VM name first and stops the guest and deletes the clone when this returns (CEO §54).
 # EXIT STATUS: 0 only when every check passed.
@@ -156,5 +165,105 @@ if [ "$BEFORE" = "$AFTER" ]; then pass "R2 opening a draft and quitting left bot
 # ---- R3: Quit leaves nothing running --------------------------------------------------------------
 LEFT=$(gs "pgrep -fl 'RichDoctor.app/Contents/MacOS/RichDoctor' || true" | tr -d '\r')
 if [ -z "$LEFT" ]; then pass "R3 no RichDoctor process is left"; else fail "R3 left running: $LEFT"; fi
+# ---- R5 / R6: a failed send, Edit report, Save for later; a changed screenshot set ----------------
+# A reviewed fixture report with one screenshot, offered alone: the earlier drafts are moved away.
+R5_ID=d-5555aaaa5555
+R5_WORDS="FIXTURE REVIEW report for the failed-send paths"
+python3 -I - "$S" "$R5_ID" "$R5_WORDS" "$PORT" <<'PY' || setup_failed "writing the review fixture"
+import hashlib, json, struct, sys, zlib
+out, rid, words, port = sys.argv[1:5]
+def chunk(t, d):
+    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+w = h = 24
+raw = b"".join(b"\x00" + bytes((x * 9 + y * 5 + 40) % 256 for x in range(w) for _ in range(3)) for y in range(h))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+open(f"{out}/r5-shot.png", "wb").write(png)
+ms = 1793300000000
+d = {"id": rid, "created_at": ms - 60000, "updated_at": ms, "stage": "review", "description": words, "without_ai": True,
+     "conversation": [{"kind": "person", "text": words}], "left": "draft, saved to finish later",
+     "screenshots": [{"id": "shot-r5r5r5r5r5r5", "sha256": hashlib.sha256(png).hexdigest(), "covers": 0, "approved_at": ms, "media_type": "image/png"}],
+     "report": {"report_id": "RD-5555-5555", "title": "FIXTURE failed-send report", "what_happened": words, "expected": "It is filed.",
+                "when": "Just now", "steps": [], "versions": "RichDoctor fixture", "excerpts": [], "screenshots": ["shot-r5r5r5r5r5r5"],
+                "relay": f"http://127.0.0.1:{port}", "causes": "", "missing": [], "provenance": "without-ai", "removals": [], "shortened": []}}
+json.dump(d, open(f"{out}/{rid}.json", "w"), indent=2)
+PY
+launch_app() {
+  gs "$AS RICHDOCTOR_REPORT_RELAY=http://127.0.0.1:$PORT RICHDOCTOR_REPORT_REPOSITORY=richos-test/report-relay-local nohup '$GHOME/Applications/RichDoctor.app/Contents/MacOS/RichDoctor' > $G/app.log 2>&1 & echo \$! > $G/app.pid" || fail "relaunching RichDoctor"
+}
+quit_app() {
+  gs "$AS osascript -e 'tell application id \"com.richos.richdoctor\" to quit'" >/dev/null 2>&1 || true
+  sleep 5
+}
+stand_in_stop() { gs "test -s $G/stand-in.pid && kill \$(cat $G/stand-in.pid) 2>/dev/null; rm -f $G/stand-in.pid; true" >/dev/null 2>&1; }
+stand_in_start() { # <state> <log>: the loopback relay stand-in, its PID recorded for finish()
+  gs "nohup python3 $G/relay-stand-in.py $PORT $G/$1 $G/$2 0 500 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" >/dev/null || fail "starting the relay stand-in ($1)"
+  sleep 2
+}
+# No log file yet means the stand-in has had no request at all: zero registrations.
+registrations() { gs "if [ -f $G/$1 ]; then grep -c '\"path\": \"/v1/reports\"' $G/$1; else echo 0; fi; true" | tr -d '\r' | tail -1; }
+stand_in_stop
+gs "mkdir -p $G/old-drafts && mv '$DATA'/drafts/* $G/old-drafts/ && mkdir -p '$DATA/drafts/$R5_ID/shots'" || setup_failed "clearing the earlier drafts"
+gs --push "$S/$R5_ID.json" "$DATA/drafts/$R5_ID/draft.json" || setup_failed "the review fixture draft"
+gs --push "$S/r5-shot.png" "$DATA/drafts/$R5_ID/shots/shot-r5r5r5r5r5r5" || setup_failed "the review fixture screenshot"
+gs "chown -R admin '$DATA/drafts'" >/dev/null 2>&1 || true
+launch_app
+wait_text "Continue your unfinished report?" 20 || fail "R5 no card for the review fixture"
+# R5: the relay refuses (the stand-in's "reject" fault) with no retry time.
+stand_in_start relay5.json stand-in5.log
+gs "curl -s -X POST -d '{\"next\":\"reject\"}' http://127.0.0.1:$PORT/_fault" >/dev/null || fail "R5 arming the refusal"
+"$T/ax.sh" "$VM" click --title "Continue" --app RichDoctor --first >/dev/null 2>&1 || fail "R5 pressing Continue"
+wait_text "Send report" 15 || fail "R5 the review screen did not open"
+"$T/ax.sh" "$VM" click --title "Send report" --app RichDoctor --first >/dev/null 2>&1 || fail "R5 pressing Send report"
+if wait_text "Not sent yet" 20; then pass "R5 the relay's refusal shows Not sent yet"; else fail "R5 no Not sent yet after the refusal"; fi
+"$T/shot.sh" "$VM" "$S/5-refused.png" || fail "capture 5-refused"
+"$T/ax.sh" "$VM" click --title "Edit report" --app RichDoctor --first >/dev/null 2>&1 || fail "R5 pressing Edit report"
+wait_text "Save for later" 15 || fail "R5 the review screen did not come back"
+"$T/ax.sh" "$VM" click --title "Save for later" --app RichDoctor --first >/dev/null 2>&1 || fail "R5 pressing Save for later"
+sleep 3
+if gs "grep -c '\"cause\": \"withdrawn\"' '$DATA/drafts/$R5_ID/draft.json'" | grep -q 1 && gs "grep -c '\"stage\": \"review\"' '$DATA/drafts/$R5_ID/draft.json'" | grep -q 1; then pass "R5 the draft is review-stage with its approval withdrawn"; else fail "R5 the draft still carries the approval: $(gs "grep -E '\"(stage|state|cause)\"' '$DATA/drafts/$R5_ID/draft.json'" | tr -d '\r' | tr '\n' ' ')"; fi
+quit_app
+launch_app
+if wait_text "Continue your unfinished report?" 20 && has "$R5_WORDS"; then pass "R5 after the relaunch the card offers the report saved for later"; else fail "R5 the failed, edited and saved report is not offered after the relaunch"; fi
+"$T/shot.sh" "$VM" "$S/5-offered.png" || fail "capture 5-offered"
+# R6: the relay goes away, the report is sent (queued), the screenshot set changes, the relay returns.
+stand_in_stop
+"$T/ax.sh" "$VM" click --title "Continue" --app RichDoctor --first >/dev/null 2>&1 || fail "R6 pressing Continue"
+# A report that was sent and saved for later reopens on its Not sent yet screen (open_saved).
+wait_text "Send again" 15 || fail "R6 the reopened report did not show Send again"
+"$T/ax.sh" "$VM" click --title "Send again" --app RichDoctor --first >/dev/null 2>&1 || fail "R6 pressing Send again"
+sleep 10
+if gs "grep -c '\"cause\": \"unreachable\"' '$DATA/drafts/$R5_ID/draft.json'" | grep -q 1; then pass "R6 with the relay down the report is Not sent yet (queued)"; else fail "R6 not queued with the relay down: $(gs "grep -E '\"(stage|state|cause)\"' '$DATA/drafts/$R5_ID/draft.json'" | tr -d '\r' | tr '\n' ' ')"; fi
+"$T/ax.sh" "$VM" click --title "Edit report" --app RichDoctor --first >/dev/null 2>&1 || fail "R6 pressing Edit report"
+wait_text "Remove screenshot 1" 15 || fail "R6 the screenshot's Remove is not on the review screen"
+"$T/ax.sh" "$VM" click --title "Remove screenshot 1" --app RichDoctor --first >/dev/null 2>&1 || fail "R6 removing the screenshot"
+sleep 3
+stand_in_start relay6.json stand-in6.log
+note "R6: the relay is back; waiting 45 s (the outbox looks every 5 s, a retry is due after 30 s)"
+sleep 45
+N6=$(registrations stand-in6.log)
+if [ "$N6" = 0 ]; then pass "R6 the old approval was not sent by itself after the screenshot set changed"; else fail "R6 the old approval was sent by itself ($N6 registration(s))"; fi
+"$T/ax.sh" "$VM" click --title "Send report" --app RichDoctor --first >/dev/null 2>&1 || fail "R6 pressing Send report"
+sent6=no
+for _ in $(seq 1 20); do
+  if gs "grep -q '/complete' $G/stand-in6.log 2>/dev/null"; then sent6=yes; break; fi
+  sleep 3
+done
+gs "cat $G/stand-in6.log" > "$S/stand-in6.log" 2>&1 || true
+if [ "$sent6" = yes ]; then pass "R6 Send report filed the report"; else fail "R6 Send report did not reach the relay"; fi
+MANIFEST=$(python3 -I - "$S/stand-in6.log" <<'PY'
+import json, sys
+n = None
+for line in open(sys.argv[1]):
+    r = json.loads(line)
+    if r["path"] == "/v1/reports" and r["method"] == "POST":
+        n = len(json.loads(r["body"]).get("manifest", []))
+print("none" if n is None else n)
+PY
+)
+if [ "$MANIFEST" = 0 ]; then pass "R6 the report sent is the report as shown: no screenshot in its manifest"; else fail "R6 the approved manifest has $MANIFEST screenshot(s); the screen showed none"; fi
+"$T/shot.sh" "$VM" "$S/6-sent.png" || fail "capture 6-sent"
+quit_app
+LEFT=$(gs "pgrep -fl 'RichDoctor.app/Contents/MacOS/RichDoctor' || true" | tr -d '\r')
+if [ -z "$LEFT" ]; then pass "R5/R6 no RichDoctor process is left"; else fail "R5/R6 left running: $LEFT"; fi
 gs "cat $G/app.log" > "$S/app.log" 2>&1
 finish
