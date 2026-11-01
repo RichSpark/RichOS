@@ -14573,7 +14573,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_slots.py",
-          "sha256": "7f1bf198c4ea233a39cc6f5fdd47126712a12074e998bc5d0bd365f387b523e0",
+          "sha256": "fccdfa94370c1c298f5b8700018cdd2799094ddb3190be1ce14742bc15172919",
           "evidence": "Sources() loads it by fixed path beside the engine (module level: standard-library imports and constants); review_watch.py never calls it. Bind against the current repository, never another worktree."
         }
       ]
@@ -15487,7 +15487,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "0918da9d7f30fa761dfd3aa5451e95470a6dde833266703fce17bb9ad8c2d818",
+          "sha256": "3817df955adfb366cce98164c8b772175266736d0100eb29150f31a25ac663f5",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         }
       ]
@@ -15592,7 +15592,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_slots.py",
-          "sha256": "7f1bf198c4ea233a39cc6f5fdd47126712a12074e998bc5d0bd365f387b523e0",
+          "sha256": "fccdfa94370c1c298f5b8700018cdd2799094ddb3190be1ce14742bc15172919",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15610,7 +15610,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "0918da9d7f30fa761dfd3aa5451e95470a6dde833266703fce17bb9ad8c2d818",
+          "sha256": "3817df955adfb366cce98164c8b772175266736d0100eb29150f31a25ac663f5",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
@@ -16205,6 +16205,14 @@
           "default_engine": true,
           "path": "scripts/lib/testdevices.py",
           "sha256": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
+          "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
+        },
+        {
+          "root": "environment",
+          "variable": "RICHOS_LIFECYCLE_PAYLOAD_TEST_ROOT",
+          "default_engine": true,
+          "path": "mega-lander/workspaces.py",
+          "sha256": "13539e8a4d85ec6722c793a4cc2351d742d7a3105ac7c955e6c132ffc008713a",
           "evidence": "Bind this reached hook/helper at the exact optional alternate engine, defaulting to current engine; changed or missing remote source invalidates qualification."
         }
       ]
