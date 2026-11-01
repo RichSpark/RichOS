@@ -4502,6 +4502,123 @@ class AnyRegistryOnThisMachineCounts(_AppRegistryFixture):
         self.assertEqual([r["name"] for r in ws.all_agents() if r.get("orphan")], ["orphan-stray-wt"])
 
 
+class AnEndedConversationsFinishedWorkIsCleanedUp(Base):
+    """2026-11-01, the CEO: "why am I still seeing like a gazillion worktrees in richos under
+    cc/?" They were finished workers of an app conversation whose process had gone and which
+    never ran again: pending() lands only its own registry's records, so nothing ever read that
+    conversation's registry. A finished worker whose conversation has PROVABLY ended is now
+    handled by the next gate of any registry; a live or undecidable conversation's is not."""
+
+    def setUp(self):
+        super().setUp()
+        self.proc_name = "ws-spec-session-%d" % os.getpid()
+        # The machine's real `claude` processes are not this sandbox's sessions.
+        names = patch.dict(os.environ, {"SCRATCH_SESSION_PROCESS_NAMES": self.proc_name})
+        names.start()
+        self.addCleanup(names.stop)
+
+    def conversation(self, tag, sid, workers):
+        """An app conversation's registry with one session (a real process) and finished
+        cc/ workers, each with one commit; `workers` is [(name, merged into main)]."""
+        root = os.path.join(self.env.home, "Library", "Application Support", "com.richos.app",
+                            "engine-state", "workspaces", tag * 64)
+        os.environ["RICHOS_WORKSPACES_DIR"] = root
+        made = {}
+        try:
+            proc = self.env.session(sid, self.entity)
+            ws.record_integration(self.entity, "main", "the conversation's body of work", sid)
+            for name, merged in workers:
+                path, branch = os.path.join(self.env.root, "conversation-wt", name), "cc/" + name
+                ws.register_cc(sid, name, self.entity, path, branch)
+                run("git", "-C", self.entity, "worktree", "add", "-q", path, "-b", branch)
+                ws.confirm_cc(sid, name, path, True)
+                with open(os.path.join(path, name + ".txt"), "w") as f:
+                    f.write("work\n")
+                run("git", "-C", path, "add", "-A")
+                run("git", "-C", path, "commit", "-q", "-m", name)
+                if merged:
+                    run("git", "-C", self.entity, "merge", "-q", "--no-edit", branch)
+                rec = ws.load_agent(ws.named_key(sid, name))
+                rec["end"] = {"at": ws.now(), "signal": "SubagentStop", "detail": ""}
+                ws.save_agent(rec)
+                made[name] = (path, branch)
+        finally:
+            os.environ.pop("RICHOS_WORKSPACES_DIR", None)
+            self.env.use(self.sess)
+        return root, proc, made
+
+    def record_in(self, root, sid, name):
+        os.environ["RICHOS_WORKSPACES_DIR"] = root
+        try:
+            return ws.load_agent(ws.named_key(sid, name))
+        finally:
+            os.environ.pop("RICHOS_WORKSPACES_DIR", None)
+
+    def assert_kept(self, root, sid, name, path, branch):
+        self.assertTrue(os.path.isdir(path), "%s's workspace was deleted" % name)
+        self.assertIn(branch, branches(self.entity), "%s's branch was deleted" % name)
+        rec = self.record_in(root, sid, name)
+        self.assertIsNone(rec.get("disposition"), "%s was landed or discarded" % name)
+
+    def three_conversations(self):
+        ended_root, ended_proc, ended = self.conversation(
+            "e", "conv-ended-1111", [("echo-opus-ended1", True), ("ray-sonnet-kept1", False)])
+        live_root, _live_proc, live = self.conversation("b", "conv-live-2222", [("echo-opus-live1", True)])
+        und_root, und_proc, und = self.conversation("c", "conv-undecided-3333", [("echo-opus-undec1", True)])
+        for proc in (ended_proc, und_proc):
+            proc.kill()
+            proc.wait()
+        # The undecidable conversation's process is gone too, but nothing it recorded says which
+        # process it was: absence is never death.
+        spath = os.path.join(und_root, "sessions", "conv-undecided-3333.json")
+        srec = ws.read_json(spath)
+        srec.pop("pid", None)
+        srec.pop("pid_start", None)
+        ws.write_json(spath, srec)
+        rpath = os.path.join(und_root, "agents", ws.named_key("conv-undecided-3333", "echo-opus-undec1") + ".json")
+        rrec = ws.read_json(rpath)
+        rrec.pop("session_identity", None)
+        ws.write_json(rpath, rrec)
+        return (ended_root, ended), (live_root, live), (und_root, und)
+
+    def test_a_finished_worker_of_an_ended_conversation_is_cleaned_up_and_only_that(self):
+        (ended_root, ended), (live_root, live), (und_root, und) = self.three_conversations()
+        ok, _person, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        path, branch = ended["echo-opus-ended1"]
+        self.assertFalse(os.path.isdir(path), "the ended conversation's landed worker kept its workspace")
+        self.assertNotIn(path, worktrees(self.entity))
+        self.assertNotIn(branch, branches(self.entity), "the ended conversation's landed worker kept its branch")
+        rec = self.record_in(ended_root, "conv-ended-1111", "echo-opus-ended1")
+        self.assertEqual((rec.get("disposition") or {}).get("kind"), "landed")
+        # Work not in main is kept, never deleted, and a status names it.
+        self.assert_kept(ended_root, "conv-ended-1111", "ray-sonnet-kept1", *ended["ray-sonnet-kept1"])
+        status = [i for i in ws.pending(self.sid, self.entity, scan=True, dry=True)
+                  if i["name"].startswith("ray-sonnet-kept1 (ended conversation")]
+        self.assertEqual(len(status), 1, status)
+        self.assertFalse(status[0]["blocks_turn_end"])
+        self.assertIn("kept", status[0]["why"])
+        # A live conversation's finished worker and an undecidable one's are left alone.
+        self.assert_kept(live_root, "conv-live-2222", "echo-opus-live1", *live["echo-opus-live1"])
+        self.assert_kept(und_root, "conv-undecided-3333", "echo-opus-undec1", *und["echo-opus-undec1"])
+        for root, sid, name in ((live_root, "conv-live-2222", "echo-opus-live1"),
+                                (und_root, "conv-undecided-3333", "echo-opus-undec1")):
+            self.assertFalse(self.record_in(root, sid, name).get("claimed_by"), "%s was claimed" % name)
+
+    def test_a_session_process_no_session_file_names_leaves_every_conversation_undecided(self):
+        """The reaper's INDETERMINATE: a running session process that no platform session file
+        names could be the ended conversation resumed, so nothing is cleaned up."""
+        (ended_root, ended), _live, _und = self.three_conversations()
+        link = os.path.join(self.env.root, self.proc_name)
+        os.symlink(shutil.which("sleep"), link)
+        stray = subprocess.Popen([link, "300"])
+        self.env.procs.append(stray)
+        self.assertIn(stray.pid, ws.session_table()["unattributed"])
+        ok, _person, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(ok)
+        self.assert_kept(ended_root, "conv-ended-1111", "echo-opus-ended1", *ended["echo-opus-ended1"])
+
+
 ANY_REGISTRY_ENTRANCES = ("gate_stop", "session_start", "post_merge_pending", "retry_due", "land", "discard",
                           "merge_and_land", "dry_status")
 ANY_REGISTRY_KINDS = ("worktree", "branch", "unreadable")
