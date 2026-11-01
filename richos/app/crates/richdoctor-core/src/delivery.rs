@@ -101,6 +101,13 @@ pub struct Approved {
     /// rather than an issue: schema [`IDEA_SCHEMA`], no screenshots. Never set by RichDoctor.
     #[serde(default)]
     pub idea: bool,
+    /// The report's one receipt, made when it is approved and kept with it (the relay's client
+    /// rule: the ID, receipt, text and bytes are persisted before the first request). Every try
+    /// of this report presents the same ID and the same receipt, so the relay answers a retry
+    /// with the report's real state and never files a second issue. Empty on a draft an earlier
+    /// version approved: [`send`] then makes one for that send.
+    #[serde(default)]
+    pub receipt_secret: String,
 }
 
 /// The register schema of a RichOS feature idea (`RICHDOCTOR-RELAY.md`, "Feature ideas").
@@ -118,7 +125,8 @@ pub fn approve(report_id: &str, title: &str, body: &str, manifest: Vec<Entry>, r
     if !body.ends_with(&crate::report::ending(relay, report_id, manifest.len())) {
         return Err(problem("The report's screenshot lines or its report ID footer are missing.".into()));
     }
-    Ok(Approved { report_id: report_id.into(), title: title.into(), body: body.into(), manifest, approved_at: now, installation_id: installation_id.into(), idea: false })
+    let receipt_secret = crate::util::random_bytes(32).map(|b| crate::util::base64url(&b)).unwrap_or_default();
+    Ok(Approved { report_id: report_id.into(), title: title.into(), body: body.into(), manifest, approved_at: now, installation_id: installation_id.into(), idea: false, receipt_secret })
 }
 
 impl Approved {
@@ -156,19 +164,30 @@ pub enum NotSent {
     Refused { detail: String, until: Option<u64> },
     /// An approved screenshot could not be read on this Mac, so nothing was sent.
     Screenshot { item: String },
+    /// The person chose to edit or save the report for later after a send failed, so it is no
+    /// longer sent by itself; it is an unfinished report again.
+    Withdrawn,
 }
 
 impl NotSent {
+    /// Only a transport failure stays queued: the request never reached the service, or its
+    /// answer did not come back. The same ID and receipt are then sent again by themselves.
+    /// Anything the service answered, and anything wrong on this Mac, waits for the person.
+    pub fn is_transport(&self) -> bool {
+        matches!(self, NotSent::Offline | NotSent::Unreachable | NotSent::NoAnswer)
+    }
+
     /// The plain reason ("Not sent yet").
     pub fn reason(&self) -> String {
         match self {
-            NotSent::Offline => "Your Mac is not connected to the internet. Send again when you are online.".into(),
-            NotSent::Unreachable => "RichDoctor could not reach the reporting service. Send again or email support.".into(),
-            NotSent::NoAnswer => "RichDoctor did not hear back from the reporting service, so it may not have been filed. Send again or email support.".into(),
+            NotSent::Offline => "Your Mac is not connected to the internet. RichDoctor sends it by itself when you are online.".into(),
+            NotSent::Unreachable => "RichDoctor could not reach the reporting service. It tries again by itself; you can also send again or email support.".into(),
+            NotSent::NoAnswer => "RichDoctor did not hear back from the reporting service, so it may not have been filed. It checks again by itself; you can also send again or email support.".into(),
             NotSent::Refused { detail, until } => match until.map(crate::util::local_clock) {
                 Some(t) => format!("The reporting service did not file it: {} You can send again after {t}.", detail.trim()),
                 None => format!("The reporting service did not file it: {} Send again or email support.", detail.trim()),
             },
+            NotSent::Withdrawn => "You chose to edit this report, so it is not being sent by itself. Send it when you are ready.".into(),
             NotSent::Screenshot { item } => format!("{item} could not be read on this Mac, so nothing was sent. Email support, or start a new report."),
         }
     }
@@ -273,8 +292,13 @@ pub fn send(approved: &Approved, images: Images, dest: &Destination, relay: &dyn
             None => return State::NotSent { why: NotSent::Screenshot { item: format!("Screenshot {}", e.order) }, at: now },
         }
     }
-    let Ok(secret) = crate::util::random_bytes(32).map(|b| crate::util::base64url(&b)) else {
-        return State::NotSent { why: NotSent::Refused { detail: "RichDoctor could not make the report's one-time key.".into(), until: None }, at: now };
+    let secret = if approved.receipt_secret.is_empty() {
+        let Ok(secret) = crate::util::random_bytes(32).map(|b| crate::util::base64url(&b)) else {
+            return State::NotSent { why: NotSent::Refused { detail: "RichDoctor could not make the report's one-time key.".into(), until: None }, at: now };
+        };
+        secret
+    } else {
+        approved.receipt_secret.clone()
     };
     let base = format!("{}/v1/reports", dest.relay);
     let steps = ["receiving", "ready"];
