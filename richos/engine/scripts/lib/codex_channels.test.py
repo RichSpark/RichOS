@@ -316,7 +316,8 @@ c.send(locator, ident, 'recover original request')
             state = self.root / name
             env = dict(os.environ, RICHOS_CODEX_CHANNEL_STATE=str(state),
                        CODEX_WATCH_STATE_DIR=str(state / "codex-watch/watch"),
-                       CODEX_WATCH_FILES="", RICHOS_WATCH_HOST=str(os.getpid()))
+                       CODEX_WATCH_CHANNELS=str(self.root / "unused-legacy" / "to-rich.md"),
+                       RICHOS_WATCH_HOST=str(os.getpid()))
             proc = subprocess.Popen([sys.executable, "-B", str(watcher), "--monitor", "--host-json"],
                                     env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             children.append(proc)
