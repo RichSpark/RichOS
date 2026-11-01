@@ -77,12 +77,17 @@ class AppSweep(unittest.TestCase):
         assert out.strip() == self.name, "the session process is not running as %s: %r" % (self.name, out)
         return child
 
-    def live(self, session, registry=None):
+    def live(self, session, registry=None, padded_day=False):
         """A running session process, with the session file Claude Code writes for it, in the
-        default registry or in an added account's (`registry`)."""
+        default registry or in an added account's (`registry`). `padded_day` writes the start
+        with a second space before the day, as `ps -o lstart=` prints the 1st to the 9th of a
+        month ("Sun Nov  1 00:34:09 2026"), whatever today's date is."""
         child = self.session_process()
         start = subprocess.run(["ps", "-o", "lstart=", "-p", str(child.pid)], capture_output=True, text=True,
                                env=dict(os.environ, LC_ALL="C", LANG="C", TZ="UTC0")).stdout.strip()
+        if padded_day:
+            words = start.split()
+            start = "%s %s  %s %s %s" % tuple(words)
         registry = registry or (self.config_dir / "sessions")
         registry.mkdir(parents=True, exist_ok=True)
         (registry / ("%d.json" % child.pid)).write_text(
@@ -148,6 +153,19 @@ class AppSweep(unittest.TestCase):
         self.resumed_earlier(scratch)
         rc, out, err = self.sweep()
         self.assertTrue(scratch.exists(), "a live resumed session's scratch was deleted:\n" + out)
+
+    # The land of echo-opus-wk1 on 2026-11-01: Claude Code keeps `ps`'s padding for a day below
+    # 10, workspaces.process_start collapses it, and a byte comparison called every session
+    # started on the 1st to the 9th "stale" and deleted a resumed live session's scratch.
+    # Written padded on purpose, so this case fails against a byte comparison on any day.
+    def test_a_live_session_whose_start_ps_padded_is_kept(self):
+        session, scratch = self.hosted()
+        self.live(session, padded_day=True)
+        self.resumed_earlier(scratch)
+        rc, out, err = self.sweep()
+        self.assertEqual(rc, 0, out + err)
+        self.assertNotIn("registration is stale", out + err)
+        self.assertTrue(scratch.exists(), "a live session started on a padded day lost its scratch:\n" + out)
 
     def test_a_session_a_running_command_line_carries_is_kept_with_no_registry(self):
         session, scratch = self.hosted()
