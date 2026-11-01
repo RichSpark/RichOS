@@ -18,13 +18,17 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
              `projects` is then a link to Account 1's records folder
   chat       a message with a codeword, answered on Work: the turn's record names Work's folder
              (the provider's transcript_path), and the record is in Account 1's records folder
+  switch     Account 1's "Use this one now", then a turn in the same chat: answered in the same
+             session, on Account 1, from the record's permanent path in Account 1's records folder
+             (never through Work's folder, which goes with Work)
   remove     the Work card's Remove, then its confirmation, in the Claude accounts sheet, as a
-             person removes it: Work is gone from the list and its folder is gone
+             person removes it, while the chat runs on Account 1: Work is gone from the list and
+             its folder is gone
   continue   a message asking for the codeword: answered, in the SAME session as the codeword (its
              prompt is in the same session's callbacks, so the chat resumed its record and did not
              start over), and the answer names the codeword
 
-Evidence in --out: report.json, accounts.json, chat.json, remove.json, continue.json, screenshots
+Evidence in --out: report.json, accounts.json, chat.json, switch.json, remove.json, continue.json, screenshots
 and the app logs. Exit 0 when every step passes. Every app instance is quit by run-walk.py's
 stop.sh (CEO §54).
 """
@@ -48,7 +52,7 @@ toolchain_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(toolchain_walk)
 StepFailed = toolchain_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'accounts', 'chat', 'remove', 'continue']
+STEPS = ['identity', 'first-run', 'accounts', 'chat', 'switch', 'remove', 'continue']
 REMEMBER = 'Remember this codeword for later in this chat: {code}. Reply with one word: noted.'
 RECALL = 'What was the codeword I asked you to remember earlier in this chat? Reply with the codeword only.'
 RETURN_KEY = '36'
@@ -168,8 +172,7 @@ class AccountRemoveWalk(toolchain_walk.ToolchainAskWalk):
         self.save()
         return evidence
 
-    def remove(self):
-        opened = False
+    def open_sheet(self):
         for _ in range(3):
             self.press('Settings', role='AXPopUpButton')
             time.sleep(3)
@@ -179,10 +182,44 @@ class AccountRemoveWalk(toolchain_walk.ToolchainAskWalk):
                 continue
             time.sleep(3)
             if self.present('Close Claude accounts'):
-                opened = True
-                break
-        if not opened:
-            raise StepFailed('the Claude accounts sheet did not open')
+                return
+        raise StepFailed('the Claude accounts sheet did not open')
+
+    def switch(self):
+        """Account 1 chosen with its own "Use this one now", then a turn in the same chat: it runs on
+        Account 1, resumed from the record's permanent path in Account 1's records folder, never
+        through Work's folder (second review rv-20261101T183042Z, P1: removing Work then broke the
+        live chat's next write)."""
+        self.open_sheet()
+        self.press('Use Account 1 now', contains=False)
+        end = time.monotonic() + 30
+        while time.monotonic() < end and self.accounts_file().get('inUse') != '1':
+            time.sleep(2)
+        self.shot('switch-sheet.png')
+        self.press('Close Claude accounts')
+        if self.accounts_file().get('inUse') != '1':
+            raise StepFailed('Account 1 was not put in use')
+        words = 'Here is one more thing to note, the word {w}. Reply with one word: noted.'.format(w='harbor')
+        sent, turns = self.answered(words, lambda text: 'noted' in text.lower())
+        prompts = self.prompt_sessions('one more thing to note, the word harbor')
+        evidence = {'sent_between_guest_ms': [round(v) for v in sent], 'prompts': prompts,
+                    'rich_turns_since_send': [t['text'][:400] for t in turns]}
+        self.write('switch.json', evidence)
+        self.shot('switch.png')
+        failures = []
+        if not any('noted' in t['text'].lower() for t in turns):
+            failures.append('Rich did not answer on Account 1')
+        if not any(p['session'] == self.facts.get('session') for p in prompts):
+            failures.append('the turn on Account 1 ran in another session %s, not %s'
+                            % ([p['session'] for p in prompts], self.facts.get('session')))
+        elif not all((p.get('transcript_path') or '').startswith(self.records + '/') for p in prompts):
+            failures.append("the chat resumed on Account 1 writes through another folder than Account 1's records: %s" % prompts)
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return evidence
+
+    def remove(self):
+        self.open_sheet()
         self.shot('remove-sheet.png')
         self.press('Remove Work', contains=False)
         time.sleep(2)
