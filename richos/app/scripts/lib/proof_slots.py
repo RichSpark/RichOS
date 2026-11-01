@@ -84,6 +84,10 @@ gives way check by check while the build's run has checks waiting; nothing of th
 stopped, its running checks finish and its waiting ones start once the build's run has none
 waiting. A teammate cannot claim it from its own worktree: the checkout must be the build's
 source tree. The engine nightly (nightly-engine.py) is not one: it yields to the app nightly.
+A run that gives way also withdraws its worker request (proof-run.py `schedule`): left live, a
+refused request ages past engine_pass BACKGROUND_PRIORITY_AGE and worker admission then favors it
+over the run ahead, which it waits for, so neither moved with every worker free (review
+rv-20261101T094016Z-2c1ea15a-8a00).
 
 NESTED RUNS. A suite that runs the real proof-run.py (proof-run.test.py, test-results.test.sh)
 inside a check of a proof run works inside its caller's slot: the caller exports its holder

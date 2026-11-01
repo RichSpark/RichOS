@@ -1139,6 +1139,64 @@ try:
           "gives way to it, and the teammate in line runs and passes afterwards",
           (n_seen, n_item.state, n_item.notes, n_buf.getvalue()[-400:], output("p16-n-line")[-300:]))
 
+    # P16o — a run that gives way never holds the run ahead of it back at worker admission (review
+    # rv-20261101T094016Z-2c1ea15a-8a00, its fixtures/nightly_worker_priority.py). A teammate run
+    # took its slot first and was refused a worker permit, which leaves its live request in the
+    # machine's Admission queue; then the nightly's run takes a slot and goes ahead of it. Once that
+    # request is BACKGROUND_PRIORITY_AGE (120 s) old, worker admission favors it over the nightly's,
+    # while the slot order makes the teammate give way before it asks for a worker again: neither
+    # moved, with every worker free. Now a run that gives way withdraws its worker request, so the
+    # nightly is admitted, and the teammate is admitted once the nightly has nothing waiting. Real
+    # Admission and slot locks in a private directory, P16m's simulated clock, no commands run.
+    o_dir = os.path.join(tmp, "p16-o")
+    os.makedirs(o_dir)
+    o_seen = {}
+    with contextlib.ExitStack() as o_stack:
+        o_stack.enter_context(mock16m.patch.object(pr.time, "monotonic", lambda: m_clock.now))
+        o_stack.enter_context(mock16m.patch.object(pr.time, "sleep", m_clock.sleep))
+        o_stack.enter_context(mock16m.patch.object(pr.engine_pass, "is_main_checkout", lambda p: False))
+        o_stack.enter_context(mock16m.patch.object(pr.engine_pass, "birth", lambda *a: "fixture"))
+        o_stack.enter_context(mock16m.patch.object(pr, "discount_held_gap", lambda *a: 0))
+        o_stack.enter_context(mock16m.patch.object(pr, "checkpoint", lambda *a: None))
+        o_stack.enter_context(mock16m.patch.object(pr, "STALL", type("S", (), {
+            "over": staticmethod(lambda: None), "refused": staticmethod(lambda *a: None)})()))
+        o_teammate = pr.proof_slots._try(o_dir, 1, {"waiter": "p16-o-teammate"}, checks=1)
+        o_nightly = None
+        o_team_adm = pr.engine_pass.Admission(o_dir, "teammate-worktree")
+        o_night_adm = pr.engine_pass.Admission(o_dir, "nightly-source")
+        o_team_budget, o_night_budget = M16Budget(o_team_adm), M16Budget(o_night_adm)
+        o_team_item = pr.Item("p16-o-teammate-ready", o_dir, ["true"])
+        o_night_item = pr.Item("p16-o-nightly-ready", o_dir, ["true"])
+        try:
+            # Busy workers refuse the teammate: what Budget.try_acquire does when no permit is free.
+            o_seen["teammate_attempt"] = o_team_adm.begin()
+            o_team_adm.attempted(False)
+            o_nightly = pr.proof_slots._try(o_dir, 2, {"waiter": "p16-o-nightly", "first": True}, checks=1)
+            o_seen["teammate_gives_way_to"] = [r.get("first") for r in pr.proof_slots.ahead_of(o_teammate)]
+            m_clock.now += pr.engine_pass.BACKGROUND_PRIORITY_AGE + 1
+            o_seen["teammate_admitted"] = m_passes(o_teammate, o_team_item, o_team_budget, None)
+            o_seen["teammate_wait_reason"] = o_team_item.wait_reason
+            o_seen["teammate_attempts"] = o_team_budget.attempts
+            o_seen["nightly_admitted"] = m_passes(o_nightly, o_night_item, o_night_budget, None)
+            # The nightly's run has nothing left waiting: the teammate asks again and is admitted.
+            o_nightly.release()
+            o_nightly = None
+            o_seen["teammate_admitted_after"] = m_passes(o_teammate, o_team_item, o_team_budget, None)
+        finally:
+            for o_adm in (o_team_adm, o_night_adm):
+                o_adm.close()
+            if o_nightly is not None:
+                o_nightly.release()
+            o_teammate.release()
+            pr.SLOT = saved_slot
+    check(o_seen.get("teammate_attempt") and o_seen.get("teammate_gives_way_to") == [True]
+          and o_seen.get("teammate_admitted") is False and o_seen.get("teammate_wait_reason") == "older-run"
+          and o_seen.get("teammate_attempts") == 0 and o_seen.get("nightly_admitted")
+          and o_seen.get("teammate_admitted_after"),
+          "P16o a teammate run giving way to the nightly's run withdraws its aged worker request, so the "
+          "nightly is admitted to a worker, and the teammate is admitted once the nightly has none waiting",
+          o_seen)
+
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine
     # units included, whatever a dated weight predicts (`workspace-spec-fourteen` was planned
     # at 2812 s and ran in 172-554 s); --run-cap ends the run on its own clock and ends, never

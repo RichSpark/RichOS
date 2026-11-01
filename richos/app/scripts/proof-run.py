@@ -2051,6 +2051,14 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
             # checks waiting to be admitted: it goes first (proof_slots.py, 2026-10-31, 2026-11-01).
             # Not the Mac refusing, so it never spends --admission-wait; with nothing of this run
             # running it is a wait for the Mac like the slot line, recorded as one.
+            # While it gives way it withdraws its worker request (review
+            # rv-20261101T094016Z-2c1ea15a-8a00): a refused request left live ages past
+            # BACKGROUND_PRIORITY_AGE and then makes engine_pass.Admission refuse the run ahead,
+            # which this run waits for, so neither moved with every worker free. Its next attempt,
+            # once it no longer gives way, queues afresh.
+            withdrawn = getattr(budget.shared or budget, "admission", None)
+            if withdrawn is not None:
+                withdrawn.close()
             gave_way = True
             behind = proof_slots.describe_behind(ahead)
             for it in eligible:
