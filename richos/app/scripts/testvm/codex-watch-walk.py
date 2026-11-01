@@ -1,48 +1,11 @@
 #!/usr/bin/env python3
-"""codex-watch-walk.py — in the regular app, Codex's entries reach Stu by themselves, once each.
+"""Real packaged-app dedicated Codex channel walk, on guest fixture data only.
 
-Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
-
-  run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
-      codex-watch-walk.py --out DIR --expect-sha SHA
-
-THE QUESTION (gap X of richos-hq docs/plans/2026-10-21-switching-to-the-app.md, item 5d). Codex
-writes to Rich in `to-rich.md` of a channel folder and Rich answers in the `to-codex.md` beside it.
-The app runs the engine's codex-watch as its own child (richos-core `codex_watch.rs`) on the user's
-channel folders (the CODEX_CHANNELS setting; unset, the conventional
-`~/.richos-coordination/rich-codex` and `rich-codex-questions`) and saves each new entry for Stu in
-the conversation on screen. Stu acts on them; until 2026-10-31 they went to Rich, who passed most of
-them on to Stu at the cost of a turn of his own (richos-hq docs/research/2026-10-31-app-token-burn,
-1d). This walk shows that in the real app, on fixture data in a guest.
-
-WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65). The channel is the
-conventional folder in the GUEST's home (the setting is unset, as on a new install):
-  identity   the running app says it was built from --expect-sha
-  first-run  adopt-walk.py's: company "Acme" with a folder that is a Git repository
-  unopened   an entry written while NO conversation is open survives a quit (follow-ups of
-             2026-10-28, rv-20261028T095119Z-32768ffd-e1eb#1): the app relaunched with
-             RICHOS_ENTITY naming no registered company, so it opens on no conversation; an
-             entry is written and the watcher marks it told; the app is quit and opened again
-             as usual (Acme, its conversation open). PASS needs exactly one row from codex-watch
-             carrying it in THIS conversation's inbox for Stu
-  channel    the channel's to-rich.md is written with one entry while the app runs: PASS needs
-             exactly one row from codex-watch carrying it in THIS conversation's inbox for Stu
-             (<app state>/messages/<company>/<conversation>/stu.jsonl)
-  relaunch   the app quit and opened again (command-walk.py's): its sessions now have the
-             channel folder, and the watcher starts again where it stopped
-  append     a second entry is appended: PASS needs exactly one inbox row carrying it, the first
-             entry still told once only, Stu's native transcript carrying it (his turn on it) and
-             no turn of Rich's carrying it in the conversation ledger
-  answer     typed to Rich: add one line to the to-codex.md beside that to-rich.md. PASS needs the
-             line in the guest's to-codex.md
-  context    what each input added to its session's context (the entries' are Stu's), from the
-             guest's native transcripts: a
-             session's first input carries the full blocks; every later one, the second entry's
-             included, under 1,000 tokens (chars/4) with neither the full continuity block nor
-             the company material. For one session, run it without relaunch:
-             --steps identity,first-run,channel,append,context
-
-Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
+Run through run-walk.py with --bundle, --home, --engine and --report. The walk
+uses real Rich scoped tools for designation/Rich-first setup, the packaged helper
+for independent Codex callers and the actual background Stu actors for replies.
+Two companies, same chat titles and three connections exercise isolation before
+and after rename, archive and restart. No live operator channels are touched.
 """
 import argparse
 import importlib.util
@@ -56,17 +19,21 @@ import uuid
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from relaunch import guest  # noqa: E402
+from relaunch import guest, relaunch
 
-_spec = importlib.util.spec_from_file_location('stu_reminder_walk', HERE / 'stu-reminder-walk.py')
-stu_reminder_walk = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(stu_reminder_walk)
-StepFailed = stu_reminder_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'unopened', 'channel', 'relaunch', 'append', 'answer', 'context']
-# `context` measures one session, which `relaunch` ends, so it runs only when asked for.
-DEFAULT_STEPS = [s for s in STEPS if s != 'context']
-CHANNEL = '.richos-coordination/rich-codex'
+def load(name, filename):
+    spec = importlib.util.spec_from_file_location(name, HERE / filename)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+stu = load('codex_walk_stu', 'stu-reminder-walk.py')
+multi = load('codex_walk_multi', 'multico-walk.py')
+StepFailed = stu.StepFailed
+STEPS = ['identity', 'first-run', 'pair', 'parallel', 'rename-restart', 'reconcile']
+DEFAULT_STEPS = STEPS
 
 
 def judge_context(rows):
@@ -90,153 +57,168 @@ def judge_context(rows):
     return None
 
 
-class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
-    # garbage-walk.py's: OCR reads "to Rich" on the relaunched app's home frame.
+class CodexWatchWalk(stu.StuReminderWalk):
     HOME_TEXT = 'to Rich'
 
     def __init__(self, a):
         super().__init__(a)
-        self.channel = self.home + '/' + CHANNEL
-        self.marks = self.facts.setdefault('marks', {})
+        self.beta = self.home + '/Beta'
+        self.coordination = self.home + '/.richos-coordination'
+        self.python = self.payload + '/engine/runtime/bin/python3'
+        self.helper = self.payload + '/engine/scripts/lib/codex_channels.py'
 
-    def entry(self, name):
-        """One entry as Codex writes one: a `## <UTC time> — <subject>` header and its lines, with a
-        mark no other text in the guest carries."""
-        mark = self.marks.setdefault(name, 'codexwalk-%s-%s' % (name, uuid.uuid4().hex[:10]))
-        self.save()
-        stamp = time.strftime('%Y-%m-%d %H:%MZ', time.gmtime())
-        return mark, '## %s — WALK %s\n%s\nSecond line of the %s entry.\n\n' % (stamp, name.upper(), mark, name)
+    def run_python(self, program, *args):
+        return json.loads(guest(self.vm, shlex.join([self.python, '-B', '-c', program, *args]), 120))
 
-    def write(self, text, append):
-        guest(self.vm, 'mkdir -p %s && printf %%s %s %s %s/to-rich.md' % (
-            shlex.quote(self.channel), shlex.quote(text), '>>' if append else '>', shlex.quote(self.channel)), 60)
-
-    def inbox(self):
-        """THIS conversation's inbox rows for Stu from codex-watch."""
-        script = ('import glob,json,sys\n'
-                  'out=[]\n'
-                  'for p in glob.glob(sys.argv[1]+"/engine-state/messages/*/"+sys.argv[2]+"/stu.jsonl"):\n'
-                  '    for l in open(p):\n'
-                  '        try: r=json.loads(l)\n'
-                  '        except Exception: continue\n'
-                  '        if r.get("from")=="codex-watch": out.append({"file":p,"text":r.get("text","")})\n'
-                  'print(json.dumps(out))\n')
-        return json.loads(guest(self.vm, 'python3 -c %s %s %s' % (
-            shlex.quote(script), shlex.quote(self.data), shlex.quote(self.facts['thread'])), 120) or '[]')
+    def helper_call(self, action, **request):
+        command = shlex.join(['env', 'HOME=' + self.home, 'CODEX_COORDINATION_ROOT=' + self.coordination,
+                              self.python, '-B', self.helper, action, '--request'])
+        return json.loads(guest(self.vm, 'printf %s ' + shlex.quote(json.dumps(request)) + ' | ' + command, 120))
 
     def ledger(self):
-        rows = guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 120)
-        out = []
-        for line in rows.splitlines():
-            try:
-                out.append(json.loads(line))
-            except ValueError:
-                continue
-        return out
+        return self.run_python('import json,sys;print(json.dumps([json.loads(l) for l in open(sys.argv[1]) if l.strip()]))',
+                               self.data + '/conversation-ledger.jsonl')
 
-    def told(self, mark, within):
-        """Wait up to `within` seconds for an inbox row carrying `mark`, then one look more (a
-        second row would come at a later look). The rows carrying it."""
-        end = time.monotonic() + within
-        rows = []
-        while time.monotonic() < end:
-            rows = [r for r in self.inbox() if mark in r['text']]
-            if rows:
-                time.sleep(20)            # a look of 15 s and more: a second telling would be in by now
-                return [r for r in self.inbox() if mark in r['text']]
+    def threads(self):
+        return [r for r in self.ledger() if r.get('event') == 'ThreadCreated']
+
+    def registry(self):
+        return self.run_python('import json,sys;print(json.dumps(json.load(open(sys.argv[1]))))', self.data + '/entities.json')
+
+    def navigation(self):
+        return self.run_python('import json,sys;print(json.dumps(json.load(open(sys.argv[1]))))', self.data + '/navigation.json')
+
+    def title(self, thread):
+        nav = self.navigation()
+        return nav.get('renamed_threads', {}).get(thread) or nav.get('auto_titles', {}).get(thread) or next(r['title'] for r in self.threads() if r['thread_id'] == thread)
+
+    def wait_fact(self, description, read, predicate, seconds=None):
+        end = time.monotonic() + (seconds or self.a.within)
+        while True:
+            value = read()
+            if predicate(value):
+                return value
+            if time.monotonic() >= end:
+                raise StepFailed(description + ': fact did not arrive; last observation ' + str(value)[:1000])
             time.sleep(3)
-        return rows
 
-    def told_to_end(self):
-        """Has the watcher told the channel's to-rich.md up to its end (its own offsets record)?"""
-        script = ('import json,os,sys\n'
-                  'f=sys.argv[2]+"/to-rich.md"\n'
-                  'try: o=json.load(open(sys.argv[1]+"/engine-state/codex-watch/watch/app-host/offsets.json"))\n'
-                  'except Exception: o={}\n'
-                  'print(json.dumps({"offset":(o.get(f) or {}).get("offset"),"size":os.path.getsize(f) if os.path.exists(f) else None}))\n')
-        seen = json.loads(guest(self.vm, 'python3 -c %s %s %s' % (
-            shlex.quote(script), shlex.quote(self.data), shlex.quote(self.channel)), 60) or '{}')
-        return seen.get('size') is not None and seen.get('offset') == seen.get('size')
+    def connections(self):
+        return self.run_python('import glob,json,sys;print(json.dumps([dict(json.load(open(p)),locator=p.rsplit("/",1)[0]) for p in glob.glob(sys.argv[1]+"/connections/*/*/*/connection.json")]))', self.coordination)
 
-    def unopened(self):
-        if not self.facts.get('thread'):
-            raise StepFailed('first-run must have run (no thread on record)')
-        from relaunch import relaunch
-        closed = relaunch(self.vm, environment={'RICHOS_ENTITY': 'no-such-company'})
-        end = time.monotonic() + self.a.relaunch_within
-        log = ''
-        while time.monotonic() < end and '[richos] Codex watch: watching' not in log:
-            log = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(closed['log']), 60)
-            time.sleep(2)
-        if 'RICHOS_ENTITY="no-such-company" is not a registered entity' not in log:
-            raise StepFailed('the relaunch did not open on no company; see its log %s' % closed['log'])
-        if '[richos] Codex watch: watching' not in log:
-            raise StepFailed('the watcher did not start within %g s of the relaunch' % self.a.relaunch_within)
-        mark, text = self.entry('unopened')
-        self.write(text, append=True)
-        end = time.monotonic() + self.a.within
-        while time.monotonic() < end and not self.told_to_end():
-            time.sleep(2)
-        if not self.told_to_end():
-            raise StepFailed('the watcher never told the entry within %g s' % self.a.within)
-        early = [r for r in self.inbox() if mark in r['text']]
-        opened = relaunch(self.vm)
-        settled = self.after_relaunch()
-        rows = self.told(mark, self.a.within)
-        evidence = {'mark': mark, 'closed_launch_log': closed['log'], 'rows_before_quit': early,
-                    'reopened': opened, 'settled': settled, 'rows': rows}
-        (self.out / 'unopened.json').write_text(json.dumps(evidence, indent=2) + '\n')
-        if early:
-            raise StepFailed('the entry was saved while no conversation was open, so the quit proves nothing; see unopened.json')
-        if len(rows) != 1:
-            raise StepFailed('the entry written with no conversation open reached Stu\'s inbox %d time(s) after the relaunch, '
-                             'not once; see unopened.json' % len(rows))
-        return {'mark': mark, 'row': rows[0]}
+    def coordinator(self):
+        return self.run_python('import json,os,sys;p=sys.argv[1];print(json.dumps(json.load(open(p)) if os.path.exists(p) else {}))', self.coordination + '/coordinator.json')
 
-    def channel_step(self):
-        if not self.facts.get('thread'):
-            raise StepFailed('first-run must have run (no thread on record)')
-        mark, text = self.entry('first')
-        self.write(text, append=False)
-        rows = self.told(mark, self.a.within)
-        (self.out / 'channel.json').write_text(json.dumps({'mark': mark, 'rows': rows}, indent=2) + '\n')
-        if len(rows) != 1:
-            raise StepFailed('the first entry reached Stu\'s inbox %d time(s), not once; see channel.json' % len(rows))
-        return {'mark': mark, 'row': rows[0]}
+    def rename(self, thread, title):
+        self.wait_for('Actions for ' + self.title(thread), seconds=120)
+        self.press('Actions for ' + self.title(thread))
+        self.press('Rename…', 'AXMenuItem')
+        self.type_into(title, '--role', 'AXTextField', '--title', 'Chat name')
+        self.keys('tell application "System Events" to key code 36')
+        return self.wait_fact('rename saved', self.navigation, lambda v: v.get('renamed_threads', {}).get(thread) == title)
 
-    def append(self):
-        first = self.marks.get('first')
-        if not first:
-            raise StepFailed('channel must have run (no first entry on record)')
-        mark, text = self.entry('second')
-        sent = self.clock()
-        self.write(text, append=True)
-        rows = self.told(mark, self.a.within)
-        again = [r for r in self.inbox() if first in r['text']]
-        heard = []
-        end = time.monotonic() + self.a.within
-        while time.monotonic() < end:
-            heard = self.stu_heard(mark)
-            if heard:
-                break
-            time.sleep(5)
-        rich = [{'turn_id': r.get('turn_id'), 'source': r.get('source'), 'prompt': str(r.get('text', ''))[:2000]}
-                for r in self.ledger() if r.get('event') == 'PromptReceived' and r.get('thread_id') == self.facts['thread']
-                and mark in str(r.get('text', '')) and r.get('at', 0) >= sent - 5000]
-        evidence = {'mark': mark, 'rows': rows, 'first_entry_rows_after_relaunch': again,
-                    'stu_transcripts_carrying_it': heard, 'rich_turns_carrying_it': rich}
-        (self.out / 'append.json').write_text(json.dumps(evidence, indent=2) + '\n')
-        if len(rows) != 1:
-            raise StepFailed('the appended entry reached Stu\'s inbox %d time(s), not once; see append.json' % len(rows))
-        if len(again) != 1:
-            raise StepFailed('the first entry was told %d time(s) after the relaunch, not once; see append.json' % len(again))
-        if not heard:
-            raise StepFailed('no transcript of Stu\'s carried the appended entry within %g s; see append.json' % self.a.within)
-        if rich:
-            raise StepFailed('%d turn(s) of Rich\'s carried the appended entry; see append.json' % len(rich))
-        return {'mark': mark, 'stu_transcripts': heard}
+    def pair(self):
+        acme = self.facts['thread']
+        self.send('Perform this harmless transport test yourself here. Explicitly designate THIS chat as the future Codex coordinator using codex_channel designate. Then use codex_channel connect with text "Harmless parallel roundtrip test: acknowledge marked transport observations on their own bridge locator only" and provenance "Guest user transport test". Return the handoff. Do not delegate or start repository work.')
+        first = self.wait_fact('Rich-first connection', self.connections, lambda rows: len(rows) == 1)[0]
+        if first['thread_id'] != acme:
+            raise StepFailed('Rich-first connection has the wrong owner')
+        rich_context = self.helper_call('read', locator=first['locator'])['records']
+        if not any(r.get('kind') == 'task_context' and r.get('provenance') == 'Guest user transport test' for r in rich_context):
+            raise StepFailed('Rich-first setup omitted the original context/source')
+        self.rename(acme, 'Parallel transport test')
+        second = self.helper_call('connect', text='Harmless parallel roundtrip test: acknowledge marked observations on their own connection', provenance='Guest Codex-first source')['locator']
+        multi.Walk.second_company(self)
+        self.send('Perform this harmless transport test yourself here. Explicitly designate THIS chat as the future Codex coordinator using codex_channel designate. This authorizes harmless transport acknowledgments through the scoped channel tool. Do not delegate or start repository work.')
+        target = self.wait_fact('Beta default', self.coordinator, lambda v: v.get('entity_id') == 'beta')
+        beta = target['thread_id']
+        self.rename(beta, 'Parallel transport test')
+        third = self.helper_call('connect', text='Harmless Beta roundtrip: acknowledge marked observations on their own connection', provenance='Guest Codex-first source')['locator']
+        rows = self.connections()
+        by_path = {r['locator']: r for r in rows}
+        paths = [first['locator'], second, third]
+        if len(set(paths)) != 3 or [by_path[p]['thread_id'] for p in paths] != [acme, acme, beta]:
+            raise StepFailed('three fresh pairs were not bound to their intended immutable owners')
+        if self.title(acme) != self.title(beta):
+            raise StepFailed('two companies did not have the same chat title')
+        self.facts.update(connections=paths, owners=[acme, acme, beta], beta_thread=beta)
+        self.save()
+        return dict(connections=rows, original_context=rich_context, default=target)
 
-    def stu_heard(self, mark):
+    def inboxes(self):
+        return self.run_python('import glob,json,sys;out=[]\nfor p in glob.glob(sys.argv[1]+"/engine-state/messages/*/*/stu.jsonl"):\n for l in open(p):\n  r=json.loads(l)\n  if r.get("bridge"):out.append(dict(r,file=p,thread=p.split("/")[-2]))\nprint(json.dumps(out))', self.data)
+
+    def exchange(self, label):
+        paths, owners = self.facts['connections'], self.facts['owners']
+        requests = []
+        for i, path in enumerate(paths):
+            marker = 'parallel-%s-%d-%s' % (label, i, uuid.uuid4().hex[:10])
+            requests.append(dict(locator=path, message_id=marker, text='Harmless transport observation %s. Reply once on bridge.locator with text ACK-%s, message_id ack-%s and reply_to %s using codex_channel send. No other action is requested.' % (marker, marker, marker, marker)))
+        sent = time.time()
+        # Independent real CLI processes, sharing only their own helper module.
+        program = 'import concurrent.futures,json,os,subprocess,sys;rows=json.loads(sys.argv[3]);env=dict(os.environ,HOME=sys.argv[4],CODEX_COORDINATION_ROOT=sys.argv[4]+"/.richos-coordination")\ndef send(r):\n p=subprocess.run([sys.argv[1],"-B",sys.argv[2],"send","--request"],input=json.dumps(r),env=env,text=True,capture_output=True);assert p.returncode==0,p.stderr;return json.loads(p.stdout)\nwith concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool: print(json.dumps(list(pool.map(send,rows))))'
+        receipts = self.run_python(program, self.python, self.helper, json.dumps(requests), self.home)
+        arrivals = {}
+        def rows():
+            observed = self.inboxes()
+            for request in requests:
+                if any(r.get('bridge', {}).get('message_id') == request['message_id'] for r in observed):
+                    arrivals.setdefault(request['message_id'], time.time() - sent)
+            return observed
+        observed = self.wait_fact('three owning inbox receipts', rows, lambda rs: all(any(r.get('bridge', {}).get('message_id') == q['message_id'] for r in rs) for q in requests))
+        evidence = []
+        for request, owner in zip(requests, owners):
+            match = [r for r in observed if r.get('bridge', {}).get('message_id') == request['message_id']]
+            if len(match) != 1 or match[0]['thread'] != owner or match[0].get('instruction') is not None or match[0].get('handoff'):
+                raise StepFailed('wrong, duplicate or instruction-bearing delivery: ' + str(match))
+            reply = self.wait_fact('reply on original pair', lambda: self.helper_call('read', locator=request['locator']),
+                lambda v: any(r.get('reply_to') == request['message_id'] and 'ACK-' + request['message_id'] in r['text'] for r in v['records']), self.a.answer_within)
+            heard = self.wait_fact('owning background Stu transcript', lambda: self.stu_heard(request['message_id'], owner), bool)
+            evidence.append(dict(request=request, inbox=match[0], reply=reply, stu=heard, source_save_to_inbox_seconds=arrivals[request['message_id']]))
+        return dict(receipts=receipts, exchanges=evidence)
+
+    def parallel(self):
+        result = self.exchange('before')
+        self.facts['first_exchange'] = result
+        self.save()
+        return result
+
+    def rename_restart(self):
+        # Rename both through the normal UI. Once the first has changed, the
+        # remaining old title uniquely names the second Actions button.
+        self.rename(self.facts['owners'][0], 'Transport renamed Acme')
+        self.rename(self.facts['beta_thread'], 'Transport renamed Beta')
+        acme_title = self.title(self.facts['owners'][0])
+        self.press('Actions for ' + acme_title)
+        self.press('Archive', 'AXMenuItem')
+        launch = relaunch(self.vm)
+        self.after_relaunch()
+        result = self.exchange('after-restart-archived')
+        return dict(relaunch=launch, exchange=result, endpoints=self.connections())
+
+    def reconcile(self):
+        first = self.facts['first_exchange']['exchanges'][0]['request']
+        history = self.helper_call('read', locator=first['locator'], direction='to-rich')
+        result = self.helper_call('send', **first)
+        if not result.get('already_saved'):
+            raise StepFailed('original recorded ID did not reconcile the uncertain retry')
+        accepted = self.data + '/engine-state/codex-watch/accepted'
+        # Only derived positions are removed; retained source and acknowledged
+        # inbox history must prevent another actionable row after relaunch.
+        guest(self.vm, 'rm -rf ' + shlex.quote(accepted), 60)
+        launch = relaunch(self.vm)
+        self.after_relaunch()
+        def replayed():
+            return self.run_python('import json,os,sys;paths=json.loads(sys.argv[2]);out=[]\nfor p in paths:\n f=sys.argv[1]+"/"+p.rsplit("/",1)[-1]+".json"\n v=json.load(open(f)) if os.path.exists(f) else {}\n out.append(dict(locator=p,through=v.get("through"),size=os.path.getsize(p+"/to-rich.jsonl")))\nprint(json.dumps(out))', accepted, json.dumps(self.facts['connections']))
+        positions = self.wait_fact('all retained sources reconciled after position loss', replayed,
+                                   lambda rows: all(r.get('through') == r['size'] for r in rows))
+        incoming = self.helper_call('read', locator=first['locator'], direction='to-rich')
+        observed = self.inboxes()
+        own = [r for r in observed if r.get('bridge', {}).get('message_id') == first['message_id']]
+        if len(own) != 1 or history['records'] != incoming['records']:
+            raise StepFailed('replay changed source or duplicated the accepted observation')
+        return dict(relaunch=launch, replay_receipt=result, positions=positions, original_rows=own, source_retained=True)
+
+    def stu_heard(self, mark, thread=None):
         """The native transcripts of THIS conversation's Stu sessions that carry `mark`: each
         session bound as Stu (`<state>/evidence/<session>/binding.json`), its transcript the path its
         callbacks name (richos-core `session_tools::native_path`)."""
@@ -259,69 +241,7 @@ class CodexWatchWalk(stu_reminder_walk.StuReminderWalk):
                   '        except OSError: pass\n'
                   'print(json.dumps(out))\n')
         return json.loads(guest(self.vm, 'python3 -c %s %s %s %s' % (
-            shlex.quote(script), shlex.quote(self.data), shlex.quote(self.facts['thread']), shlex.quote(mark)), 120) or '[]')
-
-    def answer(self):
-        mark = self.marks.get('second')
-        if not mark:
-            raise StepFailed('append must have run (no second entry on record)')
-        line = 'walk-ack %s' % mark
-        self.send('Codex just wrote to you in %s/to-rich.md. Please answer Codex yourself, now: add the line '
-                  '"%s" at the end of the to-codex.md file in that same folder. Nothing else.' % (self.channel, line))
-        end = time.monotonic() + self.a.answer_within
-        text = ''
-        while time.monotonic() < end:
-            text = guest(self.vm, 'cat %s/to-codex.md 2>/dev/null || true' % shlex.quote(self.channel), 60)
-            if line in text:
-                break
-            time.sleep(5)
-        (self.out / 'to-codex.md').write_text(text)
-        if line not in text:
-            raise StepFailed('the line did not reach to-codex.md within %g s; see to-codex.md' % self.a.answer_within)
-        return {'line': line, 'to_codex_bytes': len(text.encode())}
-
-    def context(self):
-        """What each input of the conversation added to its session's context (the entries' are
-        Stu's): every UserPromptSubmit `hook_additional_context` in the guest's native transcripts, beside the input it came
-        with ([`judge_context`]: each later input of a session under 1,000 tokens, chars/4, with
-        neither the full continuity block nor the company material; follow-up "Rich's context
-        fills with the same injected blocks on every message", 2026-10-30). Run it without
-        `relaunch`: a relaunched app is a new session and gives the full blocks once again."""
-        marks = {k: v for k, v in self.marks.items() if k in ('first', 'second')}
-        if set(marks) != {'first', 'second'}:
-            raise StepFailed('channel and append must have run (no entries on record)')
-        script = ('import glob,json,sys\n'
-                  'marks=json.loads(sys.argv[2])\n'
-                  'out=[]\n'
-                  'for p in sorted(glob.glob(sys.argv[1]+"/.claude/projects/*/*.jsonl")):\n'
-                  '    said=""\n'
-                  '    for l in open(p):\n'
-                  '        try: r=json.loads(l)\n'
-                  '        except Exception: continue\n'
-                  '        a=r.get("attachment") or {}\n'
-                  '        m=r.get("message") if isinstance(r.get("message"),dict) else {}\n'
-                  '        c=m.get("content","")\n'
-                  '        result=isinstance(c,list) and any(isinstance(x,dict) and x.get("type")=="tool_result" for x in c)\n'
-                  '        if r.get("type")=="user" and not result:\n'
-                  '            said=json.dumps(c)\n'
-                  '        elif a.get("type")=="queued_command":\n'
-                  '            said=json.dumps(a)\n'
-                  '        elif a.get("type")=="hook_additional_context" and a.get("hookEvent")=="UserPromptSubmit":\n'
-                  '            text="\\n".join(x for x in a.get("content",[]) if isinstance(x,str))\n'
-                  '            out.append({"session":p.rsplit("/",1)[-1],"entry":next((k for k,v in marks.items() if v in said),None),\n'
-                  '                        "input":said[:200],"characters":len(text),"tokens":len(text)//4,\n'
-                  '                        "full_continuity":"</executive-continuity>" in text,\n'
-                  '                        "full_company":"Current company material from the host" in text,"context":text})\n'
-                  'print(json.dumps(out))\n')
-        rows = json.loads(guest(self.vm, 'python3 -c %s %s %s' % (
-            shlex.quote(script), shlex.quote(self.home), shlex.quote(json.dumps(marks))), 120) or '[]')
-        (self.out / 'context.json').write_text(json.dumps(rows, indent=2) + '\n')
-        summary = [{k: r[k] for k in ('session', 'entry', 'input', 'characters', 'tokens', 'full_continuity', 'full_company')}
-                   for r in rows]
-        problem = judge_context(rows)
-        if problem:
-            raise StepFailed(problem + '; see context.json')
-        return {'inputs': summary}
+            shlex.quote(script), shlex.quote(self.data), shlex.quote(thread or self.facts['thread']), shlex.quote(mark)), 120) or '[]')
 
 
 def main():
@@ -330,7 +250,7 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
     p.add_argument('--within', type=float, default=300, help="seconds for an entry to reach Stu and his turn on it")
-    p.add_argument('--answer-within', type=float, default=300, help='seconds for the line to reach to-codex.md')
+    p.add_argument('--answer-within', type=float, default=300, help='seconds for a scoped reply to reach its dedicated journal')
     p.add_argument('--relaunch-within', type=float, default=120)
     p.add_argument('--steps', default=','.join(DEFAULT_STEPS))
     a = p.parse_args()
@@ -346,7 +266,7 @@ def main():
         began = time.monotonic()
         row = {'step': step}
         try:
-            name = 'channel_step' if step == 'channel' else step.replace('-', '_')
+            name = step.replace('-', '_')
             row['evidence'] = getattr(walk, name)()
             row['outcome'] = 'PASS'
         except (StepFailed, RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:

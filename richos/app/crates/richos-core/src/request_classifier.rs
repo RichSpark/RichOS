@@ -274,7 +274,7 @@ pub(crate) mod tests {
             user:Default::default(),
             runtime:crate::runtime::EngineRuntime {root:PathBuf::from("/usr"),python:PathBuf::from("/usr/bin/python3"),
                 node:PathBuf::from("/usr/bin/false"),git:PathBuf::from("/usr/bin/git"),versions:Default::default()},
-            work_scope:None,
+            work_scope:None, codex_root:root.join("codex-coordination"),
             claude_account:None,token_sink:None,speech_model:None,
             lease_models:Default::default(),machine_settings:Default::default(),
         };

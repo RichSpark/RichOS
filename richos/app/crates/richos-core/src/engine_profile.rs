@@ -137,6 +137,8 @@ pub struct EngineProfile {
     pub state: PathBuf,
     pub runtime: EngineRuntime,
     pub work_scope: Option<(String, String)>,
+    /// Host-selected shared coordination root, also passed to scoped tools.
+    pub codex_root: PathBuf,
     /// **Fill-first: the Claude account this lease runs under.** Set by the shell from the
     /// account in use (`quota::Service::lease_account`). An added account's folder reaches
     /// the provider as `CLAUDE_CONFIG_DIR` in [`Self::configure`]; Account 1 has no folder and
@@ -671,7 +673,7 @@ impl EngineProfile {
             .collect();
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
-        let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None,
+        let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None, codex_root:crate::codex_bridge::root(),
                   claude_account: None, token_sink: None, speech_model: None,
                   lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
         write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
@@ -933,12 +935,12 @@ impl EngineProfile {
         if self.work_scope.is_some() {
             read_roots.push(self.target_state());
             read_roots.extend(attachments.iter().cloned());
-            // The user's Codex channel folders that exist (`codex_watch.rs`, gap X): Rich and Stu
-            // read Codex's `to-rich.md` and answer in its `to-codex.md`. Folders of the session,
-            // not of the read-only inspectors below.
-            let home = std::env::var_os("HOME").map(PathBuf::from).filter(|home| !home.as_os_str().is_empty());
-            let channels: Vec<PathBuf> = crate::codex_watch::channel_folders(self.user.folder.as_deref(), home.as_deref())
-                .into_iter().filter(|folder| folder.is_dir() && !read_roots.contains(folder)).collect();
+            // Dedicated channels belong to this permanent conversation only.
+            // Scoped tools use the shared writer; no session sees another chat's
+            // reply journals through a broad legacy-folder grant.
+            let channels: Vec<PathBuf> = self.work_scope.as_ref().map(|(entity,thread)|
+                self.codex_root.join("connections").join(entity).join(thread))
+                .filter(|folder|folder.is_dir() && !read_roots.contains(folder)).into_iter().collect();
             command.arg("--add-dir").args(&read_roots).args(&channels);
         }
         // Read-only inspectors inherit exactly this company's/conversation's
@@ -952,6 +954,7 @@ impl EngineProfile {
             .env("CLAUDE_ENV_FILE", self.plugin.join(COMMANDS_ENV))
             // The app's own tools run the app's Python whatever an agent's PATH finds first
             // (the yt-dlp launcher, `media_tools::launcher_text`).
+            .env("CODEX_COORDINATION_ROOT", &self.codex_root)
             .env(crate::media_tools::RUNTIME_PYTHON, &self.runtime.python)
             // Hooks inherit the runtime-only PATH, which excludes Claude's installer path.
             .env("RICHOS_CLAUDE_BIN", provider)

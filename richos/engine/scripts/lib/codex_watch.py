@@ -69,6 +69,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+import codex_channels  # shared framing/endpoint reader
 import host_child  # noqa: E402  (sibling in scripts/lib: the app host's child)
 import stall_watch  # noqa: E402  (sibling in scripts/lib: session, lock and JSON helpers)
 
@@ -214,6 +215,15 @@ def session_dir(sid):
 def tick(sd, now=None, out=None, json_lines=False, config=""):
     """One look: prints each due entry as its own block (as one JSON line with
     json_lines). Returns blocks printed."""
+    # Association and the last old-reader pass are ordered by the same OS lock.
+    # The pipe remains ordered: native keeps any already emitted legacy lines
+    # before accepting the following framed import events. No post-cutover raw
+    # parsing or new spool writer survives that pass.
+    with codex_channels.locked(codex_channels.root() / "coordinator.lock"):
+        return _legacy_tick(sd, now, out, json_lines, config)
+
+
+def _legacy_tick(sd, now=None, out=None, json_lines=False, config=""):
     out = out or sys.stdout
     now = time.time() if now is None else now
     path = os.path.join(sd, "offsets.json")
@@ -222,6 +232,8 @@ def tick(sd, now=None, out=None, json_lines=False, config=""):
     told = stall_watch._read_json(told_path)
     printed = 0
     for ch in channels(config):
+        if codex_channels.legacy_owner(os.path.dirname(ch)):
+            continue
         blocks, new, told_to = look_one(ch, state.get(ch), told, now)
         for b in blocks:
             out.write((host_child.line("\n".join(b)) if json_lines else "\n".join(b)) + "\n")
@@ -299,13 +311,35 @@ def run_host_loop():
     fd = stall_watch._try_lock(os.path.join(sd, "monitor.lock"))
     if fd is None:
         return 0                           # another copy of the app already watches
+    state = os.environ.get("RICHOS_CODEX_CHANNEL_STATE", "")
+    receiver = None
+    if state:
+        codex_channels.mkdir(codex_channels.root())
+        receiver = stall_watch._try_lock(str(codex_channels.root() / "receiver.lock"))
+        if receiver is None:
+            os.close(fd)
+            return 0
     prune_state(sd)
     poll = stall_watch._env_float("CODEX_WATCH_POLL_SECONDS", POLL_SECONDS)
+    reported = set()
     try:
         while alive():
             tick(sd, json_lines=True)
+            if state:
+                events, errors = codex_channels.scan(state)
+                for event in events:
+                    sys.stdout.write(__import__("json").dumps(event, ensure_ascii=False) + "\n")
+                if not (codex_channels.root() / "coordinator.json").exists():
+                    sys.stdout.write(__import__("json").dumps({"type":"setup"}) + "\n")
+                sys.stdout.flush()
+                for error in errors:
+                    if error not in reported:
+                        print("Codex channel held: " + error, file=sys.stderr)
+                reported = set(errors)
             stall_watch._nap(poll, alive)
     finally:
+        if receiver is not None:
+            os.close(receiver)
         os.close(fd)
     return 0
 

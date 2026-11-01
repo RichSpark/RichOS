@@ -71,7 +71,7 @@ fn ordinary_quit_and_restart_preserve_stus_reports_and_input_receipts() {
         let before = std::fs::read(&path).unwrap();
         let input = session_tools::inbox(&scope, "stu").unwrap();
         std::fs::create_dir_all(input.parent().unwrap()).unwrap();
-        let message = Message {
+        let message = Message {bridge:None,
             handoff: true,
             from: "rich".into(),
             text: "The original handoff".into(),
@@ -208,7 +208,7 @@ fn quit_and_stop_the_work_records_his_stop_on_every_open_job() {
     // Stu holds the running job's handoff, as an ordinary quit would leave it to resume.
     let input = session_tools::inbox(&scope("one"), "stu").unwrap();
     std::fs::create_dir_all(input.parent().unwrap()).unwrap();
-    let message = Message {
+    let message = Message {bridge:None,
         handoff: true,
         from: "rich".into(),
         text: "The original handoff".into(),

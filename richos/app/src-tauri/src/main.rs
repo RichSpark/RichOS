@@ -345,16 +345,22 @@ fn ensure_app_review_watch(engine: &Path, data_dir: &Path, claude: &Path, at_lau
 /// Where the Codex watcher's entries go: set once at launch, before the watcher first starts.
 static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sync::OnceLock::new();
 
-/// **EACH NEW ENTRY CODEX WRITES REACHES STU, IN THE CONVERSATION ON SCREEN** (gap X): saved in
-/// Stu's inbox of the active conversation, where `peer_messages` wakes him as it does for Rich's
-/// messages; Stu acts on Codex's entries, so none costs a turn of Rich's. One attempt: with no conversation open yet (or the state not yet
-/// managed) it says why, and the entry stays pending on disk, tried again every five seconds
-/// with the entries after it behind it, through a quit (`richos_core::codex_watch::pending_path`).
+/// Dedicated input is resolved against its permanent ledger owner. Only the setup-only
+/// observation uses the visible chat; it carries no task text or work authority.
 fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
-    Arc::new(move |text: &str| {
-        let state = app.try_state::<AppState>().ok_or("the app is still starting")?;
-        let binding = state.reader.snapshot().active_binding().cloned().ok_or("no conversation is open yet")?;
-        richos_core::codex_watch::deliver(&state.data_dir.join("engine-state"), &binding, text)
+    Arc::new(move |line:&str| {
+        let state=app.try_state::<AppState>().ok_or("the app is still starting")?;
+        let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
+        let view=state.reader.snapshot();
+        let state_root=state.data_dir.join("engine-state");
+        if event["type"]=="setup" {
+            let binding=view.active_binding().ok_or("no conversation is open yet")?;
+            return richos_core::codex_bridge::setup_notice(&state_root,binding)
+        }
+        let thread=event["connection"]["thread_id"].as_str().ok_or("no channel conversation")?;
+        let binding=view.ledger().thread_binding(thread).map_err(|e|e.to_string())?;
+        if !view.entity_registry().contains(binding.entity_id()) {return Err("channel company is no longer registered".into())}
+        richos_core::codex_bridge::accept(&state_root,&binding,&event,&richos_core::codex_bridge::root())
     })
 }
 

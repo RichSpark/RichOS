@@ -6,9 +6,11 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import selectors
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location("codex_channels", Path(__file__).with_name("codex_channels.py"))
 c = importlib.util.module_from_spec(spec)
@@ -117,6 +119,22 @@ class Channels(unittest.TestCase):
         self.assertEqual(c.connection(self.connect(locator=p))[1]["thread_id"], "chat-a")
         self.assertIn(b"EVERY unanswered request", handoff)
 
+    def test_later_legacy_association_cannot_move_the_preserved_spool(self):
+        first, later = c.root() / "old-a", c.root() / "old-b"
+        for folder in (first, later):
+            c.mkdir(folder)
+            (folder / "to-rich.md").write_text("preserved raw input")
+        c.designate(self.a, [first])
+        c.designate(self.b, [later])
+        spool = Path(self.a["state_root"]) / "codex-watch/pending.jsonl"
+        c.mkdir(spool.parent)
+        spool.write_text(json.dumps("Saved old observation") + "\n")
+        events, errors = c.scan(self.a["state_root"])
+        self.assertFalse(errors)
+        imported = [e for e in events if e["record"]["kind"] == "legacy_import"]
+        self.assertEqual(len(imported), 1)
+        self.assertEqual(imported[0]["connection"]["thread_id"], self.a["thread_id"])
+
     def test_send_failure_does_not_claim_saved_and_requires_id(self):
         p = self.connect(self.a)
         result = subprocess.run([sys.executable, "-B", c.__file__, "send", "--locator", p,
@@ -125,6 +143,124 @@ class Channels(unittest.TestCase):
         self.assertEqual(c.read(p, "to-rich")["records"], [])
         with self.assertRaises(ValueError):
             c.send(p, "oversize", "x" * (c.TEXT_LIMIT + 1))
+
+    def test_large_stdin_message_is_readable_and_bad_positions_replay(self):
+        p = self.connect(self.a)
+        text = "large original words " + "x" * (c.TEXT_LIMIT - 21)
+        sent = subprocess.run([sys.executable, "-B", c.__file__, "send", "--request"],
+            input=json.dumps(dict(locator=p, message_id="large", text=text)), capture_output=True, text=True)
+        self.assertEqual(sent.returncode, 0, sent.stderr)
+        self.assertEqual(c.read(p, "to-rich")["records"][0]["text"], text)
+        source = Path(p) / "to-rich.jsonl"
+        pos = Path(self.a["state_root"]) / "codex-watch/accepted" / (Path(p).name + ".json")
+        for through in (-1, "bad", True, 7, 10**9):
+            c.save(pos, dict(source_identity=c.identity(source), through=through))
+            self.assertEqual(c.scan(self.a["state_root"])[0][0]["record"]["message_id"], "large")
+        pos.write_text("broken advisory state")
+        self.assertEqual(c.scan(self.a["state_root"])[0][0]["record"]["message_id"], "large")
+
+    def test_sync_and_denied_write_failures_never_return_saved(self):
+        p = self.connect(self.a)
+        with mock.patch.object(c.os, "fsync", side_effect=OSError(28, "fixture disk full")):
+            with self.assertRaises(OSError):
+                c.send(p, "disk-full", "retained retry")
+        # A complete but uncertain append is reconciled by its recorded ID.
+        self.assertTrue(c.send(p, "disk-full", "retained retry")["saved"])
+        with mock.patch.object(c.os, "open", side_effect=PermissionError("fixture denied write")):
+            with self.assertRaises(PermissionError):
+                c.send(p, "denied", "must not claim success")
+        self.assertEqual([r["message_id"] for r in c.read(p, "to-rich")["records"]], ["disk-full"])
+
+    def test_producer_killed_at_real_append_sync_boundaries_recovers_same_id(self):
+        p = self.connect(self.a)
+        for boundary in ("before-write", "before-sync", "after-sync"):
+            # Only this subprocess is killed. The monkeypatch intercepts an actual
+            # lock/write/fsync boundary, not a sleep or a fabricated receipt.
+            program = """
+import contextlib, os, signal, sys
+sys.path.insert(0, sys.argv[1])
+import codex_channels as c
+boundary, locator, ident = sys.argv[2:]
+kill = lambda: os.kill(os.getpid(), signal.SIGKILL)
+if boundary == 'before-write':
+    original = c.locked
+    @contextlib.contextmanager
+    def locked(path):
+        with original(path) as fd:
+            kill()
+            yield fd
+    c.locked = locked
+else:
+    original = c.os.fsync
+    def sync(fd):
+        if boundary == 'before-sync': kill()
+        original(fd)
+        kill()
+    c.os.fsync = sync
+c.send(locator, ident, 'recover original request')
+"""
+            child = subprocess.run([sys.executable, "-B", "-c", program, str(Path(c.__file__).parent), boundary, p, boundary],
+                                   capture_output=True, text=True)
+            self.assertEqual(child.returncode, -9)
+            self.assertEqual(child.stdout, "")
+            recovered = c.read(p, "to-rich")["records"]
+            if boundary != "before-write":
+                self.assertIn(boundary, [r["message_id"] for r in recovered])
+            c.send(p, boundary, "recover original request")
+            c.send(p, boundary, "recover original request")
+            self.assertEqual(sum(r["message_id"] == boundary for r in c.read(p, "to-rich")["records"]), 1)
+
+    def test_partial_migration_handoff_repairs_and_raw_tail_never_imports(self):
+        old = c.root() / "rich-codex"
+        c.mkdir(old)
+        (old / "to-rich.md").write_text("unframed original\n")
+        (old / "to-codex.md").write_text("\n## RICHOS CHANNEL MIGRATION ")
+        c.designate(self.a, [old])
+        p, _ = c.legacy_owner(old)
+        self.assertIn("EVERY unanswered request", (old / "to-codex.md").read_text())
+        events, errors = c.scan(self.a["state_root"])
+        self.assertFalse(errors)
+        self.assertEqual([e["record"]["kind"] for e in events], ["legacy_notice"])
+        with (old / "to-rich.md").open("a") as f:
+            f.write("a second newline fragment\n")
+        self.assertEqual(c.scan(self.a["state_root"])[0][0]["record"], events[0]["record"])
+
+    def test_one_managed_receiver_is_fenced_and_process_death_releases_ownership(self):
+        p = self.connect(self.a)
+        c.designate(self.a, [])
+        c.send(p, "receiver-test", "owning app only")
+        watcher = Path(c.__file__).with_name("codex_watch.py")
+        children = []
+        def start(name):
+            state = self.root / name
+            env = dict(os.environ, RICHOS_CODEX_CHANNEL_STATE=str(state),
+                       CODEX_WATCH_STATE_DIR=str(state / "codex-watch/watch"),
+                       CODEX_WATCH_FILES="", RICHOS_WATCH_HOST=str(os.getpid()))
+            proc = subprocess.Popen([sys.executable, "-B", str(watcher), "--monitor", "--host-json"],
+                                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            children.append(proc)
+            return proc
+        def receive(proc):
+            with selectors.DefaultSelector() as selected:
+                selected.register(proc.stdout, selectors.EVENT_READ)
+                self.assertTrue(selected.select(30), "hang guard: no first scan from owned receiver")
+                return json.loads(proc.stdout.readline())
+        try:
+            first = start("first-state")
+            self.assertEqual(receive(first)["record"]["message_id"], "receiver-test")
+            second = start("second-state")
+            out, err = second.communicate(timeout=30)
+            self.assertEqual(second.returncode, 0, err)
+            self.assertEqual(out, b"", "second managed receiver must not emit app-owned input")
+            first.kill()
+            first.communicate(timeout=30)
+            third = start("second-state")
+            self.assertEqual(receive(third)["record"]["message_id"], "receiver-test")
+        finally:
+            for proc in children:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.communicate(timeout=30)
 
 
 if __name__ == "__main__":

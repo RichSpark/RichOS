@@ -141,6 +141,7 @@ if HERE not in sys.path:
 import stall_watch  # noqa: E402  (sibling: session, lock, JSON and silent-teammate helpers)
 from app_review import app_paths  # noqa: E402  (sibling: the app's review paths, shared with its hook)
 import operator_fences as F  # noqa: E402  (sibling: review_repos, the one reader of SECOND_REVIEW_REPOS)
+import codex_channels as channels  # one shared framed decoder/writer
 
 POLL_SECONDS = 60
 LONG_JOB_MINUTES = 60
@@ -449,6 +450,10 @@ class Item(object):
             return a
         if self.source == "codex":
             a += ["--branch", self.branch, "--author", "codex"]
+            if self.claude:
+                a += ["--claude", self.claude]
+            if self.accounts:
+                a += ["--accounts", self.accounts]
             for w in self.words:
                 a += ["--words-file", w]
             for c in self.claims:
@@ -600,11 +605,18 @@ class World(object):
         return items, problems
 
     # -- Codex's handovers --------------------------------------------------------
+    def channel_repositories(self, endpoint):
+        return {name: self.repo_named(name) for name in self.repos or [] if self.repo_named(name)}
+
     def codex_items(self, now, codex_state):
         """(items, problems, notes). codex_state is the shared reading state
         (offset in to-rich.md and the pending handovers), updated in place."""
         to_rich = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_RICH") or DEFAULT_TO_RICH)
         to_codex = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_CODEX") or DEFAULT_TO_CODEX)
+        # App-associated input has one review host. Terminal monitors retain only
+        # unmigrated Markdown; their separate review state cannot fence the app's.
+        if channels.legacy_owner(os.path.dirname(to_rich)):
+            return [], []
         problems = []
         pending = codex_state.setdefault("pending", [])
         try:
@@ -652,7 +664,7 @@ class World(object):
         itip, _why = self.integration_tip([], repo)
         return self.merge_base(repo, itip, tip) if itip else None
 
-    def codex_handover(self, header, body, to_rich, to_codex, now):
+    def codex_handover(self, header, body, to_rich, to_codex, now, words=None, repo_map=None, origin=""):
         """A pending review for a READY entry naming a codex/ branch; a string
         saying why one cannot start; or None for any other entry."""
         if not header or "READY" not in header.upper():
@@ -666,13 +678,16 @@ class World(object):
         # without the colon.
         listed = [n.strip(".") for line in re.findall(r"Repositor(?:y|ies)\b([^\n]*)", text)
                   for n in re.findall(r"[A-Za-z0-9._-]+", line)]
-        names = [n for n in listed if n in (self.repos or [])]
+        allowed = list(repo_map) if repo_map is not None else (self.repos or [])
+        names = [n for n in listed if n in allowed]
+        if repo_map is not None and listed and not names:
+            return "Codex's handover %r names no uniquely connected repository for this company; no review started" % header[:90]
         if not names and any(self.repo_named(n) for n in listed):
             # It names only repositories that get no second review: not a review case.
             return None
-        if not names and self.repos and len(self.repos) == 1:
-            names = [self.repos[0]]
-        repo = self.repo_named(names[0]) if names else ""
+        if not names and not listed and len(allowed) == 1:
+            names = [allowed[0]]
+        repo = (repo_map[names[0]] if repo_map is not None else self.repo_named(names[0])) if names else ""
         if not repo or not self.wanted(repo):
             return None
         cm = re.search(r"Commit:\s*`?([0-9a-f]{40})", text) or SHA_RE.search(text)
@@ -682,13 +697,13 @@ class World(object):
         if not tip or git(repo, "cat-file", "-e", tip + "^{commit}") is None:
             return ("Codex's handover %r names %s, whose commit %s is not in %s, so no review of it started"
                     % (header[:90], branch, tip[:12] or "(none)", repo))
-        words = codex_words(to_codex, to_rich, branch)
+        words = codex_words(to_codex, to_rich, branch) if words is None else words
         if not words:
             return ("Codex's handover %r: no entry in %s names %s or comes before Codex first named it, so there "
                     "are no original words and no review of it started" % (header[:90], to_codex, branch))
         wdir = _p("codex-words")
         os.makedirs(wdir, exist_ok=True)
-        stem = "%s-%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", branch), tip[:12])
+        stem = "%s-%s%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", branch), tip[:12], "-" + origin if origin else "")
         wpath, cpath = os.path.join(wdir, stem + ".words.md"), os.path.join(wdir, stem + ".claims.md")
         with open(wpath, "w", encoding="utf-8") as f:
             f.write("".join("%s\n%s\n" % (h, b) for h, b in words))
@@ -696,6 +711,59 @@ class World(object):
             f.write("%s\n%s\n" % (header, body))
         return {"work": "branch:%s:%s" % (repo, branch), "repo": repo, "branch": branch, "tip": tip,
                 "words": [wpath], "claims": [cpath], "at": now, "title": header[3:].strip()[:120]}
+
+    def channel_items(self, now, codex_state, connections):
+        """The shared READY handler, with its own advisory reading position.
+
+        Only the app enumerates app-owned connections. Terminal callers may use
+        the same handler explicitly, but do not run a competing managed receiver.
+        """
+        pending = codex_state.setdefault("channel_pending", [])
+        positions = codex_state.setdefault("channels", {})
+        for path, endpoint in connections:
+            if endpoint.get("legacy_folder"):
+                continue
+            try:
+                repos = self.channel_repositories(endpoint)
+                source = path / "to-rich.jsonl"
+                identity = channels.identity(source)
+                saved = positions.get(str(path), {})
+                offset = channels.position(source, saved)
+                # Source evidence is always recoverable from the journals. No
+                # timestamp association and no assumption that replies are tasks.
+                words = []
+                for direction in ("to-rich", "to-codex"):
+                    for _, _, row in channels.records(path / (direction + ".jsonl")):
+                        if row.get("kind") == "task_context" or (row.get("kind", "message") == "message" and row.get("reply_to") == "task-context"):
+                            words.append(("Source excerpt (%s; %s)" % (direction, row.get("provenance", "explicit task amendment")), row["text"]))
+                for _, end, row in channels.records(source, offset):
+                    if row.get("kind", "message") == "message":
+                        for header, body in split_entries(row["text"]):
+                            got = self.codex_handover(header, body, str(source), str(path / "to-codex.jsonl"), now,
+                                                      words=words, repo_map=repos, origin=endpoint["connection_id"])
+                            if isinstance(got, str):
+                                channel_reply(path, row["message_id"], "review-held", got)
+                            elif got:
+                                got["channel"] = {"locator": str(path), "message_id": row["message_id"]}
+                                if not any(p["channel"] == got["channel"] and p["repo"] == got["repo"] and p["tip"] == got["tip"] for p in pending):
+                                    pending.append(got)
+                    positions[str(path)] = dict(source_identity=identity, through=end)
+            except (OSError, ValueError, KeyError) as exc:
+                print("review-watch: connection held %s: %s" % (path, exc), file=sys.stderr)
+        items = []
+        # Keep review ownership with the existing pending/lock/attempt records.
+        # Replaying a lost position cannot add a second due review for the tip.
+        pending[:] = [p for p in pending if now - float(p.get("at") or now) <= KEEP_SECONDS]
+        for p in pending:
+            base = self.merge_base_for(p["repo"], p["tip"])
+            if not base or base == p["tip"]:
+                continue
+            item = Item(p["work"], "codex", p["repo"], p["tip"], base, "ended", branch=p["branch"], source="codex",
+                        words=p["words"], claims=p["claims"], title=p["title"])
+            item.channel = p["channel"]
+            item.claude, item.accounts = getattr(self, "claude", ""), getattr(self, "accounts", "")
+            items.append(item)
+        return items, []
 
 
 class AppWorld(World):
@@ -719,7 +787,8 @@ class AppWorld(World):
       * Codex reviews instead when the user turned on the Settings switch "Let Codex review
         your team's work" (round 20.2, ruling §114; --codex-reviews, read when each review
         starts, app_reviewer), whenever Codex is installed and signed in; Claude otherwise.
-      * No Codex channel: that is his team's.
+      * Dedicated Codex handovers use the same READY handler as the terminal,
+        restricted to the originating company's connected repositories.
     """
 
     codex_reviews = ""  # the Codex switch's file; none (a world built without it) is the switch off
@@ -804,7 +873,28 @@ class AppWorld(World):
         return items, problems
 
     def codex_items(self, now, codex_state):
-        return [], []
+        return self.channel_items(now, codex_state, channels.registered())
+
+    def channel_repositories(self, endpoint):
+        app = stall_watch._load("review_watch_app", os.path.join(self.engine_root, "mega-lander", "app.py"))
+        if app is None:
+            raise ValueError("app repository scope helper is unavailable")
+        before = os.environ.get("RICHOS_APP_REGISTRY")
+        os.environ["RICHOS_APP_REGISTRY"] = os.path.join(os.path.dirname(self.app_state), "entities.json")
+        try:
+            paths = app.repositories({"binding": endpoint})
+        finally:
+            if before is None:
+                os.environ.pop("RICHOS_APP_REGISTRY", None)
+            else:
+                os.environ["RICHOS_APP_REGISTRY"] = before
+        result = {}
+        for path in paths:
+            name = os.path.basename(os.path.realpath(path))
+            if name in result:
+                raise ValueError("connected repository basename is ambiguous: " + name)
+            result[name] = os.path.realpath(path)
+        return result
 
 
 def split_entries(text):
@@ -1170,6 +1260,8 @@ class Watcher(object):
         info = {"repo": item.repo, "tip": item.tip, "work": item.work, "name": item.name, "trigger": trigger,
                 "started_at": now, "attempt": attempt, "watcher": os.getpid(), "pid": None, "pid_start": "",
                 "session": getattr(item, "session", "") or ""}
+        if getattr(item, "channel", None):
+            info["channel"] = item.channel
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(info, f)
         return path, info
@@ -1233,6 +1325,8 @@ class Watcher(object):
         a = {"repo": info.get("repo"), "tip": info.get("tip"), "work": info.get("work"), "name": info.get("name"),
              "trigger": info.get("trigger"), "started_at": info.get("started_at"), "ended_at": now,
              "outcome": outcome, "why": why, "attempt": info.get("attempt"), "session": info.get("session") or ""}
+        if info.get("channel"):
+            a["channel"] = info["channel"]
         append_jsonl(_p("attempts.jsonl"), a)
         try:
             os.unlink(claimed)
@@ -1455,12 +1549,59 @@ class Watcher(object):
                 del seen[w]
         stall_watch._write_json(_p("shared.json"), shared)
         attempts = read_jsonl(_p("attempts.jsonl"))
+        if isinstance(self.world, AppWorld):
+            owners = list(codex_state.get("channel_pending", [])) + attempts + list(book.running.values())
+            publish_channel_results(rows, owners)
+            def channel_owned(row):
+                return any(o.get("channel") and all(row.get(k) == o.get(k) for k in ("repo", "work", "tip")) for o in owners)
+            # These results travel through their dedicated journals. An empty
+            # native lead-session lookup cannot deliver them and must not guess.
+            rows = [r for r in rows if not channel_owned(r)]
+            attempts = [a for a in attempts if not a.get("channel")]
+            items = [it for it in items if not getattr(it, "channel", None)]
+            book.running = {k: v for k, v in book.running.items() if not v.get("channel")}
         return tell(now, session_state, rows, Book(rows, book.running, attempts), items, problems, attempts)
 
 
 # ---------------------------------------------------------------------------
 # what is told
 # ---------------------------------------------------------------------------
+
+def channel_reply(locator, reply_to, identity, text):
+    """Same durable operation on each side; replay reconciles a split write.
+
+    The outgoing journal is Codex's result. The incoming observation tells the
+    owning Stu through the existing receiver, even when no chat is visible.
+    It is an engine review observation, never Codex-authored or a user instruction.
+    """
+    path, _ = channels.connection(locator)
+    message_id = "review-" + hashlib.sha256((identity + ":" + reply_to).encode()).hexdigest()
+    record = dict(version=1, message_id=message_id, kind="review_result", text=text, reply_to=reply_to)
+    for direction in ("to-codex", "to-rich"):
+        channels.append(path / (direction + ".jsonl"), record)
+
+
+def publish_channel_results(rows, owners):
+    for row in rows:
+        if not row.get("verdict"):
+            continue
+        for owner in owners:
+            channel = owner.get("channel")
+            if not channel or any(row.get(k) != owner.get(k) for k in ("repo", "work", "tip")):
+                continue
+            try:
+                channel_reply(channel["locator"], channel["message_id"], str(row.get("id")),
+                              "Automatic independent review observation:\n" + "\n".join(render_verdict(row, {})))
+            except (OSError, ValueError, KeyError) as exc:
+                print("review-watch: result retained in review ledger for %s: %s" % (channel, exc), file=sys.stderr)
+    for owner in owners:
+        if owner.get("channel") and owner.get("outcome") in ("lost", "held"):
+            channel = owner["channel"]
+            try:
+                channel_reply(channel["locator"], channel["message_id"], "attempt-%s-%s" % (owner.get("started_at"), owner.get("outcome")),
+                              "Automatic review %s for %s@%s: %s" % (owner["outcome"], owner.get("repo"), owner.get("tip"), owner.get("why")))
+            except (OSError, ValueError, KeyError) as exc:
+                print("review-watch: attempt notice retained for %s: %s" % (channel, exc), file=sys.stderr)
 
 def _verdict_file(row):
     try:

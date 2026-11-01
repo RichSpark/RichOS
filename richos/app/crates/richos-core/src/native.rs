@@ -1651,7 +1651,7 @@ pub fn continuation_input(ledger: &crate::ledger::Ledger, thread: &str, summary:
         crate::ecs::UserInstruction::with_text(format!("ledger:{thread}:{}", original.id),
             format!("{:x}", sha2::Sha256::digest(original.user_text.as_bytes())), Some(&original.user_text))
     });
-    serde_json::to_string(&crate::session_tools::Message { handoff: false, from: CONTINUATION_CHANNEL.into(),
+    serde_json::to_string(&crate::session_tools::Message {bridge:None, handoff: false, from: CONTINUATION_CHANNEL.into(),
         text: summary.into(), instruction, work: None }).unwrap_or_else(|_| summary.to_string())
 }
 
@@ -2005,6 +2005,11 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
     config["mcpServers"][crate::status_tools::SERVER_NAME] = json!({
         "type":"stdio", "command":executable, "args":["--status-mcp",status_scope]
     });
+    if let Some(profile)=profile {
+        config["mcpServers"][crate::status_tools::SERVER_NAME]["env"]=json!({
+            "CODEX_COORDINATION_ROOT":profile.codex_root, "RICHOS_CHANNEL_ENGINE":profile.engine,"RICHOS_CHANNEL_PYTHON":profile.runtime.python,
+            "PYTHONDONTWRITEBYTECODE":"1"});
+    }
     // **The continuity tools read THEIR OWN scope file, not the hook's** — the two differ in
     // one flag and in when it opens (`prepare_work_turn`'s note, and the measurement that
     // forced it). `continuity_tools_scope` is `None` only on a lease with no bridge, where
@@ -3271,7 +3276,7 @@ impl NativeClient {
     /// Write one `connection_restored` fact into this session as a message from `connection`, in
     /// the shape every app message to Rich and Stu has (`session_tools::Message`).
     fn tell_connection_restored(stdin: &Arc<Mutex<ChildStdin>>, id: &str, fact: Value) -> Result<(), NativeError> {
-        let message = crate::session_tools::Message { handoff: false, from: "connection".into(),
+        let message = crate::session_tools::Message {bridge:None, handoff: false, from: "connection".into(),
             text: fact.to_string(), instruction: None, work: None };
         let text = serde_json::to_string(&message).map_err(|error| NativeError::Protocol(error.to_string()))?;
         Self::write_line(stdin, &json!({"type":"user","uuid":id,"message":{"role":"user","content":[{"type":"text","text":text}]}}))
@@ -5112,7 +5117,7 @@ read -r prompt
         let mut messages=vec![];let mut saved=String::new();
         for text in ["Investigate A","Investigate B"] {
             let turn=ledger.record_prompt_received(&binding,text,Source::Text).unwrap();
-            let message=crate::session_tools::Message {handoff:true,from:"rich".into(),text:text.into(),work:None,
+            let message=crate::session_tools::Message {bridge:None,handoff:true,from:"rich".into(),text:text.into(),work:None,
                 instruction:Some(crate::ecs::UserInstruction::with_text(format!("ledger:{thread}:{turn}"),format!("{:x}",sha2::Sha256::digest(text)),Some(text)))};
             saved.push_str(&serde_json::to_string(&message).unwrap());saved.push('\n');messages.push(message);
         }
@@ -5155,7 +5160,7 @@ read -r prompt
         bridge.bind(entity.as_str(),&thread,"fixture-rich","opening",crate::ecs::ceo_seat(&thread).as_deref(),"ceo").unwrap();
         let path=cognition.continuity.as_ref().unwrap().1.clone();
         let read=|| -> crate::ecs::ToolScope {serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()};
-        let notice=|text:&str| crate::session_tools::Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None};
+        let notice=|text:&str| crate::session_tools::Message {bridge:None,handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None};
 
         // His turn for one message: written closed until it starts, then opened by the turn.
         cognition.prepare_agent_message(&binding,"peer:1",&notice("Rich: dispatch Tom's review")).unwrap();
@@ -5204,7 +5209,7 @@ read -r prompt
         bridge.bind(entity.as_str(),&thread,"fixture-rich","opening",crate::ecs::ceo_seat(&thread).as_deref(),"ceo").unwrap();
         let path=cognition.continuity.as_ref().unwrap().1.clone();
         let read=|| -> crate::ecs::ToolScope {serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()};
-        let notice=|text:&str| crate::session_tools::Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None};
+        let notice=|text:&str| crate::session_tools::Message {bridge:None,handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None};
         let seat=format!("stu-thread:{thread}");
         let operate=|held:&crate::ecs::Binding| bridge.request("inspect",crate::ecs::seated_request(Some(&seat),
             json!({"binding":serde_json::to_value(held).unwrap()})));
@@ -5560,7 +5565,7 @@ while read -r line; do :; done
         let mut cognition=NativeCognition::start_with_continuity(&script,root,root,&skills_fixture(),&script,bridge,None).unwrap();
         let binding=crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),crate::entity::EntityId::parse("company").unwrap(),"thread",1);
         for id in ["A","B"] {
-            let message=crate::session_tools::Message {handoff:true,from:"rich".into(),text:id.into(),instruction:Some(crate::ecs::UserInstruction {
+            let message=crate::session_tools::Message {bridge:None,handoff:true,from:"rich".into(),text:id.into(),instruction:Some(crate::ecs::UserInstruction {
                 ledger_ref:format!("ledger:thread:{id}"),sha256:"a".repeat(64),text:Some(id.into())}),work:None};
             cognition.prepare_agent_message(&binding,id,&message).unwrap();
             let scope:crate::ecs::ToolScope=serde_json::from_slice(&std::fs::read(&cognition.continuity.as_ref().unwrap().1).unwrap()).unwrap();
@@ -5871,6 +5876,7 @@ while True:
                 versions: Default::default(),
             },
             work_scope: None,
+            codex_root: root.join("codex-coordination"),
             user: Default::default(),
 
             claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
@@ -9051,7 +9057,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(), user: Default::default(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                work_scope:None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
+                codex_root:root.join("codex-coordination"), work_scope:None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

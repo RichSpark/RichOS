@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import sys
 import uuid
 
@@ -24,7 +25,7 @@ SETUP_TEXT = ("Codex coordination is waiting. In the chat you coordinate from, "
 
 def root():
     return Path(os.environ.get("CODEX_COORDINATION_ROOT") or
-                Path.home() / ".richos-coordination").absolute()
+                Path.home() / ".richos-coordination").resolve()
 
 
 def component(value):
@@ -48,7 +49,11 @@ def mkdir(path):
             raise ValueError("Channel directory is not an ordinary directory: %s" % path)
         return
     mkdir(path.parent)
-    path.mkdir(mode=0o700)
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError("Channel directory changed during creation") from None
     sync_dir(path.parent)
 
 
@@ -80,7 +85,7 @@ def load(path):
 @contextlib.contextmanager
 def locked(path):
     mkdir(Path(path).parent)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield fd
@@ -125,7 +130,7 @@ def scope_read(path):
 
 
 def handoff(path):
-    helper = Path(__file__).parent.parent / "codex-channel.sh"
+    helper = shlex.join([sys.executable, "-B", str(Path(__file__).resolve())])
     return ("Use this dedicated RichOS connection: %s\n"
             "Helper: %s. Use send/read with this locator; connect creates a NEW pair. "
             "Keep the locator in your working notes. After compaction recover it from "
@@ -179,14 +184,16 @@ def records(path, offset=0):
             if not line.endswith(b"\n"):
                 return
             record = json.loads(line)
-            validate(record)
+            validate(record, Path(path).parent)
             yield start, f.tell(), record
 
 
-def validate(record):
+def validate(record, locator=None):
     if not isinstance(record, dict) or record.get("version") != VERSION:
         raise ValueError("Unsupported channel record")
-    if record.get("kind", "message") not in ("message", "task_context"):
+    if set(record) - {"version", "message_id", "kind", "text", "provenance", "reply_to"}:
+        raise ValueError("Unknown channel record fields")
+    if record.get("kind", "message") not in ("message", "task_context", "review_result"):
         raise ValueError("Unknown channel record kind")
     component(record.get("message_id"))
     text = record.get("text")
@@ -195,21 +202,33 @@ def validate(record):
     if record.get("reply_to") is not None:
         component(record["reply_to"])
     # Account for the native observation wrapper BEFORE acknowledging a saved send.
-    if len(json.dumps(dict(text=text, bridge=dict(message_id=record["message_id"])), ensure_ascii=False).encode()) + 2048 > FRAME_LIMIT:
+    reference = dict(connection_id=Path(locator).name if locator else "x" * 128,
+                     message_id=record["message_id"], payload_digest="0" * 64,
+                     locator=str(locator) if locator else "x" * 4096)
+    if record.get("reply_to") is not None:
+        reference["reply_to"] = record["reply_to"]
+    envelope = dict(bridge=reference, text=text, instruction=None)
+    envelope["from"] = "review-watch"  # longest supported observation source
+    if len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()) + 1 > FRAME_LIMIT:
         raise ValueError("Encoded message exceeds the native inbox frame limit")
 
 
 def append(path, record):
-    validate(record)
+    validate(record, Path(path).parent)
     encoded = (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode()
     if len(encoded) > FRAME_LIMIT:
         raise ValueError("Encoded channel record exceeds frame limit")
     with locked(path) as fd:
         with os.fdopen(os.dup(fd), "r+b", buffering=0) as f:
             # An unacknowledged incomplete tail is not a message. Reuse inbox recovery.
-            data = f.read()
-            end = data.rfind(b"\n") + 1
-            if end != len(data):
+            length = os.fstat(fd).st_size
+            start = max(0, length - FRAME_LIMIT)
+            f.seek(start)
+            tail = f.read(FRAME_LIMIT)
+            if tail and not tail.endswith(b"\n"):
+                end = start + tail.rfind(b"\n") + 1
+                if end == start and start:
+                    raise ValueError("Incomplete channel tail exceeds the frame limit")
                 f.truncate(end)
                 print("Discarded incomplete channel tail: %s" % path, file=sys.stderr)
             for _, through, old in records(path):
@@ -237,12 +256,13 @@ def read(locator, direction="to-codex", offset=0, scope=None):
     p, _ = connection(locator, scope)
     if direction not in ("to-rich", "to-codex"):
         raise ValueError("Unknown channel direction")
-    out, through = [], offset
+    out, through, size = [], offset, 2
     for _, end, record in records(p / (direction + ".jsonl"), offset):
-        out.append(record)
-        if len(json.dumps(out, ensure_ascii=False).encode()) > TEXT_LIMIT:
-            out.pop()
+        encoded_size = len(json.dumps(record, ensure_ascii=False).encode()) + (2 if out else 0)
+        if out and size + encoded_size > FRAME_LIMIT:
             break
+        out.append(record)
+        size += encoded_size
         through = end
     return dict(records=out, through=through, locator=str(p), instructions=handoff(p))
 
@@ -251,6 +271,10 @@ def designate(scope, legacy_folders):
     """An explicit host-scoped choice. Existing endpoint records never change."""
     target = dict(version=VERSION, entity_id=component(scope["entity_id"]), thread_id=component(scope["thread_id"]))
     with locked(root() / "coordinator.lock"):
+        # The old spool had no per-channel address. Its first explicit frozen
+        # association owns it permanently. Later folders/defaults cannot move it.
+        # An unavailable existing legacy directory also prevents reassignment.
+        has_legacy = any((root() / "connections").glob("*/*/legacy-*"))
         for folder in legacy_folders:
             folder = Path(folder).absolute()
             if not (folder / "to-rich.md").exists():
@@ -262,7 +286,18 @@ def designate(scope, legacy_folders):
             else:
                 p = endpoint(target["entity_id"], target["thread_id"], ident)
                 mkdir(p)
-                save(p / "connection.json", dict(target, connection_id=ident, legacy_folder=str(folder)))
+                try:
+                    old = load(Path(scope["state_root"]) / "codex-watch/watch/last-told.json")
+                    previous = old.get(str(folder / "to-rich.md"), {})
+                    raw = (folder / "to-rich.md").stat()
+                    boundary = previous.get("offset", 0) if isinstance(previous, dict) and previous.get("inode") == raw.st_ino else 0
+                    if type(boundary) is not int or not 0 <= boundary <= raw.st_size:
+                        boundary = 0
+                except (FileNotFoundError, ValueError):
+                    boundary = 0
+                save(p / "connection.json", dict(target, connection_id=ident, legacy_folder=str(folder),
+                                                 legacy_boundary=boundary, imports_legacy_spool=not has_legacy))
+                has_legacy = True
             instruction = ("\n## RICHOS CHANNEL MIGRATION %s\n"
                            "Create your own dedicated pair with the helper connect --locator %s "
                            "--text <original-task> --provenance <source-reference>. "
@@ -272,7 +307,7 @@ def designate(scope, legacy_folders):
             reply = folder / "to-codex.md"
             with locked(reply) as fd:
                 with os.fdopen(os.dup(fd), "r+b", buffering=0) as f:
-                    if ("RICHOS CHANNEL MIGRATION " + ident).encode() not in f.read():
+                    if instruction.encode() not in f.read():
                         f.seek(0, os.SEEK_END)
                         f.write(instruction.encode())
                     os.fsync(fd)
@@ -296,6 +331,19 @@ def event(path, record, source, start, end):
                 source_identity=identity(source), start=start, through=end)
 
 
+def position(source, saved):
+    """A lost, stale or malformed advisory position means retained-source replay."""
+    offset = saved.get("through") if isinstance(saved, dict) and saved.get("source_identity") == identity(source) else 0
+    if type(offset) is not int or not 0 <= offset <= Path(source).stat().st_size:
+        return 0
+    if offset:
+        with Path(source).open("rb") as boundary:
+            boundary.seek(offset - 1)
+            if boundary.read(1) != b"\n":
+                return 0
+    return offset
+
+
 def scan(state):
     """One next record per connection. No position is written by the scanner."""
     state = Path(state)
@@ -309,7 +357,14 @@ def scan(state):
             source = p / "to-rich.jsonl"
             legacy = c.get("legacy_folder")
             if legacy:
-                if c["connection_id"] != min(r["connection_id"] for _, r in channels if r.get("legacy_folder")):
+                raw = Path(legacy) / "to-rich.md"
+                boundary = c.get("legacy_boundary", 0)
+                if raw.exists() and raw.stat().st_size > boundary:
+                    e = event(p, c, raw, boundary, boundary)
+                    e["record"] = dict(version=VERSION, message_id="legacy-tail", kind="legacy_notice",
+                        text="Unframed legacy input remains preserved at %s after byte %s. Use the migration handoff and re-send unanswered requests on dedicated pairs; do not judge or execute fragments." % (raw, boundary))
+                    events.append(e)
+                if not c.get("imports_legacy_spool"):
                     continue
                 source = state / "codex-watch" / "pending.jsonl"
                 if not source.exists():
@@ -317,10 +372,9 @@ def scan(state):
             pos = state / "codex-watch" / "accepted" / (c["connection_id"] + ".json")
             try:
                 saved = load(pos)
-                offset = saved["through"] if saved.get("source_identity") == identity(source) else 0
-                if offset > source.stat().st_size:
-                    offset = 0
-            except FileNotFoundError:
+                offset = position(source, saved)
+            except (FileNotFoundError, ValueError):
+                # Positions are advisory. Corruption replays retained source records.
                 offset = 0
             if legacy:
                 with source.open("rb") as f:
@@ -357,9 +411,25 @@ def main(argv=None):
     ap.add_argument("--direction", default="to-codex", choices=("to-rich", "to-codex"))
     ap.add_argument("--offset", type=int, default=0)
     ap.add_argument("--scope")
+    ap.add_argument("--request", action="store_true")
     ap.add_argument("--legacy", action="append", default=[])
     a = ap.parse_args(argv)
     try:
+        if a.request:
+            fields = json.load(sys.stdin)
+            allowed = {"locator", "message_id", "text", "provenance", "reply_to", "direction", "offset", "legacy"}
+            if not isinstance(fields, dict) or set(fields) - allowed:
+                raise ValueError("Unknown channel request fields")
+            for key, value in fields.items():
+                if key == "offset":
+                    if type(value) is not int or value < 0:
+                        raise ValueError("offset must be a nonnegative integer")
+                elif key == "legacy":
+                    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+                        raise ValueError("legacy paths must be a list of strings")
+                elif value is not None and not isinstance(value, str):
+                    raise ValueError(key + " must be text")
+                setattr(a, key, value)
         s = scope_read(a.scope) if a.scope else None
         if a.action == "connect":
             result = connect(a.text or "", a.provenance or "", a.locator, s)

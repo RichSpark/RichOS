@@ -132,8 +132,11 @@ pub fn call(scope: &StatusToolScope, name: &str, args: Value) -> Result<Value,St
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkReference {pub assignment_id:String, pub obligation_id:String}
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BridgeReference {pub connection_id:String, pub message_id:String, pub payload_digest:String, pub locator:String, #[serde(default,skip_serializing_if="Option::is_none")] pub reply_to:Option<String>}
+
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Message {#[serde(default, skip_serializing_if="std::ops::Not::not")] pub handoff:bool, pub from:String, pub text:String, #[serde(default)] pub instruction:Option<crate::ecs::UserInstruction>,
+pub struct Message {#[serde(default,skip_serializing_if="Option::is_none")] pub bridge:Option<BridgeReference>, #[serde(default, skip_serializing_if="std::ops::Not::not")] pub handoff:bool, pub from:String, pub text:String, #[serde(default)] pub instruction:Option<crate::ecs::UserInstruction>,
     #[serde(default,skip_serializing_if="Option::is_none")] pub work:Option<WorkReference>}
 
 pub fn inbox(scope: &StatusToolScope, role: &str) -> Result<PathBuf,String> {
@@ -152,13 +155,13 @@ pub fn send(scope_path: &Path, scope: &StatusToolScope, args:Value) -> Result<Va
     let sender:Session=serde_json::from_slice(&std::fs::read(scope_path.with_extension("session.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     if sender.entity_id!=scope.entity_id || sender.thread_id!=scope.thread_id {return Err("Message scope changed".into())}
     let peer=match sender.role.as_str() {"rich"=>"stu","stu"=>"rich",_=>return Err("Invalid sender role".into())};
-    append(scope,peer,&Message {handoff:false,from:sender.role,text:args.text,instruction:sender.instruction,work:None})?;
+    append(scope,peer,&Message {bridge:None,handoff:false,from:sender.role,text:args.text,instruction:sender.instruction,work:None})?;
     Ok(json!({"saved":true,"to":peer}))
 }
 
 /// A host observation is information, never a user instruction or a peer's authorship.
 pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String> {
-    append(scope,"stu",&Message {handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None})
+    append(scope,"stu",&Message {bridge:None,handoff:false,from:"stall-watch".into(),text:text.into(),instruction:None,work:None})
 }
 
 /// Codex wrote a new entry in one of the user's Codex channels (`codex_watch.rs`): the engine
@@ -166,35 +169,83 @@ pub(crate) fn observe_stall(scope:&StatusToolScope,text:&str)->Result<(),String>
 /// on to Stu, so each cost a turn of Rich's as well (richos-hq
 /// `docs/research/2026-10-31-app-token-burn`, 1d). A host observation, like the stall watch's.
 pub(crate) fn observe_codex(scope:&StatusToolScope,text:&str)->Result<(),String> {
-    append(scope,"stu",&Message {handoff:false,from:"codex-watch".into(),text:text.into(),instruction:None,work:None})
+    append(scope,"stu",&Message {bridge:None,handoff:false,from:"codex-watch".into(),text:text.into(),instruction:None,work:None})
 }
 
 pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<(),String> {
-    append(scope,"rich",&Message {handoff:false,from:"work-status".into(),text:facts.to_string(),instruction:None,work:None})
+    append(scope,"rich",&Message {bridge:None,handoff:false,from:"work-status".into(),text:facts.to_string(),instruction:None,work:None})
 }
 
 /// One of Stu's workers, or an automatic turn of his own, met an overload: its wait is over, or
 /// its retries are used up (`work_host.rs` observe_worker, observe_automatic_turn). A host
 /// observation, like the stall watch's.
 pub(crate) fn observe_overload_retry(scope:&StatusToolScope,facts:&Value)->Result<(),String> {
-    append(scope,"stu",&Message {handoff:false,from:"overload-retry".into(),text:facts.to_string(),instruction:None,work:None})
+    append(scope,"stu",&Message {bridge:None,handoff:false,from:"overload-retry".into(),text:facts.to_string(),instruction:None,work:None})
+}
+
+/// Source identity is part of the existing synced inbox, including acknowledged history.
+pub fn observe_channel(scope:&StatusToolScope,text:&str,bridge:BridgeReference)->Result<(u64,bool),String> {
+    observe_channel_from(scope,text,bridge,"codex-watch")
+}
+
+pub(crate) fn observe_channel_from(scope:&StatusToolScope,text:&str,bridge:BridgeReference,from:&str)->Result<(u64,bool),String> {
+    let result=append_record(scope,"stu",&mut Message {bridge:Some(bridge),handoff:false,from:from.into(),
+        text:text.into(),instruction:None,work:None},false,None)?;
+    // A first inbox also needs its directory entries durable before channel acceptance.
+    let path=inbox(scope,"stu")?;
+    let mut parent=path.parent();
+    while let Some(dir)=parent.filter(|dir|dir.starts_with(&scope.state_root)) {
+        std::fs::File::open(dir).and_then(|f|f.sync_all()).map_err(|e|e.to_string())?;
+        if dir==scope.state_root {break}
+        parent=dir.parent();
+    }
+    Ok(result)
+}
+
+/// One-time migration check: the old active router could have saved this in ANY inbox.
+pub fn legacy_channel_saved(state:&Path,text:&str)->Result<bool,String> {
+    let root=state.join("messages");
+    if !root.exists() {return Ok(false)}
+    for company in std::fs::read_dir(root).map_err(|e|e.to_string())? {
+        let company=company.map_err(|e|e.to_string())?;
+        if !company.file_type().map_err(|e|e.to_string())?.is_dir() {continue}
+        for thread in std::fs::read_dir(company.path()).map_err(|e|e.to_string())? {
+            let path=thread.map_err(|e|e.to_string())?.path().join("stu.jsonl");
+            let file=match std::fs::File::open(&path) {Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>continue,Err(e)=>return Err(e.to_string())};
+            #[cfg(unix)] {
+                use std::os::fd::AsRawFd;
+                if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_EX)}!=0 {return Err(std::io::Error::last_os_error().to_string())}
+            }
+            if find_record(&mut BufReader::new(&file),|m|Ok(m.from=="codex-watch" && (m.text==text ||
+                m.text.strip_prefix("Pre-cutover legacy observation; verify the complete original request before acting.\n")==Some(text))))?.is_some() {
+                file.sync_all().map_err(|e|e.to_string())?;
+                let mut parent=path.parent();
+                while let Some(dir)=parent.filter(|dir|dir.starts_with(state)) {
+                    std::fs::File::open(dir).and_then(|f|f.sync_all()).map_err(|e|e.to_string())?;
+                    if dir==state {break} parent=dir.parent();
+                }
+                return Ok(true)
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Stu's Claude account is being switched (`account_switch`: something of his still runs on the
 /// account being left) or he has been moved to it (`account_moved`) (`work_host.rs`
 /// move_to_account_in_use). A host observation, like the overload retry's.
 pub(crate) fn observe_account_switch(scope:&StatusToolScope,facts:&Value)->Result<(),String> {
-    append(scope,"stu",&Message {handoff:false,from:"account-switch".into(),text:facts.to_string(),instruction:None,work:None})
+    append(scope,"stu",&Message {bridge:None,handoff:false,from:"account-switch".into(),text:facts.to_string(),instruction:None,work:None})
 }
 
 /// The reload after Stu's turn registered a changed team (`work_host.rs` run_message): one
 /// more turn for him, so the work he left for it goes on. A host observation, like the others.
 pub(crate) fn observe_team_reloaded(scope:&StatusToolScope)->Result<(),String> {
-    append(scope,"stu",&Message {handoff:false,from:"team-reload".into(),text:json!({"event":"team_reloaded"}).to_string(),instruction:None,work:None})
+    append(scope,"stu",&Message {bridge:None,handoff:false,from:"team-reload".into(),text:json!({"event":"team_reloaded"}).to_string(),instruction:None,work:None})
 }
 
 pub(crate) fn observe_user_stop(scope:&StatusToolScope,assignment:&str,obligation:&str,at:u64)->Result<(),String> {
-    append(scope,"stu",&Message {handoff:false,from:"user-control".into(),text:json!({"event":"user_stop",
+    append(scope,"stu",&Message {bridge:None,handoff:false,from:"user-control".into(),text:json!({"event":"user_stop",
         "assignment_id":assignment,"obligation_id":obligation,"requested_at_ms":at}).to_string(),instruction:None,work:None})
 }
 
@@ -215,7 +266,7 @@ pub(crate) fn delegate_with(scope_path:&Path,scope:&StatusToolScope,args:Value,
     let mut instruction=sender.instruction.ok_or("No original user request is bound to this turn")?;
     let text=crate::work_host::verified_instruction(&scope.state_root,&scope.entity_id,&scope.thread_id,&instruction.ledger_ref,&instruction.sha256).map_err(str::to_string)?;
     instruction=crate::ecs::UserInstruction::with_text(instruction.ledger_ref,instruction.sha256,Some(&text));
-    let mut message=Message {handoff:true,from:"rich".into(),text:args.text,instruction:Some(instruction),work:None};
+    let mut message=Message {bridge:None,handoff:true,from:"rich".into(),text:args.text,instruction:Some(instruction),work:None};
     let (through,already_saved)=append_record(scope,"stu",&mut message,true,Some((sender.assignments_scope.as_deref(),opener)))?;
     Ok(json!({"saved":true,"to":"stu","through":through,"already_saved":already_saved,
         "work":message.work,"instruction_ledger_ref":message.instruction.unwrap().ledger_ref}))
@@ -325,6 +376,17 @@ fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bo
             file.set_len(complete).map_err(|e|e.to_string())?;
         }
     }
+    if let Some(reference)=message.bridge.as_ref() {
+        file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
+        if let Some((saved,through))=find_record(&mut BufReader::new(&mut file),|saved|Ok(saved.bridge.as_ref()
+            .is_some_and(|r|r.connection_id==reference.connection_id && r.message_id==reference.message_id)))? {
+            if saved.bridge.as_ref()!=Some(reference) || saved.text!=message.text || saved.from!=message.from {
+                return Err("Channel message ID conflicts with its saved inbox receipt".into())
+            }
+            file.sync_all().map_err(|e|e.to_string())?;
+            return Ok((through,true))
+        }
+    }
     // Retries and restarts report one failed logical input, using the inbox itself.
     // Scan acknowledged records too: Rich having read a failure cannot make it new.
     if let Some(input)=work_failure_input(message) {
@@ -344,7 +406,11 @@ fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bo
     if let Some((path,opener))=recording {record_handoff(scope,message,path,opener)?;}
     let mut record=serde_json::to_vec(message).map_err(|e|e.to_string())?;record.push(b'\n');
     if record.len()>256*1024 {return Err("Encoded message exceeds the input frame limit".into())}
-    file.write_all(&record).and_then(|_|file.sync_all()).map_err(|e|e.to_string())?;
+    #[cfg(test)] if message.bridge.is_some() {crate::codex_bridge::crash_boundary("before-inbox-write");}
+    file.write_all(&record).map_err(|e|e.to_string())?;
+    #[cfg(test)] if message.bridge.is_some() {crate::codex_bridge::crash_boundary("before-inbox-sync");}
+    file.sync_all().map_err(|e|e.to_string())?;
+    #[cfg(test)] if message.bridge.is_some() {crate::codex_bridge::crash_boundary("after-inbox-sync");}
     Ok((file.metadata().map_err(|e|e.to_string())?.len(),false))
 }
 
@@ -653,13 +719,13 @@ mod tests {
                 instruction_ledger_ref:instruction.ledger_ref.clone(),instruction_sha256:instruction.sha256.clone(),
                 title:format!("Original job {index}"),repositories:vec![],needs_screen:false,
             }).unwrap();
-            append(&scope,"stu",&Message {handoff:true,from:"rich".into(),text:format!("Original job {index}"),instruction:Some(instruction),
+            append(&scope,"stu",&Message {bridge:None,handoff:true,from:"rich".into(),text:format!("Original job {index}"),instruction:Some(instruction),
                 work:Some(WorkReference {assignment_id:record.id.clone(),obligation_id:format!("job-{index}")})}).unwrap();
             offsets.push(std::fs::metadata(inbox(&scope,"stu").unwrap()).unwrap().len());jobs.push(record.id);
         }
         crate::assignment::advance(&root,"company","thread",&jobs[0],crate::assignment::AssignmentState::Settled,"Verified completion before update").unwrap();
         crate::assignment::advance(&root,"company","thread",&jobs[1],crate::assignment::AssignmentState::Running,"Worker active before update").unwrap();
-        append(&scope,"stu",&Message {handoff:false,from:"rich".into(),text:"Already consumed status request".into(),instruction:None,work:None}).unwrap();
+        append(&scope,"stu",&Message {bridge:None,handoff:false,from:"rich".into(),text:"Already consumed status request".into(),instruction:None,work:None}).unwrap();
         let path=inbox(&scope,"stu").unwrap();let through=std::fs::metadata(&path).unwrap().len();
         // Nightly 61 consumed the handoff at native end_turn and removed its active receipt.
         for legacy in [json!(through),json!({"through":through}),json!({"through":through,"active":{},"accepted":{}})] {

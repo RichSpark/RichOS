@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""The existing review handler on isolated framed connections, no real reviewer."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+
+import codex_channels as c
+import review_watch as rw
+
+
+class Reviews(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="codex-review-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.environment = mock.patch.dict(os.environ, {
+            "CODEX_COORDINATION_ROOT": str(self.root / "coord"),
+            "REVIEW_WATCH_STATE_DIR": str(self.root / "review"),
+        })
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.repo = self.root / "work"
+        self.repo.mkdir()
+        self.git("init", "-b", "main")
+        self.git("config", "user.name", "Fixture")
+        self.git("config", "user.email", "fixture@example.invalid")
+        (self.repo / "file").write_text("base")
+        self.git("add", "file")
+        self.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "base")
+        self.base = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-b", "codex/fixture")
+        (self.repo / "file").write_text("implementation")
+        self.git("add", "file")
+        self.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "change")
+        self.tip = self.git("rev-parse", "HEAD")
+        self.state = self.root / "app" / "engine-state"
+        c.mkdir(self.state)
+        self.scope = dict(version=1, state_root=str(self.state), entity_id="company-a", thread_id="chat-a")
+        (self.state.parent / "entities.json").write_text(json.dumps(dict(version=2, entities=[
+            dict(id="company-a", roots=[str(self.repo)], connected_repositories=[str(self.repo)]),
+            dict(id="company-b", roots=[], connected_repositories=[])])))
+        self.path = Path(c.connect("Exact user words", "fixture transcript line 1", scope=self.scope)["locator"])
+        c.send(self.path, "ready", "## READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip + "\nClaims: implemented requested change")
+        self.world = rw.AppWorld(str(Path(__file__).resolve().parents[2]), str(self.state), claude="/fixture/claude", accounts="/fixture/accounts")
+        # Real git and shared parser; no integration subprocess or global registry.
+        self.world.integration_tip = lambda chain, repo: (self.base, "")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.repo), *args], stderr=subprocess.DEVNULL, text=True).strip()
+
+    def test_app_discovers_ready_once_with_exact_context_scope_and_existing_dedup(self):
+        state = {}
+        items, problems = self.world.codex_items(100, state)
+        self.assertFalse(problems)
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertEqual((item.repo, item.tip, item.base), (str(self.repo), self.tip, self.base))
+        self.assertEqual(item.channel, dict(locator=str(self.path), message_id="ready"))
+        self.assertIn("Exact user words", Path(item.words[0]).read_text())
+        self.assertNotIn("Claims:", Path(item.words[0]).read_text())
+        self.assertIn("Claims:", Path(item.claims[0]).read_text())
+        args = item.args("handover")
+        self.assertEqual(args[args.index("--author") + 1], "codex")
+        self.assertIn("/fixture/claude", args)
+        self.assertEqual(len(list(rw.due(items, rw.Book([], {}, []), 100, {}, 3600))), 1)
+        running = {item.key: dict(trigger="handover", started_at=100)}
+        self.assertEqual(list(rw.due(items, rw.Book([], running, []), 101, {}, 3600)), [])
+        # Lose the review consumer's advisory positions. Persistent handover keys
+        # and the existing Book remain the scheduling fence.
+        state["channels"] = {}
+        self.world.codex_items(101, state)
+        self.assertEqual(len(state["channel_pending"]), 1)
+        row = dict(id="review-1", repo=item.repo, work=item.work, tip=item.tip, trigger="handover", verdict="passed", reviewer="claude", reviewer_model="fixture")
+        rw.publish_channel_results([row], state["channel_pending"])
+        rw.publish_channel_results([row], state["channel_pending"])
+        result = [r for r in c.read(self.path)["records"] if r.get("kind") == "review_result"]
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["reply_to"], "ready")
+        incoming = [r for r in c.read(self.path, "to-rich")["records"] if r.get("kind") == "review_result"]
+        self.assertEqual(incoming, result)
+        self.assertEqual(list(rw.due(items, rw.Book([row], {}, []), 102, {}, 3600)), [])
+
+    def test_world_uses_same_handler_but_managed_terminal_does_not_compete(self):
+        world = rw.World.__new__(rw.World)
+        world.repos = ["work"]
+        world._merge_bases = {}
+        world.repo_named = lambda name: str(self.repo) if name == "work" else ""
+        world.integration_tip = lambda chain, repo: (self.base, "")
+        state = {}
+        items, problems = world.channel_items(100, state, [c.connection(self.path)])
+        self.assertEqual(len(items), 1)
+        self.assertFalse(problems)
+        old = c.root() / "rich-codex"
+        c.mkdir(old)
+        (old / "to-rich.md").write_text("preserved legacy")
+        c.designate(self.scope, [old])
+        with mock.patch.dict(os.environ, {"REVIEW_WATCH_TO_RICH": str(old / "to-rich.md")}):
+            self.assertEqual(world.codex_items(100, {}), ([], []))
+
+    def test_wrong_company_repository_and_split_result_write_remain_with_origin(self):
+        other = Path(c.connect("Other task", "other transcript", scope=dict(self.scope, entity_id="company-b", thread_id="chat-b"))["locator"])
+        c.send(other, "wrong", "## READY TO LAND: codex/fixture\nRepository: work\nCommit: " + self.tip)
+        items, _ = self.world.codex_items(100, {})
+        self.assertEqual(len(items), 1)
+        self.assertTrue(any("no uniquely connected repository" in r["text"] for r in c.read(other)["records"]))
+        original = c.append
+        def fail_incoming(path, record):
+            if path.name == "to-rich.jsonl":
+                raise OSError("fixture failed after outgoing sync")
+            return original(path, record)
+        with mock.patch.object(c, "append", side_effect=fail_incoming):
+            with self.assertRaises(OSError):
+                rw.channel_reply(self.path, "ready", "split", "Exact verdict")
+        rw.channel_reply(self.path, "ready", "split", "Exact verdict")
+        self.assertEqual(sum(r["text"] == "Exact verdict" for r in c.read(self.path)["records"]), 1)
+        self.assertEqual(sum(r["text"] == "Exact verdict" for r in c.read(self.path, "to-rich")["records"]), 1)
+        self.assertFalse(any(r["text"] == "Exact verdict" for r in c.read(other)["records"]))
+
+
+if __name__ == "__main__":
+    unittest.main()

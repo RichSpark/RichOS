@@ -428,7 +428,7 @@ mod tests {
             assignment::note_start(&state,"depot","thread-one",&receipt.id,"stu-before-restart",vec![]).unwrap();
             assignment::advance(&state,"depot","thread-one",&receipt.id,AssignmentState::Running,"Stu owns this work").unwrap();
             let scope=crate::status_tools::StatusToolScope{version:1,state_root:state.clone(),entity_id:"depot".into(),thread_id:"thread-one".into()};
-            let message=crate::session_tools::Message{handoff:true,from:"rich".into(),text:"Original handoff".into(),
+            let message=crate::session_tools::Message{bridge:None,handoff:true,from:"rich".into(),text:"Original handoff".into(),
                 instruction:Some(crate::ecs::UserInstruction{ledger_ref:"ledger:thread-one:turn-7".into(),sha256:digest(),text:None}),
                 work:Some(crate::session_tools::WorkReference{assignment_id:receipt.id.clone(),obligation_id:"canonical-owner".into()})};
             let inbox=crate::session_tools::inbox(&scope,"stu").unwrap();
