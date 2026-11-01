@@ -564,6 +564,72 @@ pub(crate) fn undelivered(scope:&StatusToolScope,role:&str)->Result<bool,String>
     }
 }
 
+/// **Open handoffs a session of Stu's already holds in its own record** (CEO, 2026-11-01, richos-hq
+/// `docs/audits/2026-11-01-app-start` finding A: at every start of the app Stu was handed the same
+/// six handoffs from 10-28/29 again, because what a session was given was remembered only until
+/// the app quit, `work_host::Inner::delivered`). Each one is returned with the session its cursor
+/// entry names (`begin_attempt`, the session it was given to) when that session's native record
+/// ([`native_path`], the file Claude Code resumes) contains the same message: Claude Code wrote
+/// it there because the session received it. A record that cannot be read proves nothing, so
+/// its handoffs are not returned and are given once, as before. A found one is marked on its
+/// entry (`received`), so a later start reads the mark rather than the whole record again; the
+/// next `begin_attempt` (a delivery to a session) replaces the entry and the mark with it.
+pub(crate) fn received_handoffs(scope:&StatusToolScope)->Result<Vec<(u64,String)>,String> {
+    let path=inbox(scope,"stu")?;let cursor=cursor_state(&path)?;
+    let mut received=Vec::new();
+    let mut wanted:std::collections::HashMap<String,Vec<(u64,Message)>>=Default::default();
+    for (input,entry) in cursor["active"].as_object().unwrap() {
+        let Some(offset)=input.strip_prefix("peer:").and_then(|offset|offset.parse::<u64>().ok()) else {continue};
+        let Some(session)=entry["session_id"].as_str().filter(|session|component(session)) else {continue};
+        if entry["received"]==true {received.push((offset,session.to_string()));continue}
+        let message=input_at(&path,offset)?;
+        if message.handoff {wanted.entry(session.to_string()).or_default().push((offset,message));}
+    }
+    for (session,messages) in wanted {
+        let Ok(record)=native_path(scope,&session) else {continue};
+        let found=match record_holds(&record,&messages) {
+            Ok(found)=>found,
+            Err(error)=>{eprintln!("[richos] Stu's record {} could not be read: {error}",record.display());continue}
+        };
+        for offset in found {
+            let input=format!("peer:{offset}");
+            update_cursor(scope,"stu",|cursor| {
+                if cursor["active"][&input]["session_id"]==session.as_str() {cursor["active"][&input]["received"]=json!(true);}
+                Ok(())
+            })?;
+            received.push((offset,session.clone()));
+        }
+    }
+    Ok(received)
+}
+
+/// The inbox offsets of `messages` whose message is a user turn in the native record at `record`.
+/// The app sends each one as the text of a user message (`work_host`, `run_message`), with
+/// `previous_delivery_attempt` and `work` added; neither is part of what was asked, so the
+/// sender, the text, the handoff mark and the user's instruction are what is compared.
+fn record_holds(record:&Path,messages:&[(u64,Message)])->std::io::Result<std::collections::HashSet<u64>> {
+    let same=|a:&Message,b:&Message| a.handoff==b.handoff && a.from==b.from && a.text==b.text
+        && a.instruction.as_ref().map(|i|(&i.ledger_ref,&i.sha256))==b.instruction.as_ref().map(|i|(&i.ledger_ref,&i.sha256));
+    let mut found=std::collections::HashSet::new();
+    for line in BufReader::new(std::fs::File::open(record)?).split(b'\n') {
+        let line=line?;
+        if !String::from_utf8_lossy(&line).contains("\"type\":\"user\"") {continue}
+        let Ok(row)=serde_json::from_slice::<Value>(&line) else {continue};
+        if row["type"]!="user" {continue}
+        let texts:Vec<&str>=match &row["message"]["content"] {
+            Value::String(text)=>vec![text.as_str()],
+            Value::Array(parts)=>parts.iter().filter(|part|part["type"]=="text").filter_map(|part|part["text"].as_str()).collect(),
+            _=>continue,
+        };
+        for text in texts {
+            let Ok(given)=serde_json::from_str::<Message>(text) else {continue};
+            found.extend(messages.iter().filter(|(_,message)|same(message,&given)).map(|(offset,_)|*offset));
+        }
+        if found.len()==messages.len() {break}
+    }
+    Ok(found)
+}
+
 /// **Stu's inboxes as far as the update gate poll has read them** (Tom's review of P0, follow-up
 /// 2: every five-second poll re-scanned the inbox from its start for each open record, 232 KB
 /// measured, and nothing prunes it). An inbox only grows, record by record (`append_record`;
