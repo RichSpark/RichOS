@@ -108,9 +108,21 @@ class CodexWatchWalk(stu.StuReminderWalk):
     def coordinator(self):
         return self.run_python('import json,os,sys;p=sys.argv[1];print(json.dumps(json.load(open(p)) if os.path.exists(p) else {}))', self.coordination + '/coordinator.json')
 
+    def chat_menu(self, thread):
+        entity = next(r['entity_id'] for r in self.threads() if r['thread_id'] == thread)
+        company = next(e['display_name'] for e in self.registry()['entities'] if e['id'] == entity)
+        def owning_rows():
+            rows = self.ax('find', '--title', self.title(thread), '--role', 'AXButton', '--contains')
+            return [r for r in rows if 'in ' + company in (r.get('title', '') + ' ' + r.get('desc', ''))
+                    and r.get('w', 0) > 0 and r.get('h', 0) > 0]
+        row = self.wait_fact('owning chat row including company label', owning_rows, bool)[0]
+        point = '%s,%s' % (row['x'] + row['w'] / 2, row['y'] + row['h'] / 2)
+        # Same-title chats have indistinguishable Actions labels. Right-click
+        # the company's actual row so its existing thread-bound menu is used.
+        stu.command_walk.command([HERE / 'pointer-drag.sh', self.vm, point, point, '--right'], 90)
+
     def rename(self, thread, title):
-        self.wait_for('Actions for ' + self.title(thread), seconds=120)
-        self.press('Actions for ' + self.title(thread))
+        self.chat_menu(thread)
         self.press('Rename…', 'AXMenuItem')
         self.type_into(title, '--role', 'AXTextField', '--title', 'Chat name')
         self.keys('tell application "System Events" to key code 36')
@@ -184,12 +196,10 @@ class CodexWatchWalk(stu.StuReminderWalk):
         return result
 
     def rename_restart(self):
-        # Rename both through the normal UI. Once the first has changed, the
-        # remaining old title uniquely names the second Actions button.
+        # Rename both through their own company-labelled rows in the normal UI.
         self.rename(self.facts['owners'][0], 'Transport renamed Acme')
         self.rename(self.facts['beta_thread'], 'Transport renamed Beta')
-        acme_title = self.title(self.facts['owners'][0])
-        self.press('Actions for ' + acme_title)
+        self.chat_menu(self.facts['owners'][0])
         self.press('Archive', 'AXMenuItem')
         launch = relaunch(self.vm)
         self.after_relaunch()
