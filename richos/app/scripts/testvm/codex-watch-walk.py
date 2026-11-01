@@ -124,8 +124,8 @@ class CodexWatchWalk(stu.StuReminderWalk):
         if self.present('Expand ' + company):
             self.press('Expand ' + company, contains=False)
         label = 'Actions for ' + self.title(thread)
-        self.wait_for(label, seconds=120)
-        self.ax('click', '--title', label, '--role', 'AXButton', '--in', 'sidebar', '--contains', '--first')
+        self.wait_for(label, role='AXPopUpButton', seconds=120)
+        self.ax('click', '--title', label, '--role', 'AXPopUpButton', '--in', 'sidebar', '--contains', '--first')
 
     def rename(self, thread, title):
         self.chat_menu(thread)
