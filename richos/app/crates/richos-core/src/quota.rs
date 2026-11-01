@@ -73,23 +73,15 @@ pub struct Reading {
     /// §4): it replaces 99 as the weekly point at normal speed. `None` everywhere but the one
     /// account the variable names.
     pub weekly_cutoff: Option<f64>,
-    /// **This account's last measured handoff** (`Service::track_tokens`, from the gate's
-    /// markers): the longest time from the order to a helper's handoff commit, and the weekly
-    /// points the account spent in it. `None` until one is measured: then
-    /// [`HANDOFF_DEFAULT_MS`] and no points.
-    pub handoff: Option<(u64, f64)>,
 }
 
-/// **H until a handoff is measured: 5 minutes** (the CEO, 2026-10-07: *"I would hope that when
-/// the teammates get their handoff message, they'd get to a full finish within a few minutes.
-/// Hopefully no more than 3-5 minutes or so."*). The 10-minute guess it replaces was never
-/// measured. Once an account has a measured handoff, that is its H (`Reading::handoff`).
+/// **H, the work the weekly point leaves room for after it: 5 minutes at the measured speed.**
+/// Since the CEO's §153 (2026-10-31) nobody is told to stop or hand off at a weekly switch:
+/// what runs on the account being left carries on and Stu moves once nothing of his runs
+/// (`quota::gate` `decide_call`), so the room is for that work's next Claude calls. The name is
+/// kept from the weekly handoff it was first measured for, so the gate's mirror in the engine
+/// (`quota_watch.py`, rule for rule) keeps the same constant.
 pub const HANDOFF_DEFAULT_MS: u64 = 5 * 60_000;
-
-/// The orders of one handoff reach each helper at its next tool call, so within minutes of
-/// each other; an account's next leaving is days later. The markers ordered within this span
-/// of an account's newest one are its last handoff.
-pub const HANDOFF_BATCH_MS: u64 = 3_600_000;
 
 /// `RICHOS_TEST_WEEKLY_CUTOFF=<account id>:<percent>` (weekly-switch plan §4): the weekly
 /// point of that one account is `<percent>` instead of 99. No UI; read once at launch. Only
@@ -149,23 +141,19 @@ impl Reading {
     /// percentage for the switch needs to be adjusted dynamically so that this doesn't happen.
     /// My "1-2% sooner" was just guesswork."*, "this" being 100% before the switch):
     ///
-    /// `point = 99 - max(0, ceil(s x I + max(s x H, P)) - 1)`
-    ///
     /// with `s` the window's measured speed (the larger of the percentage speed and the token
-    /// speed), `I` the time to the next check (`interval`), `H` the time a handoff takes and `P`
-    /// the points the last handoff on this account spent (`handoff`: measured from the order to
-    /// the handoff commit, 5 minutes and no points until one is measured). If the wait for the
-    /// next check and the handoff would use 1 point or less, it is 99; up to 2 points, 98; up to
-    /// 5, 95; and so on, as early as the speed requires, with no floor but 0. So the point plus
-    /// what the wait and the handoff spend is at or under 100 at any speed. Every weekly
-    /// decision uses it, so the account switch and the order to every teammate on the account
-    /// fire at the same moment. 99 is the test cut-off instead, on the one account it names
+    /// speed), `I` the time to the next check (`interval`) and `H` the work left room for after
+    /// the switch ([`HANDOFF_DEFAULT_MS`]): `point = 99 - max(0, ceil(s x (I + H)) - 1)`. If the
+    /// wait for the next check and that work would use 1 point or less, it is 99; up to 2
+    /// points, 98; up to 5, 95; and so on, as early as the speed requires, with no floor but 0.
+    /// So the point plus what the wait and that work spend is at or under 100 at any speed.
+    /// Every weekly decision uses it. 99 is the test cut-off instead, on the one account it names
     /// (`weekly_cutoff`).
     pub fn weekly_point(&self, window: &Window) -> f64 {
         let base = self.weekly_cutoff.unwrap_or(resets::WEEKLY_THRESHOLD);
         let speed = self.speeds.get(&window.id).copied().unwrap_or(0.);
-        let (handoff_ms, handoff_points) = self.handoff.unwrap_or((HANDOFF_DEFAULT_MS, 0.));
-        let points = speed * self.interval() as f64 + (speed * handoff_ms as f64).max(handoff_points);        let earlier = (points.ceil() - 1.).max(0.);
+        let points = speed * (self.interval() + HANDOFF_DEFAULT_MS) as f64;
+        let earlier = (points.ceil() - 1.).max(0.);
         (base - earlier).clamp(0., 100.)
     }
     /// Has this weekly window reached its handoff point?
@@ -406,9 +394,10 @@ pub struct View {
     #[serde(default)]
     pub first_label: Option<String>,
     /// **Every account being left for its week** (weekly-switch plan §1): its weekly window
-    /// has reached its handoff point (`Reading::weekly_point`). Published with one account
-    /// too, unless that one account has automatic pause off. The gate orders every teammate
-    /// running on one of these accounts to commit, hand off and end (`gate.rs`).
+    /// has reached its point (`Reading::weekly_point`). Published with one account too, unless
+    /// that one account has automatic pause off. With another account to move to, a helper still
+    /// running on one of these carries on, the weekly hold not judging its calls (the CEO's §153;
+    /// `gate.rs` `decide_call`); nobody is told to stop or hand off.
     #[serde(default)]
     pub leaving: Vec<String>,
     /// **The speed measured before the hold**, points per ms, by window: the last rise that
@@ -609,8 +598,6 @@ struct Snapshot {
     /// set at every token scan. Used only while the reading is older than the normal check
     /// (`reading_with`).
     since_reading: f64,
-    /// This account's last measured handoff (`Reading::handoff`), set at every token scan.
-    handoff: Option<(u64, f64)>,
     /// Null answers in a row before this account's first reading (`FIRST_READING_RETRY_MS`).
     empties: u32,
     /// **What the last answer ABOUT the sign-in said** ([`View::signed_in`]), kept apart from
@@ -760,7 +747,7 @@ impl Snapshot {
             }
         }
         Reading { windows, speeds,
-            expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(), weekly_cutoff, handoff: self.handoff }
+            expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(), weekly_cutoff }
     }
     fn accept(&mut self, mut windows: Vec<Window>, observed: u64) {
         self.measure(&windows, observed);
@@ -774,10 +761,10 @@ impl Snapshot {
         let bases = std::mem::take(&mut self.bases);
         let rises = std::mem::take(&mut self.rises);
         let rise_log = std::mem::take(&mut self.rise_log);
-        let (rise_until, token_speed, handoff) = (self.rise_until, self.token_speed, self.handoff);
+        let (rise_until, token_speed) = (self.rise_until, self.token_speed);
         // Only a signed-in account reports a reading.
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
-            since_reading: 0., handoff, empties: 0, signed_in: Some(true), rise_log };
+            since_reading: 0., empties: 0, signed_in: Some(true), rise_log };
     }
     /// **A check that came back with no figures.** Every kind records when, so the pause stops
     /// waiting on it (`Admission::NoReading`). A null answer (`ReadError::NoReading`) is not a
@@ -871,7 +858,7 @@ impl Snapshot {
         let interval = reading.interval();
         // The two check points, recalculated from the measured speed (answer 10), shown in
         // the panel; the normal 93% and 99% again once the speed is back down (answer 11).
-        // The weekly one is the handoff point (weekly-switch plan §1).
+        // The weekly one is the switch point (weekly-switch plan §1).
         let act_at: BTreeMap<String, f64> = self.windows.iter().filter_map(|w| match w.id.as_str() {
             "five_hour" => Some((w.id.clone(), reading.act_point(w, f64::from(policy.pause_percent)))),
             "seven_day" => Some((w.id.clone(), reading.weekly_point(w))),
@@ -1258,7 +1245,7 @@ impl Service {
         let readings = self.readings();
         // Every account being left for its week (plan §1), with one account too, unless that
         // one account has automatic pause off: then nothing acts before 100%, as the fast-use
-        // alert says, so no handoff order goes out. With two or more the weekly switch acts
+        // alert says. With two or more the weekly switch acts
         // whatever the pause setting says.
         view.leaving = if self.accounts.count() <= 1 && !policy.enabled { Vec::new() } else {
             self.accounts.list().into_iter()
@@ -1379,6 +1366,17 @@ impl Service {
         self.accounts.in_use().id
     }
 
+    /// [`Self::before_turn`] with `windows` read on `account` at `at`, for an added account too:
+    /// its record is made first, as `refresh_accounts` makes it (no probe runs). For tests
+    /// outside this module, which cannot reach the records.
+    #[cfg(test)]
+    pub(crate) fn observe_for_test(&self, account: &str, windows: Vec<Window>, at: u64) -> String {
+        if let Some(folder) = self.accounts.list().into_iter().find(|a| a.id == account).and_then(|a| a.folder) {
+            self.extra.lock().unwrap().entry(account.to_string()).or_insert_with(|| self.reader(folder));
+        }
+        self.before_turn(account, Some((windows, at)))
+    }
+
     /// **Token use, before every decision** (`tokens`): take what the app's own leases streamed
     /// on each account (`tokens::Sink`) and what its transcripts gained (Claude Code used
     /// outside the app), give its freshest weekly reading to its track (an episode may close:
@@ -1391,55 +1389,26 @@ impl Service {
         // The leases' requests into the spend ledger too: nothing else holds them (§118).
         self.spend.add(self.sink.take_for_spend(), now);
         self.spend.save(now, false);
-        // The gate's handoff markers: when each helper was ordered and when it committed.
-        let markers = gate::handoffs(&self.cwd.join("engine-state"));
         let (mut learned, mut moved) = (false, false);
         for account in self.accounts.list() {
-            let mine: Vec<&(PathBuf, gate::Handoff)> = markers.iter().filter(|(_, m)| m.account == account.id).collect();
             let one = account.id == crate::claude_accounts::ACCOUNT_ONE;
             let folder = if one { self.transcripts_one.clone() } else { account.folder.clone() };
             let week = |s: &Snapshot| s.windows.iter().find(|w| w.id == "seven_day").cloned().zip(s.checked_at);
             let reading = if one { week(&self.snapshot.lock().unwrap()) }
                 else { self.extra.lock().unwrap().get(&account.id).and_then(|(_, s)| week(s)) };
-            let (speed, since, counted) = {
+            let (speed, since) = {
                 let mut tracks = self.tokens.lock().unwrap();
                 let track = tracks.entry(account.id.clone()).or_default();
                 if let Some(folder) = &folder { track.scan(folder, now); }
                 for (_, found) in streamed.iter().filter(|(id, _)| *id == account.id) { track.add_use(found); }
                 let since = reading.as_ref().map_or(0., |(_, at)| track.points_since(*at, now));
-                // A handoff under way keeps its tokens until its commit; a committed one has its
-                // points counted once, from the order to the commit.
-                track.hold_from = mine.iter().filter(|(_, m)| m.committed_at.is_none() && m.at + HANDOFF_BATCH_MS > now)
-                    .map(|(_, m)| m.at).min();
-                let counted: Vec<(PathBuf, f64)> = mine.iter()
-                    .filter_map(|(path, m)| match (m.committed_at, m.points) {
-                        (Some(committed), None) => Some((path.clone(), track.points_since(m.at, committed))),
-                        _ => None,
-                    }).collect();
                 if let Some((window, at)) = reading { learned |= track.reading(&window, at, now); }
-                (track.speed(now), since, counted)
+                (track.speed(now), since)
             };
-            for (path, points) in &counted {
-                if let Err(error) = gate::record_points(path, *points) {
-                    eprintln!("[richos] quota: a handoff's points could not be kept ({error})");
-                }
-            }
-            // **What a handoff really takes on this account** (the CEO, 2026-10-07): its last
-            // handoff's longest order-to-commit time and the points it spent.
-            let measured: Vec<(u64, u64, f64)> = mine.iter().filter_map(|(path, m)| {
-                let committed = m.committed_at?;
-                let points = m.points.or_else(|| counted.iter().find(|(p, _)| p == path).map(|(_, p)| *p)).unwrap_or(0.);
-                Some((m.at, committed.saturating_sub(m.at), points))
-            }).collect();
-            let handoff = measured.iter().map(|m| m.0).max().map(|newest| {
-                let last = measured.iter().filter(|m| m.0 + HANDOFF_BATCH_MS >= newest);
-                (last.clone().map(|m| m.1).max().unwrap_or(HANDOFF_DEFAULT_MS), last.map(|m| m.2).fold(0., f64::max))
-            });
             let mut set = |s: &mut Snapshot| {
-                moved |= s.token_speed != Some(speed) || s.since_reading != since || s.handoff != handoff;
+                moved |= s.token_speed != Some(speed) || s.since_reading != since;
                 s.token_speed = Some(speed);
                 s.since_reading = since;
-                s.handoff = handoff;
             };
             if one { set(&mut self.snapshot.lock().unwrap()); }
             else if let Some((_, snapshot)) = self.extra.lock().unwrap().get_mut(&account.id) { set(snapshot); }
@@ -2184,7 +2153,7 @@ pub(crate) mod tests {
     ///
     /// On main the late tokens are 83,446 / 3,953 = 21.1 points in the live minute: fast, so I =
     /// 1 minute and H the default 5, and the point is 99 - (ceil(21.1 x 6 = 126.7) - 1) = -27,
-    /// clamped to 0: Work at 3% is `leaving` (the gate's handoff order) and held. With the late
+    /// clamped to 0: Work at 3% is `leaving` (then the gate's handoff order) and held. With the late
     /// tokens counted at most `tokens::LATE_POINTS_MAX` (1 point) the speed is (a) 1 point a
     /// minute and (b) 1,001 / 3,953 + 1 = 1.25: the point is (a) 99 - (ceil(1 x 6) - 1) = 94,
     /// or 93 when f64 puts 1/60,000 x 60,000 a hair over 1; (b) 99 - (ceil(1.25 x 6 = 7.5) - 1) = 92.
@@ -2443,7 +2412,7 @@ pub(crate) mod tests {
     /// 76,707 input and 6,739 output, all of it result remainder). Before the fix the fit gave
     /// Haiku 3,953 tokens a point, so the remainder was 21.1 points in the live minute; at the
     /// fast interval the point was 99 - (ceil(21.1 x (1 + 5)) - 1) = 99 - 126, clamped to 0, and
-    /// Work at 3% was `leaving` (the gate's handoff order, gate.rs `handoff`) and held (the
+    /// Work at 3% was `leaving` (then the gate's handoff order) and held (the
     /// gate's `admission`) until the minute passed. Home at 99% is leaving all along. Again with
     /// 1,500 Haiku tokens in the second episode (the second review of d73436c94: a fix that
     /// still let Haiku be fitted alone read 59.5 points a minute there).
@@ -3747,15 +3716,8 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         outside_home(&view, home_week_reset as f64, "", &[], &mut found);
         assert!(found.is_empty(), "Home's weekly reset outside Home's own row: {found:?} in {view}");
 
-        // 2. The gate: Work admits work; a helper on Work gets no order, one still on Home does (R5),
-        // and its marker states the account and the figure it acted on (C7).
+        // 2. The gate: Work admits work.
         assert_eq!(gate::admission(&state, crate::util::now_millis()), Admission::Ready);
-        let helper = |agent: &str| json!({"agent_id":agent,"session_id":"s","tool_name":"Bash"});
-        assert!(gate::handoff(&helper("helper-work"), &state, &scope, "2").is_none(), "a helper on Work is ordered off Work");
-        assert!(matches!(gate::handoff(&helper("helper-home"), &state, &scope, "1"), Some(Err(_))), "a helper still on Home is not ordered off it");
-        let marker: gate::Handoff = gate::read_json(&state.join(gate::HANDOFFS_DIR).join("helper-home.json")).unwrap();
-        assert_eq!((marker.account.as_str(), marker.label.as_deref(), marker.weekly_used), ("1", Some("Home"), Some(99.)), "{marker:?}");
-        assert!(marker.weekly_point.is_some_and(|p| p <= 99.), "{marker:?}");
 
         // 3. The quota tool: Work, named, with Work's figures and the gate's own admission, nothing of Home's.
         let reply = tool();

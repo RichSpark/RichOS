@@ -24,19 +24,17 @@
 # of that file on the first user turn (SubagentStart and PostToolUse[Agent] "async_launched",
 # the rows app_workers.rs reads). /Users/admin/fill-first/reply.txt, when present, is the answer. # machine-path-exempt: isolated guest fixture documentation; no customer default
 #
-# HELPER STEPS (weekly-switch handoff plan 2026-10-07, slice 6). While the agents file lists
-# helpers, each user turn (and each second of a held turn) is one step of every helper that has
-# not ended: the fake runs the gate command from the lease's <plugin-dir>/hooks/hooks.json
-# (PreToolUse), with a helper payload (agent_id walk-agent-N) on stdin and the lease's own
-# environment, as Claude Code would. When the gate refuses with the order (exit 2, "Stop the task
-# now" on stderr), the fake writes that helper's SubagentStop row; an admitted step writes
-# nothing. Every step is a line in calls.log ("gate <agent> exit <n>"). Without helpers, or
+# HELPER STEPS. While the agents file lists helpers, each user turn (and each second of a held
+# turn) is one step of every helper that has not ended: the fake runs the gate command from the
+# lease's <plugin-dir>/hooks/hooks.json (PreToolUse), with a helper payload (agent_id
+# walk-agent-N) on stdin and the lease's own environment, as Claude Code would. A held step waits
+# as long as the gate holds it; a refused step ends nothing. Every step is a line in calls.log
+# ("gate <agent> exit <n>", with the gate's first words when it said any). Without helpers, or
 # without a hooks.json, no step runs and nothing here changes.
 #
-# THE BACK END'S JOB (round 1 of the weekly-switch handoff test, 2026-10-07). The handoff
-# continuation lives in the work host (work_host.rs continuation_after_a_helper_ended), which
-# runs only for a job the front desk wrote down; helpers on the front desk's own lease never
-# reach it. Two files make a job with a helper on the back end, with no model:
+# THE BACK END'S JOB. A helper of Stu's runs only for a job the front desk wrote down; helpers
+# on the front desk's own lease are not his. Two files make a job with a helper on the back end,
+# with no model:
 #   register      while it exists, the front desk's user turn whose text carries the file's
 #                 text (a lease whose --mcp-config has richos_assignments; never the app's own
 #                 priming turn) calls that server's `record` tool with the file's text as the
@@ -44,7 +42,10 @@
 #                 file is taken (renamed) first, so the job is written down once. calls.log:
 #                 "register ok <text>" or "register error <text>". A file of several lines
 #                 writes one job per line, in order, in that one turn (the turn's text carries
-#                 the first line); a one-line file is exactly the single job above.
+#                 the first line); a one-line file is exactly the single job above. Each job
+#                 written down is then handed to Stu with the `richos_status` server's
+#                 `delegate` tool, as Rich hands work over (a job only written down waits:
+#                 "Preparation has not started."). calls.log: "delegate ok|error <text>".
 #
 # NOBODY SIGNED IN (the held queue, richos-hq plan 2026-10-09 §4 row 5). While
 # /Users/admin/fill-first/signed-out exists, `auth status --json` answers loggedIn false with exit # machine-path-exempt: isolated guest fixture documentation; no customer default
@@ -56,14 +57,40 @@
 # in calls.log: "work-turn refused <text>" or "work-turn answered <text>", and each front-desk user
 # turn "desk-turn <text>" (first 400 chars), so a walk can tell which lease took which turn.
 #   work-agents   one helper per line, launched on the FIRST back-end lease's first user turn (a
-#                 lease whose --mcp-config has richos_work), as work-agent-N; once per walk
+#                 lease whose --mcp-config has richos_work and not richos_assignments), as
+#                 work-agent-N; once per walk
 #                 (work-agents-started). A background helper keeps running after the back end's
 #                 turn ends, so after that turn a stepper child steps every open work-agent
 #                 every 2 s (the same gate step as above) until each has ended, for at most 10
 #                 minutes, and ends with this process.
+#   work-agents-finish  while it exists, a work-agent's next step the app's QUOTA gate admits is
+#                 its last: it finishes on its own, its SubagentStop row is written and calls.log
+#                 says "gate work-agent-N exit <n> finished". Admitted is exit 0, or a refusal
+#                 by the engine's hook behind the gate (`--claude-quota-gate` runs it only once
+#                 it has admitted the call): the stand-in command is not a registered worker's,
+#                 and the engine's own guards refuse it ("Lock-out: REFUSED (no registration)").
+#                 A step the quota gate holds never returns, and one it refuses says so first
+#                 ("RichOS desktop quota: ..." or "RichOS desktop: This app work has ended"):
+#                 neither finishes it (weekly switch, the CEO's §153: a helper on the account
+#                 being left carries on to its own end).
+#
+# THE TASK FRAMES. The app counts Stu's running helpers from his stream (agent_tasks.rs TaskBook),
+# not from the journal: Claude Code prints the Agent tool call, its async_launched answer and a
+# system task_started (task_type local_agent) when a background agent starts, and a system
+# task_notification (status completed) when it ends, followed between turns by the automatic
+# turn it runs for it. So does this fake for each work-agent; without them the app saw nothing of
+# Stu's running and moved him under a running helper (accounts-walk 5d).
+#
+# THE INPUT HOOK. Claude Code calls the app's UserPromptSubmit hook (`richos-input-context`, a
+# control_request hook_callback carrying the input's exact text) when it takes an input in, and
+# the app writes that turn's tool scopes then, the register's among them (native.rs
+# prepare_work_turn, run at that hook). So does this fake, for every user turn, and it waits for
+# the app's control_response before the turn goes on; lines that arrive meanwhile are kept and
+# read after. Without it the register refused every job ("RichOS has not opened this
+# conversation for assignments.", accounts-walk 5d's first run).
 # Nothing here reaches a network.
 use strict; use warnings; use JSON::PP; use Fcntl qw(:flock O_CREAT O_EXCL O_WRONLY); use File::Path qw(make_path);
-use IPC::Open2 qw(open2); use POSIX qw(WNOHANG);
+use IPC::Open2 qw(open2); use POSIX qw(WNOHANG); use Cwd qw(getcwd);
 $| = 1;
 # The walk's folder in the guest; RICHOS_FILL_FIRST_DIR moves it for a check off the guest.
 my $dir = $ENV{RICHOS_FILL_FIRST_DIR} // ((getpwuid($<))[7] . '/fill-first');
@@ -107,7 +134,11 @@ if (@ARGV && $ARGV[0] eq 'auth') {
 }
 my $five_reset = time() + 3 * 3600; my $week_reset = time() + 4 * 86400;
 sub arg_after { my ($flag, $match) = @_; for my $i (0 .. $#ARGV - 1) { return $ARGV[$i + 1] if $ARGV[$i] eq $flag && (!$match || $ARGV[$i + 1] =~ $match); } return undef }
-my $session = arg_after('--session-id');
+# A resumed lease is the same session as the one it resumes. The app resumes with the path of the
+# session's native transcript (`--resume <...>/<session>.jsonl`, native.rs native_resume), on
+# another account too; a bare session id is taken as it is.
+my $session = arg_after('--session-id') // arg_after('--resume');
+if (defined $session) { $session =~ s{\A.*/}{}; $session =~ s{\.jsonl\z}{}; }
 my $profile = arg_after('--plugin-dir', qr{/engine-profiles/});
 my $evidence;
 if ($session && $profile && $session =~ /\A[A-Za-z0-9_-]{1,128}\z/) {
@@ -122,7 +153,22 @@ sub journal {  # append callback rows under the journal's lock, as app-evidence.
   print $out $json->encode({ schema => 1, callback => { session_id => $session, %$_ } }), "\n" for @_;
   close $out; close $lock;
 }
-journal({ hook_event_name => 'SessionStart' });
+# THE NATIVE TRANSCRIPT. Claude Code keeps each session's record at
+# <config folder>/projects/<project>/<session>.jsonl and names it in SessionStart's
+# transcript_path; the app finds it there (session_tools.rs native_path) and carries it to the next
+# account's folder before it resumes the session there (native.rs native_resume). Without it the
+# app could not move a back end at all ("The provider has not recorded this session's native
+# transcript path", accounts-walk 5d). So this fake keeps an empty one, created if missing.
+my $transcript;
+if ($evidence) {
+  # Account 1 without a folder named is $HOME/.claude, as Claude Code's default.
+  my $config = length $folder ? $folder : (($ENV{HOME} // (getpwuid($<))[7]) . '/.claude');
+  my $project = "$config/projects/-fill-first";
+  make_path($project);
+  $transcript = "$project/$session.jsonl";
+  if (open(my $t, '>>', $transcript)) { close $t; }
+}
+journal({ hook_event_name => 'SessionStart', ($transcript ? (transcript_path => $transcript) : ()) });
 my %ended;
 sub gate_command {  # the PreToolUse command of the lease's hooks.json, or undef
   return undef unless $profile && open(my $fh, '<', "$profile/hooks/hooks.json");
@@ -130,25 +176,40 @@ sub gate_command {  # the PreToolUse command of the lease's hooks.json, or undef
   my $m = eval { $json->decode($text) } or return undef;
   return $m->{hooks}{PreToolUse}[0]{hooks}[0]{command};
 }
-sub step_one {  # one gate step of one helper; true when the gate ordered it to stop and it ended
+my $steps = 0;
+my $between_turns = 0;  # set in the background stepper: its frames arrive between the back end's turns
+sub step_one {  # one gate step of one helper; true when that step was its last (it finished)
   my ($command, $id, $type) = @_;
+  # A tool_use_id, a prompt_id and the cwd, as every Claude Code tool call's hook payload has: the
+  # engine's evidence hook refuses a call without them ("Tool callback has no tool identity",
+  # "Callback has no prompt identity").
   my $payload = $json->encode({ hook_event_name => 'PreToolUse', session_id => $session, agent_id => $id,
-    agent_type => $type, tool_name => 'Bash', tool_input => { command => 'true' } });
+    agent_type => $type, tool_name => 'Bash', tool_input => { command => 'true' },
+    tool_use_id => 'toolu_fake_' . $id . '_' . (++$steps), prompt_id => "fake-prompt-$session", cwd => getcwd() });
   my $in = "$dir/gate-in-$$-$id.json"; my $err = "$dir/gate-err-$$-$id.txt";
   open(my $w, '>', $in) or return 0; print $w $payload; close $w;
   system("($command) < '$in' > /dev/null 2> '$err'");
   my $code = $? >> 8;
   my $said = ''; if (open(my $e, '<', $err)) { local $/; $said = <$e> // ''; close $e; }
   unlink $in, $err;
-  # The order is named as such; any other refusal carries the gate's first words, because an
-  # exit 2 alone cannot tell the order from the hook refusing for another reason (walk
-  # walk-1db6a7b8afee: every step exited 2, from before the cut-off on).
-  my $ordered = $code == 2 && $said =~ /Stop the task now/;
+  # A refusal carries the gate's first words: an exit 2 alone does not say why.
   my ($first) = split /\n/, $said; $first //= '';
+  my $quota_refused = $code != 0 && $first =~ /\ARichOS desktop(?: quota)?: /;
+  my $finished = !$quota_refused && $id =~ /\Awork-agent-\d+\z/ && -e "$dir/work-agents-finish";
   if (open(my $l, '>>', "$dir/calls.log")) { print $l join(' ', time(), ($folder || 'account-1'), 'gate', $id, 'exit', $code,
-    $ordered ? 'order' : length $first ? ('said:', substr($first, 0, 200)) : ()), "\n"; close $l; }
-  return 0 unless $ordered;
+    $finished ? 'finished' : (), length $first ? ('said:', substr($first, 0, 200)) : ()), "\n"; close $l; }
+  return 0 unless $finished;
   journal({ hook_event_name => 'SubagentStop', agent_id => $id, agent_type => $type });
+  # Its end on the lease's stream (THE TASK FRAMES): task_notification, and between the back
+  # end's turns the automatic turn Claude Code runs for it, which ends with a result.
+  if ($id =~ /\Awork-agent-(\d+)\z/) {
+    print $json->encode({ type => 'system', subtype => 'task_notification', task_id => "task-work-agent-$1", status => 'completed',
+      session_id => $session }), "\n";
+    if ($between_turns) {
+      print $json->encode({ type => 'assistant', message => { role => 'assistant', content => [ { type => 'text', text => "$type finished." } ] } }), "\n";
+      print $json->encode({ type => 'result', subtype => 'success', stop_reason => 'end_turn', is_error => JSON::PP::false, result => "$type finished." }), "\n";
+    }
+  }
   return 1;
 }
 sub open_work_helpers {  # [id, type] of every work-agent this lease launched that has not ended
@@ -178,10 +239,17 @@ sub helper_steps {  # one step of every listed helper that has not ended
   step_one($command, @$_) for open_work_helpers();
 }
 # The lease's MCP servers, from --mcp-config as the app passes it: the front desk carries the
-# register (richos_assignments), the back end carries the work tools (richos_work).
+# register (richos_assignments), and Stu's back end the work tools (richos_work) without the
+# register. Rich's conversation lease carries richos_work too now (native.rs mcp_config), so the
+# work tools alone do not make a lease the back end; they are still declared wherever they are.
 my $servers = eval { $json->decode(arg_after('--mcp-config') // '{}')->{mcpServers} } || {};
-my $backend = exists $servers->{richos_work};
+my $work_tools = exists $servers->{richos_work};
+my $backend = $work_tools && !exists $servers->{richos_assignments};
 sub calls_line { if (open(my $l, '>>', "$dir/calls.log")) { print $l join(' ', time(), ($folder || 'account-1'), @_), "\n"; close $l; } }
+# One line naming a lease and its kind, so a walk reads which account each one opened on without
+# parsing the argument line above (it runs over several lines): "lease back-end <session>",
+# "lease front-desk <session>" or "lease other <session>".
+calls_line('lease', $backend ? 'back-end' : exists $servers->{richos_assignments} ? 'front-desk' : 'other', $session) if $evidence;
 sub register_job {  # the front desk writes the job down through the app's own register; its words, or undef
   my ($sent) = @_;
   my $server = $servers->{richos_assignments} or return undef;
@@ -203,7 +271,7 @@ sub register_job {  # the front desk writes the job down through the app's own r
     { jsonrpc => '2.0', method => 'notifications/initialized' },
     map { $n++; { jsonrpc => '2.0', id => $n, method => 'tools/call', params => { name => 'record', arguments => { assignment => $_ } } } } @jobs;
   close $to;
-  my ($answered, @words) = (0);
+  my ($answered, $recorded, @words) = (0, 0);
   while (my $line = <$from>) {
     my $reply = eval { $json->decode($line) } or next;
     my $rid = $reply->{id} // ''; next unless $rid =~ /\A\d+\z/ && $rid >= 2;
@@ -211,13 +279,38 @@ sub register_job {  # the front desk writes the job down through the app's own r
     my $said = $result->{content} && $result->{content}[0] ? $result->{content}[0]{text} // '' : ($reply->{error}{message} // '');
     if ($result->{content} && !$result->{isError}) {
       my $receipt = eval { $json->decode($said) } || {};
-      $ok = $receipt->{recorded} ? 1 : 0; push @words, $receipt->{say} if defined $receipt->{say};
+      $ok = $receipt->{recorded} ? 1 : 0; $recorded += $ok; push @words, $receipt->{say} if defined $receipt->{say};
     }
     calls_line('register', $ok ? 'ok' : 'error', ($said =~ s/\s+/ /gr));
     last if ++$answered == @jobs;
   }
   close $from; waitpid($pid, 0);
+  delegate_jobs(@jobs) if $recorded;
   return @words ? join(' ', @words) : undef;
+}
+sub delegate_jobs {  # each job handed to Stu through richos_status `delegate`, as Rich does
+  my @jobs = @_;
+  my $server = $servers->{richos_status} or do { calls_line('delegate', 'error', 'no richos_status server'); return };
+  my ($from, $to);
+  my $pid = eval { open2($from, $to, $server->{command}, @{ $server->{args} || [] }) };
+  unless ($pid) { calls_line('delegate', 'error', 'the status server could not be started'); return; }
+  my $n = 1;
+  print $to $json->encode($_), "\n" for
+    { jsonrpc => '2.0', id => 1, method => 'initialize',
+      params => { protocolVersion => '2025-06-18', capabilities => {}, clientInfo => { name => 'fake-claude', version => '1' } } },
+    { jsonrpc => '2.0', method => 'notifications/initialized' },
+    map { $n++; { jsonrpc => '2.0', id => $n, method => 'tools/call', params => { name => 'delegate', arguments => { text => $_ } } } } @jobs;
+  close $to;
+  my $answered = 0;
+  while (my $line = <$from>) {
+    my $reply = eval { $json->decode($line) } or next;
+    my $rid = $reply->{id} // ''; next unless $rid =~ /\A\d+\z/ && $rid >= 2;
+    my $result = $reply->{result} || {};
+    my $said = $result->{content} && $result->{content}[0] ? $result->{content}[0]{text} // '' : ($reply->{error}{message} // '');
+    calls_line('delegate', ($result->{content} && !$result->{isError}) ? 'ok' : 'error', ($said =~ s/\s+/ /gr));
+    last if ++$answered == @jobs;
+  }
+  close $from; waitpid($pid, 0);
 }
 my $stepper;  # the pid of this lease's background stepper, while it runs
 sub step_in_background {  # the work-agents keep running after the back end's turn ends
@@ -227,7 +320,10 @@ sub step_in_background {  # the work-agents keep running after the back end's tu
   my $pid = fork();
   return unless defined $pid;
   if ($pid) { $stepper = $pid; return; }
-  open(STDIN, '<', '/dev/null'); open(STDOUT, '>', '/dev/null');
+  # STDOUT stays the lease's: a helper's end is a frame on it (THE TASK FRAMES). Each frame is
+  # one line written whole, so it never interleaves with the lease's own.
+  open(STDIN, '<', '/dev/null');
+  $between_turns = 1;
   for (1 .. 300) {
     sleep 2;
     POSIX::_exit(0) if getppid() != $parent;
@@ -236,8 +332,22 @@ sub step_in_background {  # the work-agents keep running after the back end's tu
   }
   POSIX::_exit(0);
 }
+my @queued;  # lines read while waiting for the app's answer to the input hook, read next
+my $hooks = 0;
+sub next_line { return @queued ? shift @queued : scalar <STDIN>; }
+sub input_hook {  # THE INPUT HOOK (header): the app's answer is awaited, other lines kept
+  my ($text) = @_;
+  my $id = 'fake-input-' . ++$hooks . "-$$";
+  print $json->encode({ type => 'control_request', request_id => $id, request => { subtype => 'hook_callback',
+    callback_id => 'richos-input-context', input => { hook_event_name => 'UserPromptSubmit', prompt => $text } } }), "\n";
+  while (defined(my $l = <STDIN>)) {
+    my $m = eval { $json->decode($l) };
+    return if $m && ($m->{type} // '') eq 'control_response' && (($m->{response} // {})->{request_id} // '') eq $id;
+    push @queued, $l;
+  }
+}
 sub iso { my @t = gmtime(shift); sprintf('%04d-%02d-%02dT%02d:%02d:%02dZ', $t[5]+1900, $t[4]+1, $t[3], $t[2], $t[1], $t[0]) }
-while (my $line = <STDIN>) {
+while (defined(my $line = next_line())) {
   my $msg = eval { $json->decode($line) } or next;
   my $type = $msg->{type} // '';
   if ($type eq 'control_request') {
@@ -259,7 +369,7 @@ while (my $line = <STDIN>) {
     # These are declarations only; this fake executes none of these tools. A back-end lease
     # also declares the five work tools: without them the app refuses its job before and after
     # its turn ("The desktop work tools did not load", native.rs work_readiness_facts).
-    my @work = $backend ? map { "mcp__richos_work__$_" } qw(repositories prepare inspect integrate complete) : ();
+    my @work = $work_tools ? map { "mcp__richos_work__$_" } qw(repositories prepare inspect integrate complete) : ();
     print $json->encode({ type => 'system', subtype => 'init', model => 'fill-first-fixture',
       plugins => [ { name => 'rich-skills' }, { name => 'richos-app-engine' } ], permissionMode => 'bypassPermissions',
       tools => [ 'Bash', 'mcp__richos_onboarding__save_company_notes', 'mcp__richos_onboarding__decline_onboarding',
@@ -270,6 +380,7 @@ while (my $line = <STDIN>) {
     # line) goes to calls.log as "turn <text>", so a walk can read what the app sent to the back end.
     my $c = $msg->{message}{content};
     my $sent = ref $c eq 'ARRAY' ? join(' ', map { ref $_ eq 'HASH' ? ($_->{text} // '') : '' } @$c) : ($c // '');
+    input_hook($sent);
     $sent =~ s/\s+/ /g;
     if (!$internal && -e "$dir/log-turns" && open(my $tl, '>>', "$dir/calls.log")) {
       print $tl join(' ', time(), ($folder || 'account-1'), 'turn', substr($sent, 0, 400)), "\n"; close $tl;
@@ -292,6 +403,18 @@ while (my $line = <STDIN>) {
         my $n = 0;
         journal(map { $n++; ({ hook_event_name => 'SubagentStart', agent_id => "work-agent-$n", agent_type => $_ },
           { hook_event_name => 'PostToolUse', tool_name => 'Agent', tool_response => { status => 'async_launched', agentId => "work-agent-$n" } }) } @who);
+        # THE TASK FRAMES (header): the Agent call, its immediate answer and task_started, on
+        # this turn's own stream, as Claude Code prints them for a background agent.
+        $n = 0;
+        for my $type (@who) {
+          $n++; my $tool = "toolu_agent_work-agent-$n";
+          print $json->encode({ type => 'assistant', message => { role => 'assistant', content => [ { type => 'tool_use', id => $tool,
+            name => 'Agent', input => { name => $type, description => "work-agent-$n", run_in_background => JSON::PP::true } } ] } }), "\n";
+          print $json->encode({ type => 'user', message => { role => 'user', content => [ { type => 'tool_result', tool_use_id => $tool,
+            content => "async_launched work-agent-$n" } ] } }), "\n";
+          print $json->encode({ type => 'system', subtype => 'task_started', task_id => "task-work-agent-$n", tool_use_id => $tool,
+            task_type => 'local_agent', session_id => $session }), "\n";
+        }
       }
     }
     # NOBODY SIGNED IN: a back-end turn is refused as Claude Code refuses it (header).

@@ -94,7 +94,7 @@ cents() { python3 -c 'import sys; print(round(float(sys.argv[1].lstrip("$").repl
 figure_after() { local f; for _ in $(seq 1 10); do f="$(figure)"; [ -n "$f" ] && [ "$f" != "$1" ] && { echo "$f"; return; }; sleep 3; done; figure; }
 
 # A first run asks its questions first (the setup sheet, the memory folder, the company); each
-# is answered the way handoff-walk.sh and accounts-walk.sh answer them.
+# is answered the way accounts-walk.sh answers them.
 wait_for 'Not now' || true
 for _ in 1 2 3; do
   ax find --title 'Add this company' --first >/dev/null 2>&1 && break

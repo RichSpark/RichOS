@@ -886,7 +886,7 @@ pub(crate) mod tests {
         Reading { windows: vec![
             Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: five, resets_at: Some(NOW + five_reset), duration_ms: 5 * HOUR },
             Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly, resets_at: Some(NOW + weekly_reset), duration_ms: 168 * HOUR },
-        ], speeds: BTreeMap::new(), expected: false, rises: BTreeMap::new(), weekly_cutoff: None, handoff: None }
+        ], speeds: BTreeMap::new(), expected: false, rises: BTreeMap::new(), weekly_cutoff: None }
     }
     fn two_accounts() -> (Scratch, Accounts) {
         let dir = Scratch::new();
