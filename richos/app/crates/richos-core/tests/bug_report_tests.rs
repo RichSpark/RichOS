@@ -1491,8 +1491,10 @@ fn with_claude_unavailable_nothing_is_sent() {
 
 #[test]
 fn a_change_told_to_rich_is_scanned_and_then_his_at_send() {
-    // His words for a change are scanned when they are added; the card with them is a changed
-    // card, so at Send he has the last word on it, and nothing after him changes it.
+    // His words for a change are scanned when they are added. Since §156 the change itself ends
+    // with his last pass (`changed_card_for`); this is what a card whose words differ from his
+    // last (a hand edit, or a change put in by a client that skips it) still gets at Send: he has
+    // the last word on it, and nothing after him changes it.
     let written = checked_with("The window froze.", "[]");
     let check = Check::of(&written.draft);
     let card = sheet_of(&written.draft);
@@ -2027,6 +2029,44 @@ fn a_sent_card_opens_the_relay_link_on_either_address_and_nothing_else() {
 // §156 (CEO 2026-11-01): NOTHING IN THE BUG-REPORT PATH DROPS WHAT THE USER ALREADY DID, ASKS HIM
 // AGAIN, OR LEAVES HIM A STEP THE APP CAN DO ITSELF.
 // ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_change_rich_makes_is_his_last_word_and_send_sends_it_without_asking_him_again() {
+    // The card his change produces went through the scanner first and then Rich, so Send finds
+    // it equal to what he gave and sends it as it is: no second turn of his, no card shown again.
+    let written = checked_with("The window froze.", "[]");
+    let card = sheet_of(&written.draft);
+    let change = change_naming("Jane Doe saw it too.", r#"[{"text": "Jane Doe", "kind": "person"}]"#);
+    let mut asked = 0;
+    let his = changed_card_for(Post::Bug, &card, &[], &change, &[], |p| {
+        asked += 1;
+        rich_keeps(p)
+    })
+    .unwrap();
+    assert_eq!(asked, 1, "the change is one pass of his, after the scanner");
+    // The scanner went first: the name is a stand-in in the words he was given and in his card.
+    let words = draft_words(&his.draft);
+    assert!(words.contains("[a person] saw it too.") && !words.contains("Jane Doe"), "{words}");
+    // The window now shows his card; Send is pressed on it, as it is.
+    let shown = sheet_of(&his.draft);
+    match at_send(&shown, Some(&Check::of(&his.draft)), &[], |_| panic!("Rich was asked a second time about his own change")) {
+        AtSend::Send(public) => assert_sent_as_shown(&shown, &public),
+        other => panic!("{other:?}"),
+    }
+    // A change he cannot be had for adds nothing; a section that is not on the card likewise.
+    assert!(changed_card_for(Post::Bug, &card, &[], &change, &[], |_| Err("claude is down".into())).is_err());
+    let nowhere = parse_change(r#"{"section": "No such section", "add": "x", "private": []}"#).unwrap();
+    assert!(changed_card_for(Post::Bug, &card, &[], &nowhere, &[], |_| panic!("asked about a change with no place")).is_err());
+    // A hand edit still gets the check at Send, as before.
+    let mut by_hand = shown.clone();
+    by_hand.sections[0].paragraphs[0].push_str(" Twice.");
+    let mut turns = 0;
+    let _ = at_send(&by_hand, Some(&Check::of(&his.draft)), &[], |p| {
+        turns += 1;
+        rich_keeps(p)
+    });
+    assert_eq!(turns, 1);
+}
 
 #[test]
 fn a_written_up_card_is_kept_and_comes_back_after_a_relaunch_until_it_is_done_with() {

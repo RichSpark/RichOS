@@ -493,13 +493,17 @@ pub async fn bug_report_take_unchecked(app: AppHandle, id: String, post: Option<
 
 /// **A change said to Rich**: the sentence to add and where it goes. Sends nothing. `private` is
 /// the report's own private words so far (the draft's, and every change's since); they go on
-/// applying, with any Rich names in this change, and come back for the card to keep. When Rich
-/// cannot be had, nothing is added: the user's words are not put in the report unchecked (review
-/// rv-20261009T162841Z-69294215-70e6 finding 2, the same rule as `bug_report_write`), and the card
-/// says to tell him again or change the words in place, where the heads-up reads them.
+/// applying, with any Rich names in this change. When Rich cannot be had, nothing is added: the
+/// user's words are not put in the report unchecked (review rv-20261009T162841Z-69294215-70e6
+/// finding 2, the same rule as `bug_report_write`), and the card says to tell him again or change
+/// the words in place, where the heads-up reads them.
 ///
-/// The scanner goes over what he adds; the card with it added is a changed card, so at Send it
-/// goes through the scanner and then Rich, last (`bug::at_send`), like words changed by hand.
+/// **THE CHANGE IS HIS LAST WORD** (CEO §156, with §115 unchanged): his sentence goes into the
+/// card's words, the scanner goes over the whole card, and Rich gets the last pass over what it
+/// made (`bug::changed_card_for`). The card answered (`{ report, draft, digest, section }`) is
+/// kept as what Rich last gave of this report, so Send sends it without a second check; a hand
+/// edit by the user still gets the check at Send. `screen` is where the report was started, kept
+/// with the card if it is not already kept (a card that was sent to waiting and is being changed).
 #[richos_command::command]
 pub async fn bug_report_change(
     app: AppHandle,
@@ -507,27 +511,44 @@ pub async fn bug_report_change(
     sheet: bug::Sheet,
     private: Option<Vec<bug::PrivateTerm>>,
     post: Option<bug::Post>,
+    report: Option<String>,
+    screen: Option<bug::Screen>,
 ) -> Result<serde_json::Value, String> {
     let started = Instant::now();
+    let post = post.unwrap_or_default();
     let (scrubber, (bin, folder), bugs) = read_state(&app);
     let report_private = private.unwrap_or_default();
     off_the_ipc_threads(move || {
         let headings: Vec<String> = sheet.sections.iter().map(|s| s.heading.clone()).collect();
-        let input = bug::writer_input(&bug::change_prompt_for(post.unwrap_or_default(), &sheet, &said), None);
+        let input = bug::writer_input(&bug::change_prompt_for(post, &sheet, &said), None);
+        let not_added = |why: String| {
+            eprintln!("[richos] bug report: Rich could not check the change ({why}); nothing was added");
+            "RichOS couldn't check that change just now, so nothing was added. Submit the change again.".to_string()
+        };
         let change = ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &input)
             .and_then(|raw| bug::parse_change(&raw))
             .and_then(|c| if headings.contains(&c.section) { Ok(c) } else { Err(format!("no section {:?}", c.section)) })
-            .map_err(|why| {
-                eprintln!("[richos] bug report: Rich could not check the change ({why}); nothing was added");
-                "RichOS couldn't check that change just now, so nothing was added. Submit the change again.".to_string()
-            })?;
-        // The scanner goes over his words now; Rich gets the last word on the changed card at Send
-        // (`bug::at_send`), so nothing after him changes a word that is sent (CEO §115).
-        let (add, private) = bug::scrub_change(&change, scrubber.terms(), &report_private);
+            .map_err(not_added)?;
+        // The scanner goes over the card with his words in it, and Rich has the last pass over
+        // what it made, so nothing after him changes a word that is sent (CEO §115, §156).
+        let last = |prompt: &str| ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
+        let his = bug::changed_card_for(post, &sheet, &report_private, &change, scrubber.terms(), last).map_err(not_added)?;
+        let report = report.filter(|r| !r.is_empty()).unwrap_or_else(bug::report_id);
+        bugs.checks().insert(report.clone(), bug::Check::of(&his.draft));
+        // The kept copy reads as his new card; when none is kept (the card had been sent to
+        // waiting and is being changed) it is kept now, so a relaunch does not lose the change.
+        let kept = bugs.outbox(post).update_card(&report, his.clone()).and_then(|updated| match (updated, &screen) {
+            (false, Some(screen)) => bugs.outbox(post).keep_card(&report, "", screen, his.clone(), now_ms()),
+            _ => Ok(()),
+        });
+        if let Err(e) = kept {
+            eprintln!("[richos] bug report {report}: the changed card could not be kept on this Mac ({e}); a relaunch would lose the change");
+        }
         Ok(serde_json::json!({
             "section": change.section,
-            "add": add,
-            "private": private,
+            "report": report,
+            "draft": his.draft,
+            "digest": his.digest,
             "workedMs": started.elapsed().as_millis() as u64,
         }))
     })

@@ -2236,6 +2236,30 @@ pub fn checked_edit_for(post: Post, edited: &Edited, app: &[PrivateTerm], finish
     Ok(Checked { draft: rich_last(post, &scanned, &as_typed(&edited.sheet), app, finish)?, digest: EDIT_DIGEST.into() })
 }
 
+/// **A CHANGE RICH FOLDED IN, AS HIS LAST WORD** (CEO §156: Send must not ask Rich again after a
+/// change Rich himself made; §115 stays: nothing changes a word after him). `change` is his
+/// sentence to add and where; it is put into `sheet` (the card's words now, hand changes
+/// included) at the end of its section's paragraphs, and the whole card goes through the scanner
+/// and then Rich ([`checked_edit_for`]). The card that comes back is already his last word, so
+/// Send sends it as it is ([`at_send_for`] finds it equal to what he gave). `report_private` are the
+/// report's private words so far; any Rich names in this change join them. Errors when the section
+/// is not on the card or Rich cannot answer: then nothing is added.
+pub fn changed_card_for(
+    post: Post,
+    sheet: &Sheet,
+    report_private: &[PrivateTerm],
+    change: &Change,
+    app: &[PrivateTerm],
+    finish: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Checked, String> {
+    let mut merged = sheet.clone();
+    let section =
+        merged.sections.iter_mut().find(|s| s.heading == change.section).ok_or_else(|| format!("no section {:?}", change.section))?;
+    section.paragraphs.push(change.add.trim().to_string());
+    let private = distinct(report_private.iter().chain(&change.private).cloned());
+    checked_edit_for(post, &Edited { sheet: merged, private }, app, finish)
+}
+
 // ---------------------------------------------------------------------------------------
 // SEND, AND KEEP WHAT COULD NOT GO
 // ---------------------------------------------------------------------------------------

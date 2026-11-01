@@ -21,7 +21,9 @@
 // What is SENT is decided by the shell alone, at Send (`bug_report_send`, `richos_core::
 // bug_report::at_send`), in the CEO's order (§115): the scanner first, Rich last, and nothing
 // after him changes the words. The card's words go as they are when they are the words Rich last
-// gave of this report (`f.report`). Words that changed (by hand, or a change told to Rich) go
+// gave of this report (`f.report`). A change told to Rich is his last word already (CEO §156:
+// the scanner goes over the card with his sentence in it and he has the last pass, in
+// `bug_report_change`), so Send sends it with no second check. Words changed by hand go
 // through the scanner and then Rich first ("Rich is checking your changes…"); when his version
 // differs from the card, the card comes back with his version, to send or not; when Claude can't
 // answer they wait on this Mac, unsent, like any report he couldn't check. This file never decides
@@ -710,21 +712,32 @@ window.RichBug = (function () {
       var more = f.nextChanges && f.nextChanges.shift();
       if (more && f.step === "draft") askChange(f, more, false);
     }
-    bridge.invoke("bug_report_change", { said: text, sheet: sheetOf(f), private: f.private || [], post: postOf(f) }).then(function (answer) {
+    var before = sheetOf(f);
+    bridge.invoke("bug_report_change", { said: text, sheet: before, private: f.private || [], post: postOf(f), report: f.report || null, screen: publicScreen(f.screen) }).then(function (answer) {
       w2.remove();
       if (f.step !== "changing") return;
-      if (answer.private) f.private = answer.private;
+      // **THE CARD HIS CHANGE MADE IS HIS LAST WORD** (CEO §156): the scanner went over the card
+      // with his sentence in it and he had the last pass, so this card replaces the one shown and
+      // Send sends it as it is. Whatever he added is marked, in the section he put it in.
+      f.report = answer.report || f.report;
+      f.draft = answer.draft;
+      f.private = (answer.draft && answer.draft.private) || f.private || [];
+      var old = f.card;
+      f.card = buildCard(f);
+      old.parentNode.replaceChild(f.card, old);
+      window.setTimeout(function () { if (f.card) f.card.classList.remove("is-new"); }, 2600);
       var secs = f.card.querySelectorAll(".bug-sec");
       var sec = null;
       for (var i = 0; i < secs.length; i++) if (secs[i].querySelector("h4").textContent === answer.section) sec = secs[i];
       if (!sec) sec = secs[0];
-      var p = node("p", "is-added");
-      appendSegments(p, answer.add);
-      var ol = sec.querySelector("ol, ul");
-      sec.insertBefore(p, ol);
+      var had = ((before.sections.filter(function (s) { return s.heading === answer.section; })[0] || {}).paragraphs || []).slice();
+      fieldsIn(sec).paragraphs.forEach(function (p) {
+        var at = had.indexOf(wordsOf(p));
+        if (at !== -1) had.splice(at, 1);
+        else p.classList.add("is-added");
+      });
       f.edited = true;
-      // The card changed: at Send it goes through the scanner and then Rich, last (CEO §115).
-      f.handEdited = true;
+      f.handEdited = false;
       f.step = "draft";
       paintCard(f);
       paintComposers();

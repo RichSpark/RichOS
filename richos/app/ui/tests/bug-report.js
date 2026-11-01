@@ -402,7 +402,10 @@ async function main() {
     await shot(page, "changed-dark");
     await page.click("#bug-cancel");
     await page.waitForSelector(".bugcard.is-canceled .bug-pill:has-text('Canceled · nothing sent')");
-    assert((await page.locator(".bug-ctitle").innerText()).includes("for Acme deal"), "the folded card does not show its title");
+    // Rich's change went over the whole card with the scanner first (§156), so the private name the
+    // user typed into the title is a stand-in on the card his change made, and in its folded title.
+    const folded = await page.locator(".bug-ctitle").innerText();
+    assert(folded.includes("for [a conversation]") && !folded.includes("Acme deal"), "the folded card does not show its title as Rich's change left it: " + folded);
     await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('Canceled. Nothing was sent.')");
     assertEqual((await calls(page, "bug_report_send")).length, 0, "a canceled report was sent");
     await shot(page, "canceled-dark");
@@ -778,6 +781,43 @@ async function main() {
     assertEqual(await kept(later), 0, "a sent card is still kept");
     await later.close();
     return "closed and reopened, canceled off this Mac, restored and sent";
+  });
+
+  await run.check("a change Rich made is his last word: Send sends it with one press, and a change by hand is still checked at Send", async () => {
+    const page = await open("dark", { bugRichPrivate: [{ text: "Jane Doe", kind: "person_name" }] });
+    await bustABug(page);
+    await answer(page, "The names on the left get cut off.");
+    await page.fill("#bugdock-input", "Also say Jane Doe saw it first");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bug-sec p.is-added");
+    const asked = (await calls(page, "bug_report_change"))[0];
+    assert(asked.report, "the change was not told which report it belongs to: " + JSON.stringify(asked));
+    const added = await page.locator(".bug-sec p.is-added").innerText();
+    assert(added.includes("[a person]") && !added.includes("Jane Doe"), "the change put the name back: " + added);
+    // Send: one press, one send, Rich not asked again, the card not shown a second time.
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-sent");
+    assertEqual((await calls(page, "bug_report_send")).length, 1, "Send was needed more than once");
+    assertEqual(await page.locator("#bugdock-msgs .bug-working").count(), 0, "Rich was asked again at Send");
+    const sentText = JSON.stringify(await filed(page));
+    assert(sentText.includes("[a person]") && !sentText.includes("Jane Doe"), "what went out is not his card: " + sentText);
+    assert(!(await page.locator("#bugdock-msgs").innerText()).includes("some of its words would go out differently"), "the card came back to be sent again");
+    await page.close();
+
+    // A change by hand still goes through the scanner and then Rich at Send.
+    const hand = await open("dark");
+    await bustABug(hand);
+    await answer(hand, "The names on the left get cut off.");
+    await hand.click("#bug-change");
+    await hand.waitForSelector(".bugcard.is-editing");
+    await hand.keyboard.type(" It happens twice.");
+    await hand.click("#bug-done");
+    await hand.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
+    await hand.click("#bug-send");
+    await hand.waitForSelector(".bugcard.is-sent, #bugdock-msgs .bug-working");
+    await hand.waitForSelector(".bugcard.is-sent");
+    await hand.close();
+    return "change then one Send; hand edit still checked";
   });
 
   await run.check("what Rich checked, under Worked for, is at least 16px in both themes", async () => {

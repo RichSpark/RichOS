@@ -4618,19 +4618,30 @@
           return at !== -1;
         }
         case "bug_report_change": {
-          bugMock.calls.push({ cmd, said: args.said, sheet: args.sheet, private: args.private, post: args.post });
+          bugMock.calls.push({ cmd, said: args.said, sheet: args.sheet, private: args.private, post: args.post, report: args.report });
           await new Promise((r) => setTimeout(r, preset.bugWriteMs ?? 400));
           if (preset.bugChangeHold) await bugHold("change");
           // Claude could not be asked: nothing is added (the shell's answer, word for word).
           if (bugMock.claude === "down") throw "I couldn't check that change just now, so nothing was added.";
           const said = String(args.said || "").replace(/^(also|and|please)\s+/i, "").replace(/^(say|mention|add)\s+(that\s+)?/i, "");
-          // The report's own private words go on applying to every change (the shell's `scrub_change`),
-          // and every stand-in already in his words is marked by its kind, as in the first draft.
+          // The change is Rich's LAST word (the shell's `changed_card_for`, CEO §156): his sentence
+          // goes into the card's words, the scanner goes over all of it with the report's private
+          // words, and the card that comes back is already what Send sends, kept under its id.
           const kept = args.private || [];
-          const add = bugScrub(bugSentence(said), kept).flatMap((s) => (s.kind ? [s] : bugMarked(s.text)));
-          // The card with his words added is a changed card: at Send it goes through the scanner
-          // and then Rich, last (the core's `at_send`, CEO §115), as words changed by hand do.
-          return { section: args.post === "idea" ? "The idea" : "What happened", add, private: kept, workedMs: 4000 };
+          const section = args.post === "idea" ? "The idea" : "What happened";
+          const sheet = JSON.parse(JSON.stringify(args.sheet));
+          const target = sheet.sections.find((x) => x.heading === section) || sheet.sections[0];
+          target.paragraphs.push(bugSentence(said));
+          const named = kept.concat(preset.bugRichCheck || []);
+          const draft = bugRedraft(sheet, named);
+          // Every stand-in in his words is marked by its kind, as in the first draft.
+          draft.sections.forEach((sec) => { sec.paragraphs = sec.paragraphs.map((p) => p.flatMap((x) => (x.kind ? [x] : bugMarked(x.text)))); });
+          const report = args.report || "00000000-0000-4000-a000-" + String(++bugMock.seq).padStart(12, "0");
+          bugKeepCheck(report, draft);
+          const card = bugMock.unchecked.find((u) => u.id === report);
+          if (card) card.card = { draft, digest: "Checked your changes for private details" };
+          else if (args.screen) bugMock.unchecked.push({ id: report, answer: "", screen: args.screen, post: args.post || "bug", card: { draft, digest: "Checked your changes for private details" } });
+          return { section: target.heading, report, draft, digest: "Checked your changes for private details", workedMs: 4000 };
         }
         case "bug_report_send": {
           bugMock.calls.push({ cmd, report: args.report, sheet: args.sheet, screen: args.screen, post: args.post });
