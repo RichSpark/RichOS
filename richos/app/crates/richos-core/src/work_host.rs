@@ -124,9 +124,18 @@ struct Inner {
     /// connection fails, which read every open handoff out to the SAME resumed session again
     /// (2026-10-28 ~23:00Z: Stu was handed the nightly-78 handoff three times within minutes,
     /// two of them with no `previous_delivery_attempt`). What a session was given here is never
-    /// given to it again here; the next process hands it back once, as a reconciliation that
-    /// names the earlier attempt.
+    /// given to it again here, and what a later process finds in that session's own record
+    /// ([`Inner::received`]) is put here too, so a restart never gives it to the session again.
     delivered: std::collections::HashMap<String, std::collections::HashSet<u64>>,
+    /// **Open handoffs the session that was given them already holds in its own record**, read
+    /// once per process before Stu's back end first selects input
+    /// ([`WorkHost::restore_receipts`], `session_tools::received_handoffs`; CEO, 2026-11-01,
+    /// finding A: every start of the app handed Stu the same six old handoffs again). `None`
+    /// until read. With no open lease these are passed over: the next lease resumes the session
+    /// they name, because Stu's seat on a conversation is never released (`recovery.rs`, which
+    /// releases only `work-seat:` rows). A lease on another session is given them
+    /// ([`Inner::given_to`] keys by the open lease).
+    received: Option<std::collections::HashSet<u64>>,
     /// **Input each provider session was given in a turn that ended without `end_turn`**, by
     /// session id, that nothing will send again (Otto's trace of 2026-10-29: a message delivered
     /// into a turn a 429 cut stayed only received; this process never sent it again, its sent
@@ -138,7 +147,10 @@ struct Inner {
 impl Inner {
     /// What `session` was already given in this process, for [`WorkHost::next_for_stu`].
     fn given_to(&self, session: Option<&str>) -> std::collections::HashSet<u64> {
-        session.and_then(|session| self.delivered.get(session)).cloned().unwrap_or_default()
+        match session {
+            Some(session) => self.delivered.get(session).cloned().unwrap_or_default(),
+            None => self.received.clone().unwrap_or_default(),
+        }
     }
     fn note_given(&mut self, session: &str, through: u64) {
         self.delivered.entry(session.to_string()).or_default().insert(through);
@@ -927,8 +939,8 @@ impl WorkHost {
     /// back end's [`Inner::screen_released`]), then the inbox in order from `after`, passing
     /// over every handoff still waiting for the screen. Never locks the back end itself: the
     /// run loop calls it holding that lock.
-    /// `given` is what the live session was already given in this process ([`Inner::delivered`]):
-    /// passed over, never handed to it twice.
+    /// `given` is what the live session was already given, in this process or before it as its
+    /// own record shows ([`Inner::given_to`]): passed over, never handed to it twice.
     fn next_for_stu(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, mut after: u64,
         released: &mut Vec<u64>, given: &std::collections::HashSet<u64>) -> Result<Option<(crate::session_tools::Message, u64)>, String> {
         let scope = self.message_scope(binding);
@@ -957,8 +969,31 @@ impl WorkHost {
 
     pub fn remember_binding(self: &Arc<Self>, binding: &ThreadBinding) {
         if let Some(backend) = self.backend_for(binding.thread_id()) {
+            self.restore_receipts(&backend, binding);
             backend.inner.lock().unwrap().binding = Some(binding.clone());
         }
+    }
+
+    /// **What Stu's session already holds, read before his back end first selects input**
+    /// ([`Inner::received`]). Before the binding is set, because the run loop selects only once
+    /// it has one, so no selection in this process runs without it. Read once per back end; a
+    /// failure is logged and leaves the open handoffs to be given once, as before.
+    fn restore_receipts(&self, backend: &Arc<Backend>, binding: &ThreadBinding) {
+        if backend.inner.lock().unwrap().received.is_some() {
+            return;
+        }
+        let found = crate::session_tools::received_handoffs(&self.message_scope(binding)).unwrap_or_else(|error| {
+            eprintln!("[richos] what Stu's session already holds could not be read: {error}");
+            Vec::new()
+        });
+        let mut inner = backend.inner.lock().unwrap();
+        if inner.received.is_some() {
+            return;
+        }
+        for (through, session) in &found {
+            inner.note_given(session, *through);
+        }
+        inner.received = Some(found.into_iter().map(|(through, _)| through).collect());
     }
 
     pub fn wake_messages(self: &Arc<Self>, binding: &ThreadBinding) {
@@ -966,6 +1001,7 @@ impl WorkHost {
             return;
         };
         let _delivery = backend.live_delivery.lock().unwrap();
+        self.restore_receipts(&backend, binding);
         let (input, after, session) = {
             let mut inner = backend.inner.lock().unwrap();
             inner.binding = Some(binding.clone());
@@ -1827,7 +1863,8 @@ impl WorkHost {
                         let after = inner.peer_active_through.unwrap_or(0);
                         // Keyed by the OPEN lease: a renewed lease resumes the same session and
                         // is passed over; after a lost connection there is no open lease, and
-                        // the next one is handed unfinished input once, naming the attempt.
+                        // the next one is handed unfinished input once, naming the attempt,
+                        // unless the session's own record already holds it (`Inner::received`).
                         let given = inner.given_to(live_session.as_deref());
                         match self.next_for_stu(&backend, &binding, after, &mut inner.screen_released, &given) {
                             Ok(Some((message, through))) => {
@@ -3462,6 +3499,75 @@ mod tests {
         assert!(crate::session_tools::previous_attempt(&scope,"stu",&format!("peer:{through}")).unwrap().is_none());
         restarted.shutdown();
         }
+        }
+    }
+
+    /// Claude Code's own record of Stu's session `session`, as the app finds it
+    /// (`session_tools::native_path`): its binding, where the record lives, and one user turn per
+    /// prompt in `turns`. The rows are spaced as Python writes JSON, not as Claude Code does, so
+    /// the record is read by its fields and not by one writer's spelling (the walk's first run).
+    fn stu_record(h: &Harness, session: &str, turns: &[String]) {
+        let evidence = h.state.join("evidence").join(session);
+        std::fs::create_dir_all(&evidence).unwrap();
+        std::fs::write(evidence.join("binding.json"), serde_json::json!({"session_id":session,"role":"stu",
+            "entity_id":h.binding.entity_id().as_str(),"thread_id":h.binding.thread_id(),"instruction":null}).to_string()).unwrap();
+        let record = h.root.join("projects").join(format!("{session}.jsonl"));
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(evidence.join(crate::session_tools::RECORD), serde_json::json!({"transcript_path":record}).to_string()).unwrap();
+        let rows: String = turns.iter().map(|text| format!("{{\"type\": \"user\", \"sessionId\": {}, \"message\": {}}}\n",
+            serde_json::json!(session), serde_json::json!({"role":"user","content":[{"type":"text","text":text}]}))).collect();
+        std::fs::write(&record, rows).unwrap();
+    }
+
+    /// **A restart never hands Stu a handoff his resumed session already received** (CEO,
+    /// 2026-11-01, finding A of richos-hq `docs/audits/2026-11-01-app-start`: every start of the
+    /// app gave Stu the same six old handoffs again). The app restarts onto the same session with
+    /// the handoff's job still open. When the session's own record holds the handoff, no turn is
+    /// started for it; when the record does not (the app ended before the send reached Claude
+    /// Code), it is given exactly once. An ordinary message saved after it is the next input in
+    /// inbox order, so it is given only after the handoff would have been.
+    #[test]
+    fn a_restart_never_resends_a_handoff_the_resumed_session_already_received() {
+        for received in [true, false] {
+            let h = harness(1);
+            h.team.lock().unwrap().resume_same_session = true;
+            let record = assignment::register(&h.state, &registration(&h)).unwrap();
+            assignment::advance(&h.state, "depot", "thread-one", &record.id, AssignmentState::Running, "Worker start observed").unwrap();
+            let scope = h.host.message_scope(&h.binding);
+            let path = h.root.join("peer-status.json");
+            crate::session_tools::bind(&path, &scope, "front-session", "rich", Some(crate::ecs::UserInstruction {
+                ledger_ref: registration(&h).instruction_ledger_ref, sha256: registration(&h).instruction_sha256, text: None })).unwrap();
+            crate::session_tools::delegate(&path, &scope, serde_json::json!({"text":"Build nightly 78"})).unwrap();
+            h.host.wake_messages(&h.binding);
+            assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)), "the handoff's turn did not end");
+            let delivery = h.work_prompts.lock().unwrap()[0].clone();
+            assert!(delivery.contains("Build nightly 78"));
+            let earlier = serde_json::json!({"from":"rich","text":"An earlier message"}).to_string();
+            stu_record(&h, "work-session-one", &if received { vec![earlier, delivery] } else { vec![earlier] });
+            h.host.shutdown();
+            assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_some(), "the handoff's job is still open");
+
+            let factory = Factory { spawns: h.spawns.clone(), prompts: h.work_prompts.clone(), commands: h.commands.clone(),
+                team: h.team.clone(), gate: h.start_gate.clone() };
+            let restarted = WorkHost::new(&h.state, Box::new(factory), Arc::new(SilentNotifier));
+            restarted.wake_messages(&h.binding);
+            crate::session_tools::send(&path, &scope, serde_json::json!({"text":"What is the status?"})).unwrap();
+            restarted.wake_messages(&h.binding);
+            let turns = if received { 1 } else { 2 };
+            assert!(restarted.wait_for_completed(turns, std::time::Duration::from_secs(30)), "the restarted Stu took no turn");
+            let after: Vec<String> = h.work_prompts.lock().unwrap()[1..].to_vec();
+            assert_eq!(after.iter().filter(|prompt| prompt.contains("Build nightly 78")).count(), usize::from(!received),
+                "received={received}: turns after the restart: {after:?}");
+            assert_eq!(after.len(), turns as usize, "received={received}: turns after the restart: {after:?}");
+            assert!(after.last().unwrap().contains("What is the status?"), "received={received}: {after:?}");
+            restarted.shutdown();
+            // A start after that reads the mark it left, not the record: the record is gone now.
+            if received {
+                std::fs::remove_file(h.root.join("projects/work-session-one.jsonl")).unwrap();
+                let again = crate::session_tools::received_handoffs(&scope).unwrap();
+                assert_eq!(again.iter().map(|(_, session)| session.as_str()).collect::<Vec<_>>(), vec!["work-session-one"]);
+            }
+            std::fs::remove_dir_all(&h.root).unwrap();
         }
     }
 
