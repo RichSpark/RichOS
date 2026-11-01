@@ -3504,7 +3504,8 @@ mod tests {
 
     /// Claude Code's own record of Stu's session `session`, as the app finds it
     /// (`session_tools::native_path`): its binding, where the record lives, and one user turn per
-    /// prompt in `turns`.
+    /// prompt in `turns`. The rows are spaced as Python writes JSON, not as Claude Code does, so
+    /// the record is read by its fields and not by one writer's spelling (the walk's first run).
     fn stu_record(h: &Harness, session: &str, turns: &[String]) {
         let evidence = h.state.join("evidence").join(session);
         std::fs::create_dir_all(&evidence).unwrap();
@@ -3513,8 +3514,8 @@ mod tests {
         let record = h.root.join("projects").join(format!("{session}.jsonl"));
         std::fs::create_dir_all(record.parent().unwrap()).unwrap();
         std::fs::write(evidence.join(crate::session_tools::RECORD), serde_json::json!({"transcript_path":record}).to_string()).unwrap();
-        let rows: String = turns.iter().map(|text| serde_json::json!({"type":"user","sessionId":session,
-            "message":{"role":"user","content":[{"type":"text","text":text}]}}).to_string() + "\n").collect();
+        let rows: String = turns.iter().map(|text| format!("{{\"type\": \"user\", \"sessionId\": {}, \"message\": {}}}\n",
+            serde_json::json!(session), serde_json::json!({"role":"user","content":[{"type":"text","text":text}]}))).collect();
         std::fs::write(&record, rows).unwrap();
     }
 

@@ -613,7 +613,8 @@ fn record_holds(record:&Path,messages:&[(u64,Message)])->std::io::Result<std::co
     let mut found=std::collections::HashSet::new();
     for line in BufReader::new(std::fs::File::open(record)?).split(b'\n') {
         let line=line?;
-        if !String::from_utf8_lossy(&line).contains("\"type\":\"user\"") {continue}
+        // A cheap pass over the record's other rows; spacing is the writer's, so only the word.
+        if !String::from_utf8_lossy(&line).contains("\"user\"") {continue}
         let Ok(row)=serde_json::from_slice::<Value>(&line) else {continue};
         if row["type"]!="user" {continue}
         let texts:Vec<&str>=match &row["message"]["content"] {
