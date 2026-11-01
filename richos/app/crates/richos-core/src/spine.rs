@@ -3364,6 +3364,9 @@ impl Spine {
         eprintln!("[richos] turn interrupted [{}]: {reason}", cause.tag());
         if let Err(e) = self.ledger.record_interruption_cause(turn_id, &record) {
             eprintln!("[richos] the reason for that interruption could not be written down: {e}");
+        } else if cause == crate::interruption::InterruptionCause::HistoryGone {
+            // Told only now that the message is on record.
+            crate::native::commit_history_gone(reason);
         }
         (cause, statement)
     }

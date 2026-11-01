@@ -612,6 +612,27 @@ pub const HISTORY_GONE: &str = "this chat's earlier history is gone from this Ma
 /// chat starts a new session.
 const HISTORY_GONE_MARK: &str = "history-gone";
 
+/// Losses noticed but not yet told: session id to the marker file that commits them.
+static HISTORY_GONE_PENDING: std::sync::Mutex<Vec<(String, std::path::PathBuf)>> = std::sync::Mutex::new(Vec::new());
+
+/// A lost saved record was noticed for `session`; `marker` is the file that will commit it.
+pub fn history_gone_pending(session: &str, marker: std::path::PathBuf) {
+    let mut pending = HISTORY_GONE_PENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !pending.iter().any(|(s, _)| s == session) { pending.push((session.to_string(), marker)); }
+}
+
+/// **The one place a loss becomes "told".** Called when the interruption carrying `reason` has
+/// been recorded in the chat (`spine.rs` `record_interruption`): every pending loss whose session
+/// the reason names is marked, so his next message starts a new session in the chat.
+pub fn commit_history_gone(reason: &str) {
+    let mut pending = HISTORY_GONE_PENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    pending.retain(|(session, marker)| {
+        if !reason.contains(session.as_str()) { return true }
+        if let Err(error) = std::fs::write(marker, b"") { eprintln!("[richos] could not mark the lost history as told: {error}") }
+        false
+    });
+}
+
 /// How long the turn's end waits for the child's last stderr lines once its stdout has closed.
 /// The two pipes close together when it exits; this only covers the drain thread's last read.
 const CHILD_EXIT_STDERR_WITHIN: Duration = Duration::from_millis(500);
@@ -2085,8 +2106,11 @@ fn native_resume(profile: Option<&crate::engine_profile::EngineProfile>,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => match relocated_record(profile, &path) {
             Some(found) => found,
             None => {
-                // Told once, as what it is; marked so his next message starts anew.
-                std::fs::write(profile.state.join("evidence").join(&binding.session_id).join(HISTORY_GONE_MARK), b"")?;
+                // Only noticed here. Opening the chat primes it in the background, where the
+                // failure is logged and nobody is told; the loss is marked lost by
+                // [`commit_history_gone`] once the visible message is recorded, so his first
+                // message still gets the card and only the one after it starts anew.
+                history_gone_pending(&binding.session_id, profile.state.join("evidence").join(&binding.session_id).join(HISTORY_GONE_MARK));
                 return Err(NativeError::HistoryGone { session: binding.session_id });
             }
         },
@@ -5960,6 +5984,11 @@ while True:
             let gone=native_resume(Some(&profile),Some((&reopened,&root)),role);
             assert!(matches!(gone,Err(NativeError::HistoryGone{..})),"missing history silently created a replacement session, or was told as something else: {gone:?}");
             assert!(crate::interruption::classify(&gone.unwrap_err().to_string())==crate::interruption::InterruptionCause::HistoryGone,"lost history was blamed on something else");
+            // Noticed while the chat was merely opened (background priming): NOT yet told, so his
+            // first message must meet the same loss and show it.
+            let again=native_resume(Some(&profile),Some((&reopened,&root)),role);
+            assert!(matches!(again,Err(NativeError::HistoryGone{..})),"opening the chat consumed the warning: {again:?}");
+            commit_history_gone(&again.unwrap_err().to_string());
             assert!(native_resume(Some(&profile),Some((&reopened,&root)),role).unwrap().is_none(),"his next message did not start a new session in the chat");
         }
         std::fs::remove_dir_all(root).unwrap();

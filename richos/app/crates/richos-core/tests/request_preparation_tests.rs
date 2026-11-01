@@ -598,3 +598,34 @@ fn a_chat_that_cannot_start_fails_its_queued_messages_at_once_after_the_repeat()
     let tried = spawns.load(std::sync::atomic::Ordering::SeqCst);
     assert!(tried <= 2, "the app tried to start the chat {tried} times for 6 queued messages");
 }
+
+/// A chat whose saved record is gone: the start fails with the history-gone reason for session S.
+struct HistoryGoneFactory(String);
+impl LeaseFactory for HistoryGoneFactory {
+    fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> {
+        Err(CognitionError::Io(format!("{} (the saved record of session {} is not on this Mac)",
+            richos_core::native::HISTORY_GONE, self.0)))
+    }
+}
+#[test]
+fn a_lost_history_is_marked_told_only_when_the_message_is_on_record() {
+    let (mut spine, _, _, _) = fixture();
+    let a = spine.active_thread().unwrap().to_string();
+    let marker = std::env::temp_dir().join(format!("history-gone-marker-{}", uuid_like()));
+    let session = format!("session-{}", uuid_like());
+    // Noticed while the chat was only opened (background priming): nothing is told yet.
+    richos_core::native::history_gone_pending(&session, marker.clone());
+    assert!(!marker.exists(), "noticing the loss must not commit it");
+    spine.set_lease_factory(Box::new(HistoryGoneFactory(session)));
+    spine.detach_conversation_io();
+    let id = spine.submit_prompt_to(&a, "hello again", Source::Text).unwrap();
+    let shared = Arc::new(Mutex::new(spine));
+    drop(richos_core::spine::drive_shared_turns(&shared));
+    let s = shared.lock().unwrap();
+    assert_eq!(s.ledger().turn(&id).unwrap().state, TurnState::Interrupted);
+    assert!(marker.exists(), "the loss was told on his first message but not committed");
+    std::fs::remove_file(marker).unwrap();
+}
+fn uuid_like() -> String {
+    format!("{}-{:?}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+}

@@ -19,7 +19,8 @@ STEPS, in the guest, never on the host's screen (CEO ruling 65):
   lose        the app is quit (relaunch.py, the captured pid only) and every Claude Code record in the
               guest's `~/.claude/projects` that carries the chat message is deleted; the scope folder
               is listed again (AFTER-QUIT)
-  queue       relaunch; the home screen is left with Return; QUEUED messages are typed with real keys
+  queue       relaunch; the home screen is left with Return (this OPENS the chat, which primes it in the
+              background); once the app's log says that preparation ended, QUEUED messages are typed with real keys
               and sent with the Return key, one after the other. PASS needs exactly ONE turn closed
               by the history-gone sentence (conversation-ledger.jsonl TurnInterrupted), its words on
               the screen (screenshot read by OCR), and no further history-gone sentence in --settle
@@ -170,11 +171,26 @@ class HistoryGoneWalk(base.StuReminderWalk):
         self.save()
         return {'removed': found}
 
+    def primed(self, log):
+        """Wait for the app's own log to say the chat's background preparation ended, either way."""
+        end = time.monotonic() + self.a.within
+        while time.monotonic() < end:
+            tail = guest(self.vm, 'grep -E "conversation preparation finished|front desk was not made ready" %s 2>/dev/null | tail -n 3 || true'
+                         % shlex.quote(log), 60)
+            if tail.strip():
+                return tail.splitlines()
+            time.sleep(3)
+        raise StepFailed('the chat\'s background preparation did not end within %g s of opening it' % self.a.within)
+
     def queue(self):
         record = {'queued': list(QUEUED), 'settle': self.a.settle}
         launched = relaunch(self.vm)
         record['relaunched'] = launched
         record['home'] = self.after_relaunch()
+        # OPEN THE CHAT FIRST (handover review of 31c6b73ac, finding 1): opening it primes it in the
+        # background, which meets the lost record before any message is sent. Messages are sent only
+        # once that priming has ended, so the first message must still be told the loss.
+        record['opened'] = self.primed(launched['log'])
         start = self.clock()
         record['started_at_ms'] = start
         for words in QUEUED:
