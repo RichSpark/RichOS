@@ -24,8 +24,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
              (never through Work's folder, which goes with Work)
   remove     the Work card's Remove, then its confirmation, in the Claude accounts sheet, as a
              person removes it, while the chat runs on Account 1: Work is gone from the list and
-             its sign-in is gone (its records link stays, for good)
-  continue   a message asking for the codeword: answered, in the SAME session as the codeword (its
+             its sign-in is gone and its records link stays
+  relaunch   the app is relaunched: Work's folder still holds only its `projects` link to Account
+             1's records (kept for good: a saved transcript names paths under Work's folder,
+             handover review rv-20261101T200002Z)
+  continue   after that relaunch, a message asking for the codeword: answered, in the SAME session as the codeword (its
              prompt is in the same session's callbacks, so the chat resumed its record and did not
              start over), and the answer names the codeword
 
@@ -53,7 +56,7 @@ toolchain_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(toolchain_walk)
 StepFailed = toolchain_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'accounts', 'chat', 'switch', 'remove', 'continue']
+STEPS = ['identity', 'first-run', 'accounts', 'chat', 'switch', 'remove', 'relaunch', 'continue']
 REMEMBER = 'Remember this codeword for later in this chat: {code}. Reply with one word: noted.'
 RECALL = 'What was the codeword I asked you to remember earlier in this chat? Reply with the codeword only.'
 RETURN_KEY = '36'
@@ -261,8 +264,32 @@ class AccountRemoveWalk(toolchain_walk.ToolchainAskWalk):
         # that still runs and every path a saved transcript names under Work's folder
         # (claude_accounts.rs remove_sign_in, remove_leftover).
         left = guest(self.vm, 'ls -A ' + shlex.quote(self.work) + ' 2>/dev/null || true').split()
-        if left not in ([], ['projects']):
-            failures.append("Work's sign-in is still there: " + folder[:300])
+        if left != ['projects']:
+            failures.append("Work's folder should hold only its records link: " + folder[:300])
+        if failures:
+            raise StepFailed('; '.join(failures))
+        return evidence
+
+    def relaunch_after_removal(self):
+        """The next launch keeps Work's records link (claude_accounts.rs remove_leftover): every path
+        a saved transcript names under Work's folder still reads the shared records."""
+        relaunch(self.vm)
+        took = self.through_home()
+        left = guest(self.vm, 'ls -A ' + shlex.quote(self.work) + ' 2>/dev/null || true').split()
+        link = guest(self.vm, 'readlink ' + shlex.quote(self.work + '/projects') + ' || true').strip()
+        session = self.facts.get('session', 'none')
+        through = guest(self.vm, 'grep -c ' + shlex.quote(self.facts['code']) + ' ' + shlex.quote(self.work)
+                        + '/projects/*/' + shlex.quote(session) + '.jsonl 2>/dev/null || true').strip()
+        evidence = {'home_after_s': took, 'work_folder': left, 'work_projects_link': link,
+                    'codeword_lines_read_through_work': through}
+        self.write('relaunch.json', evidence)
+        failures = []
+        if left != ['projects']:
+            failures.append("Work's folder after the relaunch holds %s, not only its records link" % left)
+        if link != self.records:
+            failures.append("Work's records link after the relaunch points at %r, not %r" % (link, self.records))
+        if not through or through.split()[-1] in ('', '0'):
+            failures.append("the chat's record does not read through the path under Work's folder: %r" % through)
         if failures:
             raise StepFailed('; '.join(failures))
         return evidence
@@ -314,7 +341,7 @@ def main():
         began = time.monotonic()
         row = {'step': step}
         try:
-            name = {'continue': 'continue_'}.get(step, step.replace('-', '_'))
+            name = {'continue': 'continue_', 'relaunch': 'relaunch_after_removal'}.get(step, step.replace('-', '_'))
             row['evidence'] = getattr(walk, name)()
             row['outcome'] = 'PASS'
         except (StepFailed, RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError) as exc:
