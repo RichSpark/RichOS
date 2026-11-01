@@ -2022,3 +2022,36 @@ fn a_sent_card_opens_the_relay_link_on_either_address_and_nothing_else() {
     assert!(page_to_open("https://github.com/WebDevBooster/richos-report-test/issues/3", Post::Bug, test).is_some());
     assert_eq!(page_to_open("https://github.com/RichSpark/RichOS/issues/3", Post::Bug, test), None);
 }
+
+// ---------------------------------------------------------------------------------------
+// §156 (CEO 2026-11-01): NOTHING IN THE BUG-REPORT PATH DROPS WHAT THE USER ALREADY DID, ASKS HIM
+// AGAIN, OR LEAVES HIM A STEP THE APP CAN DO ITSELF.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_written_up_card_is_kept_and_comes_back_after_a_relaunch_until_it_is_done_with() {
+    let dir = scratch("kept-card");
+    let written = checked_with("The window froze.", "[]");
+    let id = report_id();
+    let outbox = Outbox::open(&dir);
+    outbox.keep_card(&id, "the window froze", &screen(), written.clone(), 1_000).unwrap();
+
+    // Nothing of it can be sent from there.
+    assert!(outbox.pending().unwrap().is_empty() && outbox.sent().unwrap().is_empty());
+    // A relaunch: a new Outbox over the same folder gives the window the same card, unasked.
+    let relaunched = Outbox::open(&dir);
+    let back = relaunched.check_due(u64::MAX, |_| panic!("Rich was asked about a card he had written")).unwrap();
+    assert_eq!(back, vec![(id.clone(), written.clone())]);
+    // The card Rich's change made since is the one that comes back.
+    let mut changed = written.clone();
+    changed.draft.sections[0].paragraphs.push(plain("It froze twice."));
+    assert!(relaunched.update_card(&id, changed.clone()).unwrap(), "a kept card is updated");
+    assert_eq!(Outbox::open(&dir).check_due(u64::MAX, |_| panic!("asked")).unwrap(), vec![(id.clone(), changed)]);
+    // A card that is not kept is not made by an update.
+    assert!(!relaunched.update_card(&report_id(), written).unwrap(), "a card that is not kept was made");
+    assert_eq!(relaunched.unchecked().unwrap().len(), 1);
+    // Sent, canceled or dropped: it is taken off, once, and is gone.
+    assert!(relaunched.take_unchecked(&id).unwrap());
+    assert!(Outbox::open(&dir).check_due(u64::MAX, |_| panic!("asked")).unwrap().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}

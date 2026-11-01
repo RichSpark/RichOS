@@ -3084,6 +3084,11 @@
     const scrubbed = (preset.bugPrivateWords || []).map((w) => ({ text: w, kind: /@/.test(w) ? "email_address" : "private_word" }));
     return kept.concat(preset.bugRichCheck || [], scrubbed);
   }
+  /// A kept card goes off this Mac once it is sent or waiting in full (the shell's `take_unchecked`).
+  function bugDropCard(report) {
+    const at = bugMock.unchecked.findIndex((u) => u.id === report);
+    if (at !== -1) bugMock.unchecked.splice(at, 1);
+  }
   function bugDeliver(sheet, id, post) {
     const reason = BUG_REASON[bugMock.net];
     if (!reason) {
@@ -3137,6 +3142,15 @@
     keptBefore(answer, screen, post) {
       bugMock.unchecked.push({ id: "00000000-0000-4000-9000-" + String(++bugMock.seq).padStart(12, "0"), answer, screen: screen || {}, post: post || "bug" });
     },
+    /// A written-up card kept before the app was last quit (the shell's `keep_card`): on this Mac
+    /// with Rich's checked words, no card in this window. The shell's loop says it on
+    /// `rich://bug-report` after a launch (`claudeAnswers` is that pass here).
+    keptCardBefore(answer, screen, post) {
+      const id = "00000000-0000-4000-9000-" + String(++bugMock.seq).padStart(12, "0");
+      const draft = bugDraft(answer, screen || {}, post || "bug");
+      bugMock.unchecked.push({ id, answer, screen: screen || {}, post: post || "bug", card: { draft, digest: bugDigest(screen) } });
+      return id;
+    },
     /// Claude answers again: the shell's check loop asks Rich about each report he could not
     /// check and says each one on `rich://bug-report` as `{ checked }`, as it does on every pass
     /// until the window takes it.
@@ -3145,9 +3159,9 @@
       bugMock.unchecked.forEach((u) => {
         // Changed words he could not check at Send: the scanner and then he go over those (the
         // core's `checked_edit`).
-        const draft = u.edited ? bugRedraft(u.edited.sheet, u.edited.private.concat(preset.bugRichCheck || [])) : bugDraft(u.answer, u.screen, u.post);
+        const draft = u.card ? u.card.draft : u.edited ? bugRedraft(u.edited.sheet, u.edited.private.concat(preset.bugRichCheck || [])) : bugDraft(u.answer, u.screen, u.post);
         if (!bugMock.checks[u.id]) bugKeepCheck(u.id, draft);
-        const digest = u.edited ? "Checked your changes for private details" : bugDigest(u.screen);
+        const digest = u.card ? u.card.digest : u.edited ? "Checked your changes for private details" : bugDigest(u.screen);
         emit("rich://bug-report", { checked: { id: u.id, report: u.id, draft, digest, here: u.screen.here || "", post: u.post || "bug" } });
       });
     },
@@ -4592,6 +4606,9 @@
           const draft = bugDraft(args.answer, args.screen, args.post);
           const report = "00000000-0000-4000-a000-" + String(++bugMock.seq).padStart(12, "0");
           bugKeepCheck(report, draft);
+          // Kept on this Mac as soon as it is written up (the shell's `keep_card`, CEO §156), until
+          // it is sent, canceled or dropped.
+          bugMock.unchecked.push({ id: report, answer: String(args.answer || ""), screen: args.screen || {}, post: args.post || "bug", card: { draft, digest: bugDigest(args.screen) } });
           return { state: "checked", report, draft, digest: bugDigest(args.screen), workedMs: 9000 };
         }
         case "bug_report_take_unchecked": {
@@ -4627,13 +4644,19 @@
             if (bugMock.claude === "down") {
               const id = "00000000-0000-4000-9000-" + String(++bugMock.seq).padStart(12, "0");
               bugMock.unchecked.push({ id, answer: "", screen: args.screen || {}, post: args.post || "bug", edited: { sheet: args.sheet, private: (held || {}).private || [] } });
+              bugDropCard(report);
               return { state: "unchecked", id };
             }
             const again = bugRedraft(args.sheet, named);
             bugKeepCheck(report, again);
-            if (JSON.stringify(bugSheetOf(again)) !== JSON.stringify(args.sheet)) return { state: "checked", report, draft: again, digest: "Checked your changes for private details" };
+            if (JSON.stringify(bugSheetOf(again)) !== JSON.stringify(args.sheet)) {
+              const card = bugMock.unchecked.find((u) => u.id === report);
+              if (card) card.card = { draft: again, digest: "Checked your changes for private details" };
+              return { state: "checked", report, draft: again, digest: "Checked your changes for private details" };
+            }
           }
           const d = bugDeliver(args.sheet, "00000000-0000-4000-8000-" + String(++bugMock.seq).padStart(12, "0"), args.post);
+          bugDropCard(report);
           if (d.state === "sent") delete bugMock.checks[report];
           return d;
         }

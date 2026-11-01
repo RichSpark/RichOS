@@ -2588,6 +2588,35 @@ impl Outbox {
         Ok(WriteUp::Unchecked { id: unchecked.id })
     }
 
+    /// **A WRITTEN-UP CARD KEPT ON THIS MAC** (CEO §156: a quit, an update relaunch or the crash
+    /// being reported must not lose what Rich wrote up). `id` is the report's id (the one its check
+    /// is kept under for Send). It is kept the way a check the window has not taken is: in
+    /// `<dir>/unchecked/` with `checked` set, so [`Outbox::check_due`] hands it to the window again
+    /// after a relaunch. It stays until the card is sent, canceled or dropped ([`Outbox::take_unchecked`]).
+    pub fn keep_card(&self, id: &str, answer: &str, screen: &Screen, checked: Checked, now_ms: u64) -> io::Result<()> {
+        self.write_unchecked(&Unchecked {
+            id: id.to_string(),
+            created_at_ms: now_ms,
+            answer: answer.trim().to_string(),
+            screen: screen.clone(),
+            attempts: 1,
+            next_try_at_ms: now_ms,
+            checked: Some(checked),
+            edited: None,
+        })
+    }
+
+    /// The kept card `id` now reads as `checked` (Rich's last word on it changed). Nothing is
+    /// written, and `false` answered, when no card is kept by that id.
+    pub fn update_card(&self, id: &str, checked: Checked) -> io::Result<bool> {
+        let Some(path) = self.unchecked_path(id) else { return Ok(false) };
+        let Ok(bytes) = std::fs::read(&path) else { return Ok(false) };
+        let Ok(mut kept) = serde_json::from_slice::<Unchecked>(&bytes) else { return Ok(false) };
+        kept.checked = Some(checked);
+        self.write_unchecked(&kept)?;
+        Ok(true)
+    }
+
     /// Every report Rich has not checked yet, or whose check the window has not taken, oldest
     /// first. A file this build cannot read is skipped, never deleted.
     pub fn unchecked(&self) -> io::Result<Vec<Unchecked>> {
@@ -2631,8 +2660,9 @@ impl Outbox {
         Ok(out)
     }
 
-    /// Take a report off the unchecked list: the window has shown Rich's check on a card, or the
-    /// user canceled it. `false` when there was none by that id.
+    /// Take a report off the unchecked list: its card was sent (or is waiting in full in the
+    /// outbox), or the user canceled or dropped it (CEO §156: showing the card does not take it
+    /// off, so a relaunch brings it back). `false` when there was none by that id.
     pub fn take_unchecked(&self, id: &str) -> io::Result<bool> {
         let Some(path) = self.unchecked_path(id) else { return Ok(false) };
         match std::fs::remove_file(path) {

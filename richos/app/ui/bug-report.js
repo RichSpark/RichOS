@@ -101,6 +101,7 @@ window.RichBug = (function () {
       notSaved: "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.",
       canceled: "Canceled. Nothing was sent.",
       savedToast: "Your bug report is saved on this Mac and goes out by itself when it can.",
+      draftToast: "Your bug report is saved on this Mac, not sent. Press Bust a bug to come back to it.",
       uncheckedToast: "Your bug report is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
     idea: {
@@ -126,6 +127,7 @@ window.RichBug = (function () {
       notSaved: "I couldn't save your idea on this Mac, so nothing was posted. Press Post idea to try again.",
       canceled: "Canceled. Nothing was posted.",
       savedToast: "Your idea is saved on this Mac and is posted by itself when it can.",
+      draftToast: "Your idea is saved on this Mac, not posted. Press Request a feature to come back to it.",
       uncheckedToast: "Your idea is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
   };
@@ -672,6 +674,9 @@ window.RichBug = (function () {
     if (!c || !c.id) return;
     var kind = c.post === "idea" ? "idea" : "bug";
     if (taken[c.id]) return takeOff(c.id, kind);
+    // The card is already on screen, or was and is done with: the shell says a kept card on every
+    // pass, so this is a repeat.
+    if (flows.some(function (x) { return x.report === c.id; })) return;
     var f = flows.filter(function (x) { return x.uncheckedId === c.id; })[0];
     var earlier = !f;
     if (earlier) {
@@ -683,8 +688,9 @@ window.RichBug = (function () {
       $("bugdock-where").textContent = "· " + label;
     }
     if (f.step !== "unchecked") return;
-    taken[c.id] = true;
-    takeOff(c.id, postOf(f));
+    // Shown, and NOT taken off this Mac: the card stays kept until it is sent, canceled or dropped
+    // (CEO §156), so a quit, a relaunch or a crash does not lose it. The shell says it again on
+    // every pass; a flow already showing it (`f.report`) ignores that.
     f.uncheckedId = null;
     if (f.uncheckedActs) { f.uncheckedActs.remove(); f.uncheckedActs = null; }
     showDock(f);
@@ -1412,6 +1418,8 @@ window.RichBug = (function () {
   function cancel(f) {
     if (f.step !== "draft" && f.step !== "queued") return;
     withdraw(f, "cancel", function () {
+      // Canceled: its kept copy goes too, so a relaunch does not bring it back (CEO §156).
+      if (f.report) { taken[f.report] = true; takeOff(f.report, postOf(f)); }
       f.step = "canceled";
       paintCard(f);
       paintComposers();
@@ -1484,9 +1492,12 @@ window.RichBug = (function () {
   }
   function paintDock() {
     var f = dockFlow();
-    var busy = f && ["checking", "draft", "editing", "changing", "sending", "withdrawing"].indexOf(f.step) !== -1;
+    // A written-up card waiting for Send is kept on this Mac (CEO §156), so the panel may close
+    // over it and the press that opens it again comes back to it (`start`). Only a step that is
+    // mid-air (Rich working, a words being changed, a send in flight) holds the panel open.
+    var busy = f && ["checking", "editing", "changing", "sending", "withdrawing"].indexOf(f.step) !== -1;
     var x = $("bugdock-x");
-    if (x) x.hidden = !!busy; // while a report waits on a decision, Send or Cancel is the way out
+    if (x) x.hidden = !!busy;
   }
 
   // ---- paint the sticky actions' edge only while they float over the report -----------------
@@ -1618,6 +1629,7 @@ window.RichBug = (function () {
       var f = dockFlow();
       if (f && f.step === "ask") neverMind(f, true);
       if (f && f.step === "queued" && host) host.toast(W(f).savedToast);
+      if (f && f.step === "draft" && host) host.toast(W(f).draftToast);
       if (f && f.step === "unchecked" && host) host.toast(W(f).uncheckedToast);
       hideDock();
     });

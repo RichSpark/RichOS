@@ -458,14 +458,20 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
             eprintln!("[richos] bug report: the report could not be kept on this Mac ({e})");
         "RichOS couldn't save the report on this Mac, so nothing was sent. Try sending the report again.".to_string()
         })?;
-        let mut answer = serde_json::to_value(&write_up).map_err(|e| e.to_string())?;
+        let mut told = serde_json::to_value(&write_up).map_err(|e| e.to_string())?;
         if let bug::WriteUp::Checked(checked) = &write_up {
             let report = bug::report_id();
             bugs.checks().insert(report.clone(), bug::Check::of(&checked.draft));
-            answer["report"] = serde_json::json!(report);
+            // The card is kept on this Mac as soon as it is written up (CEO §156), so a quit, an
+            // update relaunch or the crash being reported does not lose it. If it cannot be kept
+            // the card still shows and still sends; only a relaunch would lose it, and that is said.
+            if let Err(e) = bugs.outbox(post).keep_card(&report, &answer, &screen, checked.clone(), now_ms()) {
+                eprintln!("[richos] bug report {report}: the written-up card could not be kept on this Mac ({e}); a relaunch would lose it");
+            }
+            told["report"] = serde_json::json!(report);
         }
-        answer["workedMs"] = serde_json::json!(started.elapsed().as_millis() as u64);
-        Ok(answer)
+        told["workedMs"] = serde_json::json!(started.elapsed().as_millis() as u64);
+        Ok(told)
     })
     .await
 }
@@ -588,6 +594,11 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
             bug::AtSend::Send(public) => {
                 let relay = bugs.relay();
                 let delivery = deliver(&bugs, post, |o| o.send(&public, &relay, &relay, now_ms()).map(Some))?.ok_or_else(|| "nothing was sent".to_string())?;
+                // Sent, or written to the waiting folder in full: either way the kept card has
+                // done its job (CEO §156), and a relaunch must not bring it back to be sent again.
+                if let Err(e) = bugs.outbox(post).take_unchecked(&report) {
+                    eprintln!("[richos] bug report {report}: the kept card could not be taken off this Mac ({e}); it returns after a relaunch");
+                }
                 if matches!(delivery, bug::Delivery::Sent(_)) {
                     bugs.checks().remove(&report);
                 }
@@ -595,6 +606,10 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
             }
             bug::AtSend::Show(his) => {
                 bugs.checks().insert(report.clone(), bug::Check::of(&his.draft));
+                // The kept card now reads as his version (nothing is written if none is kept).
+                if let Err(e) = bugs.outbox(post).update_card(&report, his.clone()).map(|_| ()) {
+                    eprintln!("[richos] bug report {report}: the kept card could not be updated ({e})");
+                }
                 Ok(serde_json::json!({ "state": "checked", "report": report, "draft": his.draft, "digest": his.digest }))
             }
             bug::AtSend::Unchecked(why) => {
@@ -603,6 +618,11 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
                     eprintln!("[richos] bug report: the changed report could not be kept on this Mac ({e})");
                     "RichOS couldn't save the report on this Mac, so nothing was sent. Try sending the report again.".to_string()
                 })?;
+                // The changed words now wait under their own id; the card's kept copy is the old
+                // words and must not come back beside them.
+                if let Err(e) = bugs.outbox(post).take_unchecked(&report) {
+                    eprintln!("[richos] bug report {report}: the kept card could not be taken off this Mac ({e})");
+                }
                 serde_json::to_value(kept).map_err(|e| e.to_string())
             }
         }
