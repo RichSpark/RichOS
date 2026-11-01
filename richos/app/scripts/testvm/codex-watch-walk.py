@@ -110,16 +110,22 @@ class CodexWatchWalk(stu.StuReminderWalk):
 
     def chat_menu(self, thread):
         entity = next(r['entity_id'] for r in self.threads() if r['thread_id'] == thread)
-        company = next(e['display_name'] for e in self.registry()['entities'] if e['id'] == entity)
-        def owning_rows():
-            rows = self.ax('find', '--title', self.title(thread), '--role', 'AXButton', '--contains')
-            return [r for r in rows if 'in ' + company in (r.get('title', '') + ' ' + r.get('desc', ''))
-                    and r.get('w', 0) > 0 and r.get('h', 0) > 0]
-        row = self.wait_fact('owning chat row including company label', owning_rows, bool)[0]
-        point = '%s,%s' % (row['x'] + row['w'] / 2, row['y'] + row['h'] / 2)
-        # Same-title chats have indistinguishable Actions labels. Right-click
-        # the company's actual row so its existing thread-bound menu is used.
-        stu.command_walk.command([HERE / 'pointer-drag.sh', self.vm, point, point, '--right'], 90)
+        companies = self.registry()['entities']
+        company = next(e['display_name'] for e in companies if e['id'] == entity)
+        if self.present('Show the sidebar'):
+            self.press('Show the sidebar')
+        # Company-group rows omit the company suffix. Hide other groups through
+        # the normal controls so the same-title Actions label is unambiguous.
+        # These navigation controls do not select/activate another conversation.
+        for other in companies:
+            label = 'Collapse ' + other['display_name']
+            if other['id'] != entity and self.present(label):
+                self.press(label, contains=False)
+        if self.present('Expand ' + company):
+            self.press('Expand ' + company, contains=False)
+        label = 'Actions for ' + self.title(thread)
+        self.wait_for(label, seconds=120)
+        self.ax('click', '--title', label, '--role', 'AXButton', '--in', 'sidebar', '--contains', '--first')
 
     def rename(self, thread, title):
         self.chat_menu(thread)
