@@ -39,6 +39,8 @@ enum Pending {
     Rough,
     /// Claude's question.
     Claude(String),
+    /// RichDoctor's own, when Claude does not ask: `report::WITHOUT_AI_QUESTIONS[n]`, n = 1 or 2.
+    Own(usize),
 }
 
 struct Inner {
@@ -225,7 +227,19 @@ impl Engine {
             return;
         }
         if self.env.claude.is_none() {
-            self.ai_failed(Failure::NotInstalled);
+            // No Claude Code to ask the questions: RichDoctor asks them itself, so the report is
+            // not left with "When: Not known." and unknowns the person is made to fill in by hand.
+            {
+                let mut inner = self.inner.lock().unwrap();
+                if let Some(d) = inner.draft.as_mut() {
+                    d.without_ai = true;
+                    d.ai_failure = Some(Failure::NotInstalled);
+                }
+                self.save(&mut inner);
+            }
+            self.send(json!({"t": "sub", "text": "Claude Code is not available right now"}));
+            self.line(Entry::Doctor { text: format!("{} I will ask the few questions myself.", Failure::NotInstalled.message()) });
+            self.without_ai();
             return;
         }
         if ambiguous {
@@ -319,8 +333,21 @@ impl Engine {
                     self.save(&mut inner);
                 }
                 self.write_scope();
-                let first = self.first_message();
-                self.claude(first);
+                if self.inner.lock().unwrap().draft.as_ref().is_some_and(|d| d.without_ai) {
+                    self.ask_own(1);
+                } else {
+                    let first = self.first_message();
+                    self.claude(first);
+                }
+            }
+            Pending::Own(n) => {
+                self.record_answer(&text);
+                self.inner.lock().unwrap().pending = Pending::None;
+                if n + 1 < report::WITHOUT_AI_QUESTIONS.len() {
+                    self.ask_own(n + 1);
+                } else {
+                    self.finish_without_ai();
+                }
             }
             Pending::Claude(_) | Pending::None => {
                 self.record_answer(&text);
@@ -631,18 +658,24 @@ impl Engine {
         self.busy.store(true, Ordering::SeqCst);
         self.collect_here(&report::without_ai_categories(diagnostics));
         self.busy.store(false, Ordering::SeqCst);
-        {
-            let mut inner = self.inner.lock().unwrap();
-            if let Some(d) = inner.draft.as_mut() {
-                for q in report::WITHOUT_AI_QUESTIONS {
-                    d.questions.push((q.to_string(), None));
-                }
-            }
-        }
+        // The questions Claude would have asked, asked here with the window's own question
+        // screen: when it happened first (it sets the report's When), then what the person
+        // expected and what they were doing just before (the report's Expected and steps).
+        self.ask(Pending::When, when::QUESTION, when::CHOICES.iter().map(|s| s.to_string()).collect());
+    }
+
+    /// The next of RichDoctor's own questions (`report::WITHOUT_AI_QUESTIONS[n]`), free text.
+    fn ask_own(&self, n: usize) {
+        self.ask(Pending::Own(n), report::WITHOUT_AI_QUESTIONS[n], Vec::new());
+    }
+
+    /// Every question is answered: the report can be reviewed.
+    fn finish_without_ai(&self) {
+        let diagnostics = !self.inner.lock().unwrap().draft.as_ref().is_some_and(|d| d.no_diagnostics);
         let text = if diagnostics {
-            "Your report is ready to review. It contains your description and what RichDoctor collected on this Mac. Questions Claude would have asked are listed as unknown so you can fill them in."
+            "Your report is ready to review. It contains your description, your answers and what RichDoctor collected on this Mac."
         } else {
-            "Your report is ready to review. It contains your description and the RichOS version; nothing else was collected."
+            "Your report is ready to review. It contains your description, your answers and the RichOS version; nothing else was collected."
         };
         self.line(Entry::Doctor { text: text.into() });
         self.send(json!({"t": "ready"}));
@@ -1215,6 +1248,8 @@ impl Engine {
             Some(when::QUESTION) => Pending::When,
             Some(when::ROUGH_QUESTION) => Pending::Rough,
             Some(when::WHICH_QUESTION) => Pending::Which,
+            Some(q) if q == report::WITHOUT_AI_QUESTIONS[1] => Pending::Own(1),
+            Some(q) if q == report::WITHOUT_AI_QUESTIONS[2] => Pending::Own(2),
             Some(other) => Pending::Claude(other.to_string()),
             None => Pending::None,
         };
@@ -1402,6 +1437,56 @@ mod tests {
             engine.use_image(&util::base64_std(&png(seed)), u32::from(seed == 1), false).unwrap();
         }
         (engine, seen, root)
+    }
+
+    /// Answer each question the window shows, in order, until `ready`; returns the questions asked.
+    fn answer_every_question(e: &Engine, events: &Arc<Mutex<Vec<Value>>>, answers: &[&str]) -> Vec<String> {
+        let mut asked = Vec::new();
+        for a in answers {
+            wait_for(events, &["question"]);
+            let q = events.lock().unwrap().iter().rev().find(|v| v["t"] == "question").unwrap()["text"].as_str().unwrap().to_string();
+            asked.push(q);
+            events.lock().unwrap().clear();
+            e.answer((*a).into());
+        }
+        wait_for(events, &["ready"]);
+        asked
+    }
+
+    #[test]
+    fn prepare_without_ai_asks_when_and_the_two_questions_and_the_report_carries_the_answers() {
+        let root = scratch("without-ai");
+        let (e, events) = engine_at(&root.join("store"), None);
+        e.start("RichOS closes before its window opens".into(), true, true).unwrap();
+        let asked = answer_every_question(&e, &events, &["Earlier today", "The window opens with my conversations", "I had just updated macOS"]);
+        assert_eq!(asked, [when::QUESTION, report::WITHOUT_AI_QUESTIONS[1], report::WITHOUT_AI_QUESTIONS[2]]);
+        events.lock().unwrap().clear();
+        e.prepare();
+        wait_for(&events, &["review"]);
+        let text = e.exact_text().unwrap().1;
+        e.close();
+        assert!(text.contains("The window opens with my conversations"), "expected: {text}");
+        assert!(text.contains("I had just updated macOS"), "steps: {text}");
+        assert!(!text.contains("Not known"), "when: {text}");
+        assert!(!text.contains("Not answered, unknown"), "nothing is left for the person to type in: {text}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_missing_claude_code_asks_the_same_questions_instead_of_skipping_when() {
+        let root = scratch("no-claude");
+        let (e, events) = engine_at(&root.join("store"), None);
+        e.start("RichOS closes before its window opens".into(), true, false).unwrap();
+        let asked = answer_every_question(&e, &events, &["Yesterday", "It should open", "I opened it from the Dock"]);
+        assert_eq!(asked[0], when::QUESTION);
+        events.lock().unwrap().clear();
+        e.prepare();
+        wait_for(&events, &["review"]);
+        let text = e.exact_text().unwrap().1;
+        e.close();
+        assert!(text.contains("It should open") && text.contains("I opened it from the Dock"), "{text}");
+        assert!(!text.contains("Not known"), "{text}");
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
