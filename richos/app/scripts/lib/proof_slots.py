@@ -39,14 +39,19 @@ naming the run it waits for, so the lead's turn end is refused once it passes te
 `status` reads the holder and waiter files and probes their locks with a shared, non-blocking
 lock that it drops at once; it never touches a slot file, so looking cannot delay admission.
 
-A RUN WHOSE CHECKS STILL WAIT HOLDS THE NEXT ONE BACK (2026-10-29, work-6ec9b429). With the
-limit set to 6, six runs started together; one of them ran 46 min at 95% CPU and 30 of its 37
-checks were never admitted, so it proved almost nothing. The limit is a ceiling, never a reason
-to start: while a holder still has checks waiting to be admitted (it publishes how many in its
-`slot-NNN.waiting` file, written by the run, removed when none wait or the slot is released, and
-believed only while that holder's lock is held by the pid it names), a free slot is not taken.
-The new run waits in line and says which run it waits behind. With the default of one run at a
-time this changes nothing.
+A RUN WHOSE CHECKS STILL WAIT GOES FIRST (2026-10-29, work-6ec9b429; reshaped 2026-11-01). With
+the limit set to 6, six runs started together; one of them ran 46 min at 95% CPU and 30 of its 37
+checks were never admitted, so it proved almost nothing. Each holder publishes how many of its
+checks still wait to be admitted in its `slot-NNN.waiting` file (written by the run, removed when
+none wait or the slot is released, believed only while that holder's lock is held by the pid it
+names), and a run behind it starts none of its own checks while that count is above zero
+(`ahead_of`, below). Until 2026-11-01 that count ALSO kept a free slot from being taken: the next
+run waited in line, unstarted, recorded as a CPU wait. That second hold protected nothing
+`ahead_of` does not already protect, and it kept whole runs out while slots were free: on
+2026-11-01 one run waited 10 min behind another's waiting checks while the stall watcher sampled
+the Mac at 19% busy, and the nightly's own checks waited 10 min the same way. So a free slot is
+taken at once; the run in it gives way check by check, and uses only what the runs ahead of it
+cannot.
 
 ONLY CHECKS THE MAC COULD TAKE NOW COUNT, AND A NEWER RUN GIVES WAY (2026-10-31). The count used
 to be every check not yet started, and most of those wait for the run's own work, not for the
@@ -65,6 +70,20 @@ exception keeps a single priority order: a land in the primary checkout holding 
 priority (engine_pass.Admission) never gives way, because that priority is what keeps an older
 background run's checks waiting; giving way to them left both waiting until the 600 s turn
 expired (review rv-20261031T223851Z-0d748dd7-f9f7). Once its turn is over it gives way like any.
+
+A NIGHTLY OR RELEASE COMMAND'S RUN GOES FIRST (2026-11-01). On 2026-11-01 08:47-08:57Z the
+nightly's mutation batch (nightly-local.py `mutation_units`) stood #1 in line for 10 min behind a
+teammate's run, and went on only after the lead asked the teammate to stop. The CEO's first point
+on builds: he says go and walks away, and the right app is built. A run is the build's own when
+its checkout is a nightly state folder's `source` tree while that folder's `release.lock` is held
+(nightly-local.py `Runner.source` and `exclusive()`, which every nightly-local command holds for
+its whole run).
+Such a run never waits in the line: it takes a free slot, or one past the limit when none is free.
+In the order above it is ahead of every other run whenever it took its slot, so each teammate run
+gives way check by check while the build's run has checks waiting; nothing of the teammate's is
+stopped, its running checks finish and its waiting ones start once the build's run has none
+waiting. A teammate cannot claim it from its own worktree: the checkout must be the build's
+source tree. The engine nightly (nightly-engine.py) is not one: it yields to the app nightly.
 
 NESTED RUNS. A suite that runs the real proof-run.py (proof-run.test.py, test-results.test.sh)
 inside a check of a proof run works inside its caller's slot: the caller exports its holder
@@ -196,6 +215,22 @@ def _read(path):
         return {}
 
 
+def release_owned(checkout):
+    """True when `checkout` is a nightly or release command's own source tree while that command
+    runs (header): `<state>/source` beside `<state>/release.lock`, and that lock held right now."""
+    if not checkout:
+        return False
+    path = os.path.realpath(checkout)
+    return (os.path.basename(path) == "source"
+            and _locked(os.path.join(os.path.dirname(path), "release.lock")) is True)
+
+
+def _rank(record):
+    """The order runs are admitted in (header): a build's run before any other, then by slot taken."""
+    return (0 if record.get("first") else 1, record.get("since") or 0,
+            record.get("slot") if isinstance(record.get("slot"), int) else -1)
+
+
 class Slot(object):
     def __init__(self, index, fds, holder_path, borrowed=False):
         self.index, self._fds, self.holder_path, self.borrowed = index, list(fds), holder_path, borrowed
@@ -248,7 +283,7 @@ def _try(d, n, meta, checks=0):
         record = dict(meta, pid=os.getpid(), since=time.time(), slot=i)
         os.write(hfd, (json.dumps(record) + "\n").encode())
         slot = Slot(i, [fd, hfd], holder)
-        slot.since = record["since"]
+        slot.since, slot.first = record["since"], bool(record.get("first"))
         # Until its checks are admitted, every one of them waits: said before the next run looks.
         _publish(holder, checks)
         slot._published = checks
@@ -281,21 +316,24 @@ def waiting_holders(d=None):
 
 
 def ahead_of(slot):
-    """The holders that took their slot before `slot` and still have checks waiting to be admitted
+    """The holders ahead of `slot` in the admission order (`_rank`: a nightly or release command's
+    run first, then the order slots were taken) that still have checks waiting to be admitted
     (header): while there is one, `slot`'s run starts none of its own. Empty for a borrowed slot (a
     proof run inside a check of its caller is part of that caller's run) and for no slot at all."""
     if slot is None or slot.borrowed or not slot.fds or not slot.holder_path:
         return []
-    mine = (getattr(slot, "since", None) or _read(slot.holder_path).get("since") or time.time(), slot.index)
+    record = _read(slot.holder_path)
+    mine = _rank({"first": getattr(slot, "first", record.get("first")),
+                  "since": getattr(slot, "since", None) or record.get("since") or time.time(), "slot": slot.index})
     own = os.path.realpath(slot.holder_path)
     return [r for r in waiting_holders(os.path.dirname(slot.holder_path))
-            if os.path.realpath(r["holder_file"]) != own
-            and (r.get("since") or 0, r.get("slot") if isinstance(r.get("slot"), int) else -1) < mine]
+            if os.path.realpath(r["holder_file"]) != own and _rank(r) < mine]
 
 
 def describe_behind(rows):
-    return "; ".join("%s (pid %s): %d of its checks still wait to be admitted" % (
-        r.get("waiter", "?"), r.get("pid", "?"), r["waiting"]) for r in rows)
+    return "; ".join("%s (pid %s%s): %d of its checks still wait to be admitted" % (
+        r.get("waiter", "?"), r.get("pid", "?"), ", a nightly or release command's run" if r.get("first") else "",
+        r["waiting"]) for r in rows)
 
 
 def _ancestors(pid):
@@ -381,10 +419,11 @@ def describe_holders(rows, now=None):
 
 
 def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None, checks=0):
-    """A slot for this run: at once when one is free, nobody waits and no holder still has checks
-    waiting to be admitted (header), else in line. `checks`: how many this run plans, published as
-    waiting until it says otherwise. Returns (slot, seconds waited). Raises TimeoutError, naming
-    the holders, after `wait_seconds`."""
+    """A slot for this run: at once when one is free and nobody waits, else in line; a nightly or
+    release command's run (`release_owned(meta["checkout"])`) never waits, taking a slot past the
+    limit when none is free (header). `checks`: how many this run plans, published as waiting
+    until it says otherwise. Returns (slot, seconds waited). Raises TimeoutError, naming the
+    holders, after `wait_seconds`."""
     say = say or (lambda line: None)
     d = directory()
     meta = dict(meta, waiter=_waiter_name(), cwd=os.getcwd())
@@ -392,7 +431,12 @@ def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None, checks=0):
     if borrowed is not None:
         return borrowed, 0.0
     n, _source = limit(d)
-    if not _waiters(d) and not waiting_holders(d):
+    if release_owned(meta.get("checkout")):
+        meta["first"] = True
+        slot = _try(d, n + cores(), meta, checks)
+        if slot is not None:
+            return slot, 0.0
+    if not _waiters(d):
         slot = _try(d, n, meta, checks)
         if slot is not None:
             return slot, 0.0
@@ -415,21 +459,17 @@ def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None, checks=0):
         while True:
             n, _source = limit(d)
             line = _waiters(d)
-            behind = waiting_holders(d)
-            if line and line[0] == mine and not behind:
-                slot = _try(d, n, meta, checks)
+            if meta.get("first") or (line and line[0] == mine):
+                slot = _try(d, n + cores() if meta.get("first") else n, meta, checks)
                 if slot is not None:
                     return slot, time.time() - started
             position = line.index(mine) + 1 if mine in line else 1
             held = holders(d)
             why = ("proof-run: waiting for a proof-run slot (this Mac runs %d at once): held by %s; #%d in line"
                    % (n, describe_holders(held), position))
-            if behind:
-                why += "; waiting behind %s" % describe_behind(behind)
-            # What the line is SAID again for: the limit, who holds, the place in line, which run
-            # it waits behind. Not elapsed times or counts, which would make every poll a new line.
-            changed = (n, tuple((h.get("pid"), h.get("since")) for h in held), position,
-                       tuple(h.get("pid") for h in behind))
+            # What the line is SAID again for: the limit, who holds, the place in line. Not
+            # elapsed times or counts, which would make every poll a new line.
+            changed = (n, tuple((h.get("pid"), h.get("since")) for h in held), position)
             if record is None and resource_waits is not None:
                 try:
                     record = resource_waits.waiting(resource_waits.CPU, why).start()
@@ -468,12 +508,14 @@ def print_status(s):
         print("  holding: slot %s  %s (pid %s) for %s since %s" % (
             h.get("slot", "?"), h.get("waiter", "?"), h.get("pid", "?"), _minutes(now - h.get("since", now)),
             _utc(h.get("since", now))))
+        if h.get("first"):
+            print("           a nightly or release command's run: it goes first, past the limit if it must")
         for key in ("checkout", "logs", "selection"):
             if h.get(key):
                 print("           %s: %s" % (key, h[key]))
         if h.get("checks_waiting"):
-            print("           checks still waiting to be admitted: %d (no other run starts until none wait)"
-                  % h["checks_waiting"])
+            print("           checks still waiting to be admitted: %d (runs behind it start no check until "
+                  "none wait)" % h["checks_waiting"])
     if not s["waiting"]:
         print("  waiting: nobody")
     for w in s["waiting"]:

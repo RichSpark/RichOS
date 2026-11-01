@@ -176,13 +176,13 @@ default is one run at a time, and the lead sets another number for the whole Mac
 wait for the lead's turn-end gate; `python3 scripts/lib/proof_slots.py status` shows who holds and
 who waits. The slot is an flock the kernel drops with the run's last descriptor (the run's checks'
 supervisors hold it too), so a killed run releases it once its checks are stopped. A proof run
-started by a check of a proof run works inside its caller's slot. Under a limit above one, a free
-slot is still not taken while a running run has checks waiting to be admitted (2026-10-29: six
-runs at once left 30 of one run's 37 checks never admitted); the new run says which it waits behind.
-Only a check the run would start the moment the Mac lets it counts, never one waiting for its own
-lane or prerequisite (waiting_to_be_admitted, 2026-10-31), and a run's checks give way while a run
-that took its slot earlier still has checks waiting to be admitted, so starting beside it cannot
-starve it, except a land holding integration priority, which goes first (one priority order).
+started by a check of a proof run works inside its caller's slot. A run's checks give way while a
+run ahead of it still has checks waiting to be admitted (2026-10-29: six runs at once left 30 of
+one run's 37 checks never admitted), so starting beside it cannot starve it; a free slot is taken
+at once (2026-11-01). Only a check the run would start the moment the Mac lets it counts, never
+one waiting for its own lane or prerequisite (waiting_to_be_admitted, 2026-10-31). Ahead means a
+nightly or release command's own run first (it never waits in the line, 2026-11-01), then the
+order slots were taken, except a land holding integration priority, which goes first.
 """
 import argparse
 import copy
@@ -2047,18 +2047,19 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
         ahead = (proof_slots.ahead_of(SLOT) if eligible and now >= next_sample and not holds_priority
                  else [])
         if ahead:
-            # An older run still has checks waiting to be admitted: it goes first (proof_slots.py,
-            # 2026-10-31). Not the Mac refusing, so it never spends --admission-wait; with nothing
-            # of this run running it is a wait for the Mac like the slot line, recorded as one.
+            # A run ahead of this one (a nightly or release command's, else an older one) still has
+            # checks waiting to be admitted: it goes first (proof_slots.py, 2026-10-31, 2026-11-01).
+            # Not the Mac refusing, so it never spends --admission-wait; with nothing of this run
+            # running it is a wait for the Mac like the slot line, recorded as one.
             gave_way = True
             behind = proof_slots.describe_behind(ahead)
             for it in eligible:
                 it.wait_reason, it.refusing = "older-run", False
             if not running:
-                STALL.refused("proof-run: %s gives way to an older run: %s" % (eligible[0].label, behind))
+                STALL.refused("proof-run: %s gives way to a run ahead of it: %s" % (eligible[0].label, behind))
             if said_ahead != [r.get("pid") for r in ahead]:
                 said_ahead = [r.get("pid") for r in ahead]
-                print("[%s] wait   %-40s gives way to an older run: %s" % (stamp(), eligible[0].label, behind),
+                print("[%s] wait   %-40s gives way to a run ahead of it: %s" % (stamp(), eligible[0].label, behind),
                       flush=True)
             time.sleep(0.2)
             continue
