@@ -256,7 +256,26 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
-pub fn build_panel(app: &AppHandle) -> Result<(), String> {
+/// [`build_panel`] from a window command. A command's body runs on a tokio worker
+/// (`#[richos_command::command]`), and `build_panel`'s AppKit calls (`make_panel`'s
+/// `object_setClass` and `setStyleMask:`) are main-thread only: made from the worker, they raced
+/// the main thread setting the new webview up, and pressing the RichCleaner switch quit RichOS
+/// with no panic line. So the build runs on the main thread and is waited for.
+/// If the main thread does not answer in time the panel is still built there when it gets to
+/// it, and `show` builds it on demand in any case, so enabling does not fail for that.
+fn build_panel_on_main(app: &AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    match crate::dictation::bar::ask_main(app, move || build_panel(&handle)) {
+        Some(built) => built,
+        None => {
+            eprintln!("[richos] RichCleaner panel: the main thread did not answer in time; it is built when first shown");
+            Ok(())
+        }
+    }
+}
+/// Main thread only (AppKit): from `start` in setup, from `show`'s main-thread closure, and from
+/// a command only through [`build_panel_on_main`].
+fn build_panel(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window(PANEL).is_some() {
         return Ok(());
     }
@@ -712,11 +731,11 @@ pub fn cleaner_set_enabled(app: AppHandle, enabled: bool) -> Result<Value, Strin
     let (_, existing) = settings(&app)?;
     let state = app.state::<AppState>();
     let scribe = crate::dictation::store::read(&state.data_dir)?;
-    if enabled {
-        build_panel(&app)?;
-    }
     if enabled && !scribe.on {
         return Err("Turn on RichScribe first".into());
+    }
+    if enabled {
+        build_panel_on_main(&app)?;
     }
     if !enabled {
         let h = host(&app);

@@ -200,3 +200,207 @@ fn no_command_in_the_shell_carries_a_bare_tauri_command_attribute() {
         found.join("\n")
     );
 }
+
+/// The calls that send AppKit messages to a raw `NSWindow`: `dictation::appkit::Win` and its
+/// methods, and the RichCleaner panel's `build_panel`, which turns the new window into an
+/// `NSPanel` with `object_setClass` and `setStyleMask:`. AppKit allows them on the main thread only.
+const MAIN_THREAD_ONLY: [&str; 7] =
+    ["build_panel", "make_panel", "float_everywhere", "ignore_mouse", "show_key", "Win", "msg_send!"];
+
+/// Push `ch` as a blank: a space, or the line break itself, so line numbers stay true.
+fn blank(out: &mut String, ch: char) {
+    out.push(if ch == '\n' { '\n' } else { ' ' });
+}
+
+/// Blank `c[from..to]` into `out`.
+fn blank_span(out: &mut String, c: &[char], from: usize, to: usize) {
+    for &ch in &c[from..to.min(c.len())] {
+        blank(out, ch);
+    }
+}
+
+/// The end (exclusive) of a quoted literal that opens at `c[at]` with `quote`, escapes skipped.
+fn quoted_end(c: &[char], at: usize, quote: char) -> usize {
+    let mut i = at + 1;
+    while i < c.len() && c[i] != quote {
+        i += if c[i] == '\\' { 2 } else { 1 };
+    }
+    i + 1
+}
+
+/// `text` with comments, string literals and character literals blanked, so a brace or a name
+/// inside one is never read as code. Lifetimes (`'a`, no closing quote) are code.
+pub(crate) fn code_only(text: &str) -> String {
+    let c: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let ident = |ch: char| ch.is_alphanumeric() || ch == '_';
+    let mut i = 0;
+    while i < c.len() {
+        let next = c.get(i + 1).copied();
+        let end = if c[i] == '/' && next == Some('/') {
+            c[i..].iter().position(|&ch| ch == '\n').map_or(c.len(), |p| i + p)
+        } else if c[i] == '/' && next == Some('*') {
+            let (mut depth, mut j) = (0usize, i);
+            while j < c.len() {
+                if c[j] == '/' && c.get(j + 1) == Some(&'*') {
+                    depth += 1;
+                    j += 2;
+                } else if c[j] == '*' && c.get(j + 1) == Some(&'/') {
+                    depth -= 1;
+                    j += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    j += 1;
+                }
+            }
+            j
+        } else if c[i] == 'r' && matches!(next, Some('"' | '#')) && (i == 0 || !ident(c[i - 1])) {
+            // A raw string, r"…" or r#"…"#, closed by as many hashes as opened it.
+            let mut j = i + 1;
+            while c.get(j) == Some(&'#') {
+                j += 1;
+            }
+            if c.get(j) == Some(&'"') {
+                let hashes = j - i - 1;
+                let mut k = j + 1;
+                while k < c.len() && !(c[k] == '"' && (0..hashes).all(|h| c.get(k + 1 + h) == Some(&'#'))) {
+                    k += 1;
+                }
+                k + 1 + hashes
+            } else {
+                i
+            }
+        } else if c[i] == '"' {
+            quoted_end(&c, i, '"')
+        } else if c[i] == '\'' && (next == Some('\\') || c.get(i + 2) == Some(&'\'')) {
+            quoted_end(&c, i, '\'')
+        } else {
+            i
+        };
+        if end > i {
+            blank_span(&mut out, &c, i, end);
+            i = end;
+        } else {
+            out.push(c[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Every `#[richos_command::command]` function in `text`, as `(its name, its body)`, read from
+/// [`code_only`] text so braces inside strings and comments do not move a body's end.
+pub(crate) fn command_bodies(text: &str) -> Vec<(String, String)> {
+    let code = code_only(text);
+    let mut bodies = Vec::new();
+    let mut from = 0;
+    while let Some(at) = code[from..].find("#[richos_command::command") {
+        let start = from + at;
+        from = start + 1;
+        let Some(fn_at) = code[start..].find("fn ").map(|p| start + p) else { break };
+        let name: String = code[fn_at + 3..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        let Some(open) = code[fn_at..].find('{').map(|p| fn_at + p) else { break };
+        let mut depth = 0usize;
+        let mut close = None;
+        for (offset, ch) in code[open..].char_indices() {
+            if ch == '{' {
+                depth += 1;
+            } else if ch == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + offset);
+                    break;
+                }
+            }
+        }
+        let Some(close) = close else { break };
+        bodies.push((name, code[open..=close].to_string()));
+    }
+    bodies
+}
+
+/// The main-thread-only calls in `body`, each matched as a whole identifier followed by `(`
+/// (or, for the macro, by itself).
+pub(crate) fn main_thread_calls(body: &str) -> Vec<&'static str> {
+    let ident = |ch: char| ch.is_alphanumeric() || ch == '_';
+    MAIN_THREAD_ONLY
+        .into_iter()
+        .filter(|name| {
+            body.match_indices(name).any(|(at, _)| {
+                let rest = &body[at + name.len()..];
+                let whole_before = !body[..at].chars().next_back().is_some_and(ident);
+                let called = name.ends_with('!') || rest.trim_start().starts_with('(') && !rest.starts_with(ident);
+                whole_before && called
+            })
+        })
+        .collect()
+}
+
+/// **No window command sends AppKit a message from its own body.** A command's body runs on a
+/// tokio worker (`#[richos_command::command]` runs it under `block_in_place`), never on the main
+/// thread, and AppKit's window calls are main-thread only. `cleaner_set_enabled` once called
+/// `build_panel` from its body, so the new panel's `object_setClass` and `setStyleMask:` ran on
+/// the worker while the main thread was setting the panel's webview up, and pressing the
+/// RichCleaner switch quit RichOS tens of milliseconds later with no panic line. A command reaches such a call through the main thread
+/// (`cleaner_host::build_panel_on_main`, `dictation::bar::ask_main`).
+#[test]
+fn no_command_body_sends_appkit_a_message_off_the_main_thread() {
+    fn walk(dir: &std::path::Path, commands: &mut usize, found: &mut Vec<String>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, commands, found);
+            } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("command_rule_tests.rs") {
+                for (name, body) in command_bodies(&std::fs::read_to_string(&path).unwrap()) {
+                    *commands += 1;
+                    let calls = main_thread_calls(&body);
+                    if !calls.is_empty() {
+                        found.push(format!("{}: {name} calls {}", path.display(), calls.join(", ")));
+                    }
+                }
+            }
+        }
+    }
+    let src = std::path::Path::new("src");
+    assert!(src.join("main.rs").is_file(), "run from src-tauri/ (cargo test does): no src/main.rs in {:?}", std::env::current_dir());
+    let (mut commands, mut found) = (0, Vec::new());
+    walk(src, &mut commands, &mut found);
+    // 218 command attributes in src/ when this was written; far fewer means the scan is blind.
+    assert!(commands > 150, "the scan read only {commands} command bodies; it is not reading the shell's source");
+    assert!(
+        found.is_empty(),
+        "{} command(s) send AppKit a message from a tokio worker; go through the main thread (cleaner_host::build_panel_on_main, dictation::bar::ask_main):\n{}",
+        found.len(),
+        found.join("\n")
+    );
+}
+
+/// The scanner itself: braces in strings, comments and character literals do not end a body
+/// early, a call inside a command is seen, and a name that only contains a forbidden one is not.
+#[test]
+fn the_appkit_scan_reads_bodies_as_code() {
+    let text = r##"
+#[richos_command::command]
+pub fn one(app: AppHandle) -> Result<(), String> {
+    let s = "}\"}"; let r = r#"}"#; let c = '}'; // }
+    /* } /* } */ */ helper::<'static>(s, '\'');
+    build_panel(&app)?;
+    Ok(())
+}
+fn not_a_command() { build_panel(&app); }
+#[richos_command::command]
+pub fn two(app: AppHandle) -> Result<(), String> { build_panel_on_main(&app)?; rebuild_panel(); Ok(()) }
+#[richos_command::command]
+pub fn three(app: AppHandle) { let w = crate::dictation::appkit::Win(ptr); w.make_panel(true); }
+"##;
+    let bodies = command_bodies(text);
+    let names: Vec<&str> = bodies.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["one", "two", "three"]);
+    assert!(bodies[0].1.contains("Ok(())") && !bodies[0].1.contains("not_a_command"), "the body ends at its own brace: {}", bodies[0].1);
+    assert_eq!(main_thread_calls(&bodies[0].1), ["build_panel"]);
+    assert!(main_thread_calls(&bodies[1].1).is_empty(), "{:?}", main_thread_calls(&bodies[1].1));
+    assert_eq!(main_thread_calls(&bodies[2].1), ["make_panel", "Win"]);
+}
