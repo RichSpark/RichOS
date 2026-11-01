@@ -57,6 +57,23 @@ struct Inner {
     resumed: bool,
 }
 
+/// The least time between two tries of one queued report, and how often the outbox looks.
+pub const RETRY_EVERY: Duration = Duration::from_secs(30);
+const OUTBOX_TICK: Duration = Duration::from_secs(5);
+
+/// The person edits or saves for later a report whose send failed on the way: it is no longer
+/// sent by itself, and it is an unfinished report again (offered with its own saved time).
+fn withdraw_queued(d: &mut Draft) {
+    if let Some(del) = d.delivery.as_mut() {
+        // Any send that failed on the way, queued or not: the approval is withdrawn, the report
+        // is unfinished again and sent only when the person presses Send.
+        if matches!(&del.state, State::NotSent { why, .. } if *why != NotSent::Withdrawn) {
+            del.state = State::NotSent { why: NotSent::Withdrawn, at: util::now_millis() };
+            d.stage = Stage::Review;
+        }
+    }
+}
+
 /// The fixed facts of this Mac and this run.
 pub struct Env {
     pub store: Store,
@@ -120,8 +137,15 @@ impl Engine {
 
     /// Save the current draft; report the storage state to the window either way.
     fn save(&self, inner: &mut Inner) {
+        self.save_with(inner, false);
+    }
+
+    /// `stamp`: the person chose Save for later, so the saved time is now even when nothing
+    /// else changed. Otherwise an unchanged draft is left alone ([`Store::save`]).
+    fn save_with(&self, inner: &mut Inner, stamp: bool) {
         let Some(d) = inner.draft.as_mut() else { return };
-        match self.env.store.save(d, util::now_millis()) {
+        let now = util::now_millis();
+        match if stamp { self.env.store.save_now(d, now) } else { self.env.store.save(d, now) } {
             Ok(()) => {
                 if inner.unsaved.take().is_some() {
                     self.send(json!({"t": "storage", "ok": true}));
@@ -159,7 +183,17 @@ impl Engine {
     /// draft to resume.
     pub fn first_screen(&self) -> Value {
         let found = install::richos(&self.env.home);
-        let resume = self.env.store.list().into_iter().find(|d| d.stage != Stage::Approved && !d.description.trim().is_empty());
+        // Only a report the person never sent is unfinished. One that was sent is not, whatever
+        // stage an earlier version left on it; one whose send failed on the way is queued and
+        // sent by RichDoctor itself ([`Engine::retry_queued`]), so it is not offered either.
+        let resume = self.env.store.list().into_iter().find(|d| {
+            let unsent = match d.delivery.as_ref().map(|x| &x.state) {
+                None => true,
+                Some(State::NotSent { why: NotSent::Withdrawn, .. }) => true,
+                Some(_) => false,
+            };
+            unsent && d.stage != Stage::Approved && !d.description.trim().is_empty()
+        });
         json!({
             "installation": install::installation_line(&found),
             "ambiguous": install::ambiguous(&found),
@@ -752,6 +786,7 @@ impl Engine {
         let mut inner = self.inner.lock().unwrap();
         let d = inner.draft.as_mut().ok_or("no report")?;
         d.report.as_mut().ok_or("no report")?.edit(section, text)?;
+        withdraw_queued(d);
         self.save(&mut inner);
         let d = inner.draft.as_ref().unwrap();
         Ok(review_view(d, d.report.as_ref().unwrap()))
@@ -762,6 +797,7 @@ impl Engine {
         if let Some(r) = inner.draft.as_mut().and_then(|d| d.report.as_mut()) {
             r.set_excerpt_removed(id, removed);
         }
+        inner.draft.as_mut().map(withdraw_queued);
         self.save(&mut inner);
         let d = inner.draft.as_ref().unwrap();
         review_view(d, d.report.as_ref().unwrap())
@@ -771,9 +807,10 @@ impl Engine {
     pub fn save_later(&self) -> String {
         let mut inner = self.inner.lock().unwrap();
         if let Some(d) = inner.draft.as_mut() {
+            withdraw_queued(d);
             d.left = "draft, saved to finish later".into();
         }
-        self.save(&mut inner);
+        self.save_with(&mut inner, true);
         match &inner.unsaved {
             None => "Saved on this Mac. Nothing was sent.".into(),
             Some(e) if e.disk_full => "Could not save: the disk is full. Copy the report or choose another location.".into(),
@@ -846,6 +883,22 @@ impl Engine {
     /// issue is acceptable); one that was submitted, or is being sent, is not sent again.
     pub fn send_report(&self) -> Result<(), String> {
         let dest = self.env.dest.clone()?;
+        // Send again on a report queued after a transport failure sends that approval again, under
+        // its own ID and receipt: a lost confirmation is then never a second issue.
+        let queued = {
+            let inner = self.inner.lock().unwrap();
+            inner.draft.as_ref().and_then(|d| match d.delivery.as_ref() {
+                Some(Delivery { approved, state: State::NotSent { why, .. } }) if why.is_transport() => Some((d.id.clone(), approved.clone())),
+                _ => None,
+            })
+        };
+        if let Some((id, approved)) = queued {
+            if self.claim(&id) {
+                let this = self.clone();
+                std::thread::spawn(move || this.deliver(&id, approved, dest));
+                return Ok(());
+            }
+        }
         let draft_id = {
             let mut inner = self.inner.lock().unwrap();
             let d = inner.draft.as_mut().ok_or("no report")?;
@@ -910,6 +963,9 @@ impl Engine {
                 del.state = state.clone();
             }
             d.left = left_words(state);
+            if matches!(state, State::Submitted { .. }) {
+                d.stage = Stage::Approved;
+            }
             self.save(&mut inner);
             let view = self.view(&inner);
             drop(inner);
@@ -923,6 +979,9 @@ impl Engine {
             if let Some(del) = d.delivery.as_mut() {
                 del.state = state.clone();
                 d.left = left_words(state);
+                if matches!(state, State::Submitted { .. }) {
+                    d.stage = Stage::Approved;
+                }
                 self.env.store.save(&mut d, util::now_millis()).ok();
             }
         }
@@ -943,6 +1002,57 @@ impl Engine {
             Err(_) => State::NotSent { why: NotSent::Unreachable, at: util::now_millis() },
         };
         self.set_state(draft_id, &end);
+    }
+
+    /// **THE OUTBOX** (adoption ledger C5/C6, COPY THE DESIGN): every report the person approved
+    /// whose send failed on the way ([`NotSent::is_transport`]) is sent again by RichDoctor itself,
+    /// at most once per [`RETRY_EVERY`] each, under the SAME report ID and receipt it was approved
+    /// with, so the relay answers with the report's real state and never files a second issue.
+    /// Only the relay's `delivered` retires it. Returns how many were tried.
+    pub fn retry_queued(&self, now: u64) -> usize {
+        let Ok(dest) = self.env.dest.clone() else { return 0 };
+        let mut tried = 0;
+        for d in self.env.store.list() {
+            let Some(Delivery { approved, state: State::NotSent { why, at } }) = d.delivery.clone() else { continue };
+            if !why.is_transport() || now < why.retry_at(at, RETRY_EVERY.as_millis() as u64) {
+                continue;
+            }
+            if !self.claim(&d.id) {
+                continue;
+            }
+            tried += 1;
+            self.deliver(&d.id, approved, dest.clone());
+        }
+        tried
+    }
+
+    /// Take one queued report for a try: it is "sending" from here, so a manual Send or the next
+    /// sweep cannot also send it. False when it is no longer queued (sent, changed or taken).
+    fn claim(&self, draft_id: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let queued = |d: &Draft| matches!(d.delivery.as_ref().map(|x| &x.state), Some(State::NotSent { why, .. }) if why.is_transport());
+        if let Some(d) = inner.draft.as_mut().filter(|d| d.id == draft_id) {
+            if !queued(d) {
+                return false;
+            }
+            d.delivery.as_mut().unwrap().state = State::Sending;
+            self.save(&mut inner);
+            return true;
+        }
+        drop(inner);
+        let Some(mut d) = self.env.store.load(draft_id).filter(queued) else { return false };
+        d.delivery.as_mut().unwrap().state = State::Sending;
+        self.env.store.save(&mut d, util::now_millis()).is_ok()
+    }
+
+    /// Start the outbox: every few seconds, whatever is due is tried, for as long as RichDoctor
+    /// (a menu bar item) runs.
+    pub fn start_outbox(&self) {
+        let this = self.clone();
+        std::thread::spawn(move || loop {
+            this.retry_queued(util::now_millis());
+            std::thread::sleep(OUTBOX_TICK);
+        });
     }
 
     /// The open report's delivery view, with its screenshots' facts.
@@ -1065,6 +1175,7 @@ impl Engine {
                 r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
                 r.fit();
             }
+            withdraw_queued(d);
             let without_ai = d.without_ai;
             if let Some(old) = &old {
                 inner.pictures.retain(|p| p.0 != old.id);
@@ -1098,6 +1209,7 @@ impl Engine {
             r.screenshots = d.screenshots.iter().map(|s| s.id.clone()).collect();
             r.fit();
         }
+        withdraw_queued(d);
         // A removed screenshot is not sent to Claude either.
         inner.pictures.retain(|p| p.0 != shot.id);
         self.save(&mut inner);
@@ -1218,12 +1330,14 @@ impl Engine {
         self.env.store.delete(id).map_err(|e| e.to_string())
     }
 
-    /// At launch: a report that was being sent when RichDoctor quit or crashed is "not sent
-    /// yet", so the person can send it again (a rare duplicate issue is acceptable, §140).
+    /// At launch: a report that was being sent when RichDoctor quit or crashed did not get its
+    /// answer, so it is queued as due now ([`Engine::retry_queued`] sends it again, under its own
+    /// ID and receipt, at the first sweep after launch: CEO §156).
     pub fn interrupted_sends_not_sent(&self) {
         for mut d in self.env.store.list() {
             if let Some(del) = d.delivery.as_mut().filter(|x| matches!(x.state, State::Sending)) {
-                del.state = State::NotSent { why: NotSent::NoAnswer, at: util::now_millis() };
+                let due_now = util::now_millis().saturating_sub(RETRY_EVERY.as_millis() as u64);
+                del.state = State::NotSent { why: NotSent::NoAnswer, at: due_now };
                 d.left = left_words(&del.state);
                 self.env.store.save(&mut d, util::now_millis()).ok();
             }
@@ -1271,6 +1385,8 @@ fn left_words(state: &State) -> String {
     match state {
         State::Sending => "approved, sending".into(),
         State::Submitted { at, .. } => format!("sent at {}", util::local_clock(*at)),
+        State::NotSent { why: NotSent::Withdrawn, .. } => "draft, saved to finish later".into(),
+        State::NotSent { why, .. } if why.is_transport() => "approved, not sent yet; RichDoctor sends it by itself when it can".into(),
         State::NotSent { .. } => "approved, not sent yet".into(),
     }
 }
@@ -1318,7 +1434,7 @@ pub fn delivery_view(d: &Draft) -> Value {
     let (kind, extra) = match &del.state {
         State::Sending => ("sending", json!({})),
         State::Submitted { issue_url, .. } => ("submitted", json!({"issue_url": issue_url})),
-        State::NotSent { why, .. } => ("notsent", json!({"reason": why.reason(), "review": false, "try_again": true, "upload": false})),
+        State::NotSent { why, .. } => ("notsent", json!({"reason": why.reason(), "review": false, "try_again": true, "upload": false, "queued": why.is_transport()})),
     };
     json!({
         "kind": kind,
@@ -1799,6 +1915,17 @@ mod tests {
         /// How many more uploads are stored; past that an upload's connection is dropped,
         /// unanswered and not stored (an interrupted send). `None`: every one is stored.
         allow_stores: Option<u32>,
+        /// The relay answers nothing (the Mac cannot reach it): every request is dropped.
+        down: bool,
+        /// The next completion files the issue, but its answer is lost on the way.
+        lose_complete_answer: bool,
+        /// The relay is busy: registration answers "limited, try after this many seconds".
+        limited_for: Option<u64>,
+        /// The relay is still creating the report: registration answers "pending, check again
+        /// in this many seconds" (report-worker.mjs:94).
+        pending_for: Option<u64>,
+        /// The relay refuses without a retry time ("reports are paused").
+        refuse: bool,
     }
 
     /// A stand-in for the reporting relay, protocol 2, over plain HTTP on loopback: it registers
@@ -1895,6 +2022,18 @@ mod tests {
         /// The relay's answer, or `None` to drop the connection unanswered.
         fn answer(&self, method: &str, path: &str, body: &[u8]) -> Option<Value> {
             let mut s = self.st.0.lock().unwrap();
+            if s.down {
+                return None;
+            }
+            if let Some(secs) = s.limited_for {
+                return Some(json!({"state": "limited", "retry_after_seconds": secs}));
+            }
+            if s.refuse {
+                return Some(json!({"state": "closed", "detail": "Reports are paused for today."}));
+            }
+            if let Some(secs) = s.pending_for {
+                return Some(json!({"state": "pending", "stage": "creating", "check_after_seconds": secs}));
+            }
             if method == "POST" && path == "/v1/reports" {
                 let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
                 // A new report ID is a new report: nothing of the one before carries over.
@@ -1918,6 +2057,9 @@ mod tests {
             } else if path.ends_with("/complete") && s.created == 0 && s.ids.iter().all(|i| s.stored.iter().any(|x| &x.0 == i)) {
                 s.created += 1;
                 s.issues += 1;
+                if std::mem::take(&mut s.lose_complete_answer) {
+                    return None;
+                }
             }
             let k = s.ids.len();
             if s.created > 0 {
@@ -2005,6 +2147,236 @@ mod tests {
         e
     }
 
+    /// A sent report is never offered as unfinished: not after its own send, and not a draft an
+    /// earlier version left at Review with a submitted delivery (the 2026-11-01 screenshot).
+    #[test]
+    fn a_sent_report_is_not_offered_on_the_next_open() {
+        let root = scratch("sent-not-offered");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        assert!(e.first_screen()["resume"].is_object(), "before the send it is offered");
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "submitted", "{v}");
+        let id = e.inner.lock().unwrap().draft.as_ref().unwrap().id.clone();
+        assert_eq!(e.env().store.load(&id).unwrap().stage, Stage::Approved, "finished when the send succeeds");
+        assert!(e.first_screen()["resume"].is_null(), "{}", e.first_screen());
+        // A leftover from an earlier version: Review stage, delivery submitted.
+        let mut d = e.env().store.load(&id).unwrap();
+        d.stage = Stage::Review;
+        d.left = "draft, saved to finish later".into();
+        e.env().store.save(&mut d, 5).unwrap();
+        assert!(e.first_screen()["resume"].is_null(), "recognized as sent: {}", e.first_screen());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// A report saved to finish later is offered with the time it was saved, and opening it and
+    /// closing the window does not rewrite it or move that time.
+    #[test]
+    fn a_saved_for_later_report_is_offered_with_its_own_time_and_opening_does_not_rewrite_it() {
+        let root = scratch("saved-time");
+        let (e, _) = engine_at(&root.join("store"), None);
+        let mut d = reviewed_draft("");
+        d.left = "draft, saved to finish later".into();
+        e.env().store.save_now(&mut d, 1_793_254_000_000).unwrap();
+        let path = e.env().store.draft_dir(&d.id).join("draft.json");
+        let before = std::fs::read(&path).unwrap();
+        let offered = e.first_screen();
+        assert_eq!(offered["resume"]["id"], d.id.as_str());
+        assert_eq!(offered["resume"]["saved_at"], util::local_clock(1_793_254_000_000).as_str());
+        e.open(&d.id).unwrap();
+        e.close();
+        assert_eq!(std::fs::read(&path).unwrap(), before, "opening and closing leave the draft file as it was");
+        assert_eq!(e.first_screen()["resume"]["saved_at"], util::local_clock(1_793_254_000_000).as_str());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// The CEO, 2026-11-01: a report he pressed Send on while offline is sent by RichDoctor itself
+    /// when it can, exactly once, with nothing reopened or pressed; and until then it is never
+    /// offered as unfinished.
+    #[test]
+    fn an_offline_send_is_sent_by_itself_once_the_relay_is_back_and_exactly_once() {
+        let root = scratch("outbox-offline");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().down = true;
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "notsent", "{v}");
+        assert!(e.first_screen()["resume"].is_null(), "queued, not offered: {}", e.first_screen());
+        let due = util::now_millis() + RETRY_EVERY.as_millis() as u64 + 1000;
+        assert_eq!(e.retry_queued(due - 2000), 0, "not tried again before its time");
+        relay.st.0.lock().unwrap().down = true;
+        assert_eq!(e.retry_queued(due), 1, "tried when due");
+        assert_eq!(e.delivery()["kind"], "notsent", "still queued while the relay is down");
+        relay.st.0.lock().unwrap().down = false;
+        let due = util::now_millis() + 2 * RETRY_EVERY.as_millis() as u64 + 1000;
+        assert_eq!(e.retry_queued(due), 1);
+        assert_eq!(e.delivery()["kind"], "submitted", "{}", e.delivery());
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1, "one issue");
+        assert_eq!(e.retry_queued(due + 1_000_000), 0, "a sent report is never tried again");
+        assert!(e.first_screen()["resume"].is_null());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// The relay filed the issue but the answer was lost: the retry carries the same report ID and
+    /// receipt, and the relay's one issue is the only one.
+    #[test]
+    fn a_retry_after_a_lost_confirmation_files_no_second_issue() {
+        let root = scratch("outbox-lost");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().lose_complete_answer = true;
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "notsent", "{v}");
+        let first = relay.st.0.lock().unwrap().registered.clone();
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1, "it was filed, the answer was lost");
+        assert_eq!(e.retry_queued(util::now_millis() + RETRY_EVERY.as_millis() as u64 + 1000), 1);
+        assert_eq!(e.delivery()["kind"], "submitted", "{}", e.delivery());
+        let again = relay.st.0.lock().unwrap().registered.clone();
+        assert_eq!((again["report_id"].clone(), again["receipt_secret"].clone()), (first["report_id"].clone(), first["receipt_secret"].clone()), "same ID, same receipt");
+        assert!(first["receipt_secret"].as_str().is_some_and(|s| s.len() == 43), "{first}");
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1, "still one issue");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// §156 (1): a send a quit cut off is sent again at the first sweep after the next launch, under
+    /// its own ID, with nothing pressed.
+    #[test]
+    fn a_send_interrupted_by_a_quit_is_sent_again_at_the_next_launch() {
+        let root = scratch("outbox-quit");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().down = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        // The quit: the draft on disk says "sending", as it does when the app is cut off mid-send.
+        let id = e.inner.lock().unwrap().draft.as_ref().unwrap().id.clone();
+        let mut d = e.env().store.load(&id).unwrap();
+        d.delivery.as_mut().unwrap().state = State::Sending;
+        e.env().store.save(&mut d, 99).unwrap();
+        relay.st.0.lock().unwrap().down = false;
+        let (next_launch, _) = engine_for(&root, &relay);
+        next_launch.interrupted_sends_not_sent();
+        assert_eq!(next_launch.retry_queued(util::now_millis()), 1, "due at once, not after a wait");
+        let sent = next_launch.env().store.load(&id).unwrap();
+        assert!(matches!(sent.delivery.unwrap().state, State::Submitted { .. }));
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// §156 (2): "busy, try after <time>" is retried at that time by itself, not before.
+    #[test]
+    fn a_busy_relay_is_retried_at_the_time_it_names() {
+        let root = scratch("outbox-busy");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().limited_for = Some(120);
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "notsent", "{v}");
+        assert!(v["extra"]["reason"].as_str().unwrap().contains("sends it by itself after"), "{v}");
+        relay.st.0.lock().unwrap().limited_for = None;
+        let now = util::now_millis();
+        assert_eq!(e.retry_queued(now + 60_000), 0, "not before the time the relay named");
+        assert_eq!(e.retry_queued(now + 125_000), 1, "at that time");
+        assert_eq!(e.delivery()["kind"], "submitted", "{}", e.delivery());
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// The reviewer's path (rv-20261101T212128Z-4d4b000f-544e): send fails, the person chooses Edit
+    /// report and Save for later. That is the person saying "later": it is not sent by itself, and
+    /// it is offered with its own time.
+    #[test]
+    fn a_failed_send_then_edit_and_save_for_later_is_offered_and_not_sent_by_itself() {
+        let root = scratch("outbox-withdrawn");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().down = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        assert!(e.first_screen()["resume"].is_null(), "queued while it is going to be sent");
+        assert_eq!(e.save_later(), "Saved on this Mac. Nothing was sent.");
+        let offered = e.first_screen();
+        assert!(offered["resume"].is_object(), "saved for later and not sent: {offered}");
+        relay.st.0.lock().unwrap().down = false;
+        assert_eq!(e.retry_queued(util::now_millis() + 10 * RETRY_EVERY.as_millis() as u64), 0, "not sent by itself");
+        assert_eq!(relay.st.0.lock().unwrap().issues, 0);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// rv-20261101T221231Z-569ad7fe-8335 #1: send offline with one screenshot, Edit report, add
+    /// another, send again: the approval that goes out is the report as shown (two screenshots).
+    #[test]
+    fn a_changed_screenshot_set_withdraws_the_queued_approval_and_send_approves_what_is_shown() {
+        let root = scratch("outbox-shots-changed");
+        let relay = FakeRelay::start();
+        let (e, _) = engine_for(&root, &relay);
+        let mut d = draft_for(&relay);
+        e.env().store.save(&mut d, 1).unwrap();
+        e.open(&d.id).unwrap();
+        e.use_image(&util::base64_std(&png(41)), 0, false).unwrap();
+        relay.st.0.lock().unwrap().down = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        e.use_image(&util::base64_std(&png(42)), 0, false).unwrap();
+        assert!(e.first_screen()["resume"].is_object(), "an edited report is unfinished again");
+        relay.st.0.lock().unwrap().down = false;
+        assert_eq!(e.retry_queued(util::now_millis() + 10 * RETRY_EVERY.as_millis() as u64), 0, "the old approval is not sent");
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "submitted", "{v}");
+        assert_eq!(relay.st.0.lock().unwrap().registered["manifest"].as_array().map(|m| m.len()), Some(2), "approved exactly what was shown");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// Same, for a removed screenshot.
+    #[test]
+    fn a_removed_screenshot_withdraws_the_queued_approval() {
+        let root = scratch("outbox-shot-removed");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().down = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        e.remove_image(1).unwrap();
+        relay.st.0.lock().unwrap().down = false;
+        assert_eq!(e.retry_queued(util::now_millis() + 10 * RETRY_EVERY.as_millis() as u64), 0);
+        assert_eq!(send_and_wait(&e, false)["kind"], "submitted");
+        assert_eq!(relay.st.0.lock().unwrap().registered["manifest"].as_array().map(|m| m.len()), Some(1));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// #2: "pending, check again in N s" keeps the report queued and the same approval is asked
+    /// again after that time, under the same report ID and receipt.
+    #[test]
+    fn a_pending_relay_answer_keeps_the_report_queued_and_checks_the_same_approval_again() {
+        let root = scratch("outbox-pending");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().pending_for = Some(5);
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "notsent", "{v}");
+        assert_eq!(v["extra"]["queued"], true, "{v}");
+        let id = e.inner.lock().unwrap().draft.as_ref().unwrap().id.clone();
+        let first = e.env().store.load(&id).unwrap().delivery.unwrap().approved.report_id;
+        relay.st.0.lock().unwrap().pending_for = None;
+        let now = util::now_millis();
+        assert_eq!(e.retry_queued(now + 2_000), 0, "not before the time the relay gave");
+        assert_eq!(e.retry_queued(now + 7_000), 1);
+        assert_eq!(e.delivery()["kind"], "submitted", "{}", e.delivery());
+        assert_eq!(relay.st.0.lock().unwrap().report_id, first, "same report ID");
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// #3: a send the relay refused (paused, no retry time), then Save for later: the report is
+    /// offered with its own time and is sent only when the person presses Send.
+    #[test]
+    fn a_refused_send_then_save_for_later_is_offered() {
+        let root = scratch("outbox-refused-later");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().refuse = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        assert_eq!(e.save_later(), "Saved on this Mac. Nothing was sent.");
+        assert!(e.first_screen()["resume"].is_object(), "{}", e.first_screen());
+        std::fs::remove_dir_all(root).ok();
+    }
+
     /// §140: Send runs the live relay's calls straight through; success shows the issue link.
     #[test]
     fn send_files_the_report_with_its_screenshots_and_shows_the_issue_link() {
@@ -2020,7 +2392,7 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
-    /// §140: any failure is "not sent"; Send again starts over under a fresh report ID and files it.
+    /// §140: any failure is "not sent"; Send again files it (a transport failure under its own ID, 2026-11-01).
     #[test]
     fn a_failed_send_is_not_sent_and_send_again_files_it() {
         let root = scratch("send-again");
@@ -2035,7 +2407,7 @@ mod tests {
         relay.st.0.lock().unwrap().allow_stores = None;
         let v = send_and_wait(&e, true);
         assert_eq!(v["kind"], "submitted", "{v}");
-        assert_ne!(v["report_id"].as_str().unwrap(), first, "a fresh report ID");
+        assert_eq!(v["report_id"].as_str().unwrap(), first, "a transport failure is sent again under its own ID, so a lost confirmation is never a second issue");
         assert_eq!(relay.st.0.lock().unwrap().issues, 1, "filed once");
         std::fs::remove_dir_all(root).ok();
     }

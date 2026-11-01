@@ -101,6 +101,13 @@ pub struct Approved {
     /// rather than an issue: schema [`IDEA_SCHEMA`], no screenshots. Never set by RichDoctor.
     #[serde(default)]
     pub idea: bool,
+    /// The report's one receipt, made when it is approved and kept with it (the relay's client
+    /// rule: the ID, receipt, text and bytes are persisted before the first request). Every try
+    /// of this report presents the same ID and the same receipt, so the relay answers a retry
+    /// with the report's real state and never files a second issue. Empty on a draft an earlier
+    /// version approved: [`send`] then makes one for that send.
+    #[serde(default)]
+    pub receipt_secret: String,
 }
 
 /// The register schema of a RichOS feature idea (`RICHDOCTOR-RELAY.md`, "Feature ideas").
@@ -118,7 +125,8 @@ pub fn approve(report_id: &str, title: &str, body: &str, manifest: Vec<Entry>, r
     if !body.ends_with(&crate::report::ending(relay, report_id, manifest.len())) {
         return Err(problem("The report's screenshot lines or its report ID footer are missing.".into()));
     }
-    Ok(Approved { report_id: report_id.into(), title: title.into(), body: body.into(), manifest, approved_at: now, installation_id: installation_id.into(), idea: false })
+    let receipt_secret = crate::util::random_bytes(32).map(|b| crate::util::base64url(&b)).unwrap_or_default();
+    Ok(Approved { report_id: report_id.into(), title: title.into(), body: body.into(), manifest, approved_at: now, installation_id: installation_id.into(), idea: false, receipt_secret })
 }
 
 impl Approved {
@@ -156,20 +164,41 @@ pub enum NotSent {
     Refused { detail: String, until: Option<u64> },
     /// An approved screenshot could not be read on this Mac, so nothing was sent.
     Screenshot { item: String },
+    /// The person chose to edit or save the report for later after a send failed, so it is no
+    /// longer sent by itself; it is an unfinished report again.
+    Withdrawn,
 }
 
 impl NotSent {
+    /// Only a failure that time cures stays queued (CEO 2026-11-01, §156): the request never
+    /// reached the service, its answer did not come back, or the service said "busy, try after
+    /// <time>". The same ID and receipt are then sent again by themselves. Any other answer, and
+    /// anything wrong on this Mac, waits for the person.
+    pub fn is_transport(&self) -> bool {
+        matches!(self, NotSent::Offline | NotSent::Unreachable | NotSent::NoAnswer | NotSent::Refused { until: Some(_), .. })
+    }
+
+    /// When a queued report is due again: the time the service named, else `retry_every` after
+    /// the failed try at `at`.
+    pub fn retry_at(&self, at: u64, retry_every: u64) -> u64 {
+        match self {
+            NotSent::Refused { until: Some(t), .. } => *t,
+            _ => at + retry_every,
+        }
+    }
+
     /// The plain reason ("Not sent yet").
     pub fn reason(&self) -> String {
         match self {
-            NotSent::Offline => "Your Mac is not connected to the internet. Send again when you are online.".into(),
-            NotSent::Unreachable => "RichDoctor could not reach the reporting service. Send again or email support.".into(),
-            NotSent::NoAnswer => "RichDoctor did not hear back from the reporting service, so it may not have been filed. Send again or email support.".into(),
+            NotSent::Offline => "Your Mac is not connected to the internet. RichDoctor sends it by itself when you are online.".into(),
+            NotSent::Unreachable => "RichDoctor could not reach the reporting service. It tries again by itself; you can also send again or email support.".into(),
+            NotSent::NoAnswer => "RichDoctor did not hear back from the reporting service, so it may not have been filed. It checks again by itself; you can also send again or email support.".into(),
             NotSent::Refused { detail, until } => match until.map(crate::util::local_clock) {
-                Some(t) => format!("The reporting service did not file it: {} You can send again after {t}.", detail.trim()),
+                Some(t) => format!("The reporting service did not file it: {} RichDoctor sends it by itself after {t}.", detail.trim()),
                 None => format!("The reporting service did not file it: {} Send again or email support.", detail.trim()),
             },
-            NotSent::Screenshot { item } => format!("{item} could not be read on this Mac, so nothing was sent. Email support, or start a new report."),
+            NotSent::Withdrawn => "You chose to edit this report, so it is not being sent by itself. Send it when you are ready.".into(),
+            NotSent::Screenshot { item } => format!("{item} could not be read on this Mac, so nothing was sent. Choose Edit report, remove that screenshot on the review screen, and send again."),
         }
     }
 }
@@ -255,9 +284,13 @@ fn read(t: &Transport, next: &[&str], repository: &str, kind: &str, now: u64) ->
                 (Some(d), _) => d.chars().take(400).collect(),
                 (None, "limited") => "it is busy right now.".into(),
                 (None, "closed") => "it is not taking reports right now.".into(),
+                (None, "pending") => "it is still filing this report.".into(),
                 _ => "it could not be filed this time.".into(),
             };
-            let until = b["retry_after_seconds"].as_u64().or(*retry_after).map(|s| now + s * 1000);
+            // "pending, check again in N s" is the relay still creating this report: the same
+            // approval is asked again after that time (it stays queued, never dropped).
+            let wait = b["retry_after_seconds"].as_u64().or(if state == "pending" { b["check_after_seconds"].as_u64() } else { None }).or(*retry_after);
+            let until = wait.map(|s| now + s * 1000);
             Err(not_sent(NotSent::Refused { detail, until }))
         }
     }
@@ -273,8 +306,13 @@ pub fn send(approved: &Approved, images: Images, dest: &Destination, relay: &dyn
             None => return State::NotSent { why: NotSent::Screenshot { item: format!("Screenshot {}", e.order) }, at: now },
         }
     }
-    let Ok(secret) = crate::util::random_bytes(32).map(|b| crate::util::base64url(&b)) else {
-        return State::NotSent { why: NotSent::Refused { detail: "RichDoctor could not make the report's one-time key.".into(), until: None }, at: now };
+    let secret = if approved.receipt_secret.is_empty() {
+        let Ok(secret) = crate::util::random_bytes(32).map(|b| crate::util::base64url(&b)) else {
+            return State::NotSent { why: NotSent::Refused { detail: "RichDoctor could not make the report's one-time key.".into(), until: None }, at: now };
+        };
+        secret
+    } else {
+        approved.receipt_secret.clone()
     };
     let base = format!("{}/v1/reports", dest.relay);
     let steps = ["receiving", "ready"];
@@ -393,6 +431,18 @@ mod tests {
         let s = send(&a, &|e: &Entry| images.get(e.order as usize - 1).cloned(), &dest(), &r, 5);
         assert!(matches!(s, State::NotSent { .. }), "only delivered is success: {s:?}");
         assert!(s.may_send(), "Send again is offered");
+    }
+
+    /// The live relay answers a registration it is still creating with `pending` and
+    /// `check_after_seconds` (report-worker.mjs:94): queued, checked again after that time.
+    #[test]
+    fn a_pending_answer_stays_queued_for_the_time_the_relay_gives() {
+        let (a, images) = approved_with(1);
+        let r = script(vec![Transport::Answer { status: 202, body: Some(json!({"state": "pending", "stage": "creating", "check_after_seconds": 5})), retry_after: None }]);
+        let s = send(&a, &|e: &Entry| images.get(e.order as usize - 1).cloned(), &dest(), &r, 1_000);
+        let State::NotSent { why, .. } = &s else { panic!("{s:?}") };
+        assert!(why.is_transport(), "queued, not dropped: {why:?}");
+        assert_eq!(why.retry_at(1_000, 30_000), 6_000, "checked again after the 5 s the relay gave");
     }
 
     #[test]

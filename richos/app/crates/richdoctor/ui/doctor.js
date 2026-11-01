@@ -656,7 +656,7 @@
     if (v.kind === "submitted") body.querySelector(".issue").textContent = v.extra.issue_url.replace("https://", "");
     if (v.kind === "notsent") {
       body.querySelector(".why").textContent = v.extra.reason;
-      body.querySelector(".kept").textContent = "Your approved report" + (n ? " and its " + plural(n, "screenshot") + " are" : " is") + " kept on this Mac. Edit it if you like; Send again sends it as it is then, under a new report ID.";
+      body.querySelector(".kept").textContent = "Your approved report" + (n ? " and its " + plural(n, "screenshot") + " are" : " is") + " kept on this Mac. " + (v.extra.queued ? "RichDoctor sends it by itself when it can. If you edit it, Send again sends it as it is then, under a new report ID." : "Edit it if you like; Send again sends it as it is then, under a new report ID.");
     }
     body.appendChild(approvedWell(v));
     show("s-result");

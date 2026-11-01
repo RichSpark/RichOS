@@ -311,7 +311,7 @@ async function run() {
       for (const [kind, extra, want] of [
         ["sending", {}, "Sending your report…"],
         ["submitted", { issue_url: "https://github.com/WebDevBooster/richos/issues/412" }, "Report submitted"],
-        ["notsent", { reason: "Your Mac is not connected to the internet. Send again when you are online.", try_again: true }, "Not sent yet"],
+        ["notsent", { reason: "Your Mac is not connected to the internet. RichDoctor sends it by itself when you are online.", try_again: true }, "Not sent yet"],
       ]) {
         const shots = kind === "submitted" ? [SHOT(1), SHOT(2)] : [];
         await emit({ t: "delivery", view: Object.assign(DELIVERY(kind, extra), { shots }) });
