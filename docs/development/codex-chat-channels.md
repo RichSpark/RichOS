@@ -47,12 +47,17 @@ Writers flock one journal, repair only its incomplete unacknowledged tail,
 append a full newline-terminated JSON frame and fsync before returning Saved.
 New files/directories are synced. Text is at most 128 KiB and the encoded native
 inbox frame remains at most 256 KiB. Readers never promote partial frames.
-Invalid complete frames hold that channel with a path diagnostic while healthy
+Short writes finish fully or fail without Saved. Missing journals are held rather
+than recreated; symlinks and nonregular journal paths refuse. Readers hold a
+nonblocking shared lock only while decoding each frame, then release it before
+calling a consumer. Invalid complete frames hold that channel with a path diagnostic while healthy
 channels progress at the next normal scan. No raw-append fallback is supported.
 
 Native delivery re-resolves the ledger binding, then saves the normal observation
 and bridge reference under the existing Stu inbox lock. It searches acknowledged
-history too. The inbox is synced before an advisory accepted position is saved
+history too. Delivery reads also fence the writer and sync a bridge row before
+Stu can act on a filesystem notification. Busy bridge writers hold only their own
+chat. The inbox is synced before an advisory accepted position is saved
 under `engine-state/codex-watch/accepted/`. Lost, stale or malformed positions
 replay against the same receipt. Archive is navigation only; missing endpoints
 hold rather than creating or redirecting a conversation. No reference-bearing

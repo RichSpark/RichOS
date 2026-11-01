@@ -17533,7 +17533,7 @@
     },
     "scripts/lib/codex_channels.py": {
       "source": "scripts/lib/codex_channels.py",
-      "sha256": "34de4a52d5b43e504cc017861eb87243896076ffd5fd611d615479f47bbd0610",
+      "sha256": "3e48d4b6896f54a90741b39069f1c44ab297885762262ba60fe519f8bb87ad7b",
       "evidence": "Shared dedicated-channel protocol, 2026-11-01. Standard-library imports only and no execution at import. Explicit scope/request arguments and CODEX_COORDINATION_ROOT else HOME select ordinary local JSON/JSONL files. Reads endpoint/default metadata and retained source journals, uses flock/fsync/atomic replacement for writer/setup operations and advisory positions for scanners. No orchestration.config key, engine subprocess, model or native chat identity. Review callers use registered/connection/records/position/append; all use the same framing and writer. CLI main additionally accepts a host scope and JSON stdin request; no arbitrary module/path execution.",
       "keys": [],
       "edges": []

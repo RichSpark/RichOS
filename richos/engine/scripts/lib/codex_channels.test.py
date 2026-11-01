@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import selectors
+import shlex
 import sys
 import tempfile
 import unittest
@@ -23,7 +24,7 @@ class Channels(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.old = os.environ.get("CODEX_COORDINATION_ROOT")
-        os.environ["CODEX_COORDINATION_ROOT"] = str(self.root / "coord")
+        os.environ["CODEX_COORDINATION_ROOT"] = str(self.root / "coord with space")
         self.addCleanup(self.restore)
         self.a = dict(version=1, state_root=str(self.root / "state"), entity_id="company-a", thread_id="chat-a")
         self.b = dict(self.a, entity_id="company-b", thread_id="chat-b")
@@ -153,6 +154,68 @@ class Channels(unittest.TestCase):
         (path / "connection.json").write_bytes(metadata)
         self.assertEqual(c.connection(path)[1], record)
 
+    def test_short_writes_finish_or_fail_without_false_saved(self):
+        p = self.connect(self.a)
+        real_write = c.os.write
+        with mock.patch.object(c.os, "write", side_effect=lambda fd, data: real_write(fd, data[:7])):
+            self.assertTrue(c.send(p, "short", "complete across short writes")["saved"])
+        calls = 0
+        def failed(fd, data):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return real_write(fd, data[:9])
+            raise OSError(28, "fixture disk full after partial write")
+        with mock.patch.object(c.os, "write", side_effect=failed):
+            with self.assertRaises(OSError):
+                c.send(p, "partial", "retry original")
+        self.assertEqual([r["message_id"] for r in c.read(p, "to-rich")["records"]], ["short"])
+        c.send(p, "partial", "retry original")
+        self.assertEqual([r["message_id"] for r in c.read(p, "to-rich")["records"]], ["short", "partial"])
+
+    def test_busy_writer_and_nonregular_paths_hold_only_their_connection(self):
+        x, y = self.connect(self.a), self.connect(self.b)
+        c.send(x, "held", "owner held")
+        c.send(y, "healthy", "other owner progresses")
+        path = Path(x) / "to-rich.jsonl"
+        with c.locked(path):
+            events, errors = c.scan(self.a["state_root"])
+            self.assertEqual([e["record"]["message_id"] for e in events], ["healthy"])
+            self.assertTrue(any("writer is busy" in e for e in errors))
+        saved = path.read_bytes()
+        path.unlink()
+        path.symlink_to(Path(y) / "to-rich.jsonl")
+        with self.assertRaises(OSError):
+            c.send(x, "wrong", "must never reach the other owner")
+        events, errors = c.scan(self.a["state_root"])
+        self.assertEqual([e["record"]["message_id"] for e in events], ["healthy"])
+        self.assertTrue(errors)
+        path.unlink()
+        os.mkfifo(path)
+        events, errors = c.scan(self.a["state_root"])
+        self.assertEqual([e["record"]["message_id"] for e in events], ["healthy"])
+        self.assertTrue(errors)
+        path.unlink()
+        path.write_bytes(saved)
+        self.assertEqual(len(c.scan(self.a["state_root"])[0]), 2)
+
+    def test_handoff_is_self_contained_and_missing_journals_are_not_recreated(self):
+        p = self.connect(self.a)
+        command = c.handoff(p).partition("Helper: ")[2].partition(". Use send/read")[0]
+        env = dict(os.environ)
+        env.pop("CODEX_COORDINATION_ROOT", None)
+        out = subprocess.check_output(shlex.split(command) + ["read", "--locator", p], env=env, text=True)
+        self.assertEqual(json.loads(out)["records"][0]["text"], "Exact user task")
+        source = Path(p) / "to-rich.jsonl"
+        original = source.with_suffix(".preserved")
+        source.rename(original)
+        with self.assertRaises(FileNotFoundError):
+            c.send(p, "held", "restore this endpoint only")
+        self.assertFalse(source.exists())
+        original.rename(source)
+        c.send(p, "held", "restore this endpoint only")
+        self.assertEqual(c.read(p, "to-rich")["records"][0]["message_id"], "held")
+
     def test_send_failure_does_not_claim_saved_and_requires_id(self):
         p = self.connect(self.a)
         result = subprocess.run([sys.executable, "-B", c.__file__, "send", "--locator", p,
@@ -203,8 +266,8 @@ kill = lambda: os.kill(os.getpid(), signal.SIGKILL)
 if boundary == 'before-write':
     original = c.locked
     @contextlib.contextmanager
-    def locked(path):
-        with original(path) as fd:
+    def locked(path, **kwargs):
+        with original(path, **kwargs) as fd:
             kill()
             yield fd
     c.locked = locked

@@ -260,7 +260,7 @@ def sample():
     if lib.proc_pid_rusage(pid,2,ctypes.byref(usage)):raise OSError(ctypes.get_errno(),'proc_pid_rusage failed')
     processes=subprocess.check_output(['ps','-axo','pid=,ppid=,command='],text=True).splitlines()
     receivers=[line for line in processes if any(arg.endswith('/scripts/lib/codex_watch.py') for arg in line.split()[2:6])]
-    inboxes={str(p):p.stat().st_size for p in (data/'engine-state/messages').glob('*/*/stu.jsonl')}
+    inboxes={str(p):[json.loads(line)['bridge'] for line in p.read_text().splitlines() if json.loads(line).get('bridge')] for p in (data/'engine-state/messages').glob('*/*/stu.jsonl')}
     return dict(pid=pid,counters={name:getattr(usage,name) for name in fields},receivers=receivers,inboxes=inboxes,at=time.monotonic())
 before=sample();time.sleep(32);after=sample()
 print(json.dumps(dict(before=before,after=after,elapsed_seconds=after['at']-before['at'],

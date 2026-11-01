@@ -443,6 +443,75 @@ mod tests {
         assert!(!rows[0].handoff);
     }
     #[test]
+    fn codex_complete_unsynced_inbox_frame_is_held_until_the_writer_releases_it() {
+        use std::os::fd::AsRawFd;
+        use std::sync::mpsc;
+        for retained in [false, true] {
+            let f = Fixture::new();
+            let path = session_tools::inbox(&f.scope(), "stu").unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path.with_extension("cursor"),
+                json!({"through":0,"handoffs_retained":retained}).to_string(),
+            )
+            .unwrap();
+            let mut writer = std::fs::OpenOptions::new()
+                .create_new(true)
+                .append(true)
+                .read(true)
+                .open(&path)
+                .unwrap();
+            assert_eq!(unsafe { libc::flock(writer.as_raw_fd(), libc::LOCK_EX) }, 0);
+            let record = session_tools::Message {
+                handoff: false,
+                from: "codex-watch".into(),
+                text: "Original request".into(),
+                instruction: None,
+                work: None,
+                bridge: Some(session_tools::BridgeReference {
+                    connection_id: "pair".into(),
+                    message_id: "message-1".into(),
+                    payload_digest: digest(&f.event["record"]),
+                    locator: f.event["locator"].as_str().unwrap().into(),
+                    reply_to: None,
+                }),
+            };
+            writer
+                .write_all(format!("{}\n", serde_json::to_string(&record).unwrap()).as_bytes())
+                .unwrap();
+            // It looks complete but the producer still holds its unsynced write.
+            let state = f.state.clone();
+            let binding = f.binding.clone();
+            let event = f.event.clone();
+            let coord = f.coord.clone();
+            let scope = f.scope();
+            let (tx, rx) = mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                let accepted = accept(&state, &binding, &event, &coord);
+                let pending = session_tools::pending(&scope, "stu");
+                tx.send((accepted, pending)).unwrap();
+            });
+            // load-bound: hang guard for an OS-lock admission answer; assertions check held results, never measured speed. Our fixture lock is always released before joining.
+            let result = rx.recv_timeout(Duration::from_secs(10));
+            drop(writer); // always release our owned lock before asserting/joining
+            reader.join().unwrap();
+            let (accepted, pending) = result.expect("one busy inbox blocked the receiver");
+            assert!(accepted.is_err());
+            assert!(pending.is_err());
+            accept(&f.state, &f.binding, &f.event, &f.coord).unwrap();
+            assert_eq!(f.rows().len(), 1);
+            assert_eq!(
+                session_tools::pending(&f.scope(), "stu")
+                    .unwrap()
+                    .unwrap()
+                    .0
+                    .text,
+                "Original request"
+            );
+        }
+    }
+
+    #[test]
     fn codex_crash_probe_child() {
         let Ok(root) = std::env::var("RICHOS_CHANNEL_TEST_ROOT") else {
             return;

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import sys
 import uuid
 
@@ -84,23 +85,56 @@ def save(path, value):
         temporary.unlink(missing_ok=True)
 
 
+def open_regular(path, flags):
+    fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("Channel path is not an ordinary file: %s" % path)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def load(path):
-    with Path(path).open(encoding="utf-8") as f:
-        value = json.load(f)
+    with os.fdopen(open_regular(path, os.O_RDONLY), "rb") as f:
+        data = f.read(FRAME_LIMIT + 1)
+    if len(data) > FRAME_LIMIT:
+        raise ValueError("Channel metadata exceeds the frame limit: %s" % path)
+    value = json.loads(data)
     if not isinstance(value, dict):
         raise ValueError("Expected an object: %s" % path)
     return value
 
 
 @contextlib.contextmanager
-def locked(path):
+def locked(path, create=True):
     mkdir(Path(path).parent)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    fd = open_regular(path, os.O_RDWR | os.O_APPEND | (os.O_CREAT if create else 0))
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield fd
     finally:
         os.close(fd)
+
+
+def write_all(fd, data):
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(fd, remaining)
+        if written <= 0:
+            raise OSError("Channel write made no progress")
+        remaining = remaining[written:]
+
+
+def contains(file, needle):
+    tail = b""
+    while chunk := file.read(64 * 1024):
+        chunk = tail + chunk
+        if needle in chunk:
+            return True
+        tail = chunk[-(len(needle) - 1):] if len(needle) > 1 else b""
+    return False
 
 
 def endpoint(entity, thread, connection):
@@ -112,8 +146,15 @@ def connection(locator, scope=None):
     if path.name == "connection.json":
         path = path.parent
     record = load(path / "connection.json")
-    if record.get("version") != VERSION:
+    if type(record.get("version")) is not int or record["version"] != VERSION:
         raise ValueError("Unsupported connection version")
+    if record.get("legacy_folder") is not None:
+        if not isinstance(record["legacy_folder"], str) or not Path(record["legacy_folder"]).is_absolute():
+            raise ValueError("Invalid legacy channel folder")
+        if type(record.get("legacy_boundary")) is not int or record["legacy_boundary"] < 0:
+            raise ValueError("Invalid legacy preservation boundary")
+        if type(record.get("imports_legacy_spool")) is not bool:
+            raise ValueError("Invalid frozen legacy spool owner")
     want = endpoint(record.get("entity_id"), record.get("thread_id"), record.get("connection_id"))
     if path != want or path.resolve() != want:
         raise ValueError("Connection is outside its registered location")
@@ -134,7 +175,7 @@ def registered():
 
 def scope_read(path):
     s = load(path)
-    if s.get("version") != VERSION or not Path(s.get("state_root", "")).is_absolute():
+    if type(s.get("version")) is not int or s["version"] != VERSION or not Path(s.get("state_root", "")).is_absolute():
         raise ValueError("No valid host channel scope")
     component(s.get("entity_id"))
     component(s.get("thread_id"))
@@ -142,7 +183,7 @@ def scope_read(path):
 
 
 def handoff(path):
-    helper = shlex.join([sys.executable, "-B", str(Path(__file__).resolve())])
+    helper = shlex.join(["env", "CODEX_COORDINATION_ROOT=" + str(root()), sys.executable, "-B", str(Path(__file__).resolve())])
     return ("Use this dedicated RichOS connection: %s\n"
             "Helper: %s. Use send/read with this locator; connect creates a NEW pair. "
             "Keep the locator in your working notes. After compaction recover it from "
@@ -165,6 +206,8 @@ def connect(text, provenance, locator=None, scope=None):
             target = load(root() / "coordinator.json")
         except FileNotFoundError:
             raise ValueError(SETUP_TEXT) from None
+    if type(target.get("version")) is not int or target["version"] != VERSION:
+        raise ValueError("Unsupported coordinator version")
     ident = uuid.uuid4().hex
     p = endpoint(target["entity_id"], target["thread_id"], ident)
     mkdir(p)
@@ -182,26 +225,48 @@ def connect(text, provenance, locator=None, scope=None):
     return dict(locator=str(p), connection=record, instructions=handoff(p))
 
 
-def records(path, offset=0):
-    """Only newline-terminated frames. Invalid complete input holds its connection."""
-    with Path(path).open("rb") as f:
-        f.seek(offset)
+def records(path, offset=0, writer_locked=False):
+    """Only complete immutable frames. Release the read lock before yielding.
+
+    Bounded pread avoids retaining an incomplete read-ahead fragment across a
+    writer's tail repair. A busy writer holds only its connection, never a scan.
+    """
+    fd = open_regular(path, os.O_RDONLY)
+    try:
         while True:
-            start = f.tell()
-            line = f.readline(FRAME_LIMIT + 1)
-            if not line:
-                return
-            if len(line) > FRAME_LIMIT:
-                raise ValueError("Channel record exceeds frame limit: %s" % path)
-            if not line.endswith(b"\n"):
-                return
-            record = json.loads(line)
-            validate(record, Path(path).parent)
-            yield start, f.tell(), record
+            if not writer_locked:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise ValueError("Channel writer is busy; retry on the next scan") from None
+            try:
+                encoded = bytearray()
+                while len(encoded) <= FRAME_LIMIT:
+                    part = os.pread(fd, min(4096, FRAME_LIMIT + 1 - len(encoded)), offset + len(encoded))
+                    if not part:
+                        return
+                    newline = part.find(b"\n")
+                    encoded.extend(part if newline < 0 else part[:newline + 1])
+                    if newline >= 0:
+                        break
+                if len(encoded) > FRAME_LIMIT:
+                    raise ValueError("Channel record exceeds frame limit: %s" % path)
+                if not encoded.endswith(b"\n"):
+                    return
+                record = json.loads(encoded)
+                validate(record, Path(path).parent)
+                end = offset + len(encoded)
+            finally:
+                if not writer_locked:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            yield offset, end, record
+            offset = end
+    finally:
+        os.close(fd)
 
 
 def validate(record, locator=None):
-    if not isinstance(record, dict) or record.get("version") != VERSION:
+    if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] != VERSION:
         raise ValueError("Unsupported channel record")
     if set(record) - {"version", "message_id", "kind", "text", "provenance", "reply_to"}:
         raise ValueError("Unknown channel record fields")
@@ -230,7 +295,7 @@ def append(path, record):
     encoded = (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode()
     if len(encoded) > FRAME_LIMIT:
         raise ValueError("Encoded channel record exceeds frame limit")
-    with locked(path) as fd:
+    with locked(path, create=False) as fd:
         with os.fdopen(os.dup(fd), "r+b", buffering=0) as f:
             # An unacknowledged incomplete tail is not a message. Reuse inbox recovery.
             length = os.fstat(fd).st_size
@@ -243,14 +308,14 @@ def append(path, record):
                     raise ValueError("Incomplete channel tail exceeds the frame limit")
                 f.truncate(end)
                 print("Discarded incomplete channel tail: %s" % path, file=sys.stderr)
-            for _, through, old in records(path):
+            for _, through, old in records(path, writer_locked=True):
                 if old["message_id"] == record["message_id"]:
                     if old != record:
                         raise ValueError("Message ID already exists with different contents")
                     os.fsync(fd)
                     return dict(saved=True, already_saved=True, message_id=old["message_id"], through=through)
             f.seek(0, os.SEEK_END)
-            f.write(encoded)
+            write_all(fd, encoded)
             os.fsync(fd)
             return dict(saved=True, already_saved=False, message_id=record["message_id"], through=f.tell())
 
@@ -321,9 +386,9 @@ def designate(scope, legacy_folders):
             reply = folder / "to-codex.md"
             with locked(reply) as fd:
                 with os.fdopen(os.dup(fd), "r+b", buffering=0) as f:
-                    if instruction.encode() not in f.read():
+                    if not contains(f, instruction.encode()):
                         f.seek(0, os.SEEK_END)
-                        f.write(instruction.encode())
+                        write_all(fd, instruction.encode())
                     os.fsync(fd)
             sync_dir(folder)
         save(root() / "coordinator.json", target)
@@ -342,12 +407,13 @@ def legacy_associated(folder):
         return True
     try:
         marker = ("\n## RICHOS CHANNEL MIGRATION %s\n" % ident).encode()
-        associated = marker in (folder / "to-codex.md").read_bytes()
+        with os.fdopen(open_regular(folder / "to-codex.md", os.O_RDONLY), "rb") as file:
+            associated = contains(file, marker)
         _diagnostics.pop(str(folder), None)
         return associated
     except FileNotFoundError:
         return False
-    except OSError as error:
+    except (OSError, ValueError) as error:
         diagnostic(folder, error)
         return True  # unknown association holds old transport; never fall back
 
@@ -373,7 +439,7 @@ def position(source, saved):
     if type(offset) is not int or not 0 <= offset <= Path(source).stat().st_size:
         return 0
     if offset:
-        with Path(source).open("rb") as boundary:
+        with os.fdopen(open_regular(source, os.O_RDONLY), "rb") as boundary:
             boundary.seek(offset - 1)
             if boundary.read(1) != b"\n":
                 return 0
@@ -413,7 +479,7 @@ def scan(state):
                 # Positions are advisory. Corruption replays retained source records.
                 offset = 0
             if legacy:
-                with source.open("rb") as f:
+                with os.fdopen(open_regular(source, os.O_RDONLY), "rb") as f:
                     f.seek(offset)
                     line = f.readline(FRAME_LIMIT + 1)
                     if not line or not line.endswith(b"\n"):

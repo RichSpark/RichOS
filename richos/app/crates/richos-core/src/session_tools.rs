@@ -191,15 +191,34 @@ pub fn observe_channel(scope:&StatusToolScope,text:&str,bridge:BridgeReference)-
 pub(crate) fn observe_channel_from(scope:&StatusToolScope,text:&str,bridge:BridgeReference,from:&str)->Result<(u64,bool),String> {
     let result=append_record(scope,"stu",&mut Message {bridge:Some(bridge),handoff:false,from:from.into(),
         text:text.into(),instruction:None,work:None},false,None)?;
-    // A first inbox also needs its directory entries durable before channel acceptance.
-    let path=inbox(scope,"stu")?;
+    sync_inbox_parents(scope,"stu")?;
+    Ok(result)
+}
+
+fn sync_inbox_parents(scope:&StatusToolScope,role:&str)->Result<(),String> {
+    let path=inbox(scope,role)?;
     let mut parent=path.parent();
     while let Some(dir)=parent.filter(|dir|dir.starts_with(&scope.state_root)) {
         std::fs::File::open(dir).and_then(|f|f.sync_all()).map_err(|e|e.to_string())?;
-        if dir==scope.state_root {break}
-        parent=dir.parent();
+        if dir==scope.state_root {break} parent=dir.parent();
     }
-    Ok(result)
+    if let Some(parent)=scope.state_root.parent() {std::fs::File::open(parent).and_then(|f|f.sync_all()).map_err(|e|e.to_string())?;}
+    Ok(())
+}
+
+// A filesystem notification can precede the writer's fsync. Bridge observations
+// cannot reach an actor until the existing writer lock is released and the
+// exact retained row/directories are synced. A busy owner never blocks others.
+fn synced_bridge_input(file:&std::fs::File,scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> {
+    if message.bridge.is_none() {return Ok(())}
+    #[cfg(unix)] {
+        use std::os::fd::AsRawFd;
+        // lock-busy: hold this input; the existing peer receiver retries while other chats progress.
+        if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_SH|libc::LOCK_NB)}!=0 {return Err("Bridge inbox writer is busy; input remains on disk".into())}
+    }
+    let result=file.sync_all().map_err(|e|e.to_string()).and_then(|_|sync_inbox_parents(scope,role));
+    #[cfg(unix)] {use std::os::fd::AsRawFd;unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_UN);}}
+    result
 }
 
 /// One-time migration check: the old active router could have saved this in ANY inbox.
@@ -211,10 +230,11 @@ pub fn legacy_channel_saved(state:&Path,text:&str)->Result<bool,String> {
         if !company.file_type().map_err(|e|e.to_string())?.is_dir() {continue}
         for thread in std::fs::read_dir(company.path()).map_err(|e|e.to_string())? {
             let path=thread.map_err(|e|e.to_string())?.path().join("stu.jsonl");
-            let file=match std::fs::File::open(&path) {Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>continue,Err(e)=>return Err(e.to_string())};
+            let file=match read_inbox(&path) {Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>continue,Err(e)=>return Err(e.to_string())};
             #[cfg(unix)] {
                 use std::os::fd::AsRawFd;
-                if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_EX)}!=0 {return Err(std::io::Error::last_os_error().to_string())}
+                // lock-busy: retain the legacy import; the next normal channel scan retries it.
+                if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)}!=0 {return Err(std::io::Error::last_os_error().to_string())}
             }
             if find_record(&mut BufReader::new(&file),|m|Ok(m.from=="codex-watch" && (m.text==text ||
                 m.text.strip_prefix("Pre-cutover legacy observation; verify the complete original request before acting.\n")==Some(text))))?.is_some() {
@@ -274,7 +294,7 @@ pub(crate) fn delegate_with(scope_path:&Path,scope:&StatusToolScope,args:Value,
 
 pub fn saved_handoff(scope:&StatusToolScope,instruction:&crate::ecs::UserInstruction)->Result<Option<(Message,u64)>,String> {
     let path=inbox(scope,"stu")?;
-    let file=match std::fs::File::open(path) {Ok(file)=>file,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
+    let file=match read_inbox(&path) {Ok(file)=>file,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
     find_handoff(&mut BufReader::new(file),instruction)
 }
 
@@ -309,14 +329,27 @@ fn append(scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> 
     append_record(scope,role,&mut message.clone(),false,None).map(|_|())
 }
 
-fn locked_inbox(scope:&StatusToolScope,role:&str)->Result<std::fs::File,String> {
+fn read_inbox(path:&Path)->std::io::Result<std::fs::File> {
+    let mut options=std::fs::OpenOptions::new();options.read(true);
+    #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK);}
+    let file=options.open(path)?;
+    if !file.metadata()?.is_file(){return Err(std::io::Error::other("Peer inbox is not an ordinary file"))}
+    Ok(file)
+}
+
+fn locked_inbox(scope:&StatusToolScope,role:&str,nonblocking:bool)->Result<std::fs::File,String> {
     let path=inbox(scope,role)?;
+    if !path.exists() && path.with_extension("cursor").exists() {return Err("Saved peer inbox is unavailable; restore its original history".into())}
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e|e.to_string())?;
-    let file=std::fs::OpenOptions::new().create(true).append(true).read(true).open(&path).map_err(|e|e.to_string())?;
+    let mut options=std::fs::OpenOptions::new();options.create(true).append(true).read(true);
+    #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK);}
+    let file=options.open(&path).map_err(|e|e.to_string())?;
+    if !file.metadata().map_err(|e|e.to_string())?.is_file(){return Err("Peer inbox is not an ordinary file".into())}
     #[cfg(unix)]
     {use std::os::fd::AsRawFd;
         // Locks are released by closing this handle on success or any error.
-        if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_EX)}!=0 {return Err(std::io::Error::last_os_error().to_string())}
+        // lock-busy: bridge intake/first-read reconciliation holds and retries at the existing receiver cadence; other writers serialize normally.
+        if unsafe {libc::flock(file.as_raw_fd(),libc::LOCK_EX|if nonblocking {libc::LOCK_NB} else {0})}!=0 {return Err(std::io::Error::last_os_error().to_string())}
     }
     Ok(file)
 }
@@ -356,13 +389,13 @@ fn record_handoff(scope:&StatusToolScope,message:&mut Message,path:Option<&Path>
 
 /// Upgrade a pending older handoff using the same inbox lock and existing register.
 pub(crate) fn record_pending_handoff(scope:&StatusToolScope,message:&mut Message,path:&Path)->Result<(),String> {
-    let _lock=locked_inbox(scope,"stu")?;
+    let _lock=locked_inbox(scope,"stu",false)?;
     record_handoff(scope,message,Some(path),&crate::assignment_tools::EcsObligations)
 }
 
 fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bool,
     recording:Option<(Option<&Path>,&dyn crate::assignment_tools::ObligationOpener)>)->Result<(u64,bool),String> {
-    let mut file=locked_inbox(scope,role)?;
+    let mut file=locked_inbox(scope,role,message.bridge.is_some())?;
     let mut record=serde_json::to_vec(message).map_err(|e|e.to_string())?;record.push(b'\n');
     if record.len()>256*1024 {return Err("Encoded message exceeds the input frame limit".into())}
     let length=file.metadata().map_err(|e|e.to_string())?.len();
@@ -421,7 +454,7 @@ pub fn pending(scope: &StatusToolScope, role: &str) -> Result<Option<(Message,u6
 
 /// Read an existing inbox record by its bounded frame offset, independent of history.
 fn input_at(path:&Path,through:u64)->Result<Message,String> {
-    let mut file=std::fs::File::open(path).map_err(|e|e.to_string())?;
+    let mut file=read_inbox(path).map_err(|e|e.to_string())?;
     if through==0 || through>file.metadata().map_err(|e|e.to_string())?.len(){return Err("Unfinished input no longer matches its durable inbox".into())}
     let start=through.saturating_sub(256*1024+1);file.seek(SeekFrom::Start(start)).map_err(|e|e.to_string())?;
     let mut bytes=Vec::new();file.take(through-start).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
@@ -451,9 +484,9 @@ fn handoff_finished(scope:&StatusToolScope,message:&Message)->Result<bool,String
 /// Repair their existing receipts once from the canonical inbox, never from a dispatcher.
 fn retain_legacy_handoffs(scope:&StatusToolScope)->Result<(),String> {
     let path=inbox(scope,"stu")?;
-    update_cursor(scope,"stu",|cursor| {
+    update_cursor_with_lock(scope,"stu",true,|cursor| {
         if cursor["handoffs_retained"]==true {return Ok(())}
-        let mut reader=BufReader::new(std::fs::File::open(&path).map_err(|e|e.to_string())?);
+        let mut reader=BufReader::new(read_inbox(&path).map_err(|e|e.to_string())?);
         let mut through=0;
         while let Some((message,length))=find_record(&mut reader,|_|Ok(true))? {
             through+=length;
@@ -493,7 +526,7 @@ pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<
         if accepted>std::fs::metadata(&path).map_err(|e|e.to_string())?.len(){return Err("Message input is shorter than its saved cursor".into())}
         return Ok(Some((input_at(&path,through)?,through)))
     }
-    let mut file=match std::fs::File::open(&path){Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
+    let mut file=match read_inbox(&path){Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
     let mut through=accepted.max(after);
     if through>file.metadata().map_err(|e|e.to_string())?.len(){return Err("Message input is shorter than its saved cursor".into())}
     file.seek(SeekFrom::Start(through)).map_err(|e|e.to_string())?;let mut reader=BufReader::new(file);
@@ -503,6 +536,7 @@ pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<
         if count==0 || !line.ends_with('\n'){return Ok(None)}through+=count as u64;
         if cursor["accepted"].get(through.to_string()).is_some() && cursor["active"].get(format!("peer:{through}")).is_none(){continue}
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
+        synced_bridge_input(reader.get_ref(),scope,role,&message)?;
         if role=="stu" && message.handoff && handoff_finished(scope,&message)?{acknowledge(scope,role,through)?;continue}
         return Ok(Some((message,through)))
     }
@@ -515,7 +549,7 @@ pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<
 /// A pure read: unlike `pending_after`, it never acknowledges anything.
 pub(crate) fn undelivered(scope:&StatusToolScope,role:&str)->Result<bool,String> {
     let path=inbox(scope,role)?;let cursor=cursor_state(&path)?;
-    let mut file=match std::fs::File::open(&path){Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(false),Err(e)=>return Err(e.to_string())};
+    let mut file=match read_inbox(&path){Ok(f)=>f,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(false),Err(e)=>return Err(e.to_string())};
     let mut through=cursor["through"].as_u64().unwrap();
     if through>file.metadata().map_err(|e|e.to_string())?.len(){return Err("Message input is shorter than its saved cursor".into())}
     file.seek(SeekFrom::Start(through)).map_err(|e|e.to_string())?;let mut reader=BufReader::new(file);
@@ -570,7 +604,7 @@ impl HandoffIndex {
     }
 
     fn saved(&mut self,path:&Path,instruction:&crate::ecs::UserInstruction)->Result<Option<u64>,String> {
-        let file=match std::fs::File::open(path) {
+        let file=match read_inbox(path) {
             Ok(file)=>file,
             Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{self.inboxes.remove(path);return Ok(None)}
             Err(e)=>return Err(e.to_string()),
@@ -633,7 +667,7 @@ fn accept_input(scope:&StatusToolScope,role:&str,through:u64,finished:bool)->Res
         let mut frontier=cursor["through"].as_u64().unwrap();
         if through<=frontier {return Ok(())}
         cursor["accepted"][through.to_string()]=json!(true);
-        let mut file=std::fs::File::open(&path).map_err(|e|e.to_string())?;
+        let mut file=read_inbox(&path).map_err(|e|e.to_string())?;
         file.seek(SeekFrom::Start(frontier)).map_err(|e|e.to_string())?;
         let mut reader=BufReader::new(file);
         loop {
@@ -649,8 +683,12 @@ fn accept_input(scope:&StatusToolScope,role:&str,through:u64,finished:bool)->Res
 }
 
 fn update_cursor(scope:&StatusToolScope,role:&str,edit:impl FnOnce(&mut Value)->Result<(),String>)->Result<(),String> {
+    update_cursor_with_lock(scope,role,false,edit)
+}
+
+fn update_cursor_with_lock(scope:&StatusToolScope,role:&str,nonblocking:bool,edit:impl FnOnce(&mut Value)->Result<(),String>)->Result<(),String> {
     let path=inbox(scope,role)?;
-    let _lock=locked_inbox(scope,role)?;
+    let _lock=locked_inbox(scope,role,nonblocking)?;
     let mut cursor=cursor_state(&path)?;
     edit(&mut cursor)?;
     crate::doctrine::write_verified(&path.with_extension("cursor"),&cursor.to_string()).map_err(|e|e.to_string())
