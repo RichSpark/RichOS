@@ -248,6 +248,17 @@ module.exports = [
       "deliberate stop as an error. It issues no instruction and asks for nothing.",
   },
   {
+    s: "Rich's earlier words in this chat are gone from this Mac, so he can't pick up where you left off. Press Restore my message, then send it again and he will start a new conversation in this chat.",
+    c: "ACTIONABLE",
+    control: ".tl-intervention button.tl-intervention-action",
+    fixture: null,
+    why:
+      "`InterruptionCause::HistoryGone` (2026-11-01): the chat's saved session record is not on " +
+      "this Mac, so the card says the history is gone instead of blaming his sign-in. Asking " +
+      "again is honest advice: the next message starts a new session in the same chat, so it " +
+      "keeps the card's button like the connection-lost row.",
+  },
+  {
     s: "RichOS lost its connection to Claude Code while Rich was answering, so his answer is incomplete. Press Restore my message, then send it again.",
     c: "ACTIONABLE",
     control: ".tl-intervention button.tl-intervention-action",

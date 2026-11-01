@@ -497,6 +497,7 @@ richos/app/
                               assuming support
     tests/onboarding_persistence_tests.rs regressions for verified tool persistence, per-company answers, resumption and MCP transport.
     tests/your_instructions_tool_tests.rs Rich saving the user's instructions (round 36 screen 1): rules added at the end of instructions.md only in a visible turn, extra arguments refused, and the card left for that conversation's turn.
+    tests/failed_start_leaves_nothing_tests.rs a conversation lease that cannot start removes its scope files and starts no Haiku.
     tests/request_preparation_tests.rs regressions for cancellable preparation, independent replies and startup, rotation, provider retries and restart outcomes.
     tests/restart_continuation_tests.rs restart tests for atomic continuation, uncertain native attempts, preserved control provenance and durable Stop across replay.
     tests/routing_context_tests.rs verifies that classification receives the existing scoped visible conversation, including formatted replies, without hidden inputs.
