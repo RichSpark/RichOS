@@ -71,6 +71,10 @@ class AccountWalk(new_user_walk.NewUserWalk):
     def judge(self, name):
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
+            # RichDoctor, a separate app the guest opens as a login item, can sit in front of the
+            # sheet; the sheet is RichOS's own, so bring RichOS forward before reading the screen.
+            guest(self.vm, "osascript -e 'tell application id \"com.richos.app\" to activate'")
+            time.sleep(1)
             if re.search(r'setting up to do\s+first', self.frame(name)):
                 break
             time.sleep(3)

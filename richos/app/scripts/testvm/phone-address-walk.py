@@ -56,7 +56,8 @@ GONE = ['/app.js', '/styles.css', '/manifest.webmanifest', '/icons/icon-192.png'
 class Walk(adopt.Walk):
     def pairing_address(self):
         self.press('Settings', role='AXPopUpButton')
-        self.press('Use Rich from your phone', role='AXMenuItem')
+        # The settings row is a button (#set-phone-open), not a menu item (adopt-walk.py pair).
+        self.press('Use Rich from your phone')
         # The route chooser shows while RichOS Connect is offered; this walk is the Tailscale path.
         if self.present('Use Tailscale', role='AXCheckBox'):
             self.ax('click', '--title', 'Use Tailscale', '--role', 'AXCheckBox', '--in', 'dialog', '--first')
