@@ -45,6 +45,13 @@ _spec.loader.exec_module(adopt)
 StepFailed = adopt.StepFailed
 command = adopt.command
 
+
+
+class NotRun(Exception):
+    """The step ran but its coverage was not met (the account under test had the wrong shape): not a
+    PASS and not a FAIL, and the reason is the evidence."""
+
+
 STEPS = ['identity', 'first-run', 'resources', 'cleaner', 'accounts']
 
 
@@ -274,9 +281,31 @@ class Walk(adopt.Walk):
         self.shot('cleaner-sheet-off-again.png')
         ev['switch_off'] = next(({k: n.get(k) for k in ('role', 'value')} for n in nodes
                                  if n.get('desc') == 'RichCleaner' and n.get('role') == sw['role']), None)
+        # the verdict: the press must have DONE something a person can see. Either the refusal is on
+        # screen (RichScribe off) or the switch really went on and came back off. A press that left
+        # the switch OFF and the sheet silent is a dead switch, not a pass.
+        def on(v):
+            return str(v).strip().lower() in ('1', 'true', 'on', 'yes')
+        before = on((ev['switch_before'] or {}).get('value'))
+        after_on = on((ev['switch_on'] or {}).get('value'))
+        after_off = on((ev['switch_off'] or {}).get('value'))
+        refused = 'RichScribe first' in ev['after_on_text'] or 'RichScribe first' in ev['sheet_text']
+        ev['refusal_on_screen'] = refused
+        ev['alive_after_press'] = ev.get('main_process_after_press') not in ('', '0', None)
+        if refused:
+            ev['classification'] = 'refused: RichScribe off, the sheet says so'
+        elif not before and after_on and not after_off:
+            ev['classification'] = 'toggled: off, then on, then off again'
+        else:
+            ev['classification'] = 'no visible effect'
         (self.out / 'cleaner.json').write_text(json.dumps(ev, indent=2) + '\n')
         self.facts['cleaner'] = ev
         self.save()
+        if not ev['alive_after_press']:
+            raise StepFailed('RichOS was gone after the switch was pressed: ' + json.dumps(ev))
+        if ev['classification'] == 'no visible effect':
+            raise StepFailed('the press changed nothing and showed no refusal (before=%s on=%s off=%s): %s'
+                             % (before, after_on, after_off, ev['after_on_text'][:300]))
         return ev
 
     def accounts(self):
@@ -305,9 +334,18 @@ class Walk(adopt.Walk):
                 self.ax('click', '--id', 'quota-close', '--first')
         else:
             ev['quota'] = 'no quota row in Settings'
+        # coverage: this step is about an account WITHOUT a five-hour window, so it passes only when a
+        # weekly meter is read and no five-hour meter or choice is. Anything else says what was seen.
+        q = ev['quota'] if isinstance(ev['quota'], dict) else {}
+        five = ev['accounts']['five_hour_meter'] or ev['accounts']['five_hour_choice'] or q.get('five_hour')
+        weekly = ev['accounts']['weekly_meter'] or q.get('weekly')
+        ev['coverage'] = ('five-hour window present' if five else
+                          'no five-hour window, weekly meter read' if weekly else 'no usage reading seen')
         (self.out / 'accounts.json').write_text(json.dumps(ev, indent=2) + '\n')
         self.facts['accounts'] = ev
         self.save()
+        if ev['coverage'] != 'no five-hour window, weekly meter read':
+            raise NotRun('the account has no five-hour-less reading to test: ' + ev['coverage'])
         return ev
 
 
@@ -327,6 +365,9 @@ def main():
         try:
             row['evidence'] = getattr(walk, step.replace('-', '_'))()
             row['outcome'] = 'PASS'
+        except NotRun as exc:
+            row['outcome'] = 'NOT RUN'
+            row['detail'] = str(exc)[:1500]
         except (StepFailed, RuntimeError, subprocess.TimeoutExpired) as exc:
             row['outcome'] = 'FAIL'
             row['detail'] = str(exc)[:1500]
