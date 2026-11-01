@@ -371,6 +371,20 @@ def handle(payload):
             print(json.dumps(answer))
 
 
+def lead_contexts(text):
+    """The additionalContext strings in a hook's JSON stdout lines."""
+    out = []
+    for line in (text or "").splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        ctx = (obj.get("hookSpecificOutput") or {}).get("additionalContext") if isinstance(obj, dict) else None
+        if ctx:
+            out.append(ctx)
+    return out
+
+
 DECISION_RANK = {"allow": 1, "ask": 2, "defer": 3, "deny": 4}
 
 
