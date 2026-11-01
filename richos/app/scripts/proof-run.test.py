@@ -820,6 +820,11 @@ try:
     a = subprocess.Popen([sys.executable, "-c", busy_boot, "--commands", cmds, "--log-dir", os.path.join(tmp, "p16-j-a.log")],
                          stdout=a_out, stderr=subprocess.STDOUT, env=a_env)
     until(lambda: exists(os.path.join(mark, "j.a1")), a)
+    # Not room for both from here on: the Mac has refused the first run's second check, and the
+    # first run says so (refused_by_the_mac). Until then that check waits for the first run's own
+    # ramp, and a second run sampling an idle Mac starts beside it (P16p).
+    j_refused = until(lambda: any(h.get("waiter") == "p16-j-a" and h.get("checks_waiting")
+                                  for h in json.loads(slots("status", "--json").stdout)["holders"]), a)
     b = start_run("p16-j-b", "touch %s/j.b" % mark)
     behind = until(lambda: "gives way to a run ahead of it: p16-j-a" in output("p16-j-b"), b)
     b_early = exists(os.path.join(mark, "j.b"))
@@ -832,12 +837,12 @@ try:
     jb = os.path.getmtime(os.path.join(mark, "j.b")) if exists(os.path.join(mark, "j.b")) else None
     with open(os.path.join(tmp, "p16-j-a.log", "summary.json")) as fh:
         a_states = [row.get("result") for row in json.load(fh).get("checks", [])]
-    check(behind and not b_early and a_rc == 0 and b_rc == 0 and a2 is not None and jb is not None and jb >= a2
-          and "not-admitted" not in a_states and "waiting for a proof-run slot" not in output("p16-j-b"),
+    check(j_refused and behind and not b_early and a_rc == 0 and b_rc == 0 and a2 is not None and jb is not None
+          and jb >= a2 and "not-admitted" not in a_states and "waiting for a proof-run slot" not in output("p16-j-b"),
           "P16j under a limit of 2, a second run takes the free slot at once, its check gives way to a run "
-          "whose checks still wait for the CPU and starts only once they were admitted; the first has no "
+          "whose check the Mac refused and starts only once that check was admitted; the first has no "
           "check not admitted",
-          (behind, b_early, a_rc, b_rc, a2, jb, a_states, output("p16-j-b")[-500:]))
+          (j_refused, behind, b_early, a_rc, b_rc, a2, jb, a_states, output("p16-j-b")[-500:]))
     slots("set", "1")
 
     # P16k — a free Mac is used: checks that wait only for their own run's lane or prerequisite
@@ -967,8 +972,8 @@ try:
           and l_item.state == "passed" and l_ran is not None and l_ran >= l_free and l_old_rc == 0
           and l_item.wait_times.get("older-run", 0) >= 1.5 and l_item.refused_wait == 0
           and "gives way to a run ahead of it: p16-l-old" in l_buf.getvalue(),
-          "P16l a newer run's check gives way while an older run still has checks waiting to be admitted, "
-          "never spends its admission wait doing so, and runs once the older run has none waiting",
+          "P16l a newer run's check gives way while an older run publishes checks the Mac refused, "
+          "never spends its admission wait doing so, and runs once the older run publishes none",
           (l_seen, l_item.state, l_item.notes, l_item.wait_times, l_item.refused_wait, l_ran, l_free,
            l_buf.getvalue()[-500:]))
 
@@ -1242,6 +1247,52 @@ try:
           "P16o a teammate run giving way to the nightly's run withdraws its aged worker request, so the "
           "nightly is admitted to a worker, and the teammate is admitted once the nightly has none waiting",
           o_seen)
+
+    # P16p — a check the CPU rule admits is admitted, whichever run it belongs to (2026-11-01,
+    # 22:52-22:55Z: three runs gave way for 11 min to echo-opus-build51's "11 of its checks still
+    # wait to be admitted" while the Mac sampled 30-56% busy). Two runs under a limit of 2, both
+    # queued, on a host sampled below the line. The first has one worker (--capacity 1): one of its
+    # two checks runs and the other waits for that worker, its own run's queue, never the Mac. The
+    # second run's check is admitted beside it without giving way, and both of the first run's
+    # checks are admitted too.
+    slots("set", "2")
+    p_cmds = os.path.join(tmp, "p16-p-a.cmds")
+    with open(p_cmds, "w") as fh:
+        for p_tag in ("p1", "p2"):
+            # It ends naming its own file: a check is labeled by the last path in its command.
+            fh.write("cd richos/app && bash -c %s\n" % shlex_quote("touch %s/%s.start; %s; touch %s/%s.done" % (
+                mark, p_tag, held("p"), mark, p_tag)))
+    p_out = open(os.path.join(tmp, "p16-p-a.out"), "w")
+    p_env = {**os.environ, "RICHOS_PROOF_RUN_SLOTS_DIR": slots_dir, "RICHOS_WAITER": "p16-p-a",
+             "RICHOS_RUNTIME_DIR": os.path.join(tmp, "no-runtime")}
+    p_env.pop("RICHOS_PROOF_RUN_SLOT_HELD", None)
+    p_a = subprocess.Popen([sys.executable, "-c", runner_boot, "--commands", p_cmds, "--capacity", "1",
+                            "--log-dir", os.path.join(tmp, "p16-p-a.log")],
+                           stdout=p_out, stderr=subprocess.STDOUT, env=p_env)
+    p_starts = lambda: [t for t in ("p1", "p2") if exists(os.path.join(mark, t + ".start"))]
+    p_seen = {"a_started": until(lambda: bool(p_starts()), p_a)}
+    p_seen["a_published"] = [h.get("checks_waiting") for h in json.loads(slots("status", "--json").stdout)["holders"]
+                             if h.get("waiter") == "p16-p-a"]
+    p_b = start_run("p16-p-b", "touch %s/p.b" % mark)
+    until(lambda: exists(os.path.join(mark, "p.b")) or "gives way" in output("p16-p-b"), p_b)
+    p_seen["b_ran"] = exists(os.path.join(mark, "p.b"))
+    p_seen["a_started_when_b_ran"] = p_starts()
+    release("p")
+    p_seen["a_rc"], p_seen["b_rc"] = p_a.wait(), p_b.wait()
+    with open(os.path.join(tmp, "p16-p-a.log", "summary.json")) as fh:
+        p_seen["a_results"] = [row.get("result") for row in json.load(fh).get("checks", [])]
+    with open(os.path.join(tmp, "p16-p-b.log", "summary.json")) as fh:
+        p_seen["b_results"] = [row.get("result") for row in json.load(fh).get("checks", [])]
+    p_seen["b_gave_way"] = "gives way" in output("p16-p-b")
+    check(p_seen["a_started"] and p_seen["a_published"] == [0] and p_seen["b_ran"]
+          and len(p_seen["a_started_when_b_ran"]) == 1 and not p_seen["b_gave_way"]
+          and p_seen["a_rc"] == 0 and p_seen["b_rc"] == 0
+          and p_seen["a_results"] == ["passed", "passed"] and p_seen["b_results"] == ["passed"],
+          "P16p two queued runs on a host below the CPU line: the second run's check is admitted beside "
+          "the first run's while that run's other check waits for its own worker, without giving way, "
+          "and both runs' checks are admitted and pass",
+          (p_seen, output("p16-p-a")[-400:], output("p16-p-b")[-400:]))
+    slots("set", "1")
 
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine
     # units included, whatever a dated weight predicts (`workspace-spec-fourteen` was planned
