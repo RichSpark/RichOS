@@ -25,6 +25,12 @@ STEPS, in the guest, never on the host's screen (CEO ruling 65):
               by the history-gone sentence (conversation-ledger.jsonl TurnInterrupted), its words on
               the screen (screenshot read by OCR), and no further history-gone sentence in --settle
               seconds. The scope folder is listed (AFTER-QUEUE).
+  stu-job     a job handed to Stu, settled (stu-reminder-walk.py's job); stu-idle: his turn ended and
+              his session is on record
+  stu-lose    the app is quit and Stu's own Claude Code record (<session>.jsonl) is deleted
+  stu-handoff relaunch, open the chat, hand Stu a second job. PASS needs exactly ONE work-status
+              notice naming the history-gone words in Rich's inbox for this chat, and the job settled
+              by a NEW Stu session (not the lost one) with a Claude Code record that did not exist.
   answer      one more message; PASS needs its turn TurnCompleted with a reply, on a Claude Code
               record that did not exist before the queue (a NEW session), and the scope folder
               (AFTER-ANSWER) holding no more `*-continuity.json` files than AFTER-QUIT plus BEFORE
@@ -50,8 +56,16 @@ base = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(base)
 StepFailed = base.StepFailed
 command = base.command_walk.command
+OPEN = base.OPEN
 
 STEPS = ['identity', 'first-run', 'chat', 'lose', 'queue', 'answer']
+# Stu's work session, run as --steps identity,first-run,stu-job,stu-idle,stu-lose,stu-handoff
+# (CEO 2026-11-01: the recovery is for Rich's conversation and for Stu's work session alike).
+STU_STEPS = ['identity', 'first-run', 'stu-job', 'stu-idle', 'stu-lose', 'stu-handoff']
+STU_JOB = ('Stu walk: add a file named notes.md whose whole content is the line "Notes for the walk test." '
+           'to the Acme repository and commit it, and land it.')
+STU_HANDOFF = ('Stu walk again: add a file named more-notes.md whose whole content is the line "More notes." '
+               'to the Acme repository and commit it, and land it.')
 CHAT = 'Hello Rich. Reply with one word: ready. (history-walk-chat)'
 QUEUED = ('Queued one: reply with one word: one. (history-walk-q1)',
           'Queued two: reply with one word: two. (history-walk-q2)',
@@ -152,6 +166,82 @@ class HistoryGoneWalk(base.StuReminderWalk):
         self.shot('chat.png')
         return {'turn': row['turn_id'], 'records': len(self.facts['records_before']),
                 'continuity_files_before': len(continuity_files(self.scopes('before')))}
+
+    def rich_notices(self):
+        """The work-status rows saved for Rich in THIS chat (<app state>/messages/<company>/<chat>/rich.jsonl)."""
+        script = ('import glob,json,sys\n'
+                  'out=[]\n'
+                  'for p in glob.glob(sys.argv[1]+"/engine-state/messages/*/"+sys.argv[2]+"/rich.jsonl"):\n'
+                  '    for l in open(p):\n'
+                  '        try: r=json.loads(l)\n'
+                  '        except Exception: continue\n'
+                  '        if r.get("from")=="work-status": out.append(str(r.get("text","")))\n'
+                  'print(json.dumps(out))\n')
+        return json.loads(guest(self.vm, 'python3 -c %s %s %s' % (shlex.quote(script), shlex.quote(self.data),
+                                                                shlex.quote(self.facts['thread'])), 120) or '[]')
+
+    def stu_job(self):
+        self.a.task = STU_JOB
+        return self.job()
+
+    def stu_idle(self):
+        return self.idle()
+
+    def stu_lose(self):
+        session = self.facts.get('stu_session')
+        if not session:
+            raise StepFailed('stu-idle must have run (no Stu session on record)')
+        quit_app(self.vm)
+        found = guest(self.vm, 'ls %s/.claude/projects/*/%s.jsonl 2>/dev/null || true' % (shlex.quote(self.home), shlex.quote(session)), 60).splitlines()
+        if not found:
+            raise StepFailed("no Claude Code record of Stu's session %s in the guest: nothing to lose" % session)
+        for path in found:
+            guest(self.vm, 'rm -f ' + shlex.quote(path), 30)
+        if guest(self.vm, 'ls %s/.claude/projects/*/%s.jsonl 2>/dev/null || true' % (shlex.quote(self.home), shlex.quote(session)), 60).strip():
+            raise StepFailed("Stu's record is still there after removal")
+        self.facts['stu_lost_records'] = found
+        self.facts['records_after_stu_loss'] = self.records()
+        self.save()
+        return {'removed': found, 'session': session}
+
+    def stu_handoff(self):
+        lost = self.facts['stu_session']
+        before = set(self.facts.get('records_after_stu_loss', []))
+        notices_before = len(self.rich_notices())
+        launched = relaunch(self.vm)
+        self.after_relaunch()
+        self.ax('click', '--title', 'Stu walk', '--first', '--contains')
+        time.sleep(5)
+        sent = self.send(STU_HANDOFF)
+        end = time.monotonic() + self.a.job_within
+        pressed, record = 0, None
+        while time.monotonic() < end:
+            record = self.ours(sent)
+            if record and record.get('state') not in OPEN:
+                break
+            if record and pressed < self.a.approvals and self.approve_if_asked(record.get('title', '')):
+                pressed += 1
+            time.sleep(3)
+        time.sleep(self.a.settle)
+        told = [t for t in self.rich_notices()[notices_before:] if GONE_WORDS in t]
+        now = self.records()
+        evidence = {'lost_session': lost, 'relaunched': launched, 'history_gone_notices': told,
+                    'job': {k: (record or {}).get(k) for k in ('id', 'state', 'title', 'work_session')},
+                    'new_records': [p for p in now if p not in before], 'lead_files': self.lead_files()}
+        (self.out / 'stu-handoff.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        self.shot('stu-handoff.png')
+        failures = []
+        if len(told) != 1:
+            failures.append('Rich was told the history is gone %d time(s), not exactly once' % len(told))
+        if not record or record.get('state') != 'settled':
+            failures.append('the next handoff was not taken: the job is %s' % (record or {}).get('state'))
+        elif record.get('work_session') == lost:
+            failures.append('the job ran on the lost session %s' % lost)
+        if not evidence['new_records']:
+            failures.append('no new Claude Code record: no new Stu session')
+        if failures:
+            raise StepFailed('; '.join(failures) + '; see stu-handoff.json')
+        return evidence
 
     def lose(self):
         quit_app(self.vm)
@@ -274,10 +364,11 @@ def main():
     p.add_argument('--idle-within', type=float, default=900)
     p.add_argument('--approvals', type=int, default=3)
     p.add_argument('--relaunch-within', type=float, default=120)
-    p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--task', default=STU_JOB)
+    p.add_argument('--steps', default=','.join(STEPS), help='default is the conversation walk; the Stu one is ' + ','.join(STU_STEPS))
     a = p.parse_args()
     steps = a.steps.split(',')
-    unknown = [s for s in steps if s not in STEPS]
+    unknown = [s for s in steps if s not in STEPS + STU_STEPS]
     if unknown:
         p.error('unknown step(s): ' + ', '.join(unknown))
     walk = HistoryGoneWalk(a)
