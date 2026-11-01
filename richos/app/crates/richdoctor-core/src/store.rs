@@ -163,6 +163,10 @@ pub struct Draft {
     /// How it was left: "draft, interrupted during the investigation".
     #[serde(default)]
     pub left: String,
+    /// The person pressed "Start a new report" on this draft's first-screen offer: it is not
+    /// offered again (it stays in Saved reports).
+    #[serde(default)]
+    pub resume_declined: bool,
 }
 
 impl Draft {
@@ -184,6 +188,7 @@ impl Draft {
             report: None,
             delivery: None,
             left: String::new(),
+            resume_declined: false,
         })
     }
 

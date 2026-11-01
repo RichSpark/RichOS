@@ -159,13 +159,27 @@ impl Engine {
     /// draft to resume.
     pub fn first_screen(&self) -> Value {
         let found = install::richos(&self.env.home);
-        let resume = self.env.store.list().into_iter().find(|d| d.stage != Stage::Approved && !d.description.trim().is_empty());
+        let resume = self.env.store.list().into_iter().find(|d| d.stage != Stage::Approved && !d.description.trim().is_empty() && !d.resume_declined);
         json!({
             "installation": install::installation_line(&found),
             "ambiguous": install::ambiguous(&found),
             "claude_found": self.env.claude.is_some(),
             "resume": resume.map(|d| json!({"id": d.id, "description": d.description, "saved_at": util::local_clock(d.updated_at), "left": d.left})),
         })
+    }
+
+    /// **START A NEW REPORT** on the first screen's "Continue your unfinished report?" offer: the
+    /// choice is kept on that draft, so it is not offered again. It stays in Saved reports.
+    pub fn decline_resume(&self, id: &str) {
+        if let Some(mut d) = self.env.store.load(id) {
+            d.resume_declined = true;
+            let updated = d.updated_at;
+            self.env.store.save(&mut d, updated).ok();
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(d) = inner.draft.as_mut().filter(|d| d.id == id) {
+            d.resume_declined = true;
+        }
     }
 
     /// **CONTINUE** or **PREPARE WITHOUT AI** on the first screen.
@@ -1388,6 +1402,23 @@ mod tests {
             engine.use_image(&util::base64_std(&png(seed)), u32::from(seed == 1), false).unwrap();
         }
         (engine, seen, root)
+    }
+
+    #[test]
+    fn start_a_new_report_is_remembered_and_the_draft_is_not_offered_again() {
+        let root = scratch("declined");
+        let (e, _) = engine_at(&root, None);
+        let mut d = investigating();
+        e.env().store.save(&mut d, 1).unwrap();
+        assert_eq!(e.first_screen()["resume"]["id"], d.id.as_str(), "offered before the choice");
+        e.decline_resume(&d.id);
+        assert!(e.first_screen()["resume"].is_null(), "not offered again after Start a new report");
+        // A new engine over the same store (RichDoctor opened again): still not offered.
+        let (again, _) = engine_at(&root, None);
+        assert!(again.first_screen()["resume"].is_null());
+        let rows = again.saved()["rows"].as_array().unwrap().clone();
+        assert!(rows.iter().any(|r| r["id"] == d.id.as_str()), "it stays in Saved reports");
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

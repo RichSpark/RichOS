@@ -778,7 +778,7 @@
       case "continue": begin(false); break;
       case "no-ai": begin(true); break;
       case "resume": openSaved(S.boot.resume.id); break;
-      case "new-report": $("resume-card").hidden = true; $("desc").value = ""; $("desc").focus(); break;
+      case "new-report": if (S.boot && S.boot.resume) { invoke("decline_resume", { id: S.boot.resume.id }); S.boot.resume = null; } $("resume-card").hidden = true; $("desc").value = ""; $("desc").focus(); break;
       case "send-answer": sendAnswer($("answer-field").value.trim()); break;
       case "cancel-inv": invoke("cancel"); break;
       case "resume-inv": case "retry-ai": document.querySelectorAll("#log .fail").forEach(function (f) { f.remove(); }); invoke("retry"); break;

@@ -75,7 +75,7 @@ fn run(store: Store, quiet: bool) {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             boot, start, answer, cancel, retry, prepare, review, edit, excerpt, save_later, send_report, try_again, delivery, saved,
-            open_saved, resume_pending, delete_saved, set_login, mail_available, open_mail, copy_report, copy_address, save_report_file, open_issue,
+            open_saved, resume_pending, decline_resume, delete_saved, set_login, mail_available, open_mail, copy_report, copy_address, save_report_file, open_issue,
             use_image, remove_image, images, close_help, inspect_image, prepare_image, replace_image, email_plan, note_added
         ])
         .setup(move |app| {
@@ -341,6 +341,11 @@ fn open_saved(engine: State<Engine>, id: String) -> Result<Value, String> {
 #[tauri::command]
 fn resume_pending(engine: State<Engine>) {
     engine.resume_pending()
+}
+
+#[tauri::command]
+fn decline_resume(engine: State<Engine>, id: String) {
+    engine.decline_resume(&id)
 }
 
 #[tauri::command]
