@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Channel persistence/isolation checks on owned fixture paths only."""
 import concurrent.futures
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -12,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+import codex_watch as watcher
 
 spec = importlib.util.spec_from_file_location("codex_channels", Path(__file__).with_name("codex_channels.py"))
 c = importlib.util.module_from_spec(spec)
@@ -305,6 +308,41 @@ c.send(locator, ident, 'recover original request')
         with (old / "to-rich.md").open("a") as f:
             f.write("a second newline fragment\n")
         self.assertEqual(c.scan(self.a["state_root"])[0][0]["record"], events[0]["record"])
+
+    def test_setup_notice_requires_existing_legacy_input_or_a_saved_spool(self):
+        old = self.root / "legacy"
+        state = Path(self.a["state_root"])
+        environment = dict(RICHOS_CODEX_CHANNEL_STATE=str(state),
+                           CODEX_WATCH_STATE_DIR=str(state / "codex-watch/watch"),
+                           CODEX_WATCH_CHANNELS=str(old / "to-rich.md"))
+        def monitor_output():
+            alive = iter([True, True, True, False])
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, environment), \
+                 mock.patch.object(watcher.host_child, "start", return_value=lambda: next(alive)), \
+                 mock.patch.object(watcher.stall_watch, "_nap"), \
+                 mock.patch.object(watcher, "tick", wraps=watcher.tick) as tick, \
+                 contextlib.redirect_stdout(output):
+                self.assertEqual(watcher.run_host_loop(), 0)
+                self.assertEqual(tick.call_count, 2, "the real host loop must have polled")
+            return output.getvalue()
+        self.assertEqual(monitor_output(), "", "a user without Codex must get no setup input")
+        old.mkdir()
+        (old / "to-rich.md").write_text("preserved old request\n")
+        events = [json.loads(line) for line in monitor_output().splitlines()]
+        self.assertEqual([event for event in events if event.get("type") == "setup"],
+                         [dict(type="setup"), dict(type="setup")])
+        with mock.patch.dict(os.environ, environment):
+            c.designate(self.a, [old])
+            self.assertFalse(watcher.legacy_setup_pending(str(state)))
+            (c.root() / "coordinator.json").unlink()
+            self.assertFalse(watcher.legacy_setup_pending(str(state)), "associated files are not new migration input")
+            spool = state / "codex-watch/pending.jsonl"
+            spool.parent.mkdir(parents=True, exist_ok=True)
+            spool.write_text("")
+            self.assertFalse(watcher.legacy_setup_pending(str(state)))
+            spool.write_text(json.dumps("saved before cutover") + "\n")
+            self.assertTrue(watcher.legacy_setup_pending(str(state)))
 
     def test_one_managed_receiver_is_fenced_and_process_death_releases_ownership(self):
         p = self.connect(self.a)

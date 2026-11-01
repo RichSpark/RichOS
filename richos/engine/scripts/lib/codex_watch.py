@@ -300,6 +300,23 @@ def run_loop(engine_root, config):
     return 0
 
 
+def legacy_setup_pending(state):
+    """The migration notice is for existing input, never a new install."""
+    if (codex_channels.root() / "coordinator.json").exists():
+        return False
+    if any(os.path.isfile(path) and not codex_channels.legacy_associated(os.path.dirname(path))
+           for path in channels()):
+        return True
+    spool = os.path.join(state, "codex-watch", "pending.jsonl")
+    try:
+        return os.path.getsize(spool) > 0
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        codex_channels.diagnostic(spool, error)
+        return False
+
+
 def run_host_loop():
     """--monitor --host-json: the app's own child (richos-core codex_watch.rs). Its state is the
     app's own folder (CODEX_WATCH_STATE_DIR), so the app's first start replays no backlog, and a
@@ -329,7 +346,7 @@ def run_host_loop():
                 events, errors = codex_channels.scan(state)
                 for event in events:
                     sys.stdout.write(__import__("json").dumps(event, ensure_ascii=False) + "\n")
-                if not (codex_channels.root() / "coordinator.json").exists():
+                if legacy_setup_pending(state):
                     sys.stdout.write(__import__("json").dumps({"type":"setup"}) + "\n")
                 sys.stdout.flush()
                 for error in errors:
