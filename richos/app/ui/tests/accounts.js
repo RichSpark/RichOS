@@ -30,6 +30,10 @@ function two(home, work, opts = {}) {
     changes: opts.changes || [{ at: now - DAY - 2 * HOUR, kind: "added", id: "2", label: "Work" }], lastSwitch: opts.lastSwitch || null,
     ...(opts.moving ? { moving: opts.moving } : {}) };
 }
+// An account with no five-hour limit (Anthropic removed it for verified accounts, 2026-10-31): its
+// reading carries only the week, as the CEO's own did that day.
+const weekOnly = (week, at = now + 2 * DAY) => [{ id: "seven_day", label: "Weekly", usedPercent: week, resetsAt: at, durationMs: 7 * DAY }];
+const oneWeekly = week => ({ state: "fresh", checkedAt: now, retryAt: null, message: null, windows: weekOnly(week) });
 // Two accounts, `idle` not in use, signed in without limits: no reading, `signedIn: true`.
 function idleSignedIn(inUse, idle) {
   const quota = two([10, 20], [10, 20], { inUse });
@@ -139,6 +143,36 @@ async function main() {
     assertEqual(await text(page, ".acc-how-title"), "How Rich uses your accounts");
     await page.close();
     return "one: Your Claude account + the slot; two: Home In use now, Work Next, the handover line";
+  });
+
+  // THE CEO, 2026-10-31: "If no 5-hour-limit data, then don't show/don't handle it." Red on main,
+  // where a reading with no five-hour window drew an empty "5-hour limit" meter, "Not reported yet".
+  await run.check("no five-hour window: the card shows the weekly meter only, alone or beside an account that still has one", async () => {
+    let page = await open("dark", oneWeekly(86)); // 86%: the Settings row has its line, which sheet() waits for
+    await sheet(page);
+    assertEqual(await texts(page, ".acc-meter .acc-meter-label"), ["Weekly limit"]);
+    assertEqual(await text(page, '.acc-meter[data-k="week"] .acc-meter-num'), "86%used");
+    assertEqual(await page.locator('.acc-meter[data-k="five"]').count(), 0, "no 5-hour meter");
+    assert(!/5-hour|five-hour|Not reported yet/i.test(await text(page, "#accounts-sheet .acc-col")), "nothing five-hour on the card");
+    assertEqual(await text(page, "#acc-lede"), "Rich and the team do their work on your Claude account. Claude limits how much each account can do in a week.");
+    await page.close();
+    const mixed = two([30, 40], [0, 12]);
+    mixed.accounts[1].windows = weekOnly(12, now + 3 * DAY);
+    page = await open("light", mixed);
+    await sheet(page);
+    assertEqual(await texts(page, '.acc-card[data-id="1"] .acc-meter-label'), ["Weekly limit", "5-hour limit"], "Home keeps both");
+    assertEqual(await texts(page, '.acc-card[data-id="2"] .acc-meter-label'), ["Weekly limit"], "Work: the week only");
+    assert(await page.locator("#acc-five-h").isVisible(), "Home still has a 5-hour limit, so its choice stays");
+    await page.close();
+    const neither = two([30, 40], [0, 12]);
+    neither.accounts.forEach((a, i) => { a.windows = weekOnly([40, 12][i], now + (2 + i) * DAY); });
+    neither.windows = neither.accounts[0].windows;
+    page = await open("dark", neither);
+    await sheet(page);
+    assertEqual(await page.locator("#acc-five-h").count(), 0, "no account has a 5-hour limit: no 5-hour choice");
+    assert(!/5-hour|five-hour/i.test(await text(page, "#accounts-sheet .acc-panel")), "nothing five-hour on the sheet");
+    await page.close();
+    return "one weekly-only account: Weekly limit 86% alone, the lede says a week; Home with both meters and the 5-hour choice beside Work with the week only; neither: no 5-hour choice";
   });
 
   // A new user's first run (2026-10-21): "In use now" over "No reading yet. If this account is not
@@ -658,6 +692,7 @@ async function main() {
     ["menu-signed-out", signedOut, async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["menu-near", one(86), async p => { await menu(p); await p.waitForFunction(() => document.querySelector("#set-accounts-state.is-attention")); }],
     ["one", one(86, 47), sheet],
+    ["no-five-hour", oneWeekly(86), sheet],
     ["add", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.click("#acc-continue"); }],
     ["add-signin", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.fill("#acc-nu", "Work"); await p.click("#acc-continue"); }],
     ["add-wait", one(86, 47), async p => { await sheet(p); await p.click(".acc-slot"); await p.fill("#acc-nu", "Work"); await p.click("#acc-continue");

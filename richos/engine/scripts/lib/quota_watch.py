@@ -468,6 +468,8 @@ def read_reading(path, now):
         if isinstance(rl, dict):
             r["windows"] = quota_weekly.windows(rl, _parse_reset, fallback=True)
             fh5 = rl.get("five_hour")
+            if "five_hour" not in rl and r["windows"]:
+                return no_five_hour(r, now)
     if not isinstance(fh5, dict):
         r["state"], r["why"] = "malformed", "%s carries no rate_limits.five_hour" % path
         return r
@@ -481,6 +483,30 @@ def read_reading(path, now):
     r["state"], r["used"], r["resets_at"] = "ok", used, int(resets)
     r["ended"] = int(resets) <= now
     return r
+
+
+NO_FIVE_HOUR = "no five-hour window: this account has no five-hour limit"
+
+
+def no_five_hour(r, now):
+    """A reading that answered with its windows and no five-hour one. Never UNKNOWN for that.
+
+    THE CEO, 2026-10-31: "If no 5-hour-limit data, then don't show/don't handle it." Anthropic
+    removed the five-hour limit for verified accounts ("Newer accounts keep a temporary limit until
+    they're verified"), and Claude Code's own reading on his Mac carried only seven_day that day
+    (~/.claude/statusline-payload.json at 18:23Z). Until then such a reading was "malformed" (the
+    status line) or "a shape this watcher cannot read" (get_usage), and every poll fell back and
+    woke the lead as blind. So: state "ok", no five-hour figure ("used" and "resets_at" None,
+    "five" False). classify() calls it below the five-hour threshold, nothing five-hour is said,
+    and the weekly windows are handled exactly as before (quota_weekly). The desktop app judges
+    the same reading the same way: quota.rs `view_with`, "No five-hour window, no five-hour rule"."""
+    r["state"], r["used"], r["resets_at"], r["ended"], r["five"] = "ok", None, None, False, False
+    return r
+
+
+def has_five(r):
+    """True when this reading carries a five-hour figure (no_five_hour() is the other kind of ok)."""
+    return r.get("state") == "ok" and r.get("used") is not None
 
 
 def claude_binary():
@@ -617,7 +643,10 @@ def read_get_usage(now, deadline_s=None):
         r["state"], r["why"] = "failed", "Claude Code did not report subscription limits for this account"
         return r
     r["windows"] = quota_weekly.windows(body.get("rate_limits", {}), _parse_reset)
-    five = (body.get("rate_limits") or {}).get("five_hour") if isinstance(body.get("rate_limits"), dict) else None
+    limits = body.get("rate_limits") if isinstance(body.get("rate_limits"), dict) else {}
+    if body.get("rate_limits_available") is True and "five_hour" not in limits and r["windows"]:
+        return no_five_hour(r, now)
+    five = limits.get("five_hour")
     used = five.get("utilization") if isinstance(five, dict) else None
     resets = _parse_reset(five.get("resets_at")) if isinstance(five, dict) else None
     if (body.get("rate_limits_available") is not True or isinstance(used, bool)
@@ -867,6 +896,9 @@ def _gate_recompute(data, src, percent, now_ms):
         return "held", five["resets"], why
     if five is not None and fresh and five["resets"] is not None and five["resets"] > now_ms:
         return "ready", None, "ready"
+    if five is None and fresh:
+        # quota.rs `view_with`: no five-hour window, no five-hour rule (the CEO, 2026-10-31).
+        return "ready", None, "ready; %s" % NO_FIVE_HOUR
     return ("noReading" if answered_empty else "unknown"), None, "no current reading (the gate admits work without one)"
 
 
@@ -931,6 +963,8 @@ def read_app(state, now):
         return r
     r["age"] = max(0.0, now - checked / 1000.0)
     five = next((w for w in windows if w["id"] == "five_hour"), None)
+    if five is None and windows:
+        return no_five_hour(r, now)
     if five is None or five["resets_at"] is None:
         r["state"], r["why"] = "malformed", "the app's reading of account %s carries no five-hour window" % label
         return r
@@ -968,6 +1002,12 @@ def classify(r, threshold, stale_after):
     """('below' | 'at-or-above' | 'unknown', why)."""
     if r["state"] != "ok":
         return "unknown", r["why"]
+    if not has_five(r):
+        # Nothing five-hour to cross. Old is still old: a stale reading proves nothing about the
+        # week either, and a refresh is what keeps the weekly 99% from going unseen.
+        if r["age"] is not None and r["age"] > stale_after:
+            return "unknown", "the reading is stale: %s old, and a stale reading proves nothing" % span(r["age"])
+        return "below", ""
     if r["ended"]:
         return "unknown", "the reading is from a window that ended at %s" % hhmm(r["resets_at"])
     if r["used"] >= threshold:
@@ -998,6 +1038,10 @@ def rule_verdict(r, threshold, stale_after, now):
 def describe(r, threshold, now):
     if r["state"] != "ok":
         return "UNKNOWN: %s" % r["why"]
+    if not has_five(r):
+        extra = quota_weekly.describe(r, now)
+        return ("%s, read %s ago" % (NO_FIVE_HOUR, span(r["age"] or 0))
+                + (" via %s" % r["source"] if r.get("source") else "") + ("; " + extra if extra else ""))
     bits = ["%s%% of the five-hour window" % fmt_pct(r["used"]),
             "threshold %s%%" % fmt_pct(threshold) if threshold is not None else "threshold UNDECLARED",
             "read %s ago" % span(r["age"] or 0) + (" via %s" % r["source"] if r.get("source") else "")
@@ -1166,6 +1210,9 @@ def mode_status(a, now):
         print("  source    : Claude Code's get_usage (%s), fresh at this read" % claude_binary())
     if r["state"] != "ok":
         print("  reading   : UNKNOWN: %s" % r["why"])
+    elif not has_five(r):
+        print("  reading   : %s" % NO_FIVE_HOUR)
+        print("  age       : %s" % span(r["age"] or 0))
     else:
         print("  reading   : %s%% of the five-hour window" % fmt_pct(r["used"]))
         print("  age       : %s%s" % (span(r["age"] or 0), " (the payload refreshes only when a status line renders)"
@@ -1256,6 +1303,15 @@ def _emit_release(a, reset_at, now, w):
     print(KEEPS_POLLING + " Inside the last 20 minutes it pauses nobody, and it wakes you at the reset.")
 
 
+def _emit_five_gone(a, now, w):
+    print("QUOTA-RELEASE at %s" % hhmm(now))
+    print("  The current reading has no five-hour window: this account no longer has a five-hour limit, so"
+          " the quota hold releases now. The weekly limit applies as before.")
+    print("  The CEO, 2026-10-31: \"If no 5-hour-limit data, then don't show/don't handle it.\"")
+    _wake_quota_paused(w, None)
+    print(KEEPS_POLLING)
+
+
 def _wake_quota_paused(w, reset_at):
     print("  %s" % worker_line(w))
     if w["known"]:
@@ -1276,8 +1332,12 @@ def _emit_switch_release(a, left, r, verdict, now, w):
     now_on = r["account"]["label"] if isinstance(r.get("account"), dict) else "another account"
     state = ("below the threshold" if verdict == "below" else
              "at or above the threshold, but its reset is less than 20 minutes away")
-    print("  The account in use changed from %s to %s, at %s%% of its five-hour window: %s. The quota hold"
-          " taken on %s releases." % (left["label"], now_on, fmt_pct(r["used"]), state, left["label"]))
+    if has_five(r):
+        print("  The account in use changed from %s to %s, at %s%% of its five-hour window: %s. The quota hold"
+              " taken on %s releases." % (left["label"], now_on, fmt_pct(r["used"]), state, left["label"]))
+    else:
+        print("  The account in use changed from %s to %s, which has no five-hour limit. The quota hold"
+              " taken on %s releases." % (left["label"], now_on, left["label"]))
     print("  The CEO's rule (%s): %s" % (RULING, HIS_WORDS))
     _wake_quota_paused(w, r["resets_at"])
     print(KEEPS_POLLING + " From here it follows %s's own window and reset." % now_on)
@@ -1294,8 +1354,9 @@ def _emit_refresh(a, r, w, at):
           % (int(r["age"] or 0), a.stale))
     if r.get("fallback_why"):
         print("  The reading comes from the status-line file, because %s." % r["fallback_why"])
-    print("  Last value: %s%%, below the threshold %s%%. The CEO's rule (%s) checks every 5 minutes, so the"
-          % (fmt_pct(r["used"]), fmt_pct(a.threshold), RULING))
+    print("  Last value: %s. The CEO's rule (%s) checks every 5 minutes, so the"
+          % ("%s%%, below the threshold %s%%" % (fmt_pct(r["used"]), fmt_pct(a.threshold)) if has_five(r)
+             else quota_weekly.describe(r, int(time.time())), RULING))
     print("  watcher wakes you at %d s, before the reading ages past one poll, not a poll after it." % at)
     print("  %s" % worker_line(w))
     print("  REFRESH THE READING: reply once, in this turn. The payload is rewritten only when your")
@@ -1318,8 +1379,8 @@ def _emit_blind(a, r, w, why, outage=None):
               % (span(r["age"] or 0), a.poll))
         if r.get("fallback_why"):
             print("  It came from the status-line file, because %s." % r["fallback_why"])
-        print("  Last value seen: %s%%. It is NOT the current value: usage has only grown since."
-              % fmt_pct(r["used"]))
+        print("  Last value seen: %s. It is NOT the current value: usage has only grown since."
+              % ("%s%%" % fmt_pct(r["used"]) if has_five(r) else quota_weekly.describe(r, int(time.time()))))
     else:
         print("QUOTA-UNKNOWN: %s" % (why or r["why"]))
     print("  The watcher cannot tell whether the threshold was crossed.")
@@ -1723,7 +1784,10 @@ def _poll_loop(a, out, alive, health=None):
         # the speed exactly as get_usage does. Treated as a fallback, every app watcher lost
         # QUOTA-FAST and the early pause during a fast rise (60% -> 92% in 300 s: no wake at all).
         app_ok = isinstance(r.get("account"), dict) and r["state"] == "ok"
-        if app_ok:
+        if app_ok and not has_five(r):
+            # No five-hour window (no_five_hour): no five-hour history or speed to keep.
+            history, app_window, outage = [], None, None
+        elif app_ok:
             # Measured when the app checked, not when this poll read the file: the same reading
             # read twice is one point of history, never a flat stretch.
             taken = now - int(r["age"] or 0)
@@ -1732,6 +1796,13 @@ def _poll_loop(a, out, alive, health=None):
             app_window = r["resets_at"]
             if not history or history[-1][0] != taken:
                 history = (history + [(taken, r["used"])])[-24:]
+            outage = None
+        elif r.get("source") == "get_usage" and not has_five(r):
+            # Answered, with no five-hour window: nothing five-hour to measure or keep through an
+            # outage. The weekly windows are handled below as with any reading.
+            history, last_gu = [], None
+            if outage is not None:
+                print("  get_usage answers again (it failed first at %s)" % _hms(outage["at"]), flush=True)
             outage = None
         elif r.get("source") == "get_usage":
             if last_gu is not None and not same_window(last_gu["resets_at"], r["resets_at"]):
@@ -1762,7 +1833,7 @@ def _poll_loop(a, out, alive, health=None):
         speed = recent_speed(history, a.poll, a.fast_poll) if r.get("source") == "get_usage" or app_ok else None
         if app_ok and r.get("speed") is not None:
             speed = max(speed or 0.0, r["speed"])
-        fast = speed is not None and speed >= fast_speed(a)
+        fast = speed is not None and has_five(r) and speed >= fast_speed(a)
         # ... and a big rise EXPECTED (many teammates just started) checks
         # every minute before any rise is measured. Back at normal speed with
         # nothing expected, everything is as before: 5 minutes, and 93%.
@@ -1801,6 +1872,16 @@ def _poll_loop(a, out, alive, health=None):
             _poll_completed(health)
             _nap(a.poll, alive)
             continue
+        if window_end is not None and not has_five(r) and classify(r, a.threshold, a.stale)[0] == "below":
+            # THE FIVE-HOUR WINDOW WENT AWAY (second review rv-20261031T192316Z-d2322984-98af): a
+            # current reading no longer carries the window this watcher was following, so its hold
+            # ends now, not at that window's old reset 100 minutes on. A weekly hold is untouched:
+            # it was decided above and continues there.
+            w = workers(a.engine_root)
+            if not w["known"] or w["quota_paused"]:
+                out.wake("RELEASE", _capture(_emit_five_gone, a, now, w), now)
+            window_end = released = None
+            threshold_named = {}
         if first and r["state"] == "ok" and r["ended"]:
             # Started after a reset had already passed: the agents it held
             # still need waking, and nothing else does.
@@ -2330,7 +2411,9 @@ def mode_alive(a):
         hb.get("pid"), hb.get("interval") or hb.get("poll"),
         ("%s, %s ago" % (_hms(last), span(now - last))) if last else "not yet"))
     rd = hb.get("reading")
-    if isinstance(rd, dict):
+    if isinstance(rd, dict) and rd.get("used") is None:
+        print("  last reading: %s, at %s via %s" % (NO_FIVE_HOUR, _hms(rd.get("at") or 0), rd.get("source")))
+    elif isinstance(rd, dict):
         print("  last reading: %s%% of the five-hour window at %s via %s" % (
             fmt_pct(rd.get("used")), _hms(rd.get("at") or 0), rd.get("source")))
     sp, fast_from = hb.get("speed"), hb.get("fast_from")
