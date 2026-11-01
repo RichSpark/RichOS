@@ -6045,9 +6045,9 @@ while True:
 
     /// **(b) The CEO 2026-11-01: a chat that ran on Work resumes on Account 1 after Work is
     /// removed.** With every account's records in Account 1's folder
-    /// (`claude_accounts::Accounts::share_records`), the session Work started is resumed on
-    /// Account 1 from the same file, nothing copied, and once Work is removed the path Claude
-    /// Code named under Work's folder still leads to it.
+    /// (`claude_accounts::Accounts::share_records`), the record of a session Work started is
+    /// Account 1's record too, nothing copied; Work is removed while the chat is still on it, and
+    /// the chat resumes on Account 1 with its history from the path Claude Code named under Work.
     #[test]
     fn a_chat_started_on_an_account_resumes_on_another_after_that_account_is_removed() {
         let root=fixture_root().join(format!("resume-removed-{}",uuid::Uuid::new_v4()));
@@ -6072,15 +6072,14 @@ while True:
         std::fs::write(profile.state.join("evidence").join(&session).join("callbacks.jsonl"),format!("{}\n",json!({"callback":{"transcript_path":named}}))).unwrap();
         let in_home=home.join("projects/-coordination").join(format!("{session}.jsonl"));
 
-        // Resumed on Account 1 while Work is still there: the same file, nothing copied.
-        profile.claude_account=Some(crate::claude_accounts::Account{id:"1".into(),label:"Account 1".into(),folder:Some(home.clone())});
-        let (_,resumed)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).unwrap().unwrap();
-        assert!(std::fs::read_to_string(&resumed).unwrap().contains("started on Work"));
-        assert_eq!(std::fs::canonicalize(&resumed).unwrap(),std::fs::canonicalize(&in_home).unwrap(),"one record, not a copy");
+        // The record Work wrote is already Account 1's record, before any resume moved anything.
+        assert!(std::fs::read_to_string(&in_home).expect("one record for every account").contains("started on Work"));
 
-        // Work removed: the chat still resumes on Account 1, with its history.
+        // Work removed while the chat was still on it (the CEO's case), then resumed on Account 1:
+        // it resumes, with its history.
         accounts.remove(&work.id).unwrap();
         assert!(!named.exists(),"the path under Work's folder is gone with its sign-in");
+        profile.claude_account=Some(crate::claude_accounts::Account{id:"1".into(),label:"Account 1".into(),folder:Some(home.clone())});
         let (_,after)=native_resume(Some(&profile),Some((&bridge,&root)),LeaseRole::Work).expect("the chat resumes after its account is removed").unwrap();
         assert_eq!(after,in_home);
         assert!(std::fs::read_to_string(&after).unwrap().contains("started on Work"),"its history is there");
