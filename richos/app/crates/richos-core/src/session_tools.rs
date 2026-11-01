@@ -697,7 +697,9 @@ fn update_cursor_with_lock(scope:&StatusToolScope,role:&str,nonblocking:bool,edi
 fn cursor_state(inbox:&Path)->Result<Value,String> {
     let mut value=match std::fs::read_to_string(inbox.with_extension("cursor")) {
         Ok(text)=>serde_json::from_str::<Value>(&text).map_err(|e|e.to_string())?,
-        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>json!({"through":0}),
+        // No acknowledged offsets exist to migrate. Replay all retained input;
+        // legacy repair is only needed for an actual saved cursor from an older build.
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>json!({"through":0,"handoffs_retained":true}),
         Err(e)=>return Err(e.to_string()),
     };
     if value.is_u64() {value=json!({"through":value});}
@@ -745,6 +747,30 @@ mod tests {
                 bridge:crate::ecs::EcsBridge {python:PathBuf::from("unused"),component:PathBuf::from("unused"),state_root:scope.state_root.clone()},
                 binding:crate::ecs::Binding {entity_id:scope.entity_id.clone(),thread_id:scope.thread_id.clone(),session_id:"native-rich".into(),turn_id:"original".into(),audience:"rich".into(),revision:1},seat:None})}).unwrap();
     }
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_cursor_reads_saved_input_without_taking_the_legacy_repair_lock() {
+        use std::os::fd::AsRawFd;
+        let root=std::env::temp_dir().join(format!("richos-fresh-inbox-{}",uuid::Uuid::new_v4()));
+        let scope=StatusToolScope {version:1,state_root:root.clone(),entity_id:"company".into(),thread_id:"thread".into()};
+        let sender=root.join("sender.json");
+        bind(&sender,&scope,"native-rich","rich",None).unwrap();
+        send(&sender,&scope,json!({"text":"Already durably saved ordinary peer input"})).unwrap();
+        let path=inbox(&scope,"stu").unwrap();
+        let length=std::fs::metadata(&path).unwrap().len();
+        let held=std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        // lock-busy: this fixture must own its already-synced inbox without waiting.
+        assert_eq!(unsafe {libc::flock(held.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)},0);
+        let result=pending_after(&scope,"stu",0);
+        let wrote_cursor=path.with_extension("cursor").exists();
+        drop(held);
+        std::fs::remove_dir_all(root).unwrap();
+        let (message,through)=result.expect("a fresh cursor needs no legacy repair lock").unwrap();
+        assert_eq!(message.text,"Already durably saved ordinary peer input");
+        assert_eq!(through,length);
+        assert!(!wrote_cursor,"reading a new inbox must not create migration state");
+    }
+
     #[test]
     fn upgrade_recovers_a_consumed_unfinished_handoff_without_repeating_finished_work() {
         let root=std::env::temp_dir().join(format!("richos-upgrade-inbox-{}",uuid::Uuid::new_v4()));
