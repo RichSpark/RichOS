@@ -1012,7 +1012,7 @@ impl Engine {
         let mut tried = 0;
         for d in self.env.store.list() {
             let Some(Delivery { approved, state: State::NotSent { why, at } }) = d.delivery.clone() else { continue };
-            if !why.is_transport() || now < at + RETRY_EVERY.as_millis() as u64 {
+            if !why.is_transport() || now < why.retry_at(at, RETRY_EVERY.as_millis() as u64) {
                 continue;
             }
             if !self.claim(&d.id) {
@@ -1326,12 +1326,14 @@ impl Engine {
         self.env.store.delete(id).map_err(|e| e.to_string())
     }
 
-    /// At launch: a report that was being sent when RichDoctor quit or crashed is "not sent
-    /// yet", so the person can send it again (a rare duplicate issue is acceptable, §140).
+    /// At launch: a report that was being sent when RichDoctor quit or crashed did not get its
+    /// answer, so it is queued as due now ([`Engine::retry_queued`] sends it again, under its own
+    /// ID and receipt, at the first sweep after launch: CEO §156).
     pub fn interrupted_sends_not_sent(&self) {
         for mut d in self.env.store.list() {
             if let Some(del) = d.delivery.as_mut().filter(|x| matches!(x.state, State::Sending)) {
-                del.state = State::NotSent { why: NotSent::NoAnswer, at: util::now_millis() };
+                let due_now = util::now_millis().saturating_sub(RETRY_EVERY.as_millis() as u64);
+                del.state = State::NotSent { why: NotSent::NoAnswer, at: due_now };
                 d.left = left_words(&del.state);
                 self.env.store.save(&mut d, util::now_millis()).ok();
             }
@@ -1913,6 +1915,8 @@ mod tests {
         down: bool,
         /// The next completion files the issue, but its answer is lost on the way.
         lose_complete_answer: bool,
+        /// The relay is busy: registration answers "limited, try after this many seconds".
+        limited_for: Option<u64>,
     }
 
     /// A stand-in for the reporting relay, protocol 2, over plain HTTP on loopback: it registers
@@ -2011,6 +2015,9 @@ mod tests {
             let mut s = self.st.0.lock().unwrap();
             if s.down {
                 return None;
+            }
+            if let Some(secs) = s.limited_for {
+                return Some(json!({"state": "limited", "retry_after_seconds": secs}));
             }
             if method == "POST" && path == "/v1/reports" {
                 let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
@@ -2213,6 +2220,49 @@ mod tests {
         assert_eq!((again["report_id"].clone(), again["receipt_secret"].clone()), (first["report_id"].clone(), first["receipt_secret"].clone()), "same ID, same receipt");
         assert!(first["receipt_secret"].as_str().is_some_and(|s| s.len() == 43), "{first}");
         assert_eq!(relay.st.0.lock().unwrap().issues, 1, "still one issue");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// §156 (1): a send a quit cut off is sent again at the first sweep after the next launch, under
+    /// its own ID, with nothing pressed.
+    #[test]
+    fn a_send_interrupted_by_a_quit_is_sent_again_at_the_next_launch() {
+        let root = scratch("outbox-quit");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().down = true;
+        assert_eq!(send_and_wait(&e, false)["kind"], "notsent");
+        // The quit: the draft on disk says "sending", as it does when the app is cut off mid-send.
+        let id = e.inner.lock().unwrap().draft.as_ref().unwrap().id.clone();
+        let mut d = e.env().store.load(&id).unwrap();
+        d.delivery.as_mut().unwrap().state = State::Sending;
+        e.env().store.save(&mut d, 99).unwrap();
+        relay.st.0.lock().unwrap().down = false;
+        let (next_launch, _) = engine_for(&root, &relay);
+        next_launch.interrupted_sends_not_sent();
+        assert_eq!(next_launch.retry_queued(util::now_millis()), 1, "due at once, not after a wait");
+        let sent = next_launch.env().store.load(&id).unwrap();
+        assert!(matches!(sent.delivery.unwrap().state, State::Submitted { .. }));
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// §156 (2): "busy, try after <time>" is retried at that time by itself, not before.
+    #[test]
+    fn a_busy_relay_is_retried_at_the_time_it_names() {
+        let root = scratch("outbox-busy");
+        let relay = FakeRelay::start();
+        let e = report_with_two_screenshots(&root, &relay);
+        relay.st.0.lock().unwrap().limited_for = Some(120);
+        let v = send_and_wait(&e, false);
+        assert_eq!(v["kind"], "notsent", "{v}");
+        assert!(v["extra"]["reason"].as_str().unwrap().contains("sends it by itself after"), "{v}");
+        relay.st.0.lock().unwrap().limited_for = None;
+        let now = util::now_millis();
+        assert_eq!(e.retry_queued(now + 60_000), 0, "not before the time the relay named");
+        assert_eq!(e.retry_queued(now + 125_000), 1, "at that time");
+        assert_eq!(e.delivery()["kind"], "submitted", "{}", e.delivery());
+        assert_eq!(relay.st.0.lock().unwrap().issues, 1);
         std::fs::remove_dir_all(root).ok();
     }
 

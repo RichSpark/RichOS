@@ -170,11 +170,21 @@ pub enum NotSent {
 }
 
 impl NotSent {
-    /// Only a transport failure stays queued: the request never reached the service, or its
-    /// answer did not come back. The same ID and receipt are then sent again by themselves.
-    /// Anything the service answered, and anything wrong on this Mac, waits for the person.
+    /// Only a failure that time cures stays queued (CEO 2026-11-01, §156): the request never
+    /// reached the service, its answer did not come back, or the service said "busy, try after
+    /// <time>". The same ID and receipt are then sent again by themselves. Any other answer, and
+    /// anything wrong on this Mac, waits for the person.
     pub fn is_transport(&self) -> bool {
-        matches!(self, NotSent::Offline | NotSent::Unreachable | NotSent::NoAnswer)
+        matches!(self, NotSent::Offline | NotSent::Unreachable | NotSent::NoAnswer | NotSent::Refused { until: Some(_), .. })
+    }
+
+    /// When a queued report is due again: the time the service named, else `retry_every` after
+    /// the failed try at `at`.
+    pub fn retry_at(&self, at: u64, retry_every: u64) -> u64 {
+        match self {
+            NotSent::Refused { until: Some(t), .. } => *t,
+            _ => at + retry_every,
+        }
     }
 
     /// The plain reason ("Not sent yet").
@@ -184,11 +194,11 @@ impl NotSent {
             NotSent::Unreachable => "RichDoctor could not reach the reporting service. It tries again by itself; you can also send again or email support.".into(),
             NotSent::NoAnswer => "RichDoctor did not hear back from the reporting service, so it may not have been filed. It checks again by itself; you can also send again or email support.".into(),
             NotSent::Refused { detail, until } => match until.map(crate::util::local_clock) {
-                Some(t) => format!("The reporting service did not file it: {} You can send again after {t}.", detail.trim()),
+                Some(t) => format!("The reporting service did not file it: {} RichDoctor sends it by itself after {t}.", detail.trim()),
                 None => format!("The reporting service did not file it: {} Send again or email support.", detail.trim()),
             },
             NotSent::Withdrawn => "You chose to edit this report, so it is not being sent by itself. Send it when you are ready.".into(),
-            NotSent::Screenshot { item } => format!("{item} could not be read on this Mac, so nothing was sent. Email support, or start a new report."),
+            NotSent::Screenshot { item } => format!("{item} could not be read on this Mac, so nothing was sent. Choose Edit report, remove that screenshot on the review screen, and send again."),
         }
     }
 }
