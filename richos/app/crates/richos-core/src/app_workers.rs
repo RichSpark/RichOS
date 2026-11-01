@@ -34,6 +34,121 @@ fn evidence_lock(folder: &Path, patience: std::time::Duration) -> Option<std::fs
     #[cfg(not(unix))] { let _ = (folder, patience); None }
 }
 
+/// The state one journal's rows fold into: helpers open, helpers the provider said it launched
+/// in the background, and every helper seen starting.
+#[derive(Clone, Default)]
+struct Fold {
+    open: BTreeMap<String, String>,
+    launched: std::collections::BTreeSet<String>,
+    started: BTreeMap<String, String>,
+}
+
+/// What the last read of one journal left behind, so the next read starts where it stopped
+/// instead of reading the whole file again (his Stu's journal was 293 MB, read every 5 s).
+struct Cached { offset: u64, tail: Vec<u8>, fold: Fold }
+
+const TAIL_CHECK: u64 = 256;
+
+fn cache() -> &'static std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Cached>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Cached>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Reads the rows after the cached offset (the whole file when the cache does not match the
+/// file's bytes just before that offset) and folds them. Any unreadable row is an `Err`,
+/// never a partial answer, and leaves the cache as it was.
+fn fold_journal(path: &Path, session: &str) -> Result<Fold, ()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|_| ())?;
+    let len = file.metadata().map_err(|_| ())?.len();
+    let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
+    let mut start = 0u64;
+    let mut fold = Fold::default();
+    if let Some(c) = cache.get(path) {
+        if c.offset <= len {
+            let back = c.tail.len() as u64;
+            let mut now = vec![0u8; c.tail.len()];
+            if file.seek(SeekFrom::Start(c.offset - back)).is_ok() && file.read_exact(&mut now).is_ok() && now == c.tail {
+                start = c.offset;
+                fold = c.fold.clone();
+            }
+        }
+    }
+    file.seek(SeekFrom::Start(start)).map_err(|_| ())?;
+    let mut reader = BufReader::new(file);
+    let mut consumed = start;
+    let mut snapshot = None;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = reader.read_until(b'\n', &mut buf).map_err(|_| ())?;
+        if n == 0 { break; }
+        let complete = buf.last() == Some(&b'\n');
+        if !complete { snapshot = Some(fold.clone()); }
+        let line = std::str::from_utf8(&buf).map_err(|_| ())?;
+        let row = serde_json::from_str::<serde_json::Value>(line).map_err(|_| ())?;
+        fold_row(&mut fold, &row, session)?;
+        if complete { consumed += n as u64; }
+    }
+    // Remember only through the last complete row; a row still being written is read again.
+    let keep = snapshot.unwrap_or_else(|| fold.clone());
+    let tail_len = consumed.min(TAIL_CHECK);
+    let mut tail = vec![0u8; tail_len as usize];
+    let mut file = std::fs::File::open(path).map_err(|_| ())?;
+    if file.seek(SeekFrom::Start(consumed - tail_len)).is_ok() && file.read_exact(&mut tail).is_ok() {
+        cache.insert(path.to_path_buf(), Cached { offset: consumed, tail, fold: keep });
+    } else {
+        cache.remove(path);
+    }
+    Ok(fold)
+}
+
+fn fold_row(fold: &mut Fold, row: &serde_json::Value, session: &str) -> Result<(), ()> {
+    let callback = &row["callback"];
+    if row["schema"] != 1 || callback["session_id"].as_str() != Some(session) { return Err(()); }
+    match callback["hook_event_name"].as_str() {
+        // **A helper launched before the session's latest `resume` or `startup` is never
+        // counted as working.** Such a start follows the death of the process that ran those
+        // helpers (the app quit, or the machine did), and a helper that died with it never
+        // wrote an end. A helper started after this row is counted as usual.
+        Some("SessionStart") if matches!(callback["source"].as_str(), Some("resume" | "startup")) => {
+            *fold = Fold::default();
+        }
+        Some("SubagentStart") => {
+            let id = callback["agent_id"].as_str().filter(|s| !s.is_empty()).ok_or(())?;
+            let label = callback["agent_type"].as_str().unwrap_or(id).to_string();
+            fold.started.insert(id.to_string(), label.clone());
+            fold.open.insert(id.to_string(), label);
+        }
+        Some("SubagentStop") => {
+            let id = callback["agent_id"].as_str().filter(|s| !s.is_empty()).ok_or(())?;
+            fold.open.remove(id);
+        }
+        // The back end's own turn end, and the provider's list of what it still runs
+        // (see the note on [`status`]).
+        Some("Stop") if callback["agent_id"].as_str().is_none_or(str::is_empty) => {
+            for task in callback["background_tasks"].as_array().into_iter().flatten() {
+                if task["type"] != "subagent" || task["status"] != "running" { continue; }
+                let Some(id) = task["id"].as_str() else { continue };
+                if let Some(label) = fold.started.get(id).cloned() {
+                    fold.open.entry(id.to_string()).or_insert(label);
+                    fold.launched.insert(id.to_string());
+                }
+            }
+        }
+        Some("PostToolUse") if callback["tool_name"] == "Agent" => {
+            let response = &callback["tool_response"];
+            if response["status"] == "async_launched" {
+                if let Some(id) = response["agentId"].as_str().filter(|s| !s.is_empty()) {
+                    fold.launched.insert(id.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// **`active` VS `liveness_unknown`, AND WHY THIS READER NOW TELLS THEM APART.**
 ///
 /// Until 2026-09-18 every open run came back as `liveness_unknown` — an honest answer while
@@ -86,53 +201,8 @@ fn status_within(state: &Path, session: Option<&str>, patience: std::time::Durat
     let folder = state.join("evidence").join(session);
     let Some(_lock) = evidence_lock(&folder, patience) else { return unavailable(Unattributed::AppEvidenceUnavailable); };
     let path = folder.join("callbacks.jsonl");
-    let Ok(file) = std::fs::File::open(path) else { return unavailable(Unattributed::AppEvidenceUnavailable); };
-    let mut open = BTreeMap::new();
-    // **THE PROVIDER'S OWN WORD THAT IT LAUNCHED A RUN IN THE BACKGROUND**, joined by
-    // `agent_id`. An open run with this beside it and an open run without it are different
-    // facts and this reader used to give them the same answer — see the note on [`status`].
-    let mut launched = std::collections::BTreeSet::new();
-    // Every run seen starting, so a provider `Stop` listing one as still running can reopen it.
-    let mut started = BTreeMap::new();
-    for line in BufReader::new(file).lines() {
-        let Ok(line) = line else {return unavailable(Unattributed::AppEvidenceUnavailable)};
-        let Ok(row) = serde_json::from_str::<serde_json::Value>(&line) else {return unavailable(Unattributed::AppEvidenceUnavailable)};
-        let callback = &row["callback"];
-        if row["schema"] != 1 || callback["session_id"].as_str() != Some(session) {return unavailable(Unattributed::AppEvidenceUnavailable)}
-        match callback["hook_event_name"].as_str() {
-            Some("SubagentStart") => {
-                let Some(id) = callback["agent_id"].as_str().filter(|s|!s.is_empty()) else {return unavailable(Unattributed::AppEvidenceUnavailable)};
-                let label = callback["agent_type"].as_str().unwrap_or(id).to_string();
-                started.insert(id.to_string(), label.clone());
-                open.insert(id.to_string(),label);
-            }
-            Some("SubagentStop") => {
-                let Some(id) = callback["agent_id"].as_str().filter(|s|!s.is_empty()) else {return unavailable(Unattributed::AppEvidenceUnavailable)};
-                open.remove(id);
-            }
-            // The back end's own turn end, and the provider's list of what it still runs
-            // (see the note on [`status`]).
-            Some("Stop") if callback["agent_id"].as_str().is_none_or(str::is_empty) => {
-                for task in callback["background_tasks"].as_array().into_iter().flatten() {
-                    if task["type"] != "subagent" || task["status"] != "running" { continue; }
-                    let Some(id) = task["id"].as_str() else { continue };
-                    if let Some(label) = started.get(id) {
-                        open.entry(id.to_string()).or_insert_with(|| label.clone());
-                        launched.insert(id.to_string());
-                    }
-                }
-            }
-            Some("PostToolUse") if callback["tool_name"] == "Agent" => {
-                let response = &callback["tool_response"];
-                if response["status"] == "async_launched" {
-                    if let Some(id) = response["agentId"].as_str().filter(|s| !s.is_empty()) {
-                        launched.insert(id.to_string());
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    let Ok(fold) = fold_journal(&path, session) else { return unavailable(Unattributed::AppEvidenceUnavailable); };
+    let Fold { open, launched, .. } = fold;
     let (mut active, mut liveness_unknown) = (0usize, 0usize);
     let items: Vec<_> = open
         .into_iter()
@@ -231,6 +301,28 @@ pub fn session_ended(state: &Path, session: &str) -> Option<bool> {
         std::fs::write(&path,row("SubagentStart","worker-1")+&row("SubagentStop","worker-1")).unwrap();
         let view=status(&root,Some("session-one"));assert_eq!(view.liveness_unknown,0);assert!(view.items.is_empty());
         std::fs::write(&path,"partial").unwrap();assert_eq!(status(&root,Some("session-one")).unattributed,Some(Unattributed::AppEvidenceUnavailable));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A helper launched before the session's latest `resume` or `startup` died with the old
+    /// process and never wrote an end: it is not counted. One launched after it is.
+    #[test] fn a_helper_launched_before_a_resume_is_not_counted() {
+        let root=std::env::temp_dir().join(format!("app-worker-resume-{}",uuid::Uuid::new_v4()));
+        let folder=root.join("evidence/session-one");std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(".lock"), "").unwrap();
+        let path=folder.join("callbacks.jsonl");
+        let row=|event:&str,id:&str,source:&str|serde_json::json!({"schema":1,"callback":{"session_id":"session-one","hook_event_name":event,"agent_id":id,"source":source,
+            "tool_name":"Agent","tool_response":{"status":"async_launched","agentId":id}}}).to_string()+"\n";
+        let launch=|id:&str|row("SubagentStart",id,"")+&row("PostToolUse",id,"");
+        std::fs::write(&path,launch("w1")+&launch("w2")).unwrap();
+        assert_eq!(status(&root,Some("session-one")).active,2);
+        let mut journal=std::fs::read_to_string(&path).unwrap();
+        journal+=&row("SessionStart","","resume");
+        std::fs::write(&path,&journal).unwrap();
+        assert_eq!(status(&root,Some("session-one")).active,0);
+        journal+=&launch("w3");
+        std::fs::write(&path,&journal).unwrap();
+        assert_eq!(status(&root,Some("session-one")).active,1);
         std::fs::remove_dir_all(root).unwrap();
     }
 
