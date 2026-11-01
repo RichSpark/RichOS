@@ -796,12 +796,14 @@ try:
     check(waited, "P16i naming the holder's slot in the environment does not let an unrelated run skip the line",
           output("p16-fake")[-400:])
 
-    # P16j — a free slot is not a reason to start while a running run's checks still wait for the
-    # CPU (2026-10-29, work-6ec9b429: slots set to 6, six runs at once, one ran 46 min and 30 of its
-    # 37 checks were never admitted). Two runs started together under a limit of 2 on a host that
-    # refuses the first run's second check (its sampler reads busy while a flag file exists): the
-    # second run waits, names the run it waits behind, and starts only after that check was
-    # admitted; the first finishes with no check not admitted.
+    # P16j — a run's checks never start while an older run's checks still wait for the CPU
+    # (2026-10-29, work-6ec9b429: slots set to 6, six runs at once, one ran 46 min and 30 of its 37
+    # checks were never admitted), and the free slot is taken at once all the same (2026-11-01: a
+    # run kept in line, unstarted, behind another's waiting checks while the Mac sampled 19% busy).
+    # Two runs under a limit of 2 on a host that refuses the first run's second check (its sampler
+    # reads busy while a flag file exists): the second run takes its slot without waiting in line,
+    # its check gives way naming the first run, and starts only after that check was admitted; the
+    # first finishes with no check not admitted.
     slots("set", "2")
     flag = os.path.join(mark, "j.busy")
     busy_boot = runner_boot.replace(
@@ -819,7 +821,7 @@ try:
                          stdout=a_out, stderr=subprocess.STDOUT, env=a_env)
     until(lambda: exists(os.path.join(mark, "j.a1")), a)
     b = start_run("p16-j-b", "touch %s/j.b" % mark)
-    behind = until(lambda: "waiting behind p16-j-a" in output("p16-j-b"), b)
+    behind = until(lambda: "gives way to a run ahead of it: p16-j-a" in output("p16-j-b"), b)
     b_early = exists(os.path.join(mark, "j.b"))
     os.unlink(flag)           # the Mac frees up: the first run's second check is admitted
     until(lambda: exists(os.path.join(mark, "j.a2")), a)
@@ -831,9 +833,10 @@ try:
     with open(os.path.join(tmp, "p16-j-a.log", "summary.json")) as fh:
         a_states = [row.get("result") for row in json.load(fh).get("checks", [])]
     check(behind and not b_early and a_rc == 0 and b_rc == 0 and a2 is not None and jb is not None and jb >= a2
-          and "not-admitted" not in a_states,
-          "P16j under a limit of 2, a second run waits behind a run whose checks still wait for the CPU, "
-          "and starts only once they were admitted; the first has no check not admitted",
+          and "not-admitted" not in a_states and "waiting for a proof-run slot" not in output("p16-j-b"),
+          "P16j under a limit of 2, a second run takes the free slot at once, its check gives way to a run "
+          "whose checks still wait for the CPU and starts only once they were admitted; the first has no "
+          "check not admitted",
           (behind, b_early, a_rc, b_rc, a2, jb, a_states, output("p16-j-b")[-500:]))
     slots("set", "1")
 
@@ -963,7 +966,7 @@ try:
     check(l_seen.get("gave_way") and not l_seen.get("ran_early") and not l_seen.get("ran_while_older_waited")
           and l_item.state == "passed" and l_ran is not None and l_ran >= l_free and l_old_rc == 0
           and l_item.wait_times.get("older-run", 0) >= 1.5 and l_item.refused_wait == 0
-          and "gives way to an older run: p16-l-old" in l_buf.getvalue(),
+          and "gives way to a run ahead of it: p16-l-old" in l_buf.getvalue(),
           "P16l a newer run's check gives way while an older run still has checks waiting to be admitted, "
           "never spends its admission wait doing so, and runs once the older run has none waiting",
           (l_seen, l_item.state, l_item.notes, l_item.wait_times, l_item.refused_wait, l_ran, l_free,
@@ -1076,6 +1079,123 @@ try:
           "run its own priority keeps waiting, and the older run is admitted once the land lets it go",
           m_seen)
     slots("set", "1")
+
+    # P16n — a nightly or release command's own run goes first (2026-11-01, nightly run
+    # 20261101T084646Z-6bd51a90: its mutation batch stood #1 in line for 10 min behind a teammate's
+    # run until the lead asked the teammate to stop). Under a limit of 1, a teammate run holds the
+    # only slot with checks waiting to be admitted and another teammate run waits in line; then a run
+    # whose checkout is a nightly state folder's `source` tree asks for a slot while that folder's
+    # release.lock is held (nightly-local.py exclusive()). It is admitted at once, past the limit,
+    # its check runs without giving way although the teammate took its slot first, the teammate
+    # holder gives way to it, and neither teammate run is stopped: the one in line runs afterwards.
+    import fcntl as fcntl16n
+    n_state = os.path.join(tmp, "p16-n-nightly-state")
+    os.makedirs(os.path.join(n_state, "source"))
+    n_lock = open(os.path.join(n_state, "release.lock"), "a")
+    fcntl16n.flock(n_lock, fcntl16n.LOCK_EX)
+    n_seen = {}
+    n_teammate = pr.proof_slots._try(slots_dir, 1, {"waiter": "p16-n-teammate"}, checks=3)
+    n_line = start_run("p16-n-line", "touch %s/n.line" % mark)
+    n_seen["line_waits"] = until(lambda: "waiting for a proof-run slot" in output("p16-n-line"), n_line)
+    n_slot = None
+    n_item = pr.Item("p16-n-nightly-check", os.path.join(pr.ROOT, "richos/app"),
+                     ["bash", "-c", "touch %s/n.nightly" % mark], None, 1.0)
+    n_buf = io.StringIO()
+    try:
+        try:
+            n_slot, n_seen["waited"] = pr.proof_slots.acquire(
+                {"checkout": os.path.join(n_state, "source"), "waiter": "p16-n-nightly"}, 5, checks=1)
+        except TimeoutError as exc:
+            n_seen["refused"] = str(exc)[:300]
+        if n_slot is not None:
+            n_seen["slot"] = n_slot.index
+            n_seen["teammate_gives_way_to"] = [(r.get("slot"), r.get("first"))
+                                               for r in pr.proof_slots.ahead_of(n_teammate)]
+            n_seen["nightly_gives_way_to"] = [r.get("slot") for r in pr.proof_slots.ahead_of(n_slot)]
+            n_seen["status_first"] = [h.get("slot") for h in json.loads(slots("status", "--json").stdout)["holders"]
+                                      if h.get("first")]
+            pr.SLOT = n_slot
+            with background_run(), contextlib.redirect_stdout(n_buf):
+                pr.run([n_item], Args(admission_wait=1), os.path.join(tmp, "p16-n"), sampler=idle)
+            n_seen["line_ran_before_nightly"] = exists(os.path.join(mark, "n.line"))
+    finally:
+        pr.SLOT = None
+        if n_slot is not None:
+            n_slot.release()
+        n_teammate.release()
+        fcntl16n.flock(n_lock, fcntl16n.LOCK_UN)
+        n_lock.close()
+    n_seen["line_rc"] = n_line.wait()
+    n_seen["line_ran"] = exists(os.path.join(mark, "n.line"))
+    check(n_seen.get("line_waits") and n_slot is not None and n_seen.get("waited", 99) < 1
+          and n_seen.get("slot", 0) >= 1 and n_seen.get("status_first") == [n_seen.get("slot")]
+          and n_seen.get("nightly_gives_way_to") == []
+          and n_seen.get("teammate_gives_way_to") == [(n_seen.get("slot"), True)]
+          and n_item.state == "passed" and "gives way" not in n_buf.getvalue()
+          and n_seen.get("line_ran_before_nightly") is False
+          and n_seen.get("line_rc") == 0 and n_seen.get("line_ran"),
+          "P16n a nightly's own run is admitted first: at once past the limit while a teammate run holds the "
+          "only slot with checks waiting and another waits in line; its check never gives way, the holder "
+          "gives way to it, and the teammate in line runs and passes afterwards",
+          (n_seen, n_item.state, n_item.notes, n_buf.getvalue()[-400:], output("p16-n-line")[-300:]))
+
+    # P16o — a run that gives way never holds the run ahead of it back at worker admission (review
+    # rv-20261101T094016Z-2c1ea15a-8a00, its fixtures/nightly_worker_priority.py). A teammate run
+    # took its slot first and was refused a worker permit, which leaves its live request in the
+    # machine's Admission queue; then the nightly's run takes a slot and goes ahead of it. Once that
+    # request is BACKGROUND_PRIORITY_AGE (120 s) old, worker admission favors it over the nightly's,
+    # while the slot order makes the teammate give way before it asks for a worker again: neither
+    # moved, with every worker free. Now a run that gives way withdraws its worker request, so the
+    # nightly is admitted, and the teammate is admitted once the nightly has nothing waiting. Real
+    # Admission and slot locks in a private directory, P16m's simulated clock, no commands run.
+    o_dir = os.path.join(tmp, "p16-o")
+    os.makedirs(o_dir)
+    o_seen = {}
+    with contextlib.ExitStack() as o_stack:
+        o_stack.enter_context(mock16m.patch.object(pr.time, "monotonic", lambda: m_clock.now))
+        o_stack.enter_context(mock16m.patch.object(pr.time, "sleep", m_clock.sleep))
+        o_stack.enter_context(mock16m.patch.object(pr.engine_pass, "is_main_checkout", lambda p: False))
+        o_stack.enter_context(mock16m.patch.object(pr.engine_pass, "birth", lambda *a: "fixture"))
+        o_stack.enter_context(mock16m.patch.object(pr, "discount_held_gap", lambda *a: 0))
+        o_stack.enter_context(mock16m.patch.object(pr, "checkpoint", lambda *a: None))
+        o_stack.enter_context(mock16m.patch.object(pr, "STALL", type("S", (), {
+            "over": staticmethod(lambda: None), "refused": staticmethod(lambda *a: None)})()))
+        o_teammate = pr.proof_slots._try(o_dir, 1, {"waiter": "p16-o-teammate"}, checks=1)
+        o_nightly = None
+        o_team_adm = pr.engine_pass.Admission(o_dir, "teammate-worktree")
+        o_night_adm = pr.engine_pass.Admission(o_dir, "nightly-source")
+        o_team_budget, o_night_budget = M16Budget(o_team_adm), M16Budget(o_night_adm)
+        o_team_item = pr.Item("p16-o-teammate-ready", o_dir, ["true"])
+        o_night_item = pr.Item("p16-o-nightly-ready", o_dir, ["true"])
+        try:
+            # Busy workers refuse the teammate: what Budget.try_acquire does when no permit is free.
+            o_seen["teammate_attempt"] = o_team_adm.begin()
+            o_team_adm.attempted(False)
+            o_nightly = pr.proof_slots._try(o_dir, 2, {"waiter": "p16-o-nightly", "first": True}, checks=1)
+            o_seen["teammate_gives_way_to"] = [r.get("first") for r in pr.proof_slots.ahead_of(o_teammate)]
+            m_clock.now += pr.engine_pass.BACKGROUND_PRIORITY_AGE + 1
+            o_seen["teammate_admitted"] = m_passes(o_teammate, o_team_item, o_team_budget, None)
+            o_seen["teammate_wait_reason"] = o_team_item.wait_reason
+            o_seen["teammate_attempts"] = o_team_budget.attempts
+            o_seen["nightly_admitted"] = m_passes(o_nightly, o_night_item, o_night_budget, None)
+            # The nightly's run has nothing left waiting: the teammate asks again and is admitted.
+            o_nightly.release()
+            o_nightly = None
+            o_seen["teammate_admitted_after"] = m_passes(o_teammate, o_team_item, o_team_budget, None)
+        finally:
+            for o_adm in (o_team_adm, o_night_adm):
+                o_adm.close()
+            if o_nightly is not None:
+                o_nightly.release()
+            o_teammate.release()
+            pr.SLOT = saved_slot
+    check(o_seen.get("teammate_attempt") and o_seen.get("teammate_gives_way_to") == [True]
+          and o_seen.get("teammate_admitted") is False and o_seen.get("teammate_wait_reason") == "older-run"
+          and o_seen.get("teammate_attempts") == 0 and o_seen.get("nightly_admitted")
+          and o_seen.get("teammate_admitted_after"),
+          "P16o a teammate run giving way to the nightly's run withdraws its aged worker request, so the "
+          "nightly is admitted to a worker, and the teammate is admitted once the nightly has none waiting",
+          o_seen)
 
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine
     # units included, whatever a dated weight predicts (`workspace-spec-fourteen` was planned
