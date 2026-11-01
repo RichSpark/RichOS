@@ -179,6 +179,10 @@ pub struct Draft {
     /// continues from it and Prepare report now still uses Claude.
     #[serde(default)]
     pub last_message: Option<String>,
+    /// Prepare report now was asked and no report is built yet: a reopened report prepares it
+    /// again, with Claude.
+    #[serde(default)]
+    pub preparing: bool,
 }
 
 impl Draft {
@@ -204,6 +208,7 @@ impl Draft {
             in_flight: false,
             ready: false,
             last_message: None,
+            preparing: false,
         })
     }
 

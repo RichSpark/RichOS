@@ -709,7 +709,8 @@
         const last = d.conversation[d.conversation.length - 1];
         // Claude said it was ready: show that again. Claude was working when the window closed, or
         // failed in a way that can clear up: the investigation continues by itself, nothing to press.
-        if (d.ready) readyFooter();
+        if (d.preparing) { progress("Preparing your report…"); invoke("prepare"); }
+        else if (d.ready) readyFooter();
         else if (d.resuming) invoke("continue_investigation");
         else if (!d.pending_question && !(last && (last.t === "ai-failed"))) canceledCard();
         if (d.pending_question) showAnswer();

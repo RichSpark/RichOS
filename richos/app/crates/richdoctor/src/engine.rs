@@ -386,7 +386,11 @@ impl Engine {
                 }
                 self.write_scope();
                 if self.inner.lock().unwrap().draft.as_ref().is_some_and(|d| d.without_ai) {
-                    self.ask_own(1);
+                    let this = self.clone();
+                    std::thread::spawn(move || {
+                        this.collect_without_ai();
+                        this.ask_own(1);
+                    });
                 } else {
                     let first = self.first_message();
                     self.claude(first);
@@ -520,7 +524,13 @@ impl Engine {
                 None
             }
             Err(Some(failure)) => {
-                if !report && self.rest_then_retry(failure, &message) {
+                if report {
+                    // Preparing the report waits here: a failure that can clear up is tried again
+                    // before the report is built without Claude.
+                    if self.rest_blocking(failure) {
+                        return self.claude_now(message, true);
+                    }
+                } else if self.rest_then_retry(failure, &message) {
                     return None;
                 }
                 self.set_in_flight(false);
@@ -572,6 +582,33 @@ impl Engine {
             }
         });
         true
+    }
+
+    /// The same rest and the same number of tries as [`Self::rest_then_retry`], waited out in the
+    /// calling thread (report preparation). `false`: not retried (not transient, tries used, the
+    /// window closed meanwhile).
+    fn rest_blocking(&self, failure: Failure) -> bool {
+        let Some(default_rest) = auto_retry_rest(failure) else { return false };
+        if !self.auto_retry.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
+            return false;
+        }
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.auto_tries >= AUTO_RETRIES {
+                return false;
+            }
+            inner.auto_tries += 1;
+        }
+        let fixed = self.rest_ms.load(Ordering::SeqCst);
+        let rest = if fixed == u64::MAX { default_rest } else { Duration::from_millis(fixed) };
+        let until = Instant::now() + rest;
+        while Instant::now() < until {
+            if self.closed.load(Ordering::SeqCst) {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(100).min(until.saturating_duration_since(Instant::now())));
+        }
+        !self.closed.load(Ordering::SeqCst)
     }
 
     /// Nothing happened since the failure that makes a waiting retry wrong: the window did not
@@ -804,11 +841,17 @@ impl Engine {
         }
     }
 
-    fn without_ai(&self) {
-        let diagnostics = !self.inner.lock().unwrap().draft.as_ref().unwrap().no_diagnostics;
+    /// What the no-AI path collects, once the incident time is known: the collectors read the
+    /// window the time question sets, so collecting before it would keep the last day's records
+    /// for an incident of another day.
+    fn collect_without_ai(&self) {
+        let diagnostics = !self.inner.lock().unwrap().draft.as_ref().is_some_and(|d| d.no_diagnostics);
         self.busy.store(true, Ordering::SeqCst);
         self.collect_here(&report::without_ai_categories(diagnostics));
         self.busy.store(false, Ordering::SeqCst);
+    }
+
+    fn without_ai(&self) {
         // The questions Claude would have asked, asked here with the window's own question
         // screen: when it happened first (it sets the report's When), then what the person
         // expected and what they were doing just before (the report's Expected and steps).
@@ -854,12 +897,25 @@ impl Engine {
                 }
             }
             this.canceled.store(false, Ordering::SeqCst);
+            // Kept with the report: closing the window while Claude drafts must not leave a
+            // report built without Claude; reopening prepares it again, with Claude.
+            {
+                let mut inner = this.inner.lock().unwrap();
+                inner.auto_tries = 0;
+                if let Some(d) = inner.draft.as_mut() {
+                    d.preparing = true;
+                }
+                this.save(&mut inner);
+            }
             let (ai, diagnostics) = {
                 let inner = this.inner.lock().unwrap();
                 let d = inner.draft.as_ref().unwrap();
                 (!d.without_ai && d.ai_failure.is_none() && this.env.claude.is_some() && inner.last_message.is_some(), !d.no_diagnostics)
             };
             let drafted = if ai { this.claude_now(adapter::PREPARE_REPORT.into(), true).as_deref().and_then(adapter::parse_drafted) } else { None };
+            if this.closed.load(Ordering::SeqCst) {
+                return; // the window closed meanwhile: still preparing, nothing built
+            }
             let provenance = {
                 let inner = this.inner.lock().unwrap();
                 let d = inner.draft.as_ref().unwrap();
@@ -903,6 +959,7 @@ impl Engine {
             ctx: &c,
         });
         d.report = Some(r);
+        d.preparing = false;
         d.stage = Stage::Review;
         d.left = "draft, ready to review".into();
         self.save(&mut inner);
@@ -1394,6 +1451,7 @@ impl Engine {
             "without_ai": d.without_ai,
             "ready": d.ready && d.stage == Stage::Investigating,
             "resuming": self.should_continue(&d),
+            "preparing": d.preparing && d.stage == Stage::Investigating,
         }))
     }
 
@@ -1794,6 +1852,62 @@ mod tests {
         e.close();
         assert_eq!(all.lines().filter(|l| l.contains("It closes every time")).count() as u32, 1 + AUTO_RETRIES, "{all}");
         assert!(events.lock().unwrap().iter().any(|v| v["t"] == "ai-failed" && v["retry"] == true));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn preparing_the_report_retries_a_failure_that_can_clear_up_before_building_without_claude() {
+        let root = scratch("prepare-retry");
+        let (e, events, _) = asked_by_claude(&root);
+        e.set_auto_retry(Some(Duration::from_millis(50)));
+        std::fs::write(e.env().store.work_dir().join("fail-once"), "").unwrap(); // one 503 on the drafting turn
+        e.prepare();
+        wait_for(&events, &["review"]);
+        let all = captured_all(&e);
+        e.close();
+        assert_eq!(all.lines().filter(|l| l.contains(adapter::PREPARE_REPORT)).count(), 2, "Claude was asked again: {all}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn closing_the_window_while_claude_drafts_leaves_the_report_to_be_prepared_with_claude() {
+        let root = scratch("close-preparing");
+        let (e, events, id) = asked_by_claude(&root);
+        let work = e.env().store.work_dir();
+        std::fs::write(work.join("hang-next"), "").unwrap();
+        e.prepare();
+        wait_captured(&e, adapter::PREPARE_REPORT);
+        e.close();
+        wait_idle(&events);
+        // load-bound: the preparing thread ends right after the operation does; only a hang reaches this.
+        std::thread::sleep(Duration::from_millis(500));
+        let saved = e.env().store.load(&id).unwrap();
+        assert!(saved.report.is_none() && saved.stage == Stage::Investigating, "no fallback report was built while the window was closed");
+        assert!(saved.preparing);
+        std::fs::remove_file(work.join("hang-next")).unwrap();
+        assert_eq!(e.open(&id).unwrap()["preparing"], true, "reopening prepares it again");
+        events.lock().unwrap().clear();
+        e.prepare();
+        wait_for(&events, &["review"]);
+        let all = captured_all(&e);
+        e.close();
+        assert!(all.lines().filter(|l| l.contains(adapter::PREPARE_REPORT)).count() >= 2, "Claude was asked again after reopening: {all}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn prepare_without_ai_collects_after_the_time_is_known_not_before() {
+        let root = scratch("collect-after-when");
+        let (e, events) = engine_at(&root.join("store"), None);
+        e.start("RichOS closes before its window opens".into(), true, true).unwrap();
+        wait_for(&events, &["question"]);
+        let dir = e.draft_dir().unwrap();
+        assert!(evidence::Store::at(&dir).all().is_empty(), "nothing is collected under the unknown last-day window before the time is asked");
+        events.lock().unwrap().clear();
+        e.answer("Yesterday".into());
+        wait_for(&events, &["question"]);
+        assert!(!evidence::Store::at(&dir).all().is_empty(), "collected once the time is known");
+        e.close();
         std::fs::remove_dir_all(root).ok();
     }
 
