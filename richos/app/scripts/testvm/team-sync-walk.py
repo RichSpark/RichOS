@@ -33,7 +33,9 @@ It reuses hire-walk.py's class for the first run and the relaunch; only these ar
            then what a later lease for another company does to the folder every lease shares
            (`coordination/.claude/agents/ray.md` written with another model) is done in the guest,
            and the shipped engine's own `job_model('ray')`, run with that lease's real
-           environment, still answers the lease's model, not the other company's
+           environment, still answers the lease's model, not the other company's; and the same for
+           every other reader of the roster: guard-pierce's instruction text, the shell guards'
+           resolver, and the Stop hooks' role lists (review rv-20261102T062434Z-a3c7a28e)
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -187,11 +189,42 @@ class TeamSyncWalk(hire_walk.HireWalk):
                    f'python3 -c {shlex.quote(script)} {shlex.quote(engine + "/mega-lander/app.py")} 2>&1')
         answered = guest(self.vm, command, 120).strip().splitlines()[-1:] or ['']
         evidence.update({'own_model': own, 'other_company_model_in_shared_folder': other, 'dispatch_model': answered[0]})
+        # The other readers of the roster (review rv-20261102T062434Z-a3c7a28e): guard-pierce's
+        # instruction text, the shell guards' resolver and the Stop hooks' role lists, each run with
+        # the lease's real environment while the shared folder holds the other company's text.
+        own_text, setenv = self.read(roster + '/ray.md'), (
+            f'RICHOS_ENTITY_ROOT={shlex.quote(entity)} RICHOS_AGENT_ROSTER={shlex.quote(roster)} '
+            f'CLAUDE_PROJECT_DIR={shlex.quote(entity)} RICHOS_APP_STATE=/tmp/team-sync-walk-state ')
+        pierce_script = ('import sys\nsys.path.insert(0,sys.argv[1])\nimport pierce\n'
+                         'print(pierce.instruction_text({"tool_input":{"subagent_type":"richos-app-engine:ray","prompt":"x"},'
+                         '"cwd":sys.argv[2]}))')
+        pierce = guest(self.vm, f'{setenv}python3 -c {shlex.quote(pierce_script)} '
+                       f'{shlex.quote(engine + "/scripts/lib")} {shlex.quote(entity)} 2>&1', 120)
+        resolve_script = '. "$1/scripts/lib/resolve-roots.sh"; resolve_agent_def "$2" "$1" richos-app-engine:ray; agent_roster_dir "$2"'
+        resolved = guest(self.vm, setenv + 'bash -c ' + shlex.quote(resolve_script)
+                         + f' x {shlex.quote(engine)} {shlex.quote(entity)} 2>&1', 60).split()
+        own_roster = '/tmp/team-sync-walk-roster'
+        self.put(own_roster + '/onlyroster.md', definition('onlyroster', 'x'))
+        roles = {}
+        for label, rel in (('ass-kicker', 'ass-kicker/ass-kicker.py'), ('guard-unresolved-claims', 'scripts/hooks/guard-unresolved-claims.py')):
+            roles_script = ('import importlib.util,sys\n'
+                            's=importlib.util.spec_from_file_location("m",sys.argv[1]);m=importlib.util.module_from_spec(s);'
+                            's.loader.exec_module(m)\nprint(" ".join(sorted(m.roster_roles(sys.argv[2],None,None))))')
+            roles[label] = guest(self.vm, f'RICHOS_AGENT_ROSTER={own_roster} python3 -c {shlex.quote(roles_script)} '
+                                 f'{shlex.quote(engine + "/" + rel)} {shlex.quote(entity)} 2>&1', 60).strip()
+        evidence.update({'pierce_has_own_text': own_text.strip() in pierce, 'pierce_has_other_text': DECOY in pierce,
+                         'resolver_and_roster_dir': resolved, 'role_lists': roles})
         (self.out / 'rosters-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         if DECOY not in self.read(shared):
             raise StepFailed('the shared folder was not changed, so this step proved nothing')
         if answered[0] != own:
             raise StepFailed("the dispatch ran on %r, not the lease's own %r" % (answered[0], own))
+        if own_text.strip() not in pierce or DECOY in pierce:
+            raise StepFailed("Pierce inspected the assignment against another definition than the lease's own: %r" % pierce[:400])
+        if resolved != [roster + '/ray.md', roster]:
+            raise StepFailed("the shell guards' resolver did not take the lease's roster: %r" % resolved)
+        if set(roles.values()) != {'onlyroster'}:
+            raise StepFailed("a Stop hook's role list did not come from the lease's roster: %r" % roles)
         return evidence
 
 
