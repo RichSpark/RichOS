@@ -636,6 +636,40 @@ fn cancel_says_canceled_only_once_the_copy_is_gone_and_names_the_issue_when_it_w
 }
 
 #[test]
+fn a_waiting_report_being_changed_keeps_its_copy_unsent_and_goes_out_by_itself_once_put_back() {
+    // Review rv-20261102T003409Z-35b12ee9-35e9 (CEO §156): Change it took the waiting copy off
+    // this Mac at once, so Done with nothing changed left no report anywhere. Now the copy stays
+    // while it is changed, held out of the retry, and is sent by itself once it is put back.
+    let dir = scratch("held");
+    let outbox = Outbox::open(&dir);
+    let id = match outbox.send(&public_of(&sheet("x")), &Token(Some("t")), &FakeGitHub::answering(vec![Outcome::Unreachable]), 0).unwrap() {
+        Delivery::Waiting { id, .. } => id,
+        other => panic!("{other:?}"),
+    };
+    // Still waiting: nothing is removed by asking.
+    assert_eq!(outbox.gone(&id).unwrap(), None);
+    assert_eq!(outbox.pending().unwrap().len(), 1);
+    // Held: the retry leaves it alone, however due it is, and it stays on this Mac.
+    let untouched = FakeGitHub::answering(vec![]);
+    assert!(outbox.send_due_but(&|w| w == id, &Token(Some("t")), &untouched, u64::MAX).unwrap().is_empty());
+    assert!(untouched.seen.borrow().is_empty(), "a held report was tried");
+    assert_eq!(outbox.pending().unwrap().len(), 1, "a held report is no longer waiting");
+    // Put back as it was: it goes out by itself, once.
+    let online = FakeGitHub::answering(vec![Outcome::Created { number: 412, url: "u".into() }]);
+    let sent = outbox.send_due_but(&|_| false, &Token(Some("t")), &online, u64::MAX).unwrap();
+    assert!(matches!(sent.as_slice(), [Delivery::Sent(s)] if s.number == 412), "{sent:?}");
+    assert_eq!(online.seen.borrow().len(), 1);
+    // Gone now, and said as what became of it.
+    assert!(matches!(outbox.gone(&id).unwrap(), Some(Withdrawn::AlreadySent(s)) if s.number == 412));
+    assert_eq!(outbox.gone(&uuid_like()).unwrap(), Some(Withdrawn::Canceled));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn uuid_like() -> String {
+    "00000000-0000-4000-8000-000000000001".into()
+}
+
+#[test]
 fn a_private_name_rich_found_stays_left_out_on_every_later_change() {
     // Finding 4, fixture `core-edge-cases.py`: on the tip "Jane Doe", whom Rich named private in
     // his write-up, was left out of the draft and then went public on the first change.

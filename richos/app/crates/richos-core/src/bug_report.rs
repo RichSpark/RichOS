@@ -2754,6 +2754,21 @@ impl Outbox {
         })
     }
 
+    /// **IS IT STILL WAITING HERE?** `None` while its copy waits on this Mac; otherwise what became
+    /// of it, as [`Outbox::withdraw`] says it ([`Withdrawn::AlreadySent`] with the issue, or
+    /// [`Withdrawn::Canceled`] when nothing by that id waits or went out). Removes nothing: a
+    /// waiting report being changed keeps its copy until the changed words are saved (CEO §156).
+    /// Called under the same one-at-a-time lock as every send, so a retry in flight finishes first.
+    pub fn gone(&self, id: &str) -> io::Result<Option<Withdrawn>> {
+        if self.path_of(id).is_some_and(|p| p.exists()) {
+            return Ok(None);
+        }
+        Ok(Some(match self.sent()?.into_iter().find(|s| s.id == id) {
+            Some(sent) => Withdrawn::AlreadySent(sent),
+            None => Withdrawn::Canceled,
+        }))
+    }
+
     /// Remove a waiting report. `false` when there was none by that id.
     pub fn cancel(&self, id: &str) -> io::Result<bool> {
         let Some(path) = self.path_of(id) else { return Ok(false) };
@@ -2790,9 +2805,16 @@ impl Outbox {
 
     /// Every waiting report whose rest is over, tried once each, oldest first.
     pub fn send_due(&self, credentials: &dyn Credentials, transport: &dyn Transport, now_ms: u64) -> io::Result<Vec<Delivery>> {
+        self.send_due_but(&|_| false, credentials, transport, now_ms)
+    }
+
+    /// [`Outbox::send_due`], leaving out each report `held` names: one the user is changing
+    /// (Change it), whose copy stays on this Mac, unsent, until the changed words replace it or
+    /// it is put back as it was (CEO §156).
+    pub fn send_due_but(&self, held: &dyn Fn(&str) -> bool, credentials: &dyn Credentials, transport: &dyn Transport, now_ms: u64) -> io::Result<Vec<Delivery>> {
         let mut out = Vec::new();
         for pending in self.pending()? {
-            if pending.next_try_at_ms <= now_ms {
+            if pending.next_try_at_ms <= now_ms && !held(&pending.id) {
                 out.push(self.attempt(pending, credentials, transport, now_ms)?);
             }
         }
