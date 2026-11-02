@@ -353,8 +353,16 @@ fn quit_running_with(places: &Places, me: i32, owns_window: &dyn Fn(i32) -> bool
     let sock = places.doctor_data.join("instance.sock");
     let Ok(mut s) = std::os::unix::net::UnixStream::connect(&sock) else { return Ok(false) };
     s.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    writeln!(s, "quit-if-idle").map_err(|e| e.to_string())?;
+    // Decide BEFORE asking anything: an installed copy at activation policy Regular (a help window
+    // open, minimized or hidden) is never asked to quit. Its own idle test cannot see text still
+    // being typed before Continue, and its quit handler reads `is_visible()`, false for a
+    // minimized window, so asking could end it with the typed text lost. Only one at Accessory
+    // (no window) is asked. A pid the kernel will not name is left alone the same way.
     let answered_by = peer_pid_of(&s);
+    if answered_by.is_none_or(|p| p != me && owns_window(p)) {
+        return Err("a RichDoctor help session is open".into());
+    }
+    writeln!(s, "quit-if-idle").map_err(|e| e.to_string())?;
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).map_err(|_| "RichDoctor did not answer within five seconds".to_string())?;
     if line.trim() != "ok" {
@@ -854,6 +862,45 @@ mod tests {
         // No window at all: the stuck copy is stopped by its process id.
         let (r, stops) = old_busy_copy("nowindow", false);
         assert_eq!(stops, vec![std::process::id() as i32], "{r:?}");
+    }
+
+    /// An old copy that would answer `ok` to `quit-if-idle` (as a minimized window with half-typed
+    /// text does); returns the outcome and whether it was asked at all.
+    fn old_copy_that_would_quit(tag: &str, owns: bool) -> (Result<bool, String>, bool) {
+        let root = temp(tag);
+        let p = places(&root);
+        crate::util::private_dir(&p.doctor_data).unwrap();
+        let sock = p.doctor_data.join("instance.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let gone = sock.clone();
+        let t = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let Ok((s, _)) = listener.accept() else { return };
+            let mut line = String::new();
+            BufReader::new(&s).read_line(&mut line).ok();
+            tx.send(line.trim().to_string()).ok();
+            if line.trim() == "quit-if-idle" {
+                writeln!(&s, "ok").ok();
+                drop(listener);
+                fs::remove_file(gone).ok();
+            }
+        });
+        let r = quit_running_with(&p, -1, &|_| owns, &|_| {});
+        t.join().unwrap();
+        let asked = rx.try_recv().is_ok_and(|l| l == "quit-if-idle");
+        fs::remove_dir_all(root).ok();
+        (r, asked)
+    }
+
+    #[test]
+    fn a_copy_with_a_window_is_never_asked_to_quit_and_one_without_is() {
+        // Regular (window open, minimized or hidden): not asked, whatever it would answer.
+        let (r, asked) = old_copy_that_would_quit("regular", true);
+        assert!(!asked && r.is_err(), "asked={asked} {r:?}");
+        // Accessory (no window): asked, and it quits.
+        let (r, asked) = old_copy_that_would_quit("accessory", false);
+        assert!(asked && r == Ok(true), "asked={asked} {r:?}");
     }
 
     #[test]
