@@ -347,6 +347,8 @@ fn split_heading(heading: &str) -> Option<(&str, &str)> {
 pub fn working_teammates(data: &Path, kinds: &[String]) -> Result<Vec<Teammate>, RuntimeError> {
     let definitions = user_definitions(data)?;
     Ok(kinds.iter().map(|kind| {
+        // Normal dispatch names a teammate `richos-app-engine:<name>`: the plugin prefix is not part of it.
+        let kind = kind.rsplit(':').next().unwrap_or(kind);
         match definitions.iter().find(|(name, _)| name.eq_ignore_ascii_case(kind)) {
             Some((name, body)) => teammate_from(name, body),
             None => {

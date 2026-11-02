@@ -780,7 +780,7 @@ fn the_working_list_names_running_helpers_from_the_team_folder() {
     let team = f.0.join("team");
     std::fs::create_dir_all(&team).unwrap();
     std::fs::write(team.join("finn.md"), "---\nname: finn\n---\n# Finn: Finance Lead\n").unwrap();
-    let kinds = vec!["finn".to_string(), "explore".to_string()];
+    let kinds = vec!["richos-app-engine:finn".to_string(), "explore".to_string()];
     assert_eq!(working_teammates(&f.0, &kinds).unwrap(), vec![
         Teammate { name: "Finn".into(), role: Some("Finance Lead".into()) },
         Teammate { name: "Explore".into(), role: None },
