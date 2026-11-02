@@ -2,6 +2,29 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.6-nightly.20261102.86
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.6-nightly.20261102.86)
+
+- Added a + button to the message box that opens your Mac's file picker for files and folders; a folder, picked or dragged in, is handed to Rich to read where it is instead of being copied
+- Changed the message box to a new look: when empty it reads "Type here… OR…" with Talk to Rich on the line below; the +, the status line, Output and Send sit in a row under your words
+- Changed RichDoctor to send a report by itself once it can when your Send did not get through because you were offline, the reporting service was busy or unreachable or RichDoctor quit while sending; it no longer comes back as unfinished
+- Changed closing RichDoctor's window while it is looking into your problem so it no longer cancels: reopening it carries on with Claude and RichDoctor retries Claude's passing hiccups by itself
+- Changed Prepare without AI in RichDoctor to ask when the problem happened, what you expected and what happened just before instead of leaving them for you to fill in; RichDoctor asks the same on a Mac without Claude Code
+- Improved adding a screenshot in RichDoctor: one press of Use this image finishes it, where it used to take two
+- Fixed RichOS opening each time in the conversation created most recently, often one you never used; it now starts with no conversation selected so you pick one
+- Fixed removing an account in Settings, Claude accounts breaking every conversation that had run on it; your conversations' history now stays on your Mac whichever account you remove
+- Fixed a conversation whose earlier history is missing from your Mac failing on every message and sending you to check your sign-in; Rich now says the history is gone and your next message starts afresh in the same conversation
+- Fixed RichOS showing agents working right after it started by counting teammates that had stopped when it last quit
+- Fixed Stu being handed the same old jobs again every time RichOS started
+- Fixed Dictation saying it was still downloading the voice AI every time you used it if its speech engine was being replaced just as RichOS started
+- Fixed a Bust a bug report or Request a feature idea that Rich had written up being lost when RichOS quit, restarted or crashed before you sent it; it is now kept on your Mac with your own changes and you can close the panel and bring it back with the same button
+- Fixed Send in Bust a bug making you wait for Rich to check your report again after he had changed it as you asked; sometimes it even had to be pressed twice
+- Fixed a Bust a bug report or idea waiting to go out being lost when you pressed Change it and then Done without changing anything or when Rich could not make the change you asked for; it now goes back to waiting as it was
+- Fixed RichDoctor offering a report you had already sent as an unfinished report to continue; choosing Start a new report now also stops it offering the old one again
+- [technical] Fixed a conversation that could not start being tried again for every message waiting in it; after two failed tries the rest stop at once with the same reason and a failed start leaves no files behind
+- [technical] Fixed the cleanup at the end of your team's work running out of time before it could remove that work's temporary files
+
 ## 1.2.5-nightly.20261101.85
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5-nightly.20261101.85)
