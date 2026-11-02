@@ -251,5 +251,16 @@
     "previous_tag": "v1.2.7-nightly.20261102.87",
     "previous_source": "b4e8981a9e10089230a565ae64f20eb8f3ef06c3",
     "entry": "- Changed the home screen once you have a team: your own memories now light up in gold in front of a dimmed example marked \"Example, not yours\", which fades as yours grow and is gone at 2,500, where before there was no picture until you had about 2,000 memories\n- Changed the home screen's left column once you have a team to also show how many teammates are working now, sources understood, decisions and lessons remembered and how many memories Rich has from you\n- Improved how soon your memories appear on the home screen: they are drawn in as soon as RichOS has read them and show right away on later launches while they are unchanged\n- Fixed RichDoctor not being brought up to date when it was open as RichOS started; RichOS now updates it within about a minute of you closing its window and no longer closes a minimized or hidden RichDoctor window, which could lose what you had typed"
+  },
+  "v1.2.8": {
+    "schema": 1,
+    "tag": "v1.2.8",
+    "version": "1.2.8",
+    "channel": "stable",
+    "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
+    "build_commit": "c3ec56edacae5df8b7e0024114b4fab59390b473",
+    "previous_tag": "v1.2.7",
+    "previous_source": "b4e8981a9e10089230a565ae64f20eb8f3ef06c3",
+    "entry": "- Changed the home screen once you have added a teammate: your own memories now light up in gold in front of a dimmed example marked \"Example, not yours\", which fades as yours grow and is gone at 2,500; before, there was no picture until you had about 2,000 memories\n- Changed the home screen's left column once you have a team to also show how many memories Rich has from you, how many teammates are working now, sources understood and decisions and lessons remembered\n- Improved how soon your memories appear on the home screen: the picture no longer waits for them, they are drawn in as soon as RichOS has read them and they show at once on later launches while they are unchanged\n- Fixed RichDoctor not being brought up to date while it was running with a window or a report open; RichOS now tries again every minute and updates it once its window is closed\n- Fixed RichOS closing a minimized or hidden RichDoctor window to bring it up to date, which lost what you had typed in it"
   }
 }
