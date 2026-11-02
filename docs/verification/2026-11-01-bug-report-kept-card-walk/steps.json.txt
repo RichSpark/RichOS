@@ -1,0 +1,510 @@
+[
+  {
+    "i": 0,
+    "step": {
+      "op": "guest",
+      "command": "mkdir -p /Users/admin/fill-first"
+    },
+    "at": "22:37:53Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 1,
+    "step": {
+      "op": "push",
+      "src": "richos/app/scripts/testvm/fake-claude-fill-first.pl",
+      "dest": "/Users/admin/fill-first/claude-fill-first"
+    },
+    "at": "22:37:53Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 2,
+    "step": {
+      "op": "push",
+      "src": "richos/app/scripts/testvm/fake-claude-bug-report.py",
+      "dest": "/Users/admin/fill-first/claude"
+    },
+    "at": "22:37:54Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 3,
+    "step": {
+      "op": "push",
+      "src": "richos/app/scripts/testvm/report-relay-stand-in.py",
+      "dest": "/Users/admin/fill-first/relay-stand-in.py"
+    },
+    "at": "22:37:54Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 4,
+    "step": {
+      "op": "guest",
+      "command": "chmod 755 /Users/admin/fill-first/claude /Users/admin/fill-first/claude-fill-first; printf '{\"five\":10,\"weekly\":20}' > /Users/admin/fill-first/usage-1.json; printf 'Noted.' > /Users/admin/fill-first/reply.txt"
+    },
+    "at": "22:37:55Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 5,
+    "step": {
+      "op": "guest",
+      "command": "cd /Users/admin/fill-first && (nohup python3 relay-stand-in.py 8765 /Users/admin/fill-first/relay.json /Users/admin/fill-first/stand-in.log 0 412 > /Users/admin/fill-first/relay.out 2>&1 & echo $! > /Users/admin/fill-first/stand-in.pid); sleep 2; cat /Users/admin/fill-first/relay.out"
+    },
+    "at": "22:37:55Z",
+    "exit": 0,
+    "output": "listening 8765"
+  },
+  {
+    "i": 6,
+    "step": {
+      "op": "relaunch",
+      "env": [
+        "RICHOS_CLAUDE_BIN=/Users/admin/fill-first/claude",
+        "RICHDOCTOR_REPORT_RELAY=http://127.0.0.1:8765",
+        "RICHDOCTOR_REPORT_REPOSITORY=richos-test/report-relay-local"
+      ]
+    },
+    "at": "22:37:58Z",
+    "exit": 0,
+    "output": "{\"pid\": 1437, \"log\": \"/Users/admin/testvm/walk-c599e00466f1/relaunch-1793572681507867000.log\", \"app\": \"/Users/admin/testvm/walk-c599e00466f1/RichOS.app\"}"
+  },
+  {
+    "i": 7,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--title",
+        "Settings",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 120
+    },
+    "at": "22:38:03Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1437 windows=1 nodes=24 mode=find matches=1\n          AXPopUpButton title='Settings' desc='Settings' value='' enabled=yes pos=1482 123 size=40 40\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.7966}\n{\"ax_timing\": true, \"total_seconds\": 3.4901, \"preflight_seconds\": 0.8601, \"transport_seconds\": 2.5582, \"render_seconds\": 0.0722, \"guest_seconds\": 0.7966, \"transport_overhead_second"
+  },
+  {
+    "i": 8,
+    "step": {
+      "op": "wait",
+      "seconds": 5
+    },
+    "at": "22:38:48Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 9,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Settings",
+        "--first"
+      ]
+    },
+    "at": "22:38:53Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1437 windows=1 nodes=34 mode=click matches=1\npressed AXPopUpButton title='Settings' desc='Settings' pos=1482 123 size=40 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.8593}\n{\"ax_timing\": true, \"total_seconds\": 2.8222, \"preflight_seconds\": 0.8052, \"transport_seconds\": 1.9634, \"render_seconds\": 0.0541, \"guest_seconds\": 0.8593, \"transport_overhead_seconds\": 1.1041}"
+  },
+  {
+    "i": 10,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "22:38:56Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 11,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Bust a bug!",
+        "--contains",
+        "--first"
+      ]
+    },
+    "at": "22:38:58Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1437 windows=1 nodes=69 mode=click matches=1\npressed AXButton title='Bust a bug!' desc='' pos=1160 791 size=332 41 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.8312}\n{\"ax_timing\": true, \"total_seconds\": 2.5441, \"preflight_seconds\": 0.7679, \"transport_seconds\": 1.7206, \"render_seconds\": 0.0562, \"guest_seconds\": 0.8312, \"transport_overhead_seconds\": 0.8894}"
+  },
+  {
+    "i": 12,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "What went wrong? Tell me in your own words",
+        "--contains",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 30
+    },
+    "at": "22:39:00Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1437 windows=1 nodes=104 mode=find matches=1\n                  AXStaticText title='' desc='' value=\"What went wrong? Tell me in your own words, typed or out loud and where it happened if it wasn't here. I've noted that you were on the home screen.\" enabled=yes pos=1089 266 size=414 74\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.7158}\n{\"ax_timing\": true, \"total_seconds\": 2.3"
+  },
+  {
+    "i": 13,
+    "step": {
+      "op": "ax",
+      "args": [
+        "type",
+        "The names of my conversations on the left get cut off when I make the text bigger.",
+        "--role",
+        "AXTextArea",
+        "--id",
+        "bugdock-input",
+        "--replace"
+      ]
+    },
+    "at": "22:39:03Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1437 windows=1 nodes=104 mode=type matches=1\ntype verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 2.2014}\n{\"ax_timing\": true, \"total_seconds\": 3.8351, \"preflight_seconds\": 0.7332, \"transport_seconds\": 3.041, \"render_seconds\": 0.0616, \"guest_seconds\": 2.2014, \"transport_overhead_seconds\": 0.8396}"
+  },
+  {
+    "i": 14,
+    "step": {
+      "op": "ax",
+      "args": [
+        "--key",
+        "36"
+      ]
+    },
+    "at": "22:39:07Z",
+    "exit": 0,
+    "output": "{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.4769}\n{\"ax_timing\": true, \"total_seconds\": 1.9793, \"preflight_seconds\": 0.6624, \"transport_seconds\": 1.3173}"
+  },
+  {
+    "i": 15,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "Not sent yet",
+        "--contains",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 120
+    },
+    "at": "22:39:09Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1437 windows=1 nodes=136 mode=find matches=1\n                  AXStaticText title='' desc='' value='Not sent yet' enabled=yes pos=1365 -169 size=91 20\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.6722}\n{\"ax_timing\": true, \"total_seconds\": 2.3228, \"preflight_seconds\": 0.7763, \"transport_seconds\": 1.5023, \"render_seconds\": 0.0448, \"guest_seconds\": 0.6722, \"transport_overhead_s"
+  },
+  {
+    "i": 16,
+    "step": {
+      "op": "wait",
+      "seconds": 4
+    },
+    "at": "22:39:11Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 17,
+    "step": {
+      "op": "shot",
+      "name": "1-card-written"
+    },
+    "at": "22:39:15Z",
+    "exit": 0,
+    "output": "[testvm] 22:39:17Z captured 1680x1050, 73.5% non-black -> /Volumes/E1TB/tmp/claude/echo/a9d0d7e1f054960b4/out/1-card-written.png"
+  },
+  {
+    "i": 18,
+    "step": {
+      "op": "guest",
+      "command": "d=\"$(find /Users/admin -type d -name bug-reports -path '*com.richos.app*' 2>/dev/null | head -1)\"; echo \"$d\"; ls \"$d/unchecked\"; test \"$(ls \"$d/unchecked\" | wc -l | tr -d ' ')\" = 1 && echo 'ONE written-up card is kept on disk'; test ! -s /Users/admin/fill-first/stand-in.log && echo 'nothing reached the relay'"
+    },
+    "at": "22:39:17Z",
+    "exit": 0,
+    "output": "/Users/admin/testvm/walk-c599e00466f1/home/Library/Application Support/com.richos.app/bug-reports\na63a2b7e-85a9-477d-8c5a-249d84870704.json\nONE written-up card is kept on disk\nnothing reached the relay"
+  },
+  {
+    "i": 19,
+    "step": {
+      "op": "guest",
+      "command": "echo \"Rich's last passes so far: $(grep -c public_draft_privacy_check /Users/admin/fill-first/writer-prompts.log)\"; test \"$(grep -c public_draft_privacy_check /Users/admin/fill-first/writer-prompts.log)\" = 1"
+    },
+    "at": "22:39:22Z",
+    "exit": 0,
+    "output": "Rich's last passes so far: 1"
+  },
+  {
+    "i": 20,
+    "step": {
+      "op": "relaunch",
+      "env": [
+        "RICHOS_CLAUDE_BIN=/Users/admin/fill-first/claude",
+        "RICHDOCTOR_REPORT_RELAY=http://127.0.0.1:8765",
+        "RICHDOCTOR_REPORT_REPOSITORY=richos-test/report-relay-local"
+      ]
+    },
+    "at": "22:39:22Z",
+    "exit": 0,
+    "output": "{\"pid\": 1820, \"log\": \"/Users/admin/testvm/walk-c599e00466f1/relaunch-1793572763364678000.log\", \"app\": \"/Users/admin/testvm/walk-c599e00466f1/RichOS.app\"}"
+  },
+  {
+    "i": 21,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "Not sent yet",
+        "--contains",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 150
+    },
+    "at": "22:39:24Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1820 windows=1 nodes=126 mode=find matches=1\n                  AXStaticText title='' desc='' value='Not sent yet' enabled=yes pos=1365 -169 size=91 20\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.3739}\n{\"ax_timing\": true, \"total_seconds\": 1.6314, \"preflight_seconds\": 0.6604, \"transport_seconds\": 0.9198, \"render_seconds\": 0.0515, \"guest_seconds\": 0.3739, \"transport_overhead_s"
+  },
+  {
+    "i": 22,
+    "step": {
+      "op": "wait",
+      "seconds": 4
+    },
+    "at": "22:40:12Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 23,
+    "step": {
+      "op": "shot",
+      "name": "2-card-after-relaunch"
+    },
+    "at": "22:40:16Z",
+    "exit": 0,
+    "output": "[testvm] 22:40:19Z captured 1680x1050, 73.8% non-black -> /Volumes/E1TB/tmp/claude/echo/a9d0d7e1f054960b4/out/2-card-after-relaunch.png"
+  },
+  {
+    "i": 24,
+    "step": {
+      "op": "guest",
+      "command": "echo \"Rich's last passes after the relaunch: $(grep -c public_draft_privacy_check /Users/admin/fill-first/writer-prompts.log)\"; test \"$(grep -c public_draft_privacy_check /Users/admin/fill-first/writer-prompts.log)\" = 1"
+    },
+    "at": "22:40:19Z",
+    "exit": 0,
+    "output": "Rich's last passes after the relaunch: 1"
+  },
+  {
+    "i": 25,
+    "step": {
+      "op": "ax",
+      "args": [
+        "type",
+        "Also say it happens in the light theme too.",
+        "--role",
+        "AXTextArea",
+        "--id",
+        "bugdock-input",
+        "--replace"
+      ]
+    },
+    "at": "22:40:19Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1820 windows=1 nodes=158 mode=type matches=1\ntype verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 1.6694}\n{\"ax_timing\": true, \"total_seconds\": 2.8261, \"preflight_seconds\": 0.7372, \"transport_seconds\": 2.0467, \"render_seconds\": 0.043, \"guest_seconds\": 1.6694, \"transport_overhead_seconds\": 0.3773}"
+  },
+  {
+    "i": 26,
+    "step": {
+      "op": "ax",
+      "args": [
+        "--key",
+        "36"
+      ]
+    },
+    "at": "22:40:22Z",
+    "exit": 0,
+    "output": "{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.15}\n{\"ax_timing\": true, \"total_seconds\": 1.0092, \"preflight_seconds\": 0.5649, \"transport_seconds\": 0.4448}"
+  },
+  {
+    "i": 27,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "Added that to",
+        "--contains",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 150
+    },
+    "at": "22:40:23Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1820 windows=1 nodes=157 mode=find matches=1\n                  AXStaticText title='' desc='' value='Added that to What happened, above. It still waits for you to send it.' enabled=yes pos=1089 777 size=397 48\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.2589}\n{\"ax_timing\": true, \"total_seconds\": 1.2106, \"preflight_seconds\": 0.5849, \"transport_seconds\": 0.5923, \"render_second"
+  },
+  {
+    "i": 28,
+    "step": {
+      "op": "wait",
+      "seconds": 3
+    },
+    "at": "22:40:24Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 29,
+    "step": {
+      "op": "shot",
+      "name": "3-after-his-change"
+    },
+    "at": "22:40:27Z",
+    "exit": 0,
+    "output": "[testvm] 22:40:29Z captured 1680x1050, 74.2% non-black -> /Volumes/E1TB/tmp/claude/echo/a9d0d7e1f054960b4/out/3-after-his-change.png"
+  },
+  {
+    "i": 30,
+    "step": {
+      "op": "guest",
+      "command": "echo \"Rich's last passes after his change: $(grep -c public_draft_privacy_check /Users/admin/fill-first/writer-prompts.log)\"; test \"$(grep -c public_draft_privacy_check /Users/admin/fill-first/writer-prompts.log)\" = 2"
+    },
+    "at": "22:40:29Z",
+    "exit": 0,
+    "output": "Rich's last passes after his change: 2"
+  },
+  {
+    "i": 31,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Send report",
+        "--first"
+      ]
+    },
+    "at": "22:40:30Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1820 windows=1 nodes=124 mode=click matches=1\npressed AXButton title='Send report' desc='' pos=1108 618 size=123 37 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.6713}\n{\"ax_timing\": true, \"total_seconds\": 1.8619, \"preflight_seconds\": 0.6822, \"transport_seconds\": 1.1352, \"render_seconds\": 0.0453, \"guest_seconds\": 0.6713, \"transport_overhead_seconds\": 0.4639}"
+  },
+  {
+    "i": 32,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "Sent \u00b7 #412",
+        "--contains",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 60
+    },
+    "at": "22:40:32Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1820 windows=1 nodes=138 mode=find matches=1\n                  AXStaticText title='' desc='' value='Sent \u00b7 #412' enabled=yes pos=1371 -536 size=85 20\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.264}\n{\"ax_timing\": true, \"total_seconds\": 1.2854, \"preflight_seconds\": 0.6469, \"transport_seconds\": 0.597, \"render_seconds\": 0.0422, \"guest_seconds\": 0.264, \"transport_overhead_secon"
+  },
+  {
+    "i": 33,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "22:40:33Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 34,
+    "step": {
+      "op": "shot",
+      "name": "4-sent-with-one-send"
+    },
+    "at": "22:40:35Z",
+    "exit": 0,
+    "output": "[testvm] 22:40:37Z captured 1680x1050, 75.0% non-black -> /Volumes/E1TB/tmp/claude/echo/a9d0d7e1f054960b4/out/4-sent-with-one-send.png"
+  },
+  {
+    "i": 35,
+    "step": {
+      "op": "guest",
+      "command": "echo \"Rich's last passes after Send: $(grep -c public_draft_privacy_check /Users/admin/fill-first/writer-prompts.log)\"; test \"$(grep -c public_draft_privacy_check /Users/admin/fill-first/writer-prompts.log)\" = 2"
+    },
+    "at": "22:40:37Z",
+    "exit": 0,
+    "output": "Rich's last passes after Send: 2"
+  },
+  {
+    "i": 36,
+    "step": {
+      "op": "guest",
+      "command": "d=\"$(find /Users/admin -type d -name bug-reports -path '*com.richos.app*' 2>/dev/null | head -1)\"; echo \"$d\"; cat \"$d/sent.jsonl\"; echo \"waiting: $(ls \"$d/waiting\" 2>/dev/null | wc -l | tr -d ' ')  kept cards: $(ls \"$d/unchecked\" 2>/dev/null | wc -l | tr -d ' ')\"; test \"$(ls \"$d/unchecked\" 2>/dev/null | wc -l | tr -d ' ')\" = 0"
+    },
+    "at": "22:40:37Z",
+    "exit": 0,
+    "output": "/Users/admin/testvm/walk-c599e00466f1/home/Library/Application Support/com.richos.app/bug-reports\n{\"id\":\"d60f47ef-b974-4d69-8824-9f16cecc8fe0\",\"number\":412,\"url\":\"https://github.com/richos-test/report-relay-local/issues/412\",\"account\":{\"kind\":\"reporting\"},\"title\":\"Conversation names in the sidebar are cut off at larger text sizes\",\"sent_at_ms\":1793572834271,\"post\":\"bug\"}\nwaiting: 0  kept cards: 0"
+  },
+  {
+    "i": 37,
+    "step": {
+      "op": "guest",
+      "command": "grep -c 'light theme too' /Users/admin/fill-first/stand-in.log; test \"$(grep -c '/complete' /Users/admin/fill-first/stand-in.log)\" = 1 && echo 'one completion at the relay'"
+    },
+    "at": "22:40:43Z",
+    "exit": 0,
+    "output": "1\none completion at the relay"
+  },
+  {
+    "i": 38,
+    "step": {
+      "op": "pull",
+      "src": "/Users/admin/fill-first/stand-in.log",
+      "dest": "stand-in.log"
+    },
+    "at": "22:40:43Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 39,
+    "step": {
+      "op": "pull",
+      "src": "/Users/admin/fill-first/writer-prompts.log",
+      "dest": "writer-prompts.log"
+    },
+    "at": "22:40:44Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 40,
+    "step": {
+      "op": "guest",
+      "command": "kill $(cat /Users/admin/fill-first/stand-in.pid) && echo 'stand-in stopped'"
+    },
+    "at": "22:40:44Z",
+    "exit": 0,
+    "output": "stand-in stopped"
+  }
+]

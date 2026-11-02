@@ -64,6 +64,11 @@ pub struct BugReports {
     /// compares the card's against (`bug::at_send`). Kept here, never by the window, so nothing the
     /// window sends can stand in for his check. In memory only: a card does not outlive the app.
     checks: Mutex<std::collections::HashMap<String, bug::Check>>,
+    /// **WAITING REPORTS THE USER IS CHANGING** (Change it, CEO §156), by their waiting id: each
+    /// keeps its copy on this Mac and the retry leaves it alone until the changed words replace it
+    /// (`bug_report_cancel`) or it is put back as it was (`bug_report_hold` with `hold: false`). In
+    /// memory only: after a quit a held report is simply waiting again, and goes out by itself.
+    held: Mutex<std::collections::HashSet<String>>,
     /// This install's random id for the relay: its per-install rate limit key, never
     /// authentication (`RICHDOCTOR-RELAY.md`, "Register body"). Made once, in `bug-reports/`.
     installation: String,
@@ -84,6 +89,7 @@ impl BugReports {
             version: bug::version_line(app_version, macos_version().as_deref(), std::env::consts::ARCH),
             look: Mutex::new(None),
             checks: Mutex::new(std::collections::HashMap::new()),
+            held: Mutex::new(std::collections::HashSet::new()),
             installation,
         })
     }
@@ -106,6 +112,10 @@ impl BugReports {
     /// map (every write is one insert or remove), so it is taken back rather than poisoned.
     fn checks(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, bug::Check>> {
         self.checks.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<String>> {
+        self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -458,14 +468,20 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
             eprintln!("[richos] bug report: the report could not be kept on this Mac ({e})");
         "RichOS couldn't save the report on this Mac, so nothing was sent. Try sending the report again.".to_string()
         })?;
-        let mut answer = serde_json::to_value(&write_up).map_err(|e| e.to_string())?;
+        let mut told = serde_json::to_value(&write_up).map_err(|e| e.to_string())?;
         if let bug::WriteUp::Checked(checked) = &write_up {
             let report = bug::report_id();
             bugs.checks().insert(report.clone(), bug::Check::of(&checked.draft));
-            answer["report"] = serde_json::json!(report);
+            // The card is kept on this Mac as soon as it is written up (CEO §156), so a quit, an
+            // update relaunch or the crash being reported does not lose it. If it cannot be kept
+            // the card still shows and still sends; only a relaunch would lose it, and that is said.
+            if let Err(e) = bugs.outbox(post).keep_card(&report, &answer, &screen, checked.clone(), now_ms()) {
+                eprintln!("[richos] bug report {report}: the written-up card could not be kept on this Mac ({e}); a relaunch would lose it");
+            }
+            told["report"] = serde_json::json!(report);
         }
-        answer["workedMs"] = serde_json::json!(started.elapsed().as_millis() as u64);
-        Ok(answer)
+        told["workedMs"] = serde_json::json!(started.elapsed().as_millis() as u64);
+        Ok(told)
     })
     .await
 }
@@ -487,13 +503,17 @@ pub async fn bug_report_take_unchecked(app: AppHandle, id: String, post: Option<
 
 /// **A change said to Rich**: the sentence to add and where it goes. Sends nothing. `private` is
 /// the report's own private words so far (the draft's, and every change's since); they go on
-/// applying, with any Rich names in this change, and come back for the card to keep. When Rich
-/// cannot be had, nothing is added: the user's words are not put in the report unchecked (review
-/// rv-20261009T162841Z-69294215-70e6 finding 2, the same rule as `bug_report_write`), and the card
-/// says to tell him again or change the words in place, where the heads-up reads them.
+/// applying, with any Rich names in this change. When Rich cannot be had, nothing is added: the
+/// user's words are not put in the report unchecked (review rv-20261009T162841Z-69294215-70e6
+/// finding 2, the same rule as `bug_report_write`), and the card says to tell him again or change
+/// the words in place, where the heads-up reads them.
 ///
-/// The scanner goes over what he adds; the card with it added is a changed card, so at Send it
-/// goes through the scanner and then Rich, last (`bug::at_send`), like words changed by hand.
+/// **THE CHANGE IS HIS LAST WORD** (CEO §156, with §115 unchanged): his sentence goes into the
+/// card's words, the scanner goes over the whole card, and Rich gets the last pass over what it
+/// made (`bug::changed_card_for`). The card answered (`{ report, draft, digest, section }`) is
+/// kept as what Rich last gave of this report, so Send sends it without a second check; a hand
+/// edit by the user still gets the check at Send. `screen` is where the report was started, kept
+/// with the card if it is not already kept (a card that was sent to waiting and is being changed).
 #[richos_command::command]
 pub async fn bug_report_change(
     app: AppHandle,
@@ -501,27 +521,44 @@ pub async fn bug_report_change(
     sheet: bug::Sheet,
     private: Option<Vec<bug::PrivateTerm>>,
     post: Option<bug::Post>,
+    report: Option<String>,
+    screen: Option<bug::Screen>,
 ) -> Result<serde_json::Value, String> {
     let started = Instant::now();
+    let post = post.unwrap_or_default();
     let (scrubber, (bin, folder), bugs) = read_state(&app);
     let report_private = private.unwrap_or_default();
     off_the_ipc_threads(move || {
         let headings: Vec<String> = sheet.sections.iter().map(|s| s.heading.clone()).collect();
-        let input = bug::writer_input(&bug::change_prompt_for(post.unwrap_or_default(), &sheet, &said), None);
+        let input = bug::writer_input(&bug::change_prompt_for(post, &sheet, &said), None);
+        let not_added = |why: String| {
+            eprintln!("[richos] bug report: Rich could not check the change ({why}); nothing was added");
+            "RichOS couldn't check that change just now, so nothing was added. Submit the change again.".to_string()
+        };
         let change = ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &input)
             .and_then(|raw| bug::parse_change(&raw))
             .and_then(|c| if headings.contains(&c.section) { Ok(c) } else { Err(format!("no section {:?}", c.section)) })
-            .map_err(|why| {
-                eprintln!("[richos] bug report: Rich could not check the change ({why}); nothing was added");
-                "RichOS couldn't check that change just now, so nothing was added. Submit the change again.".to_string()
-            })?;
-        // The scanner goes over his words now; Rich gets the last word on the changed card at Send
-        // (`bug::at_send`), so nothing after him changes a word that is sent (CEO §115).
-        let (add, private) = bug::scrub_change(&change, scrubber.terms(), &report_private);
+            .map_err(not_added)?;
+        // The scanner goes over the card with his words in it, and Rich has the last pass over
+        // what it made, so nothing after him changes a word that is sent (CEO §115, §156).
+        let last = |prompt: &str| ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));
+        let his = bug::changed_card_for(post, &sheet, &report_private, &change, scrubber.terms(), last).map_err(not_added)?;
+        let report = report.filter(|r| !r.is_empty()).unwrap_or_else(bug::report_id);
+        bugs.checks().insert(report.clone(), bug::Check::of(&his.draft));
+        // The kept copy reads as his new card; when none is kept (the card had been sent to
+        // waiting and is being changed) it is kept now, so a relaunch does not lose the change.
+        let kept = bugs.outbox(post).update_card(&report, his.clone()).and_then(|updated| match (updated, &screen) {
+            (false, Some(screen)) => bugs.outbox(post).keep_card(&report, "", screen, his.clone(), now_ms()),
+            _ => Ok(()),
+        });
+        if let Err(e) = kept {
+            eprintln!("[richos] bug report {report}: the changed card could not be kept on this Mac ({e}); a relaunch would lose the change");
+        }
         Ok(serde_json::json!({
             "section": change.section,
-            "add": add,
-            "private": private,
+            "report": report,
+            "draft": his.draft,
+            "digest": his.digest,
             "workedMs": started.elapsed().as_millis() as u64,
         }))
     })
@@ -588,6 +625,11 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
             bug::AtSend::Send(public) => {
                 let relay = bugs.relay();
                 let delivery = deliver(&bugs, post, |o| o.send(&public, &relay, &relay, now_ms()).map(Some))?.ok_or_else(|| "nothing was sent".to_string())?;
+                // Sent, or written to the waiting folder in full: either way the kept card has
+                // done its job (CEO §156), and a relaunch must not bring it back to be sent again.
+                if let Err(e) = bugs.outbox(post).take_unchecked(&report) {
+                    eprintln!("[richos] bug report {report}: the kept card could not be taken off this Mac ({e}); it returns after a relaunch");
+                }
                 if matches!(delivery, bug::Delivery::Sent(_)) {
                     bugs.checks().remove(&report);
                 }
@@ -595,6 +637,10 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
             }
             bug::AtSend::Show(his) => {
                 bugs.checks().insert(report.clone(), bug::Check::of(&his.draft));
+                // The kept card now reads as his version (nothing is written if none is kept).
+                if let Err(e) = bugs.outbox(post).update_card(&report, his.clone()).map(|_| ()) {
+                    eprintln!("[richos] bug report {report}: the kept card could not be updated ({e})");
+                }
                 Ok(serde_json::json!({ "state": "checked", "report": report, "draft": his.draft, "digest": his.digest }))
             }
             bug::AtSend::Unchecked(why) => {
@@ -603,9 +649,37 @@ pub async fn bug_report_send(app: AppHandle, report: Option<String>, sheet: bug:
                     eprintln!("[richos] bug report: the changed report could not be kept on this Mac ({e})");
                     "RichOS couldn't save the report on this Mac, so nothing was sent. Try sending the report again.".to_string()
                 })?;
+                // The changed words now wait under their own id; the card's kept copy is the old
+                // words and must not come back beside them.
+                if let Err(e) = bugs.outbox(post).take_unchecked(&report) {
+                    eprintln!("[richos] bug report {report}: the kept card could not be taken off this Mac ({e})");
+                }
                 serde_json::to_value(kept).map_err(|e| e.to_string())
             }
         }
+    })
+    .await
+}
+
+/// **THE USER'S HAND CHANGES, SAVED BEFORE THE PANEL MAY CLOSE** (CEO §156): `sheet` is the card's
+/// words after Done. They are kept beside the card on this Mac and come back after a relaunch as
+/// a hand-changed card, which still goes through the scanner and then Rich at Send. Sends nothing.
+#[richos_command::command]
+pub async fn bug_report_keep_edit(
+    app: AppHandle,
+    report: String,
+    sheet: bug::Sheet,
+    private: Option<Vec<bug::PrivateTerm>>,
+    screen: bug::Screen,
+    post: Option<bug::Post>,
+) -> Result<(), String> {
+    let bugs = app.state::<Arc<BugReports>>().inner().clone();
+    off_the_ipc_threads(move || {
+        let private = private.unwrap_or_default();
+        bugs.outbox(post.unwrap_or_default()).keep_edit(&report, bug::Edited { sheet, private }, &screen, now_ms()).map_err(|e| {
+            eprintln!("[richos] bug report {report}: the changed words could not be kept on this Mac ({e})");
+            "RichOS couldn't save your changes on this Mac.".to_string()
+        })
     })
     .await
 }
@@ -631,10 +705,44 @@ pub async fn bug_report_cancel(app: AppHandle, id: String, post: Option<bug::Pos
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
         let _one_at_a_time = one_at_a_time(&bugs);
-        bugs.outbox(post.unwrap_or_default()).withdraw(&id).map_err(|e| {
+        let withdrawn = bugs.outbox(post.unwrap_or_default()).withdraw(&id);
+        // Off this Mac, or not (then it waits again as it was): either way no longer held.
+        bugs.held().remove(&id);
+        withdrawn.map_err(|e| {
             eprintln!("[richos] bug report {id}: could not be taken off this Mac ({e}); it still waits");
             "RichOS couldn't cancel the report, so it's still waiting to send. Press Cancel report to try again.".to_string()
         })
+    })
+    .await
+}
+
+/// **CHANGE IT ON A WAITING REPORT: ITS COPY STAYS UNTIL ITS REPLACEMENT IS SAVED** (CEO §156;
+/// review rv-20261102T003409Z-35b12ee9-35e9: taking the copy off at Change it left nothing on this
+/// Mac after a Done with no change). `hold: true` keeps the copy and has the retry leave it alone
+/// while the user changes it: `{state: "held"}`, or what became of it when it no longer waits
+/// (`{state: "sent", …}` when it went out first, `{state: "canceled"}` when none is here). It
+/// waits behind a send in flight, as Cancel does. `hold: false` puts it back as it was, waiting
+/// to go out by itself; changed words that replace it are saved first, then `bug_report_cancel`.
+#[richos_command::command]
+pub async fn bug_report_hold(app: AppHandle, id: String, hold: bool, post: Option<bug::Post>) -> Result<serde_json::Value, String> {
+    let bugs = app.state::<Arc<BugReports>>().inner().clone();
+    off_the_ipc_threads(move || {
+        let _one_at_a_time = one_at_a_time(&bugs);
+        if !hold {
+            bugs.held().remove(&id);
+            return Ok(serde_json::json!({ "state": "waiting" }));
+        }
+        match bugs.outbox(post.unwrap_or_default()).gone(&id) {
+            Ok(None) => {
+                bugs.held().insert(id);
+                Ok(serde_json::json!({ "state": "held" }))
+            }
+            Ok(Some(gone)) => serde_json::to_value(gone).map_err(|e| e.to_string()),
+            Err(e) => {
+                eprintln!("[richos] bug report {id}: could not be read on this Mac ({e}); it still waits");
+                Err("RichOS couldn't take the report back to change it, so it's still waiting to send.".to_string())
+            }
+        }
     })
     .await
 }
@@ -686,7 +794,9 @@ pub fn spawn_retry(app: AppHandle) {
             // report is sent (round 24: "it posts by itself when back online").
             for post in [bug::Post::Bug, bug::Post::Idea] {
                 let guard = one_at_a_time(&bugs);
-                let due = bugs.outbox(post).send_due(&relay, &relay, now_ms());
+                // A report the user is changing stays on this Mac, unsent (`bug_report_hold`).
+                let held = bugs.held().clone();
+                let due = bugs.outbox(post).send_due_but(&|id| held.contains(id), &relay, &relay, now_ms());
                 drop(guard);
                 match due {
                     Ok(deliveries) => {
@@ -762,7 +872,15 @@ fn check_once(app: &AppHandle, bugs: &Arc<BugReports>, post: bug::Post) {
                 // His check is kept under the report's own id for Send, once: a pass that
                 // says it again must not undo a change he wrote into it since.
                 bugs.checks().entry(id.clone()).or_insert_with(|| bug::Check::of(&done.draft));
-                let payload = serde_json::json!({ "checked": { "id": id, "report": id, "draft": done.draft, "digest": done.digest, "here": here(&id), "post": post } });
+                // A card whose words the user changed by hand after Rich's check comes back as
+                // those words, scanned (never his check of them: Send gives them the scanner and
+                // then Rich, CEO §115), marked as changed so the window says so.
+                let hand = waiting.iter().find(|u| u.id == id && u.checked.is_some()).and_then(|u| u.edited.clone());
+                let (draft, digest) = match &hand {
+                    Some(e) => (bug::redraft(&e.sheet, &e.private, scrubber.terms()), bug::EDIT_DIGEST.to_string()),
+                    None => (done.draft.clone(), done.digest.clone()),
+                };
+                let payload = serde_json::json!({ "checked": { "id": id, "report": id, "draft": draft, "digest": digest, "here": here(&id), "post": post, "handEdited": hand.is_some() } });
                 if let Err(e) = app.emit(EVENT, payload) {
                     eprintln!("[richos] bug report: the window could not be told Rich checked it: {e}");
                 }
