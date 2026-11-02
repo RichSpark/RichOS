@@ -340,6 +340,15 @@ fn new_home(places: &Places) -> Option<PathBuf> {
 /// Ask a running RichDoctor to quit when it has no help session open. `Ok(true)`: it was
 /// running and quit; `Ok(false)`: none was running; `Err`: busy, refusing or silent.
 fn quit_running(places: &Places) -> Result<bool, String> {
+    let kill = |pid: i32| {
+        // SAFETY: a plain signal to the process that answered on RichDoctor's socket.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+    };
+    quit_running_with(places, std::process::id() as i32, &has_window, &kill)
+}
+
+/// [`quit_running`] with our own process id, the window question and the stop injected.
+fn quit_running_with(places: &Places, me: i32, owns_window: &dyn Fn(i32) -> bool, stop: &dyn Fn(i32)) -> Result<bool, String> {
     use std::io::{BufRead, BufReader, Write};
     let sock = places.doctor_data.join("instance.sock");
     let Ok(mut s) = std::os::unix::net::UnixStream::connect(&sock) else { return Ok(false) };
@@ -351,14 +360,13 @@ fn quit_running(places: &Places) -> Result<bool, String> {
     if line.trim() != "ok" {
         // Copies built before a closed, saved report counted as idle answer `busy` for as long
         // as they run (their `Engine::busy` kept the report's stage after `close`). With no
-        // window on screen that answer can only be this: closing saved the report, so the copy
+        // window at all (minimized and hidden ones count as open) that answer can only be this: closing saved the report, so the copy
         // is stopped by its process id, read from the socket it answered on, never by name.
-        if let Some(pid) = answered_by.filter(|&p| p != std::process::id() as i32 && !has_window_on_screen(p)) {
+        if let Some(pid) = answered_by.filter(|&p| p != me && !owns_window(p)) {
             // A closing operation may still be ending: look once more before stopping it.
             std::thread::sleep(Duration::from_secs(2));
-            if peer_pid(&sock) == Some(pid) && !has_window_on_screen(pid) {
-                // SAFETY: a plain signal to the process that answered on RichDoctor's socket.
-                unsafe { libc::kill(pid, libc::SIGTERM) };
+            if peer_pid(&sock) == Some(pid) && !owns_window(pid) {
+                stop(pid);
                 let until = Instant::now() + Duration::from_secs(5);
                 while Instant::now() < until {
                     if std::os::unix::net::UnixStream::connect(&sock).is_err() {
@@ -431,12 +439,13 @@ mod windows {
         }
     }
 
-    /// Whether process `pid` owns a normal (layer 0) window that is on screen. The window
-    /// server lists them without any permission (only titles need one). Unreadable: `true`.
-    pub fn on_screen(pid: i32) -> bool {
+    /// Whether process `pid` owns any normal (layer 0) window, on screen or not: option 0 lists
+    /// minimized and hidden windows too. The window server lists them without any permission
+    /// (only titles need one). Unreadable: `true`.
+    pub fn owns(pid: i32) -> bool {
         // SAFETY: the array is owned by us and released; entries are borrowed from it.
         unsafe {
-            let list = CGWindowListCopyWindowInfo(1, 0);
+            let list = CGWindowListCopyWindowInfo(0, 0);
             if list.is_null() {
                 return true;
             }
@@ -455,11 +464,11 @@ mod windows {
 }
 
 #[cfg(target_os = "macos")]
-fn has_window_on_screen(pid: i32) -> bool {
-    windows::on_screen(pid)
+fn has_window(pid: i32) -> bool {
+    windows::owns(pid)
 }
 #[cfg(not(target_os = "macos"))]
-fn has_window_on_screen(_pid: i32) -> bool {
+fn has_window(_pid: i32) -> bool {
     true
 }
 
@@ -648,12 +657,12 @@ mod tests {
     }
 
     #[test]
-    fn the_peer_of_a_socket_is_its_listener_and_a_process_without_a_window_has_none_on_screen() {
+    fn the_peer_of_a_socket_is_its_listener_and_a_process_without_a_window_has_none() {
         let root = temp("peer");
         let sock = root.join("s.sock");
         let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         assert_eq!(peer_pid(&sock), Some(std::process::id() as i32));
-        assert!(!has_window_on_screen(std::process::id() as i32), "a test process owns no window");
+        assert!(!has_window(std::process::id() as i32), "a test process owns no window");
         fs::remove_dir_all(root).ok();
     }
 
@@ -836,6 +845,42 @@ mod tests {
         }
         assert!(extract(&bytes, &root.join("out.app")).is_err());
         fs::remove_dir_all(root).ok();
+    }
+
+    /// An old copy that answers `busy`; returns the outcome and the stops sent.
+    fn old_busy_copy(tag: &str, owns: bool) -> (Result<bool, String>, Vec<i32>) {
+        let root = temp(tag);
+        let p = places(&root);
+        crate::util::private_dir(&p.doctor_data).unwrap();
+        let sock = p.doctor_data.join("instance.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let t = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            for _ in 0..2 {
+                let Ok((s, _)) = listener.accept() else { return };
+                let mut line = String::new();
+                BufReader::new(&s).read_line(&mut line).ok();
+                writeln!(&s, "busy").ok();
+            }
+        });
+        let stops = std::cell::RefCell::new(vec![]);
+        let r = quit_running_with(&p, -1, &|_| owns, &|pid| {
+            stops.borrow_mut().push(pid);
+            fs::remove_file(&sock).ok();
+        });
+        drop(t);
+        fs::remove_dir_all(root).ok();
+        (r, stops.into_inner())
+    }
+
+    #[test]
+    fn a_busy_old_copy_with_a_minimized_or_hidden_window_is_never_stopped_and_one_with_no_window_is() {
+        // Minimized or hidden: the window server still lists a window the process owns.
+        let (r, stops) = old_busy_copy("minimized", true);
+        assert!(r.is_err() && stops.is_empty(), "{r:?} {stops:?}");
+        // No window at all: the stuck copy is stopped by its process id.
+        let (r, stops) = old_busy_copy("nowindow", false);
+        assert_eq!(stops, vec![std::process::id() as i32], "{r:?}");
     }
 
     #[test]
