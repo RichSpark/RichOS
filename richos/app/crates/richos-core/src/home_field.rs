@@ -75,7 +75,7 @@
 
 use crate::entity::EntityRegistry;
 use crate::loro::{LoroError, LoroRoot, LoroTools};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -225,7 +225,7 @@ impl Census {
 /// One compiled item, parsed down to what SHAPE needs. `title` is deliberately absent from
 /// this struct: it is the CEO's own words, nothing in the field renders it, and a field that
 /// is never parsed cannot leak.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldItem {
     #[serde(default)]
@@ -245,7 +245,7 @@ pub struct FieldItem {
     pub provenance: Provenance,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Provenance {
     /// `wiki` | `records` | `memory` | `entities`.
@@ -387,6 +387,136 @@ pub fn collect_items(
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// the kept compile — so a big corpus is compiled once, not on every launch
+// ---------------------------------------------------------------------------
+
+/// The compile the last launch finished, kept on disk next to the app's other data.
+///
+/// WHY. Compiling a user's records is far slower than linear: measured on the test VM, 170 records
+/// under 1 s, 1,000 records 39 s, 2,600 records 408 s, while the home screen waits 8 s. The compile
+/// therefore finishes in the background (the screen draws his records the moment it does) and its
+/// result is kept here, so the next launch draws them at once.
+///
+/// WHAT MAKES IT STALE. The corpus's own fingerprint (`loro-context corpus`, 0.06-0.07 s), which
+/// changes when any record changes (`engine/loro/tests/run.js`, "the fingerprint CHANGES when a record
+/// changes"), and the topics asked. A different fingerprint or topic list is a recompile of the whole
+/// corpus; the loro compiler gives no per-record answer to refresh one record at a time. Items, not the
+/// finished field, are kept: the field is `build_field`'s pure output and the company labels it uses
+/// come from the registry of the day.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptCompile {
+    #[serde(default)]
+    pub fingerprint: String,
+    #[serde(default)]
+    pub topics: Vec<String>,
+    #[serde(default)]
+    pub items: Vec<FieldItem>,
+}
+
+/// What [`items_kept_or_compiled`] did, for the log line and the tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemsFrom {
+    Kept,
+    Compiled,
+}
+
+/// The kept compile at `path`, or `None` for a missing or unreadable file (which is a recompile,
+/// never an error: a cache is allowed to be absent).
+pub fn read_kept(path: &std::path::Path) -> Option<KeptCompile> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+/// Write `kept` to `path` atomically (a temp file in the same folder, then a rename), so a quit in
+/// the middle never leaves half a file that the next launch would read as his records.
+pub fn write_kept(path: &std::path::Path, kept: &KeptCompile) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(kept).map_err(std::io::Error::other)?)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// The items for this census and topics: the kept ones when the corpus is byte-for-byte what they
+/// were compiled from, otherwise whatever `compile` answers, which is then kept. A failed keep is not
+/// a failed compile; the items are still returned.
+///
+/// An EMPTY fingerprint (a census that did not report one) is never a match: nothing is known about
+/// what the kept items were compiled from.
+pub fn items_kept_or_compiled(
+    path: &std::path::Path,
+    census: &Census,
+    stamp: &str,
+    topics: &[String],
+    compile: impl FnOnce() -> Result<Vec<FieldItem>, LoroError>,
+) -> Result<(Vec<FieldItem>, ItemsFrom), LoroError> {
+    // THE IDENTITY IS THE FINGERPRINT AND THE FILES' STAMP. The fingerprint hashes record ids and body text, so a
+    // correction to a record's kind, confidence, title or tags (the writer rewrites the record's file) leaves
+    // it unchanged and the old items would be drawn as if nothing had changed (reviewer fixture: decision/0.9
+    // corrected to lesson/0.4, still answered from the kept items). Every field the compile reads lives in
+    // those files, so their paths, sizes and modification times are part of what the kept items are matched on.
+    let identity = if census.fingerprint.is_empty() || stamp.is_empty() { String::new() } else { format!("{}|{}", census.fingerprint, stamp) };
+    if !identity.is_empty() {
+        if let Some(kept) = read_kept(path) {
+            if kept.fingerprint == identity && kept.topics == topics {
+                return Ok((kept.items, ItemsFrom::Kept));
+            }
+        }
+    }
+    let items = compile()?;
+    if !identity.is_empty() {
+        let kept = KeptCompile { fingerprint: identity, topics: topics.to_vec(), items: items.clone() };
+        if let Err(e) = write_kept(path, &kept) {
+            eprintln!("[richos] home field: could not keep the compile ({e}); the next launch compiles again");
+        }
+    }
+    Ok((items, ItemsFrom::Compiled))
+}
+
+const STAMP_FILE_LIMIT: usize = 200_000;
+
+/// A hash of every file under the corpus: relative path, size and modification time, in path order.
+/// Hidden folders and `node_modules` are skipped. An empty string means "could not say" (an unreadable
+/// folder, or more than `STAMP_FILE_LIMIT` files), which [`items_kept_or_compiled`] never matches.
+pub fn corpus_stamp(root: &std::path::Path) -> String {
+    let mut rows: Vec<(String, u64, u128)> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else { return String::new() };
+        for entry in read {
+            let Ok(entry) = entry else { return String::new() };
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "node_modules" {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { return String::new() };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+                let rel = entry.path().strip_prefix(root).map(|p| p.to_string_lossy().to_string()).unwrap_or(name);
+                rows.push((rel, meta.len(), mtime));
+                if rows.len() > STAMP_FILE_LIMIT {
+                    return String::new();
+                }
+            }
+        }
+    }
+    rows.sort();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for b in bytes {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    for (rel, len, mtime) in &rows {
+        eat(rel.as_bytes());
+        eat(&len.to_le_bytes());
+        eat(&mtime.to_le_bytes());
+    }
+    format!("{h:016x}:{}", rows.len())
+}
+
 /// One compile, one topic.
 pub fn compile_one(tools: &LoroTools, root: &LoroRoot, topic: &str) -> Result<Vec<FieldItem>, LoroError> {
     use std::io::Write;
@@ -439,6 +569,17 @@ pub fn parse_items(stdout: &str) -> Result<Vec<FieldItem>, LoroError> {
 // ---------------------------------------------------------------------------
 // the pure half — a census and some items in, the field's own structure out
 // ---------------------------------------------------------------------------
+
+/// `grp-` plus 64 bits of FNV-1a over the lane and the group key (the file the records came from, or the
+/// record's own ref). Stable across launches and across added records; see `build_field`.
+fn stable_group_id(lane: &str, key: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in lane.bytes().chain(std::iter::once(0u8)).chain(key.bytes()) {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("grp-{h:016x}")
+}
 
 /// Build the dataset `home/field-*.js` consumes. **Pure**: no clock, no filesystem, no
 /// process, no randomness — the same inputs give the same bytes, which is what makes the
@@ -501,10 +642,14 @@ pub fn build_field(census: &Census, items: &[FieldItem], registry: &EntityRegist
         }
     }
     group_order.sort();
+    // A GROUP'S ID IS A HASH OF ITS OWN KEY, not its place in the sorted list: the picture lays a group
+    // out from this id (`field-ghost.js` hosts it and seeds its random stream from it), so an ordinal
+    // renumbered every group after a new source and moved records already on the screen (reviewer
+    // fixture: 90 of 170 records moved more than 1 brain unit when record 171 was appended). The hash is
+    // one-way, so the file's name still does not leave this function.
     let group_id: BTreeMap<(String, String), String> = group_order
         .iter()
-        .enumerate()
-        .map(|(n, k)| (k.clone(), format!("grp-{:05}", n + 1)))
+        .map(|k| (k.clone(), stable_group_id(&k.0, &k.1)))
         .collect();
 
     // ---- nodes ---------------------------------------------------------------------
@@ -773,6 +918,100 @@ mod tests {
                 ("principle".to_string(), 6),
             ]),
         }
+    }
+
+    #[test]
+    fn a_kept_compile_is_used_while_the_corpus_is_unchanged_and_dropped_when_it_changes() {
+        let dir = std::env::temp_dir().join(format!("home-field-kept-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("home-field-cache.json");
+        std::fs::remove_file(&path).ok();
+        let topics = vec!["northwind".to_string()];
+        let c = census();
+        let mut calls = 0;
+        let first = items_kept_or_compiled(&path, &c, "s1", &topics, || {
+            calls += 1;
+            Ok(vec![item("a", "decision", Some("northwind"), "p", 0.9)])
+        })
+        .unwrap();
+        assert_eq!((first.0.len(), first.1, calls), (1, ItemsFrom::Compiled, 1));
+
+        // the next launch: same corpus, nothing compiled, the same items
+        let second = items_kept_or_compiled(&path, &c, "s1", &topics, || panic!("compiled a corpus that had not changed")).unwrap();
+        assert_eq!((second.0.len(), second.1, second.0[0].r#ref.as_str()), (1, ItemsFrom::Kept, "a"));
+
+        // a record changed: the fingerprint moves, so it is compiled again and the new items are kept
+        let mut changed = census();
+        changed.fingerprint = "sha256:cafe".into();
+        let third = items_kept_or_compiled(&path, &changed, "s1", &topics, || Ok(vec![item("b", "fact", None, "q", 0.5), item("c", "fact", None, "r", 0.5)])).unwrap();
+        assert_eq!((third.0.len(), third.1), (2, ItemsFrom::Compiled));
+        let fourth = items_kept_or_compiled(&path, &changed, "s1", &topics, || panic!("not kept")).unwrap();
+        assert_eq!(fourth.0.len(), 2);
+
+        // other topics are another question; a census with no fingerprint is never a match; a torn file is a recompile
+        assert_eq!(items_kept_or_compiled(&path, &changed, "s1", &["x".to_string()], || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
+        let mut none = census();
+        none.fingerprint = String::new();
+        assert_eq!(items_kept_or_compiled(&path, &none, "s1", &topics, || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert_eq!(items_kept_or_compiled(&path, &c, "s1", &topics, || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_correction_that_keeps_the_fingerprint_does_not_keep_the_old_result() {
+        // The reviewer's fixture: the writer corrects a record's kind and confidence in place. The census
+        // fingerprint (ids and body text) is the same; the record's file is not.
+        let dir = std::env::temp_dir().join(format!("home-field-correct-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("records")).unwrap();
+        let record = dir.join("records").join("rec-1.md");
+        std::fs::write(&record, "kind: decision\\nconfidence: 0.9\\nbody\\n").unwrap();
+        // the kept file lives beside the app's data, never inside the corpus it describes
+        let path = std::env::temp_dir().join(format!("home-field-correct-{}.json", std::process::id()));
+        let topics = vec!["northwind".to_string()];
+        let c = census(); // the same fingerprint before and after: that is the defect
+        let before = corpus_stamp(&dir);
+        assert!(!before.is_empty());
+        let first = items_kept_or_compiled(&path, &c, &before, &topics, || Ok(vec![item("a", "decision", Some("northwind"), "p", 0.9)])).unwrap();
+        assert_eq!(first.1, ItemsFrom::Compiled);
+        // untouched: kept
+        assert_eq!(corpus_stamp(&dir), before);
+        let again = items_kept_or_compiled(&path, &c, &corpus_stamp(&dir), &topics, || panic!("compiled an unchanged corpus")).unwrap();
+        assert_eq!(again.1, ItemsFrom::Kept);
+        // corrected: kind and confidence change, the file's size changes with them
+        std::fs::write(&record, "kind: lesson\\nconfidence: 0.45\\nbody and more\\n").unwrap();
+        let after = corpus_stamp(&dir);
+        assert_ne!(after, before, "the stamp did not see the correction");
+        let corrected = items_kept_or_compiled(&path, &c, &after, &topics, || Ok(vec![item("a", "lesson", Some("northwind"), "p", 0.4)])).unwrap();
+        assert_eq!((corrected.1, corrected.0[0].kind.as_str()), (ItemsFrom::Compiled, "lesson"));
+        // a same-size rewrite is still seen, by its modification time
+        let size = std::fs::metadata(&record).unwrap().len() as usize;
+        let t0 = corpus_stamp(&dir);
+        std::fs::write(&record, "x".repeat(size)).unwrap();
+        // the clock is set, not waited for
+        let file = std::fs::OpenOptions::new().write(true).open(&record).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5)).unwrap();
+        assert_ne!(corpus_stamp(&dir), t0, "a same-size rewrite was not seen");
+        // an unreadable folder is "cannot say", which never matches
+        assert_eq!(corpus_stamp(&dir.join("missing")), "");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_groups_id_does_not_change_when_another_source_is_added() {
+        let a = item("a", "decision", Some("northwind"), "p/b.md", 0.9);
+        let b = item("b", "fact", Some("northwind"), "p/d.md", 0.9);
+        let ids = |items: &[FieldItem]| -> Vec<String> {
+            let f = build_field(&census(), items, &registry());
+            f["nodes"].as_array().unwrap().iter().map(|n| n["cluster"].as_str().unwrap().to_string()).collect()
+        };
+        let before = ids(&[a.clone(), b.clone()]);
+        // a source that sorts BETWEEN the two, which an ordinal would have renumbered
+        let after = ids(&[a.clone(), item("c", "fact", Some("northwind"), "p/c.md", 0.9), b.clone()]);
+        assert!(after.contains(&before[0]) && after.contains(&before[1]), "an existing group changed id: {before:?} vs {after:?}");
+        assert_ne!(before[0], before[1]);
     }
 
     #[test]

@@ -62,6 +62,11 @@ window.RichHome = (function () {
   // assigns `window.MATURE_LORO` on load and would overwrite the real one.
   var FIELD_CUSTOMER = FIELD.slice(1);
 
+  // The same MINUS the baked dataset again, for the launch that draws his records in front of the
+  // example: `field-ghost.js` and `field-data.js` are loaded first, the two datasets are merged,
+  // and these three then read the merged one.
+  var FIELD_GHOST_REST = FIELD.slice(1);
+
   // =========================================================================================
   // WHEN THE DEMONSTRATION HANDS OVER — the one place that preference lives.
   //
@@ -93,6 +98,19 @@ window.RichHome = (function () {
   // =========================================================================================
   var HOME_FIELD_MIN_OBJECTS = 1983;
 
+  // =========================================================================================
+  // THE GHOST — a user with a team, at every record count (CEO 2026-11-02, round 11.4 "V2").
+  //
+  // Everything above is the first-run demonstration and stays exactly so for a user with no
+  // team. A user with a team gets `round-11.4/v2` ("The Ghost"): the whole shape of a finished
+  // loro stands behind his own records at a dim floor — 0.155 of full light at none of his,
+  // falling in a straight line to 0 at 2,500 — and a legend names it for as long as it shows.
+  // His records burn in front of it. The count that drives all of it is the number of OBJECTS
+  // `home_field_data` reports (`meta.counts.objects`), which is the round's "records": in the
+  // mockup one record is one object.
+  // =========================================================================================
+  var GHOST_SPAN = 2500; // = RichFieldGhost.SPAN (home/field-ghost.js); tests/home-ghost.js holds them equal
+
   /// How long to wait for `home_field_data` before drawing the demonstration anyway.
   ///
   /// A machine with no corpus answers instantly — the command never starts a process. A
@@ -121,6 +139,33 @@ window.RichHome = (function () {
     riverPackets: 180,
     twinkle: 0.18,
     clickZoom: 1.45,
+  };
+
+  // round-11.4 `v2/index.html`'s constants for the field, verbatim, plus `count` (set per launch to
+  // the number of his objects) and the core's warm tint, which the count hook below drives.
+  var VARIANT_GHOST = {
+    name: "v2 The Ghost",
+    constellation: true,
+    nodeScale: 1.75,
+    leafWhite: 0.7,
+    fibreGain: 0.55,
+    hairGain: 0.8,
+    glow: 0.7,
+    packetShare: 0.03,
+    riverPackets: 180,
+    twinkle: 0.18,
+    clickZoom: 1.45,
+    count: 0,
+    ghost: 0.155,
+    ghostSpan: GHOST_SPAN,
+    ghostColor: [0.4, 0.5, 0.7],
+    sparseBoost: 1.55,
+    sparseSpan: 900,
+    sparseWhite: 0.94,
+    sparseGlow: 0.62,
+    sparseWhiteColor: [1.0, 0.93, 0.76],
+    labelDegree: 6,
+    domLabelMin: 3,
   };
 
   // How long after first paint the field is allowed to start loading. `requestIdleCallback`
@@ -173,8 +218,8 @@ window.RichHome = (function () {
     /// `true` while the home screen is the surface in front.
     open: false,
     /// `"loading" | "live" | "degraded" | "none"` — the picture's own state, which is not
-    /// the screen's: the screen is up and usable in all four. `"none"` is his team with no
-    /// picture of his own to draw (see `showTeam`).
+    /// the screen's: the screen is up and usable in all four. `"none"` is his first hire
+    /// taking the demonstration down mid-session (`dropDemonstration`).
     field: "loading",
     /// Why the picture is not live, in one sentence, or `null`. Never swallowed.
     fieldError: null,
@@ -206,11 +251,22 @@ window.RichHome = (function () {
     ///   `threshold` — the number those were judged against
     ///   `taken`     — `true` only when his loro is what got drawn
     fieldOffer: null,
+    /// His records that arrived after the ceiling, until they are drawn (`onLateRecords`).
+    lateRecords: null,
     /// HIS OWN TEAM, once `home_team` has answered with at least one teammate he added
     /// (`[{ name, role }]`), else `null`. While it is set the screen shows that team and his
-    /// own numbers and nothing made up (product hunt 2026-10-15, finding 7), and `field` is
-    /// `"none"` when there is no picture of his own to draw.
+    /// own numbers and nothing made up (product hunt 2026-10-15, finding 7), and the picture is
+    /// round 11.4 v2's (`state.ghost`).
     team: null,
+    /// THE GHOST (round 11.4 v2), for a user with a team: `null` until his picture is up, then
+    /// `{ count, level, legend }` — how many of his objects have arrived (the number the gate and the
+    /// example's floor are driven by), the example's light now (0.155 at none, 0 from
+    /// `GHOST_SPAN`) and whether the legend naming it is showing. The legend shows exactly
+    /// while `level > 0.004`, the round's own line.
+    ghost: null,
+    /// How many of his teammates are working at this moment (the whole count: the right-hand
+    /// column is cut off at six, the left column's "· N working now" is not).
+    workingNow: 0,
   };
 
   // =========================================================================================
@@ -279,6 +335,7 @@ window.RichHome = (function () {
     // aside in the DOM. Neither overlaps the other — see `--home-note-inset` — so this is
     // reading order rather than paint order.
     r.appendChild(buildNote());
+    r.appendChild(buildGhostChrome());
 
     var live = elem("aside", null, { id: "home-live" });
     var cap = elem("div", "cap");
@@ -355,6 +412,42 @@ window.RichHome = (function () {
     line.textContent = NOTE;
     box.appendChild(line);
     return box;
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // THE GHOST'S CHROME — `round-11.4/v2`'s legend, its line under the core and its "Newest"
+  // caption, all of it hidden until a user with a team has a picture (see `onFieldCount`).
+  // Words verbatim from `v2/v2.js`. Everything dynamic is set with `textContent`: the territory
+  // names are his lanes' names, from files he saved.
+  // -----------------------------------------------------------------------------------------
+  function buildGhostChrome() {
+    var g = elem("div", null, { id: "home-ghost" });
+
+    var legend = elem("div", null, { id: "home-legend", role: "note" });
+    var yours = elem("div", "row");
+    yours.appendChild(elem("span", "dot-yours"));
+    var yt = elem("span", "tx");
+    var yb = document.createElement("b");
+    yb.textContent = "Yours";
+    yt.appendChild(yb);
+    yt.appendChild(document.createTextNode(" \u00b7 everything Rich has learned from you"));
+    yours.appendChild(yt);
+    var ghost = elem("div", "row");
+    ghost.appendChild(elem("span", "dot-ghost"));
+    var gt = elem("span", "tx");
+    gt.textContent = "Example, not yours \u00b7 a finished loro, dimmed, for scale";
+    ghost.appendChild(gt);
+    legend.appendChild(yours);
+    legend.appendChild(ghost);
+    g.appendChild(legend);
+
+    var note = elem("div", "hidden", { id: "home-ghost-note" });
+    note.appendChild(elem("p", "lead"));
+    note.appendChild(elem("p", "sub"));
+    g.appendChild(note);
+
+    g.appendChild(elem("div", null, { id: "home-arrived" }));
+    return g;
   }
 
   /// Is the picture being drawn from the CUSTOMER'S OWN loro, or from a demonstration?
@@ -1110,9 +1203,17 @@ window.RichHome = (function () {
   /// dataset itself — `refreshNote()` reads `window.MATURE_LORO.meta.synthetic`, and takes the
   /// banner down only on a positive `false`. So a bug in this function can put the wrong
   /// picture up; it cannot make the screen lie about whose picture it is.
-  function askForCustomerField() {
+  function askForCustomerField(forTeam) {
     var bridge = window.RichBridge;
-    var offer = { state: "unasked", reason: null, objects: null, records: null, threshold: HOME_FIELD_MIN_OBJECTS, taken: false };
+    // A USER WITH A TEAM IS ASKED AT EVERY COUNT (round 11.4 v2, CEO 2026-11-02): his records go in
+    // front of the example whatever their number, and at `RichFieldGhost.SPAN` objects they are the
+    // picture alone. Nobody else is: the first-run demonstration keeps its one comparison.
+    var threshold = forTeam ? GHOST_SPAN : HOME_FIELD_MIN_OBJECTS;
+    // `known`: did the backend POSITIVELY say how many records he has? Only an offered dataset (any
+    // count, zero included) or `corpus: false` ("no corpus on this machine") does. A timeout or a
+    // compile that failed is not "none": the ghost then draws the example without claiming his side is
+    // empty (a compile of 2,600 records took 408 s on the test VM, against the 8 s ceiling below).
+    var offer = { state: "unasked", reason: null, objects: null, records: null, threshold: threshold, taken: false, known: false };
     state.fieldOffer = offer;
 
     if (!bridge || typeof bridge.invoke !== "function") {
@@ -1124,14 +1225,45 @@ window.RichHome = (function () {
 
     // THE CEILING, RACED AGAINST THE ANSWER. `Promise.race` and not a timer that cancels the
     // call: nothing here can stop a `node` process that is already running, so the honest
-    // thing is to stop WAITING for it and let it finish into a result nobody reads.
+    // thing is to stop WAITING for it. For a user with a team its answer is still taken when it
+    // comes (`onLateRecords`); for the first-run demonstration it is not read.
     var deadline = new Promise(function (resolve) {
       setTimeout(function () {
         resolve({ __timedOut: true });
       }, HOME_FIELD_DEADLINE_MS);
     });
 
-    return Promise.race([bridge.invoke("home_field_data"), deadline])
+    // What one answer means: the dataset to draw, or null. Used for the answer that arrives in time and,
+    // for a user with a team, for the one that arrives after the ceiling (`onLateRecords`).
+    function interpret(answer) {
+        // POSITIVE SIGNAL ONLY, the same rule the banner keeps: `available` has to be exactly
+        // `true` and there has to be a dataset attached. An answer that omits either is not
+        // evidence of a corpus.
+        if (!answer || answer.available !== true || !answer.field || !answer.field.meta) {
+          offer.state = "unavailable";
+          offer.reason = (answer && answer.reason) || "the backend said nothing about a corpus";
+          offer.known = !!answer && answer.available === false && answer.corpus === false;
+          return null;
+        }
+        var counts = answer.field.meta.counts || {};
+        offer.objects = typeof counts.objects === "number" ? counts.objects : null;
+        offer.records = typeof counts.records === "number" ? counts.records : null;
+        offer.state = "offered";
+        offer.known = offer.objects !== null;
+        // A user with a team gets his dataset at any size; `startField` decides between the
+        // example behind it and the picture alone.
+        if (forTeam) {
+          offer.taken = offer.objects !== null && offer.objects >= threshold;
+          return answer.field;
+        }
+        // THE ONE COMPARISON. A missing count is not a big one.
+        if (offer.objects === null || offer.objects < threshold) return null;
+        offer.taken = true;
+        return answer.field;
+    }
+
+    var pending = bridge.invoke("home_field_data");
+    return Promise.race([pending, deadline])
       .catch(function (e) {
         return { available: false, reason: (e && e.message) || String(e) };
       })
@@ -1139,24 +1271,21 @@ window.RichHome = (function () {
         if (answer && answer.__timedOut) {
           offer.state = "timed-out";
           offer.reason = "the corpus did not compile within " + HOME_FIELD_DEADLINE_MS + " ms";
+          // THE COMPILE IS NOT CANCELED, ONLY NOT WAITED FOR. A big corpus takes minutes (2,600 records:
+          // 408 s on the test VM); the example is on the screen meanwhile, and his records are drawn in
+          // front of it the moment this answer comes, without the screen having waited.
+          if (forTeam) {
+            pending.then(
+              function (late) {
+                var field = interpret(late);
+                if (field) onLateRecords(field);
+              },
+              function () {}
+            );
+          }
           return null;
         }
-        // POSITIVE SIGNAL ONLY, the same rule the banner keeps: `available` has to be exactly
-        // `true` and there has to be a dataset attached. An answer that omits either is not
-        // evidence of a corpus.
-        if (!answer || answer.available !== true || !answer.field || !answer.field.meta) {
-          offer.state = "unavailable";
-          offer.reason = (answer && answer.reason) || "the backend said nothing about a corpus";
-          return null;
-        }
-        var counts = answer.field.meta.counts || {};
-        offer.objects = typeof counts.objects === "number" ? counts.objects : null;
-        offer.records = typeof counts.records === "number" ? counts.records : null;
-        offer.state = "offered";
-        // THE ONE COMPARISON. A missing count is not a big one.
-        if (offer.objects === null || offer.objects < HOME_FIELD_MIN_OBJECTS) return null;
-        offer.taken = true;
-        return answer.field;
+        return interpret(answer);
       })
       .catch(function (e) {
         // A malformed answer must not cost the screen its picture.
@@ -1175,9 +1304,11 @@ window.RichHome = (function () {
   // showed neither of them. The demonstration is the FIRST-RUN experience (CEO 2026-09-06:
   // "The demo is definitely needed, initially, for the user"); a user with a team of his own
   // is past that. From the first teammate he adds, the screen shows only his team, by name
-  // and role, and his own numbers: the demonstration's dataset is never loaded, the banner
-  // calling the screen a demonstration goes, and the picture is drawn only from his own loro
-  // (when `HOME_FIELD_MIN_OBJECTS` takes it). Otherwise there is no picture at all.
+  // and role, and his own numbers: the banner calling the screen a demonstration goes, the left
+  // column is his, and the picture is round 11.4's v2 (see `GHOST_SPAN`): his own records in
+  // front of the demonstration's shape, which is dimmed, named as an example, counted in
+  // nothing and gone at 2,500 of his objects. (CEO 2026-11-02. Until then a team with fewer
+  // than `HOME_FIELD_MIN_OBJECTS` objects had no picture at all, since 2026-10-15.)
   //
   // The right-hand column is round 11.1's again (CEO 2026-11-02): "Working now", only the
   // teammates working at this moment (`main.rs::home_working`, the same helpers the Token
@@ -1214,23 +1345,159 @@ window.RichHome = (function () {
     if (!root) return;
     var user = window.RICHOS_USER && window.RICHOS_USER.name ? window.RICHOS_USER.name : "you";
     root.querySelector("#home-owner").textContent = "for " + user;
-    root.querySelector("#home-brand-line").textContent = "";
-    var signals = root.querySelector("#home-signals");
-    signals.textContent = "";
-    var sig = elem("div", "sig");
-    var n = elem("div", "n");
-    n.textContent = String(team.length);
-    var l = elem("div", "l");
-    l.textContent = team.length === 1 ? "AI specialist" : "AI specialists";
-    sig.appendChild(n);
-    sig.appendChild(l);
-    signals.appendChild(sig);
+    columnKey = null;
+    renderTeamColumn();
     root.querySelector("#home-live .cap").textContent = "Working now";
     // The column starts empty, and so off the screen, until `refreshWorking` says who works.
     if (root.querySelector("#home-working").dataset.key === undefined) showWorking([]);
     watchWorking();
     refreshNote();
     reserveDoorTop();
+  }
+
+  /// The stats of the objects that have ARRIVED (the engine's `computeStats`), or `null` before his
+  /// picture is up.
+  var fieldStats = null;
+  var columnKey = null;
+
+  /// THE LEFT COLUMN, RE-DERIVED FROM WHAT HAS ARRIVED (round 11.4 `shared/early.js::renderHud`):
+  /// a row is printed only while its value is not zero, so the column is a list of things that are
+  /// true and it gets longer. His numbers, nothing made up: the teammates he added (and how many
+  /// are working now), the sources his objects came out of, the decisions and lessons among them.
+  /// There are no tasks and no hours: his loro holds none, and a zero row is not printed.
+  /// The round's "day N" is not printed either, because his objects carry no date.
+  /// Built with `textContent`, never markup.
+  function renderTeamColumn() {
+    if (!root || !state.team) return;
+    var st = fieldStats;
+    var by = (st && st.byType) || {};
+    var rows = [];
+    var fmt = function (n) {
+      return Number(n).toLocaleString("en-US");
+    };
+    var team = state.team.length;
+    rows.push({ n: fmt(team), small: state.workingNow ? "\u00b7 " + fmt(state.workingNow) + " working now" : "", l: team === 1 ? "AI specialist" : "AI specialists" });
+    if (st && st.sources) rows.push({ n: fmt(st.sources), small: "", l: "sources understood" });
+    if (by.decision) rows.push({ n: fmt(by.decision), small: by.lesson ? "\u00b7 " + fmt(by.lesson) + " lessons" : "", l: "decisions remembered" });
+    var known = !state.fieldOffer || state.fieldOffer.known !== false;
+    var brand = st ? (st.records === 0 ? (known ? "empty" : "") : fmt(st.records) + (st.records === 1 ? " memory" : " memories")) : "";
+    var key = JSON.stringify([brand, rows]);
+    if (key === columnKey) return;
+    columnKey = key;
+
+    var line = root.querySelector("#home-brand-line");
+    line.textContent = "";
+    if (brand) {
+      line.appendChild(document.createTextNode("loro \u00b7 "));
+      var b = document.createElement("b");
+      b.textContent = brand;
+      line.appendChild(b);
+    }
+    var signals = root.querySelector("#home-signals");
+    signals.textContent = "";
+    rows.forEach(function (r) {
+      var sig = elem("div", "sig");
+      var n = elem("div", "n");
+      n.appendChild(document.createTextNode(r.n));
+      if (r.small) {
+        var sm = document.createElement("small");
+        sm.textContent = r.small;
+        n.appendChild(sm);
+      }
+      var l = elem("div", "l");
+      l.textContent = r.l;
+      sig.appendChild(n);
+      sig.appendChild(l);
+      signals.appendChild(sig);
+    });
+    reserveDoorTop();
+    // The picture hushes itself around these blocks; their size just changed.
+    if (state.field === "live") {
+      try {
+        window.dispatchEvent(new Event("resize"));
+      } catch (e) {
+        /* a webview with no Event constructor would have failed long before here */
+      }
+    }
+  }
+
+  var TYPE_WORD = { memory: "Memory", conversation: "Conversation", decision: "Decision", commitment: "Commitment", lesson: "Lesson", person: "Person", organization: "Organization", project: "Project", initiative: "Initiative", theme: "Theme" };
+
+  /// The record count changed (the engine calls this whenever the number of arrived objects does,
+  /// and once more when it is ready). Everything round 11.4 v2 drives off the count is driven here
+  /// and from nothing else: the core's tint, the bokeh, the line under the core, the "Newest" caption,
+  /// the legend, the left column.
+  function onFieldCount(count, stats) {
+    var lo = window.__loro;
+    if (!root || !lo || !state.team) return;
+    fieldStats = stats;
+    var level = lo.ghostLevel;
+
+    // Gold is the customer's, cold blue is the example's, and the core is the customer's own: while
+    // the example is on screen the core carries the ruled signal; it returns to the approved mint as
+    // the example fades, and from 400 of his records it is exactly as approved (`v2/v2.js`).
+    var warm = Math.min(1, level / 0.1);
+    var t = lo.coreTint;
+    t[0] = 0.42 + (0.86 - 0.42) * warm;
+    t[1] = 0.86 + (0.72 - 0.86) * warm;
+    t[2] = 0.6 + (0.4 - 0.6) * warm;
+
+    // The bokeh is depth behind a dense picture; in front of an empty one it is dirt on the lens.
+    var bokeh = root.querySelector("#home-bokeh");
+    if (bokeh) bokeh.style.opacity = String(0.3 + 0.55 * Math.min(1, Math.pow(count / 700, 0.6)));
+
+    var legend = root.querySelector("#home-legend");
+    var showing = level > 0.004;
+    legend.classList.toggle("on", showing);
+    state.ghost = { count: count, level: level, legend: showing };
+
+    var note = root.querySelector("#home-ghost-note");
+    var lead = note.querySelector(".lead");
+    var sub = note.querySelector(".sub");
+    // "Yours is empty" is a claim about his records, made only when the backend said so (see `known`).
+    var known = !state.fieldOffer || state.fieldOffer.known !== false;
+    if (count === 0 && !known) {
+      note.classList.add("hidden");
+    } else if (count === 0) {
+      note.classList.remove("hidden");
+      lead.textContent = "None of this light is yours yet.";
+      sub.textContent = "Behind is an example loro after a year of work, dimmed so it cannot be taken for your own. Yours is empty. The first thing Rich learns from you lights up inside it, in gold.";
+      note.style.width = "660px";
+    } else if (count < 5) {
+      note.classList.remove("hidden");
+      lead.textContent = count === 1 ? "One of these lights is yours." : count + " of these lights are yours.";
+      sub.textContent = "The cold shape is still the example. Only the gold is you.";
+      note.style.width = "520px";
+    } else {
+      note.classList.add("hidden");
+    }
+    placeGhostNote();
+
+    var arrived = root.querySelector("#home-arrived");
+    if (count > 0 && count <= 400 && stats && stats.newest >= 0) {
+      var nd = lo.nodes[stats.newest];
+      var dom = lo.domains[lo.D.nodeDomain[stats.newest]].label;
+      arrived.textContent = "";
+      arrived.appendChild(document.createTextNode("Newest \u00b7 "));
+      var i = document.createElement("i");
+      i.textContent = TYPE_WORD[nd.type] || nd.type;
+      arrived.appendChild(i);
+      arrived.appendChild(document.createTextNode(" \u00b7 " + dom));
+      arrived.classList.add("on");
+    } else {
+      arrived.classList.remove("on");
+    }
+
+    renderTeamColumn();
+  }
+
+  /// The line under the core hangs 218px below it (`v2/v2.js`).
+  function placeGhostNote() {
+    var lo = window.__loro;
+    if (!root || !lo || !lo.coreScreen) return;
+    var note = root.querySelector("#home-ghost-note");
+    if (!note) return;
+    note.style.top = Math.round(lo.coreScreen()[1] + 218) + "px";
   }
 
   /// The lines round 11.1's "Working now" column holds (`round-11.1/v1`, six active specialists).
@@ -1257,6 +1524,10 @@ window.RichHome = (function () {
   /// the whole aside off the screen when nobody works. Built with `textContent`: the names
   /// come from files he saved.
   function showWorking(working) {
+    if (state.workingNow !== working.length) {
+      state.workingNow = working.length;
+      renderTeamColumn();
+    }
     var shown = working.slice(0, WORKING_LINES);
     var key = JSON.stringify(shown.map(function (t) { return [t.name, t.role || ""]; }));
     if (!root) return;
@@ -1305,7 +1576,8 @@ window.RichHome = (function () {
     }, 3000);
   }
 
-  /// HIS TEAM AND NO PICTURE OF HIS OWN: nothing is drawn, and "waking loro…" goes with it.
+  /// NOTHING IS DRAWN, and "waking loro…" goes with it. Reached when his first hire takes the
+  /// first-run demonstration down (`dropDemonstration`).
   function noPicture() {
     state.field = "none";
     var loading = root && root.querySelector("#home-loading");
@@ -1315,7 +1587,8 @@ window.RichHome = (function () {
   /// HIS FIRST HIRE WHILE THE DEMONSTRATION IS UP: it comes down without a reload. The loop is
   /// stopped, the picture and its last ticker line are taken off the screen, and the dataset
   /// leaves the page, so `show()` has nothing of it to resume and the banner reads "not a
-  /// demonstration". His own loro, if it qualifies, is drawn from the next launch on.
+  /// demonstration". His own picture, his records in front of the example (round 11.4 v2), is
+  /// drawn from the next launch on.
   function dropDemonstration() {
     if (fieldDataIsCustomers()) return;
     if (window.__loro && window.__loro.pause) window.__loro.pause();
@@ -1342,7 +1615,105 @@ window.RichHome = (function () {
     return askForTeam().then(function (team) {
       if (!team) return;
       showTeam(team);
-      if (state.field === "live") dropDemonstration();
+      if (state.field === "live") enterGhost();
+    });
+  }
+
+  /// THE GHOST'S SCRIPTS, in order: the example's dataset, his records merged into it (or `null`), and
+  /// the engine that reads the merged one. The first time on a page that is everything; later (a
+  /// rebuild: his records arrived after the screen was drawn, or he hired his first teammate with the
+  /// example up) `field-ref.js` and `field-prep.js` are already on the page and must not run again
+  /// (`field-prep.js` declares top-level `const`s), so only the data and the engine are.
+  function loadGhost(records) {
+    var count = records && Array.isArray(records.nodes) ? records.nodes.length : 0;
+    var variant = {};
+    for (var k in VARIANT_GHOST) if (Object.prototype.hasOwnProperty.call(VARIANT_GHOST, k)) variant[k] = VARIANT_GHOST[k];
+    variant.count = count;
+    window.VARIANT = variant;
+    // THE GHOST'S COUNT HOOKS, in place before the engine runs (it calls both).
+    window.onLoroCount = onFieldCount;
+    window.onLoroReady = function (api) {
+      onFieldCount(api.COUNT, api.stats);
+    };
+    var rest = typeof window.prepare === "function" ? [FIELD[FIELD.length - 1]] : FIELD_GHOST_REST;
+    var chain = (window.RichFieldGhost ? Promise.resolve() : loadScript("home/field-ghost.js"))
+      .then(function () {
+        return loadScript(FIELD[0]);
+      })
+      .then(function () {
+        window.MATURE_LORO = window.RichFieldGhost.merge(window.MATURE_LORO, count ? records : null);
+      });
+    rest.forEach(function (src) {
+      chain = chain.then(function () {
+        return loadScript(src);
+      });
+    });
+    return chain;
+  }
+
+  /// DRAW THE PICTURE AGAIN with `records` (his dataset, or `null`) in front of the example: the running
+  /// engine is put away, its two canvases are replaced by fresh ones (the old ones carry its listeners
+  /// and its GL context), and the ghost is loaded and settled as at launch. Resolves `true` once the new
+  /// picture is up, `false` when there was nothing to rebuild; on a failure it puts the demonstration
+  /// down as a hire used to (`dropDemonstration`) and the screen keeps its team.
+  function rebuildGhost(records) {
+    // one rebuild at a time: a second answer waits for the picture the first is drawing
+    var run = (state.rebuilding || Promise.resolve()).then(function () {
+      return rebuildGhostNow(records);
+    });
+    state.rebuilding = run.catch(function () {});
+    return run;
+  }
+
+  function rebuildGhostNow(records) {
+    if (!root || !state.team || state.field !== "live") return Promise.resolve(false);
+    if (window.__loro && window.__loro.pause) window.__loro.pause();
+    delete window.__loro;
+    delete window.__loroFailed;
+    ["#home-gl", "#home-overlay"].forEach(function (sel) {
+      var old = root.querySelector(sel);
+      if (old && old.parentNode) old.parentNode.replaceChild(old.cloneNode(false), old);
+    });
+    return loadGhost(records)
+      .then(settled)
+      .then(function () {
+        reserveDoorTop();
+        refreshNote();
+        if (!state.open && window.__loro && window.__loro.pause) window.__loro.pause();
+        return true;
+      })
+      .catch(function () {
+        dropDemonstration();
+        return false;
+      });
+  }
+
+  /// HIS RECORDS ARRIVED AFTER THE CEILING (`askForCustomerField`). The screen is drawn from the
+  /// example by then, or still drawing it; either way they go in front of it as soon as the picture
+  /// is up.
+  function onLateRecords(field) {
+    if (!state.team) return;
+    state.lateRecords = field;
+    if (state.field === "live") drawLateRecords();
+  }
+
+  function drawLateRecords() {
+    var field = state.lateRecords;
+    state.lateRecords = null;
+    if (field) rebuildGhost(field);
+  }
+
+  /// A TEAM, AND THE DEMONSTRATION STILL UP: his first hire, made this session (or while the
+  /// demonstration was loading). He goes straight to the ghost, his records in front of the example,
+  /// without a relaunch. His records are asked for with the same ceiling as at launch.
+  function enterGhost() {
+    if (!state.team || fieldDataIsCustomers() || state.enteringGhost) return Promise.resolve(false);
+    state.enteringGhost = true;
+    return askForCustomerField(true).then(function (dataset) {
+      return rebuildGhost(dataset && Array.isArray(dataset.nodes) && dataset.nodes.length ? dataset : null);
+    }).then(function (done) {
+      state.enteringGhost = false;
+      return done;
     });
   }
 
@@ -1379,12 +1750,22 @@ window.RichHome = (function () {
         // answer picks the script list. `field-data.js` assigns `window.MATURE_LORO` the
         // moment it loads, so a real dataset installed first would simply be overwritten;
         // the two datasets cannot both be on the page.
-        return askForCustomerField();
+        return askForCustomerField(!!team);
       })
       .then(function (dataset) {
-        // A user with a team gets his own loro or no picture, never the demonstration.
-        if (!dataset && state.team) return false;
         var list = FIELD;
+        var mine = dataset && Array.isArray(dataset.nodes) ? dataset.nodes.length : 0;
+        if (state.team) {
+          // HIS RECORDS IN FRONT OF THE EXAMPLE (round 11.4 v2): the demonstration's dataset is
+          // loaded as the ghost, his is merged into it, and the engine is told how many of the
+          // objects are his. From `GHOST_SPAN` of them the example's light is exactly zero, but it is
+          // still the dataset he is laid out in: switching to a picture of his alone at that count
+          // moved every record he has (the arrival gate keeps each one where it is at every count).
+          // Zero of his is the same screen with nothing in front.
+          return loadGhost(mine ? dataset : null).then(function () {
+            return true;
+          });
+        }
         if (dataset) {
           // THE ONE ASSIGNMENT THAT MAKES THIS HIS. `field-engine.js:103` is
           // `const loro = window.MATURE_LORO;` — the object this line writes IS the object
@@ -1419,7 +1800,7 @@ window.RichHome = (function () {
         state.field = "live";
         // He hired while the demonstration was still loading (`refreshTeam`).
         if (state.team && !fieldDataIsCustomers()) {
-          dropDemonstration();
+          enterGhost();
           return;
         }
         // The signal block is only now carrying its five lines, so the left column has a real
@@ -1431,6 +1812,8 @@ window.RichHome = (function () {
         // his"). Re-derive from what actually loaded: if it ever says it is his, this is where
         // the banner takes itself down.
         refreshNote();
+        // His records came after the ceiling while the example was still being drawn.
+        if (state.lateRecords) drawLateRecords();
         // If the CEO already left for the app UI while this was loading, the picture must not
         // start burning frames behind an opaque surface.
         if (!state.open && window.__loro && window.__loro.pause) window.__loro.pause();
@@ -2035,6 +2418,7 @@ window.RichHome = (function () {
       // the reservation it owns rather than re-running the whole layout.
       window.addEventListener("resize", reserveNoteInset);
       window.addEventListener("resize", reserveDoorTop);
+      window.addEventListener("resize", placeGhostNote);
       // The two labels' widths depend on the vendored face, and at first paint it may not have
       // arrived: a fallback-metrics measurement would leave every pill a few pixels wrong for
       // the rest of the launch. `document.fonts` is the only event that says otherwise.
@@ -2100,6 +2484,7 @@ window.RichHome = (function () {
     /// Exported so the acceptance suite can drive the picture without waiting on an idle
     /// callback that may never come in a headless run.
     startField: startField,
+    refreshTeam: refreshTeam,
     /// The tuning constants, exported so a test can assert they are still round-11.1/v1's
     /// rather than something that drifted.
     VARIANT: VARIANT,

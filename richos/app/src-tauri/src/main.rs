@@ -9775,8 +9775,16 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     // takes three seconds must not hold a lock `provision_memory` needs.
     let Some(install) = state.loro_install.lock().unwrap().clone() else {
         let status = state.memory.lock().unwrap().clone();
+        // `corpus: false` is the one answer that says "he has no records", as opposed to "I could not
+        // read them": the home screen's ghost (round 11.4 v2) says "Yours is empty" only on this.
+        if status.state == "none" {
+            return serde_json::json!({
+                "available": false,
+                "reason": "no corpus is configured on this machine",
+                "corpus": false,
+            });
+        }
         return no(match status.state.as_str() {
-            "none" => "no corpus is configured on this machine".to_string(),
             "no-compiler" => "a corpus is configured and the memory compiler is not installed".to_string(),
             "" => "company memory was never wired on this launch".to_string(),
             other => format!("company memory is {other}"),
@@ -9797,8 +9805,15 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     };
 
     let topics = home_field::field_topics(&census, &registry);
-    let items = match home_field::collect_items(install.tools(), install.root(), &topics) {
-        Ok(v) => v,
+    // THE COMPILE IS KEPT (`home_field::KeptCompile`): the first launch of a big corpus compiles for
+    // minutes, while the home screen has long since drawn the example and waits for this answer to
+    // draw his records in; every later launch with the same corpus answers from the kept items in the
+    // time the census takes.
+    let kept_path = state.data_dir.join("home-field-cache.json");
+    let items = match home_field::items_kept_or_compiled(&kept_path, &census, &home_field::corpus_stamp(install.root().path()), &topics, || {
+        home_field::collect_items(install.tools(), install.root(), &topics)
+    }) {
+        Ok((v, _from)) => v,
         Err(e) => {
             eprintln!("[richos] home field: no topic compiled ({e}) — the home screen keeps the demonstration");
             return no(format!("the corpus could not be compiled: {e}"));

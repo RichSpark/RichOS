@@ -3132,6 +3132,56 @@ module.exports = [
       "asterisk, no 'demo mode' and nothing to dismiss.",
   },
   {
+    s: "None of this light is yours yet.",
+    c: "INFORMATIONAL",
+    why:
+      "The ghost's line under the core at none of his records (round 11.4 v2, CEO 2026-11-02), " +
+      "said only when the backend positively said he has none. It states a fact and there is " +
+      "nothing for him to press: what lights the field is Rich learning from him.",
+  },
+  {
+    s: "Behind is an example loro after a year of work, dimmed so it cannot be taken for your own. Yours is empty. The first thing Rich learns from you lights up inside it, in gold.",
+    c: "INFORMATIONAL",
+    why: "The second line of the same ghost note: what the dim shape is and what will happen first.",
+  },
+  {
+    s: "One of these lights is yours.",
+    c: "INFORMATIONAL",
+    why: "The ghost note at one record of his (round 11.4 v2). A statement of what is on screen.",
+  },
+  {
+    s: "of these lights are yours.",
+    c: "FRAGMENT",
+    why: "`count + ' of these lights are yours.'` at two to four records: the number is joined in `onFieldCount`.",
+  },
+  {
+    s: "The cold shape is still the example. Only the gold is you.",
+    c: "INFORMATIONAL",
+    why: "The ghost note's second line at one to four records.",
+  },
+  {
+    s: "Example, not yours · a finished loro, dimmed, for scale",
+    c: "INFORMATIONAL",
+    why:
+      "The legend's line naming the dim shape, on for exactly as long as the shape is " +
+      "(round 11.4 v2). Nothing to press: it labels what is there.",
+  },
+  {
+    s: "· everything Rich has learned from you",
+    c: "FRAGMENT",
+    why: "The legend's other line; its first word, 'Yours', is a separate bold element built beside it.",
+  },
+  {
+    s: "RichOS company memory",
+    c: "NOT-RENDERED",
+    why: "`meta.name` of the ghost's merged dataset (`field-ghost.js`): a storage key's name, never drawn.",
+  },
+  {
+    s: "v2 The Ghost",
+    c: "NOT-RENDERED",
+    why: "`VARIANT_GHOST.name` in `home.js`: the engine's label for its constants, never drawn.",
+  },
+  {
     s: "I can't read your companies right now, so there is nothing to change here yet.",
     c: "INFORMATIONAL",
     fixture: "home-prefs-no-entities",

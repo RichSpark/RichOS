@@ -11,6 +11,10 @@
 // teammates working at this moment, cut off at the approved six lines with no "more" line, and
 // not on the screen at all when nobody works. His whole team is never listed on the home screen.
 //
+// 2026-11-02 (CEO, round 11.4 "V2"): the picture behind those columns is no longer absent for a team
+// with few records: it is "the ghost" (`home-ghost.js` holds that), so the dataset on the page is
+// his, the example's shape is drawn dimmed behind him, and the left column lists what has arrived.
+//
 // The demonstration stays for a user with no team of his own (CEO 2026-09-06: "The demo is
 // definitely needed, initially, for the user"), so the last checks hold that side too.
 //
@@ -23,7 +27,7 @@
 
 const path = require("path");
 const { loadPlaywright, createRun, assert, assertEqual, SEED_THEME, UI_DIR } = require("./lib/harness");
-const contrastLib = require("./lib/contrast");
+const { worstContrast } = require("./lib/worst-contrast");
 
 const APP = "file://" + path.join(UI_DIR, "index.html");
 
@@ -66,77 +70,9 @@ const screenText = (page) => page.evaluate(() => document.getElementById("home")
 const signalsOf = (page) =>
   page.evaluate(() =>
     Array.from(document.querySelectorAll("#home-signals .sig"))
-      .map((s) => s.querySelector(".n").textContent.trim() + " " + s.querySelector(".l").textContent.trim())
+      .map((s) => Array.from(s.querySelector(".n").childNodes).map((c) => c.textContent.trim()).join(" ") + " " + s.querySelector(".l").textContent.trim())
       .join(" / ")
   );
-
-/// The worst contrast between each element's text and the pixels actually behind its glyphs:
-/// every glyph is made transparent (layout unchanged), the frame is captured, and each text
-/// line box is sampled for the pixel that contrasts least with the element's own ink.
-async function worstContrast(page, selectors) {
-  await page.addScriptTag({ content: contrastLib.pageScript() });
-  const targets = await page.evaluate((sels) => {
-    const out = [];
-    for (const sel of sels) {
-      for (const el of document.querySelectorAll(sel)) {
-        const rects = [];
-        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-          if (!n.textContent.trim() || n.parentElement.closest("[hidden]")) continue;
-          const r = document.createRange();
-          r.selectNodeContents(n);
-          const cs = getComputedStyle(n.parentElement);
-          for (const b of r.getClientRects()) {
-            if (b.width > 0.5 && b.height > 0.5)
-              rects.push({ x: b.left, y: b.top, w: b.width, h: b.height, ink: cs.color, px: parseFloat(cs.fontSize), weight: cs.fontWeight, text: n.textContent.trim() });
-          }
-        }
-        out.push({ sel, rects });
-      }
-    }
-    const style = document.createElement("style");
-    style.id = "__blank";
-    style.textContent = "#home *{transition:none!important;animation:none!important;color:transparent!important}";
-    document.head.appendChild(style);
-    return out;
-  }, selectors);
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  const buf = await page.screenshot({ fullPage: false });
-  await page.evaluate(() => document.getElementById("__blank").remove());
-  return page.evaluate(
-    async ({ b64, targets }) => {
-      const M = window.__contrastMath;
-      const img = new Image();
-      await new Promise((res, rej) => {
-        img.onload = res;
-        img.onerror = rej;
-        img.src = "data:image/png;base64," + b64;
-      });
-      const c = document.createElement("canvas");
-      c.width = img.width;
-      c.height = img.height;
-      const g = c.getContext("2d");
-      g.drawImage(img, 0, 0);
-      const scale = img.width / innerWidth;
-      const rows = [];
-      for (const t of targets) {
-        for (const r of t.rects) {
-          const ink = M.parseCssColor(r.ink);
-          const data = g.getImageData(Math.floor(r.x * scale), Math.floor(r.y * scale), Math.max(1, Math.ceil(r.w * scale)), Math.max(1, Math.ceil(r.h * scale))).data;
-          let worst = Infinity;
-          for (let i = 0; i < data.length; i += 4) {
-            const bg = { r: data[i], g: data[i + 1], b: data[i + 2], a: 1 };
-            const fg = ink.a < 1 ? M.compositeOver(ink, bg) : ink;
-            worst = Math.min(worst, M.contrastRatio(fg, bg));
-          }
-          rows.push({ sel: t.sel, text: r.text, ratio: M.round2(worst), needs: M.isLargeText(r.px, r.weight) ? 3 : 4.5 });
-        }
-      }
-      return rows;
-    },
-    { b64: buf.toString("base64"), targets }
-  );
-}
 
 async function main() {
   const run = createRun("the home screen of a user with a team: his team, his numbers, nothing made up");
@@ -145,7 +81,8 @@ async function main() {
 
   for (const theme of ["dark", "light"]) {
     const page = await openApp(browser, theme, { homeTeam: TEAM, homeWorking: TEAM });
-    await page.waitForFunction("window.RichHome.state.field === 'none'", null, { timeout: 30000 }).catch(() => {});
+    await page.waitForFunction("window.RichHome.state.field === 'live' && !!window.RichHome.state.ghost", null, { timeout: 90000 }).catch(() => {});
+    await page.waitForFunction("window.RichHome.state.workingNow === 2", null, { timeout: 30000 }).catch(() => {});
 
     await run.check(`${theme}: the teammates working now are on the home screen, by name and role`, async () => {
       const seen = await page.evaluate(() => ({
@@ -154,10 +91,10 @@ async function main() {
         rows: Array.from(document.querySelectorAll("#home-working li")).map((li) => li.textContent.replace(/\s+/g, " ").trim()),
       }));
       seen.signals = await signalsOf(page);
-      assertEqual(seen.field, "none", "a user with a team and no picture of his own must get no picture");
+      assertEqual(seen.field, "live", "a user with a team and none of his own records must get the ghost's picture");
       assertEqual(seen.rows, TEAM.map((t) => t.name + " " + t.role), "the list is not who is working");
       assertEqual(seen.cap, "Working now", "the column is not round 11.1's");
-      assertEqual(seen.signals, "2 AI specialists", "the numbers are not his");
+      assertEqual(seen.signals, "2 \u00b7 2 working now AI specialists", "the numbers are not his");
       return `"${seen.cap}": ${seen.rows.join(", ")}; "${seen.signals}"`;
     });
 
@@ -166,19 +103,19 @@ async function main() {
       const found = MADE_UP.filter((w) => text.includes(w.toLowerCase()));
       assertEqual(found, [], "the demonstration's numbers or names are still on his screen");
       const loaded = await page.evaluate(() => ({
-        dataset: !!window.MATURE_LORO,
-        scripts: Array.from(document.querySelectorAll("script[src]")).map((s) => s.getAttribute("src")).filter((s) => s.indexOf("home/field-") === 0),
+        synthetic: window.MATURE_LORO && window.MATURE_LORO.meta.synthetic,
+        objects: window.MATURE_LORO && window.MATURE_LORO.meta.counts.objects,
         note: !document.getElementById("home-note") || document.getElementById("home-note").hidden,
       }));
-      assertEqual(loaded.dataset, false, "a dataset was loaded for a screen that draws none");
-      assertEqual(loaded.scripts, [], "the field's scripts were loaded");
+      assertEqual(loaded.synthetic, false, "the dataset on the page does not say it is his");
+      assertEqual(loaded.objects, 0, "the dataset counts objects he does not have");
       assert(loaded.note, "the banner calling the screen a demonstration is up over his own team");
       // The loading layer fades over 0.8 s (`home.css` `#home-loading.gone`) before it is hidden.
       const gone = await page
         .waitForFunction(() => getComputedStyle(document.getElementById("home-loading")).visibility === "hidden", null, { timeout: 60000 })
         .then(() => true, () => false);
-      assert(gone, "\"waking loro…\" is left on a screen that draws no picture");
-      return "no made-up number or name, no dataset, no field script, no banner, no loading line";
+      assert(gone, "\"waking loro…\" is left on a screen that has drawn its picture");
+      return "no made-up number or name in the text, the dataset says it is his, no banner, no loading line";
     });
 
     await run.check(`${theme}: his team and numbers clear WCAG AA against what is behind them`, async () => {
@@ -206,7 +143,8 @@ async function main() {
     seen.signals = await signalsOf(page);
     assertEqual(seen.synthetic, false, "the picture is not his loro");
     assertEqual(seen.rows, TEAM.map((t) => t.name + " " + t.role), "the picture's engine replaced his team");
-    assertEqual(seen.signals, "2 AI specialists", "the picture's engine replaced his numbers");
+    // his own objects: 4,000 of them in 500 groups, one decision each (the mock's own shape)
+    assertEqual(seen.signals, "2 \u00b7 2 working now AI specialists / 500 sources understood / 500 decisions remembered", "the picture's engine replaced his numbers");
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
     return `his loro drawn; the list and the numbers stay his: ${seen.rows.join(", ")}; "${seen.signals}"`;
@@ -235,6 +173,10 @@ async function main() {
           { timeout: 90000 }
         )
         .catch(() => {});
+      // from his first hire the picture is round 11.4's ghost (his records in front of the example), rebuilt in place
+      await page
+        .waitForFunction("window.MATURE_LORO && window.MATURE_LORO.meta.synthetic === false && !!window.__loro && window.__loro.running && !!window.RichHome.state.ghost", null, { timeout: 90000 })
+        .catch(() => {});
       const seen = await page.evaluate(() => ({
         rows: Array.from(document.querySelectorAll("#home-working li")).map((li) => li.textContent.replace(/\s+/g, " ").trim()),
         cap: document.querySelector("#home-live .cap").textContent.trim(),
@@ -249,12 +191,12 @@ async function main() {
       seen.madeUp = MADE_UP.filter((w) => text.includes(w.toLowerCase()));
       assertEqual(seen.rows, want, "the home screen does not show who is working as it is now");
       assertEqual(seen.cap, "Working now", "the column is not round 11.1's");
-      assertEqual(seen.signals, team.length + (team.length === 1 ? " AI specialist" : " AI specialists"), "the numbers are not his");
-      assertEqual(seen.demo, false, "the demonstration's dataset is still on the page");
-      assertEqual(seen.drawing, false, "the demonstration is still being drawn");
-      assertEqual(seen.stageShown, false, "the demonstration's picture is still on screen");
+      assertEqual(seen.signals, team.length + " \u00b7 " + team.length + " working now " + (team.length === 1 ? "AI specialist" : "AI specialists"), "the numbers are not his");
+      assertEqual(seen.demo, false, "the demonstration's dataset (not the ghost) is still on the page");
+      assertEqual(seen.drawing, true, "the ghost is not being drawn after the hire");
+      assertEqual(seen.stageShown, true, "the ghost's picture is not on screen");
       assertEqual(seen.note, false, "the banner calling the screen a demonstration is up over his own team");
-      assertEqual(seen.field, "none", "a user with a team and no picture of his own must get no picture");
+      assertEqual(seen.field, "live", "a user with a team must get the ghost, round 11.4 v2");
       assertEqual(seen.madeUp, [], "the demonstration's numbers or names are still on his screen");
       return `${seen.rows.join(", ")}; "${seen.signals}"`;
     };
