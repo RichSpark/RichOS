@@ -278,7 +278,16 @@ class HistoryGoneWalk(base.StuReminderWalk):
         before = self.primed_count(log)
         # The row's title is written from the first message and varies by run ("History walk chat",
         # "History walk ready" on 2026-11-01), so the row is found by the part every run shares.
-        self.ax('click', '--title', 'History walk', '--first', '--contains')
+        # The title can also be hyphenated ("History-walk chat ready"), so the needles are tried in
+        # turn, the widest last.
+        for needle in ('History walk', 'History-walk', 'istory'):
+            try:
+                self.ax('click', '--title', needle, '--first', '--contains')
+                break
+            except StepFailed:
+                continue
+        else:
+            raise StepFailed("the history walk's chat has no row in the sidebar")
         end = time.monotonic() + self.a.within
         while time.monotonic() < end:
             if self.primed_count(log) > before:

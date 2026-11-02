@@ -295,8 +295,9 @@ class AccountRemoveWalk(toolchain_walk.ToolchainAskWalk):
         session = self.facts.get('session', 'none')
         through = guest(self.vm, 'grep -c ' + shlex.quote(self.facts['code']) + ' ' + shlex.quote(self.work)
                         + '/projects/*/' + shlex.quote(session) + '.jsonl 2>/dev/null || true').strip()
+        residue = guest(self.vm, 'find ' + shlex.quote(self.work) + ' -not -type l 2>/dev/null | head -40 || true').strip()
         evidence = {'home_after_s': took, 'opened_row_by': opened, 'work_folder': left, 'work_projects_link': link,
-                    'codeword_lines_read_through_work': through}
+                    'work_folder_listing': residue, 'codeword_lines_read_through_work': through}
         self.write('relaunch.json', evidence)
         failures = []
         if left != ['projects']:
@@ -344,6 +345,9 @@ def main():
     p.add_argument('--host-item', default='Claude Code-credentials',
                    help="this Mac's keychain item Work is signed in from (default: this Mac's own sign-in)")
     p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--keep-going', action='store_true',
+                   help='run the remaining steps after a FAIL too, so the user-visible steps (the chat still '
+                        'answers) are measured when an earlier assertion about files fails; the exit status is still 1')
     a = p.parse_args()
     steps = a.steps.split(',')
     unknown = [s for s in steps if s not in STEPS]
@@ -367,7 +371,7 @@ def main():
         report['steps'].append(row)
         (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         print(f"{step}: {row['outcome']}" + (f" — {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)
-        if not ok:
+        if not ok and not a.keep_going:
             break
     try:
         report['logs_kept'] = walk.keep_logs()
