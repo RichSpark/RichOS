@@ -1,0 +1,21 @@
+ok   dark image: the queue strip numbers both files
+ok   dark image: step one asks for covers
+ok   dark image: C adds a cover with its keyboard label
+ok   dark image: the one button says Use this image
+ok   dark image: one press uses the finished image, covers counted, no second check step
+ok   dark image: a HEIC is explained in place
+ok   dark image: use_image got the approved bytes and the cover count
+ok   dark image: the sheet closes after the last file
+ok   dark image: approving a revisited queue item again replaces it
+ok   dark image: a 14-file selection reads at most the 10 the report can take
+ok   light image: the queue strip numbers both files
+ok   light image: step one asks for covers
+ok   light image: C adds a cover with its keyboard label
+ok   light image: the one button says Use this image
+ok   light image: one press uses the finished image, covers counted, no second check step
+ok   light image: a HEIC is explained in place
+ok   light image: use_image got the approved bytes and the cover count
+ok   light image: the sheet closes after the last file
+ok   light image: approving a revisited queue item again replaces it
+ok   light image: a 14-file selection reads at most the 10 the report can take
+richdoctor-ui-walk: passed

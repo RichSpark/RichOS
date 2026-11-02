@@ -1,0 +1,23 @@
+[walk] 00:05:02Z RichDoctor launched in the guest, pid 1075
+[walk] 00:05:05Z ok: R1 the unfinished-report card is offered
+[walk] 00:05:07Z ok: R1 the card offers the report saved to finish later
+[walk] 00:05:10Z ok: R1 the sent report is not offered
+[walk] 00:05:11Z ok: R1 the card shows the time it was saved (7:33 AM)
+[walk] 00:05:13Z ok: R4 the queued report is not offered
+[walk] 00:05:13Z ok: R4 with the relay down it is still queued
+[walk] 00:05:14Z the loopback relay is up; waiting for RichDoctor to send the queued report by itself
+[walk] 00:06:05Z ok: R4 the queued report was filed by itself once the relay was up
+[walk] 00:06:06Z ok: R4 exactly one issue exists
+[walk] 00:06:46Z ok: R4 nothing re-sent it (1 registration(s) before and after 40 s)
+[walk] 00:06:57Z ok: R2 opening a draft and quitting left both draft files byte-identical
+[walk] 00:06:57Z ok: R3 no RichDoctor process is left
+[walk] 00:07:43Z ok: R5 the relay's refusal shows Not sent yet
+[walk] 00:07:54Z ok: R5 the draft is review-stage with its approval withdrawn
+[walk] 00:08:05Z ok: R5 after the relaunch the card offers the report saved for later
+[walk] 00:08:22Z ok: R6 with the relay down the report is Not sent yet (queued)
+[walk] 00:08:32Z R6: the relay is back; waiting 45 s (the outbox looks every 5 s, a retry is due after 30 s)
+[walk] 00:09:18Z ok: R6 the old approval was not sent by itself after the screenshot set changed
+[walk] 00:09:20Z ok: R6 Send report filed the report
+[walk] 00:09:21Z ok: R6 the report sent is the report as shown: no screenshot in its manifest
+[walk] 00:09:29Z ok: R5/R6 no RichDoctor process is left
+[walk] 00:09:30Z done: every check passed
