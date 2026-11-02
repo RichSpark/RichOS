@@ -553,8 +553,8 @@ if [ "$NEEDS_STAFFING_HATCH" -eq 1 ]; then
 
   if [ -n "$STAFFING_WHY" ]; then
     ROSTER_HINT=""
-    if [ -d "$ENTITY_ROOT/.claude/agents" ]; then
-      ROSTER_HINT="$(ls "$ENTITY_ROOT/.claude/agents"/*.md 2>/dev/null \
+    if [ -d "$(agent_roster_dir "$ENTITY_ROOT")" ]; then
+      ROSTER_HINT="$(ls "$(agent_roster_dir "$ENTITY_ROOT")"/*.md 2>/dev/null \
         | while IFS= read -r _f; do _b="${_f##*/}"; printf '%s ' "${_b%.md}"; done)"
     fi
     {

@@ -29,6 +29,7 @@ if str(LIBRARY) not in sys.path:
     sys.path.insert(0, str(LIBRARY))
 
 ENGINE = LIBRARY.parents[1]
+from agent_roster import roster_dir
 SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 LIMIT = 300
 TTL = 900
@@ -714,11 +715,11 @@ def instruction_text(payload):
     project = Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()).resolve()
     # Resolve plugin types against THIS installation, not femcboost's repository.
     if ti.get("subagent_type", "").startswith("richos-app-engine:"):
-        definition = project / ".claude/agents" / (kind + ".md")
+        definition = roster_dir(project) / (kind + ".md")
     elif ":" in ti.get("subagent_type", ""):
         definition = ENGINE / "agents" / (kind + ".md")
     else:
-        candidates = [project / ".claude/agents" / (kind + ".md"),
+        candidates = [roster_dir(project) / (kind + ".md"),
                       Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "agents" / (kind + ".md"),
                       ENGINE / "agents" / (kind + ".md")]
         definition = next((path for path in candidates if path.is_file()), None)

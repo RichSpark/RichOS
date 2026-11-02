@@ -177,10 +177,20 @@ def agent_names(text):
     return sorted({m.group(0) for m in AGENT_RE.finditer(text)})[:MAX_TOKENS]
 
 
+def _roster_dir(entity_root):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "richos_agent_roster",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/agent_roster.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.roster_dir(entity_root)
+
+
 def roster_roles(entity_root, teams_dir, session_id):
     """Every role this installation actually has. Derived from two surfaces."""
     roles = set()
-    d = os.path.join(entity_root, ".claude", "agents")
+    d = str(_roster_dir(entity_root))
     try:
         for f in os.listdir(d):
             if f.endswith(".md"):

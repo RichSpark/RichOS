@@ -467,7 +467,18 @@ pub fn with_resource_access(body: &str) -> String {
     body.into()
 }
 
-fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path, preserve_loaded:bool)->Result<Vec<String>,RuntimeError> {
+/// The variable naming the roster of the lease a process belongs to
+/// (`scripts/lib/resolve-roots.sh` `resolve_agent_def`, `mega-lander/app.py` `active_definition`).
+pub const AGENT_ROSTER_ENV: &str = "RICHOS_AGENT_ROSTER";
+
+fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path, preserve_loaded:bool, company:Option<&str>)->Result<Vec<String>,RuntimeError> {
+    // The governed repositories' current definitions reach the team first (`team_sync.rs`); a
+    // failure there never stops a lease, the team as it stands runs.
+    match crate::team_sync::sync(data, company) {
+        Ok(report) if report.changed() || !report.kept_edited.is_empty() => eprintln!("[richos] {}", report.summary()),
+        Ok(_) => {}
+        Err(e) => eprintln!("[richos] the team could not be brought up to date: {e}"),
+    }
     let team=active_team(engine,data)?;
     for root in [plugin.join("agents"),coordination.join(".claude/agents")] {
         for (name,body) in &team {
@@ -490,7 +501,7 @@ fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path, prese
 impl EngineProfile {
     pub fn refresh_team(&self)->Result<Vec<String>,RuntimeError> {
         let data=self.state.parent().ok_or_else(||RuntimeError("Missing app data directory".into()))?;
-        render_team(&self.engine,data,&self.coordination,&self.plugin,true)
+        render_team(&self.engine,data,&self.coordination,&self.plugin,true,self.work_scope.as_ref().map(|(entity,_)|entity.as_str()))
     }
 
     /// The app's lease profile: this install's machine settings, the user's own settings
@@ -572,7 +583,7 @@ impl EngineProfile {
             std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).map_err(|e| RuntimeError(e.to_string()))?;
         }
         let plugin = data.join("engine-profiles").join(uuid::Uuid::new_v4().to_string());
-        render_team(&engine, &data, &coordination, &plugin,false)?;
+        render_team(&engine, &data, &coordination, &plugin,false,None)?;
         // Who made it, so the app's sweep can tell a crash's leftover from a live lease's
         // folder (CEO §54 addendum 2, `app_cleanup::OWNER_FILE`). Without it the folder is
         // still taken, later, once nothing names it and it is past the reaper's age floor.
@@ -722,6 +733,10 @@ impl EngineProfile {
 
     pub fn scope_to(&mut self, binding: &crate::entity::ThreadBinding) -> Result<(), RuntimeError> {
         self.work_scope = Some((binding.entity_id().to_string(), binding.thread_id().to_string()));
+        // The team this lease runs is the company's own: its governed repository's definitions
+        // first (`team_sync.rs`), re-rendered into this lease's own plugin before it starts.
+        let data = self.state.parent().ok_or_else(|| RuntimeError("Missing app data directory".into()))?;
+        render_team(&self.engine, data, &self.coordination, &self.plugin, false, Some(binding.entity_id().as_str()))?;
         // The attachments folder exists before the session starts, because the session is
         // given it as a read root and a file attached later in the conversation lands in it.
         // Private like the desk's own folders, and never a redirect.
@@ -986,6 +1001,11 @@ impl EngineProfile {
             .env("STALL_WATCH_STATE_DIR", self.state.join("stall-watch"))
             .env("RICHOS_ENGINE_ROOT", &self.engine).env("RICHOS_ENGINE_DIR", &self.engine)
             .env("RICHOS_ENTITY_ROOT", &self.coordination).env("CLAUDE_PROJECT_DIR", &self.coordination)
+            // This lease's own roster: the definitions its plugin carries, the ones its session
+            // boots teammates from. The coordination folder is shared by every lease, so a
+            // company-specific definition written there by one lease replaces another lease's
+            // (review rv-20261102T053802Z-c66f511d); dispatch and the guards read this folder.
+            .env(AGENT_ROSTER_ENV, self.plugin.join("agents"))
             .env("RICHOS_WORKSPACES_DIR", self.workspace_state())
             .env("RICHOS_SA_ENTITY_ROOT", &self.coordination).env("RICHOS_SA_TEAMS_DIR", self.state.join("teams"))
             .env("RICHOS_SESSION_ID", session).env_remove("RICHOS_SESSION_PID")

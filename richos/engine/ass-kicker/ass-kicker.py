@@ -413,9 +413,20 @@ ROLE_SHAPE = re.compile(r"[a-z][a-z0-9]{1,15}")
 LEAD_ROLES = {"team-lead", "team", "rich"}
 
 
+def _load_roster():
+    spec = importlib.util.spec_from_file_location(
+        "richos_agent_roster", os.path.join(_HERE, "../lib/agent_roster.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_ROSTER = _load_roster()
+
+
 def roster_roles(entity_root, teams_dir, session_id):
     roles = set()
-    d = os.path.join(entity_root or "", ".claude", "agents")
+    d = str(_ROSTER.roster_dir(entity_root or ""))
     try:
         for f in os.listdir(d):
             if f.endswith(".md") and ROLE_SHAPE.fullmatch(f[:-3]):

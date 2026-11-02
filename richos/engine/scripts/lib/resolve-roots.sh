@@ -561,7 +561,8 @@ except Exception:
 #         degrading, which is the failure class this contract exists to kill.
 #
 # Search order:
-#   1. $ENTITY_ROOT/.claude/agents/<bare>.md            (the entity's own roster)
+#   1. $RICHOS_AGENT_ROSTER/<bare>.md when set (an app lease's own roster), else
+#      $ENTITY_ROOT/.claude/agents/<bare>.md            (the entity's own roster)
 #   2. $ENGINE_ROOT/.claude/agents/<bare>.md            (only when the namespace
 #                                                        IS this engine's plugin
 #                                                        name — read from the
@@ -571,6 +572,12 @@ except Exception:
 #                                                        "<namespace>=<root>"
 #                                                        pairs for other plugins
 #                                                        supplying agent types)
+# The folder this process reads teammate definitions from: its lease's own roster when the app set
+# RICHOS_AGENT_ROSTER, else the entity's. The Python twin is scripts/lib/agent_roster.py.
+agent_roster_dir() {
+    printf '%s\n' "${RICHOS_AGENT_ROSTER:-$1/.claude/agents}"
+}
+
 resolve_agent_def() {
     local entity_root="$1" engine_root="$2" stype="$3"
     local bare ns cand pair
@@ -579,7 +586,10 @@ resolve_agent_def() {
     ns="$(agent_namespace "$stype")"
     [ -n "$bare" ] || return 1
 
-    cand="$entity_root/.claude/agents/${bare}.md"
+    # A lease's own roster (the app sets RICHOS_AGENT_ROSTER to the folder its plugin carries)
+    # is read in place of the entity folder, which every lease of the app shares and which
+    # another company's lease may have rendered its definitions into.
+    cand="$(agent_roster_dir "$entity_root")/${bare}.md"
     if [ -f "$cand" ]; then printf '%s\n' "$cand"; return 0; fi
 
     if [ -n "$ns" ]; then
