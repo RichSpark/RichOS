@@ -496,6 +496,34 @@ mod tests {
     use super::starts_quietly;
     use richdoctor_core::bootstrap;
 
+    /// The title strip (`data-tauri-drag-region`) moves the window by calling Tauri's
+    /// `start_dragging` command, and a double-click on it calls `internal_toggle_maximize`. In
+    /// tauri 2.11.5 `core:default` grants the second (permissions/window reference.md line 34) but
+    /// not `core:window:allow-start-dragging`, so without it the strip did nothing.
+    #[test]
+    fn the_title_strip_may_start_a_window_drag() {
+        let caps: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let perms: Vec<&str> = caps["permissions"].as_array().unwrap().iter().filter_map(|p| p.as_str()).collect();
+        assert!(perms.contains(&"core:window:allow-start-dragging"), "permissions: {perms:?}");
+        assert!(include_str!("../ui/index.html").contains("id=\"wintitle\" data-tauri-drag-region"));
+    }
+
+    /// The sheet scrim (`z-index: 10`, covering the whole window) and the drop overlay (9) sit
+    /// above a strip at 4, so on a screen with a sheet open the strip could not be grabbed.
+    #[test]
+    fn the_title_strip_stays_above_every_overlay() {
+        let css = include_str!("../ui/doctor.css");
+        let z = |sel: &str| -> u32 {
+            let line = css.lines().find(|l| l.starts_with(sel)).unwrap_or_else(|| panic!("{sel}"));
+            let i = line.find("z-index:").unwrap() + 8;
+            line[i..].trim().split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap()
+        };
+        let strip = z("#wintitle");
+        for o in [".sheet-scrim", "#drop"] {
+            assert!(strip > z(o), "#wintitle z-index {strip} must exceed {o} {}", z(o));
+        }
+    }
+
     /// RichOS's installer opens RichDoctor with the arguments `bootstrap::open_args` gives
     /// `/usr/bin/open`; RichDoctor receives the part after `--args`. That start shows no window,
     /// so RichDoctor cannot take the front from the RichOS window the person just opened.
