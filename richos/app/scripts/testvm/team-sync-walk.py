@@ -10,17 +10,22 @@ Run by run-walk.py, which holds one guest slot for this run only, boots the gues
 
 It reuses hire-walk.py's class for the first run and the relaunch; only these are this walk's:
   seed     in the guest, the company folder (`~/Acme`) becomes a governed repository
-           (`orchestration.config`, `.claude/agents/ray.md` and `kai.md`), and the app's team folder
+           (`orchestration.config`, `.claude/agents/ray.md` and `kai.md`), a SECOND company
+           (`Decoy`, listed before Acme in `entities.json`) owns another governed repository that
+           also defines ray.md (review rv-20261102T050131Z-8c5e6fce-f873: a name defined in two
+           repositories), and the app's team folder
            gets what his install had on 2026-11-02: a stale hand copy of ray.md (the old rule) and
            `mine.md`, a teammate made only in the app
   start    the app stopped and started again (a lease start runs the sync)
-  synced   within --within seconds: team/ray.md carries the repository's new text with the engine
+  synced   within --within seconds: team/ray.md carries Acme's new text (never the Decoy's, which
+           comes first in company order) with the engine
            path rewritten for the app, team/kai.md was added, team/mine.md is byte-for-byte as it
            was, the lease's roster (`coordination/.claude/agents/ray.md`) carries the new text, and
            the stale copy is kept in `team-replaced/`
   edit     the repository's ray.md is changed again, in the guest, by a plain write
   restart  the app stopped and started again
-  changed  team/ray.md carries the second text: a change in the repository reaches the app
+  changed  team/ray.md carries the second text: a change in Acme's repository reaches the app
+           although another company's repository defines the same name
   kept     a copy edited in the app after a sync is the user's: the repository changes again, the
            app restarts, and team/kai.md is still the user's edit
 
@@ -46,6 +51,7 @@ StepFailed = hire_walk.StepFailed
 
 STEPS = ['identity', 'first-run', 'stock', 'seed', 'start', 'synced', 'edit', 'restart', 'changed', 'kept']
 OLD, NEW1, NEW2, USER_EDIT = 'WALK-OLD-RULE wait for proceed', 'WALK-NEW-RULE-ONE start at once', 'WALK-NEW-RULE-TWO', 'WALK-USER-EDIT'
+DECOY = 'WALK-DECOY-RULE from the other company'
 ESCALATE = '~/.claude/richos-engine/scripts/escalate.sh raise --fields esc.json'
 
 
@@ -70,11 +76,22 @@ class TeamSyncWalk(hire_walk.HireWalk):
         self.put(self.company + '/orchestration.config', 'SESSION_TEAMS_DIR=none\n')
         self.put(agents + '/ray.md', definition('ray', NEW1))
         self.put(agents + '/kai.md', definition('kai', NEW1))
+        # A second company, first in company order, whose governed repository also defines ray.
+        decoy = str(Path(self.company).parent / 'Decoy')
+        self.put(decoy + '/orchestration.config', 'SESSION_TEAMS_DIR=none\n')
+        self.put(decoy + '/.claude/agents/ray.md', definition('ray', DECOY))
+        registry = f'{self.data}/entities.json'
+        guest(self.vm, '/usr/bin/python3 -c ' + shlex.quote(
+            'import json,sys;p=sys.argv[1];d=json.load(open(p));'
+            'd["entities"].insert(0,{"id":"decoy","display_name":"Decoy","status":"active","roots":[sys.argv[2]]});'
+            'json.dump(d,open(p,"w"))') + ' ' + shlex.quote(registry) + ' ' + shlex.quote(decoy), 60)
         self.put(f'{self.data}/team/ray.md', definition('ray', OLD, '"$RICHOS_ENGINE_ROOT/scripts/escalate.sh" raise'))
         self.put(f'{self.data}/team/mine.md', definition('mine', 'made in the app only'))
         self.facts['mine'] = self.team_file('mine')
         self.save()
-        return {'governed': self.company, 'stale': 'team/ray.md', 'app_only': 'team/mine.md'}
+        self.facts['decoy'] = decoy
+        self.save()
+        return {'governed': self.company, 'decoy': decoy, 'stale': 'team/ray.md', 'app_only': 'team/mine.md'}
 
     def start(self):
         return {'relaunched': self.relaunch()}
@@ -95,12 +112,14 @@ class TeamSyncWalk(hire_walk.HireWalk):
         roster = self.read(f'{self.data}/coordination/.claude/agents/ray.md')
         kept = guest(self.vm, 'cat ' + shlex.quote(self.data) + '/team-replaced/ray.*.md 2>/dev/null || true', 60)
         evidence = {'ray': ray, 'kai_added': NEW1 in kai, 'roster_has_new_text': NEW1 in roster, 'stale_kept': OLD in kept,
-                    'mine_untouched': self.team_file('mine') == self.facts['mine']}
+                    'mine_untouched': self.team_file('mine') == self.facts['mine'],
+                    'decoy_company_still_listed_first': '"decoy"' in self.read(f'{self.data}/entities.json').replace(' ', ''),
+                    'decoy_rule_not_in_team': DECOY not in ray}
         (self.out / 'synced-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
         problems = []
         if '"$RICHOS_ENGINE_ROOT/scripts/escalate.sh"' not in ray or '~/.claude/richos-engine' in ray:
             problems.append('the engine path was not rewritten for the app')
-        problems += [k for k in ('kai_added', 'roster_has_new_text', 'stale_kept', 'mine_untouched') if not evidence[k]]
+        problems += [k for k in ('kai_added', 'roster_has_new_text', 'stale_kept', 'mine_untouched', 'decoy_company_still_listed_first', 'decoy_rule_not_in_team') if not evidence[k]]
         if OLD in ray:
             problems.append('the stale rule is still in team/ray.md')
         if problems:
@@ -117,7 +136,8 @@ class TeamSyncWalk(hire_walk.HireWalk):
     def changed(self):
         if not self.wait_text('ray', NEW2, self.a.within):
             raise StepFailed('team/ray.md never carried the second text within %d s: %r' % (self.a.within, self.team_file('ray')[:400]))
-        return {'ray_has_second_text': True, 'first_text_gone': NEW1 not in self.team_file('ray')}
+        return {'ray_has_second_text': True, 'first_text_gone': NEW1 not in self.team_file('ray'),
+                'decoy_rule_absent': DECOY not in self.team_file('ray')}
 
     def kept(self):
         self.put(f'{self.data}/team/kai.md', definition('kai', USER_EDIT, '"$RICHOS_ENGINE_ROOT/scripts/escalate.sh" raise'))
