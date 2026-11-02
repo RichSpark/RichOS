@@ -3743,7 +3743,7 @@ dependencies = [
 
 [[package]]
 name = "richos-tauri"
-version = "1.2.7"
+version = "1.2.7-nightly.20261102.87"
 dependencies = [
  "base64 0.22.1",
  "block2",
