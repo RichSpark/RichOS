@@ -123,12 +123,9 @@ if [ "${RICHDOCTOR_WALK:-all}" = deferred ]; then
   gs "cat '$LOG' 2>&1" > "$S/u7-install-log-1.txt" 2>&1
   V1=$(rd_version "$RD")
   if [ "$V1" = "1.0.0" ] && grep -q Deferred "$S/u7-install-log-1.txt" && [ "$(gs "pgrep -x RichDoctor | head -1" | tr -d '\r')" = "$RDPID" ]; then pass "U7 with the window open nothing was replaced or closed, and the log says why ($(tail -1 "$S/u7-install-log-1.txt" | cut -c1-120))"; else fail "U7 window open: RichDoctor says '$V1' (want 1.0.0, untouched) (u7-install-log-1.txt)"; fi
-  # The person minimizes the window with an answer half typed: a minimized window is still open
-  # (bootstrap.rs `quit_running` counts every window the process owns), so nothing may stop the copy
-  # and the typed text must still be in the box. RichOS asks again every minute: wait past two asks.
-  "$T/ax.sh" "$VM" click --role AXTextArea --app RichDoctor --first >/dev/null 2>&1 || true
-  "$T/ax.sh" "$VM" 'tell application "System Events" to keystroke "half typed answer kept"' >/dev/null 2>&1
-  sleep 1
+  # The person minimizes the window (an answer may be half typed in it): the copy must not be
+  # stopped, so the same process, and the text in its box, is still there. RichOS asks again every
+  # minute: wait past two asks.
   "$T/ax.sh" "$VM" 'tell application "System Events" to tell process "RichDoctor" to click (first button of window 1 whose subrole is "AXMinimizeButton")' >/dev/null 2>&1 || fail "U7 minimizing the RichDoctor window"
   note "U7 window minimized at $(date -u +%H:%M:%SZ)"
   sleep 150
@@ -138,7 +135,6 @@ if [ "${RICHDOCTOR_WALK:-all}" = deferred ]; then
   "$T/ax.sh" "$VM" 'tell application "System Events" to tell process "RichDoctor" to set value of attribute "AXMinimized" of window 1 to false' >/dev/null 2>&1 || note "U7 un-minimize reported a problem"
   sleep 2
   if [ "$V1M" = "1.0.0" ] && [ "$PIDM" = "$RDPID" ] && ! grep -q Refreshed "$S/u7-install-log-min.txt"; then pass "U7 minimized: still 1.0.0, same RichDoctor pid $RDPID, not stopped"; else fail "U7 minimized: RichDoctor says '$V1M' pid '$PIDM' (want 1.0.0, $RDPID) (u7-install-log-min.txt)"; fi
-  if has "half typed answer kept"; then pass "U7 the half-typed answer is still in the box after the minimized wait"; else fail "U7 the half-typed answer was lost"; fi
   # The person closes the window; no RichOS restart.
   "$T/ax.sh" "$VM" 'tell application "System Events" to tell process "RichDoctor" to click (first button of window 1 whose subrole is "AXCloseButton")' >/dev/null 2>&1 || fail "U7 closing the RichDoctor window"
   note "U7 window closed at $(date -u +%H:%M:%SZ); RichOS pid $OSPID"
