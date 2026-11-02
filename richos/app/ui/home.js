@@ -1179,8 +1179,11 @@ window.RichHome = (function () {
   // calling the screen a demonstration goes, and the picture is drawn only from his own loro
   // (when `HOME_FIELD_MIN_OBJECTS` takes it). Otherwise there is no picture at all.
   //
-  // "Working now" is not claimed for anybody: nothing here knows who is working, so the list
-  // is headed "Your team".
+  // The right-hand column is round 11.1's again (CEO 2026-11-02): "Working now", only the
+  // teammates working at this moment (`main.rs::home_working`, the same helpers the Token
+  // spend screen and the accounts card count), each with a role and a gold dot, cut off at the
+  // approved column's six lines with no "more" line. Nobody working: the column is not on the
+  // screen at all. His whole team is never listed here.
   // =========================================================================================
 
   /// The teammates he added (`main.rs::home_team`), or `null` for none, no bridge, or an
@@ -1222,11 +1225,49 @@ window.RichHome = (function () {
     sig.appendChild(n);
     sig.appendChild(l);
     signals.appendChild(sig);
-    root.querySelector("#home-live .cap").textContent = "Your team";
+    root.querySelector("#home-live .cap").textContent = "Working now";
+    // The column starts empty, and so off the screen, until `refreshWorking` says who works.
+    if (root.querySelector("#home-working").dataset.key === undefined) showWorking([]);
+    watchWorking();
+    refreshNote();
+    reserveDoorTop();
+  }
+
+  /// The lines round 11.1's "Working now" column holds (`round-11.1/v1`, six active specialists).
+  var WORKING_LINES = 6;
+
+  /// Who is working now (`main.rs::home_working`), or `null` when it cannot be read: a failure
+  /// keeps the column as it was, never a made-up list.
+  function askForWorking() {
+    var bridge = window.RichBridge;
+    if (!bridge || typeof bridge.invoke !== "function") return Promise.resolve(null);
+    return Promise.resolve(bridge.invoke("home_working"))
+      .then(function (rows) {
+        if (!Array.isArray(rows)) return null;
+        return rows.filter(function (t) {
+          return t && typeof t.name === "string" && t.name.trim();
+        });
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  /// Draw the working column: at most `WORKING_LINES` lines, each name, role and gold dot, and
+  /// the whole aside off the screen when nobody works. Built with `textContent`: the names
+  /// come from files he saved.
+  function showWorking(working) {
+    var shown = working.slice(0, WORKING_LINES);
+    var key = JSON.stringify(shown.map(function (t) { return [t.name, t.role || ""]; }));
+    if (!root) return;
+    var live = root.querySelector("#home-live");
     var list = root.querySelector("#home-working");
+    // The key lives on the list itself, so a rebuilt screen is drawn again.
+    if (list.dataset.key === key) return;
+    list.dataset.key = key;
     list.textContent = "";
-    team.forEach(function (t, i) {
-      var li = elem("li", null, { id: "home-team-" + i });
+    shown.forEach(function (t, i) {
+      var li = elem("li", null, { id: "home-working-" + i });
       li.appendChild(document.createTextNode(t.name.trim()));
       if (t.role && String(t.role).trim()) {
         li.appendChild(document.createTextNode(" "));
@@ -1234,10 +1275,34 @@ window.RichHome = (function () {
         fn.textContent = String(t.role).trim();
         li.appendChild(fn);
       }
+      li.appendChild(elem("span", "dot"));
       list.appendChild(li);
     });
-    refreshNote();
-    reserveDoorTop();
+    live.hidden = shown.length === 0;
+    // The picture keeps its quiet zone around the text; the engine re-measures on a resize.
+    if (state.field === "live") window.dispatchEvent(new Event("resize"));
+  }
+
+  function refreshWorking() {
+    return askForWorking().then(function (working) {
+      if (working) showWorking(working);
+    });
+  }
+
+  var workingTimer = null;
+  /// Keep the column current while the screen is open, as teammates start and finish.
+  function watchWorking() {
+    if (workingTimer) return;
+    refreshWorking();
+    workingTimer = setInterval(function () {
+      if (!document.getElementById("home")) {
+        clearInterval(workingTimer);
+        workingTimer = null;
+        return;
+      }
+      if (document.hidden) return;
+      refreshWorking();
+    }, 3000);
   }
 
   /// HIS TEAM AND NO PICTURE OF HIS OWN: nothing is drawn, and "waking loro…" goes with it.

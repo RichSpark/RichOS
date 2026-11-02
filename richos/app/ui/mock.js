@@ -1607,6 +1607,10 @@
   // asks.
   let homeTeam = Array.isArray(preset.homeTeam) ? preset.homeTeam.map((t) => ({ ...t })) : [];
 
+  // WHO IS WORKING AT THIS MOMENT (`main.rs::home_working`, CEO 2026-11-02). None by default;
+  // `preset.homeWorking` (`[{ name, role }]`) is teammates running before the home screen asks.
+  let homeWorking = Array.isArray(preset.homeWorking) ? preset.homeWorking.map((t) => ({ ...t })) : [];
+
   function homeFieldAnswer() {
     if (!homeField) {
       return {
@@ -3620,6 +3624,8 @@
           return homeFieldAnswer();
         case "home_team":
           return homeTeam.map((t) => ({ ...t }));
+        case "home_working":
+          return homeWorking.map((t) => ({ ...t }));
         // WHAT DID NOT LOAD OUT OF THE LEDGER (`Ledger::history_health`). The default is a
         // CLEAN load, because that is what every real launch produces — the notice is
         // supposed to be invisible almost always, and a preview that showed it constantly
@@ -5558,6 +5564,13 @@
     homeFieldSet(field) {
       homeField = field ? { ...field } : null;
       return homeField;
+    },
+    /// Teammates start or finish: what `home_working` answers from now on (CEO 2026-11-02).
+    ///
+    ///     __RICHOS_MOCK__.homeWorkingSet([{ name: "Will", role: "Marketing Director" }]);
+    homeWorkingSet(working) {
+      homeWorking = Array.isArray(working) ? working.map((t) => ({ ...t })) : [];
+      return homeWorking.map((t) => ({ ...t }));
     },
     /// A hire lands on disk mid-session: what `home_team` answers from now on, the way
     /// `preset.homeTeam` sets it before launch (product hunt 2026-10-15, finding 7).

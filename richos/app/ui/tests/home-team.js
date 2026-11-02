@@ -7,6 +7,10 @@
 // and showed neither of them. The acceptance sentence: it shows only this user's real team and
 // real numbers, and nothing made up.
 //
+// 2026-11-02 (CEO): the right-hand column is round 11.1's "Working now" again, listing ONLY the
+// teammates working at this moment, cut off at the approved six lines with no "more" line, and
+// not on the screen at all when nobody works. His whole team is never listed on the home screen.
+//
 // The demonstration stays for a user with no team of his own (CEO 2026-09-06: "The demo is
 // definitely needed, initially, for the user"), so the last checks hold that side too.
 //
@@ -31,7 +35,7 @@ const TEAM = [
 
 /// Every number and name the demonstration draws, read from what the hunt saw on screen
 /// (`hire/06-home-after-relaunch.png`). None of them may be on the screen of a user with a team.
-const MADE_UP = ["1,596", "2,365", "7,508", "4,802", "430", "185 lessons", "14 months", "working now",
+const MADE_UP = ["1,596", "2,365", "7,508", "4,802", "430", "185 lessons", "14 months",
   "Cadence", "Fathom", "Gantry", "Kiln", "Nocturne", "Quarry"];
 
 async function openApp(browser, theme, preset) {
@@ -140,10 +144,10 @@ async function main() {
   const browser = await webkit.launch();
 
   for (const theme of ["dark", "light"]) {
-    const page = await openApp(browser, theme, { homeTeam: TEAM });
+    const page = await openApp(browser, theme, { homeTeam: TEAM, homeWorking: TEAM });
     await page.waitForFunction("window.RichHome.state.field === 'none'", null, { timeout: 30000 }).catch(() => {});
 
-    await run.check(`${theme}: his team is on the home screen, by name and role`, async () => {
+    await run.check(`${theme}: the teammates working now are on the home screen, by name and role`, async () => {
       const seen = await page.evaluate(() => ({
         field: window.RichHome.state.field,
         cap: document.querySelector("#home-live .cap").textContent.trim(),
@@ -151,8 +155,8 @@ async function main() {
       }));
       seen.signals = await signalsOf(page);
       assertEqual(seen.field, "none", "a user with a team and no picture of his own must get no picture");
-      assertEqual(seen.rows, TEAM.map((t) => t.name + " " + t.role), "the list is not his team");
-      assertEqual(seen.cap, "Your team", "the list's heading claims something about them");
+      assertEqual(seen.rows, TEAM.map((t) => t.name + " " + t.role), "the list is not who is working");
+      assertEqual(seen.cap, "Working now", "the column is not round 11.1's");
       assertEqual(seen.signals, "2 AI specialists", "the numbers are not his");
       return `"${seen.cap}": ${seen.rows.join(", ")}; "${seen.signals}"`;
     });
@@ -193,7 +197,7 @@ async function main() {
   }
 
   await run.check("his own loro, when it is drawn, does not put made-up specialists over his team", async () => {
-    const page = await openApp(browser, "dark", { homeTeam: TEAM, homeField: { objects: 4000, records: 9000 } });
+    const page = await openApp(browser, "dark", { homeTeam: TEAM, homeWorking: TEAM, homeField: { objects: 4000, records: 9000 } });
     await page.waitForFunction("window.RichHome.state.field === 'live' && !!window.__loro", null, { timeout: 90000 });
     const seen = await page.evaluate(() => ({
       synthetic: window.MATURE_LORO.meta.synthetic,
@@ -220,6 +224,7 @@ async function main() {
       await page.evaluate((t) => {
         window.RichHome.hide("enter-app");
         window.__RICHOS_MOCK__.homeTeamSet(t);
+        window.__RICHOS_MOCK__.homeWorkingSet(t);
         window.RichHome.show("wordmark");
       }, team);
       const want = team.map((t) => t.name + " " + t.role);
@@ -242,8 +247,8 @@ async function main() {
       seen.signals = await signalsOf(page);
       const text = await screenText(page);
       seen.madeUp = MADE_UP.filter((w) => text.includes(w.toLowerCase()));
-      assertEqual(seen.rows, want, "the home screen does not show the team as it is now");
-      assertEqual(seen.cap, "Your team", "the list's heading claims something about them");
+      assertEqual(seen.rows, want, "the home screen does not show who is working as it is now");
+      assertEqual(seen.cap, "Working now", "the column is not round 11.1's");
       assertEqual(seen.signals, team.length + (team.length === 1 ? " AI specialist" : " AI specialists"), "the numbers are not his");
       assertEqual(seen.demo, false, "the demonstration's dataset is still on the page");
       assertEqual(seen.drawing, false, "the demonstration is still being drawn");
@@ -258,6 +263,89 @@ async function main() {
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
     return `after the first hire: ${first}; after the next: ${next}`;
+  });
+
+  /// The names a screen shows in its working column, as a person reads them.
+  const columnOf = (page) =>
+    page.evaluate(() => {
+      const live = document.getElementById("home-live");
+      return {
+        shown: !live.hidden && getComputedStyle(live).display !== "none",
+        cap: live.hidden ? "" : live.querySelector(".cap").textContent.trim(),
+        rows: Array.from(document.querySelectorAll("#home-working li")).map((li) => li.textContent.replace(/\s+/g, " ").trim()),
+        dots: document.querySelectorAll("#home-working li .dot").length,
+      };
+    });
+  const bigTeam = Array.from({ length: 35 }, (_, i) => ({ name: "Mate" + String.fromCharCode(65 + (i % 26)) + i, role: "Role " + i }));
+
+  for (const theme of ["dark", "light"]) {
+    await run.check(`${theme}: nobody working: the column is not on the screen, and his 35 teammates are not listed`, async () => {
+      const page = await openApp(browser, theme, { homeTeam: bigTeam });
+      await page.waitForFunction("window.RichHome.state.team", null, { timeout: 30000 });
+      const col = await columnOf(page);
+      assertEqual(col.shown, false, "the working column is on the screen with nobody working");
+      assertEqual(col.rows, [], "lines are in the column");
+      const text = await screenText(page);
+      assert(!text.includes("working now") && !text.includes("your team"), "a heading is on the screen with nothing under it");
+      assert(!bigTeam.some((t) => text.includes(t.name.toLowerCase())), "his whole team is listed on the home screen");
+      assertEqual(await signalsOf(page), "35 AI specialists", "the numbers are not his");
+      assertEqual(page.__errors, [], "the page reported errors");
+      await page.close();
+      return "no column, no heading, none of the 35 names";
+    });
+  }
+
+  await run.check("two working: exactly those two, each with role and gold dot", async () => {
+    const two = [bigTeam[3], bigTeam[20]];
+    const page = await openApp(browser, "dark", { homeTeam: bigTeam, homeWorking: two });
+    await page.waitForFunction("document.querySelectorAll('#home-working li').length > 0", null, { timeout: 30000 });
+    const col = await columnOf(page);
+    assertEqual(col.shown, true, "the column is not on the screen");
+    assertEqual(col.cap, "Working now", "the heading");
+    assertEqual(col.rows, two.map((t) => t.name + " " + t.role), "the names");
+    assertEqual(col.dots, 2, "a gold dot beside each");
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.close();
+    return col.rows.join(", ");
+  });
+
+  await run.check("more working than the column holds: cut off at six lines, no \"more\" line", async () => {
+    const nine = bigTeam.slice(0, 9);
+    const page = await openApp(browser, "dark", { homeTeam: bigTeam, homeWorking: nine });
+    await page.waitForFunction("document.querySelectorAll('#home-working li').length > 0", null, { timeout: 30000 });
+    const col = await columnOf(page);
+    assertEqual(col.rows, nine.slice(0, 6).map((t) => t.name + " " + t.role), "the first six, in order");
+    const text = await screenText(page);
+    assert(!text.includes(nine[6].name.toLowerCase()), "a seventh teammate is on the screen");
+    assert(!/\d+ more|\bmore\.\.\.|…/.test(await page.evaluate(() => document.getElementById("home-live").innerText.toLowerCase())), "the column carries a \"more\" line");
+    await page.close();
+    return "six lines, no more line";
+  });
+
+  await run.check("it updates while the screen is open, as teammates start and finish", async () => {
+    const page = await openApp(browser, "dark", { homeTeam: bigTeam });
+    await page.waitForFunction("window.RichHome.state.team", null, { timeout: 30000 });
+    const settle = async (want) => {
+      await page
+        .waitForFunction((w) => JSON.stringify(Array.from(document.querySelectorAll("#home-working li")).map((li) => li.textContent.replace(/\s+/g, " ").trim())) === JSON.stringify(w), want, { timeout: 90000 })
+        .catch(() => {});
+      return columnOf(page);
+    };
+    assertEqual((await columnOf(page)).shown, false, "the column starts on the screen");
+    const a = [bigTeam[1], bigTeam[2]].map((t) => t.name + " " + t.role);
+    await page.evaluate((w) => window.__RICHOS_MOCK__.homeWorkingSet(w), [bigTeam[1], bigTeam[2]]);
+    const two = await settle(a);
+    assertEqual([two.shown, two.rows], [true, a], "two started and are not on the screen");
+    const b = [bigTeam[2]].map((t) => t.name + " " + t.role);
+    await page.evaluate((w) => window.__RICHOS_MOCK__.homeWorkingSet(w), [bigTeam[2]]);
+    const one = await settle(b);
+    assertEqual([one.shown, one.rows], [true, b], "one finished and is still on the screen");
+    await page.evaluate(() => window.__RICHOS_MOCK__.homeWorkingSet([]));
+    const none = await settle([]);
+    assertEqual([none.shown, none.rows], [false, []], "the last finished and the column is still on the screen");
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.close();
+    return "0 -> 2 -> 1 -> 0 without a reload";
   });
 
   await run.check("NEGATIVE CONTROL: a user with no team still gets the demonstration (CEO 2026-09-06)", async () => {
