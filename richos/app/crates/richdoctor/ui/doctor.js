@@ -384,7 +384,12 @@
       if (replacing) { const at = S.shots.findIndex(function (s) { return s.n === e.n; }); if (at >= 0) S.shots[at] = e; else if (S.shots.indexOf(e) < 0) S.shots.push(e); S.changedAfterApproval = true; }
       else S.shots.push(e);
       Q.i++; openQueueItem();
-    }).catch(function (err) { toast(String(err)); });
+    }).catch(function (err) {
+      // The footer was disabled while the image was finished; a refusal (the report's size limit)
+      // leaves the person Remove image and Cancel, and the button to try again.
+      $("img-foot").querySelectorAll("button").forEach(function (b) { b.disabled = false; });
+      toast(String(err));
+    });
   }
   function skipCurrent() { const e = cur(); if (e.problem && S.notAdded.indexOf(e) < 0) S.notAdded.push(e); e.skipped = true; Q.i++; openQueueItem(); }
   function finishQueue() {
