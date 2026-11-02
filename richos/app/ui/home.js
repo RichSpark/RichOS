@@ -1207,7 +1207,11 @@ window.RichHome = (function () {
     // front of the example whatever their number, and at `RichFieldGhost.SPAN` objects they are the
     // picture alone. Nobody else is: the first-run demonstration keeps its one comparison.
     var threshold = forTeam ? GHOST_SPAN : HOME_FIELD_MIN_OBJECTS;
-    var offer = { state: "unasked", reason: null, objects: null, records: null, threshold: threshold, taken: false };
+    // `known`: did the backend POSITIVELY say how many records he has? Only an offered dataset (any
+    // count, zero included) or `corpus: false` ("no corpus on this machine") does. A timeout or a
+    // compile that failed is not "none": the ghost then draws the example without claiming his side is
+    // empty (a compile of 2,600 records took 408 s on the test VM, against the 8 s ceiling below).
+    var offer = { state: "unasked", reason: null, objects: null, records: null, threshold: threshold, taken: false, known: false };
     state.fieldOffer = offer;
 
     if (!bridge || typeof bridge.invoke !== "function") {
@@ -1242,12 +1246,14 @@ window.RichHome = (function () {
         if (!answer || answer.available !== true || !answer.field || !answer.field.meta) {
           offer.state = "unavailable";
           offer.reason = (answer && answer.reason) || "the backend said nothing about a corpus";
+          offer.known = !!answer && answer.available === false && answer.corpus === false;
           return null;
         }
         var counts = answer.field.meta.counts || {};
         offer.objects = typeof counts.objects === "number" ? counts.objects : null;
         offer.records = typeof counts.records === "number" ? counts.records : null;
         offer.state = "offered";
+        offer.known = offer.objects !== null;
         // A user with a team gets his dataset at any size; `startField` decides between the
         // example behind it and the picture alone.
         if (forTeam) {
@@ -1351,7 +1357,8 @@ window.RichHome = (function () {
     rows.push({ n: fmt(team), small: state.workingNow ? "\u00b7 " + fmt(state.workingNow) + " working now" : "", l: team === 1 ? "AI specialist" : "AI specialists" });
     if (st && st.sources) rows.push({ n: fmt(st.sources), small: "", l: "sources understood" });
     if (by.decision) rows.push({ n: fmt(by.decision), small: by.lesson ? "\u00b7 " + fmt(by.lesson) + " lessons" : "", l: "decisions remembered" });
-    var brand = st ? (st.records === 0 ? "empty" : fmt(st.records) + (st.records === 1 ? " memory" : " memories")) : "";
+    var known = !state.fieldOffer || state.fieldOffer.known !== false;
+    var brand = st ? (st.records === 0 ? (known ? "empty" : "") : fmt(st.records) + (st.records === 1 ? " memory" : " memories")) : "";
     var key = JSON.stringify([brand, rows]);
     if (key === columnKey) return;
     columnKey = key;
@@ -1425,7 +1432,11 @@ window.RichHome = (function () {
     var note = root.querySelector("#home-ghost-note");
     var lead = note.querySelector(".lead");
     var sub = note.querySelector(".sub");
-    if (count === 0) {
+    // "Yours is empty" is a claim about his records, made only when the backend said so (see `known`).
+    var known = !state.fieldOffer || state.fieldOffer.known !== false;
+    if (count === 0 && !known) {
+      note.classList.add("hidden");
+    } else if (count === 0) {
       note.classList.remove("hidden");
       lead.textContent = "None of this light is yours yet.";
       sub.textContent = "Behind is an example loro after a year of work, dimmed so it cannot be taken for your own. Yours is empty. The first thing Rich learns from you lights up inside it, in gold.";

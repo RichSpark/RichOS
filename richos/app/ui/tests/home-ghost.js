@@ -241,6 +241,27 @@ async function main() {
   }
 
   // --------------------------------------------------------------------------------------
+  // HIS RECORDS DO NOT COME BACK IN TIME. Found on the real app: a compile of 2,600 records took
+  // 408 s, and `home.js` stops waiting after 8 s. The example is drawn, and nothing on the screen may
+  // say his side is empty: "None of this light is yours yet" and "loro · empty" are claims, and a
+  // timeout is not evidence of them.
+  // --------------------------------------------------------------------------------------
+  await run.check("his records do not come back in time: the example is drawn and nothing says his side is empty", async () => {
+    const page = await openApp(browser, { homeTeam: TEAM, homeWorking: [TEAM[0]], homeFieldHangs: true });
+    const f = await factsOf(page);
+    const offer = await page.evaluate(() => window.RichHome.state.fieldOffer);
+    assertEqual(offer.state, "timed-out", "the answer did not time out");
+    assertEqual(f.field, "live", "no picture");
+    assertEqual(f.count, 0, "the gate counts records nobody read");
+    assertEqual(f.legendOn, true, "the example is on screen and the legend is not");
+    assertEqual(f.noteShown, false, "the line under the core says his side is empty");
+    assert(f.brand.toLowerCase().indexOf("empty") < 0, `the sub line says his loro is empty: ${f.brand}`);
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.close();
+    return `timed out (${offer.reason}); legend up, no "empty" anywhere: "${f.brand}"`;
+  });
+
+  // --------------------------------------------------------------------------------------
   // NEGATIVE CONTROL: no team, no ghost. The first-run demonstration is untouched.
   // --------------------------------------------------------------------------------------
   await run.check("NEGATIVE CONTROL: a user with no team still gets the demonstration, with no ghost and no legend (CEO 2026-09-06)", async () => {
