@@ -64,6 +64,11 @@ pub struct BugReports {
     /// compares the card's against (`bug::at_send`). Kept here, never by the window, so nothing the
     /// window sends can stand in for his check. In memory only: a card does not outlive the app.
     checks: Mutex<std::collections::HashMap<String, bug::Check>>,
+    /// **WAITING REPORTS THE USER IS CHANGING** (Change it, CEO §156), by their waiting id: each
+    /// keeps its copy on this Mac and the retry leaves it alone until the changed words replace it
+    /// (`bug_report_cancel`) or it is put back as it was (`bug_report_hold` with `hold: false`). In
+    /// memory only: after a quit a held report is simply waiting again, and goes out by itself.
+    held: Mutex<std::collections::HashSet<String>>,
     /// This install's random id for the relay: its per-install rate limit key, never
     /// authentication (`RICHDOCTOR-RELAY.md`, "Register body"). Made once, in `bug-reports/`.
     installation: String,
@@ -84,6 +89,7 @@ impl BugReports {
             version: bug::version_line(app_version, macos_version().as_deref(), std::env::consts::ARCH),
             look: Mutex::new(None),
             checks: Mutex::new(std::collections::HashMap::new()),
+            held: Mutex::new(std::collections::HashSet::new()),
             installation,
         })
     }
@@ -106,6 +112,10 @@ impl BugReports {
     /// map (every write is one insert or remove), so it is taken back rather than poisoned.
     fn checks(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, bug::Check>> {
         self.checks.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<String>> {
+        self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -695,10 +705,44 @@ pub async fn bug_report_cancel(app: AppHandle, id: String, post: Option<bug::Pos
     let bugs = app.state::<Arc<BugReports>>().inner().clone();
     off_the_ipc_threads(move || {
         let _one_at_a_time = one_at_a_time(&bugs);
-        bugs.outbox(post.unwrap_or_default()).withdraw(&id).map_err(|e| {
+        let withdrawn = bugs.outbox(post.unwrap_or_default()).withdraw(&id);
+        // Off this Mac, or not (then it waits again as it was): either way no longer held.
+        bugs.held().remove(&id);
+        withdrawn.map_err(|e| {
             eprintln!("[richos] bug report {id}: could not be taken off this Mac ({e}); it still waits");
             "RichOS couldn't cancel the report, so it's still waiting to send. Press Cancel report to try again.".to_string()
         })
+    })
+    .await
+}
+
+/// **CHANGE IT ON A WAITING REPORT: ITS COPY STAYS UNTIL ITS REPLACEMENT IS SAVED** (CEO §156;
+/// review rv-20261102T003409Z-35b12ee9-35e9: taking the copy off at Change it left nothing on this
+/// Mac after a Done with no change). `hold: true` keeps the copy and has the retry leave it alone
+/// while the user changes it: `{state: "held"}`, or what became of it when it no longer waits
+/// (`{state: "sent", …}` when it went out first, `{state: "canceled"}` when none is here). It
+/// waits behind a send in flight, as Cancel does. `hold: false` puts it back as it was, waiting
+/// to go out by itself; changed words that replace it are saved first, then `bug_report_cancel`.
+#[richos_command::command]
+pub async fn bug_report_hold(app: AppHandle, id: String, hold: bool, post: Option<bug::Post>) -> Result<serde_json::Value, String> {
+    let bugs = app.state::<Arc<BugReports>>().inner().clone();
+    off_the_ipc_threads(move || {
+        let _one_at_a_time = one_at_a_time(&bugs);
+        if !hold {
+            bugs.held().remove(&id);
+            return Ok(serde_json::json!({ "state": "waiting" }));
+        }
+        match bugs.outbox(post.unwrap_or_default()).gone(&id) {
+            Ok(None) => {
+                bugs.held().insert(id);
+                Ok(serde_json::json!({ "state": "held" }))
+            }
+            Ok(Some(gone)) => serde_json::to_value(gone).map_err(|e| e.to_string()),
+            Err(e) => {
+                eprintln!("[richos] bug report {id}: could not be read on this Mac ({e}); it still waits");
+                Err("RichOS couldn't take the report back to change it, so it's still waiting to send.".to_string())
+            }
+        }
     })
     .await
 }
@@ -750,7 +794,9 @@ pub fn spawn_retry(app: AppHandle) {
             // report is sent (round 24: "it posts by itself when back online").
             for post in [bug::Post::Bug, bug::Post::Idea] {
                 let guard = one_at_a_time(&bugs);
-                let due = bugs.outbox(post).send_due(&relay, &relay, now_ms());
+                // A report the user is changing stays on this Mac, unsent (`bug_report_hold`).
+                let held = bugs.held().clone();
+                let due = bugs.outbox(post).send_due_but(&|id| held.contains(id), &relay, &relay, now_ms());
                 drop(guard);
                 match due {
                     Ok(deliveries) => {

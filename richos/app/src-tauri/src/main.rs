@@ -3972,6 +3972,7 @@ fn main() {
             bug_report::bug_report_send,
             bug_report::bug_report_try_now,
             bug_report::bug_report_cancel,
+            bug_report::bug_report_hold,
             bug_report::bug_report_voice,
             bug_report::bug_report_open_issue,
             // --- "Let Codex review your team's work" (round 20.2, ruling §114) — appended ---
