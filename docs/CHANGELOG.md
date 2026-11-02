@@ -2,6 +2,31 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.2.6
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.6)
+
+- Added a + button to the message box that opens your Mac's file picker for files and folders; a folder, picked or dropped on the window, is handed to Rich to read where it is instead of being turned away
+- Changed the message box to one wide box: when empty it reads "Type here… OR…" with Talk to Rich on the line below, it grows as you type and the +, the status line, Output, Stop and Send sit in a row under your words, each with a tip when you point at it
+- Changed RichDoctor to send a report by itself once it can when your Send did not get through because you were offline, the reporting service was busy or out of reach or RichDoctor quit while sending, instead of offering it again as unfinished
+- Changed closing RichDoctor's window while it is looking into your problem so it no longer cancels: reopening carries on with Claude and a passing Claude problem, such as a timeout, is retried by itself before you are asked to press Retry
+- Changed Prepare without AI in RichDoctor to ask when the problem happened, what you expected and what happened just before instead of leaving them for you to fill in; RichDoctor asks the same on a Mac without Claude Code
+- Improved adding a screenshot in RichDoctor: Use this image now finishes it in one press instead of two and you still see it on the review screen before you send
+- Fixed RichOS opening every time in the conversation it had created most recently, often one you never used; it now starts with no conversation open so you pick one
+- Fixed removing an account in Settings, Claude accounts breaking every conversation that had run on it; removing an account now takes only its sign-in and every conversation keeps its history
+- Fixed a conversation whose earlier history was missing from your Mac failing on every message and telling you to check your sign-in; Rich now says the history is gone and your next message starts afresh in the same conversation
+- Fixed RichOS counting teammates that had stopped when it last quit as still working, so agents showed as busy right after it started and could hold back an update
+- Fixed Stu being handed the same unfinished jobs again every time RichOS started, although he already had them
+- Fixed RichScribe answering "I'm still downloading the voice AI" every time you used it after a start that had not found its speech engine; it now looks again when you use it
+- Fixed a Bust a bug report or Request a feature idea that Rich had written up being lost when RichOS quit, restarted or crashed before you sent it; it now stays on your Mac with your own changes, you can close the panel and the same button brings it back
+- Fixed Send in Bust a bug making you wait for Rich to check your report again after he had made the change you asked for and sometimes needing a second press
+- Fixed a Bust a bug report or Request a feature idea waiting to go out being lost when you pressed Change it and then Done without changing anything or when Rich could not make the change you asked for; it now goes back to waiting as it was
+- Fixed RichDoctor offering a report you had already sent as an unfinished report to continue; choosing Start a new report now also stops it offering the old one and opening a saved report no longer changes the time it says it was saved
+- [technical] Fixed a conversation that Claude Code could not start being tried again for every message waiting in it; after two failed tries the rest stop at once with the same reason and a failed start leaves no files behind
+- [technical] Fixed Stu being unable to take on work in a conversation whose earlier history was missing from your Mac; Rich is told once and Stu's next job starts afresh
+- [technical] Fixed Rich and Stu being told at the end of a turn that RichOS could not check a push's CI results when the push command ended in a redirect like 2>&1; a push that names its folder, remote or branch with a variable is now left unchecked
+- [technical] Fixed the cleanup when Rich's or Stu's session ends running out of time before it could remove the temporary files its commands had made
+
 ## 1.2.5
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.5)
