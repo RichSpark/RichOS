@@ -753,6 +753,41 @@ fn the_home_screen_team_is_the_users_own_teammates_by_name_and_role() {
     ]);
 }
 
+/// **Headings that use ":" or " - " are read as name and role too** (CEO 2026-11-02: five of his
+/// teammates, Finn, Gavin, Grant, Lance and Sage, showed as one long name with no role).
+#[test]
+fn a_heading_with_a_colon_or_a_hyphen_is_still_a_name_and_a_role() {
+    use richos_core::engine_profile::{user_teammates, Teammate};
+    let f = Scratch::new();
+    let team = f.0.join("team");
+    std::fs::create_dir_all(&team).unwrap();
+    std::fs::write(team.join("finn.md"), "---\nname: finn\n---\n# Finn: Finance Lead\n").unwrap();
+    std::fs::write(team.join("sage.md"), "---\nname: sage\n---\n# Sage - Software Architect (Coach Web + Client Native)\n").unwrap();
+    std::fs::write(team.join("wil.md"), "---\nname: wil\n---\n# Wil — Ops - Lead\n").unwrap();
+    assert_eq!(user_teammates(&f.0).unwrap(), vec![
+        Teammate { name: "Finn".into(), role: Some("Finance Lead".into()) },
+        Teammate { name: "Sage".into(), role: Some("Software Architect".into()) },
+        Teammate { name: "Wil".into(), role: Some("Ops - Lead".into()) },
+    ]);
+}
+
+/// **The working list names each running helper by its definition's heading** and lists a kind
+/// that is not his teammate by its own name, so it agrees with the count.
+#[test]
+fn the_working_list_names_running_helpers_from_the_team_folder() {
+    use richos_core::engine_profile::{working_teammates, Teammate};
+    let f = Scratch::new();
+    let team = f.0.join("team");
+    std::fs::create_dir_all(&team).unwrap();
+    std::fs::write(team.join("finn.md"), "---\nname: finn\n---\n# Finn: Finance Lead\n").unwrap();
+    let kinds = vec!["finn".to_string(), "explore".to_string()];
+    assert_eq!(working_teammates(&f.0, &kinds).unwrap(), vec![
+        Teammate { name: "Finn".into(), role: Some("Finance Lead".into()) },
+        Teammate { name: "Explore".into(), role: None },
+    ]);
+    assert!(working_teammates(&f.0, &[]).unwrap().is_empty());
+}
+
 #[test]
 fn a_repository_connected_to_two_companies_is_a_read_root_in_each_companys_conversation() {
     use richos_core::{EntityId, EntityRegistry, Ledger, Spine};

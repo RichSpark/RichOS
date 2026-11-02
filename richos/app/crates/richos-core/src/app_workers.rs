@@ -149,6 +149,24 @@ fn fold_row(fold: &mut Fold, row: &serde_json::Value, session: &str) -> Result<(
     Ok(())
 }
 
+/// The session's journal folded, or `None` when its evidence cannot be read right now.
+fn read_fold(state: &Path, session: &str, patience: std::time::Duration) -> Option<Fold> {
+    let folder = state.join("evidence").join(session);
+    let _lock = evidence_lock(&folder, patience)?;
+    fold_journal(&folder.join("callbacks.jsonl"), session).ok()
+}
+
+/// **The kind of each helper counted `active` by [`status`]** (the teammate's definition name
+/// for a teammate), one entry per running helper, from the same fold, so a list built from
+/// this and the count `status` gives always agree. Empty when nothing is attributed.
+pub fn active_kinds(state: &Path, session: &str) -> Vec<String> {
+    if session.is_empty() || session.len() > 128 || !session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Vec::new();
+    }
+    let Some(Fold { open, launched, .. }) = read_fold(state, session, EVIDENCE_LOCK_PATIENCE) else { return Vec::new() };
+    open.into_iter().filter(|(id, _)| launched.contains(id)).map(|(_, kind)| kind).collect()
+}
+
 /// **`active` VS `liveness_unknown`, AND WHY THIS READER NOW TELLS THEM APART.**
 ///
 /// Until 2026-09-18 every open run came back as `liveness_unknown` — an honest answer while
@@ -198,10 +216,7 @@ fn status_within(state: &Path, session: Option<&str>, patience: std::time::Durat
     if session.is_empty() || session.len()>128 || !session.bytes().all(|b|b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
         return unavailable(Unattributed::UnusableSessionId);
     }
-    let folder = state.join("evidence").join(session);
-    let Some(_lock) = evidence_lock(&folder, patience) else { return unavailable(Unattributed::AppEvidenceUnavailable); };
-    let path = folder.join("callbacks.jsonl");
-    let Ok(fold) = fold_journal(&path, session) else { return unavailable(Unattributed::AppEvidenceUnavailable); };
+    let Some(fold) = read_fold(state, session, patience) else { return unavailable(Unattributed::AppEvidenceUnavailable); };
     let Fold { open, launched, .. } = fold;
     let (mut active, mut liveness_unknown) = (0usize, 0usize);
     let items: Vec<_> = open
@@ -323,6 +338,27 @@ pub fn session_ended(state: &Path, session: &str) -> Option<bool> {
         journal+=&launch("w3");
         std::fs::write(&path,&journal).unwrap();
         assert_eq!(status(&root,Some("session-one")).active,1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The home screen's "Working now" list and the counts elsewhere read the same fold: the
+    /// kinds `active_kinds` names are exactly the helpers `status` counts `active`.
+    #[test] fn the_kinds_listed_working_are_the_helpers_counted_active() {
+        let root=std::env::temp_dir().join(format!("app-worker-kinds-{}",uuid::Uuid::new_v4()));
+        let folder=root.join("evidence/session-one");std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(".lock"), "").unwrap();
+        let path=folder.join("callbacks.jsonl");
+        let start=|id:&str,kind:&str|serde_json::json!({"schema":1,"callback":{"session_id":"session-one","hook_event_name":"SubagentStart","agent_id":id,"agent_type":kind}}).to_string()+"\n";
+        let launched=|id:&str|serde_json::json!({"schema":1,"callback":{"session_id":"session-one","hook_event_name":"PostToolUse","tool_name":"Agent","tool_response":{"status":"async_launched","agentId":id}}}).to_string()+"\n";
+        let stop=|id:&str|serde_json::json!({"schema":1,"callback":{"session_id":"session-one","hook_event_name":"SubagentStop","agent_id":id}}).to_string()+"\n";
+        std::fs::write(&path,start("a","finn")+&launched("a")+&start("b","sage")+&launched("b")+&start("c","grant")).unwrap();
+        // `c` was started but never said to run in the background: awaiting an end, not working.
+        let mut kinds=active_kinds(&root,"session-one");kinds.sort();
+        assert_eq!(kinds,vec!["finn","sage"]);
+        assert_eq!(status(&root,Some("session-one")).active,kinds.len());
+        std::fs::write(&path,start("a","finn")+&launched("a")+&start("b","sage")+&launched("b")+&stop("a")).unwrap();
+        assert_eq!(active_kinds(&root,"session-one"),vec!["sage"]);
+        assert!(active_kinds(&root,"session-two").is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
