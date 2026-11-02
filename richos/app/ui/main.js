@@ -3900,6 +3900,13 @@ function fadeComposerEdges() {
   inputEl.classList.toggle("fade-bottom", over && inputEl.scrollTop + inputEl.clientHeight < inputEl.scrollHeight - 1);
 }
 inputEl.addEventListener("scroll", fadeComposerEdges, { passive: true });
+// The frame after `autoGrow` falls inside the 120ms height ease, so the fade read there sees the
+// field still short of its words; once the ease ends nothing scrolls, and a draft that fits kept
+// its last line faded (handover review rv-20261101T233343Z-3df357ad-08e9). Read it again when the
+// height lands. With reduced motion there is no ease and the frame read is already final.
+inputEl.addEventListener("transitionend", (e) => {
+  if (e.target === inputEl && e.propertyName === "height") fadeComposerEdges();
+});
 
 // THE WIDTH MOVES TOO. A window, sidebar or Output-panel resize rewraps the words without a
 // keystroke, and `autoGrow` keeps scrolling off while the words fit, so a draft that fitted could

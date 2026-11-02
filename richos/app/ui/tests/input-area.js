@@ -252,15 +252,41 @@ async function main() {
     return `${wide.input.h}px at 1440 -> ${narrow.h}px at 1024, nothing hidden`;
   });
 
+  await run.check("3d. after the field grows to fit rewrapped words, its last line is not left faded", async () => {
+    // Handover review rv-20261101T233343Z-3df357ad-08e9: the fade was measured on the frame after
+    // autoGrow, while the 120ms height ease was still running, and nothing measured it again, so a
+    // draft that fitted kept its last line faded.
+    const page = await openApp(browser, { theme: "dark" });
+    const words = Array.from({ length: 4 }, () => "Pull the signed term sheet and the Q3 numbers and check the counter letter twice").join(" ");
+    await setValue(page, words);
+    await page.evaluate(() => { const i = document.getElementById("input"); i.setSelectionRange(0, 0); i.scrollTop = 0; });
+    const wide = await read(page);
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.waitForFunction((h) => document.getElementById("input").getBoundingClientRect().height > h + 1, wide.input.h);
+    await settle(page);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const after = await page.evaluate(() => {
+      const i = document.getElementById("input");
+      return { h: i.getBoundingClientRect().height, scroll: i.scrollHeight, client: i.clientHeight, top: i.scrollTop, fadeBottom: i.classList.contains("fade-bottom"), fadeTop: i.classList.contains("fade-top") };
+    });
+    assert(after.scroll <= after.client + 1, `the rewrapped draft does not fit after growing: ${JSON.stringify(after)}`);
+    assert(!after.fadeBottom && !after.fadeTop, `the whole draft fits and a line is still faded: ${JSON.stringify(after)}`);
+    await page.close();
+    return `${wide.input.h}px -> ${after.h}px, scrollHeight ${after.scroll}, no fade`;
+  });
+
   await run.check("3c. Jump to latest stays just above the box: two lines, ten and a half lines, talking", async () => {
     // Mid-job review rv-20261101T225840Z-67f9d981-8a44: a fixed 96px put it over the taller box.
     // Shown by hand here (the mock thread is too short to scroll it into view); only its place is
     // under test, and that place is the same however it comes to be shown.
     const page = await openApp(browser, { theme: "dark" });
+    // Shown and measured in ONE task: the app's own `updateJumpButton` (on any scroll or render
+    // in the mock thread) hides it again, and a frame waited between the two let that happen.
+    // The box's height has already reached `--composer-zone-h` through `settle`.
     const place = async () => {
-      await page.evaluate(() => { document.getElementById("jump-latest").hidden = false; });
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       return page.evaluate(() => {
+        document.getElementById("jump-latest").hidden = false;
         const j = document.getElementById("jump-latest").getBoundingClientRect();
         const s = document.getElementById("input-shell").getBoundingClientRect();
         const z = document.getElementById("composer-zone").getBoundingClientRect();
