@@ -103,6 +103,24 @@ if [ "${RICHDOCTOR_WALK:-all}" = deferred ]; then
   UP=0; for _ in $(seq 1 20); do has "What went wrong?" && { UP=1; break; }; sleep 3; done
   if [ "$UP" = 1 ]; then pass "U7 the older RichDoctor is running with its window open"; else fail "U7 the older RichDoctor's window did not open (u7-rd.txt)"; gs "tail -5 $G/u7-rd.log" > "$S/u7-rd.txt" 2>&1; finish; fi
   RDPID=$(gs "pgrep -x RichDoctor | head -1" | tr -d '\r')
+  # U7a: text typed in the first box (before Continue), the window minimized, THEN RichOS starts.
+  # That copy is not busy by its own test (no report yet) and its quit handler reads is_visible(),
+  # false for a minimized window, so asked it would answer ok and quit with the text lost.
+  # bootstrap.rs `quit_running_with` checks the activation policy first: Regular (window open,
+  # minimized or hidden) is never asked. It must stay 1.0.0, same pid, text still in the box.
+  "$T/ax.sh" "$VM" click --role AXTextArea --app RichDoctor --first >/dev/null 2>&1 || true
+  "$T/ax.sh" "$VM" 'tell application "System Events" to keystroke "HALFTYPED description not yet sent"' >/dev/null 2>&1
+  sleep 1
+  "$T/ax.sh" "$VM" 'tell application "System Events" to tell process "RichDoctor" to click (first button of window 1 whose subrole is "AXMinimizeButton")' >/dev/null 2>&1 || fail "U7a minimizing the RichDoctor window"
+  note "U7a text typed, window minimized at $(date -u +%H:%M:%SZ); RichOS starts now"
+  python3 -I "$T/relaunch.py" "$VM" --env "HOME=$SHORT" >> "$S/relaunch.log" 2>&1 || note "relaunch reported a problem (see relaunch.log)"
+  sleep 150
+  V1A=$(rd_version "$RD")
+  PIDA=$(gs "pgrep -x RichDoctor | head -1" | tr -d '\r')
+  gs "cat '$LOG' 2>&1" > "$S/u7a-install-log.txt" 2>&1
+  "$T/ax.sh" "$VM" 'tell application "System Events" to tell process "RichDoctor" to set value of attribute "AXMinimized" of window 1 to false' >/dev/null 2>&1 || note "U7a un-minimize reported a problem"
+  sleep 2
+  if [ "$V1A" = "1.0.0" ] && [ "$PIDA" = "$RDPID" ] && ! grep -q Refreshed "$S/u7a-install-log.txt" && has "HALFTYPED"; then pass "U7a half-typed text, minimized, RichOS started: not asked to quit, still 1.0.0, same pid $RDPID, text still in the box"; else fail "U7a half typed + minimized: says '$V1A' pid '$PIDA' (want 1.0.0, $RDPID), or the text is gone (u7a-install-log.txt)"; fi
   # A report is started in it (stage Investigating, saved at once): the old copy then answers
   # `quit-if-idle` "busy" for as long as it runs, even after its window is closed and the report saved.
   DATA="$SHORT/Library/Application Support/com.richos.richdoctor"
