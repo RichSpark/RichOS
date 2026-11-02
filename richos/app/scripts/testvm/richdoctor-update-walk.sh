@@ -85,11 +85,15 @@ if [ "${RICHDOCTOR_WALK:-all}" = deferred ]; then
   # An older copy: the installed one, made 1.0.0 (ad hoc, like the payload), in the short home.
   if [ -n "${RICHDOCTOR_OLD_ZIP:-}" ]; then
     # A REAL older build (nightly 86's RichDoctor, 1.0.0, the code the CEO's installed copy runs):
-    # unzipped and re-signed AD HOC, because this RichOS is ad hoc and only trusts a copy signed by
-    # its own team (bootstrap.rs `installed`). The re-sign changes the signature, not the code.
+    # unzipped. When the RichOS under test is signed by a team (a release candidate), the older copy
+    # keeps its genuine Developer-ID signature: RichOS only trusts a copy signed by its own team
+    # (bootstrap.rs `installed`), and an ad hoc re-sign is not seen as installed at all (the refresh
+    # then defers with "no Applications folder", never reaching the window rules).
+    # Only an ad hoc RichOS (branch-bundle.sh) gets the older copy re-signed ad hoc, to match it.
+    # The re-sign changes the signature, not the code.
     gs "mkdir -p $G; chown admin $G" >/dev/null 2>&1
     gs --push "$RICHDOCTOR_OLD_ZIP" "$G/old-richdoctor.zip" >> "$S/u7.log" 2>&1 || { fail "U7 setup: pushing the older RichDoctor zip"; finish; }
-    gs "pkill -x RichDoctor 2>/dev/null; sleep 2; rm -rf '$SHORT' $G/old; mkdir -p '$APPS' '$SHORT/Library/Application Support' $G/old && ditto -x -k $G/old-richdoctor.zip $G/old && mv $G/old/RichDoctor.app '$APPS/RichDoctor.app' && codesign --force --sign - --timestamp=none '$APPS/RichDoctor.app' && chown -R admin '$SHORT'" >> "$S/u7.log" 2>&1
+    gs "pkill -x RichDoctor 2>/dev/null; sleep 2; rm -rf '$SHORT' $G/old; mkdir -p '$APPS' '$SHORT/Library/Application Support' $G/old && ditto -x -k $G/old-richdoctor.zip $G/old && mv $G/old/RichDoctor.app '$APPS/RichDoctor.app' && { codesign -dv '$RICHOS_APP' 2>&1 | grep -q '^TeamIdentifier=[A-Z0-9]' || codesign --force --sign - --timestamp=none '$APPS/RichDoctor.app'; } && chown -R admin '$SHORT'" >> "$S/u7.log" 2>&1
   else
   gs "pkill -x RichDoctor 2>/dev/null; sleep 2; rm -rf '$SHORT'; mkdir -p '$APPS' '$SHORT/Library/Application Support' && mv '$RD' '$APPS/RichDoctor.app' && /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 1.0.0' '$APPS/RichDoctor.app/Contents/Info.plist' && /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 1.0.0' '$APPS/RichDoctor.app/Contents/Info.plist' && codesign --force --sign - --timestamp=none '$APPS/RichDoctor.app' && chown -R admin '$SHORT'" >> "$S/u7.log" 2>&1
   fi
