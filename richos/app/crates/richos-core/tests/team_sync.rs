@@ -134,12 +134,13 @@ fn a_lease_for_a_company_takes_that_companys_own_definition_first() {
 fn a_later_lease_for_another_company_does_not_change_the_first_leases_dispatch() {
     use richos_core::{Entity, EntityRegistry, Ledger, Spine};
     let f = Scratch::new();
-    let with_model = |name: &str, model: &str| definition(name, "rule").replace("model: sonnet", &format!("model: {model}"));
+    let with_model = |name: &str, model: &str, company: &str| definition(name, &format!("rule of company {company}"))
+        .replace("model: sonnet", &format!("model: {model}"));
     let repos: Vec<PathBuf> = [("a", "sonnet"), ("b", "opus")].iter().map(|(n, model)| {
         let r = f.0.join(format!("company-{n}"));
         std::fs::create_dir_all(r.join(".claude/agents")).unwrap();
         std::fs::write(r.join("orchestration.config"), "X=1\n").unwrap();
-        std::fs::write(r.join(".claude/agents/ray.md"), with_model("ray", model)).unwrap();
+        std::fs::write(r.join(".claude/agents/ray.md"), with_model("ray", model, n)).unwrap();
         r
     }).collect();
     let data = f.0.join("data");
@@ -178,4 +179,50 @@ fn a_later_lease_for_another_company_does_not_change_the_first_leases_dispatch()
     assert!(out.status.success(), "dispatch failed: {}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "opus", "B's Ray dispatches on B's model, not A's");
     assert!(std::fs::read_to_string(lease_a.plugin.join("agents/ray.md")).unwrap().contains("model: sonnet"));
+
+    // Every other reader of the roster, run with the environment B's next dispatch has
+    // (review rv-20261102T062434Z-a3c7a28e: Pierce still read the shared folder).
+    let run = |program: &str, args: &[&str]| -> String {
+        let mut c = std::process::Command::new(program);
+        c.args(args);
+        for key in ["RICHOS_ENTITY_ROOT", "RICHOS_AGENT_ROSTER", "CLAUDE_PROJECT_DIR"] {
+            if let Some(value) = env.get(key) { c.env(key, value); }
+        }
+        c.env("RICHOS_APP_STATE", f.0.join("app-state"));
+        let out = c.output().unwrap();
+        assert!(out.status.success(), "{program} {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    let path = |relative: &str| engine().join(relative).to_string_lossy().to_string();
+    let entity = env["RICHOS_ENTITY_ROOT"].to_string_lossy().to_string();
+
+    // guard-pierce: the instructions the assignment is inspected against.
+    let pierce = run("python3", &["-c", "import sys\nsys.path.insert(0,sys.argv[1])\nimport pierce\n\
+        print(pierce.instruction_text({'tool_input':{'subagent_type':'richos-app-engine:ray','prompt':'x'},'cwd':sys.argv[2]}))",
+        &path("scripts/lib"), &entity]);
+    assert!(pierce.contains("rule of company b") && !pierce.contains("rule of company a"), "Pierce reads B's Ray: {pierce}");
+
+    // The shell guards' resolver and the folder they name in a hint or fall back to (drift guard).
+    let roster = env["RICHOS_AGENT_ROSTER"].to_string_lossy().to_string();
+    let script = format!(". '{}'\nresolve_agent_def '{entity}' '{}' richos-app-engine:ray\nagent_roster_dir '{entity}'",
+        path("scripts/lib/resolve-roots.sh"), engine().to_string_lossy());
+    let shell = run("bash", &["-c", &script]);
+    assert_eq!(shell.lines().collect::<Vec<_>>(), [format!("{roster}/ray.md"), roster.clone()], "shell readers take B's roster");
+    assert!(std::fs::read_to_string(format!("{roster}/ray.md")).unwrap().contains("rule of company b"));
+
+    // The Stop hooks' list of the roles this installation has: a lease's roster folder holding a
+    // teammate the shared folder does not have, read through the lease's variable.
+    let own = f.0.join("own-roster");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("onlyroster.md"), definition("onlyroster", "x")).unwrap();
+    for (file, name) in [("ass-kicker/ass-kicker.py", "ass_kicker"), ("scripts/hooks/guard-unresolved-claims.py", "unresolved_claims")] {
+        let mut c = std::process::Command::new("python3");
+        c.args(["-c", "import importlib.util,sys\n\
+            s=importlib.util.spec_from_file_location(sys.argv[2],sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n\
+            print(' '.join(sorted(m.roster_roles(sys.argv[3],None,None))))", &path(file), name, &entity]);
+        c.env("RICHOS_AGENT_ROSTER", &own);
+        let out = c.output().unwrap();
+        assert!(out.status.success(), "{file}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "onlyroster", "{file} lists the lease's own roster");
+    }
 }

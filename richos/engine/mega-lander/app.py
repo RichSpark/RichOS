@@ -36,6 +36,7 @@ REVIEWS = load("richos_app_reviews", ENGINE / "scripts/lib/app_review.py")
 FENCES = load("richos_app_review_fences", ENGINE / "scripts/lib/operator_fences.py")
 CLOSURE = load("richos_scope_closure", ENGINE / "scripts/lib/scope_closure.py")
 ONCE = load("richos_notice_once", ENGINE / "scripts/lib/notice_once.py")
+ROSTER = load("richos_agent_roster", ENGINE / "scripts/lib/agent_roster.py")
 
 
 def bounded(path, limit=1024 * 1024):
@@ -1011,7 +1012,7 @@ def active_definition(teammate):
     root = Path(os.environ["RICHOS_ENTITY_ROOT"])
     # The lease's own roster when it has one (RICHOS_AGENT_ROSTER): the coordination folder is
     # shared by every lease, so another company's lease may have rendered its definitions there.
-    roster = Path(os.environ.get("RICHOS_AGENT_ROSTER") or root / ".claude/agents")
+    roster = ROSTER.roster_dir(root)
     path = roster / (teammate + ".md")
     if teammate in DUTIES or path.is_symlink() or not path.is_file():
         active = sorted(p.stem for p in roster.glob("*.md") if TEAMMATE_NAME.fullmatch(p.stem) and p.stem not in DUTIES)

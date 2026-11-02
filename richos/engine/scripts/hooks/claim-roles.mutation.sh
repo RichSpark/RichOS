@@ -81,6 +81,7 @@ _mutant_body() {
     cp "$ENGINE_ROOT/scripts/lib/resolve-roots.sh" \
        "$ENGINE_ROOT/scripts/lib/resolve-main-checkout.sh" \
        "$ENGINE_ROOT/scripts/lib/seat-jurisdiction.sh" \
+       "$ENGINE_ROOT/scripts/lib/agent_roster.py" \
        "$ENGINE_ROOT/scripts/lib/stop-hook-notice.sh" "$dir/scripts/lib/"
     # THE STATE-CLAIM ARM DOES NOT EXIST IN A SANDBOX WITHOUT THESE TWO, and
     # without them eighteen of the twenty mutants below were green for a reason

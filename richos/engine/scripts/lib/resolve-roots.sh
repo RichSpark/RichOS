@@ -572,6 +572,12 @@ except Exception:
 #                                                        "<namespace>=<root>"
 #                                                        pairs for other plugins
 #                                                        supplying agent types)
+# The folder this process reads teammate definitions from: its lease's own roster when the app set
+# RICHOS_AGENT_ROSTER, else the entity's. The Python twin is scripts/lib/agent_roster.py.
+agent_roster_dir() {
+    printf '%s\n' "${RICHOS_AGENT_ROSTER:-$1/.claude/agents}"
+}
+
 resolve_agent_def() {
     local entity_root="$1" engine_root="$2" stype="$3"
     local bare ns cand pair
@@ -583,11 +589,7 @@ resolve_agent_def() {
     # A lease's own roster (the app sets RICHOS_AGENT_ROSTER to the folder its plugin carries)
     # is read in place of the entity folder, which every lease of the app shares and which
     # another company's lease may have rendered its definitions into.
-    if [ -n "${RICHOS_AGENT_ROSTER:-}" ]; then
-        cand="$RICHOS_AGENT_ROSTER/${bare}.md"
-    else
-        cand="$entity_root/.claude/agents/${bare}.md"
-    fi
+    cand="$(agent_roster_dir "$entity_root")/${bare}.md"
     if [ -f "$cand" ]; then printf '%s\n' "$cand"; return 0; fi
 
     if [ -n "$ns" ]; then

@@ -301,7 +301,7 @@ if [ "$DEF_RC" -eq 2 ]; then
     warn_allow "subagent_type '${SUBAGENT_TYPE}' is namespaced but no definition for it was found under the entity roster, the engine's own roster, or AGENT_NAMESPACE_ROOTS — definition freshness is NOT being checked for this spawn." \
         "$(printf 'unresolvable-namespace\tagent=%s' "$SUBAGENT_TYPE")"
 fi
-[ -n "$DEF_PATH" ] || DEF_PATH="$ENTITY_ROOT/.claude/agents/${SUBAGENT_BARE}.md"
+[ -n "$DEF_PATH" ] || DEF_PATH="$(agent_roster_dir "$ENTITY_ROOT")/${SUBAGENT_BARE}.md"
 # Snapshot paths are recorded repo-relative, so the comparison key has to be
 # repo-relative too — and relative to whichever root the definition came from.
 case "$DEF_PATH" in
