@@ -3626,6 +3626,9 @@
           // `preset.homeFieldHangs`: the compile that does not come back (2,600 records took 408 s on
           // the test VM); `home.js` stops waiting at its own ceiling and must not call his side empty.
           if (preset.homeFieldHangs) return new Promise(() => {});
+          // `preset.homeFieldDelayMs`: the compile that does come back, later than `home.js` waits (the
+          // real one: 1,000 records 39 s). The answer is read when it is given, as the real command's is.
+          if (preset.homeFieldDelayMs) return new Promise((resolve) => setTimeout(() => resolve(homeFieldAnswer()), preset.homeFieldDelayMs));
           return homeFieldAnswer();
         case "home_team":
           return homeTeam.map((t) => ({ ...t }));

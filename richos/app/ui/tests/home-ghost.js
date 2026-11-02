@@ -316,6 +316,63 @@ async function main() {
   });
 
   // --------------------------------------------------------------------------------------
+  // THE COMPILE COMES BACK LATE. The compile of a big corpus finishes long after the 8 s the screen
+  // waits (1,000 records 39 s, 2,600 records 408 s): his records are drawn the moment it does, without
+  // the screen having waited, and the example's light follows his count as if they had been there.
+  // --------------------------------------------------------------------------------------
+  await run.check("his records come back after the ceiling: they are drawn when ready, in front of the example", async () => {
+    const page = await openApp(browser, { homeTeam: TEAM, homeWorking: [TEAM[0]], homeField: { objects: 300, records: 900 }, homeFieldDelayMs: 9500 });
+    const early = await factsOf(page);
+    assertEqual(early.count, 0, "the screen waited for the compile (or counted records nobody had read)");
+    const came = await page
+      .waitForFunction("window.__loro && window.__loro.COUNT === 300 && window.__loro.blooming === false", null, { timeout: 40000 })
+      .then(() => true, () => false);
+    assert(came, "his 300 records never appeared after the answer came");
+    const f = await factsOf(page);
+    assertEqual(f.field, "live", "no picture after the late answer");
+    assertEqual(f.nodes, 7500 + 300, "the picture is not the example plus his 300");
+    assert(Math.abs(f.level - ghostAt(300)) < 1e-4, `ghost level ${f.level}, round 11.4 says ${ghostAt(300)}`);
+    assertEqual(f.legendOn, true, "the example is on screen and the legend is not");
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.close();
+    return `0 at first, then ${f.count} of ${f.nodes} objects are his; ghost ${f.level.toFixed(4)}`;
+  });
+
+  // --------------------------------------------------------------------------------------
+  // HIS FIRST HIRE WITH THE EXAMPLE UP. The first-run demonstration is on the screen; he hires; he comes
+  // back to Home: it becomes the ghost with his records in front, without a relaunch.
+  // --------------------------------------------------------------------------------------
+  await run.check("his first hire while the demonstration is up: the ghost starts without a relaunch, his records in front", async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(String(e)));
+    await page.addInitScript(SEED_THEME, "dark");
+    await page.addInitScript((v) => {
+      window.__RICHOS_MOCK_PRESET__ = v;
+    }, { homeField: { objects: 150, records: 450 } });
+    await page.goto(APP);
+    await page.waitForFunction("typeof window.RichHome === 'object'", null, { timeout: 60000 });
+    await page.evaluate(() => window.RichSplash && window.RichSplash.yieldNow("acceptance-suite"));
+    await page.evaluate(() => window.RichHome.startField());
+    await page.waitForFunction("window.RichHome.state.field === 'live' && !!window.__loro", null, { timeout: 90000 });
+    const before = await page.evaluate(() => ({ synthetic: window.MATURE_LORO.meta.synthetic, n: window.__loro.N }));
+    assertEqual(before.synthetic, true, "the demonstration is not what is up before the hire");
+    await page.evaluate(() => window.__RICHOS_MOCK__.homeTeamSet([{ name: "Beth", role: "Bookkeeper" }]));
+    await page.evaluate(() => window.RichHome.refreshTeam());
+    const came = await page
+      .waitForFunction("window.__loro && window.MATURE_LORO.meta.synthetic === false && window.__loro.COUNT === 150 && window.__loro.blooming === false", null, { timeout: 60000 })
+      .then(() => true, () => false);
+    const f = await factsOf(page);
+    assert(came, "the ghost did not start after the first hire: " + JSON.stringify({ field: f.field, count: f.count, synthetic: f.synthetic }));
+    assertEqual(f.field, "live", "the picture was taken down by the hire");
+    assertEqual(f.nodes, 7500 + 150, "the picture is not the example plus his 150");
+    assertEqual(f.legendOn, true, "the legend is not up over the example");
+    assertEqual(errors, [], "the page reported errors");
+    await page.close();
+    return `the demonstration (${before.n} objects) became the ghost: ${f.count} of ${f.nodes} objects are his`;
+  });
+
+  // --------------------------------------------------------------------------------------
   // NEGATIVE CONTROL: no team, no ghost. The first-run demonstration is untouched.
   // --------------------------------------------------------------------------------------
   await run.check("NEGATIVE CONTROL: a user with no team still gets the demonstration, with no ghost and no legend (CEO 2026-09-06)", async () => {
