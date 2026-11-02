@@ -173,10 +173,15 @@ impl Engine {
         (self.emit)(v)
     }
 
-    /// Whether a help session is open: a draft that is being worked on, or work not saved.
+    /// Whether a help session is open: a draft being worked on in an open window, work not
+    /// saved, or an operation still running. A closed window whose report was saved is idle:
+    /// the report keeps its stage on disk, and reopening it continues.
     pub fn busy(&self) -> bool {
         let inner = self.inner.lock().unwrap();
-        self.busy.load(Ordering::SeqCst) || inner.unsaved.is_some() || inner.draft.as_ref().is_some_and(|d| matches!(d.stage, Stage::Investigating | Stage::Review))
+        let open = !self.closed.load(Ordering::SeqCst);
+        self.busy.load(Ordering::SeqCst)
+            || inner.unsaved.is_some()
+            || (open && inner.draft.as_ref().is_some_and(|d| matches!(d.stage, Stage::Investigating | Stage::Review)))
     }
 
     // -----------------------------------------------------------------------------------
@@ -1884,6 +1889,42 @@ mod tests {
         // load-bound: the closed operation ends within one poll (500 ms); only a hang reaches the bound.
         let deadline = Instant::now() + Duration::from_secs(30);
         while !events.lock().unwrap().iter().any(|v| v["t"] == "busy" && v["on"] == false) {
+            assert!(Instant::now() < deadline, "the operation never ended");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The refresh asks `quit-if-idle`: a report started or prepared and then closed (saved by
+    /// `close`) is idle; an open window, an unsaved report or a running operation is busy.
+    #[test]
+    fn a_closed_window_with_a_saved_report_is_idle_and_anything_else_is_busy() {
+        let root = scratch("closed-idle");
+        let (e, events, id) = asked_by_claude(&root);
+        for stage in [Stage::Investigating, Stage::Review] {
+            e.open(&id).unwrap();
+            e.inner.lock().unwrap().draft.as_mut().unwrap().stage = stage;
+            assert!(e.busy(), "{stage:?}: the window is open");
+            e.close();
+            wait_idle_flag(&e);
+            assert!(!e.busy(), "{stage:?}: closed and saved is idle");
+            // An unsaved report keeps it busy, a running operation too.
+            e.inner.lock().unwrap().unsaved = Some(SaveError { disk_full: true, message: "the disk is full".into() });
+            assert!(e.busy(), "{stage:?}: closed but unsaved");
+            e.inner.lock().unwrap().unsaved = None;
+            e.busy.store(true, Ordering::SeqCst);
+            assert!(e.busy(), "{stage:?}: closed but an operation runs");
+            e.busy.store(false, Ordering::SeqCst);
+            assert!(!e.busy());
+        }
+        e.open(&id).unwrap();
+        assert!(e.busy(), "reopened: the window is open again");
+        let _ = events;
+    }
+
+    fn wait_idle_flag(e: &Engine) {
+        // load-bound: the closed operation ends within one poll (500 ms); only a hang reaches the bound.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while e.busy.load(Ordering::SeqCst) {
             assert!(Instant::now() < deadline, "the operation never ended");
             std::thread::sleep(Duration::from_millis(10));
         }
