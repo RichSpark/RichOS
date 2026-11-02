@@ -9775,8 +9775,16 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     // takes three seconds must not hold a lock `provision_memory` needs.
     let Some(install) = state.loro_install.lock().unwrap().clone() else {
         let status = state.memory.lock().unwrap().clone();
+        // `corpus: false` is the one answer that says "he has no records", as opposed to "I could not
+        // read them": the home screen's ghost (round 11.4 v2) says "Yours is empty" only on this.
+        if status.state == "none" {
+            return serde_json::json!({
+                "available": false,
+                "reason": "no corpus is configured on this machine",
+                "corpus": false,
+            });
+        }
         return no(match status.state.as_str() {
-            "none" => "no corpus is configured on this machine".to_string(),
             "no-compiler" => "a corpus is configured and the memory compiler is not installed".to_string(),
             "" => "company memory was never wired on this launch".to_string(),
             other => format!("company memory is {other}"),

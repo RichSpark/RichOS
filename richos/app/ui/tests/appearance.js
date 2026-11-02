@@ -1571,11 +1571,11 @@ async function main() {
           "ported from documents why they are authored in px",
       },
       "home.css": {
-        count: 13,
+        count: 17,
         why:
           "the home screen is the port of `richos-hq/design/mockups/rounds/round-11.1/v1`, whose " +
           "type sizes are the round's own and whose rounds are FROZEN (CLAUDE.md, 'Design Rounds " +
-          "Are FROZEN'). Re-authoring 13 sizes on the CEO's landing surface is a design decision " +
+          "Are FROZEN'). Re-authoring 17 sizes (13, plus the four of round 11.4 v2's legend, note and caption, 2026-11-02) on the CEO's landing surface is a design decision " +
           "and his to make, not a gate's. What this check holds instead is the §15 FLOOR, below, " +
           "which the composition clears everywhere.",
       },
@@ -1791,7 +1791,7 @@ async function main() {
 
     return (
       rules.length + " font-size declaration(s) across " + SOURCES.styleSources().join(" + ") +
-      "; " + px.length + " in px, every one declared (style.css 2, home.css 13, splash.css 1). " +
+      "; " + px.length + " in px, every one declared (style.css 2, home.css 17, splash.css 1). " +
       "RESOLVED IN EVERY UNIT against a root of " + ROOT + "px: " + readable.length + " readable, " +
       "smallest " + smallest + "px (" + [...new Set(smallestSites)].slice(0, 3).join(", ") + ") — at §15's floor; " +
       below.length + " under it, every one declared AND checked: " +
