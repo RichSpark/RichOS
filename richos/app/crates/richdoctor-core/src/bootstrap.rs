@@ -345,9 +345,31 @@ fn quit_running(places: &Places) -> Result<bool, String> {
     let Ok(mut s) = std::os::unix::net::UnixStream::connect(&sock) else { return Ok(false) };
     s.set_read_timeout(Some(Duration::from_secs(5))).ok();
     writeln!(s, "quit-if-idle").map_err(|e| e.to_string())?;
+    let answered_by = peer_pid_of(&s);
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).map_err(|_| "RichDoctor did not answer within five seconds".to_string())?;
     if line.trim() != "ok" {
+        // Copies built before a closed, saved report counted as idle answer `busy` for as long
+        // as they run (their `Engine::busy` kept the report's stage after `close`). With no
+        // window on screen that answer can only be this: closing saved the report, so the copy
+        // is stopped by its process id, read from the socket it answered on, never by name.
+        if let Some(pid) = answered_by.filter(|&p| p != std::process::id() as i32 && !has_window_on_screen(p)) {
+            // A closing operation may still be ending: look once more before stopping it.
+            std::thread::sleep(Duration::from_secs(2));
+            if peer_pid(&sock) == Some(pid) && !has_window_on_screen(pid) {
+                // SAFETY: a plain signal to the process that answered on RichDoctor's socket.
+                unsafe { libc::kill(pid, libc::SIGTERM) };
+                let until = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < until {
+                    if std::os::unix::net::UnixStream::connect(&sock).is_err() {
+                        std::thread::sleep(Duration::from_millis(300));
+                        return Ok(true);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                return Err("RichDoctor did not quit within five seconds".into());
+            }
+        }
         return Err("a RichDoctor help session is open".into());
     }
     // Wait (five seconds at most) for it to be gone: its socket stops answering.
@@ -360,6 +382,85 @@ fn quit_running(places: &Places) -> Result<bool, String> {
         std::thread::sleep(Duration::from_millis(100));
     }
     Err("RichDoctor did not quit within five seconds".into())
+}
+
+/// The process id of whoever listens on the Unix socket `sock` (the kernel's own answer for the
+/// connected peer), or `None`.
+fn peer_pid(sock: &Path) -> Option<i32> {
+    peer_pid_of(&std::os::unix::net::UnixStream::connect(sock).ok()?)
+}
+
+fn peer_pid_of(s: &std::os::unix::net::UnixStream) -> Option<i32> {
+    use std::os::fd::AsRawFd;
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SOL_LOCAL = 0, LOCAL_PEERPID = 2 (<sys/un.h>).
+    // SAFETY: `pid` and `len` are valid for the call and sized for a pid_t.
+    let rc = unsafe { libc::getsockopt(s.as_raw_fd(), 0, 2, &mut pid as *mut _ as *mut libc::c_void, &mut len) };
+    (rc == 0 && pid > 0).then_some(pid)
+}
+
+#[cfg(target_os = "macos")]
+mod windows {
+    use std::ffi::{c_char, c_void};
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFArrayGetCount(a: *const c_void) -> isize;
+        fn CFArrayGetValueAtIndex(a: *const c_void, i: isize) -> *const c_void;
+        fn CFDictionaryGetValue(d: *const c_void, k: *const c_void) -> *const c_void;
+        fn CFStringCreateWithCString(alloc: *const c_void, s: *const c_char, enc: u32) -> *const c_void;
+        fn CFNumberGetValue(n: *const c_void, kind: isize, out: *mut c_void) -> u8;
+        fn CFRelease(o: *const c_void);
+    }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> *const c_void;
+    }
+
+    fn int(d: *const c_void, key: &[u8]) -> Option<i64> {
+        // SAFETY: `key` is NUL-terminated; the string is released; the value is read, not kept.
+        unsafe {
+            let k = CFStringCreateWithCString(std::ptr::null(), key.as_ptr() as *const c_char, 0x0800_0100);
+            let v = CFDictionaryGetValue(d, k);
+            CFRelease(k);
+            if v.is_null() {
+                return None;
+            }
+            let mut out: i64 = 0;
+            (CFNumberGetValue(v, 4, &mut out as *mut i64 as *mut c_void) != 0).then_some(out)
+        }
+    }
+
+    /// Whether process `pid` owns a normal (layer 0) window that is on screen. The window
+    /// server lists them without any permission (only titles need one). Unreadable: `true`.
+    pub fn on_screen(pid: i32) -> bool {
+        // SAFETY: the array is owned by us and released; entries are borrowed from it.
+        unsafe {
+            let list = CGWindowListCopyWindowInfo(1, 0);
+            if list.is_null() {
+                return true;
+            }
+            let mut found = false;
+            for i in 0..CFArrayGetCount(list) {
+                let d = CFArrayGetValueAtIndex(list, i);
+                if int(d, b"kCGWindowOwnerPID\0") == Some(pid as i64) && int(d, b"kCGWindowLayer\0") == Some(0) {
+                    found = true;
+                    break;
+                }
+            }
+            CFRelease(list);
+            found
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn has_window_on_screen(pid: i32) -> bool {
+    windows::on_screen(pid)
+}
+#[cfg(not(target_os = "macos"))]
+fn has_window_on_screen(_pid: i32) -> bool {
+    true
 }
 
 /// The arguments to `/usr/bin/open` that start `app` in the background, with [`QUIET_FLAG`] in
@@ -544,6 +645,16 @@ mod tests {
         let p = Places { system_apps: root.join("Applications"), user_apps: root.join("home/Applications"), doctor_data: root.join("data"), richos_folder: Some(root.join("Applications")) };
         fs::create_dir_all(&p.system_apps).unwrap();
         p
+    }
+
+    #[test]
+    fn the_peer_of_a_socket_is_its_listener_and_a_process_without_a_window_has_none_on_screen() {
+        let root = temp("peer");
+        let sock = root.join("s.sock");
+        let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert_eq!(peer_pid(&sock), Some(std::process::id() as i32));
+        assert!(!has_window_on_screen(std::process::id() as i32), "a test process owns no window");
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]
