@@ -14,6 +14,10 @@
 #       payload's byte for byte.
 #   U3  a further relaunch with the same versions leaves it alone (Info.plist byte-identical).
 #   U4  after the end no RichDoctor process is left in the guest.
+#   U5  the version RichDoctor states in the Versions section of the report it prepares (the
+#       installed copy's own support adapter, over a fixture home) is RichOS's own version.
+#   U6  the footer of a fixture report sent to a loopback relay stand-in (never GitHub) carries
+#       RichOS's version in the relay's `major.minor[.patch]` shape.
 #
 # run-walk.py passes the VM name first, then stops the guest and deletes the clone (CEO §54).
 # EXIT STATUS: 0 only when every check passed.
@@ -31,7 +35,10 @@ gs() { "$T/guest.sh" "$VM" "$@"; }
 PAYLOAD=$(cat "${TESTVM_ROOT:-$HOME/.richos-testvm}/run/$VM/payload")
 case "$PAYLOAD" in /Users/admin/testvm/*) ;; *) note "FAILED: the guest payload ($PAYLOAD)"; exit 1 ;; esac
 
+G=/Users/admin/richdoctor-update-walk
+PORT=8766
 finish() {
+  gs "test -s $G/stand-in.pid && kill \$(cat $G/stand-in.pid) 2>/dev/null; true" >/dev/null 2>&1
   gs "pkill -x RichDoctor 2>/dev/null; sleep 2; pgrep -x RichDoctor >/dev/null && echo up || echo gone" > "$S/gone.txt" 2>&1
   if [ "$(tail -1 "$S/gone.txt")" = gone ]; then pass "U4 no RichDoctor process is left in the guest"; else fail "U4 a RichDoctor process is still up"; fi
   if [ "${#FAILS[@]}" -gt 0 ]; then note "done, with ${#FAILS[@]} failed step(s): $(printf '%s; ' "${FAILS[@]}")"; exit 1; fi
@@ -75,4 +82,71 @@ sleep 20
 AFTER=$(gs "shasum -a 256 '$RD/Contents/Info.plist'" | cut -d' ' -f1)
 V3=$(rd_version "$RD")
 if [ "$BEFORE" = "$AFTER" ] && [ "$V3" = "$RV" ]; then pass "U3 a relaunch at the same version left RichDoctor alone ($V3)"; else fail "U3 the same-version relaunch changed RichDoctor ($BEFORE -> $AFTER, says $V3)"; fi
+# ---- U5: the Versions section of a report the installed copy prepares -----------------------------
+GHOME="$PAYLOAD/home"
+AS="sudo launchctl asuser \$(id -u admin) sudo -u admin env HOME='$GHOME'"
+gs "pkill -x RichDoctor 2>/dev/null; mkdir -p $G/draft '$GHOME/Library/Logs/RichOS' && chown -R admin $G" >/dev/null 2>&1 || true
+cat > "$S/adapter-probe.py" <<'PY'
+import json, subprocess, sys
+exe, draft, home = sys.argv[1:4]
+json.dump({"home": home, "window": {"start": 0, "end": 1, "known": False}, "diagnostics": True}, open(draft + "/scope.json", "w"))
+msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "collect_diagnostics", "arguments": {"category": "installation"}}}]
+p = subprocess.run([exe, "--support-adapter", draft], input="\n".join(json.dumps(m) for m in msgs) + "\n", capture_output=True, text=True, timeout=60)
+out = [json.loads(l) for l in p.stdout.splitlines() if l.strip()]
+server = out[0]["result"]["serverInfo"]["version"]
+items = json.loads(out[1]["result"]["content"][0]["text"])["items"]
+ev = items[0]["id"]
+p2 = subprocess.run([exe, "--support-adapter", draft], input=json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "read_evidence", "arguments": {"id": ev}}}) + "\n", capture_output=True, text=True, timeout=60)
+text = json.loads(json.loads(p2.stdout.splitlines()[0])["result"]["content"][0]["text"])["text"]
+print(json.dumps({"server": server, "versions_first_line": text.split("\n")[0]}))
+PY
+gs --push "$S/adapter-probe.py" "$G/adapter-probe.py" || fail "U5 pushing the probe"
+gs "$AS python3 $G/adapter-probe.py '$RD/Contents/MacOS/RichDoctor' $G/draft '$GHOME'" > "$S/adapter-probe.json" 2>&1
+STATED=$(python3 -I -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])["versions_first_line"])' "$S/adapter-probe.json" 2>/dev/null || echo "unreadable")
+if [ "$STATED" = "RichDoctor $RV" ]; then pass "U5 the report's Versions section says '$STATED'"; else fail "U5 the Versions section says '$STATED', RichOS says '$RV' (adapter-probe.json)"; fi
+
+# ---- U6: the footer of a report sent to the loopback stand-in ---------------------------------------
+FOOT=$(python3 -I -c 'import sys; p=sys.argv[1].replace("-",".").replace("+",".").split(".")[:3]; p=p[:2] if len(p)==3 and p[2]=="0" else p; print(".".join(p))' "$RV")
+python3 -I - "$S" "$PORT" <<'PY' || { fail "U6 writing the review fixture"; finish; }
+import json, sys
+out, port = sys.argv[1:3]
+ms = 1793300000000
+d = {"id": "d-6666aaaa6666", "created_at": ms - 60000, "updated_at": ms, "stage": "review", "description": "FIXTURE version report", "without_ai": True,
+     "conversation": [{"kind": "person", "text": "FIXTURE version report"}], "left": "draft, saved to finish later", "screenshots": [],
+     "report": {"report_id": "RD-6666-6666", "title": "FIXTURE version report", "what_happened": "FIXTURE version report", "expected": "It is filed.",
+                "when": "Just now", "steps": [], "versions": "RichDoctor fixture", "excerpts": [], "screenshots": [],
+                "relay": f"http://127.0.0.1:{port}", "causes": "", "missing": [], "provenance": "without-ai", "removals": [], "shortened": []}}
+json.dump(d, open(f"{out}/d-6666aaaa6666.json", "w"), indent=2)
+PY
+DATA="$GHOME/Library/Application Support/com.richos.richdoctor"
+gs --push "$T/report-relay-stand-in.py" "$G/relay-stand-in.py" || fail "U6 pushing the relay stand-in"
+gs "mkdir -p '$DATA/drafts' && mkdir -p $G/old-drafts && mv '$DATA'/drafts/* $G/old-drafts/ 2>/dev/null; mkdir -p '$DATA/drafts/d-6666aaaa6666'" >/dev/null 2>&1
+gs --push "$S/d-6666aaaa6666.json" "$DATA/drafts/d-6666aaaa6666/draft.json" || fail "U6 pushing the fixture draft"
+gs "chown -R admin '$DATA/drafts'" >/dev/null 2>&1 || true
+gs "nohup python3 $G/relay-stand-in.py $PORT $G/relay.json $G/stand-in.log 0 500 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" >/dev/null || fail "U6 starting the stand-in"
+sleep 2
+gs "$AS RICHDOCTOR_REPORT_RELAY=http://127.0.0.1:$PORT RICHDOCTOR_REPORT_REPOSITORY=richos-test/report-relay-local nohup '$RD/Contents/MacOS/RichDoctor' > $G/app.log 2>&1 &" >/dev/null 2>&1
+has() { "$T/ax.sh" "$VM" find --value "$1" --contains --app RichDoctor --first >/dev/null 2>&1 || "$T/ax.sh" "$VM" find --title "$1" --contains --app RichDoctor --first >/dev/null 2>&1; }
+wait_text() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 3; done; return 1; }
+wait_text "Continue your unfinished report?" 20 || fail "U6 no card for the fixture report"
+"$T/ax.sh" "$VM" click --title "Continue" --app RichDoctor --first >/dev/null 2>&1 || fail "U6 pressing Continue"
+wait_text "Send report" 15 || fail "U6 the review screen did not open"
+"$T/ax.sh" "$VM" click --title "Send report" --app RichDoctor --first >/dev/null 2>&1 || fail "U6 pressing Send report"
+for _ in $(seq 1 20); do gs "grep -q '/v1/reports' $G/stand-in.log 2>/dev/null" && break; sleep 3; done
+gs "cat $G/stand-in.log" > "$S/stand-in.log" 2>&1 || true
+LAST=$(python3 -I - "$S/stand-in.log" <<'PY'
+import json, sys
+last = "none"
+for line in open(sys.argv[1]):
+    try: r = json.loads(line)
+    except Exception: continue
+    if r.get("path") == "/v1/reports" and r.get("method") == "POST":
+        last = json.loads(r["body"]).get("body", "").split("\n")[-1]
+print(last)
+PY
+)
+if [ "$LAST" = "Sent with RichDoctor $FOOT · Report ID RD-6666-6666" ]; then pass "U6 the footer says '$LAST'"; else fail "U6 the footer says '$LAST', wanted version $FOOT (stand-in.log)"; fi
+gs "$AS osascript -e 'tell application id \"com.richos.richdoctor\" to quit'" >/dev/null 2>&1 || true
+sleep 3
 finish
