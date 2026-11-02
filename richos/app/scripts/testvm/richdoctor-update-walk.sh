@@ -119,17 +119,23 @@ d = {"id": "d-6666aaaa6666", "created_at": ms - 60000, "updated_at": ms, "stage"
                 "relay": f"http://127.0.0.1:{port}", "causes": "", "missing": [], "provenance": "without-ai", "removals": [], "shortened": []}}
 json.dump(d, open(f"{out}/d-6666aaaa6666.json", "w"), indent=2)
 PY
-DATA="$GHOME/Library/Application Support/com.richos.richdoctor"
+# A short home of its own: RichDoctor's instance socket lives in its data folder and a Unix
+# socket path over about 104 bytes is refused ("path must be shorter than SUN_LEN"), which the
+# walk's long payload path would exceed.
+SHORT=/Users/admin/rdh
+AS="sudo launchctl asuser \$(id -u admin) sudo -u admin env HOME='$SHORT'"
+DATA="$SHORT/Library/Application Support/com.richos.richdoctor"
+gs "mkdir -p '$SHORT/Library/Application Support' && chown -R admin '$SHORT'" >/dev/null 2>&1 || true
 gs --push "$T/report-relay-stand-in.py" "$G/relay-stand-in.py" || fail "U6 pushing the relay stand-in"
-gs "mkdir -p '$DATA/drafts' && mkdir -p $G/old-drafts && mv '$DATA'/drafts/* $G/old-drafts/ 2>/dev/null; mkdir -p '$DATA/drafts/d-6666aaaa6666'" >/dev/null 2>&1
+gs "mkdir -p '$DATA/drafts/d-6666aaaa6666'" >/dev/null 2>&1
 gs --push "$S/d-6666aaaa6666.json" "$DATA/drafts/d-6666aaaa6666/draft.json" || fail "U6 pushing the fixture draft"
-gs "chown -R admin '$DATA/drafts'" >/dev/null 2>&1 || true
+gs "chown -R admin '$SHORT'" >/dev/null 2>&1 || true
 gs "nohup python3 $G/relay-stand-in.py $PORT $G/relay.json $G/stand-in.log 0 500 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" >/dev/null || fail "U6 starting the stand-in"
 sleep 2
 gs "$AS RICHDOCTOR_REPORT_RELAY=http://127.0.0.1:$PORT RICHDOCTOR_REPORT_REPOSITORY=richos-test/report-relay-local nohup '$RD/Contents/MacOS/RichDoctor' > $G/app.log 2>&1 &" >/dev/null 2>&1
 has() { "$T/ax.sh" "$VM" find --value "$1" --contains --app RichDoctor --first >/dev/null 2>&1 || "$T/ax.sh" "$VM" find --title "$1" --contains --app RichDoctor --first >/dev/null 2>&1; }
 wait_text() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 3; done; return 1; }
-wait_text "Continue your unfinished report?" 20 || fail "U6 no card for the fixture report"
+wait_text "Continue your unfinished report?" 20 || { fail "U6 no card for the fixture report (u6-screen.txt)"; gs "tail -5 $G/app.log" > "$S/u6-app-log.txt" 2>&1; "$T/ax.sh" "$VM" tree --app RichDoctor > "$S/u6-screen.txt" 2>&1; }
 "$T/ax.sh" "$VM" click --title "Continue" --app RichDoctor --first >/dev/null 2>&1 || fail "U6 pressing Continue"
 wait_text "Send report" 15 || fail "U6 the review screen did not open"
 "$T/ax.sh" "$VM" click --title "Send report" --app RichDoctor --first >/dev/null 2>&1 || fail "U6 pressing Send report"
