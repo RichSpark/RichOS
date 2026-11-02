@@ -173,6 +173,10 @@ async function main() {
           { timeout: 90000 }
         )
         .catch(() => {});
+      // from his first hire the picture is round 11.4's ghost (his records in front of the example), rebuilt in place
+      await page
+        .waitForFunction("window.MATURE_LORO && window.MATURE_LORO.meta.synthetic === false && !!window.__loro && window.__loro.running && !!window.RichHome.state.ghost", null, { timeout: 90000 })
+        .catch(() => {});
       const seen = await page.evaluate(() => ({
         rows: Array.from(document.querySelectorAll("#home-working li")).map((li) => li.textContent.replace(/\s+/g, " ").trim()),
         cap: document.querySelector("#home-live .cap").textContent.trim(),
@@ -188,11 +192,11 @@ async function main() {
       assertEqual(seen.rows, want, "the home screen does not show who is working as it is now");
       assertEqual(seen.cap, "Working now", "the column is not round 11.1's");
       assertEqual(seen.signals, team.length + " \u00b7 " + team.length + " working now " + (team.length === 1 ? "AI specialist" : "AI specialists"), "the numbers are not his");
-      assertEqual(seen.demo, false, "the demonstration's dataset is still on the page");
-      assertEqual(seen.drawing, false, "the demonstration is still being drawn");
-      assertEqual(seen.stageShown, false, "the demonstration's picture is still on screen");
+      assertEqual(seen.demo, false, "the demonstration's dataset (not the ghost) is still on the page");
+      assertEqual(seen.drawing, true, "the ghost is not being drawn after the hire");
+      assertEqual(seen.stageShown, true, "the ghost's picture is not on screen");
       assertEqual(seen.note, false, "the banner calling the screen a demonstration is up over his own team");
-      assertEqual(seen.field, "none", "a user with a team and no picture of his own must get no picture");
+      assertEqual(seen.field, "live", "a user with a team must get the ghost, round 11.4 v2");
       assertEqual(seen.madeUp, [], "the demonstration's numbers or names are still on his screen");
       return `${seen.rows.join(", ")}; "${seen.signals}"`;
     };
