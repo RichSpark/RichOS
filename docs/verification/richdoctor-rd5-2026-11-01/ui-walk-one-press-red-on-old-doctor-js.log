@@ -1,0 +1,8 @@
+ok   dark image: the queue strip numbers both files
+FAIL dark image: step one asks for covers: not as expected
+ok   dark image: C adds a cover with its keyboard label
+FAIL dark image: the one button says Use this image: not as expected
+FAIL dark image: one press uses the finished image, covers counted, no second check step: not as expected
+[2m  - waiting for locator('#img-problem:not([hidden])') to be visible[22m
+    "  - waiting for locator('#img-problem:not([hidden])') to be visible"
+  name: 'TimeoutError'

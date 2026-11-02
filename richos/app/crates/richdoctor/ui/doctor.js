@@ -167,6 +167,7 @@
       case "ai-failed": aiFailed(e.message, e.retry); $("conv-sub").textContent = "Claude Code is not available right now"; break;
       case "canceled": canceledCard(); break;
       case "ready": readyFooter(); break;
+      case "resumed": document.querySelectorAll("#log .fail").forEach(function (f) { f.remove(); }); break;
       case "answer-open": showAnswer(); break;
       case "busy":
         S.busy = e.on;
@@ -327,11 +328,11 @@
   function toClaude() { return Q.from === "conv" && S.claudeHelping; }
   function showCover(e) {
     $("img-h").textContent = nOf() + ": cover anything private";
-    $("img-p").textContent = "Drag over names, email addresses, file paths, or anything else you do not want the team to see. Covers are solid: the covered areas are replaced with new pixels and the original's metadata is removed. " + (toClaude() ? "You check the finished image next, before Claude sees it." : "You check the finished image next.");
+    $("img-p").textContent = "Drag over names, email addresses, file paths, or anything else you do not want the team to see. Covers are solid: the covered areas are replaced with new pixels and the original's metadata is removed. " + (toClaude() ? "Use this image finishes it and lets Claude look at it. " : "Use this image finishes it and keeps it for the report. ") + "You see the finished image on the review screen before you send, and can remove it there.";
     $("img-cover").hidden = false; $("img-check").hidden = true; $("img-problem").hidden = true;
     const im = $("img-work"); im.src = e.work.toDataURL("image/png"); im.alt = "Screenshot preview: " + e.note;
     stage.querySelectorAll(".cover, .drawing").forEach(function (c) { c.remove(); });
-    $("img-foot").innerHTML = '<button class="btn link" data-act="img-remove">Remove image</button><div class="grow"></div><button class="btn" data-act="img-cancel-all">Cancel</button><button class="btn primary" data-act="img-next">Check the exact image</button>';
+    $("img-foot").innerHTML = '<button class="btn link" data-act="img-remove">Remove image</button><div class="grow"></div><button class="btn" data-act="img-cancel-all">Cancel</button><button class="btn primary" data-act="img-next">Use this image</button>';
     openSheet("sheet-image");
     im.onload = function () {
       const scale = e.work.width / stage.getBoundingClientRect().width;
@@ -344,11 +345,14 @@
     e.covers = Array.from(stage.querySelectorAll(".cover")).map(function (c) { return { x: c.offsetLeft * scale, y: c.offsetTop * scale, w: c.offsetWidth * scale, h: c.offsetHeight * scale }; });
   }
   function nextNumber(e) { return Q.mode !== "add" ? e.n : S.shots.length + Q.items.slice(0, Q.i).filter(function (x) { return x.approved; }).length + 1; }
-  function showCheck(e, inspect) {
+  // `direct`: the cover step's one press. The finished image is used at once; only a file that had
+  // to be reduced to fit the limit is shown first, because its readability is the person's to judge.
+  function showCheck(e, inspect, direct) {
     const go = inspect || !e.work ? Promise.resolve(true) : (function () { if (!$("img-cover").hidden) readCovers(e); return finalize(e); })();
     $("img-foot").querySelectorAll("button").forEach(function (b) { b.disabled = true; });
     go.then(function (ok) {
       if (!ok) { openQueueItem(); return; }
+      if (direct && !e.reduced) { useCurrent(); return; }
       $("img-cover").hidden = true; $("img-check").hidden = false; $("img-problem").hidden = true;
       $("img-h").textContent = inspect ? "Screenshot " + e.n + ", exactly as it will be shared" : nOf() + ": check the exact image";
       $("img-p").innerHTML = inspect
@@ -380,7 +384,13 @@
       if (replacing) { const at = S.shots.findIndex(function (s) { return s.n === e.n; }); if (at >= 0) S.shots[at] = e; else if (S.shots.indexOf(e) < 0) S.shots.push(e); S.changedAfterApproval = true; }
       else S.shots.push(e);
       Q.i++; openQueueItem();
-    }).catch(function (err) { toast(String(err)); });
+    }).catch(function (err) {
+      // The footer was disabled while the image was finished; a refusal (the report's size limit)
+      // leaves the person Remove image and Cancel, and the button to try again.
+      $("img-foot").querySelectorAll("button").forEach(function (b) { b.disabled = false; });
+      $("img-p").textContent = "This image could not be used: " + String(err).replace(/^Error:\s*/, "") + " Remove it, or press Use this image to try again.";
+      toast(String(err));
+    });
   }
   function skipCurrent() { const e = cur(); if (e.problem && S.notAdded.indexOf(e) < 0) S.notAdded.push(e); e.skipped = true; Q.i++; openQueueItem(); }
   function finishQueue() {
@@ -706,7 +716,12 @@
         replay(d.conversation);
         invoke("resume_pending");
         const last = d.conversation[d.conversation.length - 1];
-        if (!d.pending_question && !(last && (last.t === "ai-failed"))) canceledCard();
+        // Claude said it was ready: show that again. Claude was working when the window closed, or
+        // failed in a way that can clear up: the investigation continues by itself, nothing to press.
+        if (d.preparing) { progress("Preparing your report…"); invoke("prepare"); }
+        else if (d.ready) readyFooter();
+        else if (d.resuming) invoke("continue_investigation");
+        else if (!d.pending_question && !(last && (last.t === "ai-failed"))) canceledCard();
         if (d.pending_question) showAnswer();
         return d;
       });
@@ -778,7 +793,7 @@
       case "continue": begin(false); break;
       case "no-ai": begin(true); break;
       case "resume": openSaved(S.boot.resume.id); break;
-      case "new-report": $("resume-card").hidden = true; $("desc").value = ""; $("desc").focus(); break;
+      case "new-report": if (S.boot && S.boot.resume) { invoke("decline_resume", { id: S.boot.resume.id }); S.boot.resume = null; } $("resume-card").hidden = true; $("desc").value = ""; $("desc").focus(); break;
       case "send-answer": sendAnswer($("answer-field").value.trim()); break;
       case "cancel-inv": invoke("cancel"); break;
       case "resume-inv": case "retry-ai": document.querySelectorAll("#log .fail").forEach(function (f) { f.remove(); }); invoke("retry"); break;
@@ -790,7 +805,7 @@
       // screenshots
       case "add-shots": $("img-file").click(); break;
       case "add-cover": keyboardCover(); break;
-      case "img-next": showCheck(cur(), false); break;
+      case "img-next": showCheck(cur(), false, true); break;
       case "img-back": { const e2 = cur(); showCover(e2); break; }
       case "img-use": useCurrent(); break;
       case "img-done": Q.i++; openQueueItem(); break;

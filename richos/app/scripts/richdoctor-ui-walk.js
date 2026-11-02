@@ -84,6 +84,7 @@ function backend(state) {
           return Promise.resolve(head.startsWith("\x89PNG") ? { ok: true, kind: "png", width: 96, height: 48 } : { ok: false, problem: "type" });
         }
         if (cmd === "prepare_image") return Promise.resolve({ url: "data:image/png;base64," + args.imageBase64, b64: args.imageBase64, width: 96, height: 48, bytes: Math.round(args.imageBase64.length * 3 / 4) });
+        if (cmd === "use_image" && window.__refuse) return Promise.reject("This screenshot would take the report over its 25 MB limit.");
         if (cmd === "use_image" || cmd === "replace_image") {
           window.__shots = (window.__shots || 0) + (cmd === "use_image" ? 1 : 0);
           const n = cmd === "use_image" ? window.__shots : args.index + 1;
@@ -174,18 +175,16 @@ async function run() {
       ]);
       await page.waitForSelector("#sheet-image:not([hidden]) #img-cover:not([hidden])");
       check(`${theme} image: the queue strip numbers both files`, (await page.locator("#img-queue button").count()) === 2);
-      check(`${theme} image: step one asks for covers`, (await T("#img-h")) === "Screenshot 1 of 2: cover anything private" && (await T("#img-p")).includes("before Claude sees it"));
+      check(`${theme} image: step one asks for covers`, (await T("#img-h")) === "Screenshot 1 of 2: cover anything private" && (await T("#img-p")).includes("lets Claude look at it") && (await T("#img-p")).includes("remove it there"));
       await page.waitForFunction(() => document.activeElement && document.activeElement.id === "img-stage", null, { timeout: 2000 }).catch(() => {});
       await page.focus("#img-stage");
       await page.keyboard.press("c");
       check(`${theme} image: C adds a cover with its keyboard label`, (await page.locator("#img-stage .cover").count()) === 1);
       await contrast(page, "image-cover", theme);
+      check(`${theme} image: the one button says Use this image`, (await T('[data-act="img-next"]')) === "Use this image");
+      // ONE press (CEO 2026-11-01 §156): the first press finishes the image and uses it; no second step.
       await page.click('[data-act="img-next"]');
-      await page.waitForSelector("#img-check:not([hidden])");
-      check(`${theme} image: step two shows the exact final image and its neutral name`, (await T("#img-final-meta")).startsWith("screenshot-1.png") && (await T("#img-final-meta")).includes("1 area covered") && (await T("#img-final-meta")).includes("metadata removed"));
-      check(`${theme} image: the shown image is the app's final bytes`, (await page.getAttribute("#img-final", "src")).startsWith("data:image/png;base64,"));
-      await contrast(page, "image-check", theme);
-      await page.click('[data-act="img-use"]');
+      check(`${theme} image: one press uses the finished image, covers counted, no second check step`, await page.waitForFunction(() => document.querySelector("#img-problem") && !document.querySelector("#img-problem").hidden, null, { timeout: 5000 }).then(() => true, () => false) && (await page.locator("#img-check:not([hidden])").count()) === 0);
       await page.waitForSelector("#img-problem:not([hidden])");
       check(`${theme} image: a HEIC is explained in place`, (await T("#img-problem-text")).includes("IMG_4471.HEIC is not a PNG or JPEG image.") && (await T("#img-foot")).includes("Leave it out"));
       check(`${theme} image: use_image got the approved bytes and the cover count`, (await calls()).some((c) => c[0] === "use_image" && c[1].covers === 1));
@@ -203,21 +202,29 @@ async function run() {
       ]);
       await page.waitForSelector("#sheet-image:not([hidden]) #img-cover:not([hidden])");
       await page.click('[data-act="img-next"]');
-      await page.waitForSelector("#img-check:not([hidden])");
-      await page.click('[data-act="img-use"]');
       await page.waitForSelector('#img-queue [data-i="1"][aria-current="true"]');
       await page.click('#img-queue [data-act="queue-go"][data-i="0"]');
       await page.waitForSelector("#img-cover:not([hidden])");
       await page.focus("#img-stage");
       await page.keyboard.press("c");
-      await page.click('[data-act="img-next"]');
-      await page.waitForSelector("#img-check:not([hidden])");
       const before = (await calls()).length;
-      await page.click('[data-act="img-use"]');
+      await page.click('[data-act="img-next"]');
       await settle();
       const after = (await calls()).slice(before).map((c) => c[0]);
       check(`${theme} image: approving a revisited queue item again replaces it`, after.includes("replace_image") && !after.includes("use_image"), after.join(","));
       await page.keyboard.press("Escape");
+      await settle();
+      // A refused use (the report's size limit): the sheet says why, and Remove image, Cancel and the
+      // button stay usable (review rv-20261102T002300Z-1c3a5a2e).
+      await page.evaluate(() => { window.__refuse = true; });
+      await page.setInputFiles("#img-file", [{ name: "refused.png", mimeType: "image/png", buffer: PNG }]);
+      await page.waitForSelector("#sheet-image:not([hidden]) #img-cover:not([hidden])");
+      await page.click('[data-act="img-next"]');
+      await page.waitForFunction(() => document.querySelector("#img-p").textContent.includes("25 MB limit"), null, { timeout: 5000 }).catch(() => {});
+      check(`${theme} image: a refused use says why on the sheet`, (await T("#img-p")).includes("25 MB limit"));
+      check(`${theme} image: a refused use leaves Remove image, Cancel and the button enabled`, (await page.locator("#img-foot button:disabled").count()) === 0);
+      await page.evaluate(() => { window.__refuse = false; });
+      await page.click('[data-act="img-cancel-all"]');
       await settle();
       // Codex audit of 0881b5f8f: the 10-screenshot limit applies BEFORE any file is read, so a
       // selection of many large screenshots never holds more decoded images than the report takes.

@@ -163,6 +163,26 @@ pub struct Draft {
     /// How it was left: "draft, interrupted during the investigation".
     #[serde(default)]
     pub left: String,
+    /// The person pressed "Start a new report" on this draft's first-screen offer: it is not
+    /// offered again (it stays in Saved reports).
+    #[serde(default)]
+    pub resume_declined: bool,
+    /// A Claude operation was running when the window closed or RichDoctor quit or crashed: the
+    /// reopened report continues the investigation by itself.
+    #[serde(default)]
+    pub in_flight: bool,
+    /// Claude said it is ready for the report (or the questions are all answered); a reopened
+    /// report shows that again.
+    #[serde(default)]
+    pub ready: bool,
+    /// The last message sent to Claude (already cleaned of private details), so a reopened report
+    /// continues from it and Prepare report now still uses Claude.
+    #[serde(default)]
+    pub last_message: Option<String>,
+    /// Prepare report now was asked and no report is built yet: a reopened report prepares it
+    /// again, with Claude.
+    #[serde(default)]
+    pub preparing: bool,
 }
 
 impl Draft {
@@ -184,6 +204,11 @@ impl Draft {
             report: None,
             delivery: None,
             left: String::new(),
+            resume_declined: false,
+            in_flight: false,
+            ready: false,
+            last_message: None,
+            preparing: false,
         })
     }
 

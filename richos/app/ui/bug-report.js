@@ -21,7 +21,9 @@
 // What is SENT is decided by the shell alone, at Send (`bug_report_send`, `richos_core::
 // bug_report::at_send`), in the CEO's order (§115): the scanner first, Rich last, and nothing
 // after him changes the words. The card's words go as they are when they are the words Rich last
-// gave of this report (`f.report`). Words that changed (by hand, or a change told to Rich) go
+// gave of this report (`f.report`). A change told to Rich is his last word already (CEO §156:
+// the scanner goes over the card with his sentence in it and he has the last pass, in
+// `bug_report_change`), so Send sends it with no second check. Words changed by hand go
 // through the scanner and then Rich first ("Rich is checking your changes…"); when his version
 // differs from the card, the card comes back with his version, to send or not; when Claude can't
 // answer they wait on this Mac, unsent, like any report he couldn't check. This file never decides
@@ -96,11 +98,14 @@ window.RichBug = (function () {
       notChanged: "I couldn't change the report just now. Press Change it and change the words yourself or tell me again.",
       notCanceled: "I couldn't cancel the report: it's still saved on this Mac and will go out by itself. Press Cancel report to try again.",
       notTakenBack: "I couldn't take the report back to change it: it's still saved on this Mac and will go out by itself. Press Change it to try again.",
+      notChangedQueued: "I couldn't change the report just now, so it's still saved on this Mac as you sent it and will go out by itself. Press Change it and change the words yourself or tell me again.",
+      editNotKept: "I couldn't save your changes on this Mac, so the report still waits to go out as you sent it. Press Done to try again.",
       readers: "GitHub issues", thing: "report", notInIt: "it isn't in the report.",
       pill: { draft: "Not sent yet", changed: "Not sent yet · changed", sending: "Sending…", queued: "Waiting to send · saved on this Mac", canceled: "Canceled · nothing sent" },
       notSaved: "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.",
       canceled: "Canceled. Nothing was sent.",
       savedToast: "Your bug report is saved on this Mac and goes out by itself when it can.",
+      draftToast: "Your bug report is saved on this Mac, not sent and Bust a bug brings it back.",
       uncheckedToast: "Your bug report is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
     idea: {
@@ -121,11 +126,14 @@ window.RichBug = (function () {
       notChanged: "I couldn't change the post just now. Press Change it and change the words yourself or tell me again.",
       notCanceled: "I couldn't cancel the post: it's still saved on this Mac and will be posted by itself. Press Cancel post to try again.",
       notTakenBack: "I couldn't take the post back to change it: it's still saved on this Mac and will be posted by itself. Press Change it to try again.",
+      notChangedQueued: "I couldn't change the post just now, so it's still saved on this Mac as you sent it and will be posted by itself. Press Change it and change the words yourself or tell me again.",
+      editNotKept: "I couldn't save your changes on this Mac, so your idea still waits to be posted as you sent it. Press Done to try again.",
       readers: "GitHub Discussions", thing: "post", notInIt: "it isn't in the post.",
       pill: { draft: "Not posted yet", changed: "Not posted yet · changed", sending: "Posting…", queued: "Waiting to post · saved on this Mac", canceled: "Canceled · nothing posted" },
       notSaved: "I couldn't save your idea on this Mac, so nothing was posted. Press Post idea to try again.",
       canceled: "Canceled. Nothing was posted.",
       savedToast: "Your idea is saved on this Mac and is posted by itself when it can.",
+      draftToast: "Your idea is saved on this Mac, not posted and Request a feature brings it back.",
       uncheckedToast: "Your idea is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
   };
@@ -568,10 +576,13 @@ window.RichBug = (function () {
       return;
     }
     if (f.step === "editing") finishEdit(f);
+    // Words he changed by hand are being saved in place of the waiting copy: this change follows.
+    if (f.step === "withdrawing") { (f.nextChanges = f.nextChanges || []).push(text); return; }
     if (f.step === "queued" && f.pendingId) {
       // A changed report is approved again, so the copy waiting on this Mac must not go out
-      // first: it is taken off, CONFIRMED, before Rich changes a word.
-      return withdraw(f, "change", function () { askChange(f, text, true); });
+      // first: it is held, CONFIRMED, before Rich changes a word, and taken off only once his
+      // changed card is saved (CEO §156); if he can't change it, it waits as it was.
+      return holdBack(f, function () { askChange(f, text, true); });
     }
     askChange(f, text, false);
   }
@@ -672,6 +683,9 @@ window.RichBug = (function () {
     if (!c || !c.id) return;
     var kind = c.post === "idea" ? "idea" : "bug";
     if (taken[c.id]) return takeOff(c.id, kind);
+    // The card is already on screen, or was and is done with: the shell says a kept card on every
+    // pass, so this is a repeat.
+    if (flows.some(function (x) { return x.report === c.id; })) return;
     var f = flows.filter(function (x) { return x.uncheckedId === c.id; })[0];
     var earlier = !f;
     if (earlier) {
@@ -683,13 +697,16 @@ window.RichBug = (function () {
       $("bugdock-where").textContent = "· " + label;
     }
     if (f.step !== "unchecked") return;
-    taken[c.id] = true;
-    takeOff(c.id, postOf(f));
+    // Shown, and NOT taken off this Mac: the card stays kept until it is sent, canceled or dropped
+    // (CEO §156), so a quit, a relaunch or a crash does not lose it. The shell says it again on
+    // every pass; a flow already showing it (`f.report`) ignores that.
     f.uncheckedId = null;
     if (f.uncheckedActs) { f.uncheckedActs.remove(); f.uncheckedActs = null; }
     showDock(f);
     var lead = earlier ? W(f).earlier : f.card ? "I've checked your changes now. " : "I've checked it now. ";
     showDraft(f, c, lead + W(f).hereItIs, null);
+    // Words he changed by hand before the quit come back as changed words: Send checks them.
+    if (c.handEdited) { f.edited = true; f.handEdited = true; paintCard(f); }
   }
 
   /// Rich folds one change in. While he does, the report is "changing": Send, Change it and
@@ -704,30 +721,53 @@ window.RichBug = (function () {
       var more = f.nextChanges && f.nextChanges.shift();
       if (more && f.step === "draft") askChange(f, more, false);
     }
-    bridge.invoke("bug_report_change", { said: text, sheet: sheetOf(f), private: f.private || [], post: postOf(f) }).then(function (answer) {
+    var before = sheetOf(f);
+    bridge.invoke("bug_report_change", { said: text, sheet: before, private: f.private || [], post: postOf(f), report: f.report || null, screen: publicScreen(f.screen) }).then(function (answer) {
       w2.remove();
       if (f.step !== "changing") return;
-      if (answer.private) f.private = answer.private;
+      // **THE CARD HIS CHANGE MADE IS HIS LAST WORD** (CEO §156): the scanner went over the card
+      // with his sentence in it and he had the last pass, so this card replaces the one shown and
+      // Send sends it as it is. Whatever he added is marked, in the section he put it in.
+      f.report = answer.report || f.report;
+      f.draft = answer.draft;
+      f.private = (answer.draft && answer.draft.private) || f.private || [];
+      var old = f.card;
+      f.card = buildCard(f);
+      old.parentNode.replaceChild(f.card, old);
+      window.setTimeout(function () { if (f.card) f.card.classList.remove("is-new"); }, 2600);
       var secs = f.card.querySelectorAll(".bug-sec");
       var sec = null;
       for (var i = 0; i < secs.length; i++) if (secs[i].querySelector("h4").textContent === answer.section) sec = secs[i];
       if (!sec) sec = secs[0];
-      var p = node("p", "is-added");
-      appendSegments(p, answer.add);
-      var ol = sec.querySelector("ol, ul");
-      sec.insertBefore(p, ol);
+      var had = ((before.sections.filter(function (s) { return s.heading === answer.section; })[0] || {}).paragraphs || []).slice();
+      fieldsIn(sec).paragraphs.forEach(function (p) {
+        var at = had.indexOf(wordsOf(p));
+        if (at !== -1) had.splice(at, 1);
+        else p.classList.add("is-added");
+      });
       f.edited = true;
-      // The card changed: at Send it goes through the scanner and then Rich, last (CEO §115).
-      f.handEdited = true;
-      f.step = "draft";
-      paintCard(f);
-      paintComposers();
-      richSays(f, ["Added that to " + sec.querySelector("h4").textContent + ", above." + (wasQueued ? W(f).changedQueued : W(f).changedDraft)]);
-      flash(f);
-      next();
+      f.handEdited = false;
+      function changed() {
+        f.step = "draft";
+        paintCard(f);
+        paintComposers();
+        richSays(f, ["Added that to " + sec.querySelector("h4").textContent + ", above." + (wasQueued ? W(f).changedQueued : W(f).changedDraft)]);
+        flash(f);
+        next();
+      }
+      // His changed card is saved on this Mac (`bug_report_change`): only now does the waiting
+      // copy it replaces go (CEO §156).
+      if (f.held) return letGo(f, changed);
+      changed();
     }).catch(function () {
       w2.remove();
       if (f.step !== "changing") return;
+      // Nothing changed: a waiting report goes back to waiting, exactly as it was.
+      if (f.held) {
+        putBack(f);
+        richSays(f, [W(f).notChangedQueued]);
+        return;
+      }
       f.step = "draft";
       paintCard(f);
       paintComposers();
@@ -760,6 +800,50 @@ window.RichBug = (function () {
       paintComposers();
       richSays(f, [purpose === "cancel" ? W(f).notCanceled : W(f).notTakenBack]);
     });
+  }
+
+  /// **CHANGE IT ON A WAITING REPORT KEEPS ITS COPY** (CEO §156; review
+  /// rv-20261102T003409Z-35b12ee9-35e9: the copy was taken off at Change it, so Done with nothing
+  /// changed left no report on this Mac). The shell holds the copy, unsent, while it is changed,
+  /// and answers only after any send in flight: "held" (then `then`), the issue when it had
+  /// already gone out, "canceled" when no copy is left, an error when it could not be read.
+  function holdBack(f, then) {
+    var id = f.pendingId;
+    f.step = "withdrawing";
+    f.withdrawFor = "change";
+    paintCard(f);
+    paintComposers();
+    // A put-back just before is answered first, so it can never release this hold.
+    (f.releasing || Promise.resolve()).then(function () {
+      return bridge.invoke("bug_report_hold", { id: id, hold: true, post: postOf(f) });
+    }).then(function (r) {
+      if (f.step !== "withdrawing") return;
+      if (r && r.state === "sent") return wentOutFirst(f, r);
+      if (r && r.state === "held") f.held = true;
+      else f.pendingId = null;
+      then();
+    }).catch(function () {
+      if (f.step !== "withdrawing") return;
+      f.step = "queued";
+      paintCard(f);
+      paintComposers();
+      richSays(f, [W(f).notTakenBack]);
+    });
+  }
+
+  /// Nothing changed: the card is back as it was, waiting to go out by itself.
+  function putBack(f) {
+    f.held = false;
+    f.step = "queued";
+    paintCard(f);
+    paintComposers();
+    f.releasing = bridge.invoke("bug_report_hold", { id: f.pendingId, hold: false, post: postOf(f) }).catch(function () {});
+  }
+
+  /// The words that replace a held copy are saved: now the copy goes, confirmed (`withdraw`).
+  function letGo(f, then) {
+    f.held = false;
+    withdraw(f, "change", then);
   }
 
   /// A waiting report went out before it could be taken back: the card says Sent, and Rich says
@@ -1224,9 +1308,10 @@ window.RichBug = (function () {
 
   function edit(f) {
     if (f.step !== "draft" && f.step !== "queued") return;
-    // Changing a waiting report takes it out of the queue, confirmed, first: a changed report is
-    // approved again, and one that went out meanwhile is not opened as if it had not.
-    if (f.step === "queued" && f.pendingId) return withdraw(f, "change", function () { openEditor(f); });
+    // Changing a waiting report holds its copy, confirmed, first: a changed report is approved
+    // again, and one that went out meanwhile is not opened as if it had not. The copy stays on
+    // this Mac until changed words replace it (`finishEdit`).
+    if (f.step === "queued" && f.pendingId) return holdBack(f, function () { openEditor(f); });
     openEditor(f);
   }
   function openEditor(f) {
@@ -1246,13 +1331,54 @@ window.RichBug = (function () {
   }
   function finishEdit(f) {
     if (f.step !== "editing") return;
+    var changedNow = JSON.stringify(sheetOf(f)) !== f.beforeEdit;
+    // A waiting report: unchanged, it is put back exactly as it was; changed, its words replace
+    // the waiting copy, saved first (CEO §156).
+    if (f.held) return changedNow ? replaceHeld(f) : putBack(f);
     f.edited = true;
     // Only says what Send will be doing first ("Rich is checking your changes…"): whether the
     // words may go is the shell's to decide, against Rich's own check, never this flag's.
-    if (JSON.stringify(sheetOf(f)) !== f.beforeEdit) f.handEdited = true;
+    if (changedNow) f.handEdited = true;
     f.step = "draft";
     paintCard(f);
+    // **SAVED BEFORE THE PANEL MAY CLOSE** (CEO §156): the words he changed are kept on this Mac
+    // now, and the close button waits for that (`paintDock`), so closing and relaunching never
+    // brings back the card without his edit. Not sent: at Send they still get the scanner and then Rich.
+    if (changedNow && f.report) {
+      f.keeping = true;
+      bridge.invoke("bug_report_keep_edit", { report: f.report, sheet: sheetOf(f), private: f.private || [], screen: publicScreen(f.screen), post: postOf(f) })
+        .catch(function () { richSays(f, ["I couldn't save your changes on this Mac, so they may be gone after a quit."]); })
+        .then(function () { f.keeping = false; paintDock(); });
+    }
     paintComposers();
+  }
+
+  /// **A WAITING REPORT CHANGED BY HAND** (CEO §156): the changed words are saved on this Mac
+  /// first, and only then is the waiting copy taken off, so no moment leaves neither. Not saved:
+  /// the copy still waits as it was sent, the words stay open, and Done tries again.
+  function replaceHeld(f) {
+    f.step = "withdrawing";
+    f.withdrawFor = "change";
+    paintCard(f);
+    paintComposers();
+    bridge.invoke("bug_report_keep_edit", { report: f.report, sheet: sheetOf(f), private: f.private || [], screen: publicScreen(f.screen), post: postOf(f) }).then(function () {
+      if (f.step !== "withdrawing") return;
+      f.edited = true;
+      f.handEdited = true;
+      letGo(f, function () {
+        f.step = "draft";
+        paintCard(f);
+        paintComposers();
+        var more = f.nextChanges && f.nextChanges.shift();
+        if (more) askChange(f, more, false);
+      });
+    }).catch(function () {
+      if (f.step !== "withdrawing") return;
+      f.step = "editing";
+      paintCard(f);
+      paintComposers();
+      richSays(f, [W(f).editNotKept]);
+    });
   }
 
   // ---- send, and what happens when it can't go ----------------------------------------------
@@ -1412,6 +1538,8 @@ window.RichBug = (function () {
   function cancel(f) {
     if (f.step !== "draft" && f.step !== "queued") return;
     withdraw(f, "cancel", function () {
+      // Canceled: its kept copy goes too, so a relaunch does not bring it back (CEO §156).
+      if (f.report) { taken[f.report] = true; takeOff(f.report, postOf(f)); }
       f.step = "canceled";
       paintCard(f);
       paintComposers();
@@ -1484,9 +1612,12 @@ window.RichBug = (function () {
   }
   function paintDock() {
     var f = dockFlow();
-    var busy = f && ["checking", "draft", "editing", "changing", "sending", "withdrawing"].indexOf(f.step) !== -1;
+    // A written-up card waiting for Send is kept on this Mac (CEO §156), so the panel may close
+    // over it and the press that opens it again comes back to it (`start`). Only a step that is
+    // mid-air (Rich working, a words being changed, a send in flight) holds the panel open.
+    var busy = f && (f.keeping || ["checking", "editing", "changing", "sending", "withdrawing"].indexOf(f.step) !== -1);
     var x = $("bugdock-x");
-    if (x) x.hidden = !!busy; // while a report waits on a decision, Send or Cancel is the way out
+    if (x) x.hidden = !!busy;
   }
 
   // ---- paint the sticky actions' edge only while they float over the report -----------------
@@ -1618,6 +1749,7 @@ window.RichBug = (function () {
       var f = dockFlow();
       if (f && f.step === "ask") neverMind(f, true);
       if (f && f.step === "queued" && host) host.toast(W(f).savedToast);
+      if (f && f.step === "draft" && host) host.toast(W(f).draftToast);
       if (f && f.step === "unchecked" && host) host.toast(W(f).uncheckedToast);
       hideDock();
     });

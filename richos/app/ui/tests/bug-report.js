@@ -370,11 +370,72 @@ async function main() {
     assert(line.startsWith("GitHub isn't answering right now, so the report didn't go out."), line);
     await page.click("#bug-change");
     await page.waitForSelector(".bugcard.is-editing");
-    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 0, "the old copy still waits to go out");
+    // While it is changed its copy stays on this Mac, and the retry leaves it alone (CEO §156).
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setNet("online"));
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 600)));
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "the copy was taken off while it was being changed");
+    assertEqual((await filed(page)).length, 0, "the old words went out while they were being changed");
+    await page.keyboard.type(" twice");
     await page.click("#bug-done");
     await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
+    // The changed words are saved before the old copy goes: never a moment with neither.
+    const order = await page.evaluate(() => window.__RICHOS_MOCK_BUG__.calls.map((c) => c.cmd).filter((c) => c === "bug_report_keep_edit" || c === "bug_report_cancel"));
+    assertEqual(order, ["bug_report_keep_edit", "bug_report_cancel"], "the waiting copy went before its replacement was saved");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 0, "the old copy still waits to go out");
+    const edit = await page.evaluate(() => (window.__RICHOS_MOCK_BUG__.unchecked()[0] || {}).edited);
+    assert(JSON.stringify(edit || {}).includes("twice"), "the changed words are not saved on this Mac: " + JSON.stringify(edit));
     await page.close();
     return line.split(".")[0];
+  });
+
+  await run.check("Change it on a waiting report, then Done with nothing changed: it is back as it was, never off this Mac, and goes out by itself once", async () => {
+    // Review rv-20261102T003409Z-35b12ee9-35e9 (CEO §156), red on 35b12ee99: Change it took the
+    // waiting copy off this Mac and Done with nothing changed saved nothing, so closing the panel
+    // and relaunching lost the whole report.
+    const page = await open("dark", { bugNet: "offline" });
+    await bustABug(page);
+    await answer(page, ANSWER);
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-queued");
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "Change it took the waiting copy off this Mac");
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard.is-queued .bug-pill:has-text('Waiting to send · saved on this Mac')");
+    for (const id of ["#bug-try-now", "#bug-change", "#bug-cancel"]) assert(await page.isVisible(id), id + " is not offered again");
+    assertEqual((await calls(page, "bug_report_cancel")).length, 0, "the waiting copy was taken off");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "nothing waits on this Mac after Done");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.unchecked())).length, 0, "a second copy of it was kept");
+    // The panel may close over it: what is on this Mac is the report, waiting to go out.
+    await page.waitForSelector("#bugdock-x:visible");
+    // Back online: it goes out by itself, once.
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setNet("online"));
+    await page.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Sent · #412')");
+    assertEqual((await filed(page)).length, 1, "it did not go out exactly once");
+    assertEqual((await calls(page, "bug_report_send")).length, 1, "the user had to send it again");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 0, "still waiting after it went out");
+    await page.close();
+    return "put back waiting; went out by itself once";
+  });
+
+  await run.check("a change told to Rich on a waiting report he can't make leaves it waiting as it was", async () => {
+    // The same loss by voice: the copy was taken off before Rich changed a word, so a change he
+    // could not make (offline, Claude not answering) left nothing on this Mac.
+    const page = await open("dark", { bugNet: "offline" });
+    await bustABug(page);
+    await answer(page, ANSWER);
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-queued");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setClaude("down"));
+    await page.fill("#bugdock-input", "Also say it happens in the light theme too");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"I couldn't change the report just now, so it's still saved on this Mac as you sent it\")");
+    await page.waitForSelector(".bugcard.is-queued .bug-pill:has-text('Waiting to send · saved on this Mac')");
+    assertEqual((await calls(page, "bug_report_cancel")).length, 0, "the waiting copy was taken off");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "nothing waits on this Mac");
+    const said = await lastSaid(page);
+    await page.close();
+    return said.split(",")[0];
   });
 
   await run.check("Change it: in place with a privacy heads-up, by telling Rich, and Cancel", async () => {
@@ -402,7 +463,10 @@ async function main() {
     await shot(page, "changed-dark");
     await page.click("#bug-cancel");
     await page.waitForSelector(".bugcard.is-canceled .bug-pill:has-text('Canceled · nothing sent')");
-    assert((await page.locator(".bug-ctitle").innerText()).includes("for Acme deal"), "the folded card does not show its title");
+    // Rich's change went over the whole card with the scanner first (§156), so the private name the
+    // user typed into the title is a stand-in on the card his change made, and in its folded title.
+    const folded = await page.locator(".bug-ctitle").innerText();
+    assert(folded.includes("for [a conversation]") && !folded.includes("Acme deal"), "the folded card does not show its title as Rich's change left it: " + folded);
     await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('Canceled. Nothing was sent.')");
     assertEqual((await calls(page, "bug_report_send")).length, 0, "a canceled report was sent");
     await shot(page, "canceled-dark");
@@ -699,7 +763,7 @@ async function main() {
     const checkedLine = await lastSaid(page);
     assert(checkedLine.startsWith("I've checked it now. Here's the report as I'd file it. Nothing goes out until you press Send."), checkedLine);
     assert(await page.isHidden("#bug-unchecked-cancel"), "Cancel for the kept report is still offered beside the card");
-    await page.waitForFunction(() => window.__RICHOS_MOCK_BUG__.unchecked().length === 0);
+    assertEqual(await kept(page), 1, "the checked card is not kept on this Mac until it is sent or canceled (CEO §156)");
     assertEqual((await calls(page, "bug_report_send")).length, 0, "it was sent before the user pressed Send");
     // A change while Claude can't check it adds nothing.
     await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setClaude("down"));
@@ -735,11 +799,114 @@ async function main() {
     assertEqual(await later.locator("#bugdock-where").innerText(), "· the Acme deal conversation", "panel header");
     const line = await lastSaid(later, "#bugdock");
     assert(line.startsWith("I've checked the bug report you told me about earlier."), line);
-    await later.waitForFunction(() => window.__RICHOS_MOCK_BUG__.unchecked().length === 0);
+    assertEqual(await kept(later), 1, "the card is not kept on this Mac until it is sent or canceled (CEO §156)");
     await later.click("#bugdock #bug-send");
     await later.waitForSelector("#bugdock .bugcard.is-sent");
     await later.close();
     return line.split(".")[0];
+  });
+
+  // ---- §156 (CEO 2026-11-01): nothing in the bug-report path drops what the user already did ----
+  await run.check("a written-up card is kept on this Mac: the panel closes over it and comes back, and a card kept before a quit is Send-ready", async () => {
+    const page = await open("dark");
+    await bustABug(page);
+    await answer(page, ANSWER);
+    assertEqual(await kept(page), 1, "the written-up card exists only in this window");
+    // The panel closes over the card, with a notice, and the same press comes back to it.
+    await page.click("#bugdock-x");
+    await page.waitForSelector("#bugdock", { state: "hidden" });
+    await page.waitForSelector("#bug-toast:has-text('saved on this Mac, not sent')");
+    await bustABug(page);
+    await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await page.locator(".bugcard").count(), 1, "coming back made a second card");
+    // The shell says a kept card on every pass: a repeat is not a second card.
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.claudeAnswers());
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 50)));
+    assertEqual(await page.locator(".bugcard").count(), 1, "the kept card was shown a second time");
+    // Cancel takes it off this Mac, so a relaunch does not bring it back.
+    await page.click("#bug-cancel");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text('Canceled. Nothing was sent.')");
+    await page.waitForFunction(() => window.__RICHOS_MOCK_BUG__.unchecked().length === 0);
+    await page.close();
+
+    // A card kept before a quit: the shell says it after the launch, the panel opens on it, and
+    // Send sends it, once, with no check of Rich's first; then it is no longer kept.
+    const later = await open("dark");
+    await later.evaluate(() => window.__RICHOS_MOCK_BUG__.keptCardBefore("The names on the left get cut off.", { here: "the Acme deal conversation" }));
+    await later.evaluate(() => window.__RICHOS_MOCK_BUG__.claudeAnswers());
+    await later.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
+    assertEqual(await kept(later), 1, "the card is not kept until it is sent");
+    await later.click("#bugdock #bug-send");
+    await later.waitForSelector("#bugdock .bugcard.is-sent");
+    assertEqual((await filed(later)).length, 1, "the kept card did not go out as it was");
+    assertEqual(await kept(later), 0, "a sent card is still kept");
+    await later.close();
+    return "closed and reopened, canceled off this Mac, restored and sent";
+  });
+
+  await run.check("words the user changed by hand are saved on this Mac before the panel may close, and come back after a relaunch as changed words", async () => {
+    const page = await open("dark");
+    await bustABug(page);
+    await answer(page, ANSWER);
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    await page.keyboard.type(" It happens twice.");
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
+    // Saved on this Mac (beside the card), as the close button becomes available.
+    await page.waitForSelector("#bugdock-x:visible");
+    const savedSheet = await page.evaluate(() => (window.__RICHOS_MOCK_BUG__.unchecked()[0].edited || {}).sheet);
+    assert(JSON.stringify(savedSheet || {}).includes("It happens twice."), "the hand change was not kept on this Mac: " + JSON.stringify(savedSheet));
+    assertEqual((await calls(page, "bug_report_send")).length, 0, "saving the change sent something");
+    await page.close();
+
+    // After a quit: the kept card with his changes beside it comes back as his words, changed,
+    // and Send still gives them the check (the card is not marked as Rich's last word).
+    const later = await open("dark");
+    const id = await later.evaluate(() => window.__RICHOS_MOCK_BUG__.keptCardBefore("The names on the left get cut off.", { here: "the Acme deal conversation" }));
+    await later.evaluate(([id, sheet]) => window.RichBridge.invoke("bug_report_keep_edit", { report: id, sheet, private: [], screen: {}, post: "bug" }), [id, savedSheet]);
+    await later.evaluate(() => window.__RICHOS_MOCK_BUG__.claudeAnswers());
+    await later.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet · changed')");
+    assert((await later.locator("#bugdock .bug-doc").innerText()).includes("It happens twice."), "the hand change did not come back");
+    await later.close();
+    return "saved before close; restored as changed words";
+  });
+
+  await run.check("a change Rich made is his last word: Send sends it with one press, and a change by hand is still checked at Send", async () => {
+    const page = await open("dark", { bugRichPrivate: [{ text: "Jane Doe", kind: "person_name" }] });
+    await bustABug(page);
+    await answer(page, "The names on the left get cut off.");
+    await page.fill("#bugdock-input", "Also say Jane Doe saw it first");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".bug-sec p.is-added");
+    const asked = (await calls(page, "bug_report_change"))[0];
+    assert(asked.report, "the change was not told which report it belongs to: " + JSON.stringify(asked));
+    const added = await page.locator(".bug-sec p.is-added").innerText();
+    assert(added.includes("[a person]") && !added.includes("Jane Doe"), "the change put the name back: " + added);
+    // Send: one press, one send, Rich not asked again, the card not shown a second time.
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-sent");
+    assertEqual((await calls(page, "bug_report_send")).length, 1, "Send was needed more than once");
+    assertEqual(await page.locator("#bugdock-msgs .bug-working").count(), 0, "Rich was asked again at Send");
+    const sentText = JSON.stringify(await filed(page));
+    assert(sentText.includes("[a person]") && !sentText.includes("Jane Doe"), "what went out is not his card: " + sentText);
+    assert(!(await page.locator("#bugdock-msgs").innerText()).includes("some of its words would go out differently"), "the card came back to be sent again");
+    await page.close();
+
+    // A change by hand still goes through the scanner and then Rich at Send.
+    const hand = await open("dark");
+    await bustABug(hand);
+    await answer(hand, "The names on the left get cut off.");
+    await hand.click("#bug-change");
+    await hand.waitForSelector(".bugcard.is-editing");
+    await hand.keyboard.type(" It happens twice.");
+    await hand.click("#bug-done");
+    await hand.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
+    await hand.click("#bug-send");
+    await hand.waitForSelector(".bugcard.is-sent, #bugdock-msgs .bug-working");
+    await hand.waitForSelector(".bugcard.is-sent");
+    await hand.close();
+    return "change then one Send; hand edit still checked";
   });
 
   await run.check("what Rich checked, under Worked for, is at least 16px in both themes", async () => {
@@ -873,7 +1040,7 @@ async function main() {
     await page.fill("#bugdock-input", "When I press Not now on a suggestion it fades but stays there.");
     await page.keyboard.press("Enter");
     await page.waitForSelector("#bugdock .bugcard .bug-pill:has-text('Not sent yet')");
-    assert(await page.isHidden("#bugdock-x"), "the panel can be closed while the report waits on a decision");
+    assert(await page.isVisible("#bugdock-x"), "a written-up card is kept on this Mac, so the panel closes over it (CEO §156)");
     await shot(page, "dock-report-dark");
     await page.click("#bugdock #bug-send");
     await page.waitForSelector("#bugdock .bugcard.is-sent");
@@ -1965,7 +2132,7 @@ async function main() {
     assertEqual(await down.locator(".bugcard").count(), 1, "the checked card is a second card");
     const checked = await down.locator(".bugcard .bug-doc").innerText();
     assert(!checked.includes("Jane Doe") && !checked.includes("SecretCo"), checked);
-    await down.waitForFunction(() => window.__RICHOS_MOCK_BUG__.unchecked().length === 0);
+    assertEqual(await down.evaluate(() => window.__RICHOS_MOCK_BUG__.unchecked().length), 1, "the checked card is not kept on this Mac until it is sent or canceled");
     assertEqual((await filed(down)).length, 0, "it went out before the user pressed Send");
     await down.click("#bug-send");
     await down.waitForSelector(".bugcard.is-sent");

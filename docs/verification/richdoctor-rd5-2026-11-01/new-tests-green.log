@@ -1,0 +1,7 @@
+test engine::tests::a_reopened_claude_investigation_keeps_its_question_for_claude_even_in_the_built_in_words ... ok
+test engine::tests::an_investigation_keeps_retrying_a_failure_that_keeps_failing_and_shows_no_card_while_open ... ok
+test engine::tests::a_failure_that_can_clear_up_is_retried_by_itself_without_a_card ... ok
+test engine::tests::preparing_the_report_retries_a_failure_that_can_clear_up_before_building_without_claude ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.61s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
