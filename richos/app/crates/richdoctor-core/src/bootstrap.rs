@@ -112,7 +112,12 @@ pub fn older(a: &str, b: &str) -> bool {
     }
     match (pa, pb) {
         (Some(_), None) => true,
-        (Some(x), Some(y)) => x < y,
+        // Dot-separated pre-release identifiers, numeric ones by value: "nightly.20261102.9" is
+        // older than "nightly.20261102.86" (a plain string compare says the opposite).
+        (Some(x), Some(y)) => {
+            let key = |s: &str| s.split('.').map(|i| i.parse::<u64>().map(|n| (0, n, String::new())).unwrap_or((1, 0, i.to_string()))).collect::<Vec<_>>();
+            key(x) < key(y)
+        }
         _ => false,
     }
 }
@@ -494,6 +499,38 @@ mod tests {
         assert!(older("1.0.0-dev.abc", "1.0.0"));
         assert!(!older("1.0.0", "1.0.0"));
         assert!(!older("1.10.0", "1.9.9"));
+    }
+
+    /// RichDoctor carries RichOS's version (package-app.sh stamps it): the installed 1.0.0 is older
+    /// than any RichOS version, nightly or stable, and nightly builds of one day order by number.
+    #[test]
+    fn the_first_1_0_0_is_older_than_every_richos_version_and_nightlies_order_numerically() {
+        for v in ["1.2.6", "1.2.6-nightly.20261102.86", "1.0.1-nightly.20260101.1"] {
+            assert!(older("1.0.0", v), "{v}");
+            assert!(!older(v, "1.0.0"), "{v}");
+        }
+        assert!(older("1.2.6-nightly.20261102.9", "1.2.6-nightly.20261102.86"));
+        assert!(!older("1.2.6-nightly.20261102.86", "1.2.6-nightly.20261102.9"));
+        assert!(older("1.2.6-nightly.20261102.86", "1.2.6"));
+    }
+
+    /// The proof of the CEO's sentence: a payload stamped with the RichOS version replaces an
+    /// installed 1.0.0 copy; the same version again leaves it alone.
+    #[test]
+    fn a_payload_stamped_with_the_richos_version_replaces_an_installed_1_0_0_and_then_leaves_it() {
+        let root = temp("stamped");
+        let p = places(&root);
+        let installed = bundle(&p.user_apps, crate::IDENTIFIER, "1.0.0");
+        let build = temp("stamped-build");
+        let payload = root.join(PAYLOAD);
+        let v = "1.2.6-nightly.20261102.86";
+        archive(&bundle(&build, crate::IDENTIFIER, v), &payload);
+        assert_eq!(refresh_with(&payload, v, &None, &p, &|_| {}), Outcome::Refreshed(installed.clone()));
+        assert_eq!(identity(&installed).unwrap().1, v);
+        assert_eq!(refresh_with(&payload, v, &None, &p, &|_| {}), Outcome::Current(installed.clone()));
+        for d in [root, build] {
+            fs::remove_dir_all(d).ok();
+        }
     }
 
     /// RichOS opens RichDoctor in the background and asks it, in its own arguments, for no window.

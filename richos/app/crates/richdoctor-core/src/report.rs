@@ -19,7 +19,12 @@ use serde::{Deserialize, Serialize};
 
 /// The footer line, the body's last line, exactly as the relay's reconciliation matches it.
 pub fn footer(report_id: &str) -> String {
-    format!("Sent with RichDoctor {} · Report ID {report_id}", crate::footer_version())
+    footer_for(crate::VERSION, report_id)
+}
+
+/// The footer for a given RichDoctor version.
+pub fn footer_for(version: &str, report_id: &str) -> String {
+    format!("Sent with RichDoctor {} · Report ID {report_id}", crate::footer_version_of(version))
 }
 
 /// **THE BODY'S LAST LINES** (relay protocol 2, byte for byte; round 40's wording): with `k`
@@ -191,7 +196,7 @@ impl Report {
         };
 
         let installation = input.evidence.iter().find(|i| i.category == crate::collect::Category::Installation && i.status.has_text());
-        let versions = installation.map(|i| i.text.clone()).unwrap_or_else(|| format!("RichDoctor {}\nRichOS: the installation could not be checked.", crate::VERSION));
+        let versions = installation.map(|i| i.text.clone()).unwrap_or_else(|| format!("{}\nRichOS: the installation could not be checked.", crate::collect::versions_first_line(crate::VERSION)));
 
         let wanted: Option<&Vec<String>> = d.map(|d| &d.evidence_used).filter(|ids| !ids.is_empty());
         let excerpts: Vec<Excerpt> = input

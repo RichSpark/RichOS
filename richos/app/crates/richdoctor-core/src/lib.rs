@@ -26,13 +26,29 @@ pub mod store;
 pub mod util;
 pub mod when;
 
-/// RichDoctor's own version, the one in the report footer.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// RichDoctor's own version, everywhere it states it (the report's Versions section, its footer,
+/// the delivery, the MCP server). package-app.sh sets `RICHDOCTOR_VERSION` to RichOS's version
+/// for the build, the same value it stamps into the bundle's Info.plist, so the bundle and what
+/// RichDoctor says are one source; an unpackaged build falls back to this crate's own version.
+pub const VERSION: &str = resolve_version(option_env!("RICHDOCTOR_VERSION"), env!("CARGO_PKG_VERSION"));
+
+/// The packaged version when there is one, else the crate's own.
+pub const fn resolve_version(packaged: Option<&'static str>, own: &'static str) -> &'static str {
+    match packaged {
+        Some(v) if !v.is_empty() => v,
+        _ => own,
+    }
+}
 
 /// The footer's short version: "1.0" for 1.0.0, "1.0.2" for 1.0.2 (the relay's footer rule is
 /// `major.minor[.patch]`).
 pub fn footer_version() -> String {
-    let mut parts: Vec<&str> = VERSION.split(['.', '-', '+']).take(3).collect();
+    footer_version_of(VERSION)
+}
+
+/// `footer_version` for a given version string.
+pub fn footer_version_of(version: &str) -> String {
+    let mut parts: Vec<&str> = version.split(['.', '-', '+']).take(3).collect();
     if parts.len() == 3 && parts[2] == "0" {
         parts.pop();
     }
@@ -49,6 +65,20 @@ pub const RICHOS_IDENTIFIER: &str = "com.richos.app";
 mod tests {
     #[test]
     fn the_footer_version_drops_a_zero_patch_only() {
-        assert_eq!(super::footer_version(), "1.0");
+        assert_eq!(super::footer_version_of("1.0.0"), "1.0");
+        assert_eq!(super::footer_version_of("1.0.2"), "1.0.2");
+    }
+
+    #[test]
+    fn the_packaged_version_is_the_one_stated_in_the_versions_section_and_the_footer() {
+        let v = super::resolve_version(Some("1.3.0-nightly.86"), "1.0.0");
+        assert_eq!(v, "1.3.0-nightly.86");
+        assert_eq!(super::resolve_version(None, "1.0.0"), "1.0.0");
+        assert_eq!(super::resolve_version(Some(""), "1.0.0"), "1.0.0");
+        assert!(crate::collect::versions_first_line(v).starts_with("RichDoctor 1.3.0-nightly.86"));
+        // The footer keeps the relay's `major.minor[.patch]` shape (the deployed relay rejects any
+        // other), so a pre-release suffix is not in it; the Versions section carries the whole.
+        assert_eq!(crate::report::footer_for(v, "RD-7K3M-Q9VX"), "Sent with RichDoctor 1.3 · Report ID RD-7K3M-Q9VX");
+        assert_eq!(crate::report::footer_for("1.3.2", "RD-7K3M-Q9VX"), "Sent with RichDoctor 1.3.2 · Report ID RD-7K3M-Q9VX");
     }
 }
