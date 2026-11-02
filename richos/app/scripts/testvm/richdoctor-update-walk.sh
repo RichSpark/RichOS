@@ -67,6 +67,10 @@ if [ "$V1" = "$RV" ]; then pass "U1 RichDoctor says $V1, RichOS's own version"; 
 PAYLOAD_SUM=$(gs "shasum -a 256 '$RD/Contents/MacOS/RichDoctor'" | cut -d' ' -f1)
 
 # ---- U7: a refresh deferred by an open window happens by itself when the window closes ---------------
+# RICHDOCTOR_OLD_ZIP=<RichDoctor zip of an earlier release> makes the older copy that real build
+# (re-signed ad hoc), and a report is started in it first (its stage stays Investigating when the
+# window closes, so that build answers "busy" for as long as it runs: bootstrap.rs `quit_running`
+# stops it by the process id on its socket once no window of it is on screen).
 # RICHDOCTOR_WALK=deferred runs only U1 and this (the rest needs a RichOS built like a release).
 # bootstrap.rs `keep_trying`: RichOS asks again every minute, never closing a window itself, and
 # writes each outcome to ~/Library/Logs/RichOS/richdoctor-install.log. The RichOS here is started
@@ -79,7 +83,16 @@ if [ "${RICHDOCTOR_WALK:-all}" = deferred ]; then
   AS="sudo launchctl asuser \$(id -u admin) sudo -u admin env HOME='$SHORT'"
   state="${TESTVM_ROOT:-$HOME/.richos-testvm}/run/$VM"
   # An older copy: the installed one, made 1.0.0 (ad hoc, like the payload), in the short home.
+  if [ -n "${RICHDOCTOR_OLD_ZIP:-}" ]; then
+    # A REAL older build (nightly 86's RichDoctor, 1.0.0, the code the CEO's installed copy runs):
+    # unzipped and re-signed AD HOC, because this RichOS is ad hoc and only trusts a copy signed by
+    # its own team (bootstrap.rs `installed`). The re-sign changes the signature, not the code.
+    gs "mkdir -p $G; chown admin $G" >/dev/null 2>&1
+    gs --push "$RICHDOCTOR_OLD_ZIP" "$G/old-richdoctor.zip" >> "$S/u7.log" 2>&1 || { fail "U7 setup: pushing the older RichDoctor zip"; finish; }
+    gs "pkill -x RichDoctor 2>/dev/null; sleep 2; rm -rf '$SHORT' $G/old; mkdir -p '$APPS' '$SHORT/Library/Application Support' $G/old && ditto -x -k $G/old-richdoctor.zip $G/old && mv $G/old/RichDoctor.app '$APPS/RichDoctor.app' && codesign --force --sign - --timestamp=none '$APPS/RichDoctor.app' && chown -R admin '$SHORT'" >> "$S/u7.log" 2>&1
+  else
   gs "pkill -x RichDoctor 2>/dev/null; sleep 2; rm -rf '$SHORT'; mkdir -p '$APPS' '$SHORT/Library/Application Support' && mv '$RD' '$APPS/RichDoctor.app' && /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 1.0.0' '$APPS/RichDoctor.app/Contents/Info.plist' && /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 1.0.0' '$APPS/RichDoctor.app/Contents/Info.plist' && codesign --force --sign - --timestamp=none '$APPS/RichDoctor.app' && chown -R admin '$SHORT'" >> "$S/u7.log" 2>&1
+  fi
   RD="$APPS/RichDoctor.app"
   V0=$(rd_version "$RD"); note "U7 older copy: $V0 at $RD"
   if [ "$V0" != "1.0.0" ]; then fail "U7 setup: the older copy says '$V0'"; finish; fi
@@ -90,6 +103,19 @@ if [ "${RICHDOCTOR_WALK:-all}" = deferred ]; then
   UP=0; for _ in $(seq 1 20); do has "What went wrong?" && { UP=1; break; }; sleep 3; done
   if [ "$UP" = 1 ]; then pass "U7 the older RichDoctor is running with its window open"; else fail "U7 the older RichDoctor's window did not open (u7-rd.txt)"; gs "tail -5 $G/u7-rd.log" > "$S/u7-rd.txt" 2>&1; finish; fi
   RDPID=$(gs "pgrep -x RichDoctor | head -1" | tr -d '\r')
+  # A report is started in it (stage Investigating, saved at once): the old copy then answers
+  # `quit-if-idle` "busy" for as long as it runs, even after its window is closed and the report saved.
+  DATA="$SHORT/Library/Application Support/com.richos.richdoctor"
+  "$T/ax.sh" "$VM" click --role AXTextArea --app RichDoctor --first >/dev/null 2>&1 || true
+  "$T/ax.sh" "$VM" 'tell application "System Events" to keystroke "RichOS shows a blank window after an update. It happened twice today."' >/dev/null 2>&1
+  sleep 1
+  "$T/ax.sh" "$VM" click --title "Continue" --app RichDoctor --first >/dev/null 2>&1 || fail "U7 pressing Continue"
+  UP=0; for _ in $(seq 1 20); do has "About when did it last happen?" && { UP=1; break; }; sleep 3; done
+  if [ "$UP" = 1 ]; then pass "U7 a report was started in the older RichDoctor (it asks when it last happened)"; else fail "U7 the report did not start (u7-rd.txt)"; fi
+  DRAFT=$(gs "find '$DATA' -name draft.json 2>/dev/null | head -1" | tr -d '\r')
+  DRAFT_SUM=$(gs "shasum -a 256 '$DRAFT' | cut -d' ' -f1" | tr -d '\r')
+  gs "grep -o '\"stage\": *\"[a-z]*\"' '$DRAFT'" > "$S/u7-draft-stage.txt" 2>&1
+  note "U7 saved report: $DRAFT ($(cat "$S/u7-draft-stage.txt" | head -1))"
   # RichOS, as a relaunch (the in-app updater's relaunch starts the same executable the same way).
   python3 -I "$T/relaunch.py" "$VM" --env "HOME=$SHORT" >> "$S/relaunch.log" 2>&1 || note "relaunch reported a problem (see relaunch.log)"
   OSPID=$(cat "$state/app.pid" 2>/dev/null || echo "")
@@ -107,6 +133,8 @@ if [ "${RICHDOCTOR_WALK:-all}" = deferred ]; then
   NEWPID=$(gs "pgrep -x RichDoctor | head -1" | tr -d '\r')
   SUM7=$(gs "shasum -a 256 '$RD/Contents/MacOS/RichDoctor'" | cut -d' ' -f1)
   if [ "$V2" = "$RV" ] && [ "$ALIVE" = alive ] && grep -q Refreshed "$S/u7-install-log-2.txt" && [ "$SUM7" = "$PAYLOAD_SUM" ]; then
+    DRAFT_AFTER=$(gs "shasum -a 256 '$DRAFT' | cut -d' ' -f1" | tr -d '\r')
+    if [ "$DRAFT_AFTER" = "$DRAFT_SUM" ]; then pass "U7 the saved report is byte-identical after the replacement"; else fail "U7 the saved report changed ($DRAFT_SUM -> $DRAFT_AFTER)"; fi
     pass "U7 after the window closed RichDoctor was replaced by itself: 1.0.0 -> $V2 (executable is the payload's), RichOS pid $OSPID kept running, log: $(tail -1 "$S/u7-install-log-2.txt" | cut -c1-140); RichDoctor pid $RDPID -> ${NEWPID:-none}"
   else
     fail "U7 after the window closed: RichDoctor says '$V2' (want $RV), RichOS $ALIVE, sha $SUM7 (want $PAYLOAD_SUM) (u7-install-log-2.txt)"
