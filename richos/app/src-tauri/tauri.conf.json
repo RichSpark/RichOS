@@ -41,7 +41,7 @@
     },
     "category": "Productivity",
     "shortDescription": "Talk to Rich.",
-    "longDescription": "RichOS — the executive operating interface. One conversation with Rich.",
+    "longDescription": "RichOS \u2014 the executive operating interface. One conversation with Rich.",
     "createUpdaterArtifacts": true
   },
   "plugins": {
