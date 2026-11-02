@@ -2,6 +2,16 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.2.8
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.8)
+
+- Changed the home screen once you have added a teammate: your own memories now light up in gold in front of a dimmed example marked "Example, not yours", which fades as yours grow and is gone at 2,500; before, there was no picture until you had about 2,000 memories
+- Changed the home screen's left column once you have a team to also show how many memories Rich has from you, how many teammates are working now, sources understood and decisions and lessons remembered
+- Improved how soon your memories appear on the home screen: the picture no longer waits for them, they are drawn in as soon as RichOS has read them and they show at once on later launches while they are unchanged
+- Fixed RichDoctor not being brought up to date while it was running with a window or a report open; RichOS now tries again every minute and updates it once its window is closed
+- Fixed RichOS closing a minimized or hidden RichDoctor window to bring it up to date, which lost what you had typed in it
+
 ## 1.2.7
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.7)
