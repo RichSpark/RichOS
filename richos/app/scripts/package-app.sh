@@ -1428,7 +1428,7 @@ if [ "${RICHOS_WITHOUT_RICHDOCTOR:-}" = "1" ]; then
 else
   say ""
   say "building RichDoctor, the separate support app this RichOS installs beside itself..."
-  if ! (cd "$richdoctor_dir" && ${build_launch[@]+"${build_launch[@]}"} cargo tauri build --no-sign --bundles app --config "{\"version\":\"$target_version\"}"); then
+  if ! (cd "$richdoctor_dir" && RICHDOCTOR_VERSION="$target_version" ${build_launch[@]+"${build_launch[@]}"} cargo tauri build --no-sign --bundles app --config "{\"version\":\"$target_version\"}"); then
     warn ""
     warn "RichDoctor did not build — nothing was packaged. The output above is the reason."
     exit 4
