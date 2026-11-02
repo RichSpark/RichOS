@@ -135,6 +135,7 @@ const ROLES = {
   },
   "speckle-app.js": { role: "ui", why: "the desktop app's one call to the speckled ground, and the text colors it holds 4.5:1 for" },
   "home/field-engine.js": { role: "ui", why: "the home screen's WebGL field — it authors the hover card and the loro line" },
+  "home/field-ghost.js": { role: "ui", why: "merges his records with the demonstration's shape for the ghost (round 11.4 v2); it has no user-visible strings" },
   "home/field-prep.js": { role: "ui", why: "the field's geometry preparation" },
   "home/field-ref.js": { role: "ui", why: "the field's reference tables" },
   "phone.js": {
