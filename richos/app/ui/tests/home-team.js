@@ -304,6 +304,16 @@ async function main() {
     assertEqual(col.cap, "Working now", "the heading");
     assertEqual(col.rows, two.map((t) => t.name + " " + t.role), "the names");
     assertEqual(col.dots, 2, "a gold dot beside each");
+    // One company has no entity row and no banner above the column: its heading must still clear
+    // the settings button (seen in the test VM 2026-11-02: "WORKING NO" cut off beneath it).
+    const clear = await page.evaluate(() => {
+      // One company is no entity row: the inset the row adds is 0.
+      document.getElementById("home").style.setProperty("--home-top-inset", "0px");
+      const cap = document.querySelector("#home-live .cap").getBoundingClientRect();
+      const btn = document.getElementById("set-btn").getBoundingClientRect();
+      return { capTop: Math.round(cap.top), buttonBottom: Math.round(btn.bottom), overlap: !(cap.bottom <= btn.top || cap.top >= btn.bottom || cap.right <= btn.left || cap.left >= btn.right) };
+    });
+    assertEqual(clear.overlap, false, "the heading is under the settings button: " + JSON.stringify(clear));
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
     return col.rows.join(", ");

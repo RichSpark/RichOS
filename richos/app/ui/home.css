@@ -334,7 +334,12 @@ body.home-open {
      space, set from `home.js`, and it is `0px` whenever that banner is not up — so with a real
      customer's loro drawing the picture this line is `calc(32px + var(--home-top-inset))` and
      the composition is byte-identical to the one the CEO approved. See `#home-note` below. */
-  top: calc(32px + var(--home-top-inset) + var(--home-note-inset, 0px));
+  /* THE FLOOR IS THE SETTINGS BUTTON, as the banner's (`#home-note`): it owns y=[18,58], and
+     with one company there is no entity row (`--home-top-inset` is 0) and no banner, so 32px
+     put the heading under it ("WORKING NO" cut off, seen in the test VM 2026-11-02). 66px is
+     that 58 plus 8px of air; with the entity row or the banner up this line is the larger one
+     and nothing moves. */
+  top: max(calc(32px + var(--home-top-inset) + var(--home-note-inset, 0px)), 66px);
   right: 34px;
   text-align: right;
   pointer-events: none;
