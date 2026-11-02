@@ -2,6 +2,15 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.2.7-nightly.20261102.87
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.7-nightly.20261102.87)
+
+- Changed the home screen's right-hand column from your whole team to Working now: it lists only the teammates working at this moment, up to six, each with its role and is hidden when nobody is working
+- Fixed RichDoctor never being brought up to date after it was first installed; each newer RichOS now replaces it and RichDoctor's report shows the RichOS version it came with
+- Fixed RichDoctor's window not moving when you dragged it by its top strip, including while a panel was open in it
+- [technical] Added your team taking up the teammates defined in your companies' repositories that use the RichOS engine each time work starts, a company's own repository first; a teammate made only in RichOS or edited there since is left as it is
+
 ## 1.2.6-nightly.20261102.86
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.6-nightly.20261102.86)
