@@ -240,5 +240,16 @@
     "previous_tag": "v1.2.6",
     "previous_source": "0dfaa184940cce96f84590848ee312487e08a155",
     "entry": "- Changed the home screen's right-hand column from your whole team to Working now: it lists only the teammates working at that moment, up to six with their roles; when nobody is working the column is not shown\n- Fixed RichDoctor never being updated after it was first installed; each newer RichOS now replaces it and RichDoctor's reports show the RichOS version it came with\n- Fixed RichDoctor's window not moving when you dragged it by its top strip, including while a panel was open in it\n- [technical] Added your team picking up the teammates defined in your companies' repositories that use the RichOS engine each time work starts, with a company's own definitions first in its conversations; a teammate that exists only in RichOS or that you changed in RichOS since it was last brought over is left as it is"
+  },
+  "v1.2.8-nightly.20261102.88": {
+    "schema": 1,
+    "tag": "v1.2.8-nightly.20261102.88",
+    "version": "1.2.8-nightly.20261102.88",
+    "channel": "nightly",
+    "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
+    "build_commit": "ee734de1d3be41a90256ae1133180d6617b1491e",
+    "previous_tag": "v1.2.7-nightly.20261102.87",
+    "previous_source": "b4e8981a9e10089230a565ae64f20eb8f3ef06c3",
+    "entry": "- Changed the home screen once you have a team: your own memories now light up in gold in front of a dimmed example marked \"Example, not yours\", which fades as yours grow and is gone at 2,500, where before there was no picture until you had about 2,000 memories\n- Changed the home screen's left column once you have a team to also show how many teammates are working now, sources understood, decisions and lessons remembered and how many memories Rich has from you\n- Improved how soon your memories appear on the home screen: they are drawn in as soon as RichOS has read them and show right away on later launches while they are unchanged\n- Fixed RichDoctor not being brought up to date when it was open as RichOS started; RichOS now updates it within about a minute of you closing its window and no longer closes a minimized or hidden RichDoctor window, which could lose what you had typed"
   }
 }
