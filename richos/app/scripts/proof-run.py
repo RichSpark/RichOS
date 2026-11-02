@@ -176,11 +176,14 @@ default is one run at a time, and the lead sets another number for the whole Mac
 wait for the lead's turn-end gate; `python3 scripts/lib/proof_slots.py status` shows who holds and
 who waits. The slot is an flock the kernel drops with the run's last descriptor (the run's checks'
 supervisors hold it too), so a killed run releases it once its checks are stopped. A proof run
-started by a check of a proof run works inside its caller's slot. A run's checks give way while a
-run ahead of it still has checks waiting to be admitted (2026-10-29: six runs at once left 30 of
-one run's 37 checks never admitted), so starting beside it cannot starve it; a free slot is taken
-at once (2026-11-01). Only a check the run would start the moment the Mac lets it counts, never
-one waiting for its own lane or prerequisite (waiting_to_be_admitted, 2026-10-31). Ahead means a
+started by a check of a proof run works inside its caller's slot. A run's checks give way while
+the Mac refuses the checks of a run ahead of it (2026-10-29: six runs at once left 30 of one run's
+37 checks never admitted), so starting beside it cannot starve it; a free slot is taken at once
+(2026-11-01). Only a check the Mac refused at its run's last attempt (the CPU line, the memory
+rule, the pressure controller, the resource envelope) counts, never one waiting for its own run's
+worker budget, ramp, lane or prerequisite (refused_by_the_mac, 2026-11-01): a check the CPU rule
+admits is admitted whichever run it belongs to, and the order between runs decides only who goes
+first when there is not room for both. Ahead means a
 nightly or release command's own run first (it never waits in the line, 2026-11-01; only the run
 the nightly names with --release-state, never a fixture run a test starts inside the build's
 tree), then the order slots were taken, except a land holding integration priority, which goes
@@ -1392,20 +1395,28 @@ def admitted(args, sampler):
     return not reserve._refusal(s, args.max_cpu, 16, cpu_rule=True), s
 
 
-# A waiting check whose reason is one of these waits for other work, not for the Mac: its own run's
-# lane or prerequisite, the engine slot, another run's identical check, the integration plan. It is
-# never published as waiting to be admitted (proof_slots.py, 2026-10-31): every run with an engine
-# unit has `engine receipts` waiting for all its shards, and the units of a shard wait in its lane,
-# so counting them held every other run in line for the whole of such a run, while the stall
-# watcher sampled the Mac at 13-17% busy. Starting another run beside these cannot starve them:
-# the other run gives way whenever this one has a check the Mac could take (proof_slots.ahead_of).
-WAITS_ON_OTHER_WORK = frozenset({"dependency", "lane", "engine-slot", "identical-owner", "integration-episode"})
+# What a run publishes in its proof-run slot for the runs behind it (proof_slots.ahead_of): how many
+# of its waiting checks the MAC refused at its last admission attempt: a host sample over CEO
+# ruling §77's CPU line or its memory rule (`host`), the machine pressure controller (`pressure`)
+# or the measured resource envelope (`resource-envelope`). Only then is there no room for both runs,
+# and only then does the order between runs decide who goes first.
+#
+# Until 2026-11-01 it published every waiting check except those waiting for their own lane,
+# prerequisite, the engine slot, an identical check or the integration plan, and a run behind gave
+# way on that count without taking a sample of its own. So a check waiting for its own run's worker
+# budget or ramp, or giving way itself, held every newer run back: at 22:52-22:55Z three proof runs
+# gave way to echo-opus-build51 ("11 of its checks still wait to be admitted") for 11 minutes while
+# the Mac sampled 30-56% busy, and a run that gave way published its own 75 checks to the runs
+# behind it. Now a check the CPU rule admits is admitted, whichever run it belongs to.
+MAC_REFUSALS = frozenset({"host", "pressure", "resource-envelope"})
 
 
-def waiting_to_be_admitted(order):
-    """How many of the run's checks wait only for the Mac (the CPU line, the memory rule, the worker
-    budget, the ramp, an older run): what it publishes in its proof-run slot."""
-    return sum(1 for it in order if it.state == "waiting" and it.wait_reason not in WAITS_ON_OTHER_WORK)
+def refused_by_the_mac(order):
+    """How many of the run's waiting checks the Mac refused at its last admission attempt (above):
+    what it publishes in its proof-run slot. A check waiting for this run's own worker budget, its
+    ramp, its lane or prerequisite, the engine slot, another run's identical check, the integration
+    plan, or a run ahead of it is not one: the Mac may have room for the runs behind it."""
+    return sum(1 for it in order if it.state == "waiting" and it.wait_reason in MAC_REFUSALS)
 
 
 def refusal_counts(running):
@@ -1831,9 +1842,9 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
                 break
         slot_blocked = gave_way = False
         if SLOT is not None and not SLOT.borrowed:
-            # Another run is held back while this one still has checks the Mac could take
-            # (proof_slots.py); a check waiting for this run's own lane or prerequisite is not one.
-            SLOT.publish_waiting(waiting_to_be_admitted(order))
+            # A run behind this one gives way only while the Mac refuses this run's checks
+            # (refused_by_the_mac, proof_slots.ahead_of): then there is not room for both.
+            SLOT.publish_waiting(refused_by_the_mac(order))
         for it in order:
             if it.state == "waiting":
                 it.wait_times[it.wait_reason] = it.wait_times.get(it.wait_reason, 0.0) + interval
@@ -2049,8 +2060,10 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
         ahead = (proof_slots.ahead_of(SLOT) if eligible and now >= next_sample and not holds_priority
                  else [])
         if ahead:
-            # A run ahead of this one (a nightly or release command's, else an older one) still has
-            # checks waiting to be admitted: it goes first (proof_slots.py, 2026-10-31, 2026-11-01).
+            # A run ahead of this one (a nightly or release command's, else an older one) has checks
+            # the Mac refused: there is not room for both, so it goes first (proof_slots.py,
+            # 2026-10-31, 2026-11-01). A run ahead whose checks wait only for its own work holds
+            # nothing back (refused_by_the_mac): this run samples and starts what the Mac admits.
             # Not the Mac refusing, so it never spends --admission-wait; with nothing of this run
             # running it is a wait for the Mac like the slot line, recorded as one.
             # While it gives way it withdraws its worker request (review
@@ -3054,7 +3067,7 @@ def run_main(argv, run_state):
         SLOT, slot_wait = proof_slots.acquire(
             {"checkout": ROOT, "logs": logdir, "selection": " ".join(argv if argv is not None else sys.argv[1:])[:300],
              "release_state": args.release_state},
-            args.slot_wait, say=lambda line: print("[%s] %s" % (stamp(), line), flush=True), checks=len(items))
+            args.slot_wait, say=lambda line: print("[%s] %s" % (stamp(), line), flush=True))
     except TimeoutError as exc:
         print("proof-run: NOT ADMITTED: %s. Nothing was run. Logs: %s" % (exc, logdir), flush=True)
         # Written like any other end (2026-09-30): a caller reading summary.json sees every check
