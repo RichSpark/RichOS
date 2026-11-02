@@ -316,7 +316,7 @@
     "phone-identity": {
       "// 2026-10-10 inert": "RE-DERIVED 2026-10-10 (walk48fix20, esc-20261010T172009Z-3e3d762f): this sheet no longer claims aria-modal (D24, 26a0213b5: Settings stays reachable over it), so main.js's QUESTION_SELECTOR no longer sets `inert` on the shell behind it. On main the inert shell was not hit-testable, so lib/contrast.js stackFor() fell back to its ancestors and counted the shell's text as measured through the sheet's scrim; now that text is filed obscured, as it is behind every other overlay, and is measured on the `shell` surface (check 11). The sheet's own nodes are unchanged. Both numbers are this run's measurement.",
       "//": "CEO §61.1's identity screen, which since §61 is the FIRST screen of the sheet rather than a screen behind a chosen route — its driver no longer clicks anything to reach it, and that is the arrival proof that matters here. 34 measured of 572 across both themes. `checked` 34 is lower than the bare shell's 92 because the sheet covers the shell it opened over, so the floor that bites is `considered`: 572 against the shell's 506 is a margin of 66, far outside the three-node tolerance — it was 2 when this surface was declared unable to bite and 4 after the first shrink. `checked` fell by 2 under §61: the `Pick a different way` beside `I understand`, in both themes. THE NOTE THIS ROW USED TO CARRY IS RETIRED WITH ITS SUBJECT: it recorded that this was the only surface where a control's BORDER separated two decisions (`.phone-route > button` at `--line-control`, 3.79:1 dark and 4.06:1 light). §61 removed the screen with two decisions on it. The token still carries that job on `.desk-btn` itself, measured at the same ratios from the rendered pixels — Urban's G6 — because on the paired card that border is the only thing that makes a button a button.",
-      "checkedOverShell": 30,
+      "checkedOverShell": 32,
       "consideredOverShell": 18
     },
     "phone-rejected": {
@@ -414,6 +414,11 @@
       "checkedOverShell": 2,
       "consideredOverShell": 2,
       "//": "Round 32's plus tooltip. Its first over-shell floor, from the same 2026-10-20 calibration run: 2 measured and 2 considered over the bare shell across both themes, inside the three-node tolerance, so it is declared in `floorReference.cannotBite` with main's own reason."
+    },
+    "composer-tooltip": {
+      "checkedOverShell": 32,
+      "consideredOverShell": 36,
+      "//": "Round 51's input-area tooltip (#composer-tip) over the plus, in the acme thread. Its first over-shell floor, from the 2026-11-02 contrast.js run on cc/echo-opus-build52, reached by Option-Tab: 32 measured and 36 considered over the bare shell across both themes (the thread the driver opens, plus the tooltip's words), outside the three-node tolerance, so it bites."
     }
   },
   "signatures": {}

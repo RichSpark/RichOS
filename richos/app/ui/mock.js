@@ -2807,7 +2807,12 @@
   /// Where the mock "keeps" a committed file. A path of the real shape, under a folder that
   /// cannot exist on anybody's Mac.
   const MOCK_ATTACH_HOME = "/mock/Library/Application Support/com.richos.app/attachments";
-  const mockAttach = { staged: new Map(), drops: new Map(), nextDrop: 0, calls: [], missingNext: null };
+  const mockAttach = { staged: new Map(), folders: new Map(), drops: new Map(), nextDrop: 0, calls: [], missingNext: null, pickNext: null };
+  /// One dropped or picked entry as the shelf keeps it: a file's bytes, or a folder and how many
+  /// things are directly inside it.
+  function mockDropped(f) {
+    return { name: f.name, folder: !!f.folder, items: typeof f.items === "number" ? f.items : 0, bytes: Uint8Array.from(f.bytes || []) };
+  }
 
   function mockKindFor(declared, name) {
     const bare = String(declared || "").split(";")[0].trim().toLowerCase();
@@ -3293,13 +3298,30 @@
           mockAttach.calls.push({ cmd, name: decodeURIComponent(h["x-richos-name"] || ""), type: h["x-richos-type"] || "", size: args.length });
           return mockStage(h["x-richos-draft"], h["x-richos-attachment"], decodeURIComponent(h["x-richos-name"] || ""), h["x-richos-type"], args);
         }
+        // The plus (round 50/51): `attach_pick_files` in `mac_attachments.rs`. The picker's next
+        // answer is set by `__mock.pickFiles(files)`; files picked are shelved like a drop and
+        // answered `{ drop, files }`; no answer set is Cancel (null).
+        case "attach_pick_files": {
+          const files = mockAttach.pickNext;
+          mockAttach.pickNext = null;
+          mockAttach.calls.push({ cmd, picked: files ? files.map((f) => f.name) : null });
+          if (!files || !files.length) return null;
+          const id = ++mockAttach.nextDrop;
+          mockAttach.drops.set(id, files.map(mockDropped));
+          return { drop: id, files: files.map((f, index) => ({ index, name: f.name })) };
+        }
         case "attach_dropped_file": {
           const drop = mockAttach.drops.get(args.drop);
           const file = drop && drop[args.index];
           mockAttach.calls.push({ cmd, drop: args.drop, index: args.index, name: file ? file.name : null });
           if (!file) return Promise.reject("That drop is no longer available. Drop the file again.");
           drop[args.index] = null;
-          if (file.folder) return Promise.reject("This is a folder, not a file. Drop the files inside it instead. Nothing was attached.");
+          // A folder is not copied (`MacAttachments::attach_folder`): it goes on the tray as itself.
+          if (file.folder) {
+            const view = { id: args.attachmentId, name: file.name, mediaType: "inode/directory", label: "Folder", size: 0, sha256: "folder:" + file.name, items: file.items };
+            mockAttach.folders.set(args.draftId + "/" + args.attachmentId, view);
+            return view;
+          }
           return mockStage(args.draftId, args.attachmentId, file.name, "", file.bytes);
         }
         // Add to chat from the Output panel (output side-panel PRD §12.7): `output_attach` in
@@ -3323,22 +3345,38 @@
         }
         case "discard_attachment": {
           mockAttach.calls.push({ cmd, draftId: args.draftId, attachmentId: args.attachmentId });
+          if (mockAttach.folders.delete(args.draftId + "/" + args.attachmentId)) return true;
           return mockAttach.staged.delete(args.draftId + "/" + args.attachmentId);
         }
         case "commit_attachments": {
           mockAttach.calls.push({ cmd, threadId: args.threadId, draftId: args.draftId, text: args.text, attachments: args.attachments });
           const missing = (mockAttach.missingNext || []).filter((id) => args.attachments.some((a) => a.id === id));
           mockAttach.missingNext = null;
-          const found = args.attachments.map((a) => mockAttach.staged.get(args.draftId + "/" + a.id));
-          args.attachments.forEach((a, i) => { if (!found[i] && !missing.includes(a.id)) missing.push(a.id); });
+          const key = (a) => args.draftId + "/" + a.id;
+          const folders = args.attachments.filter((a) => mockAttach.folders.has(key(a))).map((a) => mockAttach.folders.get(key(a)));
+          const fileWanted = args.attachments.filter((a) => !mockAttach.folders.has(key(a)));
+          const found = fileWanted.map((a) => mockAttach.staged.get(key(a)));
+          fileWanted.forEach((a, i) => { if (!found[i] && !missing.includes(a.id)) missing.push(a.id); });
           if (missing.length) return { text: null, files: [], missing };
           found.forEach((f) => mockAttach.staged.delete(args.draftId + "/" + f.id));
-          const count = found.length === 1 ? "1 file" : found.length + " files";
-          const lines = found.map((f) => `- ${MOCK_ATTACH_HOME}/${args.threadId}/${args.draftId}/${f.name} (${f.mediaType}, ${f.size} bytes)`);
+          folders.forEach((f) => mockAttach.folders.delete(args.draftId + "/" + f.id));
+          const blocks = [];
           const words = String(args.text || "").trim();
+          if (words) blocks.push(words);
+          if (found.length) {
+            const count = found.length === 1 ? "1 file" : found.length + " files";
+            const lines = found.map((f) => `- ${MOCK_ATTACH_HOME}/${args.threadId}/${args.draftId}/${f.name} (${f.mediaType}, ${f.size} bytes)`);
+            blocks.push(`Attached on this Mac (${count}, saved by RichOS):\n` + lines.join("\n"));
+          }
+          // `describe_folders` in `mac_attachments.rs`: named by path, never copied.
+          if (folders.length) {
+            const count = folders.length === 1 ? "1 folder" : folders.length + " folders";
+            const lines = folders.map((f) => `- /mock/Desktop/${f.name} (folder, ${f.items} ${f.items === 1 ? "item" : "items"})`);
+            blocks.push(`Folders on this Mac (${count}, not copied; read them where they are):\n` + lines.join("\n"));
+          }
           return {
-            text: (words ? words + "\n\n" : "") + `Attached on this Mac (${count}, saved by RichOS):\n` + lines.join("\n"),
-            files: found.map(({ draftId: _d, ...f }) => f),
+            text: blocks.join("\n\n"),
+            files: found.map(({ draftId: _d, ...f }) => f).concat(folders),
             missing: [],
           };
         }
@@ -5390,14 +5428,19 @@
     // ---- screenshots and files on the Mac composer (CEO §86) -------------------------------
     /// Drop files on the window, the way the shell reports one: a `rich://file-drag` enter and
     /// leave, then `rich://file-drop` with a drop number and names only. Each file is
-    /// `{ name, bytes: number[] }` or `{ name, folder: true }`.
+    /// `{ name, bytes: number[] }` or `{ name, folder: true, items: n }`.
     dropFiles(files) {
       const id = ++mockAttach.nextDrop;
-      mockAttach.drops.set(id, files.map((f) => ({ name: f.name, folder: !!f.folder, bytes: Uint8Array.from(f.bytes || []) })));
+      mockAttach.drops.set(id, files.map(mockDropped));
       emit("rich://file-drag", { phase: "enter", count: files.length });
       emit("rich://file-drag", { phase: "leave", count: 0 });
       emit("rich://file-drop", { drop: id, files: files.map((f, index) => ({ index, name: f.name })) });
       return id;
+    },
+    /// The picker's next answer, for the composer's plus: `[{ name, bytes }]` and
+    /// `{ name, folder: true, items: n }` entries, or null for Cancel.
+    pickFiles(files) {
+      mockAttach.pickNext = files;
     },
     /// A drag hovering over the window, without landing.
     dragOver(on) {

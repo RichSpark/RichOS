@@ -3926,6 +3926,7 @@ fn main() {
             // --- screenshots and files into the composer, CEO §86 (2026-09-24) —
             //     appended, never reordered ---
             mac_attachments::attach_dropped_file,
+            mac_attachments::attach_pick_files,
             mac_attachments::attach_pasted_file,
             mac_attachments::discard_attachment,
             mac_attachments::commit_attachments,

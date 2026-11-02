@@ -1370,6 +1370,30 @@ const SURFACES = [
     },
   },
   {
+    // Round 51's tooltip over the input area (`#composer-tip`, main.js "THE INPUT AREA'S
+    // TOOLTIPS"): hidden until a control in the box is hovered or focused, so no other walk
+    // puts a pixel of it on screen.
+    // Reached from the KEYBOARD, the tooltip's other entrance (input-area.js check 8 covers the
+    // pointer): Option-Tab from the text, which is how WebKit on a Mac moves to a button (plain
+    // Tab skips buttons unless the Mac's own keyboard navigation is on). Hovering here would also
+    // measure the plus's hover tint, which style.css declares decorative at `.composer-add:hover`.
+    name: "composer-tooltip",
+    what: "round 51's tooltip over the input area's plus, \"Add files and folders\", from the keyboard",
+    drive: async (p) => {
+      await p.click('.nav-thread[data-thread-id="acme"]');
+      await p.waitForSelector("#input-shell", { state: "visible" });
+      await p.focus("#input");
+      for (let i = 0; i < 6 && (await p.evaluate(() => document.activeElement && document.activeElement.id)) !== "attach-add"; i++) {
+        await p.keyboard.press("Alt+Tab");
+      }
+      await p.waitForFunction(() => {
+        const t = document.getElementById("composer-tip");
+        return !!t && t.classList.contains("is-on") && getComputedStyle(t).opacity === "1";
+      });
+      await pageSettled(p);
+    },
+  },
+  {
     name: "rail-tooltip",
     what: "a company heading's two controls and the plus's \"+ New chat\" tooltip",
     drive: async (p) => {

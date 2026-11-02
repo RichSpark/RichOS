@@ -38,10 +38,13 @@
 //!   exactly — the same kind by name, the same size refusal before the read, the same
 //!   [`AttachmentDesk::stage_from`] and the same sentences. There is no second desk.
 //!
+//! * **The plus** (round 50/51) opens macOS's own picker for files and folders
+//!   ([`attach_pick_files`]); what he picks is shelved like a drop and takes the drop's road.
+//! * **A folder**, dropped or picked, is not copied: it goes on the tray as itself and Send names
+//!   it to Rich by its real path ([`FolderRef`]), where he reads it.
+//!
 //! # What this does NOT do, said rather than left to be discovered
 //!
-//! * **No file picker.** The brief is drop and paste; a picker needs a dialog plugin this
-//!   build does not carry.
 //! * **No thumbnails from disk.** A pasted image is previewed from the bytes the page already
 //!   holds; a dropped one is shown as a named chip, because reading it back to the page would
 //!   be a second copy of up to 25 MiB for a picture.
@@ -50,7 +53,7 @@
 use crate::output_files::{self, OutputFiles};
 use crate::phone::attachments::{self, AttachmentDesk, Origin, Upload};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -88,6 +91,20 @@ struct DropShelf {
 pub struct MacAttachments {
     desk: AttachmentDesk,
     shelf: Mutex<DropShelf>,
+    /// The folders on composers' trays, by (draft, attachment id). In memory, like the tray that
+    /// shows them: nothing of a folder is stored, so there is nothing to sweep.
+    folders: Mutex<HashMap<(String, String), FolderRef>>,
+}
+
+/// **A folder he handed over** (round 51: "just add files and folders"). Left where it is and
+/// named to Rich by its full path, as dropping a folder on the terminal does: Rich reads it there
+/// with his own tools (the session runs with permission prompts off and without
+/// `blockReadsOutsideWorkingDirectories`, `engine_profile.rs`). Copying it instead would push a
+/// whole tree through a desk built for ten files of 25 MB.
+#[derive(Clone, Debug)]
+struct FolderRef {
+    path: PathBuf,
+    view: AttachedView,
 }
 
 /// One file as the composer shows it before Send.
@@ -102,6 +119,11 @@ pub struct AttachedView {
     pub label: String,
     pub size: u64,
     pub sha256: String,
+    /// A FOLDER only: how many things are directly inside it, for the chip's "Folder · 12
+    /// items". A folder is never copied, so it has no size and no bytes to hash; its `sha256`
+    /// is the hash of its real path, which is what Send checks it against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -138,8 +160,14 @@ pub struct Committed {
     pub missing: Vec<String>,
 }
 
-const NOT_A_FILE: &str = "This is a folder, not a file. Drop the files inside it instead. Nothing was attached.";
+/// The picker could not be shown or did not answer. Nothing was attached and nothing changed.
+const PICKER_FAILED: &str = "The file picker did not open. Nothing was attached; try the plus again or drop the files on the window.";
 const UNREADABLE: &str = "RichOS couldn't read this file. Nothing was attached.";
+const FOLDER_UNREADABLE: &str = "RichOS couldn't open this folder. Nothing was attached.";
+/// A folder's kind on its chip and in what Send returns. Not a kind the desk knows: a folder never
+/// reaches the desk.
+pub const FOLDER_MEDIA_TYPE: &str = "inode/directory";
+const FOLDER_LABEL: &str = "Folder";
 const DROP_GONE: &str = "That drop is no longer available. Drop the file again.";
 const NOT_SAVED: &str = "RichOS couldn't save this file just now. Nothing was attached; try again.";
 
@@ -186,7 +214,7 @@ fn percent_decode(value: &str) -> Option<String> {
 impl MacAttachments {
     /// No I/O, like the desk it wraps.
     pub fn open(data_dir: &Path) -> Self {
-        MacAttachments { desk: AttachmentDesk::open(data_dir), shelf: Mutex::new(DropShelf::default()) }
+        MacAttachments { desk: AttachmentDesk::open(data_dir), shelf: Mutex::new(DropShelf::default()), folders: Mutex::new(HashMap::new()) }
     }
 
     /// Remember a drop's paths and say what the page may know about them.
@@ -219,6 +247,7 @@ impl MacAttachments {
                 media_type: s.media_type,
                 size: s.size,
                 sha256: s.sha256,
+                items: None,
             }),
             Upload::Refused(sentence) | Upload::Limit(sentence) => Err(sentence),
             // The page mints a fresh id for every file, so this is not a state it can reach;
@@ -235,14 +264,34 @@ impl MacAttachments {
         }
     }
 
-    /// **Attach the file at a path the OS dropped.** Typed by its name, checked by its bytes.
+    /// **Attach what is at a path the OS dropped or the picker returned.** A file is typed by its
+    /// name and checked by its bytes; a folder takes [`Self::attach_folder`].
     pub fn attach_path(&self, draft: &str, id: &str, path: &Path) -> Result<AttachedView, String> {
         Self::check_ids(draft, id)?;
         let meta = std::fs::metadata(path).map_err(|_| UNREADABLE.to_string())?;
         if meta.is_dir() {
-            return Err(NOT_A_FILE.into());
+            return self.attach_folder(draft, id, path);
         }
         self.stage_file(draft, id, &display_name(path), meta.len(), || std::fs::read(path))
+    }
+
+    /// **A folder goes on the tray as itself** ([`FolderRef`]): its real path (links resolved, so
+    /// Rich is told where it actually is), the number of things directly inside it, and nothing
+    /// copied. Send names it to Rich ([`Self::commit`]).
+    fn attach_folder(&self, draft: &str, id: &str, path: &Path) -> Result<AttachedView, String> {
+        let real = std::fs::canonicalize(path).map_err(|_| FOLDER_UNREADABLE.to_string())?;
+        let items = std::fs::read_dir(&real).map_err(|_| FOLDER_UNREADABLE.to_string())?.count() as u64;
+        let view = AttachedView {
+            id: id.to_string(),
+            name: display_name(path),
+            media_type: FOLDER_MEDIA_TYPE.to_string(),
+            label: FOLDER_LABEL.to_string(),
+            size: 0,
+            sha256: crate::phone::hex(&crate::phone::sha256(real.as_os_str().as_encoded_bytes())),
+            items: Some(items),
+        };
+        self.folders.lock().unwrap().insert((draft.to_string(), id.to_string()), FolderRef { path: real, view: view.clone() });
+        Ok(view)
     }
 
     /// **The one road from a file on this Mac to the desk**, for a drop and for a recorded file
@@ -319,6 +368,9 @@ impl MacAttachments {
         if !attachments::valid_id(draft) {
             return Ok(false);
         }
+        if self.folders.lock().unwrap().remove(&(draft.to_string(), id.to_string())).is_some() {
+            return Ok(true);
+        }
         self.desk.discard(MAC_DEVICE, draft, id).map_err(|e| {
             eprintln!("[richos] a removed attachment could not be deleted: {e}");
             "RichOS couldn't remove this file just now.".to_string()
@@ -326,24 +378,60 @@ impl MacAttachments {
     }
 
     /// **Send's half.** Every named file must be here with the bytes it was attached with;
-    /// then they move into the conversation's folder and the words Rich reads are built.
+    /// then they move into the conversation's folder and the words Rich reads are built. Every
+    /// named folder must still be the folder it was (the same real path) and still be there; it is
+    /// named to Rich under the files, by its path. Anything missing means NOTHING is committed.
     pub fn commit(&self, thread: &str, draft: &str, text: &str, wanted: &[Wanted]) -> Result<Committed, String> {
         if thread.is_empty() || !attachments::valid_id(draft) || wanted.is_empty() || wanted.len() > attachments::MAX_FILES_PER_MESSAGE {
             return Err(NOT_SAVED.into());
         }
-        let pairs: Vec<(String, String)> = wanted.iter().map(|w| (w.id.clone(), w.sha256.clone())).collect();
-        let files = match self.desk.staged(MAC_DEVICE, draft, &pairs) {
-            Ok(files) => files,
-            Err(attachments::Missing(missing)) => return Ok(Committed { text: None, files: Vec::new(), missing }),
+        let held: Vec<Option<FolderRef>> = {
+            let folders = self.folders.lock().unwrap();
+            wanted.iter().map(|w| folders.get(&(draft.to_string(), w.id.clone())).cloned()).collect()
         };
-        let stored = self.desk.commit(MAC_DEVICE, draft, thread, &files).map_err(|e| {
-            eprintln!("[richos] attached files could not be moved into the conversation: {e}");
-            "RichOS couldn't save your files into this conversation just now. They are still attached; try Send again.".to_string()
-        })?;
-        let described = attachments::describe_from(Origin::Mac, text.trim(), &stored);
-        let files = stored
+        let mut folders = Vec::new();
+        let mut missing = Vec::new();
+        let mut pairs = Vec::new();
+        for (w, folder) in wanted.iter().zip(held) {
+            match folder {
+                Some(f) if f.view.sha256 == w.sha256 && f.path.is_dir() => folders.push(f),
+                Some(_) => missing.push(w.id.clone()),
+                None => pairs.push((w.id.clone(), w.sha256.clone())),
+            }
+        }
+        let staged = if pairs.is_empty() {
+            Vec::new()
+        } else {
+            match self.desk.staged(MAC_DEVICE, draft, &pairs) {
+                Ok(files) => files,
+                Err(attachments::Missing(gone)) => {
+                    missing.extend(gone);
+                    Vec::new()
+                }
+            }
+        };
+        if !missing.is_empty() {
+            return Ok(Committed { text: None, files: Vec::new(), missing });
+        }
+        let stored = if staged.is_empty() {
+            Vec::new()
+        } else {
+            self.desk.commit(MAC_DEVICE, draft, thread, &staged).map_err(|e| {
+                eprintln!("[richos] attached files could not be moved into the conversation: {e}");
+                "RichOS couldn't save your files into this conversation just now. They are still attached; try Send again.".to_string()
+            })?
+        };
+        let mut described =
+            if stored.is_empty() { text.trim().to_string() } else { attachments::describe_from(Origin::Mac, text.trim(), &stored) };
+        if !folders.is_empty() {
+            if !described.is_empty() {
+                described.push_str("\n\n");
+            }
+            described.push_str(&describe_folders(&folders));
+        }
+        let mut files: Vec<AttachedView> = stored
             .iter()
-            .zip(files.iter())
+            .zip(staged.iter())
             .map(|(s, staged)| AttachedView {
                 id: s.id.clone(),
                 name: s.name.clone(),
@@ -351,10 +439,29 @@ impl MacAttachments {
                 label: label_of(&s.media_type),
                 size: s.size,
                 sha256: staged.sha256.clone(),
+                items: None,
             })
             .collect();
+        let mut held = self.folders.lock().unwrap();
+        for f in folders {
+            held.remove(&(draft.to_string(), f.view.id.clone()));
+            files.push(f.view);
+        }
         Ok(Committed { text: Some(described), files, missing: Vec::new() })
     }
+}
+
+/// The words Rich reads for the folders of one message, under the files' block when there is one:
+/// each folder's real path, where he reads it, and how much is directly inside it.
+fn describe_folders(folders: &[FolderRef]) -> String {
+    let count = if folders.len() == 1 { "1 folder".to_string() } else { format!("{} folders", folders.len()) };
+    let mut out = format!("Folders on this Mac ({count}, not copied; read them where they are):");
+    for f in folders {
+        let items = f.view.items.unwrap_or(0);
+        let word = if items == 1 { "item" } else { "items" };
+        out.push_str(&format!("\n- {} (folder, {items} {word})", f.path.display()));
+    }
+    out
 }
 
 /// Emit to the window, and say so in the log when it could not be delivered: a drop that
@@ -404,6 +511,167 @@ pub fn attach_dropped_file(
 ) -> Result<AttachedView, String> {
     let Some(path) = state.take_dropped(drop, index) else { return Err(DROP_GONE.into()) };
     state.attach_path(&draft_id, &attachment_id, &path)
+}
+
+/// **The composer's plus (round 50/51): macOS's own picker, files AND folders, directly.** His
+/// words (2026-11-01): "keep the plus button … just add files and folders". A sheet on the asking
+/// window that lets him choose files, folders or both, several at once ([`panel::pick`]). What he
+/// picks is shelved exactly as a drop is ([`MacAttachments::record_drop`]), so the page gets a drop
+/// number and the names, takes each with [`attach_dropped_file`], and never names a path; a
+/// folder there takes the folder road ([`MacAttachments::attach_folder`]), as a dropped folder
+/// does. `None` when he cancels.
+///
+/// `NSOpenPanel` directly, not the dialog plugin: the plugin's picker (rfd 0.16,
+/// `panel_ffi.rs` `build_pick_files`) sets `canChooseDirectories` to NO and its folder picker sets
+/// `canChooseFiles` to NO, so neither offers both in one panel. None of this is reachable from the
+/// page except through this command.
+#[richos_command::command]
+pub async fn attach_pick_files(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<Option<DropView>, String> {
+    let paths = panel::pick(&app, &window).await?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let Some(state) = app.try_state::<MacAttachments>() else { return Err(PICKER_FAILED.into()) };
+    Ok(Some(state.record_drop(paths)))
+}
+
+/// The plus's panel. Empty when he cancels; [`PICKER_FAILED`] when it could not be shown.
+#[cfg(target_os = "macos")]
+mod panel {
+    use super::PICKER_FAILED;
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    use std::ffi::{c_char, CStr};
+    use std::path::PathBuf;
+    use std::sync::mpsc::Sender;
+    use std::sync::Mutex;
+
+    /// `NSModalResponseOK`.
+    const OK: isize = 1;
+    /// The panel's own line above its file list, in the plus's words.
+    const MESSAGE: &CStr = c"Add files and folders";
+
+    /// A raw `NSWindow *`, only touched on the main thread.
+    struct Win(*mut AnyObject);
+    // SAFETY: dereferenced only inside the `run_on_main_thread` closure below.
+    unsafe impl Send for Win {}
+
+    pub async fn pick(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<Vec<PathBuf>, String> {
+        let parent = Win(window.ns_window().map_err(|e| {
+            eprintln!("[richos] attachments: the window for the picker sheet is not available: {e}");
+            PICKER_FAILED.to_string()
+        })? as *mut AnyObject);
+        let (tx, rx) = std::sync::mpsc::channel::<Option<Vec<PathBuf>>>();
+        app.run_on_main_thread(move || {
+            let parent = parent;
+            begin(parent.0, tx);
+        })
+        .map_err(|e| {
+            eprintln!("[richos] attachments: the picker could not be put on the main thread: {e}");
+            PICKER_FAILED.to_string()
+        })?;
+        // The answer comes when he presses Open or Cancel, however long that takes.
+        let answer = tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten()).await.map_err(|e| {
+            eprintln!("[richos] attachments: the picker's task did not finish: {e}");
+            PICKER_FAILED.to_string()
+        })?;
+        answer.ok_or_else(|| PICKER_FAILED.to_string())
+    }
+
+    /// On the main thread: an `NSOpenPanel` that takes files and folders, several at once, as a
+    /// sheet on `parent`. `done` hears the chosen paths (empty on Cancel), or `None` when the
+    /// panel could not be made.
+    fn begin(parent: *mut AnyObject, done: Sender<Option<Vec<PathBuf>>>) {
+        let send = |v: Option<Vec<PathBuf>>, done: &Sender<Option<Vec<PathBuf>>>| {
+            if done.send(v).is_err() {
+                eprintln!("[richos] attachments: the picker answered after nobody was waiting for it");
+            }
+        };
+        let Some(class) = AnyClass::get(c"NSOpenPanel") else { return send(None, &done) };
+        let Some(string_class) = AnyClass::get(c"NSString") else { return send(None, &done) };
+        if parent.is_null() {
+            return send(None, &done);
+        }
+        // SAFETY: documented AppKit methods on the main thread. `openPanel` returns an autoreleased
+        // panel; it is retained here and moved into the completion block, so it lives until the
+        // block has read its URLs. AppKit copies the block it is given.
+        unsafe {
+            let raw: *mut AnyObject = msg_send![class, openPanel];
+            let Some(panel) = Retained::retain(raw) else { return send(None, &done) };
+            let _: () = msg_send![&*panel, setCanChooseFiles: Bool::YES];
+            let _: () = msg_send![&*panel, setCanChooseDirectories: Bool::YES];
+            let _: () = msg_send![&*panel, setAllowsMultipleSelection: Bool::YES];
+            let _: () = msg_send![&*panel, setResolvesAliases: Bool::YES];
+            let message: *mut AnyObject = msg_send![string_class, stringWithUTF8String: MESSAGE.as_ptr()];
+            let _: () = msg_send![&*panel, setMessage: message];
+            let once = Mutex::new(Some(done));
+            let held = panel.clone();
+            let block = block2::RcBlock::new(move |response: isize| {
+                let paths = if response == OK { urls(&held) } else { Vec::new() };
+                if let Some(done) = once.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                    send(Some(paths), &done);
+                }
+            });
+            let _: () = msg_send![&*panel, beginSheetModalForWindow: parent, completionHandler: &*block];
+        }
+    }
+
+    /// The panel's chosen URLs as paths, in the order he chose them.
+    fn urls(panel: &AnyObject) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        // SAFETY: documented NSOpenPanel / NSArray / NSURL / NSString methods, inside the panel's
+        // completion handler on the main thread; each C string is copied before the pool drains.
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let list: *mut AnyObject = msg_send![panel, URLs];
+            if list.is_null() {
+                return;
+            }
+            let count: usize = msg_send![list, count];
+            for i in 0..count {
+                let url: *mut AnyObject = msg_send![list, objectAtIndex: i];
+                if url.is_null() {
+                    continue;
+                }
+                let path: *mut AnyObject = msg_send![url, path];
+                if path.is_null() {
+                    continue;
+                }
+                let utf8: *const c_char = msg_send![path, UTF8String];
+                if !utf8.is_null() {
+                    out.push(PathBuf::from(CStr::from_ptr(utf8).to_string_lossy().into_owned()));
+                }
+            }
+        });
+        out
+    }
+}
+
+/// Off macOS the plugin's file picker is the nearest thing: it offers files only (rfd has no
+/// files-and-folders mode), and folders still arrive by drop.
+#[cfg(not(target_os = "macos"))]
+mod panel {
+    use super::PICKER_FAILED;
+    use std::path::PathBuf;
+
+    pub async fn pick(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<Vec<PathBuf>, String> {
+        let (app, window) = (app.clone(), window.clone());
+        tauri::async_runtime::spawn_blocking(move || {
+            use tauri_plugin_dialog::DialogExt;
+            app.dialog()
+                .file()
+                .set_parent(&window)
+                .set_title("Add files")
+                .blocking_pick_files()
+                .map(|files| files.into_iter().filter_map(|f| f.into_path().ok()).collect())
+                .unwrap_or_default()
+        })
+        .await
+        .map_err(|e| {
+            eprintln!("[richos] attachments: the file picker's task did not finish: {e}");
+            PICKER_FAILED.to_string()
+        })
+    }
 }
 
 /// The body is the file's raw bytes. Headers: `x-richos-draft`, `x-richos-attachment`,
@@ -568,7 +836,8 @@ mod tests {
         assert_eq!(mac.attach_path("d", "z", &zip).unwrap_err(), Origin::Mac.unknown_type());
         assert_eq!(mac.attach_path("d", "f", &fake).unwrap_err(), "This file does not look like a PDF. Nothing was attached.");
         assert_eq!(mac.attach_path("d", "e", &empty).unwrap_err(), "This file is empty. Nothing was attached.");
-        assert_eq!(mac.attach_path("d", "g", &desktop.0.join("Folder.pdf")).unwrap_err(), NOT_A_FILE);
+        // A folder whose name looks like a file is still a folder, and is never typed by its name.
+        assert_eq!(mac.attach_path("d", "g", &desktop.0.join("Folder.pdf")).unwrap().media_type, FOLDER_MEDIA_TYPE);
         assert_eq!(mac.attach_path("d", "m", &desktop.0.join("missing.pdf")).unwrap_err(), UNREADABLE);
         // A file over the ceiling is refused from its size, before it is read.
         let big = desktop.0.join("big.pdf");
@@ -607,6 +876,82 @@ mod tests {
         assert!(!data.0.join("attachments").join("thr_1").exists());
         let again = mac.commit("thr_1", "draft-2", "", &wanted[..1]).unwrap();
         assert_eq!(again.text.unwrap().lines().next().unwrap(), "Attached on this Mac (1 file, saved by RichOS):");
+    }
+
+    // ---- a folder: picked with the plus or dropped (round 51, "just add files and folders") ----
+
+    #[test]
+    fn a_folder_is_attached_as_itself_and_send_names_it_to_rich_by_its_real_path_under_the_files() {
+        let data = Scratch::new("data");
+        let desktop = canonical_scratch("desktop");
+        let comps = desktop.0.join("Comps 2026");
+        std::fs::create_dir(&comps).unwrap();
+        write(&comps, "october.csv", b"a,b\n1,2");
+        write(&comps, "november.csv", b"a,b\n3,4");
+        std::fs::create_dir(comps.join("old")).unwrap();
+        let mac = MacAttachments::open(&data.0);
+
+        // Picked or dropped, it is one shelf and one road.
+        let drop = mac.record_drop(vec![comps.clone(), write(&desktop.0, "brief.pdf", PDF)]);
+        assert_eq!(drop.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["Comps 2026", "brief.pdf"]);
+        let folder = mac.attach_path("draft-f", "f1", &mac.take_dropped(drop.drop, 0).unwrap()).unwrap();
+        assert_eq!(
+            (folder.name.as_str(), folder.media_type.as_str(), folder.label.as_str(), folder.size, folder.items),
+            ("Comps 2026", FOLDER_MEDIA_TYPE, "Folder", 0, Some(3))
+        );
+        let file = mac.attach_path("draft-f", "p1", &mac.take_dropped(drop.drop, 1).unwrap()).unwrap();
+        // Nothing of the folder was copied to the desk; only the file is staged.
+        assert!(!data.0.join("phone").join("attachment-staging").join("mac").join("draft-f").join("f1.bin").exists());
+
+        let wanted = vec![Wanted { id: file.id.clone(), sha256: file.sha256.clone() }, Wanted { id: folder.id.clone(), sha256: folder.sha256.clone() }];
+        let done = mac.commit("thr_f", "draft-f", "Use these for the one-pager.", &wanted).unwrap();
+        let saved = data.0.join("attachments").join("thr_f").join("draft-f");
+        assert_eq!(
+            done.text.unwrap(),
+            format!(
+                "Use these for the one-pager.\n\nAttached on this Mac (1 file, saved by RichOS):\n- {} (application/pdf, {} bytes)\n\n\
+                 Folders on this Mac (1 folder, not copied; read them where they are):\n- {} (folder, 3 items)",
+                saved.join("brief.pdf").display(),
+                PDF.len(),
+                comps.display()
+            )
+        );
+        assert_eq!(done.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["brief.pdf", "Comps 2026"]);
+        // The folder is where it was, untouched, and the tray's record of it is gone with the send.
+        assert_eq!(std::fs::read_dir(&comps).unwrap().count(), 3);
+        assert!(mac.commit("thr_f", "draft-f", "", &wanted[1..]).unwrap().text.is_none());
+    }
+
+    #[test]
+    fn a_folder_alone_is_a_message_a_link_is_named_by_where_it_leads_and_a_removed_folder_sends_nothing() {
+        let data = Scratch::new("data");
+        let desktop = canonical_scratch("desktop");
+        let notes = desktop.0.join("Board notes");
+        std::fs::create_dir(&notes).unwrap();
+        write(&notes, "one.md", b"# One");
+        let link = desktop.0.join("notes-link");
+        std::os::unix::fs::symlink(&notes, &link).unwrap();
+        let mac = MacAttachments::open(&data.0);
+
+        let a = mac.attach_path("draft-g", "a", &link).unwrap();
+        assert_eq!((a.name.as_str(), a.items), ("notes-link", Some(1)));
+        let done = mac.commit("thr_g", "draft-g", "  ", &[Wanted { id: a.id.clone(), sha256: a.sha256.clone() }]).unwrap();
+        assert_eq!(done.text.unwrap(), format!("Folders on this Mac (1 folder, not copied; read them where they are):\n- {} (folder, 1 item)", notes.display()));
+
+        // Removed from the tray: Send no longer has it.
+        let b = mac.attach_path("draft-h", "b", &notes).unwrap();
+        assert!(mac.discard("draft-h", "b").unwrap());
+        let gone = mac.commit("thr_g", "draft-h", "hi", &[Wanted { id: b.id.clone(), sha256: b.sha256.clone() }]).unwrap();
+        assert_eq!(gone.missing, vec!["b".to_string()]);
+
+        // Deleted on disk before Send: reported missing, and nothing else in the message is sent.
+        let c = mac.attach_path("draft-i", "c", &notes).unwrap();
+        let f = mac.attach_bytes("draft-i", "f", "a.png", "image/png", PNG).unwrap();
+        std::fs::remove_dir_all(&notes).unwrap();
+        let wanted = vec![Wanted { id: f.id.clone(), sha256: f.sha256.clone() }, Wanted { id: c.id.clone(), sha256: c.sha256.clone() }];
+        let answer = mac.commit("thr_g", "draft-i", "hi", &wanted).unwrap();
+        assert_eq!(answer, Committed { text: None, files: Vec::new(), missing: vec!["c".into()] });
+        assert!(!data.0.join("attachments").join("thr_g").join("draft-i").exists(), "a partial send was made");
     }
 
     // ---- Add to chat: a recorded file through the same desk (Output side panel PRD §12.7) ----

@@ -540,10 +540,6 @@
         </button>
 
         <div id="composer-zone">
-          <!-- The engine-task courtesy chip. NOT a §7 worker chip: `rich://worker-upserted`
-               is deferred (no worker lifecycle signal exists) and §7 is slice 7. -->
-          <div id="quota-work-status" role="status" hidden></div>
-          <div id="drill-chip-zone" hidden></div>
           <!-- Says which entity a first message will be filed under, whenever that is not
                already obvious from an open thread (§3.3 new-thread flow). -->
           <p id="composer-scope" class="composer-scope" hidden></p>
@@ -578,53 +574,8 @@
                well. Saying so in the wrong place would be a second untruth on top of the
                silence. -->
           <p id="voice-unavailable" class="composer-voice-note" hidden role="status"></p>
-          <!-- SCREENSHOTS AND FILES HANDED TO RICH (CEO §86, 2026-09-24). Round 12.1's
-               attachment append is the reference: the tray grows above the text line, every
-               file has its own remove control, and what he types goes in the same message.
-               Filled by `attachments.js`; hidden while it holds nothing and no drag is over
-               the window. The refusal line is `role="status"` because it answers something
-               he just did (a paste or a drop) without him having to look for it. -->
-          <div id="attach-tray" hidden>
-            <!-- Empty until a drag is over the window: `attachments.js` writes its words then,
-                 so the shell as it opens carries no text node it did not carry before
-                 (`tests/contrast.js` 9z measures the bare shell's node count). -->
-            <p id="attach-drop" class="attach-drop" hidden></p>
-            <ul id="attach-list" class="attach-list" hidden></ul>
-          </div>
           <p id="attach-note" class="attach-note" hidden role="status"></p>
           <div id="composer-row">
-            <!-- Persistent across text/voice modes — this is the SAME ◉ the voice
-                 footnote refers to ("tap ◉ to end voice"), so it must never hide. -->
-            <!-- IT HAS A NAME, AND THE NAME CHANGES WITH THE STATE (nightly D8).
-                 `title` is a tooltip, not an accessible name: with only `title` and
-                 `aria-pressed` here, VoiceOver announced the primary affordance of a
-                 voice-first product as a bare "checkbox" — measured off the accessibility
-                 tree in
-                 docs/verification/2026-09-17-nightly-1.2.0-20260917.1-onscreen-audit.md §D8,
-                 which found the rest of this tree unusually well named and exactly two
-                 controls unnamed.
-
-                 The label is maintained by `setTalkPressed` in main.js beside
-                 `aria-pressed`, so the two can never say different things; this attribute is
-                 the off-state value the first paint needs before any script runs. -->
-            <!-- THE ICON IS THE CEO'S (2026-10-08): "only has an unassuming little circle in it
-                 which doesn't make it instantly clear that this is the voice i.e. Talk-to-Rich
-                 button". Geometry copied unchanged from his
-                 `richos-hq/wiki/assets/voice-control.svg` (bf1bc614); only the three placeholder
-                 fills are replaced, by theme tokens in style.css (`.talk-icon`). -->
-            <button id="talk-toggle" type="button" title="Talk to Rich" aria-label="Talk to Rich" aria-pressed="false">
-              <svg class="talk-icon" viewBox="0 0 927 927" aria-hidden="true" focusable="false">
-                <circle class="talk-icon-ring" cx="463.5" cy="463.5" r="463.5"/>
-                <circle class="talk-icon-gap" cx="463.5" cy="463.5" r="391.5"/>
-                <circle class="talk-icon-disc" cx="463.5" cy="463.5" r="356.5"/>
-                <path class="talk-icon-bar" d="M647.5,540L647.5,540c-14,0-25.5-11.5-25.5-25.5v-102c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v102C673,528.5,661.5,540,647.5,540z"/>
-                <path class="talk-icon-bar" d="M555.5,600L555.5,600c-14,0-25.5-11.5-25.5-25.5v-222c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v222C581,588.5,569.5,600,555.5,600z"/>
-                <path class="talk-icon-bar" d="M463.5,660L463.5,660c-14,0-25.5-11.5-25.5-25.5v-342c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v342C489,648.5,477.5,660,463.5,660z"/>
-                <path class="talk-icon-bar" d="M371.5,600L371.5,600c-14,0-25.5-11.5-25.5-25.5v-222c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v222C397,588.5,385.5,600,371.5,600z"/>
-                <path class="talk-icon-bar" d="M279.5,540L279.5,540c-14,0-25.5-11.5-25.5-25.5v-102c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v102C305,528.5,293.5,540,279.5,540z"/>
-              </svg>
-            </button>
-
             <form id="composer" autocomplete="off">
               <!-- N1 (dev-walk audit, 2026-09-17): the border, radius and fill moved to this
                    wrapper — see style.css's note on `#input-shell` — so a native scrollbar
@@ -653,141 +604,242 @@
                    placeholder carries the state; `aria-describedby` carries the reason. One
                    fact each.
 
-                   "Message to Rich" and not "Talk to Rich": the talk control eighteen lines
-                   above is already named "Talk to Rich" and this is the typed route to the
+                   "Message to Rich" and not "Talk to Rich": the talk control in this same
+                   box is already named "Talk to Rich" and this is the typed route to the
                    same place. Two controls with one name is what a screen reader cannot
                    tell apart, which is the defect one floor up from this one. -->
               <div id="input-shell" data-contrast-role="indicator">
-                <textarea
-                  id="input"
-                  rows="1"
-                  placeholder="Talk to Rich…"
-                  aria-label="Message to Rich"
-                  aria-describedby="composer-blocked"
-                ></textarea>
+                <!-- SCREENSHOTS AND FILES HANDED TO RICH (CEO §86, 2026-09-24). Round 12.1's
+                     attachment append is the reference: the tray grows above the text line, every
+                     file has its own remove control, and what he types goes in the same message.
+                     Filled by `attachments.js`; hidden while it holds nothing and no drag is over
+                     the window. The refusal line is `role="status"` because it answers something
+                     he just did (a paste or a drop) without him having to look for it. -->
+                <div id="attach-tray" hidden>
+                  <!-- Empty until a drag is over the window: `attachments.js` writes its words then,
+                       so the shell as it opens carries no text node it did not carry before
+                       (`tests/contrast.js` 9z measures the bare shell's node count). -->
+                  <p id="attach-drop" class="attach-drop" hidden></p>
+                  <ul id="attach-list" class="attach-list" hidden></ul>
+                </div>
+                <div id="composer-field" class="composer-field">
+                  <textarea
+                    id="input"
+                    rows="2"
+                    placeholder="Talk to Rich…"
+                    aria-label="Message to Rich"
+                    aria-describedby="composer-blocked"
+                  ></textarea>
+                <!-- ROUND 51: THE EMPTY BOX'S PLACEHOLDER, two lines drawn over the empty text area:
+                       Type here… OR…
+                       [Talk to Rich]  ← Click to talk to Rich.
+                     Talk to Rich is the real `#talk-toggle`, moved into line two's slot while the box
+                     is empty and back into the row on the first character (main.js `placeTalk`).
+                     The lines take no clicks, so a click on them lands in the text area. The WORDS
+                     are hidden to assistive technology (the field's own `placeholder` still says its
+                     state); the slot is not, because the button in it must stay reachable: an
+                     `aria-hidden` ancestor would take Talk to Rich out of the accessibility tree
+                     whenever the box is empty (seen on the guest, 2026-11-01). -->
+                <div id="composer-hint" class="composer-hint">
+                  <span class="composer-hint-line" aria-hidden="true">Type here… OR…</span>
+                  <span class="composer-hint-line composer-hint-talk"><span class="talk-slot" data-slot="hint"></span><span class="composer-hint-words" aria-hidden="true"><span class="composer-hint-arrow">←</span> Click to talk to Rich.</span></span>
+                </div>
+                </div>
+                <!-- Voice mode replaces the text field inline, inside the same box — never a separate
+                     call screen. Round 51: the box becomes a listening panel with the placeholder's
+                     geometry, the row below keeps the plus, the status line and Output, and Send goes
+                     (nothing is typed to send). -->
+                <div id="voice-panel" hidden>
+                  <div class="voice-state" id="voice-state-listening">
+                    <span class="voice-dot voice-dot--listening"></span>
+                    <span class="voice-label">listening…</span>
+                    <span class="voice-level" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+                  </div>
+                  <!-- The mic is open and healthy but delivering nothing (rich://voice-state
+                       noAudio). Replaces the listening row rather than shouting over it: one
+                       quiet, actionable line, no modal, no alarm color.
+
+                       AND A CONTROL, because this line names something the CEO can fix. It said
+                       "check your mic isn't muted" and then offered him nothing to press once he
+                       had: a state he could change, rendered without the control that changes
+                       it, which is a request wearing a status's clothes. Re-opening capture is
+                       the only recovery this app can genuinely perform, so it is the only thing
+                       offered — no settings deep-link is claimed that is not wired. -->
+                  <div class="voice-state" id="voice-state-no-audio" hidden>
+                    <span class="voice-dot voice-dot--attention"></span>
+                    <span class="voice-label voice-label--attention"
+                      >I can't hear anything. Check your mic isn't muted, then try again.</span
+                    >
+                    <button id="voice-retry" type="button" class="voice-retry">try again</button>
+                  </div>
+                  <div class="voice-state" id="voice-state-speaking" hidden>
+                    <span class="voice-dot voice-dot--speaking"></span>
+                    <span class="voice-label">Rich is speaking</span>
+                    <button id="voice-barge-in" type="button" class="voice-barge-in">tap to stop</button>
+                  </div>
+
+                  <!-- GETTING THE SPEECH MODEL (2026-09-17). Four rows, in the panel that is
+                       already here rather than a new screen: the CEO pressed ◉ because he wants
+                       to talk, and sending him to a settings sheet to answer "not yet" would be
+                       answering a different question from the one he asked.
+
+                       THE MIC IS NOT OPEN IN ANY OF THEM. `enterVoiceMode` only calls
+                       `start_voice_capture` when readiness says `ready`; in `model-missing` it
+                       opens this panel and touches no device. That is the same hot-mic invariant
+                       the 2026-09-04 fix established, kept rather than relaxed: a panel that says
+                       "listening…" over a machine that cannot transcribe is the defect, and none
+                       of these rows says it.
+
+                       EVERY ROW NAMES ITS CONTROL, because every one of these is a state the CEO
+                       can act on. A state he could change, rendered without the control that
+                       changes it, is a request wearing a status's clothes — the rule
+                       `#voice-state-no-audio` above had to learn. -->
+                  <div class="voice-state" id="voice-state-model-offer" hidden>
+                    <span class="voice-dot voice-dot--attention"></span>
+                    <span class="voice-label voice-label--attention" id="voice-model-offer-label"></span>
+                    <button id="voice-model-get" type="button" class="voice-retry">Download my speech model</button>
+                  </div>
+                  <div class="voice-state" id="voice-state-model-progress" hidden>
+                    <!-- --working, NOT --listening. A pulsing accent dot is this panel's grammar for a
+                         hot microphone, and no device is open on this screen. -->
+                    <span class="voice-dot voice-dot--working"></span>
+                    <span class="voice-label" id="voice-model-progress-label"></span>
+                    <!-- aria-hidden because the LABEL beside it already carries the percentage in
+                         words. A second announcement of the same number, several times a second,
+                         is what makes a screen reader unusable during a download. -->
+                    <span class="voice-progress" aria-hidden="true"><i id="voice-model-bar"></i></span>
+                    <button id="voice-model-stop" type="button" class="voice-retry">Stop the download</button>
+                  </div>
+                  <div class="voice-state" id="voice-state-model-failed" hidden>
+                    <span class="voice-dot voice-dot--attention"></span>
+                    <span class="voice-label voice-label--attention" id="voice-model-failed-label"></span>
+                    <!-- SHOWN ONLY WHEN ASKING AGAIN COULD ACTUALLY HELP. The backend says which
+                         (`retryable` on rich://voice-model), so a corrupted download never grows a
+                         button that would just corrupt it again. -->
+                    <button id="voice-model-retry" type="button" class="voice-retry" hidden>Try the download again</button>
+                  </div>
+                  <div class="voice-state" id="voice-state-model-installed" hidden>
+                    <span class="voice-dot voice-dot--attention"></span>
+                    <span class="voice-label voice-label--attention">My ears are installed. Start listening whenever you're ready.</span>
+                    <!-- THE MICROPHONE IS NOT OPENED FOR HIM. He pressed ◉ some minutes and half a
+                         gigabyte ago; opening a live mic on the strength of that would be acting on
+                         consent that has gone stale. One press, now, with the sentence in front of
+                         him. -->
+                    <button id="voice-model-listen" type="button" class="voice-retry">Start listening</button>
+                  </div>
+                  <!-- ROUND 51: THE SECOND LINE OF THE LISTENING PANEL. The pressed Talk to Rich button
+                       sits where the empty box's placeholder put it (main.js `placeTalk`), so pressing
+                       it from the empty box moves nothing under the pointer, and the words say what
+                       pressing it again does. Main's 14px "tap ◉ to end voice" hint becomes this 16px
+                       line, because he is meant to read it. -->
+                  <div class="composer-hint-talk voice-talk-line"><span class="talk-slot" data-slot="voice"></span><span class="composer-hint-words"><span class="composer-hint-arrow" aria-hidden="true">←</span> Click to stop talking · headphones recommended</span></div>
+                </div>
+
+                <!-- ROUND 51: THE ROW ALONG THE BOTTOM OF THE BOX. Three columns, the outer two
+                     equal, so Output's center is the box's center at every width and the status
+                     line gives way (an ellipsis) before Output moves:
+                       [+] [Talk to Rich] [status ........]   [Output]   [Stop] [Send]  -->
+                <div class="composer-bar">
+                  <div class="composer-bar-left">
+                    <!-- THE PLUS (round 50/51): "we should keep the plus button … some users might
+                         not know [drag and drop] and they might click this here to add some files".
+                         It opens macOS's own picker for files and folders directly
+                         (`attach_pick_files` in `mac_attachments.rs`: "just add files and folders"),
+                         and what he picks takes the drop's road to the tray.
+                         EVERY `data-tip` IN THIS ROW is round 51's own tooltip (`#composer-tip`),
+                         never a `title`, which would put the system's tooltip on top of it. -->
+                    <button id="attach-add" class="composer-add" type="button" aria-label="Add files and folders"
+                            data-tip="Add files and folders"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M10 4v12M4 10h12"/></svg></button>
+                    <span class="talk-slot" data-slot="row">
+                      <!-- ONE BUTTON, THREE PLACES, NEVER TWO (round 51): the start of the empty box's
+                           placeholder line two, this slot in the row once he types, and the start of
+                           the listening panel's line two while he talks (main.js `placeTalk`). It
+                           persists across text and voice modes and never hides. -->
+                      <!-- IT HAS A NAME, AND THE NAME CHANGES WITH THE STATE (nightly D8).
+                           `title` is a tooltip, not an accessible name: with only `title` and
+                           `aria-pressed` here, VoiceOver announced the primary affordance of a
+                           voice-first product as a bare "checkbox" — measured off the accessibility
+                           tree in
+                           docs/verification/2026-09-17-nightly-1.2.0-20260917.1-onscreen-audit.md §D8,
+                           which found the rest of this tree unusually well named and exactly two
+                           controls unnamed.
+
+                           The label is maintained by `setTalkPressed` in main.js beside
+                           `aria-pressed`, so the two can never say different things; this attribute is
+                           the off-state value the first paint needs before any script runs. -->
+                      <!-- THE ICON IS THE CEO'S (2026-10-08): "only has an unassuming little circle in it
+                           which doesn't make it instantly clear that this is the voice i.e. Talk-to-Rich
+                           button". Geometry copied unchanged from his
+                           `richos-hq/wiki/assets/voice-control.svg` (bf1bc614); only the three placeholder
+                           fills are replaced, by theme tokens in style.css (`.talk-icon`). -->
+                      <button id="talk-toggle" type="button" data-tip="Talk to Rich" aria-label="Talk to Rich" aria-pressed="false">
+                        <svg class="talk-icon" viewBox="0 0 927 927" aria-hidden="true" focusable="false">
+                          <circle class="talk-icon-ring" cx="463.5" cy="463.5" r="463.5"/>
+                          <circle class="talk-icon-gap" cx="463.5" cy="463.5" r="391.5"/>
+                          <circle class="talk-icon-disc" cx="463.5" cy="463.5" r="356.5"/>
+                          <path class="talk-icon-bar" d="M647.5,540L647.5,540c-14,0-25.5-11.5-25.5-25.5v-102c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v102C673,528.5,661.5,540,647.5,540z"/>
+                          <path class="talk-icon-bar" d="M555.5,600L555.5,600c-14,0-25.5-11.5-25.5-25.5v-222c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v222C581,588.5,569.5,600,555.5,600z"/>
+                          <path class="talk-icon-bar" d="M463.5,660L463.5,660c-14,0-25.5-11.5-25.5-25.5v-342c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v342C489,648.5,477.5,660,463.5,660z"/>
+                          <path class="talk-icon-bar" d="M371.5,600L371.5,600c-14,0-25.5-11.5-25.5-25.5v-222c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v222C397,588.5,385.5,600,371.5,600z"/>
+                          <path class="talk-icon-bar" d="M279.5,540L279.5,540c-14,0-25.5-11.5-25.5-25.5v-102c0-14,11.5-25.5,25.5-25.5l0,0c14,0,25.5,11.5,25.5,25.5v102C305,528.5,293.5,540,279.5,540z"/>
+                        </svg>
+                      </button>
+                    </span>
+                    <!-- THE STATUS LINE (round 50/51), moved from above the box into its row: the
+                         engine-task courtesy line and the work chip that opens the work summary. One
+                         line; an ellipsis before Output moves. NOT a §7 worker chip:
+                         `rich://worker-upserted` is deferred (no worker lifecycle signal exists). -->
+                    <div class="composer-status">
+                      <div id="drill-chip-zone" hidden></div>
+                      <div id="quota-work-status" role="status" hidden></div>
+                    </div>
+                  </div>
+                  <div class="composer-bar-mid">
+                    <!-- OUTPUT, AT THE BOTTOM (output side-panel PRD §6.2, round 17's `#out-bottom`): the
+                         same control as `#out-top`, at the right of the composer, where the CEO pointed
+                         for "at the bottom". -->
+                    <button id="out-bottom" class="out-btn is-empty" type="button" hidden aria-pressed="false"
+                            aria-controls="outpanel" aria-label="Output" aria-keyshortcuts="Meta+Shift+O Control+Shift+O"
+                            data-tip="Everything this thread produced" data-kbd="⌘⇧O">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                           stroke-linejoin="round" aria-hidden="true" focusable="false"><path
+                           d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path
+                           d="M9 13h6"/><path d="M9 17h6"/></svg>
+                      <span class="out-word">Output</span><span class="out-count" data-count aria-hidden="true"></span>
+                    </button>
+                  </div>
+                  <div class="composer-bar-right">
+                    <!-- §9.2: "a stop button replaces or sits beside send when the composer is
+                         empty". Empty + working shows stop alone; words in the box show both, so
+                         the CEO never has to choose between sending what he typed and stopping.
+                         `hidden` while nothing is running — a stop control with nothing to stop
+                         teaches him the button is decorative. -->
+                    <button id="stop" type="button" data-tip="Stop Rich" aria-label="Stop Rich" hidden>
+                      <span class="stop-glyph" aria-hidden="true"></span>
+                    </button>
+                    <!-- IT HAS A NAME, AND THE NAME IS NOT THE SHAPE (candidate-.2 defect #7).
+                         Read live from the accessibility tree during the on-screen walk:
+                         `AXButton` with `AXTitle = "▷"` and an empty `AXDescription`; the word
+                         "Send" existed only as `AXHelp`, which is the tooltip. A screen-reader
+                         user heard a geometric shape where the primary affordance of the composer
+                         should be. WCAG 4.1.2.
+
+                         TWO HALVES, AND BOTH ARE NEEDED. `aria-label` supplies the name;
+                         `aria-hidden` on the glyph takes the shape out of the name computation, so
+                         the name cannot become "Send ▷" if the label is ever removed again. This
+                         is exactly the shape `#stop` beside it already had — "Stop Rich" plus an
+                         `aria-hidden` glyph — which is the control this was measured against.
+
+                         The pointer tooltip is round 51's `data-tip` (with its ↩), not the name:
+                         the whole of this defect was a name that lived only in a tooltip. -->
+                    <button id="send" type="submit" data-tip="Send" data-kbd="↩" aria-label="Send">
+                      <span class="send-glyph" aria-hidden="true">▷</span>
+                    </button>
+                  </div>
+                </div>
               </div>
-              <!-- §9.2: "a stop button replaces or sits beside send when the composer is
-                   empty". Empty + working shows stop alone; words in the box show both, so
-                   the CEO never has to choose between sending what he typed and stopping.
-                   `hidden` while nothing is running — a stop control with nothing to stop
-                   teaches him the button is decorative. -->
-              <button id="stop" type="button" title="Stop" aria-label="Stop Rich" hidden>
-                <span class="stop-glyph" aria-hidden="true"></span>
-              </button>
-              <!-- IT HAS A NAME, AND THE NAME IS NOT THE SHAPE (candidate-.2 defect #7).
-                   Read live from the accessibility tree during the on-screen walk:
-                   `AXButton` with `AXTitle = "▷"` and an empty `AXDescription`; the word
-                   "Send" existed only as `AXHelp`, which is the tooltip. A screen-reader
-                   user heard a geometric shape where the primary affordance of the composer
-                   should be. WCAG 4.1.2.
-
-                   TWO HALVES, AND BOTH ARE NEEDED. `aria-label` supplies the name;
-                   `aria-hidden` on the glyph takes the shape out of the name computation, so
-                   the name cannot become "Send ▷" if the label is ever removed again. This
-                   is exactly the shape `#stop` beside it already had — "Stop Rich" plus an
-                   `aria-hidden` glyph — which is the control this was measured against.
-
-                   `title` STAYS, and it is not the name. It is the pointer tooltip, and the
-                   whole of this defect was a name that lived only there. -->
-              <button id="send" type="submit" title="Send" aria-label="Send">
-                <span class="send-glyph" aria-hidden="true">▷</span>
-              </button>
             </form>
 
-            <!-- Voice mode replaces the text field inline — never a separate call screen. -->
-            <div id="voice-panel" hidden>
-              <div class="voice-state" id="voice-state-listening">
-                <span class="voice-dot voice-dot--listening"></span>
-                <span class="voice-label">listening…</span>
-                <span class="voice-level" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-              </div>
-              <!-- The mic is open and healthy but delivering nothing (rich://voice-state
-                   noAudio). Replaces the listening row rather than shouting over it: one
-                   quiet, actionable line, no modal, no alarm color.
-
-                   AND A CONTROL, because this line names something the CEO can fix. It said
-                   "check your mic isn't muted" and then offered him nothing to press once he
-                   had: a state he could change, rendered without the control that changes
-                   it, which is a request wearing a status's clothes. Re-opening capture is
-                   the only recovery this app can genuinely perform, so it is the only thing
-                   offered — no settings deep-link is claimed that is not wired. -->
-              <div class="voice-state" id="voice-state-no-audio" hidden>
-                <span class="voice-dot voice-dot--attention"></span>
-                <span class="voice-label voice-label--attention"
-                  >I can't hear anything. Check your mic isn't muted, then try again.</span
-                >
-                <button id="voice-retry" type="button" class="voice-retry">try again</button>
-              </div>
-              <div class="voice-state" id="voice-state-speaking" hidden>
-                <span class="voice-dot voice-dot--speaking"></span>
-                <span class="voice-label">Rich is speaking</span>
-                <button id="voice-barge-in" type="button" class="voice-barge-in">tap to stop</button>
-              </div>
-
-              <!-- GETTING THE SPEECH MODEL (2026-09-17). Four rows, in the panel that is
-                   already here rather than a new screen: the CEO pressed ◉ because he wants
-                   to talk, and sending him to a settings sheet to answer "not yet" would be
-                   answering a different question from the one he asked.
-
-                   THE MIC IS NOT OPEN IN ANY OF THEM. `enterVoiceMode` only calls
-                   `start_voice_capture` when readiness says `ready`; in `model-missing` it
-                   opens this panel and touches no device. That is the same hot-mic invariant
-                   the 2026-09-04 fix established, kept rather than relaxed: a panel that says
-                   "listening…" over a machine that cannot transcribe is the defect, and none
-                   of these rows says it.
-
-                   EVERY ROW NAMES ITS CONTROL, because every one of these is a state the CEO
-                   can act on. A state he could change, rendered without the control that
-                   changes it, is a request wearing a status's clothes — the rule
-                   `#voice-state-no-audio` above had to learn. -->
-              <div class="voice-state" id="voice-state-model-offer" hidden>
-                <span class="voice-dot voice-dot--attention"></span>
-                <span class="voice-label voice-label--attention" id="voice-model-offer-label"></span>
-                <button id="voice-model-get" type="button" class="voice-retry">Download my speech model</button>
-              </div>
-              <div class="voice-state" id="voice-state-model-progress" hidden>
-                <!-- --working, NOT --listening. A pulsing accent dot is this panel's grammar for a
-                     hot microphone, and no device is open on this screen. -->
-                <span class="voice-dot voice-dot--working"></span>
-                <span class="voice-label" id="voice-model-progress-label"></span>
-                <!-- aria-hidden because the LABEL beside it already carries the percentage in
-                     words. A second announcement of the same number, several times a second,
-                     is what makes a screen reader unusable during a download. -->
-                <span class="voice-progress" aria-hidden="true"><i id="voice-model-bar"></i></span>
-                <button id="voice-model-stop" type="button" class="voice-retry">Stop the download</button>
-              </div>
-              <div class="voice-state" id="voice-state-model-failed" hidden>
-                <span class="voice-dot voice-dot--attention"></span>
-                <span class="voice-label voice-label--attention" id="voice-model-failed-label"></span>
-                <!-- SHOWN ONLY WHEN ASKING AGAIN COULD ACTUALLY HELP. The backend says which
-                     (`retryable` on rich://voice-model), so a corrupted download never grows a
-                     button that would just corrupt it again. -->
-                <button id="voice-model-retry" type="button" class="voice-retry" hidden>Try the download again</button>
-              </div>
-              <div class="voice-state" id="voice-state-model-installed" hidden>
-                <span class="voice-dot voice-dot--attention"></span>
-                <span class="voice-label voice-label--attention">My ears are installed. Start listening whenever you're ready.</span>
-                <!-- THE MICROPHONE IS NOT OPENED FOR HIM. He pressed ◉ some minutes and half a
-                     gigabyte ago; opening a live mic on the strength of that would be acting on
-                     consent that has gone stale. One press, now, with the sentence in front of
-                     him. -->
-                <button id="voice-model-listen" type="button" class="voice-retry">Start listening</button>
-              </div>
-              <p class="voice-footnote">headphones recommended · tap <span class="voice-footnote-glyph">◉</span> to end voice</p>
-            </div>
-
-            <!-- OUTPUT, AT THE BOTTOM (output side-panel PRD §6.2, round 17's `#out-bottom`): the
-                 same control as `#out-top`, at the right of the composer, where the CEO pointed
-                 for "at the bottom". -->
-            <button id="out-bottom" class="out-btn is-empty" type="button" hidden aria-pressed="false"
-                    aria-controls="outpanel" aria-label="Output" aria-keyshortcuts="Meta+Shift+O Control+Shift+O"
-                    title="Everything this thread produced (⌘⇧O)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                   stroke-linejoin="round" aria-hidden="true" focusable="false"><path
-                   d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path
-                   d="M9 13h6"/><path d="M9 17h6"/></svg>
-              <span class="out-word">Output</span><span class="out-count" data-count aria-hidden="true"></span>
-            </button>
           </div>
         </div>
       </main>
@@ -1348,6 +1400,11 @@
       <!-- The rail's instant tooltip: "+ New chat" on a company's plus (round 32). No delay and
            no fade, so it is on screen in the frame the pointer arrives in. -->
       <div id="rail-tip" role="tooltip" hidden></div>
+
+      <!-- The input area's tooltips (round 51's `.r51-tip`): the plus, Talk to Rich, the status
+           line, Output, Stop and Send, from each control's data-tip (main.js "THE INPUT AREA'S
+           TOOLTIPS"). Faded in with the round's delay; never the system's own tooltip. -->
+      <div id="composer-tip" role="tooltip" hidden></div>
 
       <!-- What a stand-in on the report replaced. Only the user sees it; it is never in the issue. -->
       <div id="bug-subtip" role="tooltip" hidden></div>

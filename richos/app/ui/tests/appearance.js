@@ -1679,7 +1679,6 @@ async function main() {
     /// under the floor fails as STALE — which is what would have caught this list going quiet
     /// after the three labels raised in the commit before this one.
     const BELOW_FLOOR = {
-      ".send-glyph": { kind: "glyph", why: "the send arrow inside the send button — the button's accessible name carries the word" },
       ".rail-icon-btn": { kind: "glyph", why: "the rail's icon buttons (the drawer's and the pane's close): one symbol each, each with an aria-label of its own" },
       ".nav-disclosure": { kind: "glyph", why: "the group disclosure triangle in the rail — rotation is the state, and the group's label is beside it" },
       ".nav-status": { kind: "glyph", why: "the per-conversation status mark, a SHAPE (§18: a state is never carried by color alone), with the word in the row's accessible label" },

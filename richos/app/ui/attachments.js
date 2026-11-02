@@ -15,8 +15,16 @@
 // remove control, a file is a chip with its name, type and size, and "what you type goes in the
 // same bubble". The Mac composer's own tokens are used for every color; there is no new one.
 //
-// WHAT THIS DOES NOT DO, said rather than discovered: no file picker (the brief is drop and
-// paste), no thumbnail for a DROPPED image (the page never receives its bytes, by design — see
+// THE PLUS (round 50/51) opens macOS's own picker for files and folders (`attach_pick_files` in
+// `mac_attachments.rs`); what he picks is shelved in Rust exactly like a drop and takes the
+// drop's road from here (`addPicked` → `addDropped`), so the page never names a path either way.
+//
+// A FOLDER (round 51: "just add files and folders"), dropped or picked, is a chip like a file's
+// with the round's folder glyph and "Folder · N items". It is not copied: Send names it to Rich by
+// its path (`FolderRef` in `mac_attachments.rs`).
+//
+// WHAT THIS DOES NOT DO, said rather than discovered: no thumbnail for a
+// DROPPED or PICKED image (the page never receives its bytes, by design — see
 // the Rust module), and the tray does not survive a relaunch (the staged files do, and are swept
 // after seven days by the desk).
 "use strict";
@@ -31,7 +39,13 @@
   const TOO_LARGE = "This file is larger than 25 MB, the most RichOS takes in one file. Nothing was attached.";
   const TOO_MANY = "A message can carry at most 10 files.";
   const STILL_ADDING = "A file is still being added. Press Send again in a moment.";
-  const DROP_HINT = "Drop to attach to your message";
+  /// Round 51's words for the drop zone (`r51.js` `dragOn`), now that a folder lands too.
+  const DROP_HINT = "Drop files or folders here to hand them to Rich";
+  /// A folder's kind as `mac_attachments.rs` answers it (`FOLDER_MEDIA_TYPE`).
+  const FOLDER_TYPE = "inode/directory";
+  /// Round 51's folder glyph (`r51.js` `ICON.folder`), drawn in the chip's tile.
+  const FOLDER_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
   const GONE = " is no longer waiting to be sent. Attach it again; your words are still in the box.";
 
   let bridge = null;
@@ -125,6 +139,9 @@
       img.src = item.thumb;
       img.alt = "";
       tile.appendChild(img);
+    } else if (item.folder) {
+      tile.classList.add("is-folder");
+      tile.innerHTML = FOLDER_ICON;
     } else {
       tile.textContent = extensionOf(item.name);
     }
@@ -138,7 +155,12 @@
     name.title = item.name;
     const meta = document.createElement("span");
     meta.className = "attach-meta";
-    meta.textContent = item.state === "adding" ? "Adding…" : (item.label || "File") + " · " + formatSize(item.size);
+    meta.textContent =
+      item.state === "adding"
+        ? "Adding…"
+        : item.folder
+          ? (item.label || "Folder") + " · " + (item.items === 1 ? "1 item" : item.items + " items")
+          : (item.label || "File") + " · " + formatSize(item.size);
     text.appendChild(name);
     text.appendChild(meta);
     li.appendChild(text);
@@ -213,6 +235,8 @@
     item.label = answer.label;
     item.size = answer.size;
     item.sha256 = answer.sha256;
+    item.folder = answer.mediaType === FOLDER_TYPE;
+    item.items = typeof answer.items === "number" ? answer.items : 0;
     item.state = "ready";
     if (!/^image\//.test(answer.mediaType)) releaseThumb(item);
     changed();
@@ -308,6 +332,22 @@
         fail(tray, item, e);
       }
     }
+  }
+
+  // ---- the plus: macOS's own file picker --------------------------------------------------
+
+  /// The picker answers like a drop (`{ drop, files }`), or null when he cancels; a refusal to
+  /// open it at all comes back as the shell's sentence, on the tray's line.
+  async function addPicked() {
+    if (!composerKey()) return;
+    let view = null;
+    try {
+      view = await bridge.invoke("attach_pick_files");
+    } catch (e) {
+      note(String(e));
+      return;
+    }
+    if (view && Array.isArray(view.files) && view.files.length) await addDropped(view);
   }
 
   // ---- a file the thread produced (Add to chat, Output side panel PRD §12.7) --------------
@@ -408,6 +448,8 @@
       changed();
     },
     addRecorded,
+    /// The plus: the file picker, then the drop's road.
+    pick: addPicked,
     note,
     STILL_ADDING,
   };

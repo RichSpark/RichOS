@@ -94,7 +94,8 @@ module.exports = [
   {"s": "The screen is back, so this is carrying on.", "c": "INFORMATIONAL", "why": "The record's carrying-on detail (screen::says::carrying_on) that timeline.js reads to show the line above. Not drawn itself; the same fact, asking nothing."},
   {"s": "1 file attached", "c": "INFORMATIONAL", "why": "The accessible name of the tray's list (`#attach-list`), counting what is on the composer. It asks nothing."},
   {"s": "Attaching 1 file:", "c": "FRAGMENT", "why": "The head of the placeholder bubble a new thread's first message shows for the moment before the thread exists; the file names follow it, and the real bubble replaces it with the words Rich receives."},
-  {"s": "Drop to attach to your message", "c": "ACTIONABLE", "control": "#input", "fixture": null, "why": "Shown only while a drag carrying files is over the window (`rich://file-drag`). The action is the drop he is already making; the composer it lands on is on screen. tests/attachments.js check 8 shows and hides it."},
+  {"s": "The file picker did not open. Nothing was attached; try the plus again or drop the files on the window.", "c": "ACTIONABLE", "control": "#attach-add", "fixture": null, "why": "Round 50/51's plus: `attach_pick_files` in `mac_attachments.rs` when the macOS file picker could not be shown or did not answer. `attachments.js` `addPicked` shows it on the tray's line (#attach-note); the plus that asked is in the same row, and a drop works too."},
+  {"s": "Drop files or folders here to hand them to Rich", "c": "ACTIONABLE", "control": "#input", "fixture": null, "why": "Round 51's drop-zone words (`r51.js` `dragOn`), shown only while a drag carrying files or folders is over the window (`rich://file-drag`). The action is the drop he is already making; the composer it lands on is on screen. tests/attachments.js check 8 shows and hides it."},
   {"s": "A file is still being added. Press Send again in a moment.", "c": "ACTIONABLE", "control": "#send", "fixture": null, "why": "Send pressed while a pasted or dropped file is still crossing to the desk. Send stays enabled beside it."},
   {"s": "A message can carry at most 10 files.", "c": "INFORMATIONAL", "why": "The desk's count ceiling, prefixed with the name of the file that crossed it. Nothing was attached; the ten already on the composer stay. tests/attachments.js check 3."},
   {"s": "// RichOS retired its phone web page. This removes it from this browser. self.addEventListener('install', () => self.skipWaiting()); self.addEventListener('activate', (event) => event.waitUntil((async () => { for (const key of await caches.keys()) await caches.delete(key); await self.registration.unregister(); for (const client of await self.clients.matchAll({ type: 'window' })) client.navigate(client.url); })()));", "c": "NOT-RENDERED", "why": "`phone/routes.rs` RETIRE_WORKER: the service worker served at /sw.js to a phone browser that once installed the retired phone web page (CEO, 2026-10-30); a script for that browser, never drawn in this window."},
@@ -108,7 +109,9 @@ module.exports = [
   {"s": "That drop is no longer available. Drop the file again.", "c": "ACTIONABLE", "control": "#input", "fixture": null, "why": "A drop number the Rust shelf no longer holds (read once, or more than ten minutes old). The drop lands on the composer, which is on screen."},
   {"s": "This file is empty. Nothing was attached.", "c": "INFORMATIONAL", "why": "The Mac's empty-file refusal. tests/attachments.js check 3 renders it."},
   {"s": "This file is larger than 25 MB, the most RichOS takes in one file. Nothing was attached.", "c": "INFORMATIONAL", "why": "The Mac's size refusal, the same 25 MiB ceiling as the phone. tests/attachments.js check 3 renders it for a paste that never crosses the bridge."},
-  {"s": "This is a folder, not a file. Drop the files inside it instead. Nothing was attached.", "c": "ACTIONABLE", "control": "#input", "fixture": null, "why": "A folder dropped on the window. The files inside it land on the composer, which is on screen. tests/attachments.js check 3 renders it."},
+  {"s": "RichOS couldn't open this folder. Nothing was attached.", "c": "ACTIONABLE", "control": "#attach-add", "fixture": null, "why": "Round 51 (\"just add files and folders\"): `MacAttachments::attach_folder` in `mac_attachments.rs` when a dropped or picked folder cannot be resolved or listed (gone, or no permission). `attachments.js` shows it on the tray's line with the folder's name; the plus to pick it again is in the same row, and a drop works too."},
+  {"s": "Add files and folders", "c": "CONTROL", "why": "The plus's accessible name and its round 51 tooltip (`#attach-add` aria-label and data-tip, shown in `#composer-tip`). His words: \"keep the plus button … just add files and folders\". tests/input-area.js checks 6b and 8."},
+  {"s": "Open the work summary", "c": "CONTROL", "why": "The status line's round 51 tooltip (`.drill-chip` data-tip in `renderDrillChip`, shown in `#composer-tip`); pressing the line opens the work summary. Its name stays the counts plus \"Open the work summary.\" (aria-label). tests/input-area.js check 8."},
   {"s": "is no longer waiting to be sent. Attach it again; your words are still in the box.", "c": "FRAGMENT", "why": "Follows a file's name: the desk no longer holds it (the seven-day sweep, or room made for newer files), so it leaves the tray and nothing is sent. The whole sentence is ACTIONABLE against `#input`, where it is attached again. tests/attachments.js check 5."},
   {"s": "The files in this message add up to more than 100 MB, the most RichOS takes in one message.", "c": "INFORMATIONAL", "why": "The desk's per-message ceiling, shared by the phone and the Mac. On the Mac it follows the file that crossed it; the files already on the composer stay. States the limit only."},
   // Add to chat from the Output panel (Output side panel PRD §12.7, slice S7): a recorded file
@@ -1019,6 +1022,8 @@ module.exports = [
       "with one name is the thing a screen reader cannot tell apart.",
   },
   { s: "Talk to Rich…", c: "CONTROL", why: "#input idle placeholder." },
+  { s: "Type here… OR…", c: "CONTROL", why: "Round 51: line one of the empty box's placeholder (#composer-hint), drawn over #input while it is empty and taking words; the box is the control and the caret is already in it. tests/input-area.js check 1." },
+  { s: "Click to talk to Rich.", c: "CONTROL", why: "Round 51: line two of the empty box's placeholder, after the arrow; the real #talk-toggle sits in front of it. tests/input-area.js check 1." },
   { s: "Add context or steer Rich…", c: "CONTROL", why: "#input working placeholder (§9.2)." },
   { s: "more threads in", c: "CONTROL", why: "'Show more' accessible name." },
 
@@ -1101,8 +1106,7 @@ module.exports = [
   },
   { s: "are no longer running", c: "FRAGMENT", why: "Worker group verb, completed with names." },
   { s: "is no longer running", c: "FRAGMENT", why: "Worker group verb, completed with a name." },
-  { s: "headphones recommended · tap", c: "FRAGMENT", why: "Voice footnote, completed by the ◉ glyph." },
-  { s: "to end voice", c: "FRAGMENT", why: "The tail of the same footnote." },
+  { s: "Click to stop talking · headphones recommended", c: "CONTROL", why: "Round 51: line two of the listening panel (`.voice-talk-line`), after the arrow; the pressed #talk-toggle in front of it ends voice. tests/input-area.js check 5 and check 7." },
 
 
   // -------------------------------------------------------------------------------------

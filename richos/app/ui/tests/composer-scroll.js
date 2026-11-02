@@ -168,6 +168,9 @@ async function main() {
     async () => {
       const page = await openApp(browser);
       await openComposer(page);
+      // Round 51 puts the caret in the box when a conversation opens, so the box is measured
+      // with the focus taken away first, then given back.
+      await page.evaluate(() => document.getElementById("input").blur());
       const unfocused = await page.evaluate(
         () => getComputedStyle(document.getElementById("input-shell")).borderColor
       );

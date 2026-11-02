@@ -1,0 +1,824 @@
+[
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Not now",
+   "--role",
+   "AXButton",
+   "--contains",
+   "--first"
+  ],
+  "contains": "Not now",
+  "seconds": 120
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "guest",
+  "command": "grep -m1 'this app: built from' /Users/admin/testvm/walk-*/app.log"
+ },
+ {
+  "op": "guest",
+  "command": "mkdir -p \"$HOME/Acme\" && printf '%%PDF-1.4\\n1 0 obj<<>>endobj\\ntrailer<<>>\\n%%%%EOF\\n' > \"$HOME/Acme board deck.pdf\" && printf 'Comps for October.\\n' > \"$HOME/comps.txt\" && ls -la \"$HOME\""
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Not now",
+   "--role",
+   "AXButton",
+   "--contains",
+   "--first"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Add this company",
+   "--role",
+   "AXButton",
+   "--contains",
+   "--first"
+  ],
+  "contains": "Add this company",
+  "seconds": 60
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Acme",
+   "--role",
+   "AXTextField",
+   "--title",
+   "What's the company called?",
+   "--contains",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "/Users/admin/Acme",
+   "--role",
+   "AXTextField",
+   "--title",
+   "Its folder on this Mac",
+   "--contains",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Add this company",
+   "--role",
+   "AXButton",
+   "--contains",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 8
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--id",
+   "first-run-later",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 6
+ },
+ {
+  "op": "shot",
+  "name": "00-after-first-run"
+ },
+ {
+  "op": "tree",
+  "name": "00-after-first-run"
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 60
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Settings",
+   "--role",
+   "AXPopUpButton",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Dark theme",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 1
+ },
+ {
+  "op": "ax",
+  "args": [
+   "--key",
+   "53"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "focus",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first"
+  ]
+ },
+ {
+  "op": "guest",
+  "command": "osascript -e 'tell application \"System Events\" to keystroke \"a\" using command down' -e 'tell application \"System Events\" to key code 51'"
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "1-empty-dark"
+ },
+ {
+  "op": "tree",
+  "name": "1-empty-dark"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "focus",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first"
+  ]
+ },
+ {
+  "op": "keys",
+  "text": "D"
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "1b-first-letter-dark"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Draft the reply to Acme at list minus 3%, and keep the tone firm but friendly.\nAttach the comps summary so Priya can check the numbers before it goes out.",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "2-typing-dark"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Before Thursday's board call, please:\n1. Pull the signed term sheet and the Q3 numbers\n2. Update the comps sheet with the two October closes\n3. Check that the counter letter still says list minus 3%\n4. Put q3-revenue-chart.png on the first page of the deck\n5. Ask Priya whether the walkthrough needs captions\n6. Move the Hensley follow-up to Friday morning\n7. Draft a two-line note for Lumen Labs about the partner book\n8. Confirm the hiring plan headcount with Dana\n9. Book 30 minutes with legal for the Meridian NDA\n10. Send me one page I can read in the car\n11. Flag anything that changed since Monday\n12. Copy Priya on everything Acme",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "3-long-dark"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Use these for the one-pager.",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "handfile",
+  "mode": "paste",
+  "path": "/Users/admin/Acme board deck.pdf"
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "handfile",
+  "mode": "paste",
+  "path": "/Users/admin/comps.txt"
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "shot",
+  "name": "4-files-dark"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Remove Acme board deck.pdf",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Remove comps.txt",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "focus",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first"
+  ]
+ },
+ {
+  "op": "guest",
+  "command": "osascript -e 'tell application \"System Events\" to keystroke \"a\" using command down' -e 'tell application \"System Events\" to key code 51'"
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Talk to Rich",
+   "--role",
+   "AXCheckBox",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "shot",
+  "name": "6-talking-dark"
+ },
+ {
+  "op": "tree",
+  "name": "6-talking-dark"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Stop talking",
+   "--role",
+   "AXCheckBox",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Add files",
+   "--role",
+   "AXButton",
+   "--first"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Cancel",
+   "--role",
+   "AXButton",
+   "--first"
+  ],
+  "contains": "Cancel",
+  "seconds": 20
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "7-plus-dark"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Cancel",
+   "--role",
+   "AXButton",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Settings",
+   "--role",
+   "AXPopUpButton",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Light theme",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 1
+ },
+ {
+  "op": "ax",
+  "args": [
+   "--key",
+   "53"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "focus",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first"
+  ]
+ },
+ {
+  "op": "guest",
+  "command": "osascript -e 'tell application \"System Events\" to keystroke \"a\" using command down' -e 'tell application \"System Events\" to key code 51'"
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "1-empty-light"
+ },
+ {
+  "op": "tree",
+  "name": "1-empty-light"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "focus",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first"
+  ]
+ },
+ {
+  "op": "keys",
+  "text": "D"
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "1b-first-letter-light"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Draft the reply to Acme at list minus 3%, and keep the tone firm but friendly.\nAttach the comps summary so Priya can check the numbers before it goes out.",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "2-typing-light"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Before Thursday's board call, please:\n1. Pull the signed term sheet and the Q3 numbers\n2. Update the comps sheet with the two October closes\n3. Check that the counter letter still says list minus 3%\n4. Put q3-revenue-chart.png on the first page of the deck\n5. Ask Priya whether the walkthrough needs captions\n6. Move the Hensley follow-up to Friday morning\n7. Draft a two-line note for Lumen Labs about the partner book\n8. Confirm the hiring plan headcount with Dana\n9. Book 30 minutes with legal for the Meridian NDA\n10. Send me one page I can read in the car\n11. Flag anything that changed since Monday\n12. Copy Priya on everything Acme",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "3-long-light"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Use these for the one-pager.",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "handfile",
+  "mode": "paste",
+  "path": "/Users/admin/Acme board deck.pdf"
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "handfile",
+  "mode": "paste",
+  "path": "/Users/admin/comps.txt"
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "shot",
+  "name": "4-files-light"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Remove Acme board deck.pdf",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Remove comps.txt",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "focus",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first"
+  ]
+ },
+ {
+  "op": "guest",
+  "command": "osascript -e 'tell application \"System Events\" to keystroke \"a\" using command down' -e 'tell application \"System Events\" to key code 51'"
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Talk to Rich",
+   "--role",
+   "AXCheckBox",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "shot",
+  "name": "6-talking-light"
+ },
+ {
+  "op": "tree",
+  "name": "6-talking-light"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Stop talking",
+   "--role",
+   "AXCheckBox",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Add files",
+   "--role",
+   "AXButton",
+   "--first"
+  ]
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Cancel",
+   "--role",
+   "AXButton",
+   "--first"
+  ],
+  "contains": "Cancel",
+  "seconds": 20
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "7-plus-light"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Cancel",
+   "--role",
+   "AXButton",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "type",
+   "Please write the numbers from 1 to 300, one per line, and nothing else.",
+   "--role",
+   "AXTextArea",
+   "--title",
+   "Message to Rich",
+   "--first",
+   "--replace"
+  ]
+ },
+ {
+  "op": "guest",
+  "command": "osascript -e 'tell application \"System Events\" to key code 36'"
+ },
+ {
+  "op": "until",
+  "args": [
+   "find",
+   "--title",
+   "Stop Rich",
+   "--role",
+   "AXButton",
+   "--first"
+  ],
+  "contains": "matches=1",
+  "seconds": 60
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "5-working-light"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Settings",
+   "--role",
+   "AXPopUpButton",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Dark theme",
+   "--first"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 1
+ },
+ {
+  "op": "ax",
+  "args": [
+   "--key",
+   "53"
+  ]
+ },
+ {
+  "op": "wait",
+  "seconds": 2
+ },
+ {
+  "op": "shot",
+  "name": "5-working-dark"
+ },
+ {
+  "op": "ax",
+  "args": [
+   "click",
+   "--title",
+   "Stop Rich",
+   "--role",
+   "AXButton",
+   "--first"
+  ],
+  "allow_fail": true
+ },
+ {
+  "op": "wait",
+  "seconds": 3
+ },
+ {
+  "op": "shot",
+  "name": "9-after-stop"
+ }
+]
