@@ -20,6 +20,9 @@
 //      6b. "just add files and folders": a picked folder is a chip of its own and Send names it.
 //   7. Every readable run in the box (placeholder, arrow, listening line, status line) clears
 //      4.5:1 on the paint behind it, light and dark, computed.
+//   8. "this helpful tooltip": every control in the box shows round 51's own tooltip, with its
+//      words and shortcut, above it after the pointer rests, never a system `title`, 4.5:1 in
+//      both themes; Talk to Rich's says what a press will do and a press puts it away.
 //
 // Run: node input-area.js
 
@@ -441,6 +444,93 @@ async function main() {
     assert(page.__errors.length === 0, "page errors: " + page.__errors.join(" | "));
     await page.close();
     return chips.map((c) => `${c.name} (${c.meta})`).join(", ");
+  });
+
+  // ---- 8. the round's tooltips, never the system's ---------------------------------------------
+  for (const theme of ["dark", "light"]) {
+    await run.check(`8. ${theme}: every control in the box shows round 51's tooltip on hover (words, shortcut, above it), none has a system title, and its words clear 4.5:1`, async () => {
+      // His words: "if I hover over this I'm getting this helpful tooltip". Round 51 draws it
+      // (`r51.css` `.r51-tip`, `r51.js` showTip); a `title` would put the system's on top.
+      const page = await openApp(browser, { theme });
+      await setValue(page, "Draft the reply");
+      // Output shows once a thread has a record and Stop while Rich works; both are shown by hand
+      // here (Stop just before it is hovered: the box's own sync hides it while nothing runs).
+      await page.evaluate(() => { document.getElementById("out-bottom").hidden = false; });
+      const want = [
+        ["#attach-add", "Add files and folders", null],
+        ["#talk-toggle", "Talk to Rich", null],
+        ["#drill-chip-zone .drill-chip", "Open the work summary", null],
+        ["#out-bottom", "Everything this thread produced", "⌘⇧O"],
+        ["#stop", "Stop Rich", null],
+        ["#send", "Send", "↩"],
+      ];
+      const seen = [];
+      for (const [sel, words, kbd] of want) {
+        const title = await page.$eval(sel, (b) => b.getAttribute("title"));
+        assertEqual(title, null, `${sel} still carries a system tooltip (title)`);
+        await page.mouse.move(5, 5);
+        await page.waitForFunction(() => document.getElementById("composer-tip").hidden);
+        if (sel === "#stop") await page.evaluate(() => { document.getElementById("stop").hidden = false; });
+        await page.hover(sel);
+        await page.waitForFunction(() => { const t = document.getElementById("composer-tip"); return t.classList.contains("is-on") && getComputedStyle(t).opacity === "1"; });
+        const tip = await page.evaluate((s) => {
+          const t = document.getElementById("composer-tip");
+          const b = document.querySelector(s).getBoundingClientRect();
+          const r = t.getBoundingClientRect();
+          const k = t.querySelector("kbd");
+          return {
+            words: t.firstChild ? t.firstChild.textContent : "",
+            kbd: k ? k.textContent : null,
+            above: r.bottom <= b.top,
+            gap: Math.round(b.top - r.bottom),
+            centered: Math.abs(r.left + r.width / 2 - (b.left + b.width / 2)) <= 1 || r.left <= 8.5 || r.right >= window.innerWidth - 8.5,
+            described: document.querySelector(s).getAttribute("aria-describedby"),
+            px: parseFloat(getComputedStyle(t).fontSize),
+          };
+        }, sel);
+        assertEqual([tip.words, tip.kbd], [words, kbd], `${sel}: the tooltip's words`);
+        assert(tip.above && tip.gap === 8 && tip.centered, `${sel}: the tooltip is not 8px above the control and centered on it: ${JSON.stringify(tip)}`);
+        assertEqual(tip.described, "composer-tip", `${sel}: the tooltip is not its description`);
+        assert(tip.px >= 16, `${sel}: the tooltip's words are ${tip.px}px`);
+        // The chip is opaque and `pointer-events: none` (so `elementsFromPoint` looks through it):
+        // its words are measured on its own fill, the words and the shortcut alike.
+        await page.evaluate(C.pageScript());
+        const ratio = await page.evaluate(() => {
+          const M = window.__contrastMath;
+          const t = document.getElementById("composer-tip");
+          const ground = M.parseCssColor(getComputedStyle(t).backgroundColor);
+          return [t, ...t.querySelectorAll("kbd")].map((n) => {
+            const fg = M.parseCssColor(getComputedStyle(n).color);
+            return { opaque: ground.a === 1, ratio: M.round2(M.contrastRatio(fg.a < 1 ? M.compositeOver(fg, ground) : fg, ground)), ink: M.hex(fg), ground: M.hex(ground) };
+          });
+        });
+        const bad = ratio.filter((r) => !r.opaque || r.ratio < 4.5);
+        assert(ratio.length && !bad.length, `${sel}: the tooltip's words below 4.5:1: ${JSON.stringify(ratio)}`);
+        seen.push(`${words} ${ratio[0].ink} on ${ratio[0].ground} ${ratio[0].ratio}:1`);
+      }
+      await page.mouse.move(5, 5);
+      await page.waitForFunction(() => document.getElementById("composer-tip").hidden);
+      assert(page.__errors.length === 0, "page errors: " + page.__errors.join(" | "));
+      await page.close();
+      return seen.join("; ");
+    });
+  }
+
+  await run.check("8b. Talk to Rich's tooltip says what pressing it will do, and a press puts the tooltip away", async () => {
+    const page = await openApp(browser, { theme: "dark" });
+    await page.hover("#talk-toggle");
+    await page.waitForFunction(() => document.getElementById("composer-tip").classList.contains("is-on"));
+    await page.click("#talk-toggle");
+    await page.waitForFunction(() => document.getElementById("talk-toggle").getAttribute("aria-pressed") === "true");
+    const afterPress = await page.evaluate(() => document.getElementById("composer-tip").classList.contains("is-on"));
+    assert(!afterPress, "the tooltip stayed up after the press");
+    await page.mouse.move(5, 5);
+    await page.hover("#talk-toggle");
+    await page.waitForFunction(() => document.getElementById("composer-tip").classList.contains("is-on"));
+    const words = await page.evaluate(() => document.getElementById("composer-tip").textContent);
+    assertEqual(words, "Stop talking", "the pressed button's tooltip");
+    await page.close();
+    return "Talk to Rich -> pressed -> Stop talking";
   });
 
   // ---- 7. contrast, both themes ----------------------------------------------------------------

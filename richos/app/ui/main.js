@@ -4107,6 +4107,90 @@ if (typeof ResizeObserver === "function") {
   new ResizeObserver(() => window.requestAnimationFrame(keepComposerHeight)).observe(composerZoneEl);
   keepComposerHeight();
 }
+// ---- THE INPUT AREA'S TOOLTIPS (round 51) ---------------------------------------------------
+//
+// His words, 2026-11-01: "keep the plus button … if I hover over this I'm getting this helpful
+// tooltip". Round 51 draws its own (`build/parts/r51.js` "tooltips"), not the system's: every
+// control in the box with a `data-tip` (the plus, Talk to Rich, the status line, Output, Stop,
+// Send) shows `#composer-tip` above itself after the pointer rests 380ms, at once on keyboard
+// focus, with its shortcut (`data-kbd`) beside the words, and puts it away when the pointer
+// leaves, the focus goes or the control is pressed. The words are read when it is shown, so Talk
+// to Rich's "Stop talking" is current.
+const composerTipEl = el("composer-tip");
+// `var`, not `let`: `renderDrillChip` reads it and can run before this line is reached.
+var composerTipFor = null;
+let composerTipTimer = null;
+
+/// The status line is rebuilt whenever its counts change, which replaces the chip a tooltip may be
+/// showing for. The new chip takes the tooltip over (the rail's `keepRailTip`); no chip at all
+/// puts it away.
+function keepComposerTip(chip) {
+  if (!composerTipFor || composerTipFor.isConnected || !composerTipFor.classList.contains("drill-chip")) return;
+  if (!chip) return hideComposerTip();
+  composerTipFor = chip;
+  chip.setAttribute("aria-describedby", "composer-tip");
+}
+
+function showComposerTip(target) {
+  window.clearTimeout(composerTipTimer);
+  if (!target.isConnected || !target.dataset.tip) return;
+  composerTipFor = target;
+  composerTipEl.textContent = target.dataset.tip;
+  if (target.dataset.kbd) {
+    const k = document.createElement("kbd");
+    k.textContent = target.dataset.kbd;
+    composerTipEl.appendChild(k);
+  }
+  composerTipEl.hidden = false;
+  const r = target.getBoundingClientRect();
+  const w = composerTipEl.offsetWidth;
+  const h = composerTipEl.offsetHeight;
+  composerTipEl.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2))) + "px";
+  composerTipEl.style.top = Math.round(r.top - h - 8) + "px";
+  target.setAttribute("aria-describedby", "composer-tip");
+  void composerTipEl.offsetWidth;
+  composerTipEl.classList.add("is-on");
+}
+
+function hideComposerTip() {
+  window.clearTimeout(composerTipTimer);
+  if (composerTipFor) composerTipFor.removeAttribute("aria-describedby");
+  composerTipFor = null;
+  // It fades out as it faded in (the round's 0.12s), then leaves the accessibility tree; with
+  // reduced motion there is no fade and it leaves at once.
+  const wasOn = composerTipEl.classList.contains("is-on");
+  composerTipEl.classList.remove("is-on");
+  if (!wasOn || !(parseFloat(getComputedStyle(composerTipEl).transitionDuration) > 0)) composerTipEl.hidden = true;
+}
+composerTipEl.addEventListener("transitionend", (e) => {
+  if (e.propertyName === "opacity" && !composerTipEl.classList.contains("is-on")) composerTipEl.hidden = true;
+});
+
+function composerTipTarget(e) {
+  const t = e.target instanceof Element ? e.target.closest("[data-tip]") : null;
+  return t && composerZoneEl.contains(t) ? t : null;
+}
+
+composerZoneEl.addEventListener("mouseover", (e) => {
+  const t = composerTipTarget(e);
+  if (!t || t === composerTipFor) return;
+  window.clearTimeout(composerTipTimer);
+  composerTipTimer = window.setTimeout(() => showComposerTip(t), 380);
+});
+composerZoneEl.addEventListener("mouseout", (e) => {
+  const t = composerTipTarget(e);
+  if (t && !t.contains(e.relatedTarget)) hideComposerTip();
+});
+composerZoneEl.addEventListener("focusin", (e) => {
+  const t = composerTipTarget(e);
+  if (t && t.matches(":focus-visible")) showComposerTip(t);
+});
+composerZoneEl.addEventListener("focusout", hideComposerTip);
+composerZoneEl.addEventListener("pointerdown", hideComposerTip);
+// A press from the keyboard too: what it did may have changed the words (Talk to Rich).
+composerZoneEl.addEventListener("click", hideComposerTip);
+window.addEventListener("blur", hideComposerTip);
+
 function moveComposer(into) {
   const target = into || composerHome.parent;
   if (composerZoneEl.parentNode === target) return;
@@ -4664,6 +4748,7 @@ function renderDrillChip() {
   if (unknown) parts.push(`${unknown} I can't see`);
   if (!parts.length) {
     drillChipEl.hidden = true;
+    keepComposerTip(null);
     return;
   }
   const chip = document.createElement("button");
@@ -4673,9 +4758,11 @@ function renderDrillChip() {
   // the line sits in the box's row.
   chip.textContent = parts.join(" · ");
   chip.setAttribute("aria-label", parts.join(", ") + ". Open the work summary.");
+  chip.dataset.tip = "Open the work summary";
   chip.addEventListener("click", openSlideOver);
   drillChipEl.appendChild(chip);
   drillChipEl.hidden = false;
+  keepComposerTip(chip);
 }
 
 Bridge.listen("rich://mock-worker-status", ({ payload }) => {
@@ -5190,7 +5277,8 @@ function provisionNeedLabel(offer) {
 function setTalkPressed(pressed) {
   talkToggleBtn.setAttribute("aria-pressed", pressed ? "true" : "false");
   talkToggleBtn.setAttribute("aria-label", pressed ? "Stop talking" : "Talk to Rich");
-  talkToggleBtn.title = pressed ? "Stop talking" : "Talk to Rich";
+  // Round 51's tooltip (`#composer-tip`), never `title`: the system's would sit on top of it.
+  talkToggleBtn.dataset.tip = pressed ? "Stop talking" : "Talk to Rich";
   // D21: the inline copies of the icon (greeting, voice row) say what the button says.
   document.querySelectorAll("svg.talk-icon-inline").forEach((i) => i.setAttribute("aria-label", pressed ? "Stop talking" : "Talk to Rich"));
 }

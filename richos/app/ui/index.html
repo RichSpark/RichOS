@@ -745,9 +745,11 @@
                          not know [drag and drop] and they might click this here to add some files".
                          It opens macOS's own picker for files and folders directly
                          (`attach_pick_files` in `mac_attachments.rs`: "just add files and folders"),
-                         and what he picks takes the drop's road to the tray. -->
+                         and what he picks takes the drop's road to the tray.
+                         EVERY `data-tip` IN THIS ROW is round 51's own tooltip (`#composer-tip`),
+                         never a `title`, which would put the system's tooltip on top of it. -->
                     <button id="attach-add" class="composer-add" type="button" aria-label="Add files and folders"
-                            title="Add files and folders"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M10 4v12M4 10h12"/></svg></button>
+                            data-tip="Add files and folders"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M10 4v12M4 10h12"/></svg></button>
                     <span class="talk-slot" data-slot="row">
                       <!-- ONE BUTTON, THREE PLACES, NEVER TWO (round 51): the start of the empty box's
                            placeholder line two, this slot in the row once he types, and the start of
@@ -770,7 +772,7 @@
                            button". Geometry copied unchanged from his
                            `richos-hq/wiki/assets/voice-control.svg` (bf1bc614); only the three placeholder
                            fills are replaced, by theme tokens in style.css (`.talk-icon`). -->
-                      <button id="talk-toggle" type="button" title="Talk to Rich" aria-label="Talk to Rich" aria-pressed="false">
+                      <button id="talk-toggle" type="button" data-tip="Talk to Rich" aria-label="Talk to Rich" aria-pressed="false">
                         <svg class="talk-icon" viewBox="0 0 927 927" aria-hidden="true" focusable="false">
                           <circle class="talk-icon-ring" cx="463.5" cy="463.5" r="463.5"/>
                           <circle class="talk-icon-gap" cx="463.5" cy="463.5" r="391.5"/>
@@ -798,7 +800,7 @@
                          for "at the bottom". -->
                     <button id="out-bottom" class="out-btn is-empty" type="button" hidden aria-pressed="false"
                             aria-controls="outpanel" aria-label="Output" aria-keyshortcuts="Meta+Shift+O Control+Shift+O"
-                            title="Everything this thread produced (⌘⇧O)">
+                            data-tip="Everything this thread produced" data-kbd="⌘⇧O">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                            stroke-linejoin="round" aria-hidden="true" focusable="false"><path
                            d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path
@@ -812,7 +814,7 @@
                          the CEO never has to choose between sending what he typed and stopping.
                          `hidden` while nothing is running — a stop control with nothing to stop
                          teaches him the button is decorative. -->
-                    <button id="stop" type="button" title="Stop" aria-label="Stop Rich" hidden>
+                    <button id="stop" type="button" data-tip="Stop Rich" aria-label="Stop Rich" hidden>
                       <span class="stop-glyph" aria-hidden="true"></span>
                     </button>
                     <!-- IT HAS A NAME, AND THE NAME IS NOT THE SHAPE (candidate-.2 defect #7).
@@ -828,9 +830,9 @@
                          is exactly the shape `#stop` beside it already had — "Stop Rich" plus an
                          `aria-hidden` glyph — which is the control this was measured against.
 
-                         `title` STAYS, and it is not the name. It is the pointer tooltip, and the
-                         whole of this defect was a name that lived only there. -->
-                    <button id="send" type="submit" title="Send" aria-label="Send">
+                         The pointer tooltip is round 51's `data-tip` (with its ↩), not the name:
+                         the whole of this defect was a name that lived only in a tooltip. -->
+                    <button id="send" type="submit" data-tip="Send" data-kbd="↩" aria-label="Send">
                       <span class="send-glyph" aria-hidden="true">▷</span>
                     </button>
                   </div>
@@ -1398,6 +1400,11 @@
       <!-- The rail's instant tooltip: "+ New chat" on a company's plus (round 32). No delay and
            no fade, so it is on screen in the frame the pointer arrives in. -->
       <div id="rail-tip" role="tooltip" hidden></div>
+
+      <!-- The input area's tooltips (round 51's `.r51-tip`): the plus, Talk to Rich, the status
+           line, Output, Stop and Send, from each control's data-tip (main.js "THE INPUT AREA'S
+           TOOLTIPS"). Faded in with the round's delay; never the system's own tooltip. -->
+      <div id="composer-tip" role="tooltip" hidden></div>
 
       <!-- What a stand-in on the report replaced. Only the user sees it; it is never in the issue. -->
       <div id="bug-subtip" role="tooltip" hidden></div>
