@@ -468,11 +468,15 @@ async function main() {
       for (const [sel, words, kbd] of want) {
         const title = await page.$eval(sel, (b) => b.getAttribute("title"));
         assertEqual(title, null, `${sel} still carries a system tooltip (title)`);
+        // Each wait says which control it was waiting on, so a red run names it.
+        const named = (what) => (e) => { throw new Error(`${sel}: ${what}: ${e.message.split("\n")[0]}`); };
         await page.mouse.move(5, 5);
-        await page.waitForFunction(() => document.getElementById("composer-tip").hidden);
+        await page.waitForFunction(() => document.getElementById("composer-tip").hidden).catch(named("the previous tooltip did not go away"));
         if (sel === "#stop") await page.evaluate(() => { document.getElementById("stop").hidden = false; });
         await page.hover(sel);
-        await page.waitForFunction(() => { const t = document.getElementById("composer-tip"); return t.classList.contains("is-on") && getComputedStyle(t).opacity === "1"; });
+        await page
+          .waitForFunction(() => { const t = document.getElementById("composer-tip"); return t.classList.contains("is-on") && getComputedStyle(t).opacity === "1"; })
+          .catch(named("its tooltip never came up"));
         const tip = await page.evaluate((s) => {
           const t = document.getElementById("composer-tip");
           const b = document.querySelector(s).getBoundingClientRect();
@@ -515,6 +519,27 @@ async function main() {
       return seen.join("; ");
     });
   }
+
+  await run.check("8c. the status line's tooltip still comes up when its counts change while the pointer rests on it", async () => {
+    // The chip is rebuilt on every count change (renderDrillChip). Rebuilt inside the 380ms rest,
+    // the tooltip used to wait on the chip that was gone and never came up (seen as a timeout in
+    // check 8 on a loaded run).
+    const page = await openApp(browser, { theme: "dark" });
+    await page.waitForSelector("#drill-chip-zone .drill-chip");
+    await page.evaluate(() => {
+      document.querySelector("#drill-chip-zone .drill-chip").dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      window.__RICHOS_MOCK__.simulateDrillChip("acme");
+    });
+    await page.waitForFunction(() => document.getElementById("composer-tip").classList.contains("is-on"));
+    const s = await page.evaluate(() => {
+      const chip = document.querySelector("#drill-chip-zone .drill-chip");
+      return { words: document.getElementById("composer-tip").textContent, described: chip.getAttribute("aria-describedby"), text: chip.textContent };
+    });
+    assertEqual([s.words, s.described], ["Open the work summary", "composer-tip"], "the tooltip over the rebuilt status line");
+    assert(page.__errors.length === 0, "page errors: " + page.__errors.join(" | "));
+    await page.close();
+    return `rebuilt to ${JSON.stringify(s.text)}, tooltip on the new chip`;
+  });
 
   await run.check("8b. Talk to Rich's tooltip says what pressing it will do, and a press puts the tooltip away", async () => {
     const page = await openApp(browser, { theme: "dark" });

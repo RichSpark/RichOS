@@ -4133,6 +4133,9 @@ function keepComposerTip(chip) {
 
 function showComposerTip(target) {
   window.clearTimeout(composerTipTimer);
+  // The status line was rebuilt while the pointer rested on it (its counts changed): the chip
+  // under the pointer now is the one the tooltip is for.
+  if (!target.isConnected && target.classList.contains("drill-chip")) target = drillChipEl.querySelector(".drill-chip") || target;
   if (!target.isConnected || !target.dataset.tip) return;
   composerTipFor = target;
   composerTipEl.textContent = target.dataset.tip;
