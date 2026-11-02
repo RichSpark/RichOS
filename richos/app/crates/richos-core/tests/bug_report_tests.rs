@@ -1491,8 +1491,10 @@ fn with_claude_unavailable_nothing_is_sent() {
 
 #[test]
 fn a_change_told_to_rich_is_scanned_and_then_his_at_send() {
-    // His words for a change are scanned when they are added; the card with them is a changed
-    // card, so at Send he has the last word on it, and nothing after him changes it.
+    // His words for a change are scanned when they are added. Since §156 the change itself ends
+    // with his last pass (`changed_card_for`); this is what a card whose words differ from his
+    // last (a hand edit, or a change put in by a client that skips it) still gets at Send: he has
+    // the last word on it, and nothing after him changes it.
     let written = checked_with("The window froze.", "[]");
     let check = Check::of(&written.draft);
     let card = sheet_of(&written.draft);
@@ -2021,4 +2023,132 @@ fn a_sent_card_opens_the_relay_link_on_either_address_and_nothing_else() {
     let test = "WebDevBooster/richos-report-test";
     assert!(page_to_open("https://github.com/WebDevBooster/richos-report-test/issues/3", Post::Bug, test).is_some());
     assert_eq!(page_to_open("https://github.com/RichSpark/RichOS/issues/3", Post::Bug, test), None);
+}
+
+// ---------------------------------------------------------------------------------------
+// §156 (CEO 2026-11-01): NOTHING IN THE BUG-REPORT PATH DROPS WHAT THE USER ALREADY DID, ASKS HIM
+// AGAIN, OR LEAVES HIM A STEP THE APP CAN DO ITSELF.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_change_rich_makes_is_his_last_word_and_send_sends_it_without_asking_him_again() {
+    // The card his change produces went through the scanner first and then Rich, so Send finds
+    // it equal to what he gave and sends it as it is: no second turn of his, no card shown again.
+    let written = checked_with("The window froze.", "[]");
+    let card = sheet_of(&written.draft);
+    let change = change_naming("Jane Doe saw it too.", r#"[{"text": "Jane Doe", "kind": "person"}]"#);
+    let mut asked = 0;
+    let his = changed_card_for(Post::Bug, &card, &[], &change, &[], |p| {
+        asked += 1;
+        rich_keeps(p)
+    })
+    .unwrap();
+    assert_eq!(asked, 1, "the change is one pass of his, after the scanner");
+    // The scanner went first: the name is a stand-in in the words he was given and in his card.
+    let words = draft_words(&his.draft);
+    assert!(words.contains("[a person] saw it too.") && !words.contains("Jane Doe"), "{words}");
+    // The window now shows his card; Send is pressed on it, as it is.
+    let shown = sheet_of(&his.draft);
+    match at_send(&shown, Some(&Check::of(&his.draft)), &[], |_| panic!("Rich was asked a second time about his own change")) {
+        AtSend::Send(public) => assert_sent_as_shown(&shown, &public),
+        other => panic!("{other:?}"),
+    }
+    // A change he cannot be had for adds nothing; a section that is not on the card likewise.
+    assert!(changed_card_for(Post::Bug, &card, &[], &change, &[], |_| Err("claude is down".into())).is_err());
+    let nowhere = parse_change(r#"{"section": "No such section", "add": "x", "private": []}"#).unwrap();
+    assert!(changed_card_for(Post::Bug, &card, &[], &nowhere, &[], |_| panic!("asked about a change with no place")).is_err());
+    // A hand edit still gets the check at Send, as before.
+    let mut by_hand = shown.clone();
+    by_hand.sections[0].paragraphs[0].push_str(" Twice.");
+    let mut turns = 0;
+    let _ = at_send(&by_hand, Some(&Check::of(&his.draft)), &[], |p| {
+        turns += 1;
+        rich_keeps(p)
+    });
+    assert_eq!(turns, 1);
+}
+
+#[test]
+fn words_the_user_changed_by_hand_are_kept_beside_the_card_and_survive_a_relaunch() {
+    let dir = scratch("kept-edit");
+    let written = checked_with("The window froze.", "[]");
+    let id = report_id();
+    let outbox = Outbox::open(&dir);
+    outbox.keep_card(&id, "the window froze", &screen(), written.clone(), 1_000).unwrap();
+    let mut sheet = sheet_of(&written.draft);
+    sheet.sections[0].paragraphs[0].push_str(" It happens twice.");
+    outbox.keep_edit(&id, Edited { sheet: sheet.clone(), private: vec![] }, &screen(), 2_000).unwrap();
+
+    // A relaunch: the card is still there, and his words are kept with it, not as Rich's check.
+    let kept = Outbox::open(&dir).unchecked().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].checked.as_ref(), Some(&written));
+    assert_eq!(kept[0].edited.as_ref().map(|e| &e.sheet), Some(&sheet));
+    assert!(Outbox::open(&dir).pending().unwrap().is_empty());
+    // Their redraft is what the window is shown, and it is not a Check: Send still asks Rich.
+    let shown = redraft(&sheet, &[], &[]);
+    let mut turns = 0;
+    let _ = at_send(&sheet_of(&shown), Some(&Check::of(&written.draft)), &[], |p| { turns += 1; rich_keeps(p) });
+    assert_eq!(turns, 1, "his hand change went without the check at Send");
+
+    // Rich's own new card replaces the hand changes it was made from.
+    assert!(outbox.update_card(&id, written.clone()).unwrap());
+    assert!(Outbox::open(&dir).unchecked().unwrap()[0].edited.is_none());
+    // With no card kept (it went to waiting and is being changed) the words wait for his check.
+    let other = report_id();
+    outbox.keep_edit(&other, Edited { sheet, private: vec![] }, &screen(), 3_000).unwrap();
+    let alone = Outbox::open(&dir).unchecked().unwrap().into_iter().find(|u| u.id == other).unwrap();
+    assert!(alone.checked.is_none() && alone.edited.is_some());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn words_that_waited_for_rich_come_back_as_his_check_after_a_relaunch_not_as_a_new_hand_edit() {
+    let dir = scratch("edit-then-check");
+    let outbox = Outbox::open(&dir);
+    let sheet = Sheet {
+        title: "The window froze".into(),
+        sections: vec![SheetSection { heading: "What happened".into(), paragraphs: vec!["Jane Doe saw the window freeze.".into()], steps: vec![] }],
+    };
+    let id = report_id();
+    // No card was kept (it went to waiting and was being changed): the words wait for his check.
+    outbox.keep_edit(&id, Edited { sheet: sheet.clone(), private: vec![] }, &screen(), 0).unwrap();
+    let jane = vec![PrivateTerm::new("Jane Doe", Kind::PersonName)];
+    // Rich recovers and checks them: he covers the name.
+    let ready = outbox.check_due(0, |u| checked_edit(u.edited.as_ref().unwrap(), &jane, rich_keeps)).unwrap();
+    assert_eq!(ready.len(), 1);
+    assert!(draft_words(&ready[0].1.draft).contains("[a person] saw the window freeze"));
+    // After a relaunch the kept entry is his check alone: no edit field to be read as a later hand change.
+    let after = Outbox::open(&dir).unchecked().unwrap();
+    assert!(after[0].edited.is_none(), "his check left the earlier edit behind: {:?}", after[0].edited);
+    assert_eq!(after[0].checked.as_ref(), Some(&ready[0].1));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_written_up_card_is_kept_and_comes_back_after_a_relaunch_until_it_is_done_with() {
+    let dir = scratch("kept-card");
+    let written = checked_with("The window froze.", "[]");
+    let id = report_id();
+    let outbox = Outbox::open(&dir);
+    outbox.keep_card(&id, "the window froze", &screen(), written.clone(), 1_000).unwrap();
+
+    // Nothing of it can be sent from there.
+    assert!(outbox.pending().unwrap().is_empty() && outbox.sent().unwrap().is_empty());
+    // A relaunch: a new Outbox over the same folder gives the window the same card, unasked.
+    let relaunched = Outbox::open(&dir);
+    let back = relaunched.check_due(u64::MAX, |_| panic!("Rich was asked about a card he had written")).unwrap();
+    assert_eq!(back, vec![(id.clone(), written.clone())]);
+    // The card Rich's change made since is the one that comes back.
+    let mut changed = written.clone();
+    changed.draft.sections[0].paragraphs.push(plain("It froze twice."));
+    assert!(relaunched.update_card(&id, changed.clone()).unwrap(), "a kept card is updated");
+    assert_eq!(Outbox::open(&dir).check_due(u64::MAX, |_| panic!("asked")).unwrap(), vec![(id.clone(), changed)]);
+    // A card that is not kept is not made by an update.
+    assert!(!relaunched.update_card(&report_id(), written).unwrap(), "a card that is not kept was made");
+    assert_eq!(relaunched.unchecked().unwrap().len(), 1);
+    // Sent, canceled or dropped: it is taken off, once, and is gone.
+    assert!(relaunched.take_unchecked(&id).unwrap());
+    assert!(Outbox::open(&dir).check_due(u64::MAX, |_| panic!("asked")).unwrap().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
 }

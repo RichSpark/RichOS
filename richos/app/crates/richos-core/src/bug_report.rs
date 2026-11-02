@@ -2236,6 +2236,30 @@ pub fn checked_edit_for(post: Post, edited: &Edited, app: &[PrivateTerm], finish
     Ok(Checked { draft: rich_last(post, &scanned, &as_typed(&edited.sheet), app, finish)?, digest: EDIT_DIGEST.into() })
 }
 
+/// **A CHANGE RICH FOLDED IN, AS HIS LAST WORD** (CEO §156: Send must not ask Rich again after a
+/// change Rich himself made; §115 stays: nothing changes a word after him). `change` is his
+/// sentence to add and where; it is put into `sheet` (the card's words now, hand changes
+/// included) at the end of its section's paragraphs, and the whole card goes through the scanner
+/// and then Rich ([`checked_edit_for`]). The card that comes back is already his last word, so
+/// Send sends it as it is ([`at_send_for`] finds it equal to what he gave). `report_private` are the
+/// report's private words so far; any Rich names in this change join them. Errors when the section
+/// is not on the card or Rich cannot answer: then nothing is added.
+pub fn changed_card_for(
+    post: Post,
+    sheet: &Sheet,
+    report_private: &[PrivateTerm],
+    change: &Change,
+    app: &[PrivateTerm],
+    finish: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Checked, String> {
+    let mut merged = sheet.clone();
+    let section =
+        merged.sections.iter_mut().find(|s| s.heading == change.section).ok_or_else(|| format!("no section {:?}", change.section))?;
+    section.paragraphs.push(change.add.trim().to_string());
+    let private = distinct(report_private.iter().chain(&change.private).cloned());
+    checked_edit_for(post, &Edited { sheet: merged, private }, app, finish)
+}
+
 // ---------------------------------------------------------------------------------------
 // SEND, AND KEEP WHAT COULD NOT GO
 // ---------------------------------------------------------------------------------------
@@ -2588,6 +2612,62 @@ impl Outbox {
         Ok(WriteUp::Unchecked { id: unchecked.id })
     }
 
+    /// **A WRITTEN-UP CARD KEPT ON THIS MAC** (CEO §156: a quit, an update relaunch or the crash
+    /// being reported must not lose what Rich wrote up). `id` is the report's id (the one its check
+    /// is kept under for Send). It is kept the way a check the window has not taken is: in
+    /// `<dir>/unchecked/` with `checked` set, so [`Outbox::check_due`] hands it to the window again
+    /// after a relaunch. It stays until the card is sent, canceled or dropped ([`Outbox::take_unchecked`]).
+    pub fn keep_card(&self, id: &str, answer: &str, screen: &Screen, checked: Checked, now_ms: u64) -> io::Result<()> {
+        self.write_unchecked(&Unchecked {
+            id: id.to_string(),
+            created_at_ms: now_ms,
+            answer: answer.trim().to_string(),
+            screen: screen.clone(),
+            attempts: 1,
+            next_try_at_ms: now_ms,
+            checked: Some(checked),
+            edited: None,
+        })
+    }
+
+    /// The kept card `id` now reads as `checked` (Rich's last word on it changed). Nothing is
+    /// written, and `false` answered, when no card is kept by that id.
+    pub fn update_card(&self, id: &str, checked: Checked) -> io::Result<bool> {
+        let Some(path) = self.unchecked_path(id) else { return Ok(false) };
+        let Ok(bytes) = std::fs::read(&path) else { return Ok(false) };
+        let Ok(mut kept) = serde_json::from_slice::<Unchecked>(&bytes) else { return Ok(false) };
+        kept.checked = Some(checked);
+        // Rich's words are the card now; hand changes made before them are in them.
+        kept.edited = None;
+        self.write_unchecked(&kept)?;
+        Ok(true)
+    }
+
+    /// **WORDS THE USER CHANGED BY HAND, KEPT BEFORE THE PANEL MAY CLOSE** (CEO §156: closing and
+    /// relaunching must not lose an edit). They are kept beside Rich's last card of this report
+    /// (`id`), or, when no card is kept (it went to waiting and is being changed), as words waiting
+    /// for his check ([`Outbox::keep_edited`]'s shape: `check_due` asks him). Never sent from here:
+    /// a kept edit comes back as a hand-changed card, which goes through the scanner and then Rich
+    /// at Send ([`at_send_for`]).
+    pub fn keep_edit(&self, id: &str, edited: Edited, screen: &Screen, now_ms: u64) -> io::Result<()> {
+        if let Some(path) = self.unchecked_path(id) {
+            if let Some(mut kept) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Unchecked>(&b).ok()) {
+                kept.edited = Some(edited);
+                return self.write_unchecked(&kept);
+            }
+        }
+        self.write_unchecked(&Unchecked {
+            id: id.to_string(),
+            created_at_ms: now_ms,
+            answer: String::new(),
+            screen: screen.clone(),
+            attempts: 1,
+            next_try_at_ms: now_ms,
+            checked: None,
+            edited: Some(edited),
+        })
+    }
+
     /// Every report Rich has not checked yet, or whose check the window has not taken, oldest
     /// first. A file this build cannot read is skipped, never deleted.
     pub fn unchecked(&self) -> io::Result<Vec<Unchecked>> {
@@ -2617,6 +2697,9 @@ impl Outbox {
             match answer {
                 Ok(done) => {
                     unchecked.checked = Some(done.clone());
+                    // His check has taken the changed words in (they were what he checked): the
+                    // field must not be read later as a hand change made after it (CEO §156).
+                    unchecked.edited = None;
                     self.write_unchecked(&unchecked)?;
                     out.push((unchecked.id, done));
                 }
@@ -2631,8 +2714,9 @@ impl Outbox {
         Ok(out)
     }
 
-    /// Take a report off the unchecked list: the window has shown Rich's check on a card, or the
-    /// user canceled it. `false` when there was none by that id.
+    /// Take a report off the unchecked list: its card was sent (or is waiting in full in the
+    /// outbox), or the user canceled or dropped it (CEO §156: showing the card does not take it
+    /// off, so a relaunch brings it back). `false` when there was none by that id.
     pub fn take_unchecked(&self, id: &str) -> io::Result<bool> {
         let Some(path) = self.unchecked_path(id) else { return Ok(false) };
         match std::fs::remove_file(path) {

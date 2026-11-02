@@ -21,7 +21,9 @@
 // What is SENT is decided by the shell alone, at Send (`bug_report_send`, `richos_core::
 // bug_report::at_send`), in the CEO's order (§115): the scanner first, Rich last, and nothing
 // after him changes the words. The card's words go as they are when they are the words Rich last
-// gave of this report (`f.report`). Words that changed (by hand, or a change told to Rich) go
+// gave of this report (`f.report`). A change told to Rich is his last word already (CEO §156:
+// the scanner goes over the card with his sentence in it and he has the last pass, in
+// `bug_report_change`), so Send sends it with no second check. Words changed by hand go
 // through the scanner and then Rich first ("Rich is checking your changes…"); when his version
 // differs from the card, the card comes back with his version, to send or not; when Claude can't
 // answer they wait on this Mac, unsent, like any report he couldn't check. This file never decides
@@ -101,6 +103,7 @@ window.RichBug = (function () {
       notSaved: "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.",
       canceled: "Canceled. Nothing was sent.",
       savedToast: "Your bug report is saved on this Mac and goes out by itself when it can.",
+      draftToast: "Your bug report is saved on this Mac, not sent and Bust a bug brings it back.",
       uncheckedToast: "Your bug report is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
     idea: {
@@ -126,6 +129,7 @@ window.RichBug = (function () {
       notSaved: "I couldn't save your idea on this Mac, so nothing was posted. Press Post idea to try again.",
       canceled: "Canceled. Nothing was posted.",
       savedToast: "Your idea is saved on this Mac and is posted by itself when it can.",
+      draftToast: "Your idea is saved on this Mac, not posted and Request a feature brings it back.",
       uncheckedToast: "Your idea is saved on this Mac. Rich will check it as soon as Claude answers and show it to you here.",
     },
   };
@@ -672,6 +676,9 @@ window.RichBug = (function () {
     if (!c || !c.id) return;
     var kind = c.post === "idea" ? "idea" : "bug";
     if (taken[c.id]) return takeOff(c.id, kind);
+    // The card is already on screen, or was and is done with: the shell says a kept card on every
+    // pass, so this is a repeat.
+    if (flows.some(function (x) { return x.report === c.id; })) return;
     var f = flows.filter(function (x) { return x.uncheckedId === c.id; })[0];
     var earlier = !f;
     if (earlier) {
@@ -683,13 +690,16 @@ window.RichBug = (function () {
       $("bugdock-where").textContent = "· " + label;
     }
     if (f.step !== "unchecked") return;
-    taken[c.id] = true;
-    takeOff(c.id, postOf(f));
+    // Shown, and NOT taken off this Mac: the card stays kept until it is sent, canceled or dropped
+    // (CEO §156), so a quit, a relaunch or a crash does not lose it. The shell says it again on
+    // every pass; a flow already showing it (`f.report`) ignores that.
     f.uncheckedId = null;
     if (f.uncheckedActs) { f.uncheckedActs.remove(); f.uncheckedActs = null; }
     showDock(f);
     var lead = earlier ? W(f).earlier : f.card ? "I've checked your changes now. " : "I've checked it now. ";
     showDraft(f, c, lead + W(f).hereItIs, null);
+    // Words he changed by hand before the quit come back as changed words: Send checks them.
+    if (c.handEdited) { f.edited = true; f.handEdited = true; paintCard(f); }
   }
 
   /// Rich folds one change in. While he does, the report is "changing": Send, Change it and
@@ -704,21 +714,32 @@ window.RichBug = (function () {
       var more = f.nextChanges && f.nextChanges.shift();
       if (more && f.step === "draft") askChange(f, more, false);
     }
-    bridge.invoke("bug_report_change", { said: text, sheet: sheetOf(f), private: f.private || [], post: postOf(f) }).then(function (answer) {
+    var before = sheetOf(f);
+    bridge.invoke("bug_report_change", { said: text, sheet: before, private: f.private || [], post: postOf(f), report: f.report || null, screen: publicScreen(f.screen) }).then(function (answer) {
       w2.remove();
       if (f.step !== "changing") return;
-      if (answer.private) f.private = answer.private;
+      // **THE CARD HIS CHANGE MADE IS HIS LAST WORD** (CEO §156): the scanner went over the card
+      // with his sentence in it and he had the last pass, so this card replaces the one shown and
+      // Send sends it as it is. Whatever he added is marked, in the section he put it in.
+      f.report = answer.report || f.report;
+      f.draft = answer.draft;
+      f.private = (answer.draft && answer.draft.private) || f.private || [];
+      var old = f.card;
+      f.card = buildCard(f);
+      old.parentNode.replaceChild(f.card, old);
+      window.setTimeout(function () { if (f.card) f.card.classList.remove("is-new"); }, 2600);
       var secs = f.card.querySelectorAll(".bug-sec");
       var sec = null;
       for (var i = 0; i < secs.length; i++) if (secs[i].querySelector("h4").textContent === answer.section) sec = secs[i];
       if (!sec) sec = secs[0];
-      var p = node("p", "is-added");
-      appendSegments(p, answer.add);
-      var ol = sec.querySelector("ol, ul");
-      sec.insertBefore(p, ol);
+      var had = ((before.sections.filter(function (s) { return s.heading === answer.section; })[0] || {}).paragraphs || []).slice();
+      fieldsIn(sec).paragraphs.forEach(function (p) {
+        var at = had.indexOf(wordsOf(p));
+        if (at !== -1) had.splice(at, 1);
+        else p.classList.add("is-added");
+      });
       f.edited = true;
-      // The card changed: at Send it goes through the scanner and then Rich, last (CEO §115).
-      f.handEdited = true;
+      f.handEdited = false;
       f.step = "draft";
       paintCard(f);
       paintComposers();
@@ -1249,9 +1270,19 @@ window.RichBug = (function () {
     f.edited = true;
     // Only says what Send will be doing first ("Rich is checking your changes…"): whether the
     // words may go is the shell's to decide, against Rich's own check, never this flag's.
-    if (JSON.stringify(sheetOf(f)) !== f.beforeEdit) f.handEdited = true;
+    var changedNow = JSON.stringify(sheetOf(f)) !== f.beforeEdit;
+    if (changedNow) f.handEdited = true;
     f.step = "draft";
     paintCard(f);
+    // **SAVED BEFORE THE PANEL MAY CLOSE** (CEO §156): the words he changed are kept on this Mac
+    // now, and the close button waits for that (`paintDock`), so closing and relaunching never
+    // brings back the card without his edit. Not sent: at Send they still get the scanner and then Rich.
+    if (changedNow && f.report) {
+      f.keeping = true;
+      bridge.invoke("bug_report_keep_edit", { report: f.report, sheet: sheetOf(f), private: f.private || [], screen: publicScreen(f.screen), post: postOf(f) })
+        .catch(function () { richSays(f, ["I couldn't save your changes on this Mac, so they may be gone after a quit."]); })
+        .then(function () { f.keeping = false; paintDock(); });
+    }
     paintComposers();
   }
 
@@ -1412,6 +1443,8 @@ window.RichBug = (function () {
   function cancel(f) {
     if (f.step !== "draft" && f.step !== "queued") return;
     withdraw(f, "cancel", function () {
+      // Canceled: its kept copy goes too, so a relaunch does not bring it back (CEO §156).
+      if (f.report) { taken[f.report] = true; takeOff(f.report, postOf(f)); }
       f.step = "canceled";
       paintCard(f);
       paintComposers();
@@ -1484,9 +1517,12 @@ window.RichBug = (function () {
   }
   function paintDock() {
     var f = dockFlow();
-    var busy = f && ["checking", "draft", "editing", "changing", "sending", "withdrawing"].indexOf(f.step) !== -1;
+    // A written-up card waiting for Send is kept on this Mac (CEO §156), so the panel may close
+    // over it and the press that opens it again comes back to it (`start`). Only a step that is
+    // mid-air (Rich working, a words being changed, a send in flight) holds the panel open.
+    var busy = f && (f.keeping || ["checking", "editing", "changing", "sending", "withdrawing"].indexOf(f.step) !== -1);
     var x = $("bugdock-x");
-    if (x) x.hidden = !!busy; // while a report waits on a decision, Send or Cancel is the way out
+    if (x) x.hidden = !!busy;
   }
 
   // ---- paint the sticky actions' edge only while they float over the report -----------------
@@ -1618,6 +1654,7 @@ window.RichBug = (function () {
       var f = dockFlow();
       if (f && f.step === "ask") neverMind(f, true);
       if (f && f.step === "queued" && host) host.toast(W(f).savedToast);
+      if (f && f.step === "draft" && host) host.toast(W(f).draftToast);
       if (f && f.step === "unchecked" && host) host.toast(W(f).uncheckedToast);
       hideDock();
     });
