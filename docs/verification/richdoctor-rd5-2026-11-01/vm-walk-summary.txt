@@ -1,0 +1,1 @@
+walks on a build of the merged tree plus the three fix commits: richdoctor-walk.sh 46 ok 0 failed; richdoctor-resume-walk.sh 19 ok 0 failed; each run: app quit, VM stopped, clone deleted (run-walk.py)

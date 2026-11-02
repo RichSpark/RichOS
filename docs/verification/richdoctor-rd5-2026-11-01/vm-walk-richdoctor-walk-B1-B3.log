@@ -1,0 +1,49 @@
+[walk] 23:57:55Z claude in the guest: /Users/admin/.local/bin/claude (2.1.316 (Claude Code))
+[walk] 23:57:56Z RichDoctor launched in the guest, pid 1101
+[walk] 23:58:01Z ok: A1 the help window opened with RichOS absent
+[walk] 23:58:02Z ok: A1 it says RichOS was not found, claiming nothing
+[walk] 23:58:08Z ok: the first question is the time
+[walk] 23:58:57Z ok: A3 a read-only tool ran (a folded progress line is on screen)
+[walk] 23:59:11Z ok: the review opened
+[walk] 23:59:15Z ok: A3 the review shows what RichDoctor found
+[walk] 23:59:19Z ok: A6 'Walker Probeson' is not on the review screen
+[walk] 23:59:22Z ok: A6 'Probeson Holdings' is not on the review screen
+[walk] 23:59:25Z ok: A6 'ghp_PLANTEDwalk0123456789abcdefghijklmn' is not on the review screen
+[walk] 23:59:28Z ok: A6 '/Users/admin/testvm/walk-42edfa10f13e/home' is not on the review screen
+[walk] 23:59:30Z ok: the public destination is beside Send
+[walk] 23:59:34Z ok: Report submitted, from a confirmed link
+[walk] 23:59:36Z ok: exactly one issue was created
+[walk] 23:59:36Z ok: A6 'Walker Probeson' did not reach the issue
+[walk] 23:59:36Z ok: A6 'Probeson Holdings' did not reach the issue
+[walk] 23:59:36Z ok: A6 'ghp_PLANTEDwalk0123456789abcdefghijklmn' did not reach the issue
+[walk] 23:59:36Z ok: A6 '/Users/admin/testvm/walk-42edfa10f13e/home' did not reach the issue
+[walk] 23:59:36Z ok: A3 the planted startup failure is in the report as sent
+[walk] 23:59:36Z ok: the issue carries the report ID footer
+[walk] 23:59:36Z ok: A4 no sentinel file
+[walk] 23:59:36Z ok: A4 the fixture sources are byte-identical
+[walk] 23:59:36Z ok: A4 absent source roots stay absent
+[walk] 23:59:39Z ok: B1 the first screen is back after Done
+[walk] 23:59:42Z ok: B1 a sent report is not offered as unfinished
+[walk] 23:59:49Z ok: B1 the time question
+[walk] 00:00:00Z ok: B1 the window closed mid-investigation
+[walk] 00:00:01Z ok: B1 the saved report keeps the investigation in flight
+[walk] 00:00:01Z ok: B1 closing the window wrote no 'canceled'
+[walk] 00:00:03Z ok: B1 the reopened window offers the unfinished report
+[walk] 00:00:11Z ok: B1 the reopened report is not shown as canceled
+[walk] 00:00:16Z ok: B1 the investigation continued by itself: Claude's next turn is on screen
+[walk] 00:00:35Z ok: B1 the review opened
+[walk] 00:00:53Z ok: B1 the reopened report was prepared with Claude
+[walk] 00:01:11Z ok: B2 the saved unfinished report is offered
+[walk] 00:01:23Z ok: B2 the first screen after reopening
+[walk] 00:01:27Z ok: B2 the offer did not come back after Start a new report
+[walk] 00:01:28Z ok: B2 the choice is saved on the draft, which stays in Saved reports
+[walk] 00:01:46Z ok: B3 Prepare without AI asks when
+[walk] 00:01:52Z ok: B3 it asks what the person expected
+[walk] 00:02:08Z ok: B3 it asks what the person was doing
+[walk] 00:02:27Z ok: B3 the report is ready after the last answer
+[walk] 00:02:39Z ok: B3 the review opened
+[walk] 00:02:43Z ok: B3 the answers are in the report's Expected and steps
+[walk] 00:02:45Z ok: B3 the report has its When
+[walk] 00:02:48Z ok: B3 no question is left unknown
+[walk] 00:02:53Z ok: A12 no RichDoctor or support-adapter process is left
+[walk] 00:02:53Z done: every check passed
