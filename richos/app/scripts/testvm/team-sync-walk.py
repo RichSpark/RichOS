@@ -202,7 +202,7 @@ class TeamSyncWalk(hire_walk.HireWalk):
                        f'{shlex.quote(engine + "/scripts/lib")} {shlex.quote(entity)} 2>&1', 120)
         resolve_script = '. "$1/scripts/lib/resolve-roots.sh"; resolve_agent_def "$2" "$1" richos-app-engine:ray; agent_roster_dir "$2"'
         resolved = guest(self.vm, setenv + 'bash -c ' + shlex.quote(resolve_script)
-                         + f' x {shlex.quote(engine)} {shlex.quote(entity)} 2>&1', 60).split()
+                         + f' x {shlex.quote(engine)} {shlex.quote(entity)} 2>&1', 60).strip().splitlines()
         own_roster = '/tmp/team-sync-walk-roster'
         self.put(own_roster + '/onlyroster.md', definition('onlyroster', 'x'))
         roles = {}
