@@ -1415,6 +1415,11 @@ build_args+=(--config "$connect_overlay")
 # it was built, as the separate download (PRD §3: "the separate download supplies the
 # identical signed app directly").
 #
+# RichDoctor is stamped with RichOS's own version ($target_version, the one source), because the
+# refresh (richdoctor-core bootstrap.rs `refresh_with`) replaces an installed copy only when its
+# version is older than the payload's; a fixed 1.0.0 was never older than 1.0.0, so no RichOS
+# ever replaced the RichDoctor installed first (CEO 2026-11-02: "how do I know that it has
+# actually been updated?"). The installed 1.0.0 is older than every RichOS version.
 # RICHOS_WITHOUT_RICHDOCTOR=1 skips it, loudly: that RichOS installs no RichDoctor.
 richdoctor_dir="$app_dir/crates/richdoctor"
 if [ "${RICHOS_WITHOUT_RICHDOCTOR:-}" = "1" ]; then
@@ -1423,7 +1428,7 @@ if [ "${RICHOS_WITHOUT_RICHDOCTOR:-}" = "1" ]; then
 else
   say ""
   say "building RichDoctor, the separate support app this RichOS installs beside itself..."
-  if ! (cd "$richdoctor_dir" && ${build_launch[@]+"${build_launch[@]}"} cargo tauri build --no-sign --bundles app); then
+  if ! (cd "$richdoctor_dir" && ${build_launch[@]+"${build_launch[@]}"} cargo tauri build --no-sign --bundles app --config "{\"version\":\"$target_version\"}"); then
     warn ""
     warn "RichDoctor did not build — nothing was packaged. The output above is the reason."
     exit 4
