@@ -468,6 +468,13 @@ pub fn with_resource_access(body: &str) -> String {
 }
 
 fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path, preserve_loaded:bool)->Result<Vec<String>,RuntimeError> {
+    // The governed repositories' current definitions reach the team first (`team_sync.rs`); a
+    // failure there never stops a lease, the team as it stands runs.
+    match crate::team_sync::sync(data) {
+        Ok(report) if report.changed() || !report.kept_edited.is_empty() => eprintln!("[richos] {}", report.summary()),
+        Ok(_) => {}
+        Err(e) => eprintln!("[richos] the team could not be brought up to date: {e}"),
+    }
     let team=active_team(engine,data)?;
     for root in [plugin.join("agents"),coordination.join(".claude/agents")] {
         for (name,body) in &team {

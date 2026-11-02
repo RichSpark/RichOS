@@ -204,6 +204,7 @@ pub mod owned_process;
 pub mod lease_commands;
 pub mod provider_auth;
 pub mod engine_profile;
+pub mod team_sync;
 pub mod user_settings;
 pub mod your_instructions;
 pub mod instructions_update;
