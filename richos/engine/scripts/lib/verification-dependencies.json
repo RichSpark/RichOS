@@ -3296,7 +3296,7 @@
     },
     "scripts/hooks/unlanded-branches.test.sh": {
       "source": "scripts/hooks/unlanded-branches.test.sh",
-      "sha256": "a5f015d9a91557df9ed0f15c8298898794bd669213e106886d35ee27a435c7cf",
+      "sha256": "368fa5607f78ac1995ae696546571c1fa6ddf7a44050c9451e29771d664e7bfe",
       "evidence": "All adopted roots are private with empty/literal switched config, including the nested mutation suite. The lint does not source settings and uses only its fixture/environment arguments. The missing-sweep case copies the finite claim/recovery/integration helpers into its private engine, proves the positive control there then removes only the copied sweep. No assertion consumes transported real config values. The mutation allocator ledger uses a suite-private CLAUDE_CONFIG_DIR.",
       "keys": [],
       "edges": [

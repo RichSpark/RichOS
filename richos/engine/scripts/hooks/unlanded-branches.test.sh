@@ -609,7 +609,7 @@ BROKEN_ENGINE="$SANDBOX/missing-sweep-engine"
 mkdir -p "$BROKEN_ENGINE/scripts/hooks" "$BROKEN_ENGINE/scripts/lib" "$BROKEN_ENGINE/mega-lander"
 cp "$CLAIMS" "$SCRIPT_DIR/guard-unresolved-claims.py" "$BROKEN_ENGINE/scripts/hooks/"
 for helper in resolve-roots.sh resolve-main-checkout.sh stop-hook-notice.sh \
-              unevaluated-notice.sh stop-session-recovery.py unlanded-branches.py; do
+              unevaluated-notice.sh stop-session-recovery.py unlanded-branches.py agent_roster.py; do
     cp "$ENGINE_ROOT/scripts/lib/$helper" "$BROKEN_ENGINE/scripts/lib/" || exit 1
 done
 cp "$ENGINE_ROOT/mega-lander/workspaces.py" "$BROKEN_ENGINE/mega-lander/" || exit 1
