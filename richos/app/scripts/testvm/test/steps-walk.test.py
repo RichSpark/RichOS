@@ -140,6 +140,29 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
         got = mod.problems([{'op': 'pointer', 'points': bad}])
         check('a pointer step with points %r is refused with a sentence' % (bad,), bool(got), got)
 
+    # A hover on a control the app moves (round 51's plus and Talk to Rich): "find" reads its
+    # center off the guest's tree when the step runs and rests the pointer there.
+    seen.clear()
+    def fake_find(args, timeout=120):
+        seen.append(args)
+        if args[0].endswith('/ax.sh'):
+            return 0, '{"meta": true, "matches": 1}\n{"role": "AXButton", "title": "Add files and folders", "x": 470, "y": 980, "w": 36, "h": 36}'
+        return 0, '{"hovered": true}'
+    mod.run = fake_find
+    code, _ = mod.step_run('no-such-vm', {'op': 'pointer', 'points': [], 'hover': True,
+                                          'find': ['--title', 'Add files and folders', '--role', 'AXButton']}, Path(tmp))
+    check('pointer with find asks ax.sh for the first match as JSON, then hovers on its center',
+          code == 0 and len(seen) == 2 and seen[0][1:] == ['no-such-vm', 'find', '--title', 'Add files and folders', '--role', 'AXButton', '--json', '--first']
+          and seen[1][0].endswith('/pointer-drag.sh') and seen[1][1:] == ['no-such-vm', '488,998', '--hover'], seen)
+    mod.run = lambda args, timeout=120: (0, '{"meta": true, "matches": 0}')
+    code, text = mod.step_run('no-such-vm', {'op': 'pointer', 'points': [], 'hover': True, 'find': ['--title', 'Gone']}, Path(tmp))
+    check('pointer with find fails its step when nothing matched, and no pointer moves', code == 1 and 'nothing with a position' in text, (code, text))
+    check('a hover with find and no points is valid', mod.problems([{'op': 'pointer', 'points': [], 'hover': True, 'find': ['--title', 'X']}]) == [],
+          mod.problems([{'op': 'pointer', 'points': [], 'hover': True, 'find': ['--title', 'X']}]))
+    check('a find that is not a list is refused', mod.problems([{'op': 'pointer', 'points': ['1,2'], 'hover': True, 'find': '--title X'}]) != [],
+          mod.problems([{'op': 'pointer', 'points': ['1,2'], 'hover': True, 'find': '--title X'}]))
+    mod.run = lambda args, timeout=120: (seen.append(args) or (0, ''))
+
     # openlink: the pairing address the Mac draws is opened on the guest's phone page, and an
     # address that never appears fails the step rather than opening nothing and passing.
     seen.clear()
