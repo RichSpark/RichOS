@@ -1001,7 +1001,7 @@ def active_definition(teammate):
     """The frontmatter of an ACTIVE teammate's definition, whose `model:` line is the model it
     runs on unless one job names another (plan §5; `job_model`).
 
-    Active means on the roster this lease registered, `<entity root>/.claude/agents/`, which
+    Active means on the roster this lease registered (`RICHOS_AGENT_ROSTER`, else `<entity root>/.claude/agents/`), which
     is the same file the isolation guard resolves `richos-app-engine:<teammate>` to and the
     same bytes the lease's plugin carries (`EngineProfile::prepare`). A name that is not
     there is refused with the names that are. The frontmatter gets the guard's own reading
@@ -1009,7 +1009,9 @@ def active_definition(teammate):
     if not TEAMMATE_NAME.fullmatch(teammate):
         raise ValueError("teammate must be an active teammate's name: 2 to 16 lowercase letters and digits")
     root = Path(os.environ["RICHOS_ENTITY_ROOT"])
-    roster = root / ".claude/agents"
+    # The lease's own roster when it has one (RICHOS_AGENT_ROSTER): the coordination folder is
+    # shared by every lease, so another company's lease may have rendered its definitions there.
+    roster = Path(os.environ.get("RICHOS_AGENT_ROSTER") or root / ".claude/agents")
     path = roster / (teammate + ".md")
     if teammate in DUTIES or path.is_symlink() or not path.is_file():
         active = sorted(p.stem for p in roster.glob("*.md") if TEAMMATE_NAME.fullmatch(p.stem) and p.stem not in DUTIES)

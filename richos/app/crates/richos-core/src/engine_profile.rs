@@ -467,6 +467,10 @@ pub fn with_resource_access(body: &str) -> String {
     body.into()
 }
 
+/// The variable naming the roster of the lease a process belongs to
+/// (`scripts/lib/resolve-roots.sh` `resolve_agent_def`, `mega-lander/app.py` `active_definition`).
+pub const AGENT_ROSTER_ENV: &str = "RICHOS_AGENT_ROSTER";
+
 fn render_team(engine:&Path, data:&Path, coordination:&Path, plugin:&Path, preserve_loaded:bool, company:Option<&str>)->Result<Vec<String>,RuntimeError> {
     // The governed repositories' current definitions reach the team first (`team_sync.rs`); a
     // failure there never stops a lease, the team as it stands runs.
@@ -997,6 +1001,11 @@ impl EngineProfile {
             .env("STALL_WATCH_STATE_DIR", self.state.join("stall-watch"))
             .env("RICHOS_ENGINE_ROOT", &self.engine).env("RICHOS_ENGINE_DIR", &self.engine)
             .env("RICHOS_ENTITY_ROOT", &self.coordination).env("CLAUDE_PROJECT_DIR", &self.coordination)
+            // This lease's own roster: the definitions its plugin carries, the ones its session
+            // boots teammates from. The coordination folder is shared by every lease, so a
+            // company-specific definition written there by one lease replaces another lease's
+            // (review rv-20261102T053802Z-c66f511d); dispatch and the guards read this folder.
+            .env(AGENT_ROSTER_ENV, self.plugin.join("agents"))
             .env("RICHOS_WORKSPACES_DIR", self.workspace_state())
             .env("RICHOS_SA_ENTITY_ROOT", &self.coordination).env("RICHOS_SA_TEAMS_DIR", self.state.join("teams"))
             .env("RICHOS_SESSION_ID", session).env_remove("RICHOS_SESSION_PID")

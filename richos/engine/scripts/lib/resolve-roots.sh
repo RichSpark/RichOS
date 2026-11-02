@@ -561,7 +561,8 @@ except Exception:
 #         degrading, which is the failure class this contract exists to kill.
 #
 # Search order:
-#   1. $ENTITY_ROOT/.claude/agents/<bare>.md            (the entity's own roster)
+#   1. $RICHOS_AGENT_ROSTER/<bare>.md when set (an app lease's own roster), else
+#      $ENTITY_ROOT/.claude/agents/<bare>.md            (the entity's own roster)
 #   2. $ENGINE_ROOT/.claude/agents/<bare>.md            (only when the namespace
 #                                                        IS this engine's plugin
 #                                                        name — read from the
@@ -579,7 +580,14 @@ resolve_agent_def() {
     ns="$(agent_namespace "$stype")"
     [ -n "$bare" ] || return 1
 
-    cand="$entity_root/.claude/agents/${bare}.md"
+    # A lease's own roster (the app sets RICHOS_AGENT_ROSTER to the folder its plugin carries)
+    # is read in place of the entity folder, which every lease of the app shares and which
+    # another company's lease may have rendered its definitions into.
+    if [ -n "${RICHOS_AGENT_ROSTER:-}" ]; then
+        cand="$RICHOS_AGENT_ROSTER/${bare}.md"
+    else
+        cand="$entity_root/.claude/agents/${bare}.md"
+    fi
     if [ -f "$cand" ]; then printf '%s\n' "$cand"; return 0; fi
 
     if [ -n "$ns" ]; then

@@ -126,3 +126,56 @@ fn a_lease_for_a_company_takes_that_companys_own_definition_first() {
     lease_a.scope_to(&a_binding).unwrap();
     assert!(std::fs::read_to_string(lease_a.plugin.join("agents/ray.md")).unwrap().contains("OLD_RULE"));
 }
+
+/// Review rv-20261102T053802Z-c66f511d: the coordination folder is shared by every lease, so
+/// starting a lease for company A after one for company B must not change what B's next dispatch
+/// reads. B, then A, then B dispatches Ray: the dispatch reads B's own roster and runs B's model.
+#[test]
+fn a_later_lease_for_another_company_does_not_change_the_first_leases_dispatch() {
+    use richos_core::{Entity, EntityRegistry, Ledger, Spine};
+    let f = Scratch::new();
+    let with_model = |name: &str, model: &str| definition(name, "rule").replace("model: sonnet", &format!("model: {model}"));
+    let repos: Vec<PathBuf> = [("a", "sonnet"), ("b", "opus")].iter().map(|(n, model)| {
+        let r = f.0.join(format!("company-{n}"));
+        std::fs::create_dir_all(r.join(".claude/agents")).unwrap();
+        std::fs::write(r.join("orchestration.config"), "X=1\n").unwrap();
+        std::fs::write(r.join(".claude/agents/ray.md"), with_model("ray", model)).unwrap();
+        r
+    }).collect();
+    let data = f.0.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let entities: Vec<Entity> = ["a", "b"].iter().zip(&repos)
+        .map(|(n, r)| Entity::try_new(&format!("company-{n}"), n, vec![r.clone()]).unwrap()).collect();
+    let registry = EntityRegistry::new(entities).unwrap();
+    registry.save(&data.join("entities.json")).unwrap();
+    let mut spine = Spine::new(Ledger::open(f.0.join("ledger.jsonl")).unwrap());
+    spine.set_entity_registry(registry);
+    let mut binding = |id: &str| {
+        let thread = spine.create_thread(id, &richos_core::EntityId::parse(id).unwrap()).unwrap();
+        spine.ledger().thread_binding(&thread).unwrap()
+    };
+    let (b, a) = (binding("company-b"), binding("company-a"));
+
+    let mut lease_b = prepare(&data, &f);
+    lease_b.scope_to(&b).unwrap();
+    let mut lease_a = prepare(&data, &f);
+    lease_a.scope_to(&a).unwrap();
+
+    // B's next dispatch, with the environment B's session and its hooks run in.
+    let mut command = std::process::Command::new("true");
+    lease_b.configure(&mut command, Path::new("/fictional/provider"), "b-session", &f.0.join("scope.json"));
+    let env: BTreeMap<String, std::ffi::OsString> = command.get_envs()
+        .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_os_string()))).collect();
+    let script = "import importlib.util,sys\n\
+        s=importlib.util.spec_from_file_location('app',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n\
+        print(m.job_model('ray',None))";
+    let mut dispatch = std::process::Command::new("python3");
+    dispatch.args(["-c", script]).arg(engine().join("mega-lander/app.py"));
+    for key in ["RICHOS_ENTITY_ROOT", "RICHOS_AGENT_ROSTER"] {
+        if let Some(value) = env.get(key) { dispatch.env(key, value); }
+    }
+    let out = dispatch.output().unwrap();
+    assert!(out.status.success(), "dispatch failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "opus", "B's Ray dispatches on B's model, not A's");
+    assert!(std::fs::read_to_string(lease_a.plugin.join("agents/ray.md")).unwrap().contains("model: sonnet"));
+}
