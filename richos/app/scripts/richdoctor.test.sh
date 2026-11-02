@@ -52,7 +52,7 @@ plist = plistlib.loads((rd / "Info.plist").read_bytes())
 assert plist.get("LSUIElement") is True, "menu bar only"
 assert not [k for k in plist if k.startswith("NS") and k.endswith("UsageDescription")], "no permission prompt"
 cap = json.loads((rd / "capabilities" / "default.json").read_text())
-assert cap["permissions"] == ["core:default"] and cap["windows"] == ["main"], "the page gets no file or dialog command"
+assert cap["permissions"] == ["core:default", "core:window:allow-start-dragging"] and cap["windows"] == ["main"], "the page gets no file or dialog command (the one addition is the title strip's window drag)"
 for icon in conf["bundle"]["icon"]:
     assert (rd / icon).is_file(), icon
 for f in ("tokens.css", "fonts/fonts.css", "fonts/Inter-Variable.woff2"):
