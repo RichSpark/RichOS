@@ -14,7 +14,7 @@
 #       payload's byte for byte.
 #   U3  a further relaunch with the same versions leaves it alone (Info.plist byte-identical).
 #   U4  after the end no RichDoctor process is left in the guest.
-#   U5  the version RichDoctor states in the Versions section of the report it prepares (the
+#   U5  the version RichDoctor states in the Versions section of the report it prepares (an
 #       installed copy's own support adapter, over a fixture home) is RichOS's own version.
 #   U6  the footer of a fixture report sent to a loopback relay stand-in (never GitHub) carries
 #       RichOS's version in the relay's `major.minor[.patch]` shape.
@@ -63,7 +63,17 @@ if [ "$V1" = "$RV" ]; then pass "U1 RichDoctor says $V1, RichOS's own version"; 
 PAYLOAD_SUM=$(gs "shasum -a 256 '$RD/Contents/MacOS/RichDoctor'" | cut -d' ' -f1)
 
 # Make it the first RichDoctor: version 1.0.0, same signing (ad hoc), quit.
-gs "pkill -x RichDoctor 2>/dev/null; sleep 2; /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 1.0.0' '$RD/Contents/Info.plist'; /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 1.0.0' '$RD/Contents/Info.plist'; codesign --force --sign - --timestamp=none '$RD'" >> "$S/downgrade.log" 2>&1
+if [ -n "${RICHDOCTOR_OLD_ZIP:-}" ]; then
+  # A RELEASE RichOS only trusts an installed copy signed by its own team (bootstrap.rs `installed`),
+  # so the ad-hoc re-sign below is never replaced under one. Give it a genuinely signed older copy
+  # instead: RICHDOCTOR_OLD_ZIP is the RichDoctor zip of an earlier release of the same team
+  # (a real older copy, such as the 1.0.0 users have).
+  gs "mkdir -p $G" >/dev/null 2>&1
+  gs --push "$RICHDOCTOR_OLD_ZIP" "$G/old-richdoctor.zip" >> "$S/downgrade.log" 2>&1 || { fail "U2 setup: pushing the older RichDoctor zip"; finish; }
+  gs "pkill -x RichDoctor 2>/dev/null; sleep 2; rm -rf '$RD' $G/old && mkdir -p $G/old && ditto -x -k $G/old-richdoctor.zip $G/old && mv $G/old/RichDoctor.app '$RD'" >> "$S/downgrade.log" 2>&1
+else
+  gs "pkill -x RichDoctor 2>/dev/null; sleep 2; /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 1.0.0' '$RD/Contents/Info.plist'; /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 1.0.0' '$RD/Contents/Info.plist'; codesign --force --sign - --timestamp=none '$RD'" >> "$S/downgrade.log" 2>&1
+fi
 V0=$(rd_version "$RD")
 note "made it a first copy: $V0"
 if [ "$V0" != "1.0.0" ]; then fail "U2 setup: could not make the installed copy 1.0.0 (says $V0)"; finish; fi
@@ -132,10 +142,16 @@ gs --push "$S/d-6666aaaa6666.json" "$DATA/drafts/d-6666aaaa6666/draft.json" || f
 gs "chown -R admin '$SHORT'" >/dev/null 2>&1 || true
 gs "nohup python3 $G/relay-stand-in.py $PORT $G/relay.json $G/stand-in.log 0 500 >/dev/null 2>&1 & echo \$! > $G/stand-in.pid; echo started" >/dev/null || fail "U6 starting the stand-in"
 sleep 2
+# A RichDoctor trusted by RichOS has its login item enabled, and one started within two minutes of the
+# person's login is the login item's: it shows only its menu bar item, no window (mac.rs
+# `launched_at_login`, by design). A fresh guest is always inside those two minutes, so wait them out
+# (the Dock's age stands for the login's) before starting the copy this check needs a window from.
+LOGIN_AGE=$(gs "ps -o etime= -p \$(pgrep -x Dock | head -1) | tr -d ' ' | awk -F'[-:]' '{n=NF; s=\$n+\$(n-1)*60; if (n>=3) s+=\$(n-2)*3600; if (n>=4) s+=\$(n-3)*86400; print s}'" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)
+if [ -n "${LOGIN_AGE:-}" ] && [ "$LOGIN_AGE" -lt 130 ]; then note "waiting $((130 - LOGIN_AGE)) s so the login item's two minutes have passed"; sleep $((130 - LOGIN_AGE)); fi
 gs "$AS RICHDOCTOR_REPORT_RELAY=http://127.0.0.1:$PORT RICHDOCTOR_REPORT_REPOSITORY=richos-test/report-relay-local nohup '$RD/Contents/MacOS/RichDoctor' > $G/app.log 2>&1 &" >/dev/null 2>&1
 has() { "$T/ax.sh" "$VM" find --value "$1" --contains --app RichDoctor --first >/dev/null 2>&1 || "$T/ax.sh" "$VM" find --title "$1" --contains --app RichDoctor --first >/dev/null 2>&1; }
 wait_text() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 3; done; return 1; }
-wait_text "Continue your unfinished report?" 20 || { fail "U6 no card for the fixture report (u6-screen.txt)"; gs "tail -5 $G/app.log" > "$S/u6-app-log.txt" 2>&1; "$T/ax.sh" "$VM" tree --app RichDoctor > "$S/u6-screen.txt" 2>&1; }
+wait_text "Continue your unfinished report?" 20 || { fail "U6 no card for the fixture report (u6-screen.txt)"; gs "tail -5 $G/app.log; echo '--- processes'; ps -axo pid,ppid,etime,command | grep -i '[R]ichDoctor\\|[R]ichOS'; echo '--- data folder'; ls -laR '$DATA' | head -40; echo '--- signature'; codesign -dv '$RD' 2>&1 | head -8" > "$S/u6-app-log.txt" 2>&1; "$T/ax.sh" "$VM" tree --app RichDoctor > "$S/u6-screen.txt" 2>&1; "$T/shot.sh" "$VM" "$S/u6-fail.png" >/dev/null 2>&1; }
 "$T/ax.sh" "$VM" click --title "Continue" --app RichDoctor --first >/dev/null 2>&1 || fail "U6 pressing Continue"
 wait_text "Send report" 15 || fail "U6 the review screen did not open"
 "$T/ax.sh" "$VM" click --title "Send report" --app RichDoctor --first >/dev/null 2>&1 || fail "U6 pressing Send report"
