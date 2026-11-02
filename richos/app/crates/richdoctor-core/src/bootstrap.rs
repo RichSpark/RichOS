@@ -340,14 +340,52 @@ fn new_home(places: &Places) -> Option<PathBuf> {
 /// Ask a running RichDoctor to quit when it has no help session open. `Ok(true)`: it was
 /// running and quit; `Ok(false)`: none was running; `Err`: busy, refusing or silent.
 fn quit_running(places: &Places) -> Result<bool, String> {
+    let kill = |pid: i32| {
+        // SAFETY: a plain signal to the process that answered on RichDoctor's socket.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+    };
+    quit_running_with(places, std::process::id() as i32, &has_window, &kill)
+}
+
+/// [`quit_running`] with our own process id, the window question and the stop injected.
+fn quit_running_with(places: &Places, me: i32, owns_window: &dyn Fn(i32) -> bool, stop: &dyn Fn(i32)) -> Result<bool, String> {
     use std::io::{BufRead, BufReader, Write};
     let sock = places.doctor_data.join("instance.sock");
     let Ok(mut s) = std::os::unix::net::UnixStream::connect(&sock) else { return Ok(false) };
     s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    // Decide BEFORE asking anything: an installed copy at activation policy Regular (a help window
+    // open, minimized or hidden) is never asked to quit. Its own idle test cannot see text still
+    // being typed before Continue, and its quit handler reads `is_visible()`, false for a
+    // minimized window, so asking could end it with the typed text lost. Only one at Accessory
+    // (no window) is asked. A pid the kernel will not name is left alone the same way.
+    let answered_by = peer_pid_of(&s);
+    if answered_by.is_none_or(|p| p != me && owns_window(p)) {
+        return Err("a RichDoctor help session is open".into());
+    }
     writeln!(s, "quit-if-idle").map_err(|e| e.to_string())?;
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).map_err(|_| "RichDoctor did not answer within five seconds".to_string())?;
     if line.trim() != "ok" {
+        // Copies built before a closed, saved report counted as idle answer `busy` for as long
+        // as they run (their `Engine::busy` kept the report's stage after `close`). With no
+        // window (activation policy Accessory; minimized and hidden ones stay Regular) that answer can only be this: closing saved the report, so the copy
+        // is stopped by its process id, read from the socket it answered on, never by name.
+        if let Some(pid) = answered_by.filter(|&p| p != me && !owns_window(p)) {
+            // A closing operation may still be ending: look once more before stopping it.
+            std::thread::sleep(Duration::from_secs(2));
+            if peer_pid(&sock) == Some(pid) && !owns_window(pid) {
+                stop(pid);
+                let until = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < until {
+                    if std::os::unix::net::UnixStream::connect(&sock).is_err() {
+                        std::thread::sleep(Duration::from_millis(300));
+                        return Ok(true);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                return Err("RichDoctor did not quit within five seconds".into());
+            }
+        }
         return Err("a RichDoctor help session is open".into());
     }
     // Wait (five seconds at most) for it to be gone: its socket stops answering.
@@ -360,6 +398,60 @@ fn quit_running(places: &Places) -> Result<bool, String> {
         std::thread::sleep(Duration::from_millis(100));
     }
     Err("RichDoctor did not quit within five seconds".into())
+}
+
+/// The process id of whoever listens on the Unix socket `sock` (the kernel's own answer for the
+/// connected peer), or `None`.
+fn peer_pid(sock: &Path) -> Option<i32> {
+    peer_pid_of(&std::os::unix::net::UnixStream::connect(sock).ok()?)
+}
+
+fn peer_pid_of(s: &std::os::unix::net::UnixStream) -> Option<i32> {
+    use std::os::fd::AsRawFd;
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SOL_LOCAL = 0, LOCAL_PEERPID = 2 (<sys/un.h>).
+    // SAFETY: `pid` and `len` are valid for the call and sized for a pid_t.
+    let rc = unsafe { libc::getsockopt(s.as_raw_fd(), 0, 2, &mut pid as *mut _ as *mut libc::c_void, &mut len) };
+    (rc == 0 && pid > 0).then_some(pid)
+}
+
+/// Whether the copy running as `pid` still has its help window (open, minimized or hidden). An
+/// installed 1.0.0 RichDoctor shows a window with activation policy Regular (`open_window`,
+/// lib.rs:149) and, when the window is destroyed, saves and drops to Accessory (lib.rs:177-184);
+/// minimizing or hiding changes neither. The window server cannot say this: a closed window stays
+/// listed, hidden, exactly like a minimized one (measured in the guest). Readable without any
+/// permission. Unreadable: `true` (the copy is left alone).
+#[cfg(target_os = "macos")]
+fn has_window(pid: i32) -> bool {
+    use std::ffi::{c_char, c_void};
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {}
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    // SAFETY: two plain Objective-C messages with the signatures NSRunningApplication documents:
+    // +runningApplicationWithProcessIdentifier: (pid_t) -> id, and -activationPolicy -> NSInteger.
+    unsafe {
+        let class = objc_getClass(c"NSRunningApplication".as_ptr());
+        if class.is_null() {
+            return true;
+        }
+        let find: extern "C" fn(*mut c_void, *mut c_void, i32) -> *mut c_void = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let app = find(class, sel_registerName(c"runningApplicationWithProcessIdentifier:".as_ptr()), pid);
+        if app.is_null() {
+            return true;
+        }
+        let policy: extern "C" fn(*mut c_void, *mut c_void) -> isize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        // NSApplicationActivationPolicyRegular = 0, Accessory = 1, Prohibited = 2.
+        policy(app, sel_registerName(c"activationPolicy".as_ptr())) == 0
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn has_window(_pid: i32) -> bool {
+    true
 }
 
 /// The arguments to `/usr/bin/open` that start `app` in the background, with [`QUIET_FLAG`] in
@@ -438,6 +530,10 @@ pub fn refresh_with(payload: &Path, payload_version: &str, team: &Option<String>
             };
             if let Err(e) = exchange(&staged, &path) {
                 cleanup(&staged);
+                if was_running {
+                    // It was asked to quit for this swap; the old copy stays, so bring it back.
+                    open(&path);
+                }
                 return Outcome::Failed(format!("the exchange failed: {e}"));
             }
             // `staged` now holds the old copy.
@@ -448,6 +544,55 @@ pub fn refresh_with(payload: &Path, payload_version: &str, team: &Option<String>
             Outcome::Refreshed(path)
         }
     }
+}
+
+/// How long a deferred refresh waits before it asks again while RichOS keeps running.
+pub const RETRY_EVERY: Duration = Duration::from_secs(60);
+const LOG_CAP: u64 = 64 << 10;
+
+/// Append one timestamped line to RichOS's own record of the refresh (`log`), so a later
+/// diagnosis can read why an older RichDoctor stayed. Bounded: past 64 KB the file is moved to
+/// `<name>.1` (replacing the previous one). Never fails the caller.
+pub fn record(log: &Path, line: &str) {
+    use std::io::Write;
+    if let Some(dir) = log.parent() {
+        fs::create_dir_all(dir).ok();
+    }
+    if fs::metadata(log).is_ok_and(|m| m.len() > LOG_CAP) {
+        let mut old = log.as_os_str().to_os_string();
+        old.push(".1");
+        fs::rename(log, old).ok();
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log) {
+        writeln!(f, "{} {line}", crate::util::now_millis()).ok();
+    }
+}
+
+/// **THE REFRESH THAT DOES NOT GIVE UP**: [`refresh_with`], and while it defers (a help session
+/// is open, work is unsaved, the running copy is silent, a folder is not writable) ask again
+/// every `every` until it settles (installed, current, refreshed, not applicable or failed).
+/// RichOS's process ends the loop; nothing is ever force-closed, because each ask is the same
+/// `quit-if-idle`. Every different outcome is written to `log` (a repeated deferral for the same
+/// reason once, not every minute). Returns the settled outcome.
+pub fn keep_trying(payload: &Path, payload_version: &str, team: &Option<String>, places: &Places, log: &Path, every: Duration, open: &dyn Fn(&Path)) -> Outcome {
+    let mut last = String::new();
+    loop {
+        let outcome = refresh_with(payload, payload_version, team, places, open);
+        let line = format!("{outcome:?}");
+        if line != last {
+            record(log, &format!("payload {payload_version}: {line}"));
+            last = line;
+        }
+        if !matches!(outcome, Outcome::Deferred(_)) {
+            return outcome;
+        }
+        std::thread::sleep(every);
+    }
+}
+
+/// [`keep_trying`] as RichOS runs it: opening a refreshed copy quietly.
+pub fn keep_trying_quietly(payload: &Path, payload_version: &str, team: &Option<String>, places: &Places, log: &Path) -> Outcome {
+    keep_trying(payload, payload_version, team, places, log, RETRY_EVERY, &open_quietly)
 }
 
 /// The payload's place inside a RichOS bundle, from that bundle's executable.
@@ -491,6 +636,15 @@ mod tests {
         let p = Places { system_apps: root.join("Applications"), user_apps: root.join("home/Applications"), doctor_data: root.join("data"), richos_folder: Some(root.join("Applications")) };
         fs::create_dir_all(&p.system_apps).unwrap();
         p
+    }
+
+    #[test]
+    fn the_peer_of_a_socket_is_its_listener() {
+        let root = temp("peer");
+        let sock = root.join("s.sock");
+        let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert_eq!(peer_pid(&sock), Some(std::process::id() as i32));
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -674,6 +828,81 @@ mod tests {
         fs::remove_dir_all(root).ok();
     }
 
+    /// An old copy that answers `busy`; returns the outcome and the stops sent.
+    fn old_busy_copy(tag: &str, owns: bool) -> (Result<bool, String>, Vec<i32>) {
+        let root = temp(tag);
+        let p = places(&root);
+        crate::util::private_dir(&p.doctor_data).unwrap();
+        let sock = p.doctor_data.join("instance.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let t = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            for _ in 0..2 {
+                let Ok((s, _)) = listener.accept() else { return };
+                let mut line = String::new();
+                BufReader::new(&s).read_line(&mut line).ok();
+                writeln!(&s, "busy").ok();
+            }
+        });
+        let stops = std::cell::RefCell::new(vec![]);
+        let r = quit_running_with(&p, -1, &|_| owns, &|pid| {
+            stops.borrow_mut().push(pid);
+            fs::remove_file(&sock).ok();
+        });
+        drop(t);
+        fs::remove_dir_all(root).ok();
+        (r, stops.into_inner())
+    }
+
+    #[test]
+    fn a_busy_old_copy_with_a_minimized_or_hidden_window_is_never_stopped_and_one_with_no_window_is() {
+        // Minimized or hidden: the window server still lists a window the process owns.
+        let (r, stops) = old_busy_copy("minimized", true);
+        assert!(r.is_err() && stops.is_empty(), "{r:?} {stops:?}");
+        // No window at all: the stuck copy is stopped by its process id.
+        let (r, stops) = old_busy_copy("nowindow", false);
+        assert_eq!(stops, vec![std::process::id() as i32], "{r:?}");
+    }
+
+    /// An old copy that would answer `ok` to `quit-if-idle` (as a minimized window with half-typed
+    /// text does); returns the outcome and whether it was asked at all.
+    fn old_copy_that_would_quit(tag: &str, owns: bool) -> (Result<bool, String>, bool) {
+        let root = temp(tag);
+        let p = places(&root);
+        crate::util::private_dir(&p.doctor_data).unwrap();
+        let sock = p.doctor_data.join("instance.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let gone = sock.clone();
+        let t = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let Ok((s, _)) = listener.accept() else { return };
+            let mut line = String::new();
+            BufReader::new(&s).read_line(&mut line).ok();
+            tx.send(line.trim().to_string()).ok();
+            if line.trim() == "quit-if-idle" {
+                writeln!(&s, "ok").ok();
+                drop(listener);
+                fs::remove_file(gone).ok();
+            }
+        });
+        let r = quit_running_with(&p, -1, &|_| owns, &|_| {});
+        t.join().unwrap();
+        let asked = rx.try_recv().is_ok_and(|l| l == "quit-if-idle");
+        fs::remove_dir_all(root).ok();
+        (r, asked)
+    }
+
+    #[test]
+    fn a_copy_with_a_window_is_never_asked_to_quit_and_one_without_is() {
+        // Regular (window open, minimized or hidden): not asked, whatever it would answer.
+        let (r, asked) = old_copy_that_would_quit("regular", true);
+        assert!(!asked && r.is_err(), "asked={asked} {r:?}");
+        // Accessory (no window): asked, and it quits.
+        let (r, asked) = old_copy_that_would_quit("accessory", false);
+        assert!(asked && r == Ok(true), "asked={asked} {r:?}");
+    }
+
     #[test]
     fn a_busy_running_copy_defers_the_refresh() {
         let root = temp("busy");
@@ -697,6 +926,46 @@ mod tests {
         assert!(matches!(refresh_with(&payload, "1.0.0", &None, &p, &|_| {}), Outcome::Deferred(_)));
         t.join().unwrap();
         assert_eq!(identity(&old).unwrap().1, "0.9.0", "nothing was swapped under it");
+        for d in [root, build] {
+            fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_busy_copy_is_replaced_once_it_goes_idle_without_a_richos_restart_and_the_outcome_is_recorded() {
+        let root = temp("idle");
+        let p = places(&root);
+        let old = bundle(&p.system_apps, crate::IDENTIFIER, "0.9.0");
+        let build = temp("build7");
+        let payload = root.join(PAYLOAD);
+        archive(&bundle(&build, crate::IDENTIFIER, "1.0.0"), &payload);
+        crate::util::private_dir(&p.doctor_data).unwrap();
+        let sock = p.doctor_data.join("instance.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        // A running RichDoctor: busy for the first two asks (window open), then idle and quits.
+        let gone = sock.clone();
+        let t = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            for n in 0..3 {
+                let (s, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(&s).read_line(&mut line).unwrap();
+                assert_eq!(line.trim(), "quit-if-idle");
+                writeln!(&s, "{}", if n < 2 { "busy" } else { "ok" }).unwrap();
+            }
+            drop(listener);
+            fs::remove_file(gone).ok();
+        });
+        let log = root.join("logs/richdoctor-install.log");
+        let opened = std::cell::Cell::new(0);
+        let outcome = keep_trying(&payload, "1.0.0", &None, &p, &log, Duration::from_millis(20), &|_| opened.set(opened.get() + 1));
+        t.join().unwrap();
+        assert!(matches!(outcome, Outcome::Refreshed(_)), "{outcome:?}");
+        assert_eq!(identity(&old).unwrap().1, "1.0.0", "replaced while the caller kept running");
+        assert_eq!(opened.get(), 1, "reopened once, quietly");
+        let text = fs::read_to_string(&log).unwrap();
+        assert!(text.contains("Deferred") && text.contains("Refreshed"), "{text}");
+        assert_eq!(text.matches("Deferred").count(), 1, "the same deferral is recorded once: {text}");
         for d in [root, build] {
             fs::remove_dir_all(d).ok();
         }
