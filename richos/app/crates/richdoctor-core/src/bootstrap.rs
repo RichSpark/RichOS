@@ -438,6 +438,10 @@ pub fn refresh_with(payload: &Path, payload_version: &str, team: &Option<String>
             };
             if let Err(e) = exchange(&staged, &path) {
                 cleanup(&staged);
+                if was_running {
+                    // It was asked to quit for this swap; the old copy stays, so bring it back.
+                    open(&path);
+                }
                 return Outcome::Failed(format!("the exchange failed: {e}"));
             }
             // `staged` now holds the old copy.
@@ -448,6 +452,55 @@ pub fn refresh_with(payload: &Path, payload_version: &str, team: &Option<String>
             Outcome::Refreshed(path)
         }
     }
+}
+
+/// How long a deferred refresh waits before it asks again while RichOS keeps running.
+pub const RETRY_EVERY: Duration = Duration::from_secs(60);
+const LOG_CAP: u64 = 64 << 10;
+
+/// Append one timestamped line to RichOS's own record of the refresh (`log`), so a later
+/// diagnosis can read why an older RichDoctor stayed. Bounded: past 64 KB the file is moved to
+/// `<name>.1` (replacing the previous one). Never fails the caller.
+pub fn record(log: &Path, line: &str) {
+    use std::io::Write;
+    if let Some(dir) = log.parent() {
+        fs::create_dir_all(dir).ok();
+    }
+    if fs::metadata(log).is_ok_and(|m| m.len() > LOG_CAP) {
+        let mut old = log.as_os_str().to_os_string();
+        old.push(".1");
+        fs::rename(log, old).ok();
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log) {
+        writeln!(f, "{} {line}", crate::util::now_millis()).ok();
+    }
+}
+
+/// **THE REFRESH THAT DOES NOT GIVE UP**: [`refresh_with`], and while it defers (a help session
+/// is open, work is unsaved, the running copy is silent, a folder is not writable) ask again
+/// every `every` until it settles (installed, current, refreshed, not applicable or failed).
+/// RichOS's process ends the loop; nothing is ever force-closed, because each ask is the same
+/// `quit-if-idle`. Every different outcome is written to `log` (a repeated deferral for the same
+/// reason once, not every minute). Returns the settled outcome.
+pub fn keep_trying(payload: &Path, payload_version: &str, team: &Option<String>, places: &Places, log: &Path, every: Duration, open: &dyn Fn(&Path)) -> Outcome {
+    let mut last = String::new();
+    loop {
+        let outcome = refresh_with(payload, payload_version, team, places, open);
+        let line = format!("{outcome:?}");
+        if line != last {
+            record(log, &format!("payload {payload_version}: {line}"));
+            last = line;
+        }
+        if !matches!(outcome, Outcome::Deferred(_)) {
+            return outcome;
+        }
+        std::thread::sleep(every);
+    }
+}
+
+/// [`keep_trying`] as RichOS runs it: opening a refreshed copy quietly.
+pub fn keep_trying_quietly(payload: &Path, payload_version: &str, team: &Option<String>, places: &Places, log: &Path) -> Outcome {
+    keep_trying(payload, payload_version, team, places, log, RETRY_EVERY, &open_quietly)
 }
 
 /// The payload's place inside a RichOS bundle, from that bundle's executable.
@@ -697,6 +750,46 @@ mod tests {
         assert!(matches!(refresh_with(&payload, "1.0.0", &None, &p, &|_| {}), Outcome::Deferred(_)));
         t.join().unwrap();
         assert_eq!(identity(&old).unwrap().1, "0.9.0", "nothing was swapped under it");
+        for d in [root, build] {
+            fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_busy_copy_is_replaced_once_it_goes_idle_without_a_richos_restart_and_the_outcome_is_recorded() {
+        let root = temp("idle");
+        let p = places(&root);
+        let old = bundle(&p.system_apps, crate::IDENTIFIER, "0.9.0");
+        let build = temp("build7");
+        let payload = root.join(PAYLOAD);
+        archive(&bundle(&build, crate::IDENTIFIER, "1.0.0"), &payload);
+        crate::util::private_dir(&p.doctor_data).unwrap();
+        let sock = p.doctor_data.join("instance.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        // A running RichDoctor: busy for the first two asks (window open), then idle and quits.
+        let gone = sock.clone();
+        let t = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            for n in 0..3 {
+                let (s, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(&s).read_line(&mut line).unwrap();
+                assert_eq!(line.trim(), "quit-if-idle");
+                writeln!(&s, "{}", if n < 2 { "busy" } else { "ok" }).unwrap();
+            }
+            drop(listener);
+            fs::remove_file(gone).ok();
+        });
+        let log = root.join("logs/richdoctor-install.log");
+        let opened = std::cell::Cell::new(0);
+        let outcome = keep_trying(&payload, "1.0.0", &None, &p, &log, Duration::from_millis(20), &|_| opened.set(opened.get() + 1));
+        t.join().unwrap();
+        assert!(matches!(outcome, Outcome::Refreshed(_)), "{outcome:?}");
+        assert_eq!(identity(&old).unwrap().1, "1.0.0", "replaced while the caller kept running");
+        assert_eq!(opened.get(), 1, "reopened once, quietly");
+        let text = fs::read_to_string(&log).unwrap();
+        assert!(text.contains("Deferred") && text.contains("Refreshed"), "{text}");
+        assert_eq!(text.matches("Deferred").count(), 1, "the same deferral is recorded once: {text}");
         for d in [root, build] {
             fs::remove_dir_all(d).ok();
         }

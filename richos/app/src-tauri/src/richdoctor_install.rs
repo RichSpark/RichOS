@@ -6,7 +6,10 @@
 //! settings or the engine exist, [`start`] hands the install or refresh to a background thread
 //! and returns at once: RichOS never waits for the quit, replacement or relaunch of RichDoctor
 //! before showing its own window, and a failure here cannot stop RichOS. What the refresh does
-//! is `richdoctor_core::bootstrap::refresh`, and its rules are in that file.
+//! is `richdoctor_core::bootstrap::refresh`, and its rules are in that file. A refresh that
+//! defers (the running RichDoctor has a window or an unsaved report open) is asked again every
+//! minute while RichOS runs, and each outcome is appended to
+//! `~/Library/Logs/RichOS/richdoctor-install.log`.
 //!
 //! A RichOS built without the payload (a plain `cargo build`, a test) finds nothing and does
 //! nothing.
@@ -36,7 +39,10 @@ pub fn start() -> bool {
                 }
             };
             let places = richdoctor_core::bootstrap::Places::for_home(&home, Some(Path::new(&richos_app)));
-            let outcome = richdoctor_core::bootstrap::refresh(&payload, &version, &team, &places);
+            // A deferred refresh asks again every minute while RichOS runs, and every outcome is
+            // written beside RichOS's other logs, where a later diagnosis reads it.
+            let log = home.join("Library/Logs/RichOS/richdoctor-install.log");
+            let outcome = richdoctor_core::bootstrap::keep_trying_quietly(&payload, &version, &team, &places, &log);
             eprintln!("[richos] richdoctor: {outcome:?}");
         })
         .is_ok()
