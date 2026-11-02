@@ -28,6 +28,12 @@ It reuses hire-walk.py's class for the first run and the relaunch; only these ar
            although another company's repository defines the same name
   kept     a copy edited in the app after a sync is the user's: the repository changes again, the
            app restarts, and team/kai.md is still the user's edit
+  rosters  (review rv-20261102T053802Z-c66f511d) a running lease's dispatch reads ITS OWN roster: the
+           real lease's environment carries RICHOS_AGENT_ROSTER, the folder its plugin registers;
+           then what a later lease for another company does to the folder every lease shares
+           (`coordination/.claude/agents/ray.md` written with another model) is done in the guest,
+           and the shipped engine's own `job_model('ray')`, run with that lease's real
+           environment, still answers the lease's model, not the other company's
 
 Exit 0 only when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO 54).
 """
@@ -47,9 +53,12 @@ from relaunch import guest  # noqa: E402
 _spec = importlib.util.spec_from_file_location('hire_walk', HERE / 'hire-walk.py')
 hire_walk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hire_walk)
+_env_spec = importlib.util.spec_from_file_location('lease_env_walk', HERE / 'lease-env-walk.py')
+lease_env_walk = importlib.util.module_from_spec(_env_spec)
+_env_spec.loader.exec_module(lease_env_walk)
 StepFailed = hire_walk.StepFailed
 
-STEPS = ['identity', 'first-run', 'stock', 'seed', 'start', 'synced', 'edit', 'restart', 'changed', 'kept']
+STEPS = ['identity', 'first-run', 'stock', 'seed', 'start', 'synced', 'edit', 'restart', 'changed', 'kept', 'rosters']
 OLD, NEW1, NEW2, USER_EDIT = 'WALK-OLD-RULE wait for proceed', 'WALK-NEW-RULE-ONE start at once', 'WALK-NEW-RULE-TWO', 'WALK-USER-EDIT'
 DECOY = 'WALK-DECOY-RULE from the other company'
 ESCALATE = '~/.claude/richos-engine/scripts/escalate.sh raise --fields esc.json'
@@ -148,6 +157,51 @@ class TeamSyncWalk(hire_walk.HireWalk):
         if USER_EDIT not in kai or NEW2 in kai:
             raise StepFailed('an edit made in the app was overwritten: %r' % kai[:300])
         return {'kai_is_the_users_edit': True}
+
+    def rosters(self):
+        end, leases = time.monotonic() + self.a.within, []
+        while time.monotonic() < end and not leases:
+            leases = [l for l in self.leases() if l.get('plugin')]
+            if not leases:
+                time.sleep(3)
+        if not leases:
+            raise StepFailed('no running lease was found in the guest within %d s' % self.a.within)
+        lease = leases[0]
+        env = {}
+        for line in lease_env_walk.process_env(self.vm, lease['pid']).splitlines():
+            key, _, value = line.partition('=')
+            env[key] = value
+        roster, entity, engine = env.get('RICHOS_AGENT_ROSTER'), env.get('RICHOS_ENTITY_ROOT'), env.get('RICHOS_ENGINE_ROOT')
+        evidence = {'lease_plugin': lease['plugin'], 'roster_env': roster, 'entity_root': entity}
+        if roster != lease['plugin'] + '/agents' or not entity or not engine:
+            raise StepFailed("the lease's environment does not name its own roster: %r" % evidence)
+        own = front_model(self.read(roster + '/ray.md'))
+        # What a lease started later, for another company, renders into the shared folder.
+        other = 'opus' if own != 'opus' else 'sonnet'
+        shared = entity + '/.claude/agents/ray.md'
+        self.put(shared, definition('ray', DECOY).replace('model: sonnet', 'model: ' + other))
+        script = ('import importlib.util,sys\n'
+                  's=importlib.util.spec_from_file_location("app",sys.argv[1]);m=importlib.util.module_from_spec(s);'
+                  's.loader.exec_module(m)\nprint(m.job_model("ray",None))')
+        command = (f'RICHOS_ENTITY_ROOT={shlex.quote(entity)} RICHOS_AGENT_ROSTER={shlex.quote(roster)} '
+                   f'python3 -c {shlex.quote(script)} {shlex.quote(engine + "/mega-lander/app.py")} 2>&1')
+        answered = guest(self.vm, command, 120).strip().splitlines()[-1:] or ['']
+        evidence.update({'own_model': own, 'other_company_model_in_shared_folder': other, 'dispatch_model': answered[0]})
+        (self.out / 'rosters-observed.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        if DECOY not in self.read(shared):
+            raise StepFailed('the shared folder was not changed, so this step proved nothing')
+        if answered[0] != own:
+            raise StepFailed("the dispatch ran on %r, not the lease's own %r" % (answered[0], own))
+        return evidence
+
+
+def front_model(text):
+    for line in text.split('\n')[1:]:
+        if line.strip() == '---':
+            break
+        if line.lower().startswith('model:'):
+            return line.partition(':')[2].strip()
+    return ''
 
 
 def main():
