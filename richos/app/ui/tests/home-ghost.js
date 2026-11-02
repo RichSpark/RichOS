@@ -153,14 +153,16 @@ async function main() {
       assertEqual(f.field, "live", "no picture: a user with a team has no ghost");
       assertEqual(f.count, objects, "the arrival gate does not count his objects");
       assert(Math.abs(f.level - ghostAt(objects)) < 1e-4, `ghost level ${f.level}, round 11.4 says ${ghostAt(objects)}`);
-      if (ghost) {
-        assertEqual(f.nodes, 7500 + objects, "the picture is not the example's 7,500 plus his");
-        assertEqual(f.ghostNodes, 7500, "the example is not flagged as the example");
-      } else {
-        assertEqual(f.nodes, objects, "from 2,500 of his objects the picture is his alone");
-        assertEqual(f.ghostNodes, 0, "an example object is still in a picture that is his alone");
-        assertEqual(f.ghostScripts, [], "the demonstration's dataset was loaded for a picture that is his alone");
-      }
+      // at every count the example is the dataset he is laid out in; from 2,500 it has no light at all
+      assertEqual(f.nodes, 7500 + objects, "the picture is not the example's 7,500 plus his");
+      assertEqual(f.ghostNodes, 7500, "the example is not flagged as the example");
+      const lit = await page.evaluate(() => {
+        const lo = window.__loro;
+        let max = 0;
+        for (let i = 0; i < lo.N; i++) if (lo.nodes[i].ghost === true && lo.gate[i] > max) max = lo.gate[i];
+        return max;
+      });
+      assert(lit < 0.5 && Math.abs(lit - ghostAt(objects)) < 1e-4, `an example object is lit at ${lit}, not ${ghostAt(objects)}`);
       assertEqual(f.synthetic, false, "the dataset on the page does not say it is his");
       return `ghost ${f.level.toFixed(4)}, ${f.count} of ${f.nodes} objects are his`;
     });
@@ -210,6 +212,28 @@ async function main() {
       });
     }
 
+    if (objects > 0) {
+      await run.check(`${objects} objects: hover and click group his records by his own source groups, and never touch the example`, async () => {
+        const seen = await page.evaluate(() => {
+          const lo = window.__loro;
+          const bad = [];
+          let checked = 0;
+          for (let i = 0; i < lo.N; i++) {
+            if (lo.nodes[i].ghost === true) continue;
+            const members = lo.D.byCluster[lo.D.nodeCluster[i]];
+            checked++;
+            const group = lo.nodes[i].cluster;
+            if (members.some((j) => lo.nodes[j].ghost === true)) bad.push("example object in the group of " + lo.nodes[i].id);
+            else if (members.some((j) => lo.nodes[j].cluster !== group)) bad.push("another group lit with " + lo.nodes[i].id);
+            if (bad.length > 2) break;
+          }
+          return { checked, bad };
+        });
+        assertEqual(seen.bad, [], "hover would light what is not his group");
+        return `${seen.checked} of his records: the cluster each one lights is its own source group alone`;
+      });
+    }
+
     if (ghost && objects > 0) {
       await run.check(`${objects} objects: his sources' threads ride the example's bands of the river, not one strand`, async () => {
         const seen = await page.evaluate(() => {
@@ -239,6 +263,36 @@ async function main() {
     }
     await page.close();
   }
+
+  // --------------------------------------------------------------------------------------
+  // THE EXAMPLE FADING TO NOTHING MOVES NOTHING. One more record takes him from 2,499 objects (the
+  // example still lit a little) to 2,500 (none): every record he already had stays where it was.
+  // (The mock's groups of eight: the groups before the last one hold the same records in both.)
+  // --------------------------------------------------------------------------------------
+  await run.check("2,499 -> 2,500 objects: no record he already had moves", async () => {
+    const take = async (objects) => {
+      const page = await openApp(browser, { homeTeam: TEAM, homeField: { objects, records: objects * 3 } });
+      const out = await page.evaluate(() => {
+        const lo = window.__loro;
+        const pos = {};
+        for (let i = 0; i < lo.N; i++) if (lo.nodes[i].ghost !== true) pos[lo.nodes[i].id] = [lo.D.home[i * 2], lo.D.home[i * 2 + 1]];
+        return pos;
+      });
+      await page.close();
+      return out;
+    };
+    const a = await take(2499), b = await take(2500);
+    let same = 0, moved = 0;
+    for (const id of Object.keys(a)) {
+      const n = Number(id.replace("own-obj-", ""));
+      if (n > 311 * 8 || !b[id]) continue; // the last group of 2,499 is bigger than the last of 2,500
+      if (Math.hypot(a[id][0] - b[id][0], a[id][1] - b[id][1]) < 1e-3) same++;
+      else moved++;
+    }
+    assert(same > 2400, `only ${same} records compared`);
+    assertEqual(moved, 0, "records moved when the example's light reached zero");
+    return `${same} records identical at 2,499 and 2,500`;
+  });
 
   // --------------------------------------------------------------------------------------
   // HIS RECORDS DO NOT COME BACK IN TIME. Found on the real app: a compile of 2,600 records took

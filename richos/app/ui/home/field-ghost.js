@@ -24,8 +24,14 @@
 // groups spread over all of them, and `field-prep.js` lays his objects out there, after the example's
 // own and on a random stream of its own (`hosted: true`). Hosting is layout only: an object keeps its
 // own lane for everything a person reads, so a territory name on the screen is always one of HIS lanes
-// (the example's territory names are never drawn: the example is in no count), and his lanes are
-// `nodeCount: 0` territories with no arc of their own.
+// (the example's territory names are never drawn: the example is in no count), his lanes are
+// `nodeCount: 0` territories with no arc of their own, and what hover and click treat as one group is
+// his own source group (`cluster`), never the example's cluster that happens to host it (`host`).
+//
+// WHERE A GROUP STANDS DOES NOT DEPEND ON THE OTHERS. Its host and the random stream that places it
+// come from a hash of its own id (`layoutSeed`), so a record added later does not move the groups
+// already there, and the picture does not rearrange itself when the example's floor reaches zero:
+// the example is still loaded then, at no light at all, because it is what he is laid out in.
 //
 // WHAT IS NOT CARRIED OVER from the demonstration: its specialists, its tasks and its
 // `bragSignals`. Those are the demonstration's claims about a workforce he does not have, and the
@@ -38,8 +44,8 @@
 
 window.RichFieldGhost = (function () {
   /// At this many of HIS objects the example's floor has fallen to exactly zero (round 11.4
-  /// `v2/index.html`, `ghostSpan: 2500`), so the picture is his alone and the demonstration is not
-  /// loaded at all.
+  /// `v2/index.html`, `ghostSpan: 2500`), so the picture is his alone: the example is still in the
+  /// dataset, at no light, deaf and in no count.
   var SPAN = 2500;
 
   var HORIZON_DAYS = 40000; // `home_field.rs::HORIZON_DAYS`: nothing is drawn as "new"
@@ -61,9 +67,12 @@ window.RichFieldGhost = (function () {
     return "own-" + id;
   };
 
-  /// The stride that spreads his groups over the example's clusters: coprime with the example's
-  /// 34 clusters, so the first 34 groups land in 34 different ones.
-  var HOST_STRIDE = 13;
+  /// A number out of a string (djb2): the same group id is the same number on every launch.
+  function hash(text) {
+    var h = 5381;
+    for (var i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+    return h >>> 0;
+  }
 
   function copy(o, patch) {
     var c = {};
@@ -100,13 +109,10 @@ window.RichFieldGhost = (function () {
         });
       });
       var hostOf = {};
-      var groups = 0;
       mine.nodes.forEach(function (n) {
-        if (!Object.prototype.hasOwnProperty.call(hostOf, n.cluster)) {
-          hostOf[n.cluster] = hostIds[(groups * HOST_STRIDE) % hostIds.length];
-          groups++;
-        }
-        nodes.push(copy(n, { id: own(n.id), domain: own(n.domain), cluster: hostOf[n.cluster], group: own(n.cluster), hosted: true }));
+        if (!Object.prototype.hasOwnProperty.call(hostOf, n.cluster)) hostOf[n.cluster] = hostIds[hash(own(n.cluster)) % hostIds.length];
+        // `cluster` is his own group (what hover lights); `host` is the example's cluster it stands in
+        nodes.push(copy(n, { id: own(n.id), domain: own(n.domain), cluster: own(n.cluster), host: hostOf[n.cluster], layoutSeed: hash(own(n.cluster)), hosted: true }));
       });
       var nodeHost = {};
       mine.nodes.forEach(function (n) {
@@ -123,9 +129,16 @@ window.RichFieldGhost = (function () {
         sources.push(copy(s, { id: own(s.id), domain: hostDomain[nodeHost[s.primaryNodeId]] || own(s.domain), primaryNodeId: own(s.primaryNodeId) }));
       });
       mine.domains.forEach(function (d) {
-        // `nodeCount: 0` and one empty cluster: a territory with no arc and nothing of its own to lay
-        // out (its objects are hosted), which is the shape `field-prep.js` can carry without a branch
-        domains.push({ id: own(d.id), label: d.label, nodeCount: 0, clusters: [{ id: own(d.id) + "/none", label: "", nodeCount: 0 }] });
+        // `nodeCount: 0`: a territory with no arc of its own (its objects are hosted), carrying his
+        // real groups as its clusters so that hover and click find them
+        domains.push({
+          id: own(d.id),
+          label: d.label,
+          nodeCount: 0,
+          clusters: d.clusters.map(function (c) {
+            return copy(c, { id: own(c.id) });
+          }),
+        });
       });
     }
 

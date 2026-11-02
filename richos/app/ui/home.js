@@ -1642,11 +1642,13 @@ window.RichHome = (function () {
             onFieldCount(api.COUNT, api.stats);
           };
         }
-        if (state.team && mine < GHOST_SPAN) {
+        if (state.team) {
           // HIS RECORDS IN FRONT OF THE EXAMPLE (round 11.4 v2): the demonstration's dataset is
           // loaded as the ghost, his is merged into it, and the engine is told how many of the
-          // objects are his. From `GHOST_SPAN` of them there is no example and this branch is not
-          // taken. Zero of his is the same screen with nothing in front.
+          // objects are his. From `GHOST_SPAN` of them the example's light is exactly zero, but it is
+          // still the dataset he is laid out in: switching to a picture of his alone at that count
+          // moved every record he has (the arrival gate keeps each one where it is at every count).
+          // Zero of his is the same screen with nothing in front.
           var variant = {};
           for (var k in VARIANT_GHOST) if (Object.prototype.hasOwnProperty.call(VARIANT_GHOST, k)) variant[k] = VARIANT_GHOST[k];
           variant.count = mine;
