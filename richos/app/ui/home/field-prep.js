@@ -123,8 +123,14 @@ function prepare(loro, REF, opts) {
   {
     const order = ARC.map(id => domainIndex.get(id));
     let k = 0, acc = 0;
+    // APP: THE SHARE IS OF THE NODES THAT OWN A TERRITORY, not of every node on the page. For every
+    // dataset but the ghost's the two are the same number (a domain's `nodeCount` is its own nodes,
+    // `home_field.rs::a_domains_node_count_is_its_own_nodes`). The ghost's own lanes are `nodeCount: 0`
+    // because his objects stand in the example's clusters (see `hosted` below), and dividing by every
+    // node would shrink the example's twelve arcs and leave a bare wedge at the end of the circle.
+    const shareN = domains.reduce((a, d) => a + d.nodeCount, 0) || N;
     order.forEach((di, oi) => {
-      const share = domains[di].nodeCount / N;
+      const share = domains[di].nodeCount / shareN;
       const target = oi === order.length - 1 ? Infinity : acc + share * lobeLen;
       while (k < lobe.length && (acc < target || domStrands[di].length === 0)) { domStrands[di].push(lobe[k]); acc += lobe[k].len; k++; }
     });
@@ -177,8 +183,13 @@ function prepare(loro, REF, opts) {
     strandColor(s, u, col, i * 3);
     z[i] = (rnd() * 2 - 1) * 0.7 + (s.lum - 0.5);
   };
+  // APP: A HOSTED NODE is one of HIS objects standing inside one of the example's clusters
+  // (`field-ghost.js`: `hosted: true`). It is laid out AFTER everything else, on a random stream of
+  // its own, so the example's own objects land exactly where they do in the demonstration and the
+  // draw does not depend on how many of his there are.
+  const hosted = (i) => nodes[i].hosted === true;
   for (let c = 0; c < clusterList.length; c++) {
-    const ids = byCluster[c].slice().sort((a, b) => nodes[b].degree - nodes[a].degree);
+    const ids = byCluster[c].filter((i) => !hosted(i)).sort((a, b) => nodes[b].degree - nodes[a].degree);
     // APP: a cluster the dataset declared and put nothing in. `nh` floors at 1, so `hubs` would
     // be an empty slice, `groups` would stay empty, and the `groups[groups.length - 1]` below
     // would be `undefined`. The round's data has no such cluster and `home_field.rs` emits none
@@ -210,6 +221,32 @@ function prepare(loro, REF, opts) {
       const g = best >= 0 ? groups[hubGroup[best]] : groups[Math.floor(rnd() * groups.length)];
       const s = pickStrand(g);
       place(i, s, 0.06 + Math.pow(rnd(), 0.8) * 0.92);
+    }
+  }
+  {
+    const rndOwn = mulberry32(20261102);
+    const placeOwn = (i, s, u) => {
+      nStrand[i] = s.i; nU[i] = u; nPerp[i] = (rndOwn() + rndOwn() + rndOwn() - 1.5) * 2.0;
+      strandAt(s, u, tmp);
+      home[i * 2] = tmp[0] - tmp[3] * nPerp[i]; home[i * 2 + 1] = tmp[1] + tmp[2] * nPerp[i];
+      tan[i * 2] = tmp[2]; tan[i * 2 + 1] = tmp[3];
+      strandColor(s, u, col, i * 3);
+      z[i] = (rndOwn() * 2 - 1) * 0.7 + (s.lum - 0.5);
+    };
+    for (let c = 0; c < clusterList.length; c++) {
+      const mine = byCluster[c].filter(hosted);
+      if (!mine.length) continue;
+      const ss = clusterList[c].strands;
+      // each of HIS source groups is one hub and its leaves, all on the hub's own strand: a small,
+      // tight group standing in the example, which is what a young loro is
+      const inGroup = new Map();
+      mine.forEach((i) => { const k = nodes[i].group; (inGroup.get(k) || inGroup.set(k, []).get(k)).push(i); });
+      inGroup.forEach((members) => {
+        members.sort((a, b) => nodes[b].degree - nodes[a].degree);
+        let tot = 0; for (const x of ss) tot += x.len;
+        let r = rndOwn() * tot, s = ss[ss.length - 1]; for (const x of ss) { r -= x.len; if (r <= 0) { s = x; break; } }
+        members.forEach((i, m) => placeOwn(i, s, m === 0 ? 0.16 + rndOwn() * 0.3 : 0.06 + Math.pow(rndOwn(), 0.8) * 0.92));
+      });
     }
   }
   for (let i = 0; i < N; i++) {
@@ -316,6 +353,11 @@ function prepare(loro, REF, opts) {
       const target = oi === ARC.length - 1 ? Infinity : acc + (list.length / S) * riverLen;
       const band = [];
       while (k < river.length && (acc < target || band.length === 0)) { band.push(river[k]); acc += river[k].len; k++; }
+      // APP: A DOMAIN AFTER THE RIVER RAN OUT. The guarantee above (one strand per domain) holds only
+      // while strands remain; the ghost (`field-ghost.js`) puts his lanes AFTER the twelve territories,
+      // which have taken every stem strand by then, and `pickStrand([])` is `undefined` at `s.i` below.
+      // His sources then ride the river's last strand rather than the picture failing to draw.
+      if (!band.length && river.length) band.push(river[river.length - 1]);
       list.forEach((si, j) => {
         const s = pickStrand(band);
         srcStrand[si] = s.i; srcPerp[si] = (rnd() + rnd() - 1) * 1.3; srcNode[si] = index.get(sources[si].primaryNodeId); srcDomain[si] = di; srcPhase[si] = rnd();

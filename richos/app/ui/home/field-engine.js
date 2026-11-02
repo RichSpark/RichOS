@@ -120,6 +120,94 @@ const pos = new Float32Array(N * 2); pos.set(D.home);
 const off = new Float32Array(N * 2), vel = new Float32Array(N * 2), tgt = new Float32Array(N * 2);
 const active = new Uint8Array(N); let activeList = [];
 const nAlpha = new Float32Array(N);               // bloom fade-in
+
+/* ================= round 11.4 — THE ARRIVAL GATE =================================================
+   round-11.1/v1 is copied forward byte for byte and this is the only thing added to it.
+
+   Every object keeps the exact position the approved screen gives it. The record count changes one
+   thing: how many of them have arrived. gate[i] is that arrival, smoothed, and it multiplies
+   nAlpha everywhere nAlpha is read - the motes, the fibres, the packets, the river, the labels, the
+   hit test, the domain centroids. So the screen at 1 record and the screen at 7,500 are the same
+   screen at two densities, not two screens; and at 7,500 the gate is all ones, which is the
+   approved frame unaltered.
+
+   Arrival order is the dataset's own createdDay, so the first records are the seeds the later ones
+   hang off - the same order a real loro would fill in. ============================================ */
+const gate = new Float32Array(N).fill(1), gateT = new Float32Array(N).fill(1), gateFrom = new Float32Array(N).fill(1), gateDelay = new Float32Array(N);
+const arrival = Array.from({ length: N }, (_, i) => i)
+  .sort((a, b) => (nodes[a].ghost ? 1 : 0) - (nodes[b].ghost ? 1 : 0) || D.createdDay[a] - D.createdDay[b] || nodes[b].significance - nodes[a].significance || D.degree[b] - D.degree[a]);
+const arrivalRank = new Int32Array(N); arrival.forEach((i, r) => { arrivalRank[i] = r; });
+const srcVisible = new Int32Array(S); let srcVisibleN = S;
+let COUNT = N, gateClock = 0, gateBusy = false;
+let STATS = null;
+function computeStats() {
+  const byType = {}, byDomain = new Int32Array(domains.length);
+  let links = 0, newestDay = -1, oldestDay = -1, sig = -1, hero = -1;
+  for (let r = 0; r < COUNT; r++) {
+    const i = arrival[r], nd = nodes[i];
+    byType[nd.type] = (byType[nd.type] || 0) + 1;
+    byDomain[D.nodeDomain[i]]++;
+    if (D.createdDay[i] > newestDay) newestDay = D.createdDay[i];
+    if (oldestDay < 0) oldestDay = D.createdDay[i];
+    if (nd.significance > sig) { sig = nd.significance; hero = i; }
+  }
+  for (let k = 0; k < L; k++) if (arrivalRank[D.ls[k]] < COUNT && arrivalRank[D.lt[k]] < COUNT) links++;
+  srcVisibleN = 0;
+  for (let si = 0; si < S; si++) if (arrivalRank[D.srcNode[si]] < COUNT) srcVisible[srcVisibleN++] = si;
+  const newest = COUNT > 0 ? arrival[COUNT - 1] : -1;
+  STATS = { records: COUNT, byType, byDomain, links, sources: srcVisibleN, newest, hero,
+    days: COUNT > 0 ? (newestDay - oldestDay + 1) : 0, newestDay, total: N };
+  return STATS;
+}
+let ghostNow = 0;
+function setCount(nn, animate) {
+  const prev = COUNT;
+  COUNT = clamp(nn | 0, 0, N);
+  // the ghost recedes as the customer's own loro grows, and is gone well before the field is full
+  ghostNow = V.ghost ? V.ghost * clamp(1 - COUNT / (V.ghostSpan || 2000), 0, 1) : 0;
+  const lo = Math.min(prev, COUNT), hi = Math.max(prev, COUNT), span = Math.max(1, hi - lo);
+  const total = Math.min(1.5, 0.1 * span);
+  for (let r = 0; r < N; r++) {
+    const i = arrival[r];
+    gateFrom[i] = gate[i];
+    gateT[i] = r < COUNT ? 1 : ghostNow;
+    gateDelay[i] = (r >= lo && r < hi) ? (COUNT > prev ? (r - lo) : (hi - 1 - r)) / span * total : 0;
+  }
+  gateClock = 0; gateBusy = true;
+  if (!animate) { for (let i = 0; i < N; i++) gate[i] = gateT[i]; gateBusy = false; }
+  bloomEnd = 0.55; for (let r = 0; r < COUNT; r++) { const i = arrival[r]; const e = (D.delay[i] + D.dur[i]) * V.bloom; if (e > bloomEnd) bloomEnd = e; }
+  NODE_MULT = nodeMultFor(COUNT); nSizeDirty = true;
+  sparseAmt = Math.pow(clamp(1 - COUNT / (V.sparseSpan || 600), 0, 1), 0.7);
+  LABEL_DEG = Math.round(LABEL_DEG_LO + (14 - LABEL_DEG_LO) * Math.min(1, COUNT / 600));
+  sparseWhiteNow = (V.sparseWhite || 0) * sparseAmt;
+  sparseGlowNow = (V.sparseGlow || 0) * sparseAmt;
+  geomDirty = true; srcColDirty = true; quietDirty = true;
+  computeStats();
+  if (typeof window.onLoroCount === 'function') window.onLoroCount(COUNT, STATS);
+}
+function stepGate(dt) {
+  if (!gateBusy) return false;
+  gateClock += dt; let busy = false, moved = false;
+  for (let i = 0; i < N; i++) {
+    if (gate[i] === gateT[i]) continue;
+    const k = clamp((gateClock - gateDelay[i]) * 2.4, 0, 1);
+    const e = 1 - Math.pow(1 - k, 3);
+    const v = gateFrom[i] + (gateT[i] - gateFrom[i]) * e;
+    gate[i] = k >= 1 ? gateT[i] : v;
+    if (gate[i] !== gateT[i]) busy = true;
+    moved = true;
+  }
+  gateBusy = busy; if (moved) { geomDirty = true; srcColDirty = true; }
+  return moved;
+}
+/* Add records the way the app would: k more objects arrive, in order, and flash as they land. */
+function arrive(k) {
+  const prev = COUNT;
+  setCount(COUNT + (k || 1), true);
+  for (let r = prev; r < COUNT; r++) { const i = arrival[r]; flash[i] = 1.6; for (let q = D.nlinkStart[i]; q < D.nlinkStart[i + 1]; q++) linkFlash[D.nlink[q]] = 1; }
+  if (V.corePulseOnLand) corePulse = Math.max(corePulse, 0.6);
+  return COUNT;
+}
 const fade = new Float32Array(N).fill(1), lit = new Float32Array(N), glow = new Float32Array(N), flash = new Float32Array(N);
 const isNbr = new Uint8Array(N), inDom = new Uint8Array(N);
 const linkFlash = new Float32Array(L), linkLit = new Float32Array(L);
@@ -132,6 +220,24 @@ for (let i = 0; i < N; i++) {
   const w = V.leafWhite * (1 - Math.min(1, D.degree[i] / 8)) * (D.isLight[i] ? 0 : 1);
   for (let c = 0; c < 3; c++) { const v = D.col[i * 3 + c]; restCol[i * 3 + c] = v + (1 - v) * w; vividCol[i * 3 + c] = Math.min(1, v * 0.6 + 0.4); }
 }
+// The picture's hover labels only ever name a hub (degree >= 14). A young loro has no hubs, so the
+// threshold comes down with the density and climbs back to the approved 14 by ~600 objects; from
+// there up, including at 7,500, it is the approved behavior exactly.
+let LABEL_DEG = 14;
+const LABEL_DEG_LO = V.labelDegree !== undefined ? V.labelDegree : 14;
+const DOM_LABEL_MIN = V.domLabelMin !== undefined ? V.domLabelMin : 8;
+const GHOST = !!V.ghost, GC = V.ghostColor || [0.44, 0.53, 0.72];
+// SPARSE STARLIGHT. A single object out of the mature picture carries a raw strand color - a hard
+// crimson or magenta disc - because in the finished picture that color only ever appears blended
+// into thousands of its neighbors. Alone on an empty field it reads as a bug on the glass. So as
+// the field thins, every object is pulled toward one warm starlight and given a halo: sparse is
+// monochrome and luminous, dense is the full-color picture. Both ends are the same renderer, and at
+// 7,500 both amounts are exactly zero, which is round-11.1/v1 untouched.
+const SW = V.sparseWhiteColor || [0.95, 0.90, 0.80];
+let sparseAmt = 0, sparseWhiteNow = 0, sparseGlowNow = 0;
+// the core's own color. The approved screen's mint is the default; a version whose subject is the
+// core while the field is empty may warm it, and says so in its NOTES.
+const CORE_TINT = new Float32Array(V.coreTint || [0.42, 0.86, 0.6]);
 const domCss = domains.map((d, di) => `rgb(${(D.domCol[di * 3] * 255) | 0},${(D.domCol[di * 3 + 1] * 255) | 0},${(D.domCol[di * 3 + 2] * 255) | 0})`);
 
 const T0 = performance.now();
@@ -210,9 +316,9 @@ const nodeProg = program(`
 // the core: a soft star drawn in GL so the hush feathers it per fragment like everything else
 const coreProg = program(`attribute vec2 a_uv; uniform vec2 u_c; uniform float u_r; uniform vec2 u_view; varying vec2 v_p; varying vec2 v_scr;
   void main(){ vec2 scr = u_c + a_uv * u_r; v_p = a_uv; v_scr = scr; vec2 c = scr / u_view * 2.0 - 1.0; c.y = -c.y; gl_Position = vec4(c, 0.0, 1.0); }`,
-  `precision mediump float; varying vec2 v_p; varying vec2 v_scr; uniform float u_gain; uniform float u_core; ${QUIET}
-  void main(){ float d = length(v_p); float g = exp(-d * d * 3.4); float core = 1.0 - smoothstep(u_core * 0.75, u_core * 1.15, d);
-    vec3 col = mix(vec3(0.42, 0.86, 0.6), vec3(1.0), g * g * 0.7 + core); float a = (g * 1.05 + core) * u_gain * quietK(v_scr);
+  `precision mediump float; varying vec2 v_p; varying vec2 v_scr; uniform float u_gain; uniform float u_core; uniform vec3 u_tint; ${QUIET}
+  void main(){ float d = length(v_p); float g = exp(-d * d * 3.4) * ${V.ghost ? 'smoothstep(1.0, 0.5, d)' : '1.0'}; float core = 1.0 - smoothstep(u_core * 0.75, u_core * 1.15, d);
+    vec3 col = mix(u_tint, vec3(1.0), g * g * 0.7 + core); float a = (g * 1.05 + core) * u_gain * quietK(v_scr);
     gl_FragColor = vec4(col * a, a); }`);
 const quadProg = program(`attribute vec2 a_uv; varying vec2 v_uv; void main(){ v_uv = a_uv; gl_Position = vec4(a_uv * 2.0 - 1.0, 0.0, 1.0); }`,
   `precision mediump float; varying vec2 v_uv; uniform sampler2D u_tex; uniform vec2 u_dir; uniform float u_w[7];
@@ -232,7 +338,7 @@ const FA = { pos: loc(fibreProg, 'a_pos'), z: loc(fibreProg, 'a_z'), col: loc(fi
 const RA = { pos: loc(ribbonProg, 'a_pos'), nrm: loc(ribbonProg, 'a_nrm'), hw: loc(ribbonProg, 'a_hw'), u: loc(ribbonProg, 'a_u'), z: loc(ribbonProg, 'a_z'), col: loc(ribbonProg, 'a_col') };
 const NA = { pos: loc(nodeProg, 'a_pos'), size: loc(nodeProg, 'a_size'), col: loc(nodeProg, 'a_col'), glow: loc(nodeProg, 'a_glow'), kind: loc(nodeProg, 'a_kind'), light: loc(nodeProg, 'a_light'), phase: loc(nodeProg, 'a_phase'), z: loc(nodeProg, 'a_z') };
 const QA = loc(quadProg, 'a_uv'), CA = loc(compProg, 'a_uv');
-const CQ = { uv: loc(coreProg, 'a_uv'), c: uni(coreProg, 'u_c'), r: uni(coreProg, 'u_r'), view: uni(coreProg, 'u_view'), gain: uni(coreProg, 'u_gain'), core: uni(coreProg, 'u_core'), quiet: uni(coreProg, 'u_quiet'), qf: uni(coreProg, 'u_qf'), qbox: uni(coreProg, 'u_qbox') };
+const CQ = { uv: loc(coreProg, 'a_uv'), c: uni(coreProg, 'u_c'), r: uni(coreProg, 'u_r'), view: uni(coreProg, 'u_view'), gain: uni(coreProg, 'u_gain'), core: uni(coreProg, 'u_core'), tint: uni(coreProg, 'u_tint'), quiet: uni(coreProg, 'u_quiet'), qf: uni(coreProg, 'u_qf'), qbox: uni(coreProg, 'u_qbox') };
 const bQuad = buf(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
 const bQuadC = buf(new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 // the core's rays: 14 lines in world units, turning once every 40 s, drawn with the fibre program
@@ -264,7 +370,8 @@ function drawCoreGL(t) {
   const [sx, sy] = toScreen(CORE.x, CORE.y, 0);
   const R = 104 * k * breathe * bloomK;
   gl.useProgram(coreProg); attr(bQuadC, CQ.uv, 2);
-  gl.uniform2f(CQ.c, sx, sy); gl.uniform1f(CQ.r, R); gl.uniform2f(CQ.view, W, H); gl.uniform1f(CQ.gain, 1.0); gl.uniform1f(CQ.core, 8 * k * bloomK / Math.max(1, R));
+  gl.uniform2f(CQ.c, sx, sy); gl.uniform1f(CQ.r, R); gl.uniform2f(CQ.view, W, H); gl.uniform1f(CQ.gain, V.coreGain === undefined ? 1.0 : V.coreGain); gl.uniform1f(CQ.core, 8 * k * bloomK / Math.max(1, R));
+  gl.uniform3fv(CQ.tint, CORE_TINT);
   gl.uniform4fv(CQ.quiet, quietRects); gl.uniform1f(CQ.qf, QUIET_FEATHER); gl.uniform4fv(CQ.qbox, quietBox);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
@@ -348,18 +455,21 @@ function buildSourceColors(dimAll) {
   for (let si = 0; si < S; si++) {
     const st = D.strands[D.srcStrand[si]], base = srcStart[si], n = st.n, dc = D.srcDomain[si] * 3;
     const node = D.srcNode[si];
-    const a = srcAlpha[si] * V.riverGain * (dimAll ? 0.45 : 1) * (inDom.length && domHover >= 0 ? (D.srcDomain[si] === domHover ? 1.4 : 0.5) : 1);
+    const g = gate[node];
+    const a = srcAlpha[si] * V.riverGain * g * (dimAll ? 0.45 : 1) * (inDom.length && domHover >= 0 ? (D.srcDomain[si] === domHover ? 1.4 : 0.5) : 1);
+    if (a <= 0) { for (let p = 0; p < n; p++) { const q = (base + p) * 4; scol[q] = scol[q + 1] = scol[q + 2] = scol[q + 3] = 0; } continue; }
     for (let p = 0; p < n; p++) {
       const u = p / (n - 1);                                   // 0 = brain end
       const t = clamp(u * 3, 0, 2.999), kk = Math.floor(t), f = t - kk;
       const c0 = st.cols[kk], c1 = st.cols[kk + 1];
       // the strand's own colour toward the river, its domain's colour toward the brain
       const m = 1 - Math.pow(1 - u, 2.2) * 0.45;
-      const r = (D.domCol[dc] * (1 - m) + (c0[0] + (c1[0] - c0[0]) * f) * m);
-      const g = (D.domCol[dc + 1] * (1 - m) + (c0[1] + (c1[1] - c0[1]) * f) * m);
-      const b = (D.domCol[dc + 2] * (1 - m) + (c0[2] + (c1[2] - c0[2]) * f) * m);
+      let r = (D.domCol[dc] * (1 - m) + (c0[0] + (c1[0] - c0[0]) * f) * m);
+      let gg = (D.domCol[dc + 1] * (1 - m) + (c0[1] + (c1[1] - c0[1]) * f) * m);
+      let b = (D.domCol[dc + 2] * (1 - m) + (c0[2] + (c1[2] - c0[2]) * f) * m);
+      if (GHOST && g < 0.985) { const mm = clamp((1 - g) / 0.6, 0, 1); r += (GC[0] - r) * mm; gg += (GC[1] - gg) * mm; b += (GC[2] - b) * mm; }
       const q = (base + p) * 4, aa = a * (0.55 + 0.45 * Math.min(1, u * 4)) * (u > 0.92 ? (1 - u) / 0.08 : 1);
-      scol[q] = r * aa * 255; scol[q + 1] = g * aa * 255; scol[q + 2] = b * aa * 255; scol[q + 3] = aa * 255;
+      scol[q] = r * aa * 255; scol[q + 1] = gg * aa * 255; scol[q + 2] = b * aa * 255; scol[q + 3] = aa * 255;
     }
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, bSCol); gl.bufferSubData(gl.ARRAY_BUFFER, 0, scol);
@@ -368,8 +478,12 @@ function buildSourceColors(dimAll) {
 // ---- nodes ----
 const nodeCol = new Float32Array(N * 4);
 const bNPos = buf(pos, gl.DYNAMIC_DRAW), bNCol = buf(nodeCol, gl.DYNAMIC_DRAW), bNGlow = buf(glow, gl.DYNAMIC_DRAW);
-const nSize = new Float32Array(N); for (let i = 0; i < N; i++) nSize[i] = D.radius[i] * V.nodeScale;
-const bNSize = buf(nSize, gl.STATIC_DRAW), bNKind = buf(kind, gl.STATIC_DRAW), bNLight = buf(D.lightR, gl.STATIC_DRAW), bNPhase = buf(D.lightPhase, gl.STATIC_DRAW), bNZ = buf(D.z, gl.STATIC_DRAW);
+const nSize = new Float32Array(N);
+let NODE_MULT = 1, nSizeDirty = true;
+function nodeMultFor(c) { return 1 + (V.sparseBoost || 0) * Math.pow(clamp(1 - c / (V.sparseSpan || 600), 0, 1), 0.7); }
+function fillNodeSize() { for (let i = 0; i < N; i++) nSize[i] = D.radius[i] * V.nodeScale * (arrivalRank[i] < COUNT ? NODE_MULT : 1); }
+fillNodeSize();
+const bNSize = buf(nSize, gl.DYNAMIC_DRAW), bNKind = buf(kind, gl.STATIC_DRAW), bNLight = buf(D.lightR, gl.STATIC_DRAW), bNPhase = buf(D.lightPhase, gl.STATIC_DRAW), bNZ = buf(D.z, gl.STATIC_DRAW);
 const litIdx = new Uint32Array(N); const bLitIdx = gl.createBuffer();
 // ---- packets ----
 const packets = [];
@@ -763,10 +877,11 @@ function setNeighbours(i) {
   for (let k = D.adjStart[i]; k < D.adjStart[i + 1]; k++) isNbr[D.adj[k]] = 1;
   for (let k = D.nlinkStart[i]; k < D.nlinkStart[i + 1]; k++) linkLit[D.nlink[k]] = 1;
 }
-function screenRadius(i) { return Math.max(D.radius[i] * V.nodeScale, D.isLight[i] ? D.lightR[i] * 0.6 : 0) * Math.sqrt(cam.s / home.s); }
+function screenRadius(i) { return Math.max(D.radius[i] * V.nodeScale * (arrivalRank[i] < COUNT ? NODE_MULT : 1), D.isLight[i] ? D.lightR[i] * 0.6 : 0) * Math.sqrt(cam.s / home.s); }
 function hitTest(sx, sy) {
   let best = -1, bestD = 1e9;
   for (let i = 0; i < N; i++) {
+    if (gate[i] < 0.5) continue;
     const [x, y] = nodeScreen(i);
     const dx = x - sx, dy = y - sy; const r = screenRadius(i) + 5;
     const d2 = dx * dx + dy * dy;
@@ -864,7 +979,7 @@ function clickBackground(sx, sy) {
 }
 function clickDomain(d) {
   domSel = d; setDomHover(d);
-  let cx = 0, cy = 0, c = 0; for (let i = 0; i < N; i++) if (D.nodeDomain[i] === d) { cx += pos[i * 2]; cy += pos[i * 2 + 1]; c++; }
+  let cx = 0, cy = 0, c = 0; for (let i = 0; i < N; i++) if (D.nodeDomain[i] === d && gate[i] > 0.5) { cx += pos[i * 2]; cy += pos[i * 2 + 1]; c++; }
   camT.x = cx / c; camT.y = cy / c; camT.s = home.s * 1.75;
   ripples.push({ x: cx / c, y: cy / c, t0: performance.now(), hue: domCss[d] });
 }
@@ -877,7 +992,9 @@ function releaseAll() {
 const recentSources = loro.sources.filter(s => s.ingestedDay >= loro.meta.horizonDays - 21 && D.index.has(s.primaryNodeId));
 const SOURCE_WORD = { document: 'a document', meeting: 'a meeting', call: 'a call', 'email-thread': 'an email thread', report: 'a report', deck: 'a deck', spreadsheet: 'a spreadsheet', chat: 'a chat', 'web-page': 'a web page', contract: 'a contract' };
 function ingest(now) {
-  const s = recentSources[Math.floor(rnd() * recentSources.length)];
+  const pool = recentSources.filter(x => gate[D.index.get(x.primaryNodeId)] > 0.5);
+  if (!pool.length) return;
+  const s = pool[Math.floor(rnd() * pool.length)];
   const i = D.index.get(s.primaryNodeId);
   let who = activeSpecialists.findIndex(sp => sp.domains.includes(s.domain));
   if (who < 0) who = Math.floor(rnd() * activeSpecialists.length);
@@ -1053,7 +1170,7 @@ function frame() {
   if (!blooming && t > 7 && now - lastIngest > nextIngestGap) { lastIngest = now; nextIngestGap = 7000 + rnd() * 5000; ingest(now); }
 
   // motion
-  let moved = false;
+  let moved = stepGate(dt);
   if (blooming) { moved = stepBloom(t); if (t > bloomEnd + 0.05) { blooming = false; for (let i = 0; i < N; i++) { nAlpha[i] = 1; pos[i * 2] = D.home[i * 2]; pos[i * 2 + 1] = D.home[i * 2 + 1]; } moved = true; } }
   else {
     if (dragging >= 0 && dragNbr) {
@@ -1062,8 +1179,8 @@ function frame() {
       dragNbr.forEach((w, j) => { activate(j); tgt[j * 2] += ddx * w; tgt[j * 2 + 1] += ddy * w; });
     }
     if (clusterSel >= 0) {
-      const ids = D.byCluster[clusterSel]; let cx = 0, cy = 0; for (const j of ids) { cx += D.home[j * 2]; cy += D.home[j * 2 + 1]; } cx /= ids.length; cy /= ids.length;
-      for (const j of ids) { activate(j); tgt[j * 2] += (D.home[j * 2] - cx) * 0.16; tgt[j * 2 + 1] += (D.home[j * 2 + 1] - cy) * 0.16; }
+      const ids = D.byCluster[clusterSel].filter(j => gate[j] > 0.5); if (ids.length) { let cx = 0, cy = 0; for (const j of ids) { cx += D.home[j * 2]; cy += D.home[j * 2 + 1]; } cx /= ids.length; cy /= ids.length;
+      for (const j of ids) { activate(j); tgt[j * 2] += (D.home[j * 2] - cx) * 0.16; tgt[j * 2 + 1] += (D.home[j * 2 + 1] - cy) * 0.16; } }
     }
     if (activeList.length || waves.length) moved = stepSprings(dt);
   }
@@ -1086,6 +1203,7 @@ function frame() {
     if (nb) { tl = 1; g = Math.max(g, i === src ? 1 : 0.25); }
     if (domActive && inDom[i] && !hoverActive) g = Math.max(g, 0.12);
     if (D.flags[i] & 4) g = Math.max(g, 0.22 * (0.5 + 0.5 * Math.sin(t * 1.2 + twPhase[i])));
+    if (sparseGlowNow > 0.004) g = Math.max(g, sparseGlowNow * gate[i] * (0.72 + 0.28 * Math.sin(t * 0.8 + twPhase[i])));
     if (flash[i] > 0.01) { g = Math.max(g, flash[i]); tl = Math.max(tl, Math.min(1, flash[i])); flash[i] *= 0.93; } else flash[i] = 0;
     fade[i] += (tf - fade[i]) * 0.16;
     lit[i] += (tl - lit[i]) * 0.2;
@@ -1093,16 +1211,20 @@ function frame() {
     if (Math.abs(fade[i] - tf) < 0.002) fade[i] = tf;
     if (Math.abs(lit[i] - tl) < 0.002) lit[i] = tl;
     if (glow[i] < 0.003 && g === 0) glow[i] = 0;
-    const f = fade[i] * nAlpha[i], l = lit[i], o = i * 3, q = i * 4;
+    const f = fade[i] * nAlpha[i] * gate[i], l = lit[i], o = i * 3, q = i * 4;
     const tw = D.isLight[i] ? 1 : 1 - V.twinkle * (0.5 + 0.5 * Math.sin(t * (0.7 + 0.5 * (twPhase[i] / 6.28)) + twPhase[i]));
-    const r = restCol[o] + (vividCol[o] - restCol[o]) * l, gg = restCol[o + 1] + (vividCol[o + 1] - restCol[o + 1]) * l, b = restCol[o + 2] + (vividCol[o + 2] - restCol[o + 2]) * l;
+    let r = restCol[o] + (vividCol[o] - restCol[o]) * l, gg = restCol[o + 1] + (vividCol[o + 1] - restCol[o + 1]) * l, b = restCol[o + 2] + (vividCol[o + 2] - restCol[o + 2]) * l;
+    // an object that has not arrived keeps its place and loses its color: it is a neutral trace of
+    // where something WOULD sit, never a tinted object mistakable for one of the customer's own.
+    if (GHOST && gate[i] < 0.985) { const m = clamp((1 - gate[i]) / 0.6, 0, 1); r += (GC[0] - r) * m; gg += (GC[1] - gg) * m; b += (GC[2] - b) * m; }
+    if (sparseWhiteNow > 0.004) { const m = sparseWhiteNow * gate[i]; r += (SW[0] - r) * m; gg += (SW[1] - gg) * m; b += (SW[2] - b) * m; }
     const a = f * (D.isLight[i] ? 0.9 : 0.42 + 0.3 * Math.min(1, D.degree[i] / 10) + 0.28 * l) * tw * V.nodeGain;
     nodeCol[q] = r * a; nodeCol[q + 1] = gg * a; nodeCol[q + 2] = b * a; nodeCol[q + 3] = a;
   }
   // ---- link colours ----
   for (let k = 0; k < L; k++) {
     const s = D.ls[k], tt = D.lt[k], o = k * LP * 4;
-    const fs = fade[s] * nAlpha[s], ft = fade[tt] * nAlpha[tt];
+    const fs = fade[s] * nAlpha[s] * gate[s], ft = fade[tt] * nAlpha[tt] * gate[tt];
     let a = Math.min(fs, ft) * D.lalpha[k] * (D.lclass[k] === 0 ? V.hairGain : 1);
     const ll = linkLit[k], fl = linkFlash[k];
     let wr = 0, wg = 0, wb = 0, wm = 0; // white admixture for lit / flashing fibres
@@ -1115,6 +1237,7 @@ function frame() {
       const u = p / SEG;
       let r = D.col[c0] + (D.col[c1] - D.col[c0]) * u, g = D.col[c0 + 1] + (D.col[c1 + 1] - D.col[c0 + 1]) * u, b = D.col[c0 + 2] + (D.col[c1 + 2] - D.col[c0 + 2]) * u;
       if (wm) { r += (1 - r) * wm; g += (1 - g) * wm; b += (1 - b) * wm; }
+      if (GHOST) { const m = clamp((1 - Math.min(gate[s], gate[tt])) / 0.6, 0, 1); if (m > 0.015) { r += (GC[0] - r) * m; g += (GC[1] - g) * m; b += (GC[2] - b) * m; } }
       const q = o + p * 4, aa = Math.min(1, a) * 255;
       lcol[q] = r * aa; lcol[q + 1] = g * aa; lcol[q + 2] = b * aa; lcol[q + 3] = aa;
     }
@@ -1135,17 +1258,17 @@ function frame() {
       const u = pk.dir > 0 ? pk.p : 1 - pk.p, fp = u * SEG, p0 = Math.min(SEG - 1, Math.floor(fp)), f = fp - p0, o = pk.k * LP * 2;
       pkPos[n * 2] = lpts[o + p0 * 2] + (lpts[o + p0 * 2 + 2] - lpts[o + p0 * 2]) * f; pkPos[n * 2 + 1] = lpts[o + p0 * 2 + 1] + (lpts[o + p0 * 2 + 3] - lpts[o + p0 * 2 + 1]) * f;
       pkZ[n] = lz[pk.k * LP + p0];
-      const s = D.ls[pk.k], tt = D.lt[pk.k], a = Math.min(fade[s], fade[tt]) * Math.min(nAlpha[s], nAlpha[tt]) * (0.55 + 0.45 * Math.sin(pk.p * Math.PI)) * V.packetGain;
+      const s = D.ls[pk.k], tt = D.lt[pk.k], a = Math.min(fade[s], fade[tt]) * Math.min(nAlpha[s] * gate[s], nAlpha[tt] * gate[tt]) * (0.55 + 0.45 * Math.sin(pk.p * Math.PI)) * V.packetGain;
       const c = D.col, cs = s * 3;
       pkCol[n * 4] = (c[cs] * 0.4 + 0.6) * a; pkCol[n * 4 + 1] = (c[cs + 1] * 0.4 + 0.6) * a; pkCol[n * 4 + 2] = (c[cs + 2] * 0.4 + 0.6) * a; pkCol[n * 4 + 3] = a;
       pkSize[n] = 1.1 + 0.5 * D.lhero[pk.k]; n++;
     }
     for (const rv of river) {
-      rv.u -= dt * rv.speed; if (rv.u <= 0) { rv.u = 1; rv.si = Math.floor(rnd() * S); }
+      rv.u -= dt * rv.speed; if (rv.u <= 0) { rv.u = 1; if (srcVisibleN) rv.si = srcVisible[Math.floor(rnd() * srcVisibleN)]; }
       const base = srcStart[rv.si], cnt = srcStart[rv.si + 1] - base, fp = rv.u * (cnt - 1), p0 = Math.min(cnt - 2, Math.floor(fp)), f = fp - p0;
       pkPos[n * 2] = spts[(base + p0) * 2] + (spts[(base + p0 + 1) * 2] - spts[(base + p0) * 2]) * f; pkPos[n * 2 + 1] = spts[(base + p0) * 2 + 1] + (spts[(base + p0 + 1) * 2 + 1] - spts[(base + p0) * 2 + 1]) * f;
       pkZ[n] = sz[base + p0];
-      const a = (blooming ? 0 : 1) * (hoverActive ? 0.5 : 1) * 0.85 * V.packetGain * Math.min(1, rv.u * 6) * Math.min(1, (1 - rv.u) * 8);
+      const a = (blooming ? 0 : 1) * (gate[D.srcNode[rv.si]] > 0.5 ? 1 : 0) * (hoverActive ? 0.5 : 1) * 0.85 * V.packetGain * Math.min(1, rv.u * 6) * Math.min(1, (1 - rv.u) * 8);
       const dc = D.srcDomain[rv.si] * 3;
       pkCol[n * 4] = (D.domCol[dc] * 0.35 + 0.65) * a; pkCol[n * 4 + 1] = (D.domCol[dc + 1] * 0.35 + 0.65) * a; pkCol[n * 4 + 2] = (D.domCol[dc + 2] * 0.35 + 0.65) * a; pkCol[n * 4 + 3] = a;
       pkSize[n] = 1.3; n++;
@@ -1207,9 +1330,10 @@ function frame() {
   gl.bindBuffer(gl.ARRAY_BUFFER, bNPos); gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos); gl.enableVertexAttribArray(NA.pos); gl.vertexAttribPointer(NA.pos, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, bNCol); gl.bufferSubData(gl.ARRAY_BUFFER, 0, nodeCol); gl.enableVertexAttribArray(NA.col); gl.vertexAttribPointer(NA.col, 4, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, bNGlow); gl.bufferSubData(gl.ARRAY_BUFFER, 0, glow); gl.enableVertexAttribArray(NA.glow); gl.vertexAttribPointer(NA.glow, 1, gl.FLOAT, false, 0, 0);
+  if (nSizeDirty) { fillNodeSize(); gl.bindBuffer(gl.ARRAY_BUFFER, bNSize); gl.bufferSubData(gl.ARRAY_BUFFER, 0, nSize); nSizeDirty = false; }
   attr(bNSize, NA.size, 1); attr(bNKind, NA.kind, 1); attr(bNLight, NA.light, 1); attr(bNPhase, NA.phase, 1); attr(bNZ, NA.z, 1);
   gl.drawArrays(gl.POINTS, 0, N);
-  let nl = 0; for (let i = 0; i < N; i++) if (lit[i] > 0.05 || glow[i] > 0.05 || D.isLight[i]) litIdx[nl++] = i;
+  let nl = 0; for (let i = 0; i < N; i++) if (gate[i] > 0.5 && (lit[i] > 0.05 || glow[i] > 0.05 || D.isLight[i])) litIdx[nl++] = i;
   if (nl) { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bLitIdx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, litIdx.subarray(0, nl), gl.DYNAMIC_DRAW); gl.drawElements(gl.POINTS, nl, gl.UNSIGNED_INT, 0); }
   // packets
   if (PK) {
@@ -1269,11 +1393,11 @@ function drawOverlay(now, t, src, hoverActive) {
 
   // domain names at their live centroids
   domCentroid.fill(0);
-  for (let i = 0; i < N; i++) { if (nAlpha[i] < 0.5) continue; const d = D.nodeDomain[i] * 4; domCentroid[d] += pos[i * 2]; domCentroid[d + 1] += pos[i * 2 + 1]; domCentroid[d + 2]++; domCentroid[d + 3] += D.z[i]; }
+  for (let i = 0; i < N; i++) { if (nAlpha[i] * gate[i] < 0.5) continue; const d = D.nodeDomain[i] * 4; domCentroid[d] += pos[i * 2]; domCentroid[d + 1] += pos[i * 2 + 1]; domCentroid[d + 2]++; domCentroid[d + 3] += D.z[i]; }
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   domLabelRects = [];
   for (let d = 0; d < domains.length; d++) {
-    const c = domCentroid[d * 4 + 2]; if (c < 8) continue;
+    const c = domCentroid[d * 4 + 2]; if (c < DOM_LABEL_MIN) continue;
     const [sx, sy] = toScreen(domCentroid[d * 4] / c, domCentroid[d * 4 + 1] / c, domCentroid[d * 4 + 3] / c);
     const near = cursor.inside ? clamp(1 - Math.hypot(sx - cursor.x, sy - cursor.y) / 210, 0, 1) : 0;
     const q = quietAt(sx, sy);
@@ -1340,7 +1464,7 @@ function drawOverlay(now, t, src, hoverActive) {
   }
   if (cursor.inside && src < 0 && domHover < 0 && !blooming) {
     const cand = [];
-    for (let i = 0; i < N; i++) { if (D.degree[i] < 14) continue; const [sx, sy] = nodeScreen(i); const d = Math.hypot(sx - cursor.x, sy - cursor.y); if (d < 130) cand.push([i, d]); }
+    for (let i = 0; i < N; i++) { if (gate[i] < 0.5 || D.degree[i] < LABEL_DEG) continue; const [sx, sy] = nodeScreen(i); const d = Math.hypot(sx - cursor.x, sy - cursor.y); if (d < 130) cand.push([i, d]); }
     cand.sort((a, b) => a[1] - b[1]).slice(0, 5).forEach(([i, d]) => labels.push([i, LABEL_FLOOR + (1 - LABEL_FLOOR) * (1 - d / 130), false, true]));
   }
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -1444,8 +1568,10 @@ function resume() {
   rafId = requestAnimationFrame(frame);
 }
 
+setCount(V.count !== undefined ? V.count : N, false);
 $('#home-loading').classList.add('gone');
 rafId = requestAnimationFrame(frame);
+if (typeof window.onLoroReady === 'function') setTimeout(() => window.onLoroReady(window.__loro), 0);
 // READ-ONLY, FOR `tests/home.js` ONLY. Calling `ingest()` from outside (the line above) does
 // NOT reset this field's own idle-learning clock (`lastIngest`/`nextIngestGap`, line 593/838) —
 // only the scheduler's own auto-fire does that — so a driven line and an auto-fired one can
@@ -1458,7 +1584,7 @@ function autoIngestDueInMs() { return Math.max(0, (lastIngest + nextIngestGap) -
 // overlaps a rectangle the picture then rubs out, and a test carrying its own copy of that
 // geometry would be a test of the copy. `labelBlockers` is the whole no-caption list, the
 // banner included.
-window.__loro = { N, L, S, V, snapshot, pause, resume, get running() { return running; }, quietRect, quietAt,
+window.__loro = { N, L, S, V, snapshot, pause, resume, nodeScreen, setCount, coreTint: CORE_TINT, coreScreen: () => toScreen(CORE.x, CORE.y, 0), get ghostLevel() { return ghostNow; }, get COUNT() { return COUNT; }, get stats() { return STATS; }, gate, arrival, nodes, domains, D, get running() { return running; }, quietRect, quietAt,
   get eraseRects() { const out = []; for (let g = 0; g < QUIET_N; g++) { const o = g * 4; if (quietRects[o + 2] < 0) continue; out.push({ x0: quietRects[o], y0: quietRects[o + 1], x1: quietRects[o + 2], y1: quietRects[o + 3] }); } return out; },
   get labelBlockers() { return blockRects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1 })); },
   get domLabelRects() { return domLabelRects; }, get nodeLabelRects() { return nodeLabelRects; }, landed, get pos() { return pos; }, get hover() { return hover; }, get selected() { return selected; }, get cam() { return cam; }, fade, lit, glow, releaseAll, ingest: () => ingest(performance.now()), get autoIngestDueInMs() { return autoIngestDueInMs(); }, get blooming() { return blooming; }, get motionFrames() { return motionFrames; }, get frames() { return frames; }, pushWave, get activeList() { return activeList; } };
