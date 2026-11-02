@@ -17,11 +17,12 @@
 # column has something to say about decisions and lessons at every count. Every body names the
 # company, which is what the compile's topic matches. Records are fictional and carry no names.
 #
-# THE APP WILL NOT WAIT FOR A BIG ONE. `home.js` stops waiting for `home_field_data` after 8 s, and
-# the compile it asks for is far slower than linear: measured on this Mac, 170 records under 1 s,
-# 1,000 records with differing bodies 39 s, 2,600 records 408 s. So a fixture of a few hundred records
-# is drawn and one of 2,600 is a timeout in the real app (the count this script prints is the
-# compile's, not what the screen will show).
+# THE SCREEN DOES NOT WAIT FOR A BIG ONE, AND DRAWS IT WHEN IT IS READY. `home.js` stops waiting for
+# `home_field_data` after 8 s, and the compile it asks for is far slower than linear: measured on this
+# Mac, 170 records under 1 s, 1,000 records with differing bodies 39 s, 2,600 records 408 s. A big
+# corpus is therefore drawn when its compile finishes, a launch after the screen came up with the
+# example alone, and from the next launch on from the kept result (`home_field.rs::KeptCompile`),
+# until a record changes. `ghost-walk.py` walks exactly that in the guest.
 #
 # Run it on a fixture home built by `cargo run -p richos-core --example gui_boot_machine -- <home>
 # <loro checkout>` (that is what makes <home>/RichOS/corpus and the compiler); it refuses a home
