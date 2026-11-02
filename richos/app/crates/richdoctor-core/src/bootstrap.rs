@@ -360,7 +360,7 @@ fn quit_running_with(places: &Places, me: i32, owns_window: &dyn Fn(i32) -> bool
     if line.trim() != "ok" {
         // Copies built before a closed, saved report counted as idle answer `busy` for as long
         // as they run (their `Engine::busy` kept the report's stage after `close`). With no
-        // window at all (minimized and hidden ones count as open) that answer can only be this: closing saved the report, so the copy
+        // window (activation policy Accessory; minimized and hidden ones stay Regular) that answer can only be this: closing saved the report, so the copy
         // is stopped by its process id, read from the socket it answered on, never by name.
         if let Some(pid) = answered_by.filter(|&p| p != me && !owns_window(p)) {
             // A closing operation may still be ending: look once more before stopping it.
@@ -408,64 +408,38 @@ fn peer_pid_of(s: &std::os::unix::net::UnixStream) -> Option<i32> {
     (rc == 0 && pid > 0).then_some(pid)
 }
 
-#[cfg(target_os = "macos")]
-mod windows {
-    use std::ffi::{c_char, c_void};
-    #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
-        fn CFArrayGetCount(a: *const c_void) -> isize;
-        fn CFArrayGetValueAtIndex(a: *const c_void, i: isize) -> *const c_void;
-        fn CFDictionaryGetValue(d: *const c_void, k: *const c_void) -> *const c_void;
-        fn CFStringCreateWithCString(alloc: *const c_void, s: *const c_char, enc: u32) -> *const c_void;
-        fn CFNumberGetValue(n: *const c_void, kind: isize, out: *mut c_void) -> u8;
-        fn CFRelease(o: *const c_void);
-    }
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> *const c_void;
-    }
-
-    fn int(d: *const c_void, key: &[u8]) -> Option<i64> {
-        // SAFETY: `key` is NUL-terminated; the string is released; the value is read, not kept.
-        unsafe {
-            let k = CFStringCreateWithCString(std::ptr::null(), key.as_ptr() as *const c_char, 0x0800_0100);
-            let v = CFDictionaryGetValue(d, k);
-            CFRelease(k);
-            if v.is_null() {
-                return None;
-            }
-            let mut out: i64 = 0;
-            (CFNumberGetValue(v, 4, &mut out as *mut i64 as *mut c_void) != 0).then_some(out)
-        }
-    }
-
-    /// Whether process `pid` owns any normal (layer 0) window, on screen or not: option 0 lists
-    /// minimized and hidden windows too. The window server lists them without any permission
-    /// (only titles need one). Unreadable: `true`.
-    pub fn owns(pid: i32) -> bool {
-        // SAFETY: the array is owned by us and released; entries are borrowed from it.
-        unsafe {
-            let list = CGWindowListCopyWindowInfo(0, 0);
-            if list.is_null() {
-                return true;
-            }
-            let mut found = false;
-            for i in 0..CFArrayGetCount(list) {
-                let d = CFArrayGetValueAtIndex(list, i);
-                if int(d, b"kCGWindowOwnerPID\0") == Some(pid as i64) && int(d, b"kCGWindowLayer\0") == Some(0) {
-                    found = true;
-                    break;
-                }
-            }
-            CFRelease(list);
-            found
-        }
-    }
-}
-
+/// Whether the copy running as `pid` still has its help window (open, minimized or hidden). An
+/// installed 1.0.0 RichDoctor shows a window with activation policy Regular (`open_window`,
+/// lib.rs:149) and, when the window is destroyed, saves and drops to Accessory (lib.rs:177-184);
+/// minimizing or hiding changes neither. The window server cannot say this: a closed window stays
+/// listed, hidden, exactly like a minimized one (measured in the guest). Readable without any
+/// permission. Unreadable: `true` (the copy is left alone).
 #[cfg(target_os = "macos")]
 fn has_window(pid: i32) -> bool {
-    windows::owns(pid)
+    use std::ffi::{c_char, c_void};
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {}
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    // SAFETY: two plain Objective-C messages with the signatures NSRunningApplication documents:
+    // +runningApplicationWithProcessIdentifier: (pid_t) -> id, and -activationPolicy -> NSInteger.
+    unsafe {
+        let class = objc_getClass(c"NSRunningApplication".as_ptr());
+        if class.is_null() {
+            return true;
+        }
+        let find: extern "C" fn(*mut c_void, *mut c_void, i32) -> *mut c_void = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let app = find(class, sel_registerName(c"runningApplicationWithProcessIdentifier:".as_ptr()), pid);
+        if app.is_null() {
+            return true;
+        }
+        let policy: extern "C" fn(*mut c_void, *mut c_void) -> isize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        // NSApplicationActivationPolicyRegular = 0, Accessory = 1, Prohibited = 2.
+        policy(app, sel_registerName(c"activationPolicy".as_ptr())) == 0
+    }
 }
 #[cfg(not(target_os = "macos"))]
 fn has_window(_pid: i32) -> bool {
@@ -657,12 +631,11 @@ mod tests {
     }
 
     #[test]
-    fn the_peer_of_a_socket_is_its_listener_and_a_process_without_a_window_has_none() {
+    fn the_peer_of_a_socket_is_its_listener() {
         let root = temp("peer");
         let sock = root.join("s.sock");
         let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         assert_eq!(peer_pid(&sock), Some(std::process::id() as i32));
-        assert!(!has_window(std::process::id() as i32), "a test process owns no window");
         fs::remove_dir_all(root).ok();
     }
 

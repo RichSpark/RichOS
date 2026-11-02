@@ -70,7 +70,7 @@ PAYLOAD_SUM=$(gs "shasum -a 256 '$RD/Contents/MacOS/RichDoctor'" | cut -d' ' -f1
 # RICHDOCTOR_OLD_ZIP=<RichDoctor zip of an earlier release> makes the older copy that real build
 # (re-signed ad hoc), and a report is started in it first (its stage stays Investigating when the
 # window closes, so that build answers "busy" for as long as it runs: bootstrap.rs `quit_running`
-# stops it by the process id on its socket once no window of it is on screen).
+# stops it by the process id on its socket once its activation policy is Accessory, i.e. its window was closed; minimized stays Regular).
 # RICHDOCTOR_WALK=deferred runs only U1 and this (the rest needs a RichOS built like a release).
 # bootstrap.rs `keep_trying`: RichOS asks again every minute, never closing a window itself, and
 # writes each outcome to ~/Library/Logs/RichOS/richdoctor-install.log. The RichOS here is started
