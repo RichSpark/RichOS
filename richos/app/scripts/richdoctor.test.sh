@@ -16,8 +16,8 @@
 #   5. the guest walk script parses (scripts/testvm/richdoctor-walk.sh runs only inside a test-VM
 #      guest, through run-walk.py; here it is syntax-checked, never run).
 # run-tests: no-host-screen: it builds, runs unit tests, a loopback stand-in and an offscreen WebKit; it launches no app
-# run-tests: inputs richos/app/scripts/richdoctor.test.sh richos/app/scripts/richdoctor-ui-walk.js richos/app/scripts/testvm/report-relay-stand-in.py richos/app/scripts/testvm/richdoctor-walk.sh richos/app/crates/richdoctor-core richos/app/crates/richdoctor richos/app/crates/richos-core/src/bug_report.rs richos/app/ui/style.css richos/app/ui/fonts richos/app/ui/tests/lib/contrast.js richos/mobile/service/report/fixtures/client
-# run-tests: covers richos/app/scripts/richdoctor-ui-walk.js richos/app/crates/richdoctor-core/examples/adapter_probe.rs richos/app/crates/richdoctor-core/examples/profile_fixtures.rs richos/app/crates/richdoctor/src/main.rs richos/app/crates/richdoctor/src/mac.rs richos/app/crates/richdoctor/src/relay.rs richos/app/crates/richdoctor/examples/relay_probe.rs richos/app/crates/richdoctor/build.rs richos/app/crates/richdoctor/tauri.conf.json richos/app/crates/richdoctor/Info.plist richos/app/crates/richdoctor/capabilities/default.json richos/app/crates/richdoctor/icons/generate.sh richos/app/crates/richdoctor/ui/index.html richos/app/crates/richdoctor/ui/doctor.css richos/app/crates/richdoctor/ui/doctor.js richos/app/scripts/testvm/report-relay-stand-in.py richos/app/scripts/testvm/richdoctor-walk.sh
+# run-tests: inputs richos/app/scripts/richdoctor.test.sh richos/app/scripts/richdoctor-ui-walk.js richos/app/scripts/testvm/report-relay-stand-in.py richos/app/scripts/testvm/richdoctor-walk.sh richos/app/scripts/testvm/richdoctor-drag-walk.sh richos/app/crates/richdoctor-core richos/app/crates/richdoctor richos/app/crates/richos-core/src/bug_report.rs richos/app/ui/style.css richos/app/ui/fonts richos/app/ui/tests/lib/contrast.js richos/mobile/service/report/fixtures/client
+# run-tests: covers richos/app/scripts/richdoctor-ui-walk.js richos/app/crates/richdoctor-core/examples/adapter_probe.rs richos/app/crates/richdoctor-core/examples/profile_fixtures.rs richos/app/crates/richdoctor/src/main.rs richos/app/crates/richdoctor/src/mac.rs richos/app/crates/richdoctor/src/relay.rs richos/app/crates/richdoctor/examples/relay_probe.rs richos/app/crates/richdoctor/build.rs richos/app/crates/richdoctor/tauri.conf.json richos/app/crates/richdoctor/Info.plist richos/app/crates/richdoctor/capabilities/default.json richos/app/crates/richdoctor/icons/generate.sh richos/app/crates/richdoctor/ui/index.html richos/app/crates/richdoctor/ui/doctor.css richos/app/crates/richdoctor/ui/doctor.js richos/app/scripts/testvm/report-relay-stand-in.py richos/app/scripts/testvm/richdoctor-walk.sh richos/app/scripts/testvm/richdoctor-drag-walk.sh
 set -euo pipefail
 app="$(cd "$(dirname "$0")/.." && pwd)"
 rd="$app/crates/richdoctor"
@@ -52,7 +52,7 @@ plist = plistlib.loads((rd / "Info.plist").read_bytes())
 assert plist.get("LSUIElement") is True, "menu bar only"
 assert not [k for k in plist if k.startswith("NS") and k.endswith("UsageDescription")], "no permission prompt"
 cap = json.loads((rd / "capabilities" / "default.json").read_text())
-assert cap["permissions"] == ["core:default"] and cap["windows"] == ["main"], "the page gets no file or dialog command"
+assert cap["permissions"] == ["core:default", "core:window:allow-start-dragging"] and cap["windows"] == ["main"], "the page gets no file or dialog command (the one addition is the title strip's window drag)"
 for icon in conf["bundle"]["icon"]:
     assert (rd / icon).is_file(), icon
 for f in ("tokens.css", "fonts/fonts.css", "fonts/Inter-Variable.woff2"):
@@ -77,4 +77,5 @@ node "$app/scripts/richdoctor-ui-walk.js"
 
 echo "== 5. the guest walk script parses =="
 bash -n "$app/scripts/testvm/richdoctor-walk.sh"
+bash -n "$app/scripts/testvm/richdoctor-drag-walk.sh"
 echo "richdoctor.test.sh: passed"

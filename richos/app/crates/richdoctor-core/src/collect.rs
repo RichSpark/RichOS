@@ -255,6 +255,11 @@ pub fn macos_version() -> Option<String> {
     dict.get("ProductVersion")?.as_string().map(str::to_string)
 }
 
+/// The Versions section's first line.
+pub fn versions_first_line(version: &str) -> String {
+    format!("RichDoctor {version}")
+}
+
 fn installation(scope: &Scope, ctx: &Context) -> Item {
     let mut item = Item::new(Category::Installation, "Installation").expect("random source");
     item.label = "which RichOS is installed".into();
@@ -262,7 +267,7 @@ fn installation(scope: &Scope, ctx: &Context) -> Item {
     let found = crate::install::richos(&scope.home);
     let macos = macos_version();
     let memory = memory_class();
-    let mut lines = vec![format!("RichDoctor {}", crate::VERSION)];
+    let mut lines = vec![versions_first_line(crate::VERSION)];
     lines.push(format!("macOS {} · {}{}", macos.as_deref().unwrap_or("version unknown"), cpu_kind(), memory.as_ref().map(|m| format!(" · {m} memory")).unwrap_or_default()));
     if found.is_empty() {
         lines.push("RichOS: not found in Applications or in the user Applications folder".into());

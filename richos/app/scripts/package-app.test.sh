@@ -701,6 +701,14 @@ unset RICHOS_NOTARIZE RICHOS_NOTARY_KEY RICHOS_NOTARY_KEY_ID RICHOS_NOTARY_ISSUE
 unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
 unset TAURI_SIGNING_PRIVATE_KEY_PATH TAURI_SIGNING_PRIVATE_KEY_PASSWORD RICHOS_SIGNING_IDENTITY
 
+# RichDoctor is stamped with RichOS's version, else the refresh never replaces an installed 1.0.0.
+# shellcheck disable=SC2016  # the pattern is the literal text of the script, $ and all
+if grep -F -- 'cargo tauri build --no-sign --bundles app --config "{\"version\":\"$target_version\"}"' "$SCRIPT" >/dev/null; then
+  ok "F1 the RichDoctor build is stamped with RichOS's own version (\$target_version)"
+else
+  bad "F1 the RichDoctor build is not stamped with RichOS's version" "RichDoctor would stay 1.0.0 and never be refreshed"
+fi
+
 echo ""
 echo "=== Z. this suite touched nothing of the operator's ==="
 REAL_IDS_AFTER="$(security find-identity -v -p codesigning 2>/dev/null || true)"
