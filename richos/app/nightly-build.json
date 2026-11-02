@@ -1,0 +1,19 @@
+{
+  "build": true,
+  "version": "1.2.7",
+  "tag": "v1.2.7",
+  "source_commit": "b4e8981a9e10089230a565ae64f20eb8f3ef06c3",
+  "created_at": "2026-11-02T14:11:44.157508+00:00",
+  "run_id": "20261102T141135Z-fa780163",
+  "run_attempt": "1",
+  "channel": "stable",
+  "platform": "darwin-aarch64",
+  "endpoint": "https://github.com/RichSpark/RichOS/releases/latest/download/latest.json",
+  "promoted_from": "v1.2.7-nightly.20261102.87",
+  "promoted_from_version": "1.2.7-nightly.20261102.87",
+  "promotion_decided_on": "2026-11-02",
+  "promotion_words": "Once Echo's current job is finished, merged and pushed, build the nightly and then promote that to stable.",
+  "reservation_ref": "refs/candidates/stable/v1.2.7",
+  "reservation_base": "",
+  "new_user_walk_required": true
+}
