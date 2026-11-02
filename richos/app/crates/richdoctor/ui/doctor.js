@@ -388,6 +388,7 @@
       // The footer was disabled while the image was finished; a refusal (the report's size limit)
       // leaves the person Remove image and Cancel, and the button to try again.
       $("img-foot").querySelectorAll("button").forEach(function (b) { b.disabled = false; });
+      $("img-p").textContent = "This image could not be used: " + String(err).replace(/^Error:\s*/, "") + " Remove it, or press Use this image to try again.";
       toast(String(err));
     });
   }

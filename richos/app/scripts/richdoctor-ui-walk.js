@@ -84,6 +84,7 @@ function backend(state) {
           return Promise.resolve(head.startsWith("\x89PNG") ? { ok: true, kind: "png", width: 96, height: 48 } : { ok: false, problem: "type" });
         }
         if (cmd === "prepare_image") return Promise.resolve({ url: "data:image/png;base64," + args.imageBase64, b64: args.imageBase64, width: 96, height: 48, bytes: Math.round(args.imageBase64.length * 3 / 4) });
+        if (cmd === "use_image" && window.__refuse) return Promise.reject("This screenshot would take the report over its 25 MB limit.");
         if (cmd === "use_image" || cmd === "replace_image") {
           window.__shots = (window.__shots || 0) + (cmd === "use_image" ? 1 : 0);
           const n = cmd === "use_image" ? window.__shots : args.index + 1;
@@ -212,6 +213,18 @@ async function run() {
       const after = (await calls()).slice(before).map((c) => c[0]);
       check(`${theme} image: approving a revisited queue item again replaces it`, after.includes("replace_image") && !after.includes("use_image"), after.join(","));
       await page.keyboard.press("Escape");
+      await settle();
+      // A refused use (the report's size limit): the sheet says why, and Remove image, Cancel and the
+      // button stay usable (review rv-20261102T002300Z-1c3a5a2e).
+      await page.evaluate(() => { window.__refuse = true; });
+      await page.setInputFiles("#img-file", [{ name: "refused.png", mimeType: "image/png", buffer: PNG }]);
+      await page.waitForSelector("#sheet-image:not([hidden]) #img-cover:not([hidden])");
+      await page.click('[data-act="img-next"]');
+      await page.waitForFunction(() => document.querySelector("#img-p").textContent.includes("25 MB limit"), null, { timeout: 5000 }).catch(() => {});
+      check(`${theme} image: a refused use says why on the sheet`, (await T("#img-p")).includes("25 MB limit"));
+      check(`${theme} image: a refused use leaves Remove image, Cancel and the button enabled`, (await page.locator("#img-foot button:disabled").count()) === 0);
+      await page.evaluate(() => { window.__refuse = false; });
+      await page.click('[data-act="img-cancel-all"]');
       await settle();
       // Codex audit of 0881b5f8f: the 10-screenshot limit applies BEFORE any file is read, so a
       // selection of many large screenshots never holds more decoded images than the report takes.
