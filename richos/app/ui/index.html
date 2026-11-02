@@ -743,10 +743,11 @@
                   <div class="composer-bar-left">
                     <!-- THE PLUS (round 50/51): "we should keep the plus button … some users might
                          not know [drag and drop] and they might click this here to add some files".
-                         It opens macOS's own file picker directly (`attach_pick_files` in
-                         `mac_attachments.rs`), and what he picks takes the drop's road to the tray. -->
-                    <button id="attach-add" class="composer-add" type="button" aria-label="Add files"
-                            title="Add files"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M10 4v12M4 10h12"/></svg></button>
+                         It opens macOS's own picker for files and folders directly
+                         (`attach_pick_files` in `mac_attachments.rs`: "just add files and folders"),
+                         and what he picks takes the drop's road to the tray. -->
+                    <button id="attach-add" class="composer-add" type="button" aria-label="Add files and folders"
+                            title="Add files and folders"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M10 4v12M4 10h12"/></svg></button>
                     <span class="talk-slot" data-slot="row">
                       <!-- ONE BUTTON, THREE PLACES, NEVER TWO (round 51): the start of the empty box's
                            placeholder line two, this slot in the row once he types, and the start of

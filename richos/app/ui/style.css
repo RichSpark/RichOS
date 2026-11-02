@@ -3919,6 +3919,15 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   letter-spacing: 0.02em;
 }
 
+/* A folder's tile (round 51, `r51.css` `.attach-tile svg`): the round's folder glyph in
+   --gold-text, a non-text indicator beside the "Folder · N items" words. COMPUTED on
+   --surface-sunk: #c2a35c on #0a1120 = 7.80:1 dark, #715715 on #efebe0 = 5.73:1 light (3:1). */
+.attach-tile.is-folder svg {
+  width: 22px;
+  height: 22px;
+  color: var(--gold-text);
+}
+
 .attach-tile img {
   width: 100%;
   height: 100%;

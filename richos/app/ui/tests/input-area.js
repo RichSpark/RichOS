@@ -17,6 +17,7 @@
 //      and with words in it; the box keeps its height; the words come back when voice ends.
 //   6. The plus opens the file picker directly; what is picked lands on the tray; Cancel adds
 //      nothing; the caret is back in the box either way.
+//      6b. "just add files and folders": a picked folder is a chip of its own and Send names it.
 //   7. Every readable run in the box (placeholder, arrow, listening line, status line) clears
 //      4.5:1 on the paint behind it, light and dark, computed.
 //
@@ -408,6 +409,38 @@ async function main() {
     assertEqual(s.slot, "hint", "files without words moved Talk to Rich out of the placeholder (only typing does)");
     await page.close();
     return calls.join(" → ");
+  });
+
+  await run.check("6b. the plus adds files AND folders: a picked folder is a chip with the folder glyph and 'Folder · 12 items', and Send names it to Rich", async () => {
+    // His words, 2026-11-01: "keep the plus button … just add files and folders".
+    const page = await openApp(browser, { theme: "dark" });
+    // Its tooltip says the same words (check 8).
+    const plus = await page.evaluate(() => document.getElementById("attach-add").getAttribute("aria-label"));
+    assertEqual(plus, "Add files and folders", "the plus's name");
+    await page.evaluate(() =>
+      window.__RICHOS_MOCK__.pickFiles([
+        { name: "Comps 2026", folder: true, items: 12 },
+        { name: "brief.pdf", bytes: [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31] },
+      ])
+    );
+    await page.click("#attach-add");
+    await page.waitForFunction(() => [...document.querySelectorAll("#attach-list .attach-chip")].filter((c) => !c.classList.contains("is-adding")).length === 2);
+    const chips = await page.$$eval("#attach-list .attach-chip", (n) =>
+      n.map((c) => ({ name: c.querySelector(".attach-name").textContent, meta: c.querySelector(".attach-meta").textContent, glyph: !!c.querySelector(".attach-tile.is-folder svg") }))
+    );
+    assertEqual(chips[0], { name: "Comps 2026", meta: "Folder · 12 items", glyph: true }, "the folder's chip");
+    assertEqual(chips[1].glyph, false, "the file's chip has the folder glyph");
+    const note = await page.evaluate(() => document.getElementById("attach-note").textContent);
+    assertEqual(note, "", "a folder was refused: " + note);
+    await page.focus("#input");
+    await page.keyboard.type("Use these for the one-pager.");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => [...document.querySelectorAll("#messages .tl-user-text")].some((n) => n.textContent.includes("Folders on this Mac")));
+    const sent = await page.evaluate(() => { const all = document.querySelectorAll("#messages .tl-user-text"); return all[all.length - 1].textContent; });
+    assert(sent.includes("Attached on this Mac (1 file, saved by RichOS):") && sent.includes("Folders on this Mac (1 folder, not copied; read them where they are):\n- /mock/Desktop/Comps 2026 (folder, 12 items)"), "what Rich is sent: " + JSON.stringify(sent));
+    assert(page.__errors.length === 0, "page errors: " + page.__errors.join(" | "));
+    await page.close();
+    return chips.map((c) => `${c.name} (${c.meta})`).join(", ");
   });
 
   // ---- 7. contrast, both themes ----------------------------------------------------------------

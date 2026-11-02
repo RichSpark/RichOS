@@ -255,9 +255,9 @@ async function main() {
 
   await run.check("3. every refusal is a sentence under the composer, with the file's name, and nothing is attached", async () => {
     const page = await openApp(browser);
+    // A folder is not on this list: since round 51 it lands as itself (input-area.js check 6b).
     await drop(page, [
       { name: "archive.zip", bytes: [0x50, 0x4b, 3, 4] },
-      { name: "Receipts", folder: true },
       { name: "not-really.pdf", bytes: PNG },
       { name: "empty.txt", bytes: [] },
     ]);
@@ -266,11 +266,11 @@ async function main() {
       () => document.getElementById("attach-note").textContent.includes("empty.txt") && document.querySelectorAll("#attach-list .attach-chip").length === 0
     );
     let tray = await readTray(page);
-    // At most three lines are kept, newest last: the zip's line has scrolled off.
+    // At most three lines are kept, newest last.
     assertEqual(
       tray.note.split("\n"),
       [
-        "Receipts: This is a folder, not a file. Drop the files inside it instead. Nothing was attached.",
+        "archive.zip: RichOS can't take this kind of file yet. Photos, PDFs, text and Office documents work. Nothing was attached.",
         "not-really.pdf: This file does not look like a PDF. Nothing was attached.",
         "empty.txt: This file is empty. Nothing was attached.",
       ],
@@ -295,7 +295,7 @@ async function main() {
     assertEqual(tray.note, "shot-11.png: A message can carry at most 10 files.", "the count refusal");
     assertEqual(page.__errors, [], "the page logged errors");
     await page.close();
-    return "zip, folder, disguised PDF, empty file, 25 MB + 1 byte and the 11th file each refused by name; the oversize paste never crossed the bridge";
+    return "zip, disguised PDF, empty file, 25 MB + 1 byte and the 11th file each refused by name; the oversize paste never crossed the bridge";
   });
 
   await run.check("4. the files belong to the thread they were dropped on, like the words", async () => {
@@ -378,17 +378,17 @@ async function main() {
       [macArm("the most RichOS takes in one file"), "This file is larger than 25 MB, the most RichOS takes in one file. Nothing was attached."],
       [macArm("look like a {label}. Nothing was attached."), "This file does not look like a {label}. Nothing was attached."],
       [rustSentenceAfter(desk, "A message can carry at most"), "A message can carry at most {} files."],
-      [rustSentenceAfter(mac, "This is a folder, not a file."), "This is a folder, not a file. Drop the files inside it instead. Nothing was attached."],
       [rustSentenceAfter(mac, "That drop is no longer available."), "That drop is no longer available. Drop the file again."],
       [macArm("Attached on this Mac ("), "Attached on this Mac ({count}, saved by RichOS):"],
+      [rustSentenceAfter(mac, "Folders on this Mac ("), "Folders on this Mac ({count}, not copied; read them where they are):"],
     ];
     for (const [rust, expected] of pairs) assertEqual(rust, expected, "the Rust sentence moved; update the preview with it");
     for (const s of pairs.slice(0, 3).map((p) => p[1])) assert(mock.includes(JSON.stringify(s)), "mock.js does not carry: " + s);
     assert(mock.includes('"This file does not look like a " + label + ". Nothing was attached."'), "mock.js's disguised-file sentence");
     assert(mock.includes('"A message can carry at most 10 files."'), "mock.js's count sentence");
-    assert(mock.includes("This is a folder, not a file. Drop the files inside it instead. Nothing was attached."), "mock.js's folder sentence");
     assert(mock.includes("That drop is no longer available. Drop the file again."), "mock.js's drop sentence");
     assert(mock.includes("Attached on this Mac (${count}, saved by RichOS):"), "mock.js's heading");
+    assert(mock.includes("Folders on this Mac (${count}, not copied; read them where they are):"), "mock.js's folders heading");
     assert(tray.includes(JSON.stringify(pairs[2][1])), "attachments.js's size refusal is not the desk's");
     assert(tray.includes('"A message can carry at most 10 files."'), "attachments.js's count refusal is not the desk's");
     assert(desk.includes("pub const MAX_FILE_BYTES: usize = 25 * 1024 * 1024;") && tray.includes("MAX_FILE_BYTES = 25 * 1024 * 1024"), "the 25 MiB ceiling differs");
@@ -406,7 +406,7 @@ async function main() {
     const page = await openApp(browser);
     await page.evaluate(() => window.__RICHOS_MOCK__.dragOver(true));
     let hint = await page.evaluate(() => ({ tray: document.getElementById("attach-tray").hidden, hint: document.getElementById("attach-drop").hidden, text: document.getElementById("attach-drop").textContent }));
-    assertEqual(hint, { tray: false, hint: false, text: "Drop to attach to your message" }, "while dragging");
+    assertEqual(hint, { tray: false, hint: false, text: "Drop files or folders here to hand them to Rich" }, "while dragging");
     await page.evaluate(() => window.__RICHOS_MOCK__.dragOver(false));
     hint = await page.evaluate(() => ({ tray: document.getElementById("attach-tray").hidden, hint: document.getElementById("attach-drop").hidden }));
     assertEqual(hint, { tray: true, hint: true }, "after the drag left");
