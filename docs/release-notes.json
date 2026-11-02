@@ -229,5 +229,16 @@
     "previous_tag": "v1.2.6-nightly.20261102.86",
     "previous_source": "0dfaa184940cce96f84590848ee312487e08a155",
     "entry": "- Changed the home screen's right-hand column from your whole team to Working now: it lists only the teammates working at this moment, up to six, each with its role and is hidden when nobody is working\n- Fixed RichDoctor never being brought up to date after it was first installed; each newer RichOS now replaces it and RichDoctor's report shows the RichOS version it came with\n- Fixed RichDoctor's window not moving when you dragged it by its top strip, including while a panel was open in it\n- [technical] Added your team taking up the teammates defined in your companies' repositories that use the RichOS engine each time work starts, a company's own repository first; a teammate made only in RichOS or edited there since is left as it is"
+  },
+  "v1.2.7": {
+    "schema": 1,
+    "tag": "v1.2.7",
+    "version": "1.2.7",
+    "channel": "stable",
+    "source_commit": "b4e8981a9e10089230a565ae64f20eb8f3ef06c3",
+    "build_commit": "1378c1d3761049e69aa711c108d4a0adbd8d1b69",
+    "previous_tag": "v1.2.6",
+    "previous_source": "0dfaa184940cce96f84590848ee312487e08a155",
+    "entry": "- Changed the home screen's right-hand column from your whole team to Working now: it lists only the teammates working at that moment, up to six with their roles; when nobody is working the column is not shown\n- Fixed RichDoctor never being updated after it was first installed; each newer RichOS now replaces it and RichDoctor's reports show the RichOS version it came with\n- Fixed RichDoctor's window not moving when you dragged it by its top strip, including while a panel was open in it\n- [technical] Added your team picking up the teammates defined in your companies' repositories that use the RichOS engine each time work starts, with a company's own definitions first in its conversations; a teammate that exists only in RichOS or that you changed in RichOS since it was last brought over is left as it is"
   }
 }
