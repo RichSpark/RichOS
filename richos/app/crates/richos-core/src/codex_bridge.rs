@@ -313,9 +313,12 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            // `accept` demands a canonical locator; TMPDIR is a symlink on macOS
+            // (/var -> /private/var), so resolve the fixture root once.
             let root =
                 std::env::temp_dir().join(format!("richos-channel-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
+            let root = root.canonicalize().unwrap();
             let mut ledger = crate::ledger::Ledger::open(root.join("ledger.jsonl")).unwrap();
             let thread = ledger
                 .create_thread("Same title", &crate::EntityId::parse("company-a").unwrap())
