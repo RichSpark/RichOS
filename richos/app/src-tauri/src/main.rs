@@ -9805,8 +9805,15 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     };
 
     let topics = home_field::field_topics(&census, &registry);
-    let items = match home_field::collect_items(install.tools(), install.root(), &topics) {
-        Ok(v) => v,
+    // THE COMPILE IS KEPT (`home_field::KeptCompile`): the first launch of a big corpus compiles for
+    // minutes, while the home screen has long since drawn the example and waits for this answer to
+    // draw his records in; every later launch with the same corpus answers from the kept items in the
+    // time the census takes.
+    let kept_path = state.data_dir.join("home-field-cache.json");
+    let items = match home_field::items_kept_or_compiled(&kept_path, &census, &topics, || {
+        home_field::collect_items(install.tools(), install.root(), &topics)
+    }) {
+        Ok((v, _from)) => v,
         Err(e) => {
             eprintln!("[richos] home field: no topic compiled ({e}) — the home screen keeps the demonstration");
             return no(format!("the corpus could not be compiled: {e}"));
