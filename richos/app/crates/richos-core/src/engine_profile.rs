@@ -330,6 +330,35 @@ pub fn user_teammates(data: &Path) -> Result<Vec<Teammate>, RuntimeError> {
         .collect())
 }
 
+/// A heading's name and role: split at the first " — ", ": " or " - ", whichever comes first
+/// (Dean's template writes " — "; five hired definitions use ":" or " - ").
+fn split_heading(heading: &str) -> Option<(&str, &str)> {
+    [" — ", ": ", " - "].iter()
+        .filter_map(|sep| heading.find(sep).map(|at| (at, sep.len())))
+        .min_by_key(|(at, _)| *at)
+        .map(|(at, len)| (&heading[..at], &heading[at + len..]))
+}
+
+/// **The teammates working at this moment**, for the home screen's "Working now": each kind
+/// in `kinds` ([`crate::app_workers::active_kinds`]) read as a definition name in the user's
+/// team folder, named by its heading; a kind that is no teammate of his (a stock helper) is
+/// listed under its own name with no role, so the list and the count agree. One entry per
+/// running helper, in the order given.
+pub fn working_teammates(data: &Path, kinds: &[String]) -> Result<Vec<Teammate>, RuntimeError> {
+    let definitions = user_definitions(data)?;
+    Ok(kinds.iter().map(|kind| {
+        // Normal dispatch names a teammate `richos-app-engine:<name>`: the plugin prefix is not part of it.
+        let kind = kind.rsplit(':').next().unwrap_or(kind);
+        match definitions.iter().find(|(name, _)| name.eq_ignore_ascii_case(kind)) {
+            Some((name, body)) => teammate_from(name, body),
+            None => {
+                let mut chars = kind.chars();
+                Teammate { name: chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default(), role: None }
+            }
+        }
+    }).collect())
+}
+
 fn teammate_from(file_name: &str, body: &str) -> Teammate {
     // After the frontmatter, whose YAML may carry a `# comment` of its own.
     let mut lines = body.lines().peekable();
@@ -343,7 +372,7 @@ fn teammate_from(file_name: &str, body: &str) -> Teammate {
         chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
     };
     let Some(heading) = heading else { return Teammate { name: fallback(), role: None } };
-    let Some((name, role)) = heading.split_once(" — ") else { return Teammate { name: heading.to_string(), role: None } };
+    let Some((name, role)) = split_heading(heading) else { return Teammate { name: heading.to_string(), role: None } };
     let role = role.trim();
     let role = match role.find(" (") {
         Some(at) if role.ends_with(')') => role[..at].trim(),

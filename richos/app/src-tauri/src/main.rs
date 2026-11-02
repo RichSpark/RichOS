@@ -3982,6 +3982,7 @@ fn main() {
             // --- the user's own team on the home screen (product hunt 2026-10-15, finding 7)
             // — appended ---
             home_team,
+            home_working,
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,
@@ -9827,6 +9828,19 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
 #[richos_command::command]
 fn home_team(state: State<'_, AppState>) -> Result<Vec<richos_core::engine_profile::Teammate>, String> {
     richos_core::engine_profile::user_teammates(&state.data_dir).map_err(|e| e.0)
+}
+
+/// **Who is working at this moment, for the home screen's "Working now"** (CEO 2026-11-02:
+/// only the teammates working now are listed; none working, no column). The same helpers the
+/// Token spend screen and the accounts card count (`set_agents_working`), in the same lease
+/// sessions, named from the team folder, so the three always agree.
+#[richos_command::command]
+fn home_working(state: State<'_, AppState>) -> Result<Vec<richos_core::engine_profile::Teammate>, String> {
+    let mut sessions: Vec<String> = state.control.lease_sessions().into_iter().chain(state.work.lease_sessions()).collect();
+    sessions.sort(); sessions.dedup();
+    let engine_state = state.data_dir.join("engine-state");
+    let kinds: Vec<String> = sessions.iter().flat_map(|s| richos_core::app_workers::active_kinds(&engine_state, s)).collect();
+    richos_core::engine_profile::working_teammates(&state.data_dir, &kinds).map_err(|e| e.0)
 }
 
 

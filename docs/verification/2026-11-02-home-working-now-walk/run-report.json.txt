@@ -1,0 +1,17 @@
+{
+  "vm": "walk-3a29a10b6ca5",
+  "load": 3.384765625,
+  "reservation": "/Users/alex/.richos-testvm/guest.lock",
+  "resources": {
+    "TESTVM_CPU": "4",
+    "TESTVM_RAM_MB": "5120",
+    "TESTVM_DISPLAY": "1680x1050"
+  },
+  "boot_seconds": 42.15749237500131,
+  "scenario_seconds": 268.8734333750326,
+  "execution": "completed",
+  "scenario_exit": 0,
+  "cleanup_complete": true,
+  "cleanup_seconds": 2.2493247910169885,
+  "elapsed_seconds": 313.28029070899356
+}
