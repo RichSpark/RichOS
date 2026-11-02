@@ -98,6 +98,8 @@ window.RichBug = (function () {
       notChanged: "I couldn't change the report just now. Press Change it and change the words yourself or tell me again.",
       notCanceled: "I couldn't cancel the report: it's still saved on this Mac and will go out by itself. Press Cancel report to try again.",
       notTakenBack: "I couldn't take the report back to change it: it's still saved on this Mac and will go out by itself. Press Change it to try again.",
+      notChangedQueued: "I couldn't change the report just now, so it's still saved on this Mac as you sent it and will go out by itself. Press Change it and change the words yourself or tell me again.",
+      editNotKept: "I couldn't save your changes on this Mac, so the report still waits to go out as you sent it. Press Done to try again.",
       readers: "GitHub issues", thing: "report", notInIt: "it isn't in the report.",
       pill: { draft: "Not sent yet", changed: "Not sent yet · changed", sending: "Sending…", queued: "Waiting to send · saved on this Mac", canceled: "Canceled · nothing sent" },
       notSaved: "I couldn't save the report on this Mac, so nothing was sent. Press Send report to try again.",
@@ -124,6 +126,8 @@ window.RichBug = (function () {
       notChanged: "I couldn't change the post just now. Press Change it and change the words yourself or tell me again.",
       notCanceled: "I couldn't cancel the post: it's still saved on this Mac and will be posted by itself. Press Cancel post to try again.",
       notTakenBack: "I couldn't take the post back to change it: it's still saved on this Mac and will be posted by itself. Press Change it to try again.",
+      notChangedQueued: "I couldn't change the post just now, so it's still saved on this Mac as you sent it and will be posted by itself. Press Change it and change the words yourself or tell me again.",
+      editNotKept: "I couldn't save your changes on this Mac, so your idea still waits to be posted as you sent it. Press Done to try again.",
       readers: "GitHub Discussions", thing: "post", notInIt: "it isn't in the post.",
       pill: { draft: "Not posted yet", changed: "Not posted yet · changed", sending: "Posting…", queued: "Waiting to post · saved on this Mac", canceled: "Canceled · nothing posted" },
       notSaved: "I couldn't save your idea on this Mac, so nothing was posted. Press Post idea to try again.",
@@ -572,10 +576,13 @@ window.RichBug = (function () {
       return;
     }
     if (f.step === "editing") finishEdit(f);
+    // Words he changed by hand are being saved in place of the waiting copy: this change follows.
+    if (f.step === "withdrawing") { (f.nextChanges = f.nextChanges || []).push(text); return; }
     if (f.step === "queued" && f.pendingId) {
       // A changed report is approved again, so the copy waiting on this Mac must not go out
-      // first: it is taken off, CONFIRMED, before Rich changes a word.
-      return withdraw(f, "change", function () { askChange(f, text, true); });
+      // first: it is held, CONFIRMED, before Rich changes a word, and taken off only once his
+      // changed card is saved (CEO §156); if he can't change it, it waits as it was.
+      return holdBack(f, function () { askChange(f, text, true); });
     }
     askChange(f, text, false);
   }
@@ -740,15 +747,27 @@ window.RichBug = (function () {
       });
       f.edited = true;
       f.handEdited = false;
-      f.step = "draft";
-      paintCard(f);
-      paintComposers();
-      richSays(f, ["Added that to " + sec.querySelector("h4").textContent + ", above." + (wasQueued ? W(f).changedQueued : W(f).changedDraft)]);
-      flash(f);
-      next();
+      function changed() {
+        f.step = "draft";
+        paintCard(f);
+        paintComposers();
+        richSays(f, ["Added that to " + sec.querySelector("h4").textContent + ", above." + (wasQueued ? W(f).changedQueued : W(f).changedDraft)]);
+        flash(f);
+        next();
+      }
+      // His changed card is saved on this Mac (`bug_report_change`): only now does the waiting
+      // copy it replaces go (CEO §156).
+      if (f.held) return letGo(f, changed);
+      changed();
     }).catch(function () {
       w2.remove();
       if (f.step !== "changing") return;
+      // Nothing changed: a waiting report goes back to waiting, exactly as it was.
+      if (f.held) {
+        putBack(f);
+        richSays(f, [W(f).notChangedQueued]);
+        return;
+      }
       f.step = "draft";
       paintCard(f);
       paintComposers();
@@ -781,6 +800,50 @@ window.RichBug = (function () {
       paintComposers();
       richSays(f, [purpose === "cancel" ? W(f).notCanceled : W(f).notTakenBack]);
     });
+  }
+
+  /// **CHANGE IT ON A WAITING REPORT KEEPS ITS COPY** (CEO §156; review
+  /// rv-20261102T003409Z-35b12ee9-35e9: the copy was taken off at Change it, so Done with nothing
+  /// changed left no report on this Mac). The shell holds the copy, unsent, while it is changed,
+  /// and answers only after any send in flight: "held" (then `then`), the issue when it had
+  /// already gone out, "canceled" when no copy is left, an error when it could not be read.
+  function holdBack(f, then) {
+    var id = f.pendingId;
+    f.step = "withdrawing";
+    f.withdrawFor = "change";
+    paintCard(f);
+    paintComposers();
+    // A put-back just before is answered first, so it can never release this hold.
+    (f.releasing || Promise.resolve()).then(function () {
+      return bridge.invoke("bug_report_hold", { id: id, hold: true, post: postOf(f) });
+    }).then(function (r) {
+      if (f.step !== "withdrawing") return;
+      if (r && r.state === "sent") return wentOutFirst(f, r);
+      if (r && r.state === "held") f.held = true;
+      else f.pendingId = null;
+      then();
+    }).catch(function () {
+      if (f.step !== "withdrawing") return;
+      f.step = "queued";
+      paintCard(f);
+      paintComposers();
+      richSays(f, [W(f).notTakenBack]);
+    });
+  }
+
+  /// Nothing changed: the card is back as it was, waiting to go out by itself.
+  function putBack(f) {
+    f.held = false;
+    f.step = "queued";
+    paintCard(f);
+    paintComposers();
+    f.releasing = bridge.invoke("bug_report_hold", { id: f.pendingId, hold: false, post: postOf(f) }).catch(function () {});
+  }
+
+  /// The words that replace a held copy are saved: now the copy goes, confirmed (`withdraw`).
+  function letGo(f, then) {
+    f.held = false;
+    withdraw(f, "change", then);
   }
 
   /// A waiting report went out before it could be taken back: the card says Sent, and Rich says
@@ -1245,9 +1308,10 @@ window.RichBug = (function () {
 
   function edit(f) {
     if (f.step !== "draft" && f.step !== "queued") return;
-    // Changing a waiting report takes it out of the queue, confirmed, first: a changed report is
-    // approved again, and one that went out meanwhile is not opened as if it had not.
-    if (f.step === "queued" && f.pendingId) return withdraw(f, "change", function () { openEditor(f); });
+    // Changing a waiting report holds its copy, confirmed, first: a changed report is approved
+    // again, and one that went out meanwhile is not opened as if it had not. The copy stays on
+    // this Mac until changed words replace it (`finishEdit`).
+    if (f.step === "queued" && f.pendingId) return holdBack(f, function () { openEditor(f); });
     openEditor(f);
   }
   function openEditor(f) {
@@ -1267,10 +1331,13 @@ window.RichBug = (function () {
   }
   function finishEdit(f) {
     if (f.step !== "editing") return;
+    var changedNow = JSON.stringify(sheetOf(f)) !== f.beforeEdit;
+    // A waiting report: unchanged, it is put back exactly as it was; changed, its words replace
+    // the waiting copy, saved first (CEO §156).
+    if (f.held) return changedNow ? replaceHeld(f) : putBack(f);
     f.edited = true;
     // Only says what Send will be doing first ("Rich is checking your changes…"): whether the
     // words may go is the shell's to decide, against Rich's own check, never this flag's.
-    var changedNow = JSON.stringify(sheetOf(f)) !== f.beforeEdit;
     if (changedNow) f.handEdited = true;
     f.step = "draft";
     paintCard(f);
@@ -1284,6 +1351,34 @@ window.RichBug = (function () {
         .then(function () { f.keeping = false; paintDock(); });
     }
     paintComposers();
+  }
+
+  /// **A WAITING REPORT CHANGED BY HAND** (CEO §156): the changed words are saved on this Mac
+  /// first, and only then is the waiting copy taken off, so no moment leaves neither. Not saved:
+  /// the copy still waits as it was sent, the words stay open, and Done tries again.
+  function replaceHeld(f) {
+    f.step = "withdrawing";
+    f.withdrawFor = "change";
+    paintCard(f);
+    paintComposers();
+    bridge.invoke("bug_report_keep_edit", { report: f.report, sheet: sheetOf(f), private: f.private || [], screen: publicScreen(f.screen), post: postOf(f) }).then(function () {
+      if (f.step !== "withdrawing") return;
+      f.edited = true;
+      f.handEdited = true;
+      letGo(f, function () {
+        f.step = "draft";
+        paintCard(f);
+        paintComposers();
+        var more = f.nextChanges && f.nextChanges.shift();
+        if (more) askChange(f, more, false);
+      });
+    }).catch(function () {
+      if (f.step !== "withdrawing") return;
+      f.step = "editing";
+      paintCard(f);
+      paintComposers();
+      richSays(f, [W(f).editNotKept]);
+    });
   }
 
   // ---- send, and what happens when it can't go ----------------------------------------------

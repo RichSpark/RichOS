@@ -2965,6 +2965,8 @@
     unchecked: [],
     checks: {},
     filed: [],
+    // Waiting reports the user is changing (the shell's `held`): kept, and left alone by the retry.
+    changing: new Set(),
   };
   // A release lets through what is held now and anything that arrives after it.
   const bugHold = (kind) => (bugMock.held[kind] === "released" ? Promise.resolve() : new Promise((r) => bugMock.held[kind].push(r)));
@@ -3127,7 +3129,9 @@
     setNet(net) {
       bugMock.net = net;
       if (net !== "online") return;
-      const due = bugMock.waiting.splice(0);
+      // A report the user is changing stays waiting, unsent (the shell's `bug_report_hold`).
+      const due = bugMock.waiting.filter((w) => !bugMock.changing.has(w.id));
+      bugMock.waiting = bugMock.waiting.filter((w) => bugMock.changing.has(w.id));
       due.forEach((w) => setTimeout(() => {
         const d = bugDeliver(w.sheet, w.id, w.post);
         if (d.state === "sent") bugMock.sent.push(d);
@@ -4698,11 +4702,27 @@
           bugMock.calls.push({ cmd, id: args.id });
           if (preset.bugCancel === "hold") await bugHold("cancel");
           if (preset.bugCancel === "fail") throw "The waiting copy could not be removed from this Mac.";
+          bugMock.changing.delete(args.id);
           const went = bugMock.sent.find((d) => d.id === args.id);
           if (went) return went;
           const at = bugMock.waiting.findIndex((w) => w.id === args.id);
           if (at !== -1) bugMock.waiting.splice(at, 1);
           return { state: "canceled" };
+        }
+        case "bug_report_hold": {
+          // Change it on a waiting report (the shell's answer): its copy stays, held from the
+          // retry, `{state: "held"}`; or the issue when it had already gone out, `{state:
+          // "canceled"}` when none is here. `hold: false` puts it back, waiting. It waits behind a
+          // send in flight as Cancel does, so `preset.bugCancel` holds or fails it the same way.
+          bugMock.calls.push({ cmd, id: args.id, hold: !!args.hold });
+          if (!args.hold) { bugMock.changing.delete(args.id); return { state: "waiting" }; }
+          if (preset.bugCancel === "hold") await bugHold("cancel");
+          if (preset.bugCancel === "fail") throw "The waiting copy could not be read on this Mac.";
+          const went = bugMock.sent.find((d) => d.id === args.id);
+          if (went) return went;
+          if (!bugMock.waiting.some((w) => w.id === args.id)) return { state: "canceled" };
+          bugMock.changing.add(args.id);
+          return { state: "held" };
         }
         case "bug_report_look":
           // The shell takes a picture of the window for the user's own Claude; here there is none.

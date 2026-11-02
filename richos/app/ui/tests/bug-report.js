@@ -370,11 +370,72 @@ async function main() {
     assert(line.startsWith("GitHub isn't answering right now, so the report didn't go out."), line);
     await page.click("#bug-change");
     await page.waitForSelector(".bugcard.is-editing");
-    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 0, "the old copy still waits to go out");
+    // While it is changed its copy stays on this Mac, and the retry leaves it alone (CEO §156).
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setNet("online"));
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 600)));
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "the copy was taken off while it was being changed");
+    assertEqual((await filed(page)).length, 0, "the old words went out while they were being changed");
+    await page.keyboard.type(" twice");
     await page.click("#bug-done");
     await page.waitForSelector(".bugcard .bug-pill:has-text('Not sent yet · changed')");
+    // The changed words are saved before the old copy goes: never a moment with neither.
+    const order = await page.evaluate(() => window.__RICHOS_MOCK_BUG__.calls.map((c) => c.cmd).filter((c) => c === "bug_report_keep_edit" || c === "bug_report_cancel"));
+    assertEqual(order, ["bug_report_keep_edit", "bug_report_cancel"], "the waiting copy went before its replacement was saved");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 0, "the old copy still waits to go out");
+    const edit = await page.evaluate(() => (window.__RICHOS_MOCK_BUG__.unchecked()[0] || {}).edited);
+    assert(JSON.stringify(edit || {}).includes("twice"), "the changed words are not saved on this Mac: " + JSON.stringify(edit));
     await page.close();
     return line.split(".")[0];
+  });
+
+  await run.check("Change it on a waiting report, then Done with nothing changed: it is back as it was, never off this Mac, and goes out by itself once", async () => {
+    // Review rv-20261102T003409Z-35b12ee9-35e9 (CEO §156), red on 35b12ee99: Change it took the
+    // waiting copy off this Mac and Done with nothing changed saved nothing, so closing the panel
+    // and relaunching lost the whole report.
+    const page = await open("dark", { bugNet: "offline" });
+    await bustABug(page);
+    await answer(page, ANSWER);
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-queued");
+    await page.click("#bug-change");
+    await page.waitForSelector(".bugcard.is-editing");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "Change it took the waiting copy off this Mac");
+    await page.click("#bug-done");
+    await page.waitForSelector(".bugcard.is-queued .bug-pill:has-text('Waiting to send · saved on this Mac')");
+    for (const id of ["#bug-try-now", "#bug-change", "#bug-cancel"]) assert(await page.isVisible(id), id + " is not offered again");
+    assertEqual((await calls(page, "bug_report_cancel")).length, 0, "the waiting copy was taken off");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "nothing waits on this Mac after Done");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.unchecked())).length, 0, "a second copy of it was kept");
+    // The panel may close over it: what is on this Mac is the report, waiting to go out.
+    await page.waitForSelector("#bugdock-x:visible");
+    // Back online: it goes out by itself, once.
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setNet("online"));
+    await page.waitForSelector(".bugcard.is-sent .bug-pill:has-text('Sent · #412')");
+    assertEqual((await filed(page)).length, 1, "it did not go out exactly once");
+    assertEqual((await calls(page, "bug_report_send")).length, 1, "the user had to send it again");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 0, "still waiting after it went out");
+    await page.close();
+    return "put back waiting; went out by itself once";
+  });
+
+  await run.check("a change told to Rich on a waiting report he can't make leaves it waiting as it was", async () => {
+    // The same loss by voice: the copy was taken off before Rich changed a word, so a change he
+    // could not make (offline, Claude not answering) left nothing on this Mac.
+    const page = await open("dark", { bugNet: "offline" });
+    await bustABug(page);
+    await answer(page, ANSWER);
+    await page.click("#bug-send");
+    await page.waitForSelector(".bugcard.is-queued");
+    await page.evaluate(() => window.__RICHOS_MOCK_BUG__.setClaude("down"));
+    await page.fill("#bugdock-input", "Also say it happens in the light theme too");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#bugdock-msgs .bug-rich:has-text(\"I couldn't change the report just now, so it's still saved on this Mac as you sent it\")");
+    await page.waitForSelector(".bugcard.is-queued .bug-pill:has-text('Waiting to send · saved on this Mac')");
+    assertEqual((await calls(page, "bug_report_cancel")).length, 0, "the waiting copy was taken off");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK_BUG__.waiting())).length, 1, "nothing waits on this Mac");
+    const said = await lastSaid(page);
+    await page.close();
+    return said.split(",")[0];
   });
 
   await run.check("Change it: in place with a privacy heads-up, by telling Rich, and Cancel", async () => {
