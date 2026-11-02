@@ -1,0 +1,1061 @@
+[
+  {
+    "i": 0,
+    "step": {
+      "op": "guest",
+      "command": "mkdir -p /Users/admin/fill-first"
+    },
+    "at": "11:41:49Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 1,
+    "step": {
+      "op": "push",
+      "src": "richos/app/scripts/testvm/fake-claude-fill-first.pl",
+      "dest": "/Users/admin/fill-first/claude"
+    },
+    "at": "11:41:49Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 2,
+    "step": {
+      "op": "push",
+      "src": "richos/app/scripts/testvm/seed-team.sh",
+      "dest": "/Users/admin/fill-first/seed-team.sh"
+    },
+    "at": "11:41:49Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 3,
+    "step": {
+      "op": "guest",
+      "command": "chmod 755 /Users/admin/fill-first/claude /Users/admin/fill-first/seed-team.sh; printf '{\"five\":10,\"weekly\":20}' > /Users/admin/fill-first/usage-1.json; printf 'Noted.' > /Users/admin/fill-first/reply.txt; rm -f /Users/admin/fill-first/agents /Users/admin/fill-first/slow; echo ready"
+    },
+    "at": "11:41:49Z",
+    "exit": 0,
+    "output": "ready"
+  },
+  {
+    "i": 4,
+    "step": {
+      "op": "relaunch",
+      "env": [
+        "RICHOS_CLAUDE_BIN=/Users/admin/fill-first/claude"
+      ]
+    },
+    "at": "11:41:49Z",
+    "exit": 0,
+    "output": "{\"pid\": 1321, \"log\": \"/Users/admin/testvm/walk-3a29a10b6ca5/relaunch-1793619710113405000.log\", \"app\": \"/Users/admin/testvm/walk-3a29a10b6ca5/RichOS.app\"}"
+  },
+  {
+    "i": 5,
+    "step": {
+      "op": "wait",
+      "seconds": 30
+    },
+    "at": "11:41:50Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 6,
+    "step": {
+      "op": "shot",
+      "name": "0-first-screen"
+    },
+    "at": "11:42:20Z",
+    "exit": 0,
+    "output": "[testvm] 11:42:21Z captured 1680x1050, 71.1% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/0-first-screen.png"
+  },
+  {
+    "i": 7,
+    "step": {
+      "op": "tree",
+      "name": "0-first-screen"
+    },
+    "at": "11:42:21Z",
+    "exit": 0,
+    "output": "91 lines"
+  },
+  {
+    "i": 8,
+    "step": {
+      "op": "ax",
+      "args": [
+        "--key",
+        "36"
+      ]
+    },
+    "at": "11:42:22Z",
+    "exit": 0,
+    "output": "{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1173}\n{\"ax_timing\": true, \"total_seconds\": 0.9842, \"preflight_seconds\": 0.6355, \"transport_seconds\": 0.3491}"
+  },
+  {
+    "i": 9,
+    "step": {
+      "op": "wait",
+      "seconds": 8
+    },
+    "at": "11:42:23Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 10,
+    "step": {
+      "op": "shot",
+      "name": "0b-after-enter"
+    },
+    "at": "11:42:31Z",
+    "exit": 0,
+    "output": "[testvm] 11:42:32Z captured 1680x1050, 91.7% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/0b-after-enter.png"
+  },
+  {
+    "i": 11,
+    "step": {
+      "op": "tree",
+      "name": "0b-after-enter"
+    },
+    "at": "11:42:32Z",
+    "exit": 0,
+    "output": "24 lines"
+  },
+  {
+    "i": 12,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Not now",
+        "--role",
+        "AXButton",
+        "--contains",
+        "--first"
+      ],
+      "allow_fail": true
+    },
+    "at": "11:42:33Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1321 windows=1 nodes=17 mode=click matches=1\npressed AXButton title='Not now' desc='' pos=742 329 size=90 35 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0713}\n{\"ax_timing\": true, \"total_seconds\": 0.7269, \"preflight_seconds\": 0.485, \"transport_seconds\": 0.2154, \"render_seconds\": 0.0267, \"guest_seconds\": 0.0713, \"transport_overhead_seconds\": 0.1441}"
+  },
+  {
+    "i": 13,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Close",
+        "--role",
+        "AXButton",
+        "--first"
+      ],
+      "allow_fail": true
+    },
+    "at": "11:42:34Z",
+    "exit": 1,
+    "output": "[testvm] ax: blocked: target=richos-tauri modal=Which company is this copy of Rich for?; nothing matched\n# app=richos-tauri pid=1321 windows=1 nodes=87 mode=click matches=0\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0837}\n[testvm] ax: blocked \u2014 target=richos-tauri modal=Which company is this copy of Rich for?; nothing matched\n{\"ax_timing\": true, \"total_seconds\": 0.7311, \"preflight_seconds\": 0.4756, \"transport_seconds\": 0.2305, \"render_seconds\": 0.0253, \"guest_seconds\": 0.0837, \"transport_overhead_seconds\": 0.1468}"
+  },
+  {
+    "i": 14,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--title",
+        "Add this company",
+        "--role",
+        "AXButton",
+        "--contains",
+        "--first"
+      ],
+      "contains": "Add this company",
+      "seconds": 60
+    },
+    "at": "11:42:35Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1321 windows=1 nodes=68 mode=find matches=1\n            AXButton title='Add this company' desc='' value='' enabled=yes pos=647 624 size=161 35\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0803}\n{\"ax_timing\": true, \"total_seconds\": 0.7213, \"preflight_seconds\": 0.475, \"transport_seconds\": 0.2206, \"render_seconds\": 0.026, \"guest_seconds\": 0.0803, \"transport_overhead_seconds\": 0"
+  },
+  {
+    "i": 15,
+    "step": {
+      "op": "guest",
+      "command": "mkdir -p /Users/admin/Acme"
+    },
+    "at": "11:42:35Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 16,
+    "step": {
+      "op": "ax",
+      "args": [
+        "type",
+        "Acme",
+        "--role",
+        "AXTextField",
+        "--title",
+        "What's the company called?",
+        "--contains",
+        "--first",
+        "--replace"
+      ]
+    },
+    "at": "11:42:36Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1321 windows=1 nodes=63 mode=type matches=1\ntype verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.3777}\n{\"ax_timing\": true, \"total_seconds\": 1.1685, \"preflight_seconds\": 0.6227, \"transport_seconds\": 0.5208, \"render_seconds\": 0.0253, \"guest_seconds\": 0.3777, \"transport_overhead_seconds\": 0.1431}"
+  },
+  {
+    "i": 17,
+    "step": {
+      "op": "ax",
+      "args": [
+        "type",
+        "/Users/admin/Acme",
+        "--role",
+        "AXTextField",
+        "--title",
+        "Its folder on this Mac",
+        "--contains",
+        "--first",
+        "--replace"
+      ]
+    },
+    "at": "11:42:37Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1321 windows=1 nodes=65 mode=type matches=1\ntype verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.2961}\n{\"ax_timing\": true, \"total_seconds\": 0.9629, \"preflight_seconds\": 0.5053, \"transport_seconds\": 0.432, \"render_seconds\": 0.0258, \"guest_seconds\": 0.2961, \"transport_overhead_seconds\": 0.1359}"
+  },
+  {
+    "i": 18,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Add this company",
+        "--role",
+        "AXButton",
+        "--contains",
+        "--first"
+      ]
+    },
+    "at": "11:42:38Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1321 windows=1 nodes=68 mode=click matches=1\npressed AXButton title='Add this company' desc='' pos=647 624 size=161 35 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0715}\n{\"ax_timing\": true, \"total_seconds\": 0.7647, \"preflight_seconds\": 0.527, \"transport_seconds\": 0.2123, \"render_seconds\": 0.0257, \"guest_seconds\": 0.0715, \"transport_overhead_seconds\": 0.1408}"
+  },
+  {
+    "i": 19,
+    "step": {
+      "op": "wait",
+      "seconds": 8
+    },
+    "at": "11:42:39Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 20,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--id",
+        "first-run-later",
+        "--first"
+      ],
+      "allow_fail": true
+    },
+    "at": "11:42:47Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1321 windows=1 nodes=72 mode=click matches=1\npressed AXButton title='Not now' desc='' pos=812 352 size=90 34 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0625}\n{\"ax_timing\": true, \"total_seconds\": 0.6515, \"preflight_seconds\": 0.428, \"transport_seconds\": 0.2005, \"render_seconds\": 0.0233, \"guest_seconds\": 0.0625, \"transport_overhead_seconds\": 0.138}"
+  },
+  {
+    "i": 21,
+    "step": {
+      "op": "wait",
+      "seconds": 6
+    },
+    "at": "11:42:47Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 22,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--role",
+        "AXTextArea",
+        "--title",
+        "Message to Rich",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 90
+    },
+    "at": "11:42:53Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=1321 windows=1 nodes=51 mode=find matches=1\n            AXTextArea title='Message to Rich' desc='Message to Rich' value='' enabled=yes pos=485 823 size=1010 49\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.061}\n{\"ax_timing\": true, \"total_seconds\": 0.6409, \"preflight_seconds\": 0.4263, \"transport_seconds\": 0.1912, \"render_seconds\": 0.0238, \"guest_seconds\": 0.061, \"transport_ove"
+  },
+  {
+    "i": 23,
+    "step": {
+      "op": "guest",
+      "command": "D=\"$(dirname \"$(find /Users/admin/testvm -type d -name engine-state 2>/dev/null | head -1)\")\"; echo \"app data: $D\"; sh /Users/admin/fill-first/seed-team.sh \"$D\" 35; ls \"$D/team\" | wc -l; head -4 \"$D/team/sage.md\" | tail -1; grep -h '^# ' \"$D/team/finn.md\" \"$D/team/gavin.md\" \"$D/team/grant.md\" \"$D/team/lance.md\" \"$D/team/sage.md\""
+    },
+    "at": "11:42:54Z",
+    "exit": 0,
+    "output": "app data: /Users/admin/testvm/walk-3a29a10b6ca5/home/Library/Application Support/com.richos.app\n      35\n      35\n---\n# Finn \u2014 Finance Lead\n# Gavin: Growth Marketer\n# Grant - Grants Writer\n# Lance \u2014 Legal Reviewer\n# Sage: Software Architect"
+  },
+  {
+    "i": 24,
+    "step": {
+      "op": "relaunch",
+      "env": [
+        "RICHOS_CLAUDE_BIN=/Users/admin/fill-first/claude"
+      ]
+    },
+    "at": "11:42:54Z",
+    "exit": 0,
+    "output": "{\"pid\": 2043, \"log\": \"/Users/admin/testvm/walk-3a29a10b6ca5/relaunch-1793619775127057000.log\", \"app\": \"/Users/admin/testvm/walk-3a29a10b6ca5/RichOS.app\"}"
+  },
+  {
+    "i": 25,
+    "step": {
+      "op": "wait",
+      "seconds": 40
+    },
+    "at": "11:42:55Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 26,
+    "step": {
+      "op": "shot",
+      "name": "1-team-of-35-nobody-working"
+    },
+    "at": "11:43:35Z",
+    "exit": 0,
+    "output": "[testvm] 11:43:36Z captured 1680x1050, 53.2% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/1-team-of-35-nobody-working.png"
+  },
+  {
+    "i": 27,
+    "step": {
+      "op": "tree",
+      "name": "1-team-of-35-nobody-working"
+    },
+    "at": "11:43:36Z",
+    "exit": 0,
+    "output": "33 lines"
+  },
+  {
+    "i": 28,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Settings",
+        "--role",
+        "AXPopUpButton",
+        "--first"
+      ]
+    },
+    "at": "11:43:37Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=24 mode=click matches=1\npressed AXPopUpButton title='Settings' desc='Settings' pos=1482 123 size=40 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0956}\n{\"ax_timing\": true, \"total_seconds\": 0.916, \"preflight_seconds\": 0.5811, \"transport_seconds\": 0.2953, \"render_seconds\": 0.0399, \"guest_seconds\": 0.0956, \"transport_overhead_seconds\": 0.1997}"
+  },
+  {
+    "i": 29,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "11:43:38Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 30,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Token spend",
+        "--contains",
+        "--first"
+      ]
+    },
+    "at": "11:43:40Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=70 mode=click matches=1\npressed AXMenuItem title='Token spend $0.00 this month' desc='' pos=1160 336 size=332 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1853}\n{\"ax_timing\": true, \"total_seconds\": 1.2465, \"preflight_seconds\": 0.5909, \"transport_seconds\": 0.6013, \"render_seconds\": 0.0547, \"guest_seconds\": 0.1853, \"transport_overhead_seconds\": 0.416}"
+  },
+  {
+    "i": 31,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "No agents working right now",
+        "--contains",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 40
+    },
+    "at": "11:43:41Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=52 mode=find matches=1\n            AXStaticText title='' desc='' value='No agents working right now' enabled=yes pos=310 778 size=216 21\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0718}\n{\"ax_timing\": true, \"total_seconds\": 0.8159, \"preflight_seconds\": 0.5696, \"transport_seconds\": 0.2199, \"render_seconds\": 0.0268, \"guest_seconds\": 0.0718, \"transport_ove"
+  },
+  {
+    "i": 32,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "11:43:42Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 33,
+    "step": {
+      "op": "shot",
+      "name": "1b-token-spend-none"
+    },
+    "at": "11:43:44Z",
+    "exit": 0,
+    "output": "[testvm] 11:43:45Z captured 1680x1050, 55.5% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/1b-token-spend-none.png"
+  },
+  {
+    "i": 34,
+    "step": {
+      "op": "ax",
+      "args": [
+        "--key",
+        "53"
+      ]
+    },
+    "at": "11:43:45Z",
+    "exit": 0,
+    "output": "{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1011}\n{\"ax_timing\": true, \"total_seconds\": 0.8123, \"preflight_seconds\": 0.5428, \"transport_seconds\": 0.27}"
+  },
+  {
+    "i": 35,
+    "step": {
+      "op": "wait",
+      "seconds": 3
+    },
+    "at": "11:43:46Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 36,
+    "step": {
+      "op": "shot",
+      "name": "1c-after-spend-esc"
+    },
+    "at": "11:43:49Z",
+    "exit": 0,
+    "output": "[testvm] 11:43:50Z captured 1680x1050, 52.9% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/1c-after-spend-esc.png"
+  },
+  {
+    "i": 37,
+    "step": {
+      "op": "ax",
+      "args": [
+        "--key",
+        "36"
+      ]
+    },
+    "at": "11:43:50Z",
+    "exit": 0,
+    "output": "{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1302}\n{\"ax_timing\": true, \"total_seconds\": 1.0597, \"preflight_seconds\": 0.5348, \"transport_seconds\": 0.5253}"
+  },
+  {
+    "i": 38,
+    "step": {
+      "op": "wait",
+      "seconds": 4
+    },
+    "at": "11:43:52Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 39,
+    "step": {
+      "op": "guest",
+      "command": "printf 'sage\\nwill\\n' > /Users/admin/fill-first/agents; touch /Users/admin/fill-first/slow; echo 'two agents will start on the next turn; the turn is held open'"
+    },
+    "at": "11:43:56Z",
+    "exit": 0,
+    "output": "two agents will start on the next turn; the turn is held open"
+  },
+  {
+    "i": 40,
+    "step": {
+      "op": "wait",
+      "seconds": 4
+    },
+    "at": "11:43:56Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 41,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--role",
+        "AXTextArea",
+        "--title",
+        "Message to Rich",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 90
+    },
+    "at": "11:44:00Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=53 mode=find matches=1\n            AXTextArea title='Message to Rich' desc='Message to Rich' value='' enabled=yes pos=485 823 size=1010 49\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0906}\n{\"ax_timing\": true, \"total_seconds\": 0.742, \"preflight_seconds\": 0.4791, \"transport_seconds\": 0.2399, \"render_seconds\": 0.0239, \"guest_seconds\": 0.0906, \"transport_ov"
+  },
+  {
+    "i": 42,
+    "step": {
+      "op": "ax",
+      "args": [
+        "type",
+        "Please get started.",
+        "--role",
+        "AXTextArea",
+        "--title",
+        "Message to Rich",
+        "--first",
+        "--replace"
+      ]
+    },
+    "at": "11:44:01Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=53 mode=type matches=1\ntype verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.7014}\n{\"ax_timing\": true, \"total_seconds\": 1.4142, \"preflight_seconds\": 0.5052, \"transport_seconds\": 0.8815, \"render_seconds\": 0.0278, \"guest_seconds\": 0.7014, \"transport_overhead_seconds\": 0.1801}"
+  },
+  {
+    "i": 43,
+    "step": {
+      "op": "ax",
+      "args": [
+        "focus",
+        "--role",
+        "AXTextArea",
+        "--title",
+        "Message to Rich",
+        "--first"
+      ]
+    },
+    "at": "11:44:02Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=53 mode=focus matches=1\nfocus verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0989}\n{\"ax_timing\": true, \"total_seconds\": 0.9042, \"preflight_seconds\": 0.6409, \"transport_seconds\": 0.2385, \"render_seconds\": 0.0252, \"guest_seconds\": 0.0989, \"transport_overhead_seconds\": 0.1396}"
+  },
+  {
+    "i": 44,
+    "step": {
+      "op": "guest",
+      "command": "osascript -e 'tell application \"System Events\" to key code 36'"
+    },
+    "at": "11:44:03Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 45,
+    "step": {
+      "op": "wait",
+      "seconds": 8
+    },
+    "at": "11:44:03Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 46,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "RichOS: go to the home screen",
+        "--first"
+      ]
+    },
+    "at": "11:44:11Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=33 mode=click matches=1\npressed AXButton title='' desc='RichOS: go to the home screen' pos=160 129 size=97 22 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0617}\n{\"ax_timing\": true, \"total_seconds\": 0.8397, \"preflight_seconds\": 0.6107, \"transport_seconds\": 0.2001, \"render_seconds\": 0.0292, \"guest_seconds\": 0.0617, \"transport_overhead_seconds\": 0.1384}"
+  },
+  {
+    "i": 47,
+    "step": {
+      "op": "wait",
+      "seconds": 14
+    },
+    "at": "11:44:12Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 48,
+    "step": {
+      "op": "shot",
+      "name": "2-two-working"
+    },
+    "at": "11:44:26Z",
+    "exit": 0,
+    "output": "[testvm] 11:44:27Z captured 1680x1050, 53.6% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/2-two-working.png"
+  },
+  {
+    "i": 49,
+    "step": {
+      "op": "tree",
+      "name": "2-two-working"
+    },
+    "at": "11:44:27Z",
+    "exit": 0,
+    "output": "45 lines"
+  },
+  {
+    "i": 50,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Settings",
+        "--role",
+        "AXPopUpButton",
+        "--first"
+      ]
+    },
+    "at": "11:44:28Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=25 mode=click matches=1\npressed AXPopUpButton title='Settings' desc='Settings' pos=1482 123 size=40 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0637}\n{\"ax_timing\": true, \"total_seconds\": 0.6876, \"preflight_seconds\": 0.4438, \"transport_seconds\": 0.2128, \"render_seconds\": 0.0313, \"guest_seconds\": 0.0637, \"transport_overhead_seconds\": 0.1491}"
+  },
+  {
+    "i": 51,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "11:44:29Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 52,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Token spend",
+        "--contains",
+        "--first"
+      ]
+    },
+    "at": "11:44:31Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=77 mode=click matches=1\npressed AXMenuItem title='Token spend $0.00 this month' desc='' pos=1160 336 size=332 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0814}\n{\"ax_timing\": true, \"total_seconds\": 0.9438, \"preflight_seconds\": 0.6457, \"transport_seconds\": 0.2614, \"render_seconds\": 0.0371, \"guest_seconds\": 0.0814, \"transport_overhead_seconds\": 0.18}"
+  },
+  {
+    "i": 53,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "2 agents working",
+        "--contains",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 40
+    },
+    "at": "11:44:32Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=2043 windows=1 nodes=55 mode=find matches=1\n            AXStaticText title='' desc='' value='2 agents working' enabled=yes pos=310 779 size=130 21\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0827}\n{\"ax_timing\": true, \"total_seconds\": 0.8523, \"preflight_seconds\": 0.5498, \"transport_seconds\": 0.266, \"render_seconds\": 0.0368, \"guest_seconds\": 0.0827, \"transport_overhead_second"
+  },
+  {
+    "i": 54,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "11:44:33Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 55,
+    "step": {
+      "op": "shot",
+      "name": "2b-token-spend-two"
+    },
+    "at": "11:44:35Z",
+    "exit": 0,
+    "output": "[testvm] 11:44:36Z captured 1680x1050, 55.4% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/2b-token-spend-two.png"
+  },
+  {
+    "i": 56,
+    "step": {
+      "op": "ax",
+      "args": [
+        "--key",
+        "53"
+      ]
+    },
+    "at": "11:44:36Z",
+    "exit": 0,
+    "output": "{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0984}\n{\"ax_timing\": true, \"total_seconds\": 0.7244, \"preflight_seconds\": 0.502, \"transport_seconds\": 0.2227}"
+  },
+  {
+    "i": 57,
+    "step": {
+      "op": "wait",
+      "seconds": 3
+    },
+    "at": "11:44:36Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 58,
+    "step": {
+      "op": "guest",
+      "command": "D=\"$(dirname \"$(find /Users/admin/testvm -type d -name engine-state 2>/dev/null | head -1)\")\"; rm -rf \"$D\"/engine-state/evidence/*; rm -f /Users/admin/fill-first/slow; printf 'finn\\ngavin\\ngrant\\nlance\\nsage\\nbeth\\nwill\\nnora\\nowen\\n' > /Users/admin/fill-first/agents; echo 'nine agents will start on the next fresh session'"
+    },
+    "at": "11:44:39Z",
+    "exit": 0,
+    "output": "nine agents will start on the next fresh session"
+  },
+  {
+    "i": 59,
+    "step": {
+      "op": "wait",
+      "seconds": 8
+    },
+    "at": "11:44:40Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 60,
+    "step": {
+      "op": "relaunch",
+      "env": [
+        "RICHOS_CLAUDE_BIN=/Users/admin/fill-first/claude"
+      ]
+    },
+    "at": "11:44:48Z",
+    "exit": 0,
+    "output": "{\"pid\": 4585, \"log\": \"/Users/admin/testvm/walk-3a29a10b6ca5/relaunch-1793619888592138000.log\", \"app\": \"/Users/admin/testvm/walk-3a29a10b6ca5/RichOS.app\"}"
+  },
+  {
+    "i": 61,
+    "step": {
+      "op": "wait",
+      "seconds": 40
+    },
+    "at": "11:44:48Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 62,
+    "step": {
+      "op": "guest",
+      "command": "touch /Users/admin/fill-first/slow; echo held"
+    },
+    "at": "11:45:28Z",
+    "exit": 0,
+    "output": "held"
+  },
+  {
+    "i": 63,
+    "step": {
+      "op": "ax",
+      "args": [
+        "--key",
+        "36"
+      ]
+    },
+    "at": "11:45:29Z",
+    "exit": 0,
+    "output": "{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0967}\n{\"ax_timing\": true, \"total_seconds\": 1.2558, \"preflight_seconds\": 0.6382, \"transport_seconds\": 0.6181}"
+  },
+  {
+    "i": 64,
+    "step": {
+      "op": "wait",
+      "seconds": 4
+    },
+    "at": "11:45:30Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 65,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--role",
+        "AXTextArea",
+        "--title",
+        "Message to Rich",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 90
+    },
+    "at": "11:45:34Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=4585 windows=1 nodes=51 mode=find matches=1\n            AXTextArea title='Message to Rich' desc='Message to Rich' value='' enabled=yes pos=485 823 size=1010 49\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1198}\n{\"ax_timing\": true, \"total_seconds\": 0.8103, \"preflight_seconds\": 0.5072, \"transport_seconds\": 0.2751, \"render_seconds\": 0.0283, \"guest_seconds\": 0.1198, \"transport_o"
+  },
+  {
+    "i": 66,
+    "step": {
+      "op": "ax",
+      "args": [
+        "type",
+        "Please get started.",
+        "--role",
+        "AXTextArea",
+        "--title",
+        "Message to Rich",
+        "--first",
+        "--replace"
+      ]
+    },
+    "at": "11:45:35Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=4585 windows=1 nodes=52 mode=type matches=1\ntype verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.4253}\n{\"ax_timing\": true, \"total_seconds\": 1.1061, \"preflight_seconds\": 0.4831, \"transport_seconds\": 0.5906, \"render_seconds\": 0.0328, \"guest_seconds\": 0.4253, \"transport_overhead_seconds\": 0.1653}"
+  },
+  {
+    "i": 67,
+    "step": {
+      "op": "ax",
+      "args": [
+        "focus",
+        "--role",
+        "AXTextArea",
+        "--title",
+        "Message to Rich",
+        "--first"
+      ]
+    },
+    "at": "11:45:36Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=4585 windows=1 nodes=52 mode=focus matches=1\nfocus verified=True\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1286}\n{\"ax_timing\": true, \"total_seconds\": 0.9068, \"preflight_seconds\": 0.5779, \"transport_seconds\": 0.3004, \"render_seconds\": 0.0289, \"guest_seconds\": 0.1286, \"transport_overhead_seconds\": 0.1718}"
+  },
+  {
+    "i": 68,
+    "step": {
+      "op": "guest",
+      "command": "osascript -e 'tell application \"System Events\" to key code 36'"
+    },
+    "at": "11:45:37Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 69,
+    "step": {
+      "op": "wait",
+      "seconds": 8
+    },
+    "at": "11:45:37Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 70,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "RichOS: go to the home screen",
+        "--first"
+      ]
+    },
+    "at": "11:45:45Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=4585 windows=1 nodes=32 mode=click matches=1\npressed AXButton title='' desc='RichOS: go to the home screen' pos=160 129 size=97 22 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0575}\n{\"ax_timing\": true, \"total_seconds\": 0.6498, \"preflight_seconds\": 0.4368, \"transport_seconds\": 0.1882, \"render_seconds\": 0.0252, \"guest_seconds\": 0.0575, \"transport_overhead_seconds\": 0.1307}"
+  },
+  {
+    "i": 71,
+    "step": {
+      "op": "wait",
+      "seconds": 14
+    },
+    "at": "11:45:46Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 72,
+    "step": {
+      "op": "shot",
+      "name": "3-nine-working-cut-off-at-six"
+    },
+    "at": "11:46:00Z",
+    "exit": 0,
+    "output": "[testvm] 11:46:01Z captured 1680x1050, 53.9% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/3-nine-working-cut-off-at-six.png"
+  },
+  {
+    "i": 73,
+    "step": {
+      "op": "tree",
+      "name": "3-nine-working-cut-off-at-six"
+    },
+    "at": "11:46:01Z",
+    "exit": 0,
+    "output": "56 lines"
+  },
+  {
+    "i": 74,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Settings",
+        "--role",
+        "AXPopUpButton",
+        "--first"
+      ]
+    },
+    "at": "11:46:01Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=4585 windows=1 nodes=25 mode=click matches=1\npressed AXPopUpButton title='Settings' desc='Settings' pos=1482 123 size=40 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.1462}\n{\"ax_timing\": true, \"total_seconds\": 0.8303, \"preflight_seconds\": 0.4534, \"transport_seconds\": 0.3383, \"render_seconds\": 0.0391, \"guest_seconds\": 0.1462, \"transport_overhead_seconds\": 0.1921}"
+  },
+  {
+    "i": 75,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "11:46:02Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 76,
+    "step": {
+      "op": "ax",
+      "args": [
+        "click",
+        "--title",
+        "Token spend",
+        "--contains",
+        "--first"
+      ]
+    },
+    "at": "11:46:04Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=4585 windows=1 nodes=80 mode=click matches=1\npressed AXMenuItem title='Token spend $0.00 this month' desc='' pos=1160 336 size=332 40 (matches=1)\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0712}\n{\"ax_timing\": true, \"total_seconds\": 0.7046, \"preflight_seconds\": 0.4703, \"transport_seconds\": 0.2084, \"render_seconds\": 0.0263, \"guest_seconds\": 0.0712, \"transport_overhead_seconds\": 0.1372}"
+  },
+  {
+    "i": 77,
+    "step": {
+      "op": "until",
+      "args": [
+        "find",
+        "--value",
+        "9 agents working",
+        "--contains",
+        "--first"
+      ],
+      "contains": "matches=1",
+      "seconds": 40
+    },
+    "at": "11:46:05Z",
+    "exit": 0,
+    "output": "# app=richos-tauri pid=4585 windows=1 nodes=55 mode=find matches=1\n            AXStaticText title='' desc='' value='9 agents working' enabled=yes pos=310 780 size=130 21\n{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0619}\n{\"ax_timing\": true, \"total_seconds\": 0.6851, \"preflight_seconds\": 0.4642, \"transport_seconds\": 0.1971, \"render_seconds\": 0.0241, \"guest_seconds\": 0.0619, \"transport_overhead_secon"
+  },
+  {
+    "i": 78,
+    "step": {
+      "op": "wait",
+      "seconds": 2
+    },
+    "at": "11:46:06Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 79,
+    "step": {
+      "op": "shot",
+      "name": "3b-token-spend-nine"
+    },
+    "at": "11:46:08Z",
+    "exit": 0,
+    "output": "[testvm] 11:46:09Z captured 1680x1050, 55.4% non-black -> /Volumes/E1TB/tmp/claude/echo-sonnet-home1/a1c35916f957ae9b2/out/3b-token-spend-nine.png"
+  },
+  {
+    "i": 80,
+    "step": {
+      "op": "ax",
+      "args": [
+        "--key",
+        "53"
+      ]
+    },
+    "at": "11:46:09Z",
+    "exit": 0,
+    "output": "{\"ax_phase\": \"guest\"}\n{\"ax_guest_seconds\": 0.0485}\n{\"ax_timing\": true, \"total_seconds\": 0.7231, \"preflight_seconds\": 0.5557, \"transport_seconds\": 0.1677}"
+  },
+  {
+    "i": 81,
+    "step": {
+      "op": "wait",
+      "seconds": 3
+    },
+    "at": "11:46:10Z",
+    "exit": 0,
+    "output": ""
+  },
+  {
+    "i": 82,
+    "step": {
+      "op": "guest",
+      "command": "rm -f /Users/admin/fill-first/slow; echo released"
+    },
+    "at": "11:46:13Z",
+    "exit": 0,
+    "output": "released"
+  },
+  {
+    "i": 83,
+    "step": {
+      "op": "wait",
+      "seconds": 5
+    },
+    "at": "11:46:13Z",
+    "exit": 0,
+    "output": ""
+  }
+]
