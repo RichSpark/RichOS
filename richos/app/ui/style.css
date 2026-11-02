@@ -1964,6 +1964,11 @@ body.bp-narrow .first-run {
   height: 20px;
 }
 
+/* DECLARED DECORATIVE: the hover tint (round 51's own, `r51.css` `.r51-add:hover`) is feedback
+   that the pointer is on the plus, not what identifies it or a state it must show. COMPUTED on the
+   box: 1.24:1 dark (on #182440) and 1.14:1 light (on #fdfcf8), measured by contrast.js when the
+   plus is hovered. The plus's indicator is its glyph: --ink-soft at rest, 5.78:1 dark and 6.38:1
+   light, and --ink here. */
 .composer-add:hover {
   background: var(--gold-soft);
   color: var(--ink);

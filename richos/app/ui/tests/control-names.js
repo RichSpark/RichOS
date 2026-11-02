@@ -88,7 +88,9 @@ const NAME_WALK = `(() => {
         tag: el.tagName.toLowerCase(),
         name: n.name,
         from: n.from,
-        title: el.getAttribute("title") || "",
+        // A tooltip is title (the system's) or data-tip (round 51's own, the input area's):
+        // a word that lives only in either is not a name.
+        title: el.getAttribute("title") || el.getAttribute("data-tip") || "",
         hidden: el.hidden,
       };
     });
@@ -168,12 +170,15 @@ async function main() {
         glyph: g ? g.textContent.trim() : null,
         glyphHidden: g ? g.getAttribute("aria-hidden") : null,
         title: b.getAttribute("title"),
+        tip: b.getAttribute("data-tip"),
       };
     });
     assertEqual(r.label, "Send", "the send control's name");
     assertEqual(r.glyphHidden, "true", `the glyph ${JSON.stringify(r.glyph)} is still in the name computation`);
-    assertEqual(r.title, "Send", "the pointer tooltip is unchanged");
-    return `aria-label "Send", glyph ${JSON.stringify(r.glyph)} aria-hidden, tooltip still "Send"`;
+    // Round 51: the pointer tooltip is the round's own (`data-tip`, shown in #composer-tip), and no
+    // system `title` sits on top of it.
+    assertEqual([r.title, r.tip], [null, "Send"], "the pointer tooltip");
+    return `aria-label "Send", glyph ${JSON.stringify(r.glyph)} aria-hidden, tooltip "Send" (round 51's)`;
   });
 
   await run.check("CONTROL: the talk control beside it was already right, and still is", async () => {
@@ -232,7 +237,8 @@ async function main() {
             glyphHidden: b.querySelector("svg").getAttribute("aria-hidden"),
             controls: b.getAttribute("aria-controls"),
             keys: b.getAttribute("aria-keyshortcuts"),
-            title: b.getAttribute("title"),
+            // `#out-bottom` is in the input area, whose tooltips are round 51's `data-tip`.
+            title: b.getAttribute("title") || b.getAttribute("data-tip") || "",
           };
         })
       );
