@@ -84,3 +84,45 @@ fn a_changed_definition_in_a_governed_repository_reaches_the_app_team() {
     assert_eq!(team("kai"), app_form("kai", "edited in the app"));
     assert_eq!(team("ray"), app_form("ray", "GO at once"));
 }
+
+/// Review rv-20261102T050131Z-8c5e6fce-f873: Ray is defined in two governed repositories (normal
+/// on his install); a lease for company B takes B's own definition, whatever the company order.
+#[test]
+fn a_lease_for_a_company_takes_that_companys_own_definition_first() {
+    use richos_core::{Entity, EntityRegistry, Ledger, Spine};
+    let f = Scratch::new();
+    let repos: Vec<PathBuf> = ["a", "b"].iter().map(|n| {
+        let r = f.0.join(format!("company-{n}"));
+        std::fs::create_dir_all(r.join(".claude/agents")).unwrap();
+        std::fs::write(r.join("orchestration.config"), "X=1\n").unwrap();
+        std::fs::write(r.join(".claude/agents/ray.md"), definition("ray", "OLD_RULE")).unwrap();
+        r
+    }).collect();
+    let data = f.0.join("data");
+    std::fs::create_dir_all(data.as_path()).unwrap();
+    let entities: Vec<Entity> = ["a", "b"].iter().zip(&repos)
+        .map(|(n, r)| Entity::try_new(&format!("company-{n}"), n, vec![r.clone()]).unwrap()).collect();
+    let registry = EntityRegistry::new(entities).unwrap();
+    registry.save(&data.join("entities.json")).unwrap();
+    let mut spine = Spine::new(Ledger::open(f.0.join("ledger.jsonl")).unwrap());
+    spine.set_entity_registry(registry);
+    let b = richos_core::EntityId::parse("company-b").unwrap();
+    let thread = spine.create_thread("B work", &b).unwrap();
+    let binding = spine.ledger().thread_binding(&thread).unwrap();
+    let a_id = richos_core::EntityId::parse("company-a").unwrap();
+    let a_thread = spine.create_thread("A work", &a_id).unwrap();
+    let a_binding = spine.ledger().thread_binding(&a_thread).unwrap();
+
+    prepare(&data, &f).scope_to(&binding).unwrap();
+    std::fs::write(repos[1].join(".claude/agents/ray.md"), definition("ray", "NEW_RULE_IN_B")).unwrap();
+    let mut lease = prepare(&data, &f);
+    lease.scope_to(&binding).unwrap();
+    let team = std::fs::read_to_string(data.join("team/ray.md")).unwrap();
+    assert!(team.contains("NEW_RULE_IN_B"), "the second repository's change reaches the app: {team}");
+    assert!(std::fs::read_to_string(lease.plugin.join("agents/ray.md")).unwrap().contains("NEW_RULE_IN_B"), "and this lease's plugin");
+
+    // A lease for company A takes A's own, which still says the old rule.
+    let mut lease_a = prepare(&data, &f);
+    lease_a.scope_to(&a_binding).unwrap();
+    assert!(std::fs::read_to_string(lease_a.plugin.join("agents/ray.md")).unwrap().contains("OLD_RULE"));
+}

@@ -19,7 +19,10 @@
 //! - A name in no governed repository is the user's own (hired in the app) and is never touched.
 //! - `dean` and `pierce` stay the app's stock ones (plan §3: the repository's Dean writes where
 //!   the app never looks).
-//! - The first repository (company order in `entities.json`) holding a name wins it.
+//! - A lease for a company takes that company's own governed repositories' definitions first
+//!   (`sync(data, Some(company))`), so a change there always reaches it; a name that company does
+//!   not define comes from the first other repository (company order in `entities.json`) holding
+//!   it. With no company (the lease not yet scoped) it is company order alone.
 //! - `team-sync.json` beside the team folder records the digest of what this module last wrote.
 //!   An app copy still carrying that digest is replaced by a newer repository definition. An app
 //!   copy that differs from it was edited in the app and is KEPT (reported, not overwritten).
@@ -81,11 +84,12 @@ fn is_definition(name: &str, text: &str) -> bool {
         && front.lines().any(|l| l.strip_prefix("description:").is_some_and(|v| !v.trim().is_empty()))
 }
 
-/// Governed repositories in company order, each once.
-fn governed_repositories(data: &Path) -> Vec<PathBuf> {
+/// Governed repositories, each once: the named company's first, then the rest in company order.
+fn governed_repositories(data: &Path, company: Option<&str>) -> Vec<PathBuf> {
     let registry = crate::entity::EntityRegistry::load(&data.join("entities.json")).registry;
     let mut seen = Vec::new();
-    for entity in registry.entities() {
+    let (own, others): (Vec<_>, Vec<_>) = registry.entities().iter().partition(|e| company == Some(e.id.as_str()));
+    for entity in own.into_iter().chain(others) {
         for root in entity.connected_repositories.iter().chain(entity.roots.iter()) {
             let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
             if !seen.contains(&root) && root.join("orchestration.config").is_file()
@@ -109,8 +113,8 @@ fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
 }
 
 /// Bring `<data>/team/` up to the governed repositories' current definitions (module doc).
-pub fn sync(data: &Path) -> Result<TeamSyncReport, String> {
-    let repos = governed_repositories(data);
+pub fn sync(data: &Path, company: Option<&str>) -> Result<TeamSyncReport, String> {
+    let repos = governed_repositories(data, company);
     let mut report = TeamSyncReport::default();
     if repos.is_empty() { return Ok(report); }
     let team = data.join(crate::engine_profile::USER_TEAM);
@@ -120,7 +124,7 @@ pub fn sync(data: &Path) -> Result<TeamSyncReport, String> {
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         .and_then(|v| v["synced"].as_object().map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect()))
         .unwrap_or_default();
-    // First repository wins a name.
+    // The first repository in that order wins a name.
     let mut sources: BTreeMap<String, String> = BTreeMap::new();
     for repo in &repos {
         let Ok(entries) = std::fs::read_dir(repo.join(".claude/agents")) else { continue };
