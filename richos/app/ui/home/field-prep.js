@@ -256,6 +256,11 @@ function prepare(loro, REF, opts) {
     if (n.type === 'decision') r *= 1 + 0.6 * n.significance;
     else if (n.type === 'theme' || n.type === 'initiative') r = Math.max(r, 2.2);
     else if (n.type === 'person' || n.type === 'organization') r = Math.max(r, 1.4);
+    // APP: HIS OBJECT IS NEVER A SPECK. A record out of his corpus has a degree of 0 or 1 (a source
+    // file is its own group), so by the rule above it would be the smallest dot in the picture; the
+    // round's own early objects are hubs with radii of 3 and 4. One of his is "the most legible single
+    // object in the round" (round 11.4 NOTES, v2), so it is never smaller than a person.
+    if (n.hosted === true) r = Math.max(r, 1.4);
     radius[i] = r;
     let f = 0;
     if (n.type === 'commitment' && n.status === 'at-risk') f |= 1;

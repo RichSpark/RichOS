@@ -1431,13 +1431,23 @@ body.home-open {
 
 #home-legend {
   position: absolute;
-  left: 34px;
-  bottom: 34px;
+  /* 34px is the left column's margin; the plate's 12px of padding sit outside it, as the door's do */
+  left: 22px;
+  bottom: 22px;
   z-index: 5;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 9px;
+  padding: 12px;
+  border-radius: 10px;
+  /* A PLATE, because the river runs behind this corner and a bright thread under the type measured
+     1.03:1 on the rendered frame (the ghost suite, with his sources on the river's bands). The
+     door's own ramp, for the same reason: dark enough under the glyphs, feathered at the edge. */
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow:
+    0 0 14px 6px rgba(12, 19, 34, 0.8),
+    0 0 34px 18px rgba(12, 19, 34, 0.5);
   pointer-events: none;
   user-select: none;
   opacity: 0;
@@ -1517,8 +1527,14 @@ body.home-open {
 
 #home-arrived {
   position: absolute;
-  right: 34px;
-  bottom: 34px;
+  right: 22px;
+  bottom: 22px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow:
+    0 0 14px 6px rgba(12, 19, 34, 0.8),
+    0 0 34px 18px rgba(12, 19, 34, 0.5);
   z-index: 5;
   text-align: right;
   pointer-events: none;

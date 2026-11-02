@@ -210,6 +210,24 @@ async function main() {
       });
     }
 
+    if (ghost && objects > 0) {
+      await run.check(`${objects} objects: his sources' threads ride the example's bands of the river, not one strand`, async () => {
+        const seen = await page.evaluate(() => {
+          const lo = window.__loro;
+          const mine = lo.D.sources.map((s, si) => ({ s, si })).filter((x) => x.s.primaryNodeId.indexOf("own-") === 0);
+          return {
+            sources: mine.length,
+            domains: Array.from(new Set(mine.map((x) => lo.domains[lo.D.srcDomain[x.si]].id))),
+            strands: new Set(mine.map((x) => lo.D.srcStrand[x.si])).size,
+          };
+        });
+        assert(seen.sources > 0, "none of his sources is in the river");
+        assert(seen.domains.every((d) => d.indexOf("own-") !== 0), "a source of his has the band of a territory with no arc: " + seen.domains.join(", "));
+        assert(seen.sources < 6 || seen.strands > 1, `${seen.sources} of his sources ride one strand`);
+        return `${seen.sources} sources over ${seen.strands} strand(s) in ${seen.domains.length} example band(s)`;
+      });
+    }
+
     if (ghost) {
       await run.check(`${objects} objects: the legend, the line under the core and "Newest" clear WCAG AA behind their glyphs`, async () => {
         const rows = await worstContrast(page, ["#home-legend .tx", "#home-ghost-note .lead", "#home-ghost-note .sub", "#home-arrived", "#home-signals", "#home-owner", "#home-brand-line"]);

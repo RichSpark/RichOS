@@ -92,9 +92,11 @@ window.RichFieldGhost = (function () {
 
     if (mine) {
       var hostIds = [];
+      var hostDomain = {};
       demo.domains.forEach(function (d) {
         d.clusters.forEach(function (c) {
           hostIds.push(c.id);
+          hostDomain[c.id] = d.id;
         });
       });
       var hostOf = {};
@@ -106,11 +108,19 @@ window.RichFieldGhost = (function () {
         }
         nodes.push(copy(n, { id: own(n.id), domain: own(n.domain), cluster: hostOf[n.cluster], group: own(n.cluster), hosted: true }));
       });
+      var nodeHost = {};
+      mine.nodes.forEach(function (n) {
+        nodeHost[n.id] = hostOf[n.cluster];
+      });
       mine.links.forEach(function (l) {
         links.push(copy(l, { s: own(l.s), t: own(l.t) }));
       });
       mine.sources.forEach(function (s) {
-        sources.push(copy(s, { id: own(s.id), domain: own(s.domain), primaryNodeId: own(s.primaryNodeId) }));
+        // His source's thread in the river takes the band of the example territory that hosts its
+        // object: with every source on his own lane's band (the one `nodeCount: 0` territory) 170 of
+        // them were one bright ribbon on a single strand (measured on the real app, 170 records).
+        // The river is the one place a territory's colors show, and these are the example's.
+        sources.push(copy(s, { id: own(s.id), domain: hostDomain[nodeHost[s.primaryNodeId]] || own(s.domain), primaryNodeId: own(s.primaryNodeId) }));
       });
       mine.domains.forEach(function (d) {
         // `nodeCount: 0` and one empty cluster: a territory with no arc and nothing of its own to lay
