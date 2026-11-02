@@ -9810,7 +9810,7 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     // draw his records in; every later launch with the same corpus answers from the kept items in the
     // time the census takes.
     let kept_path = state.data_dir.join("home-field-cache.json");
-    let items = match home_field::items_kept_or_compiled(&kept_path, &census, &topics, || {
+    let items = match home_field::items_kept_or_compiled(&kept_path, &census, &home_field::corpus_stamp(install.root().path()), &topics, || {
         home_field::collect_items(install.tools(), install.root(), &topics)
     }) {
         Ok((v, _from)) => v,

@@ -445,24 +445,76 @@ pub fn write_kept(path: &std::path::Path, kept: &KeptCompile) -> std::io::Result
 pub fn items_kept_or_compiled(
     path: &std::path::Path,
     census: &Census,
+    stamp: &str,
     topics: &[String],
     compile: impl FnOnce() -> Result<Vec<FieldItem>, LoroError>,
 ) -> Result<(Vec<FieldItem>, ItemsFrom), LoroError> {
-    if !census.fingerprint.is_empty() {
+    // THE IDENTITY IS THE FINGERPRINT AND THE FILES' STAMP. The fingerprint hashes record ids and body text, so a
+    // correction to a record's kind, confidence, title or tags (the writer rewrites the record's file) leaves
+    // it unchanged and the old items would be drawn as if nothing had changed (reviewer fixture: decision/0.9
+    // corrected to lesson/0.4, still answered from the kept items). Every field the compile reads lives in
+    // those files, so their paths, sizes and modification times are part of what the kept items are matched on.
+    let identity = if census.fingerprint.is_empty() || stamp.is_empty() { String::new() } else { format!("{}|{}", census.fingerprint, stamp) };
+    if !identity.is_empty() {
         if let Some(kept) = read_kept(path) {
-            if kept.fingerprint == census.fingerprint && kept.topics == topics {
+            if kept.fingerprint == identity && kept.topics == topics {
                 return Ok((kept.items, ItemsFrom::Kept));
             }
         }
     }
     let items = compile()?;
-    if !census.fingerprint.is_empty() {
-        let kept = KeptCompile { fingerprint: census.fingerprint.clone(), topics: topics.to_vec(), items: items.clone() };
+    if !identity.is_empty() {
+        let kept = KeptCompile { fingerprint: identity, topics: topics.to_vec(), items: items.clone() };
         if let Err(e) = write_kept(path, &kept) {
             eprintln!("[richos] home field: could not keep the compile ({e}); the next launch compiles again");
         }
     }
     Ok((items, ItemsFrom::Compiled))
+}
+
+const STAMP_FILE_LIMIT: usize = 200_000;
+
+/// A hash of every file under the corpus: relative path, size and modification time, in path order.
+/// Hidden folders and `node_modules` are skipped. An empty string means "could not say" (an unreadable
+/// folder, or more than `STAMP_FILE_LIMIT` files), which [`items_kept_or_compiled`] never matches.
+pub fn corpus_stamp(root: &std::path::Path) -> String {
+    let mut rows: Vec<(String, u64, u128)> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else { return String::new() };
+        for entry in read {
+            let Ok(entry) = entry else { return String::new() };
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "node_modules" {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { return String::new() };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+                let rel = entry.path().strip_prefix(root).map(|p| p.to_string_lossy().to_string()).unwrap_or(name);
+                rows.push((rel, meta.len(), mtime));
+                if rows.len() > STAMP_FILE_LIMIT {
+                    return String::new();
+                }
+            }
+        }
+    }
+    rows.sort();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for b in bytes {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    for (rel, len, mtime) in &rows {
+        eat(rel.as_bytes());
+        eat(&len.to_le_bytes());
+        eat(&mtime.to_le_bytes());
+    }
+    format!("{h:016x}:{}", rows.len())
 }
 
 /// One compile, one topic.
@@ -877,7 +929,7 @@ mod tests {
         let topics = vec!["northwind".to_string()];
         let c = census();
         let mut calls = 0;
-        let first = items_kept_or_compiled(&path, &c, &topics, || {
+        let first = items_kept_or_compiled(&path, &c, "s1", &topics, || {
             calls += 1;
             Ok(vec![item("a", "decision", Some("northwind"), "p", 0.9)])
         })
@@ -885,25 +937,66 @@ mod tests {
         assert_eq!((first.0.len(), first.1, calls), (1, ItemsFrom::Compiled, 1));
 
         // the next launch: same corpus, nothing compiled, the same items
-        let second = items_kept_or_compiled(&path, &c, &topics, || panic!("compiled a corpus that had not changed")).unwrap();
+        let second = items_kept_or_compiled(&path, &c, "s1", &topics, || panic!("compiled a corpus that had not changed")).unwrap();
         assert_eq!((second.0.len(), second.1, second.0[0].r#ref.as_str()), (1, ItemsFrom::Kept, "a"));
 
         // a record changed: the fingerprint moves, so it is compiled again and the new items are kept
         let mut changed = census();
         changed.fingerprint = "sha256:cafe".into();
-        let third = items_kept_or_compiled(&path, &changed, &topics, || Ok(vec![item("b", "fact", None, "q", 0.5), item("c", "fact", None, "r", 0.5)])).unwrap();
+        let third = items_kept_or_compiled(&path, &changed, "s1", &topics, || Ok(vec![item("b", "fact", None, "q", 0.5), item("c", "fact", None, "r", 0.5)])).unwrap();
         assert_eq!((third.0.len(), third.1), (2, ItemsFrom::Compiled));
-        let fourth = items_kept_or_compiled(&path, &changed, &topics, || panic!("not kept")).unwrap();
+        let fourth = items_kept_or_compiled(&path, &changed, "s1", &topics, || panic!("not kept")).unwrap();
         assert_eq!(fourth.0.len(), 2);
 
         // other topics are another question; a census with no fingerprint is never a match; a torn file is a recompile
-        assert_eq!(items_kept_or_compiled(&path, &changed, &["x".to_string()], || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
+        assert_eq!(items_kept_or_compiled(&path, &changed, "s1", &["x".to_string()], || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
         let mut none = census();
         none.fingerprint = String::new();
-        assert_eq!(items_kept_or_compiled(&path, &none, &topics, || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
+        assert_eq!(items_kept_or_compiled(&path, &none, "s1", &topics, || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
         std::fs::write(&path, b"{ not json").unwrap();
-        assert_eq!(items_kept_or_compiled(&path, &c, &topics, || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
+        assert_eq!(items_kept_or_compiled(&path, &c, "s1", &topics, || Ok(vec![])).unwrap().1, ItemsFrom::Compiled);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_correction_that_keeps_the_fingerprint_does_not_keep_the_old_result() {
+        // The reviewer's fixture: the writer corrects a record's kind and confidence in place. The census
+        // fingerprint (ids and body text) is the same; the record's file is not.
+        let dir = std::env::temp_dir().join(format!("home-field-correct-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("records")).unwrap();
+        let record = dir.join("records").join("rec-1.md");
+        std::fs::write(&record, "kind: decision\\nconfidence: 0.9\\nbody\\n").unwrap();
+        // the kept file lives beside the app's data, never inside the corpus it describes
+        let path = std::env::temp_dir().join(format!("home-field-correct-{}.json", std::process::id()));
+        let topics = vec!["northwind".to_string()];
+        let c = census(); // the same fingerprint before and after: that is the defect
+        let before = corpus_stamp(&dir);
+        assert!(!before.is_empty());
+        let first = items_kept_or_compiled(&path, &c, &before, &topics, || Ok(vec![item("a", "decision", Some("northwind"), "p", 0.9)])).unwrap();
+        assert_eq!(first.1, ItemsFrom::Compiled);
+        // untouched: kept
+        assert_eq!(corpus_stamp(&dir), before);
+        let again = items_kept_or_compiled(&path, &c, &corpus_stamp(&dir), &topics, || panic!("compiled an unchanged corpus")).unwrap();
+        assert_eq!(again.1, ItemsFrom::Kept);
+        // corrected: kind and confidence change, the file's size changes with them
+        std::fs::write(&record, "kind: lesson\\nconfidence: 0.45\\nbody and more\\n").unwrap();
+        let after = corpus_stamp(&dir);
+        assert_ne!(after, before, "the stamp did not see the correction");
+        let corrected = items_kept_or_compiled(&path, &c, &after, &topics, || Ok(vec![item("a", "lesson", Some("northwind"), "p", 0.4)])).unwrap();
+        assert_eq!((corrected.1, corrected.0[0].kind.as_str()), (ItemsFrom::Compiled, "lesson"));
+        // a same-size rewrite is still seen, by its modification time
+        let size = std::fs::metadata(&record).unwrap().len() as usize;
+        let t0 = corpus_stamp(&dir);
+        std::fs::write(&record, "x".repeat(size)).unwrap();
+        // the clock is set, not waited for
+        let file = std::fs::OpenOptions::new().write(true).open(&record).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5)).unwrap();
+        assert_ne!(corpus_stamp(&dir), t0, "a same-size rewrite was not seen");
+        // an unreadable folder is "cannot say", which never matches
+        assert_eq!(corpus_stamp(&dir.join("missing")), "");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
