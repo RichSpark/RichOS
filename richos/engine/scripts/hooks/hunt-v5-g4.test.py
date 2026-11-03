@@ -82,7 +82,7 @@ class G4(unittest.TestCase):
                 self.assertNotIn("updatedInput", result.stdout)
                 self.assertEqual(program.read_text(), source)
 
-    def capture(self, cost):
+    def capture(self, cost, fence=False):
         mod = load("cci_g4", HOOKS / "commit-ceo-inputs.py")
         repo = self.repo()
         document = repo / "wiki/raw/input-ABCDEF.md"
@@ -101,7 +101,8 @@ class G4(unittest.TestCase):
         out = io.StringIO()
         with patch.object(mod.time, "monotonic", side_effect=lambda: now[0]), \
              patch.object(mod, "run_gate", side_effect=gate), \
-             patch.object(mod, "fence_on", return_value=False), \
+             patch.object(mod, "fence_on", return_value=fence), \
+             patch.object(mod, "take_lease", return_value=("acquired", [])), \
              patch.object(mod, "commit", return_value=(True, "fixture-sha")) as commit, \
              patch.dict(os.environ, RICHOS_INGRESS_SEAT_ROOT=str(repo),
                         RICHOS_INGRESS_STATE_DIR=str(self.tmp / "state")), \
@@ -139,6 +140,60 @@ class G4(unittest.TestCase):
             rc, _, reason = mod.git(["status"], str(self.tmp))
             self.assertNotEqual(rc, 0)
             self.assertTrue(reason)
+            run.assert_not_called()
+
+    def test_46_short_lease_budget_stays_pending(self):
+        _, rc, result, _, _, commit = self.capture(0.6, fence=True)
+        self.assertEqual(rc, 4, result)
+        self.assertTrue(result["pending"], result)
+        self.assertFalse(commit.called)
+        self.assertIn("too little time", result["pending"][0]["why"])
+
+    def test_46_reference_update_finishes_index_and_lease_after_work_deadline(self):
+        mod = load("cci_cleanup_g4", HOOKS / "commit-ceo-inputs.py")
+        repo = self.repo()
+        document = repo / "docs/input.md"
+        document.parent.mkdir()
+        document.write_text("fixture\n")
+        now = [0.0]
+        releases = []
+        real_run = subprocess.run
+        def run(args, *a, **kwargs):
+            if "land-lease.sh" in " ".join(str(arg) for arg in args):
+                releases.append(args[2])
+                return subprocess.CompletedProcess(args, 0, b"", b"")
+            result = real_run(args, *a, **kwargs)
+            if "update-ref" in args and result.returncode == 0:
+                now[0] = 18.5  # Controlled completion just beyond new-work admission.
+            return result
+        out = io.StringIO()
+        with patch.object(mod.time, "monotonic", side_effect=lambda: now[0]), \
+             patch.object(mod, "run_gate", return_value=("pass", "")), \
+             patch.object(mod, "fence_on", return_value=True), \
+             patch.object(mod, "take_lease", return_value=("acquired", [])), \
+             patch.object(mod.subprocess, "run", side_effect=run), \
+             patch.dict(os.environ, RICHOS_INGRESS_SEAT_ROOT=str(repo),
+                        RICHOS_INGRESS_STATE_DIR=str(self.tmp / "state")), \
+             patch.object(sys, "stdin", io.StringIO(json.dumps({"prompt": str(document), "cwd": str(repo)}))), \
+             contextlib.redirect_stdout(out):
+            rc = mod.main()
+        result = json.loads(out.getvalue())
+        self.assertEqual(rc, 3, result)
+        self.assertEqual(len(result["committed"]), 1)
+        self.assertEqual(self.git(repo, "show", "HEAD:docs/input.md"), "fixture")
+        self.assertEqual(self.git(repo, "status", "--porcelain", "--", "docs/input.md"), "")
+        self.assertEqual(releases, ["release"])
+        # load-bound: monotonic time is controlled by the update-ref fixture above.
+        self.assertLessEqual(now[0], mod.DEADLINE_S + mod.CLEANUP_GRACE_S)
+
+    def test_46_cleanup_reserve_cannot_start_work_after_its_own_deadline(self):
+        mod = load("cci_cleanup_end_g4", HOOKS / "commit-ceo-inputs.py")
+        mod._deadline, mod._cleanup_deadline = 18, 24
+        with patch.object(mod.time, "monotonic", return_value=24), \
+             patch.object(mod.subprocess, "run") as run:
+            rc, _, reason = mod.git(["update-index"], str(self.tmp), cleanup=True)
+            self.assertNotEqual(rc, 0)
+            self.assertIn("cleanup allowance", reason)
             run.assert_not_called()
 
     def test_43_old_pending_capture_survives_unrelated_rows(self):

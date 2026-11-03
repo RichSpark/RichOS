@@ -193,7 +193,7 @@ GIT_TIMEOUT_S = 8
 # The content gates get their own budget; they build a corpus and can be slower.
 GATE_TIMEOUT_S = 10
 
-# THE WHOLE RUN'S BUDGET, and it exists because he is waiting behind it. This
+# THE NEW WORK'S BUDGET, and it exists because he is waiting behind it. This
 # hook sits between him pressing enter and the model seeing his message, so a
 # slow repository must not become a slow product. The event's default timeout is
 # 30000 ms and the registration asks for 25; this deadline sits below both so
@@ -202,27 +202,37 @@ GATE_TIMEOUT_S = 10
 # not-examined, never dropped: a file that was skipped for time is not a file
 # that was found clean.
 DEADLINE_S = 18
+# After a reference moves, sync the real index and release an acquired lease.
+# One shared reserve keeps that cleanup below the host's 25-second timeout;
+# it never permits another scan, lease acquisition or commit to start.
+CLEANUP_GRACE_S = 6
+LEASE_CALL_GRACE_S = 5
 
-# A single monotonic deadline bounds every subprocess, including classification,
-# companion gates and commit plumbing. Imported helpers have no run deadline.
+# One work deadline and a bounded cleanup reserve. Imported helpers have no
+# run deadline. Only post-reference index sync and lease release use the reserve.
 _deadline = None
+_cleanup_deadline = None
 
 
 class IngressDeadline(Exception):
     pass
 
 
-def check_budget():
-    if _deadline is not None and time.monotonic() >= _deadline:
+def check_budget(cleanup=False):
+    deadline = _cleanup_deadline if cleanup else _deadline
+    if deadline is not None and time.monotonic() >= deadline:
+        if cleanup:
+            raise IngressDeadline("the ingress exhausted its cleanup allowance")
         raise IngressDeadline("the ingress ran out of its %ds budget; remaining work was not examined" % DEADLINE_S)
 
 
-def run_command(*args, timeout, **kwargs):
-    check_budget()
-    if _deadline is not None:
-        timeout = min(timeout, max(0, _deadline - time.monotonic()))
+def run_command(*args, timeout, cleanup=False, **kwargs):
+    check_budget(cleanup)
+    deadline = _cleanup_deadline if cleanup else _deadline
+    if deadline is not None:
+        timeout = min(timeout, max(0, deadline - time.monotonic()))
         if timeout <= 0:
-            check_budget()
+            check_budget(cleanup)
     return subprocess.run(*args, timeout=timeout, **kwargs)
 
 
@@ -391,7 +401,7 @@ def resolve(raw, cwd):
 # ---------------------------------------------------------------------------
 # GIT
 # ---------------------------------------------------------------------------
-def git(args, cwd, timeout=GIT_TIMEOUT_S, stdin_bytes=None):
+def git(args, cwd, timeout=GIT_TIMEOUT_S, stdin_bytes=None, cleanup=False):
     """(rc, stdout, undecided_reason). A non-empty third element is never a pass."""
     try:
         r = run_command(
@@ -401,6 +411,7 @@ def git(args, cwd, timeout=GIT_TIMEOUT_S, stdin_bytes=None):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
+            cleanup=cleanup,
         )
     except IngressDeadline as exc:
         return (124, "", str(exc))
@@ -812,7 +823,7 @@ def commit(path, repo, session, stamp, data=None, extras=()):
     # reported as a clean capture; the failure is named with the repair.
     for emode, eblob, erel in entries:
         rc, _o, undecided = git(
-            ["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (emode, eblob, erel)], repo
+            ["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (emode, eblob, erel)], repo, cleanup=True
         )
         if undecided or rc != 0:
             break
@@ -870,7 +881,7 @@ def take_lease(repo, engine_root, wait):
     script = os.path.join(engine_root, "scripts", "land-lease.sh")
     try:
         r = run_command(["bash", script, "acquire", "--repo", repo, "--wait", str(wait)],
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=wait + 5)
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=wait + LEASE_CALL_GRACE_S)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return ("failed", "land-lease.sh could not run (%s)" % exc.__class__.__name__)
     out = r.stdout.decode("utf-8", "replace")
@@ -894,7 +905,7 @@ def take_lease(repo, engine_root, wait):
 def release_lease(repo, engine_root):
     try:
         run_command(["bash", os.path.join(engine_root, "scripts", "land-lease.sh"), "release", "--repo", repo],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45, cleanup=True)
     except (OSError, subprocess.TimeoutExpired, IngressDeadline):
         pass    # a lease left held at rest is released by the turn-end hook (release-land-leases.sh)
 
@@ -950,8 +961,9 @@ def ledger_append(state_dir, record):
 
 
 def main():
-    global _deadline
+    global _deadline, _cleanup_deadline
     _deadline = time.monotonic() + DEADLINE_S
+    _cleanup_deadline = _deadline + CLEANUP_GRACE_S
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw)
@@ -1130,8 +1142,15 @@ def main():
                 if repo in held:
                     lease, detail = "held", held[repo]
                 else:
+                    remaining = _deadline - time.monotonic()
+                    if remaining < LEASE_CALL_GRACE_S:
+                        pending.append({"path": p, "repo": repo, "pending": True,
+                                        "why": "not committed yet: the ingress has too little time left "
+                                               "to try the land lease safely. It stays pending and is "
+                                               "retried on your next message"})
+                        continue
                     wait = 0 if source == "pending" else \
-                        max(0, min(LEASE_WAIT_S, int(_deadline - time.monotonic())))
+                        max(0, min(LEASE_WAIT_S, int(remaining - LEASE_CALL_GRACE_S)))
                     lease, detail = take_lease(repo, engine_root, wait)
                 if lease == "held":
                     held[repo] = detail
