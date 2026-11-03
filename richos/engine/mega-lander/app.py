@@ -105,8 +105,9 @@ def save(path, value):
     temporary = path.with_name("." + uuid.uuid4().hex + ".incoming")
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(value, stream, sort_keys=True)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            # Keep accepted Unicode answers within the reader's byte limit.
+            json.dump(value, stream, sort_keys=True, ensure_ascii=False)
             stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
         os.replace(temporary, path)
         directory = os.open(path.parent, os.O_RDONLY)
@@ -914,20 +915,15 @@ COMPLETED_UNRUN = "the assignment was completed and this receipt never ran"
 
 
 def abandoned(record, binding):
-    """True when a receipt that never started (`never_started`) can no longer start either, so
-    completion need not wait for it: its preparation failed or is uncertain (`preparing` with
-    its owner gone, `unknown`), its dispatch was refused (Pierce, or a later control after the
-    spawn guard registered it), it is already settled (`blocked`), or it was prepared in an
-    earlier turn, whose Agent call can no longer be admitted as it stands.
+    """A never-started receipt that cannot dispatch, or whose dispatch was refused.
 
-    A preparation of THIS turn that nothing refused is NOT abandoned (Tom's review of the
-    c2ad4fb8c merge, 2026-10-28): an assignment may have several independent workers, prepared
-    one after the other and then dispatched, and `complete` settled such a parallel worker and
-    withdrew its worktree just before it was to start. It is unresolved, and completion is
-    refused until it runs or is settled on request."""
+    A prepared call remains dispatchable across turns of the same provider session.
+    Completion and replacement must keep it until it runs or is explicitly settled.
+    """
     if not never_started(record):
         return False
-    if record.get("status") != "prepared" or record.get("pierce_refused") or record.get("binding") != binding:
+    if record.get("status") != "prepared" or record.get("pierce_refused") or any(
+            record["binding"].get(key) != binding.get(key) for key in ("entity_id", "thread_id", "session_id")):
         return True
     canonical = canonical_of(record)
     return bool(canonical and any(canonical.get(field) for field in ("tool_use_id", "spawned_at")))
@@ -1155,7 +1151,15 @@ def team(args):
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 stream.write(body if body.endswith("\n") else body + "\n")
                 stream.flush(); os.fsync(stream.fileno())
-            os.replace(temporary, path)
+            if replace:
+                os.replace(temporary, path)
+            else:
+                # Publish the complete file without replacing a concurrent save.
+                try:
+                    os.link(temporary, path)
+                except FileExistsError:
+                    raise ValueError(f"{name} is already the user's teammate, and that copy is the user's: it is kept. "
+                                     "Set replace only to make a change the user asked for") from None
         finally:
             temporary.unlink(missing_ok=True)
         return {"saved": str(path), "name": name, "replaced": existed,
@@ -1347,10 +1351,9 @@ def prepare(scope_path, scope, args):
             refresh(old)
             if old["status"] == "prepared" and old["binding"] != scope["binding"] and never_started(old):
                 # A PREPARE FROM AN EARLIER TURN DISPATCHES OR CLEANS UP, never just refuses
-                # (2026-10-28, f0a399b8). Its Agent call can no longer be admitted under the
-                # turn it was prepared in. Asked again in a later turn of the SAME provider
-                # session, after this call has checked the assignment again, it is bound to
-                # this turn and its payload handed back, so it can be dispatched. In another
+                # (2026-10-28, f0a399b8). Asked again in a later turn of the SAME provider session, it is
+                # bound to this turn and its payload handed back. Dispatch can also
+                # rebind that call directly after checking its assignment again. In another
                 # session its workspace is registered under the session that ended, where no
                 # spawn can reach it, so it is settled and what it created is withdrawn.
                 if all(old["binding"].get(key) == scope["binding"].get(key) for key in ("entity_id", "thread_id", "session_id")):
@@ -1365,15 +1368,9 @@ def prepare(scope_path, scope, args):
         for old_path, old in receipts(root):
             if old["request"]["obligation_id"] == obligation and old["request"]["role"] == role:
                 refresh(old)
-                # SUPERSEDED, AND PROVABLY NEVER RUN (2026-10-28, work-709b35ac): a preparation
-                # that failed or is uncertain, one whose dispatch was refused, and one from an
-                # earlier turn, which can no longer be admitted as it stands. A preparation of
-                # THIS turn that nothing refused is left alone: an assignment may have several
-                # independent workers, prepared one after the other and then dispatched.
-                # Whatever is left is settled when the assignment completes, or by `settle`.
-                if not old.get("settled") and never_started(old) and (
-                        old["status"] in ("preparing", "unknown") or old.get("pierce_refused")
-                        or (old["status"] == "prepared" and old["binding"] != scope["binding"])):
+                # Reuse completion's dispatchability check: a new request or turn
+                # does not prove that an independent preparation was replaced.
+                if not old.get("settled") and abandoned(old, scope["binding"]):
                     settle_undispatched(scope, old_path, old, "superseded by request %s: %s" % (request_id, NEVER_DISPATCHED))
                 # An assignment may have several independent workers, reviewers or consults.
                 # Reject an exact duplicate under another id, not every request sharing a duty.
@@ -2685,12 +2682,9 @@ def conversation_threads():
     conversation thread still exists is the app's knowledge; what the store can
     prove is movement" (ecs/CONTRACT.md).
 
-    `conversation-ledger.jsonl` under `$RICHOS_APP_STATE`. The two are the same
-    directory by construction rather than by convention: `src-tauri/src/main.rs`
-    opens the ledger at `data_dir.join("conversation-ledger.jsonl")` (:1461) and
-    hands that same `data_dir` to `EngineProfile::prepare` (:1852 ->
-    engine_profile.rs:45-53), which canonicalizes it and exports it as
-    `RICHOS_APP_STATE` (:205).
+    The ledger is in app data, beside `engine-state`. EngineProfile exports
+    that child folder as RICHOS_APP_STATE; assignment_instruction uses the
+    same app-data location.
 
     A THREAD IS NEVER DELETED FROM THAT LOG. `KNOWN_EVENT_TAGS` in ledger.rs has
     `ThreadCreated` and no removal of any kind, so "this thread still exists" is
@@ -2704,7 +2698,7 @@ def conversation_threads():
     look" is the difference between deleting every one of his seats and deleting
     none of them."""
     try:
-        path = state() / "conversation-ledger.jsonl"
+        path = state().parent / "conversation-ledger.jsonl"
         if not path.is_file():
             return None
         threads = set()
@@ -3110,10 +3104,13 @@ def inspect_receipts(scope, args, read_only=False):
                 if (obligation is None or record["request"]["obligation_id"] == obligation)
                 and (wanted is None or wanted in (record.get("id"), record.get("request_id"), record.get("name")))]
         for path, record in rows:
-            # The reconciliation stays on every lookup: ECS projection happens on inspection.
+            # As in observe, persist new evidence but leave unchanged receipts alone.
+            before = json.dumps(record, sort_keys=True)
             refresh(record)
             if not read_only:
-                save(path, record)
+                if json.dumps(record, sort_keys=True) != before:
+                    save(path, record)
+                # Pending ECS projections must still retry even without a refresh change.
                 project(scope, path, record)
         if wanted is not None:
             return {"records": [view(record) for _, record in rows]}
@@ -3143,11 +3140,11 @@ TOOLS = [
     {"name":"complete","description":"Close a code assignment in ECS only after every requirement is satisfied and every final worker has a passing independent review, verified local integration and completed cleanup. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Supply all final worker receipts, across every repository. Unresolved execution or omitted work is refused. Do not use this to claim unrelated or unverified business outcomes. For an assignment without implementation work, supply answer with your verified outcome instead of worker_ids. Unresolved execution and code work refuse this answer-only path. Completion updates the operational record but never sends Rich a message. Local completion never means publication.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"answer":{"type":"string","minLength":1,"maxLength":262144},"worker_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}},"required":[],"additionalProperties":False}},
     {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
-    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns a short receipt, with agent_call only while no dispatch has been attempted: submit that exact JSON to Agent once. Its prompt names the brief this tool stored, which the teammate receives in full, so never write the brief again in the Agent call. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused, or it was prepared in an earlier turn; what it created is withdrawn only when it holds no commit and no uncommitted file, and anything else is kept and reported. A preparation from an earlier turn is dispatched by preparing it again with the same request_id. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
+    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns a short receipt, with agent_call only while no dispatch has been attempted: submit that exact JSON to Agent once. Its prompt names the brief this tool stored, which the teammate receives in full, so never write the brief again in the Agent call. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused, or it belongs to an earlier provider session; what it created is withdrawn only when it holds no commit and no uncommitted file, and anything else is kept and reported. A preparation from an earlier turn in the same provider session can still dispatch unchanged. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
     {"name":"integrate","description":"When the automatic independent handover review passes, integrate with worker_id alone. Do not prepare a routine reviewer agent: the watcher uses Codex when enabled and available, otherwise Claude automatically. reviewer_id is accepted for an existing explicit reviewer. Merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers; RichOS then sends a team_reloaded message: carry on there with the work that waited for them. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart. Without id it returns jobs: one line per job of this conversation, its name, its state (WORKING, PENDING, LANDABLE, PAUSED, FINISHED...) and why, exactly the lines the terminal's workspaces.sh status shows for them; a landed job has no line. Pass id (the job name a line shows, a receipt id or a request id) to read its record in full, brief and consult_answer included.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"additionalProperties":False}},
-    {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a later turn prepares a replacement for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded. With registry_record instead of request_id, it removes one record the workspace registry reports as unreadable, only when no workspace lifecycle wrote it (a stray test fixture); it is moved aside, never deleted, and a record that could own a workspace is refused. With superseded_by (a commit already integrated that redid this receipt's work) and request_id, it settles a receipt whose run ENDED and whose branch was redone elsewhere: the replaced tip is recorded, not merged, and the receipt's chain is landed, so complete can close the assignment. A commit that is not integrated, or that touches none of the branch's files, is refused.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"registry_record":{"type":"string"},"superseded_by":{"type":"string","maxLength":64},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["reason"],"additionalProperties":False}},
+    {"name":"settle","description":"Settle one receipt whose worker never ran, with your reason: a preparation you replaced in this same turn, or one you will not dispatch. Receipts that never ran are already settled by themselves when a new request replaces failed or refused work for the same duty, when the work a review was for is integrated, and when the assignment completes; use this only for the rest. A receipt whose run started is refused. Its worktree and branch are removed only when they hold no commit and no uncommitted file; anything else is kept and reported in settled.retained, never discarded. With registry_record instead of request_id, it removes one record the workspace registry reports as unreadable, only when no workspace lifecycle wrote it (a stray test fixture); it is moved aside, never deleted, and a record that could own a workspace is refused. With superseded_by (a commit already integrated that redid this receipt's work) and request_id, it settles a receipt whose run ENDED and whose branch was redone elsewhere: the replaced tip is recorded, not merged, and the receipt's chain is landed, so complete can close the assignment. A commit that is not integrated, or that touches none of the branch's files, is refused.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string"},"registry_record":{"type":"string"},"superseded_by":{"type":"string","maxLength":64},"reason":{"type":"string","minLength":10,"maxLength":2000}},"required":["reason"],"additionalProperties":False}},
 ]
 def available_tools(read_only=False):
     if not read_only: return TOOLS
