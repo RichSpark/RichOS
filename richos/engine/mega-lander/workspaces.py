@@ -7981,6 +7981,17 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=
                             save_agent(fresh)
                 event("landing-reopened", key=rec["key"], why=str(e))
                 return False
+        elif disposition.get("kind") == "continued":
+            # Shutdown can flush new work after the pre-spawn clean check.
+            # Keep it for reconciliation; the existing deletion retry rechecks it.
+            try:
+                _require_clean(current, "delete continued workspaces", deadline=deadline)
+            except Deadline as e:
+                deferred = str(e)
+                held = True
+            except SpecError as e:
+                failures.append(str(e))
+                held = True
 
         for w in workspaces:
             # Point 3: the branches the agent created are its branches too, and

@@ -8832,6 +8832,36 @@ class HuntV5_04_BackgroundDelivery(Base):
         self.assertEqual(ws._running_calls(self.sid, aid), [])
 
 
+class HuntV5_08_ContinuationShutdown(Base):
+    def test_continuation_keeps_bytes_flushed_by_its_predecessor(self):
+        old_name = "zach-opus-v5old"
+        cc = self.make_cc(old_name)
+        aid, _native = self.spawn(old_name, cc)
+        self.commit(cc)
+        self.finish(aid)
+        successor = self.make_cc("zach-opus-v5new", base="cc/" + old_name)
+        writer = LandingShutdown.shutdown_writer(self, cc)
+        with patch.object(ws, "stop_containers", return_value={}), \
+                patch.object(ws, "stop_test_instances", return_value={}):
+            self.spawn("zach-opus-v5new", successor, extra="continues: %s\n" % old_name)
+        self.assertEqual(writer.stdout.readline().strip(), "FLUSHED")
+        self.assertEqual(writer.wait(timeout=30), 0)
+        saved = os.path.join(cc, "shutdown-result.txt")
+        self.assertTrue(os.path.isfile(saved), "continuation deleted the only copy of shutdown output")
+        with open(saved) as stream:
+            self.assertEqual(stream.read(), "result flushed on shutdown\n")
+        old = self.rec(old_name)
+        self.assertEqual(old["disposition"]["kind"], "continued")
+        self.assertIn("uncommitted", old["deletion"]["last_error"])
+        self.assertFalse(os.path.exists(os.path.join(successor, "shutdown-result.txt")))
+        self.commit(cc, "shutdown-result.txt", "result flushed on shutdown\n")
+        with patch.object(ws, "stop_containers", return_value={}), \
+                patch.object(ws, "stop_test_instances", return_value={}):
+            self.assertTrue(ws._delete(old, ws.live_workspaces(old), branches=False, why="continued retry"))
+        self.assertFalse(os.path.exists(cc))
+        self.assertIn("cc/" + old_name, branches(self.other))
+
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a
