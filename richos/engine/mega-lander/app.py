@@ -105,8 +105,9 @@ def save(path, value):
     temporary = path.with_name("." + uuid.uuid4().hex + ".incoming")
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(value, stream, sort_keys=True)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            # Keep accepted Unicode answers within the reader's byte limit.
+            json.dump(value, stream, sort_keys=True, ensure_ascii=False)
             stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
         os.replace(temporary, path)
         directory = os.open(path.parent, os.O_RDONLY)

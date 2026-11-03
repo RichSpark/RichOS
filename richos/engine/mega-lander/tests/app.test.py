@@ -672,6 +672,23 @@ class DesktopWork(unittest.TestCase):
                                                    "query":{"section":"work","offset":0,"limit":100,"include_closed":True}})
         self.assertEqual(work["records"],[],"a consult was projected as a work unit")
 
+    def test_consult_answer_at_the_character_limit_remains_readable(self):
+        ready=self.call("prepare",{"request_id":"large-answer","obligation_id":"fixture-task",
+            "role":"consult","teammate":"clark","title":"Research","brief":"Answer the fictional question."})
+        self.start_fixture_worker(ready,"large-answer")
+        answer="😀"*self.app.CONSULT_ANSWER_LIMIT
+        self.finish_fixture_worker("large-answer",answer)
+        path=self.app.folder(self.scope)/(ready["id"]+".json")
+        record=self.call("inspect",{"id":ready["id"]})["records"][0]
+        self.assertEqual(record["consult_answer"]["message"],answer)
+        self.assertFalse(record["consult_answer"]["truncated"])
+        self.assertLessEqual(path.stat().st_size,1024*1024)
+        # JSON control escapes are longer than UTF-8 emoji. They must fit too.
+        record["consult_answer"]=self.app.consult_answer("\x00"*self.app.CONSULT_ANSWER_LIMIT,
+                                                        "large-answer","SubagentStop")
+        self.app.save(path,record)
+        self.assertEqual(self.app.bounded(path)["consult_answer"]["message"],"\x00"*self.app.CONSULT_ANSWER_LIMIT)
+
     def test_the_team_tool_lists_and_shows_the_shelf_and_saves_the_users_own_copy(self):
         """Slice 4 of the proto-teammate shelf plan (richos-hq
         docs/plans/2026-10-06-proto-teammate-shelf.md §2, §4, §10): the back end lists the
