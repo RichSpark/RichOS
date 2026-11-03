@@ -167,7 +167,6 @@ import signal
 import subprocess
 import sys
 import time
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -954,27 +953,41 @@ def version_of(binary):
 
 
 def run_bounded(argv, cwd, prompt, out_path, err_path, limit, env=None):
-    """(exit code or None on the time limit, seconds), after owned-tree cleanup.
+    """(exit code or None on the time limit, seconds).
 
-    The existing supervisor owns descendants before exec, on direct timeouts and
-    caller death too. It stays in the watcher's group; its reviewer tree is also
-    discoverable through the watcher's inherited ownership mark.
+    Keep the reviewer in the watcher's process group, including the window
+    before Popen returns. On a direct timeout, the shared tree collector retains
+    process generations and discovers scoped descendants before stopping them.
     """
     import proc_tree
     start = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="review-timeout-") as scratch:
-        marker = os.path.join(scratch, "expired")
-        command = proc_tree.command(argv)
-        split = command.index("--")
-        command[split:split] = ["--deadline", str(limit), "--timeout-marker", marker]
-        with open(out_path, "wb") as out, open(err_path, "wb") as err:
-            p = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=out, stderr=err, env=build_env(env))
-            _REVIEWER["proc"] = p
+    scope = secrets.token_hex(16)
+    child_env = build_env(env)
+    inherited = child_env.get(proc_tree.SCOPE_ENV, "")
+    child_env[proc_tree.SCOPE_ENV] = (inherited + ":" if inherited else "") + scope
+    with open(out_path, "wb") as out, open(err_path, "wb") as err:
+        p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=out, stderr=err, env=child_env)
+        _REVIEWER["proc"] = p
+        try:
             try:
-                p.communicate(prompt.encode("utf-8"))
-                return (None if os.path.exists(marker) else p.returncode), time.monotonic() - start
-            finally:
-                _REVIEWER["proc"] = None
+                tree = proc_tree.TrackedTree(p.pid, scope)
+            except RuntimeError:
+                # A fast exit or exec can race the first identity read.
+                # Retry if a timeout actually needs tree cleanup.
+                tree = None
+            try:
+                p.communicate(prompt.encode("utf-8"), timeout=limit)
+                return p.returncode, time.monotonic() - start
+            except subprocess.TimeoutExpired:
+                if tree is None:
+                    tree = proc_tree.TrackedTree(p.pid, scope)
+                left = proc_tree.finish_scope(p, tree)
+                p.wait(timeout=1)
+                if left:
+                    raise Refused("timed-out reviewer cleanup incomplete: %s" % left)
+                return None, time.monotonic() - start
+        finally:
+            _REVIEWER["proc"] = None
 
 
 def build_env(env=None):
@@ -988,9 +1001,7 @@ def build_env(env=None):
 
 
 def _on_stop(signum, _frame):
-    """Pass a direct stop to the supervisor, which cleans its owned reviewer tree.
-    The watcher also signals the supervisor through this command's process group.
-    """
+    """Pass a direct stop to the reviewer; the watcher also signals its whole group."""
     p = _REVIEWER.get("proc")
     if p is not None:
         try:

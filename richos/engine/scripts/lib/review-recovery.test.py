@@ -176,6 +176,14 @@ class Fixtures(unittest.TestCase):
                               os.devnull, os.devnull, 10)
         self.assertEqual(rc, 0)
 
+    def test_reviewer_stays_in_the_callers_process_group(self):
+        output = self.root / 'group'
+        rc, _ = S.run_bounded([sys.executable, '-B', '-c',
+                              'import os; print(os.getpgrp())'], str(self.root), '',
+                              str(output), os.devnull, 10)
+        self.assertEqual(rc, 0)
+        self.assertEqual(int(output.read_text()), os.getpgrp())
+
     def test_direct_timeout_stops_stubborn_descendant(self):
         child_file = self.root / 'child.json'
         code = '''import json,os,signal,subprocess,sys
