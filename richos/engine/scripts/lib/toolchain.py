@@ -140,19 +140,25 @@ def tool_path(directory, name):
 
 def stub_name(word, env):
     """The stub `word` would execute, or None (another tool earlier on PATH, or not a stub)."""
-    stubs = shim_dir()
     if "/" in word:
-        if os.path.dirname(os.path.normpath(word)) == stubs and os.path.basename(word) in SHIMS:
-            return os.path.basename(word)
-        return None
-    if word not in SHIMS:
-        return None
-    for entry in (env.get("PATH") or "").split(os.pathsep):
-        if not entry:
+        candidates = [word]
+    else:
+        candidates = [os.path.join(entry, word)
+                      for entry in (env.get("PATH") or "").split(os.pathsep)]
+    for candidate in candidates:
+        if not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
             continue
-        candidate = os.path.join(entry, word)
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return word if os.path.normpath(entry) == stubs else None
+        # Apple's launchers can share an inode. Prefer the invoked tool name
+        # when it is known, otherwise the name of the resolved executable.
+        name = os.path.basename(word)
+        names = [name] if name in SHIMS else sorted(SHIMS)
+        for name in names:
+            try:
+                if os.path.samefile(candidate, os.path.join(shim_dir(), name)):
+                    return name
+            except OSError:
+                pass
+        return None  # the first executable is the one PATH would run
     return None
 
 
