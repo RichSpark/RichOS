@@ -99,7 +99,7 @@ print(json.dumps({'tool_name': 'MultiEdit', 'tool_input': {'file_path': sys.argv
 # make_fakebin_no_python3 — mirrors the rest of the hook family's own repro.
 make_fakebin_no_python3() {
     local dir
-    dir="$(mktemp -d -t fakebin-no-python3.XXXXXX)"
+    dir="$(mktemp -d "${TMPDIR:?}/fakebin-no-python3.XXXXXX")"
     local tools="cat grep sed cut tr date mkdir git mktemp basename dirname rm ln awk sort uniq wc head tail shasum sha256sum env"
     local t p
     for t in $tools; do
@@ -178,7 +178,7 @@ run_case "short generic value under MIN_LENGTH passes" 0 \
     "$(json_write Write content 'pwd=abc123')"
 
 # --- (c) config-driven allowlist ---
-ALLOW_CONFIG_ROOT="$(mktemp -d -t scan-secrets-allowlist.XXXXXX)"
+ALLOW_CONFIG_ROOT="$(mktemp -d "${TMPDIR:?}/scan-secrets-allowlist.XXXXXX")"
 mkdir -p "$ALLOW_CONFIG_ROOT/scripts/hooks"
 cp "$HOOK" "$ALLOW_CONFIG_ROOT/scripts/hooks/scan-secrets.sh"
 chmod +x "$ALLOW_CONFIG_ROOT/scripts/hooks/scan-secrets.sh"
@@ -260,18 +260,22 @@ ca_case() { # <name> <want-default> <want-code-aware> <content>
 ca_case "type annotation"        2 0 'let token: NSObjectProtocol? = nil'
 ca_case "dotted member path"     2 0 'api_key = config.credentials.apiKey'
 ca_case "call expression"        2 0 'secret = getSecret(fromKeychain)'
-ca_case "descriptive fixture"    2 0 'password = "BEARER_PROTOCOL_FUTURE_TOKEN"'
-ca_case "hyphenated descriptive" 2 0 'token = "verification-token-alpha"'
+ca_case "descriptive fixture needs an explicit allowlist" 2 2 'password = "BEARER_PROTOCOL_FUTURE_TOKEN"'
+ca_case "hyphenated literal needs an explicit allowlist" 2 2 'token = "verification-token-alpha"'
 
-# The price, stated rather than hidden. These are the shapes the opt-in also
-# waves through. A reviewer reading this suite sees the trade in the same place
-# as the benefit.
+# Alphabetic and numeric literals are still scanned with the opt-in on.
 ca_case "P3-25: all-alpha passphrase is still blocked"  2 2 'password = "correcthorsebatterystaple"'
 ca_case "P3-25: all-digit long value is still blocked"  2 2 'secret = "839201748392017483920174"'
 
 # v3 re-check: random mixed-case letters split by an underscore are not words.
 CA_SEP="$(printf 'QqWwEeRrTtYyUuIi%sOoPpAaSsDdFfGgHh' '_')"
 ca_case "P3-25 v3: separated random alphabetic password is still blocked" 2 2 "password = \"$CA_SEP\""
+
+for CA_CASE in lower upper; do
+    CA_ONE_CASE="$(printf 'qwertyuiopasdfghj%s%s' '_' 'zxcvbnmlkjhgfdsa')"
+    [ "$CA_CASE" = upper ] && CA_ONE_CASE="$(printf '%s' "$CA_ONE_CASE" | tr '[:lower:]' '[:upper:]')"
+    ca_case "P3-25 v5: separated $CA_CASE-case random password stays blocked" 2 2 "password = \"$CA_ONE_CASE\""
+done
 
 # What the opt-in must NEVER touch. If any of these flipped, the setting would
 # be a hole, not a filter.
@@ -299,7 +303,7 @@ ca_case "real-source: Swift call with arguments"          2 0 'password = s.repl
 # case that passes under both settings must never be counted as a win for one.
 ca_case "PIN real-source: Convex validator (passes under BOTH)" 0 0 'secret: v.string(),'
 ca_case "real-source: generic type parameter"             2 0 'secret: Array<StringElement>'
-ca_case "real-source: hyphenated descriptive constant"    2 0 'val token = "abc-123-token"'
+ca_case "real-source: hyphenated literal needs an explicit allowlist" 2 2 'val token = "abc-123-token"'
 
 # THE TWO ARMS THAT MAKE THE REDUCER A FILTER AND NOT A HOLE.
 #

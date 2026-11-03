@@ -26,7 +26,7 @@
 #   this; that is the operator's to do." A state change that requires a human
 #   action is not a date, it is a request.
 #
-# So this notice states three things EVERY time it fires, and a change that
+# For a new host registration this notice states three things. A change that
 # drops any of them has broken it:
 #   1. WHICH guards are landed but not enforcing — named, derived, never typed;
 #   2. that they are inert RIGHT NOW, for the rest of this session;
@@ -416,14 +416,35 @@ CUR_ROWS="$(printf '%s\n' "$CUR_ROWS" | grep -v '^$' | LC_ALL=C sort -u)"
 CUR_N="$(printf '%s\n' "$CUR_ROWS" | grep -c . || true)"
 [ "${CUR_N:-0}" -ge 1 ] || cannot_compare "$SURFACE currently registers ZERO hook scripts, so there is nothing to compare the baseline against"
 
+# Only hooks.json commands are frozen by the host. The expanded inventory
+# also includes manifest modules, which an existing dispatcher reads afresh.
+# Use the shared command parser to distinguish them without changing the
+# inventory consumed by the snapshotter or the other guards.
+HOST_ROWS="$(PYTHONPATH="$SCRIPT_DIR/../lib${PYTHONPATH:+:$PYTHONPATH}" python3 - "$SURFACE" <<'PY_HOST'
+import json, sys
+from hook_command import executed_hooks
+with open(sys.argv[1], encoding="utf-8") as fh:
+    doc = json.load(fh)
+rows = set()
+for event, entries in doc.get("hooks", {}).items():
+    for entry in entries:
+        matcher = entry.get("matcher") or "-"
+        for hook in entry.get("hooks", []) or []:
+            for script in executed_hooks(hook.get("command", "")):
+                rows.add("%s\t%s\t%s" % (event, matcher, script))
+print("\n".join(sorted(rows)))
+PY_HOST
+)" || cannot_compare "could not distinguish host registrations from live dispatcher modules"
+
 # --- the delta -----------------------------------------------------------
-# Three kinds, all of them facts about two files:
+# Host additions, live module additions and removals in the expanded inventory:
 #   NEW-SCRIPT  a script wired now whose basename was absent at session start
 #               -> landed this session, enforcing NOTHING at all. The headline.
 #   NEW-WIRING  a script that WAS wired at session start, now also wired to a
 #               further event/matcher -> that hook point is not live.
-#   DROPPED     a registration present at session start and gone now -> the
-#               session is still firing something the table no longer asks for.
+#   MODULE      a module newly listed by the current dispatcher manifest.
+#   DROPPED     a row present at session start and gone now. Its old origin
+#               (direct host command or manifest module) was not snapshotted.
 # LC_ALL=C on comm as well as on the sorts that fed it: comm compares under the
 # ambient collation, and a set difference taken between two orderings is not a
 # set difference at all — it invents rows in both directions.
@@ -434,12 +455,17 @@ BASE_SCRIPTS="$(printf '%s\n' "$BASE_ROWS" | awk -F'\t' 'NF{print $3}' | LC_ALL=
 
 NEW_SCRIPT_LINES=""
 NEW_WIRING_LINES=""
+MODULE_LINES=""
 KEYS=""
 while IFS=$'\t' read -r ev matcher script; do
     [ -n "${script:-}" ] || continue
     where="$ev"
     [ "$matcher" = "-" ] || where="$ev[$matcher]"
-    if printf '%s\n' "$BASE_SCRIPTS" | grep -qxF "$script"; then
+    row="$(printf '%s\t%s\t%s' "$ev" "$matcher" "$script")"
+    if ! printf '%s\n' "$HOST_ROWS" | grep -qxF "$row"; then
+        MODULE_LINES="${MODULE_LINES}    ${script} on ${where}"$'\n'
+        KEYS="${KEYS}MODULE\t${ev}\t${matcher}\t${script}"$'\n'
+    elif printf '%s\n' "$BASE_SCRIPTS" | grep -qxF "$script"; then
         NEW_WIRING_LINES="${NEW_WIRING_LINES}    ${script} — newly wired on ${where}"$'\n'
         KEYS="${KEYS}NEW-WIRING	${ev}	${matcher}	${script}"$'\n'
     else
@@ -455,7 +481,7 @@ while IFS=$'\t' read -r ev matcher script; do
     [ -n "${script:-}" ] || continue
     where="$ev"
     [ "$matcher" = "-" ] || where="$ev[$matcher]"
-    DROPPED_LINES="${DROPPED_LINES}    ${script} — was wired on ${where} at session start, no longer in the table"$'\n'
+    DROPPED_LINES="${DROPPED_LINES}    ${script} on ${where} — no longer in the current inventory"$'\n'
     KEYS="${KEYS}DROPPED	${ev}	${matcher}	${script}"$'\n'
 done <<REM_EOF
 $REMOVED
@@ -468,7 +494,7 @@ REM_EOF
 N_INERT="$(printf '%s\n' "$NEW_SCRIPT_LINES$NEW_WIRING_LINES" | grep -c . || true)"
 N_DROPPED="$(printf '%s\n' "$DROPPED_LINES" | grep -c . || true)"
 
-MSG="RichOS engine: the hook table on disk NO LONGER MATCHES the one this session booted with."
+MSG="RichOS engine: the hook inventory on disk NO LONGER MATCHES the session-start inventory."
 if [ "${N_INERT:-0}" -gt 0 ]; then
     MSG="$MSG
   ${N_INERT} guard(s) LANDED SINCE THIS SESSION STARTED — on disk, registered, and ENFORCING NOTHING RIGHT NOW:"
@@ -477,25 +503,39 @@ ${NEW_SCRIPT_LINES%$'\n'}"
     [ -n "$NEW_WIRING_LINES" ] && MSG="$MSG
 ${NEW_WIRING_LINES%$'\n'}"
 fi
+if [ -n "$MODULE_LINES" ]; then
+    MSG="$MSG
+  Dispatcher module inventory added:
+${MODULE_LINES%$'\n'}
+  Dispatchers read their current manifest on every call. Manifest-only edits
+  take effect on the next call through an already registered dispatcher;
+  they need no session restart."
+fi
 if [ "${N_DROPPED:-0}" -gt 0 ]; then
     MSG="$MSG
-  ${N_DROPPED} registration(s) REMOVED since this session started — this session is still firing them:
+  ${N_DROPPED} inventory row(s) REMOVED since this session started:
 ${DROPPED_LINES%$'\n'}"
 fi
 
+if [ "${N_INERT:-0}" -gt 0 ]; then
+    MSG="$MSG
+
+The host reads hooks/hooks.json at session start. TO ARM new host registrations:
+RESTART THIS SESSION (or use /reload-plugins). THIS IS YOURS TO DO; the assistant
+cannot reload the host's hook table. Treat the new host registrations above as
+absent until then."
+fi
+if [ "${N_DROPPED:-0}" -gt 0 ]; then
+    MSG="$MSG
+Host registrations removed from hooks.json still require a session restart or
+/reload-plugins to stop running. Manifest removals take effect on the next
+call through the dispatcher. The old expanded snapshot does not distinguish
+the two origins, so removed inventory rows alone cannot prove stale enforcement."
+fi
 MSG="$MSG
 
-The host reads the engine's hooks/hooks.json ONCE, at session start. Everything
-listed above will stay exactly as it is for the rest of this session, no matter
-what else you do.
-
-TO ARM THEM: RESTART THIS SESSION. It takes five seconds and you can do it right
-now. (/reload-plugins re-reads a plugin's hook table too.) THIS IS YOURS TO DO —
-a hook cannot restart a session and neither can the assistant. Until you do,
-treat every guard listed above as absent: it will not catch anything.
-
-Compared ${CUR_N} current registration(s) against the ${BASE_N} this session
-booted with. $HOOK_TAG"
+Compared ${CUR_N} current inventory row(s) against the ${BASE_N} at session start.
+$HOOK_TAG"
 
 announce_once "$KEYS" "$MSG"
 exit 0

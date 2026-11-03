@@ -7,7 +7,7 @@
 #      updatedInput envelope with the American text, on all four tool shapes,
 #      re-cased, with every change reported and no permissionDecision.
 #   R. REFUSALS — what cannot be fixed mechanically still exits 2: `CEO queue`,
-#      code identifiers, single-token string literals, markup/styles/config,
+#      code identifiers, string literals, markup/styles/config,
 #      quotations, a capital mid-sentence, a hyphenated token or an
 #      interpolation inside a code string.
 #   B. NEGATIVES — nothing at all on clean text, identifiers, CSS custom
@@ -51,7 +51,7 @@ DICT="$ENGINE_ROOT/scripts/lib/dialect-en-US.dict"
 
 PASS=0
 FAIL=0
-SANDBOX="$(cd "$(mktemp -d -t dialect-guard-test.XXXXXX)" && pwd -P)"
+SANDBOX="$(cd "$(mktemp -d "${TMPDIR:?}/dialect-guard-test.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required" >&2; exit 1; }
@@ -175,9 +175,8 @@ case_fixed "A16. a hyphenated compound in prose is fixed"       "$C" "a gray-box
 case_fixed "A17. code: a comment is fixed"                      "$C" "// the color of it
 let x = 1;" Write "$SANDBOX/a.rs" "// the colour of it
 let x = 1;"
-case_fixed "A18. code: a sentence in a string literal is fixed" "$C" 'label = "Pick a nice color"' Write "$SANDBOX/a.py" 'label = "Pick a nice colour"'
-case_fixed "A19. code: a shell comment and a quoted sentence"   "$C" '# the behavior of it
-echo "the color is wrong"' Write "$SANDBOX/a.sh" '# the behaviour of it
+case_refused "A18. code: a sentence in a string needs review" "string literal" Write "$SANDBOX/a.py" 'label = "Pick a nice colour"'
+case_refused "A19. code: a comment does not make a quoted operand safe" "string literal" Write "$SANDBOX/a.sh" '# the behaviour of it
 echo "the colour is wrong"'
 case_fixed "A20. the envelope never sets permissionDecision"    '"permissionDecision" in o' "False" Write "$MD" "the colour"
 case_fixed "A21. the whole tool_input is copied, file_path kept" 'o["updatedInput"]["file_path"]' "$MD" Write "$MD" "the colour"
@@ -194,22 +193,24 @@ echo "=== R. REFUSALS — what cannot be fixed mechanically still blocks ==="
 case_refused "R1. 'CEO queue' is refused"                       "a rename, not a spelling" Write "$MD" "13 items are in the CEO queue right now."
 case_refused "R2. \"CEO's queue\" is refused"                   "a rename, not a spelling" Write "$MD" "It sat in the CEO's queue for a week."
 case_msg  "R2b. the queue refusal names CEO-TODOs as the fix"   "CEO-TODOs" Write "$MD" "13 items are in the CEO queue."
-case_refused "R3. a single-token string literal is refused"     "single-token string literal" Write "$SANDBOX/a.js" 'const k = "colour";'
+case_refused "R3. a single-token string literal is refused"     "string literal" Write "$SANDBOX/a.js" 'const k = "colour";'
 case_refused "R4. a code identifier is refused"                 "renaming an identifier changes behavior" Write "$SANDBOX/a.rs" 'let colour = 1;'
 case_refused "R5. markup is refused"                            "markup, styles or config" Write "$SANDBOX/a.html" '<p>the colour of it</p>'
 case_refused "R5b. config is refused"                           "markup, styles or config" Write "$SANDBOX/a.json" '{"label": "the colour of it"}'
 case_refused "R5c. a style is refused"                          "markup, styles or config" Write "$SANDBOX/a.css" '.x { content: "the colour" }'
 case_refused "R6. a quotation in prose is refused"              "inside a quotation" Write "$MD" 'He wrote "the colour of it is wrong" and left.'
 case_refused "R7. a capital mid-sentence is refused (a name)"   "capitalized mid-sentence" Write "$MD" "We met the Labour Party today."
-case_refused "R8. a hyphenated token in a code string is refused" "hyphenated token inside a string" Write "$SANDBOX/a.js" 'el.className = "btn text-colour";'
-case_refused "R9. an interpolation in a code string is refused" "interpolation or a format field" Write "$SANDBOX/a.py" 'msg = f"the {colour} value"'
-case_refused "R10. markup inside a code string is refused"      "markup inside a string" Write "$SANDBOX/a.js" 'html = "<span>the colour</span>";'
+case_refused "R8. a hyphenated token in a code string is refused" "string literal" Write "$SANDBOX/a.js" 'el.className = "btn text-colour";'
+case_refused "R9. an interpolation in a code string is refused" "string literal" Write "$SANDBOX/a.py" 'msg = f"the {colour} value"'
+case_refused "R10. markup inside a code string is refused"      "string literal" Write "$SANDBOX/a.js" 'html = "<span>the colour</span>";'
 # R16-R17 — the review's first shape (finding 1): markup and patterns inside a JS or TS file.
-case_refused "R16. a JSX attribute value is refused, never fixed" "an attribute value" Write "$SANDBOX/Picker.tsx" 'export default () => <div className="colour selected">Color picker</div>;'
-case_refused "R16b. ...in braces too" "an attribute value" Write "$SANDBOX/Picker2.tsx" 'export default () => <div className={"colour selected"}>x</div>;'
+case_refused "R16. a JSX attribute value is refused, never fixed" "string literal" Write "$SANDBOX/Picker.tsx" 'export default () => <div className="colour selected">Color picker</div>;'
+case_refused "R16b. ...in braces too" "string literal" Write "$SANDBOX/Picker2.tsx" 'export default () => <div className={"colour selected"}>x</div>;'
 case_refused "R17. a regular-expression literal is refused, quote marks and all" "a regular expression" Write "$SANDBOX/matcher.js" 'const match = /["'"'"']colour ["'"'"']/;'
-case_fixed "R17b. control: an ordinary JS sentence is still fixed"  "$C" 'const label = "Pick a nice color";' Write "$SANDBOX/b.js" 'const label = "Pick a nice colour";'
-case_fixed "R17c. control: a division is not a pattern"           "$C" 'const r = a / b; const s = "the color of it";' Write "$SANDBOX/c.js" 'const r = a / b; const s = "the colour of it";'
+case_refused "R17b. an ordinary JS sentence also needs review" "string literal" Write "$SANDBOX/b.js" 'const label = "Pick a nice colour";'
+case_refused "R17c. a division does not make a string safe" "string literal" Write "$SANDBOX/c.js" 'const r = a / b; const s = "the colour of it";'
+case_refused "R18. a runtime filename with spaces is never rewritten" "string literal" Write "$SANDBOX/reader.py" 'print(open("colour sample.txt").read().strip())'
+case_refused "R19. a quoted shell operand with spaces is never rewritten" "string literal" Write "$SANDBOX/reader.sh" "cat 'colour sample.txt'"
 case_msg  "R11. the refusal is re-cased: Colour -> Color"       "Colour -> Color" Write "$MD" "We met the Colour Party today."
 case_msg  "R12. the refusal names the file"                     "$MD" Write "$MD" "the CEO queue"
 case_msg  "R13. the refusal names the declared-exemption route" "dialect-exempt:" Write "$MD" "the CEO queue"
@@ -291,7 +292,7 @@ case_fixed "X2. ...and the same file outside the fence is fixed" "$N" "after the
 printf 'He said "the old text" and left.\n' > "$SANDBOX/x3.md"
 case_refused "X3. Edit inside a quotation is refused, not fixed" "inside a quotation" Edit "$SANDBOX/x3.md" "the old text" "the colour"
 printf 'const k = "KEY";\n// a note\n' > "$SANDBOX/x4.js"
-case_refused "X4. Edit inside a single-token JS string is refused" "single-token string literal" Edit "$SANDBOX/x4.js" "KEY" "colour"
+case_refused "X4. Edit inside a single-token JS string is refused" "string literal" Edit "$SANDBOX/x4.js" "KEY" "colour"
 case_fixed "X5. Edit inside a JS comment is fixed"             "$N" "a color note" Edit "$SANDBOX/x4.js" "a note" "a colour note"
 case_quiet "X6. old_string NOT in the file: nothing is done"   Edit "$SANDBOX/x4.js" "not in the file" "the colour"
 case_quiet "X7. the file does not exist: nothing is done"      Edit "$SANDBOX/missing.md" "anything" "the colour"
