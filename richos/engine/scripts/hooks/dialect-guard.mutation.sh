@@ -36,7 +36,7 @@ ENGINE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 PASS=0
 FAIL=0
-SANDBOX="$(cd "$(mktemp -d -t dialect-guard-mutation.XXXXXX)" && pwd -P)"
+SANDBOX="$(cd "$(mktemp -d "${TMPDIR:?}/dialect-guard-mutation.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required" >&2; exit 1; }
@@ -201,10 +201,10 @@ mutant no-ceo-queue-rule "R1. " "$F" \
     '    for s, e, matched in ():' \
     "the half of the ruling that is a RENAME rather than a spelling would go unenforced."
 
-mutant single-token-literal-fixed "R3. " "$F" \
-    '                elif not any(ch.isspace() for ch in content):' \
-    '                elif False:' \
-    "a one-word string can be a third-party wire value; fixing it breaks the call with nobody told."
+mutant string-literal-fixed "R18. " "$F" \
+    '                    action, why = "refuse", "a string literal: changing it may change program behavior; use dialect-exempt: with a reason for an intentional spelling"' \
+    '                    action, why = _prose_decision(text, s, e, run, ctx_lo, rs)' \
+    "a filename containing spaces would be rewritten and the working program would fail."
 
 mutant identifier-fixed "R4. " "$F" \
     '                action, why = "refuse", "code: renaming an identifier changes behavior"' \
@@ -226,16 +226,6 @@ mutant capital-mid-sentence-fixed "R7. " "$F" \
     '        if False:' \
     "names (a party, a ministry, a venue) would be respelled."
 
-mutant kebab-in-string-fixed "R8. " "$F" \
-    '                elif "-" in tok:' \
-    '                elif False:' \
-    "a class list in a string would have one class renamed and the style would break silently."
-
-mutant interpolation-fixed "R9. " "$F" \
-    '                elif _masked(content, s - rs):' \
-    '                elif False:' \
-    "a variable named inside a format string would be renamed in the string only."
-
 # --- 5. THE FRAGMENT IS JUDGED IN ITS FILE (C4) ----------------------------
 mutant edit-context-ignored "X1. " "$F" \
     '        virtual, lo = content[:k] + new + content[k + replace_len:], k' \
@@ -256,11 +246,6 @@ mutant regex-fixed "R17. " "$F" \
     '                if rkind == "regex":' \
     '                if False:' \
     "a regular expression's pattern would be respelled and would stop matching what it matched."
-
-mutant jsx-attribute-fixed "R16. " "$F" \
-    '                elif lang == "js" and _attribute_value(text, rs):' \
-    '                elif False:' \
-    "a JSX class list would have one class renamed and its selector would stop matching."
 
 # --- 6. THE EXEMPTIONS ARE THE PRODUCT, NOT THE TRIMMINGS ------------------
 mutant bare-marker-exempts "B12. " "$F" \
