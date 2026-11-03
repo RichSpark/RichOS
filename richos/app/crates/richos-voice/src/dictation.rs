@@ -521,6 +521,144 @@ pub fn restore_clipboard(change_count_now: i64, change_count_after_write: i64) -
     change_count_now == change_count_after_write
 }
 
+/// Identity evidence is computed by the native edge, never guessed from text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldIdentity {
+    Same,
+    ChangedOrLost,
+    UnreadableFromStart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryPermission {
+    Paste,
+    Recover,
+    DiscardSecure,
+}
+
+pub fn delivery_permission(same_app: bool, same_window: bool, field: FieldIdentity,
+                           secure_destination: bool, navigated: bool) -> DeliveryPermission {
+    if !same_app || !same_window {
+        return DeliveryPermission::Recover;
+    }
+    if secure_destination {
+        return DeliveryPermission::DiscardSecure;
+    }
+    match field {
+        FieldIdentity::ChangedOrLost => DeliveryPermission::Recover,
+        FieldIdentity::UnreadableFromStart if navigated => DeliveryPermission::Recover,
+        _ => DeliveryPermission::Paste,
+    }
+}
+
+/// One completed text item. No audio, durable storage or whole-window content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Draft {
+    pub original: String,
+    pub text: String,
+    pub destination: String,
+    pub company: Option<String>,
+    pub completed_ms: u64,
+    pub range: Option<(isize, isize)>,
+}
+
+#[derive(Debug)]
+struct RecentDraft {
+    draft: Draft,
+    expires: Duration,
+    unresolved: bool,
+}
+
+pub const DRAFT_LIFETIME: Duration = Duration::from_secs(30 * 60);
+
+/// One protected recovery item, plus only the current delivered cleanup subject
+/// when an earlier unresolved item occupies Recover. Time is monotonic and supplied
+/// by the owner, so tests need no sleeps and a wall-clock adjustment cannot extend
+/// retention. The dictation key never consults this state before recording.
+#[derive(Debug, Default)]
+pub struct Drafts {
+    held: Option<RecentDraft>,
+    current: Option<RecentDraft>,
+    cleanup_eligible: bool,
+    clipboard_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retention {
+    pub earlier_unresolved: bool,
+    pub replaced_clipboard_only: bool,
+}
+
+impl Drafts {
+    pub fn recording_started(&mut self, now: Duration) {
+        self.expire(now);
+        self.current = None;
+        self.cleanup_eligible = false;
+    }
+
+    pub fn complete(&mut self, draft: Draft, unresolved: bool, copied: bool, now: Duration) -> Retention {
+        self.expire(now);
+        let earlier_unresolved = self.held.as_ref().is_some_and(|h| h.unresolved);
+        let replaced_clipboard_only = earlier_unresolved && unresolved && copied && self.clipboard_only;
+        let item = RecentDraft { draft, expires: now + DRAFT_LIFETIME, unresolved };
+        self.cleanup_eligible = !unresolved;
+        self.current = None;
+        if earlier_unresolved {
+            if unresolved {
+                self.clipboard_only |= copied;
+            } else {
+                self.current = Some(item);
+            }
+        } else {
+            self.held = Some(item);
+            self.clipboard_only = false;
+        }
+        Retention { earlier_unresolved, replaced_clipboard_only }
+    }
+
+    pub fn expire(&mut self, now: Duration) {
+        if self.held.as_ref().is_some_and(|h| now >= h.expires) {
+            self.held = None;
+            self.clipboard_only = false;
+        }
+        if self.current.as_ref().is_some_and(|h| now >= h.expires) {
+            self.current = None;
+        }
+    }
+
+    pub fn recovery(&mut self, now: Duration) -> Option<&Draft> {
+        self.expire(now);
+        self.held.as_ref().map(|h| &h.draft)
+    }
+
+    pub fn cleanup_subject(&mut self, now: Duration) -> Option<&Draft> {
+        self.expire(now);
+        if !self.cleanup_eligible {
+            return None;
+        }
+        self.current.as_ref().or_else(|| self.held.as_ref().filter(|h| !h.unresolved)).map(|h| &h.draft)
+    }
+
+    pub fn copied_recovery(&mut self) {
+        self.held = None;
+        self.clipboard_only = false;
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn remove_company(&mut self, company: &str) {
+        if self.held.as_ref().is_some_and(|h| h.draft.company.as_deref() == Some(company)) {
+            self.held = None;
+            self.clipboard_only = false;
+        }
+        if self.current.as_ref().is_some_and(|h| h.draft.company.as_deref() == Some(company)) {
+            self.current = None;
+        }
+    }
+}
+
 /// The plain-text pasteboard type the words are written as.
 pub const PLAIN_TEXT_TYPE: &str = "public.utf8-plain-text";
 /// The nspasteboard.org marker that tells clipboard managers to leave an item out of their
@@ -533,6 +671,73 @@ pub const WRITTEN_TYPES: [&str; 2] = [PLAIN_TEXT_TYPE, TRANSIENT_TYPE];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destination_changes_and_secure_fields_fail_safely_without_regressing_unreadable_windows() {
+        use DeliveryPermission::*;
+        use FieldIdentity::*;
+        assert_eq!(delivery_permission(true, true, UnreadableFromStart, false, false), Paste);
+        assert_eq!(delivery_permission(true, true, UnreadableFromStart, false, true), Recover);
+        assert_eq!(delivery_permission(true, true, Same, false, true), Paste);
+        assert_eq!(delivery_permission(true, true, ChangedOrLost, false, false), Recover);
+        assert_eq!(delivery_permission(true, false, Same, false, false), Recover);
+        assert_eq!(delivery_permission(false, true, Same, false, false), Recover);
+        assert_eq!(delivery_permission(true, true, Same, true, false), DiscardSecure);
+        assert_eq!(delivery_permission(false, false, Same, true, false), Recover,
+                   "a different password app must not discard speech meant for the old destination");
+    }
+
+    fn draft(text: &str) -> Draft {
+        Draft { original: text.into(), text: text.into(), destination: "Mail".into(),
+                company: Some("company-a".into()), completed_ms: 42, range: Some((5, text.len() as isize)) }
+    }
+
+    #[test]
+    fn unresolved_draft_is_protected_while_latest_delivered_text_remains_available_for_cleanup() {
+        let mut drafts = Drafts::default();
+        let now = Duration::ZERO;
+        drafts.complete(draft("first failed"), true, true, now);
+        drafts.recording_started(now);
+        drafts.complete(draft("latest delivered"), false, false, now);
+        assert_eq!(drafts.recovery(now).unwrap().text, "first failed");
+        assert_eq!(drafts.cleanup_subject(now).unwrap().text, "latest delivered");
+        drafts.recording_started(now);
+        assert!(drafts.cleanup_subject(now).is_none());
+        assert_eq!(drafts.recovery(now).unwrap().text, "first failed");
+    }
+
+    #[test]
+    fn repeated_unresolved_results_report_the_bounded_clipboard_replacement_and_never_evict_first() {
+        let mut drafts = Drafts::default();
+        let now = Duration::ZERO;
+        assert!(!drafts.complete(draft("first"), true, true, now).earlier_unresolved);
+        assert_eq!(drafts.complete(draft("second"), true, true, now),
+                   Retention { earlier_unresolved: true, replaced_clipboard_only: false });
+        assert!(!drafts.complete(draft("copy failed"), true, false, now).replaced_clipboard_only);
+        assert!(drafts.complete(draft("third copied"), true, true, now).replaced_clipboard_only);
+        assert_eq!(drafts.recovery(now).unwrap().text, "first");
+        drafts.copied_recovery();
+        assert!(drafts.recovery(now).is_none());
+        drafts.complete(draft("next"), true, false, now);
+        assert_eq!(drafts.recovery(now).unwrap().text, "next");
+    }
+
+    #[test]
+    fn draft_expiry_is_not_extended_and_clear_or_company_removal_removes_owned_text() {
+        let mut drafts = Drafts::default();
+        drafts.complete(draft("first"), true, true, Duration::ZERO);
+        drafts.complete(draft("later delivered"), false, false, Duration::from_secs(60));
+        assert!(drafts.recovery(DRAFT_LIFETIME).is_none());
+        assert_eq!(drafts.cleanup_subject(DRAFT_LIFETIME).unwrap().text, "later delivered");
+        drafts.remove_company("other-company");
+        assert!(drafts.cleanup_subject(DRAFT_LIFETIME).is_some());
+        drafts.remove_company("company-a");
+        assert!(drafts.cleanup_subject(DRAFT_LIFETIME).is_none());
+        drafts.complete(draft("another"), false, false, DRAFT_LIFETIME);
+        drafts.clear();
+        assert!(drafts.recovery(DRAFT_LIFETIME).is_none());
+        assert!(drafts.cleanup_subject(DRAFT_LIFETIME).is_none());
+    }
     use crate::vad::VAD_FRAME_SAMPLES;
 
     // ---- the key ---------------------------------------------------------------------------
