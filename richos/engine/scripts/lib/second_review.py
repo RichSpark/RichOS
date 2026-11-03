@@ -1386,12 +1386,12 @@ def review(a):
         purpose = "handover" if a.trigger in ("handover", "manual") else "progress"
         existing = [r for r in read_ledger() if r.get("tip") == w.tip and r.get("verdict")
                     and same_repo(r, w.repo, repo_identity(w.repo))
-                    and r.get("work") == w.work_key
                     and ("handover" if r.get("trigger") in ("handover", "manual") else "progress") == purpose]
         recheck = getattr(a, "recheck", "")
         if recheck and not any(r.get("id") == recheck for r in existing):
             raise Refused("--recheck must name an existing review of this repository/source/purpose")
-        reusable = [r for r in existing if r.get("recheck_of", "") == recheck]
+        reusable = [r for r in existing if r.get("work") == w.work_key
+                    and r.get("recheck_of", "") == recheck]
         if reusable:
             row = reusable[-1]
             if row.get("input_identity") != review_input_identity(w):
