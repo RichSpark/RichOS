@@ -379,7 +379,7 @@
         "richos/engine/scripts/lib/git-jurisdiction.test.sh": "c90214ce50a34b663725e7a4f3020b9ca6f1738c7508fd1fad883742f5439572",
         "richos/engine/scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "richos/engine/scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
-        "richos/engine/scripts/lib/command_reader.py": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561",
+        "richos/engine/scripts/lib/command_reader.py": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5",
         "richos/engine/scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "richos/engine/scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838"
       },
@@ -1704,7 +1704,7 @@
         "richos/engine/hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
         "richos/engine/scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
         "richos/engine/scripts/lib/machine_paths.py": "c6c84b3946aa4f1f4be46d9f6176f9149b07a75c57163ad6f649aec5d396142a",
-        "richos/engine/scripts/lib/command_reader.py": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561",
+        "richos/engine/scripts/lib/command_reader.py": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5",
         "richos/engine/scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "richos/engine/scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838"
       },

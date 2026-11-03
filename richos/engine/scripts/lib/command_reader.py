@@ -109,11 +109,13 @@ def _words(raw):
     return result
 
 
-def _unwrap(words):
+def _unwrap(words, environment=None):
     i = 0
     while i < len(words):
         word = words[i]
         if ASSIGNMENT.match(word):
+            if environment is not None:
+                environment.append(word)
             i += 1
             continue
         base = os.path.basename(word)
@@ -126,12 +128,14 @@ def _unwrap(words):
             if base == "command" and word in ("-v", "-V"):
                 return []  # lookup only
             if base == "script" and word in ("-c", "--command"):
-                return _unwrap(shlex.split(words[i + 1]) + words[i + 2:])
+                return _unwrap(shlex.split(words[i + 1]) + words[i + 2:], environment)
             if base == "env" and (word in ("-S", "--split-string") or word.startswith("--split-string=")):
                 value = word.split("=", 1)[1] if "=" in word else words[i + 1]
                 rest = words[i + (1 if "=" in word else 2):]
-                return _unwrap(shlex.split(value) + rest)
+                return _unwrap(shlex.split(value) + rest, environment)
             if base == "env" and ASSIGNMENT.match(word):
+                if environment is not None:
+                    environment.append(word)
                 i += 1
             elif word == "--":
                 i += 1
@@ -162,33 +166,35 @@ def _shell_stdin(argv):
     return True
 
 
-def commands(text, depth=0):
+def commands(text, depth=0, with_environment=False):
     """Yield argv for literal commands and executable substitutions, not printed text."""
     if depth > 8:
         return
     raw_commands, nested = tokenize(text)
     for raw in raw_commands:
+        environment = []
         try:
-            argv = _unwrap(_words(raw))
+            argv = _unwrap(_words(raw), environment)
         except (ValueError, IndexError):
             continue
         if not argv:
             continue
-        yield argv
+        yield (argv, environment) if with_environment else argv
         if os.path.basename(argv[0]) == "eval":
-            yield from commands(" ".join(argv[1:]), depth + 1)
+            yield from commands(" ".join(argv[1:]), depth + 1, with_environment)
         if os.path.basename(argv[0]) == "find":
             for k, arg in enumerate(argv):
                 if arg in ("-exec", "-execdir", "-ok", "-okdir"):
                     end = next((j for j in range(k + 1, len(argv)) if argv[j] in (";", "+")), len(argv))
+                    child_environment = list(environment)
                     try:
-                        child = _unwrap(argv[k + 1:end])
+                        child = _unwrap(argv[k + 1:end], child_environment)
                     except (ValueError, IndexError):
                         continue
                     if child:
-                        yield child
+                        yield (child, child_environment) if with_environment else child
     for body in nested:
-        yield from commands(body, depth + 1)
+        yield from commands(body, depth + 1, with_environment)
     # Here-document data is executable only when it is stdin to a shell.
     for head, body in heredocs(text):
         for raw in tokenize(head)[0]:
@@ -197,7 +203,7 @@ def commands(text, depth=0):
             except (ValueError, IndexError):
                 continue
             if argv and os.path.basename(argv[0]) in SHELLS and _shell_stdin(argv):
-                yield from commands(body, depth + 1)
+                yield from commands(body, depth + 1, with_environment)
 
 
 def git_commands(text):

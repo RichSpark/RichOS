@@ -82,16 +82,21 @@ def verdict(command, depth=0):
     """Return the shell name for an inline script, otherwise None."""
     if depth > 8:
         return None
-    for argv in commands(command):
+    for argv, environment in commands(command, with_environment=True):
         name = os.path.basename(argv[0])
+        mention = name in TEXT_COMMANDS and not (
+            name == "rg" and any(arg.startswith("--pre") for arg in argv[1:]))
+        if not mention:
+            unknown = _unknown_shell(environment)
+            if unknown:
+                return unknown
         if name == "ssh":
             nested = verdict(ssh_command(argv), depth + 1)
             if nested:
                 return nested
             continue
         if name not in SHELLS:
-            if name == "eval" or (name in TEXT_COMMANDS and not (
-                    name == "rg" and any(arg.startswith("--pre") for arg in argv[1:]))):
+            if name == "eval" or mention:
                 continue
             unknown = _unknown_shell(_git_action_args(argv) if name == "git" else argv)
             if unknown:

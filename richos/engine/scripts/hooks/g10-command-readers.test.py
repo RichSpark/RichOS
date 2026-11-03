@@ -72,6 +72,19 @@ class G10(unittest.TestCase):
         for cmd in ["eval \"printf '%s' 'bash -c'\"", "ssh host \"printf '%s' 'bash -c'\""]:
             with self.subTest(cmd=cmd):
                 self.assertIsNone(shell.verdict(cmd))
+
+    def test_47_environment_programs(self):
+        for cmd in ["GIT_EDITOR=\"bash -c 'x'\" git commit",
+                    "GIT_SEQUENCE_EDITOR=\"sh -c 'x'\" git rebase -i HEAD~2",
+                    "env GIT_EDITOR=\"bash -c 'x'\" git commit",
+                    "PAGER=\"sh -c 'cat'\" git log",
+                    "sudo env GIT_EDITOR=\"bash -c 'x'\" git commit"]:
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(shell.verdict(cmd))
+        for cmd in ["EXAMPLE='bash -c' printf '%s' example", "env EXAMPLE='bash -c' grep pattern file",
+                    "GIT_EDITOR=true git commit -m 'mention bash -c'"]:
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(shell.verdict(cmd))
         for cmd in ["git commit -m 'mention bash -c'", "git commit -am 'mention bash -c'",
                     "git grep 'bash -c'", "git log --grep='bash -c'"]:
             with self.subTest(cmd=cmd):
