@@ -2555,7 +2555,9 @@ impl Outbox {
 
     /// Every waiting report, oldest first. A file this build cannot read is skipped, never deleted.
     pub fn pending(&self) -> io::Result<Vec<Pending>> {
+        let sent: std::collections::HashSet<_> = self.sent()?.into_iter().map(|s| s.id).collect();
         let mut out: Vec<Pending> = read_all(&self.waiting_dir())?;
+        out.retain(|p| !sent.contains(&p.id));
         out.sort_by_key(|p| (p.created_at_ms, p.id.clone()));
         Ok(out)
     }
@@ -2745,13 +2747,12 @@ impl Outbox {
     /// The shell calls this under the same one-at-a-time lock as every send, so a retry already
     /// in flight finishes first, and its record of going out is what this finds.
     pub fn withdraw(&self, id: &str) -> io::Result<Withdrawn> {
-        if self.cancel(id)? {
-            return Ok(Withdrawn::Canceled);
+        if let Some(sent) = self.sent()?.into_iter().find(|s| s.id == id) {
+            self.cleanup_sent(id);
+            return Ok(Withdrawn::AlreadySent(sent));
         }
-        Ok(match self.sent()?.into_iter().find(|s| s.id == id) {
-            Some(sent) => Withdrawn::AlreadySent(sent),
-            None => Withdrawn::Canceled,
-        })
+        self.cancel(id)?;
+        Ok(Withdrawn::Canceled)
     }
 
     /// **IS IT STILL WAITING HERE?** `None` while its copy waits on this Mac; otherwise what became
@@ -2760,13 +2761,10 @@ impl Outbox {
     /// waiting report being changed keeps its copy until the changed words are saved (CEO §156).
     /// Called under the same one-at-a-time lock as every send, so a retry in flight finishes first.
     pub fn gone(&self, id: &str) -> io::Result<Option<Withdrawn>> {
-        if self.path_of(id).is_some_and(|p| p.exists()) {
-            return Ok(None);
+        if let Some(sent) = self.sent()?.into_iter().find(|s| s.id == id) {
+            return Ok(Some(Withdrawn::AlreadySent(sent)));
         }
-        Ok(Some(match self.sent()?.into_iter().find(|s| s.id == id) {
-            Some(sent) => Withdrawn::AlreadySent(sent),
-            None => Withdrawn::Canceled,
-        }))
+        Ok(if self.path_of(id).is_some_and(|p| p.exists()) { None } else { Some(Withdrawn::Canceled) })
     }
 
     /// Remove a waiting report. `false` when there was none by that id.
@@ -2864,9 +2862,16 @@ impl Outbox {
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("sent.jsonl"))?;
         file.write_all(format!("{}\n", serde_json::to_string(sent).map_err(io::Error::other)?).as_bytes())?;
         file.sync_all()?;
-        // The record of it going out is on disk before the waiting copy goes, so a crash between
-        // the two leaves a report both sent and waiting (filed twice at worst), never neither.
-        self.cancel(&sent.id).map(|_| ())
+        // The synced receipt is authoritative even if cleanup fails or the app stops here.
+        // pending() excludes it, and the UI still answers that it was sent.
+        self.cleanup_sent(&sent.id);
+        Ok(())
+    }
+
+    fn cleanup_sent(&self, id: &str) {
+        if let Err(e) = self.cancel(id) {
+            eprintln!("[richos] bug report {id}: sent, but its waiting copy could not be removed ({e})");
+        }
     }
 }
 
@@ -3146,3 +3151,7 @@ mod tests {
         assert!(exact > 2500, "only {exact} of 3000 generated reports were exact ({doubted} in doubt)");
     }
 }
+
+#[cfg(test)]
+#[path = "bug_report/local_records_tests.rs"]
+mod local_records_tests;
