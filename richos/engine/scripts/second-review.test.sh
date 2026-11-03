@@ -917,7 +917,7 @@ sr.resolve_work=lambda _:w
 calls=[]
 def execute(a,w):
  calls.append(1)
- sr.append_row(dict(id='one',tip=tip,repo=repo,repo_id=sr.repo_identity(repo),trigger=a.trigger,
+ sr.append_row(dict(id='one',tip=tip,repo=repo,repo_id=sr.repo_identity(repo),trigger=a.trigger,work=w.work_key,
   verdict='passed',input_identity=sr.review_input_identity(w),recheck_of=a.recheck,record='fixture'))
  return 0
 sr._review_owned=execute

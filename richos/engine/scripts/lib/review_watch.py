@@ -981,11 +981,12 @@ class Book(object):
                 self.losses.pop(k, None)
                 self.held.pop(k, None)
 
-    def handover_verdict(self, key):
-        return [r for r in self.verdicts.get(key, []) if r.get("trigger") in HANDOVER_KINDS]
+    def handover_verdict(self, key, work=None):
+        return [r for r in self.verdicts.get(key, []) if r.get("trigger") in HANDOVER_KINDS
+                and (work is None or r.get("work") == work)]
 
-    def any_verdict(self, key):
-        return self.verdicts.get(key, [])
+    def any_verdict(self, key, work=None):
+        return [r for r in self.verdicts.get(key, []) if work is None or r.get("work") == work]
 
     def last_review_at(self, work):
         """The start of the newest review of this work, finished or running."""
@@ -1032,7 +1033,7 @@ def due(items, book, now, seen, long_seconds):
             continue                                # held by the quota: asked again at the next poll
 
         if it.state == "ended":
-            if book.handover_verdict(key) or it.stopped_early:
+            if book.handover_verdict(key, it.work) or it.stopped_early:
                 continue                            # stopped early: its continuation's handover covers these commits
             if running and running.get("trigger") in MID_JOB:
                 out.append((it, "handover", running))  # the handover replaces a mid-job review of this tip
@@ -1041,7 +1042,7 @@ def due(items, book, now, seen, long_seconds):
                 continue
             out.append((it, "handover", None))     # a lost one is started once more, as what it now is
             continue
-        if running or book.any_verdict(key):
+        if running or book.any_verdict(key, it.work):
             continue
         if lost:
             out.append((it, lost[-1].get("trigger") or "long-job", None))   # a lost review, started once more

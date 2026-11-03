@@ -1391,6 +1391,7 @@ def review(a):
         purpose = "handover" if a.trigger in ("handover", "manual") else "progress"
         existing = [r for r in read_ledger() if r.get("tip") == w.tip and r.get("verdict")
                     and same_repo(r, w.repo, repo_identity(w.repo))
+                    and r.get("work") == w.work_key
                     and ("handover" if r.get("trigger") in ("handover", "manual") else "progress") == purpose]
         recheck = getattr(a, "recheck", "")
         if recheck and not any(r.get("id") == recheck for r in existing):
