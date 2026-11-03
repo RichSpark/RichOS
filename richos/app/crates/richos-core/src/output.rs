@@ -572,12 +572,12 @@ impl OutputStore {
         std::fs::create_dir_all(&self.root)?;
         let mut file = std::fs::OpenOptions::new().create(true).read(true).append(true).open(&path)?;
         let _lock = Exclusive::take(&file)?;
-        let mut existing = String::new();
+        let mut existing = Vec::new();
         file.seek(SeekFrom::Start(0))?;
-        file.read_to_string(&mut existing)?;
+        file.read_to_end(&mut existing)?;
         let mut held: HashSet<String> = existing
-            .lines()
-            .filter_map(|l| serde_json::from_str::<WriteRow>(l).ok())
+            .split(|b| *b == b'\n')
+            .filter_map(|l| serde_json::from_slice::<WriteRow>(l).ok())
             .map(|r| r.key)
             .collect();
         let mut added = Vec::new();
@@ -626,12 +626,12 @@ impl OutputStore {
         };
         let mut out = RecordRead::default();
         let mut seen = HashSet::new();
-        for line in BufReader::new(file).lines() {
+        for line in BufReader::new(file).split(b'\n') {
             let line = line?;
-            if line.trim().is_empty() {
+            if std::str::from_utf8(&line).is_ok_and(|s| s.trim().is_empty()) {
                 continue;
             }
-            match serde_json::from_str::<WriteRow>(&line) {
+            match serde_json::from_slice::<WriteRow>(&line) {
                 Ok(row) if row.schema == ROW_SCHEMA && row.thread_id == thread_id => {
                     if seen.insert(row.key.clone()) {
                         out.rows.push(row);
@@ -1901,3 +1901,7 @@ mod tests {
         assert!(rows.is_empty(), "{rows:?}");
     }
 }
+
+#[cfg(test)]
+#[path = "output/local_records_tests.rs"]
+mod local_records_tests;
