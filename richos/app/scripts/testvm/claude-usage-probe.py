@@ -12,9 +12,71 @@ that never asked.
 import json
 import os
 import selectors
+import signal
+import math
 import subprocess
 import sys
 import time
+
+
+def read_wire(args, env, seconds, requests=(), gap=0, response_id=None, cwd='/var/empty'):
+    """Bound input scheduling and BOTH output pipes by one monotonic deadline.
+
+    Keep the direct child unreaped until its group is stopped. Its PID then cannot
+    be reused as an unrelated group between leader exit and cleanup.
+    """
+    end = time.monotonic() + seconds
+    p = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    buf, err = b'', b''
+    pending = list(requests)
+    next_send = time.monotonic()
+    try:
+        with selectors.DefaultSelector() as sel:
+            sel.register(p.stdout, selectors.EVENT_READ)
+            sel.register(p.stderr, selectors.EVENT_READ)
+            while sel.get_map():
+                now = time.monotonic()
+                if now >= end:
+                    break
+                if pending and now >= next_send:
+                    try:
+                        p.stdin.write((json.dumps(pending.pop(0)) + '\n').encode())
+                        p.stdin.flush()
+                    except BrokenPipeError:
+                        pending.clear()
+                    next_send = now + gap
+                wait = end - now
+                if pending:
+                    wait = min(wait, max(0, next_send - now))
+                for key, _ in sel.select(timeout=wait):
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        sel.unregister(key.fileobj)
+                    elif key.fileobj is p.stdout:
+                        buf += chunk
+                    else:
+                        err = (err + chunk)[-1500:]
+                if response_id:
+                    for line in buf.splitlines(keepends=True):
+                        if not line.endswith(b'\n'):
+                            continue
+                        try:
+                            row = json.loads(line)
+                            if row.get('type') == 'control_response' and row.get('response', {}).get('request_id') == response_id:
+                                return buf, err
+                        except (ValueError, AttributeError):
+                            pass
+    finally:
+        # No poll()/wait() before this signal, even when stdout reached EOF.
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        p.wait(timeout=5)
+        for pipe in (p.stdin, p.stdout, p.stderr):
+            pipe.close()
+    return buf, err
 
 
 def main(argv):
@@ -31,25 +93,22 @@ def main(argv):
     debug = argv[argv.index('--debug-file') + 1] if '--debug-file' in argv else None
     if debug:
         args += ['--debug-file', debug]
-    began = time.time()
-    p = subprocess.Popen(args, cwd='/var/empty', env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE)
-    for n, sub in ((1, 'initialize'), (2, 'get_usage')):
-        p.stdin.write((json.dumps({'type': 'control_request', 'request_id': 'probe-%d' % n,
-                                   'request': {'subtype': sub, 'hooks': {}}}) + '\n').encode())
-        p.stdin.flush()
-    sel = selectors.DefaultSelector()
-    sel.register(p.stdout, selectors.EVENT_READ)
-    end, buf = time.time() + seconds, b''
-    while time.time() < end and b'"probe-2"' not in buf:
-        if sel.select(timeout=1):
-            chunk = os.read(p.stdout.fileno(), 65536)
-            if not chunk:
-                break
-            buf += chunk
-    p.kill()
-    err = p.stderr.read().decode(errors='replace')[-1500:]
-    rows = [line for line in buf.decode(errors='replace').splitlines() if '"probe-2"' in line]
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError('--seconds must be finite and positive')
+    began = time.monotonic()
+    requests = [{'type': 'control_request', 'request_id': 'probe-%d' % n,
+                 'request': {'subtype': sub, 'hooks': {}}}
+                for n, sub in ((1, 'initialize'), (2, 'get_usage'))]
+    buf, error = read_wire(args, env, seconds, requests, response_id='probe-2')
+    err = error.decode(errors='replace')
+    rows = []
+    for line in buf.decode(errors='replace').splitlines():
+        try:
+            row = json.loads(line)
+            if row.get('type') == 'control_response' and row.get('response', {}).get('request_id') == 'probe-2':
+                rows.append(line)
+        except (ValueError, AttributeError):
+            pass
     usage_lines = []
     if debug:
         try:
@@ -57,7 +116,7 @@ def main(argv):
                 usage_lines = [line.strip()[:400] for line in fh if 'usage' in line.lower() or '429' in line][-20:]
         except OSError as exc:
             usage_lines = ['no debug log: ' + str(exc)]
-    print(json.dumps({'folder': folder, 'answered': bool(rows), 'seconds': round(time.time() - began, 1),
+    print(json.dumps({'folder': folder, 'answered': bool(rows), 'seconds': round(time.monotonic() - began, 1),
                       'answer': rows[0][:2500] if rows else None, 'stderr': err, 'debug_usage_lines': usage_lines}))
     return 0 if rows else 1
 
