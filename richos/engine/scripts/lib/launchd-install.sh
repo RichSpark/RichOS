@@ -97,7 +97,11 @@ launchd_install() {
         LAUNCHD_INSTALL_RESULT=loaded
     fi
 
-    mv -f "$_li_new" "$_li_plist"
+    if ! mv -f "$_li_new" "$_li_plist"; then
+        LAUNCHD_INSTALL_RESULT=failed
+        LAUNCHD_INSTALL_DETAIL="could not replace $_li_plist; the new schedule was not installed"
+        return 2
+    fi
     if ! launchctl bootstrap "$_li_domain" "$_li_plist" >/dev/null 2>&1; then
         LAUNCHD_INSTALL_RESULT=failed
         LAUNCHD_INSTALL_DETAIL="wrote $_li_plist but launchctl bootstrap failed"

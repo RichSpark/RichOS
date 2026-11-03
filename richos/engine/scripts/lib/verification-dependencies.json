@@ -17201,7 +17201,7 @@
     },
     "scripts/lib/launchd-install.sh": {
       "source": "scripts/lib/launchd-install.sh",
-      "sha256": "6cb609622e5a0ef1478750bb42bb8d18c6f3b117e7723f49ec9ea9ff1a9bb8c5",
+      "sha256": "66cf1b3b1046e79c3cdfb48d8240e9e3df26351158438386c647fb9855f55be5",
       "evidence": "Calls launchctl print/bootout/bootstrap, cmp, grep and sed on the label, plist and generated file its caller passes. Resolves its state directory from CLAUDE_CONFIG_DIR or HOME; reads ps for a recorded waiter pid; starts the fixed sibling launchd-install-after-run.sh through python3 with the install command, wait and poll its caller passes. No configuration lookup.",
       "keys": [],
       "edges": [
