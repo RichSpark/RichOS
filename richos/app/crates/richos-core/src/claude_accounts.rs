@@ -364,7 +364,7 @@ fn push_change(state: &mut Stored, change: Change) {
 }
 
 /// Was `id`'s adding finished (its sign-in came back as a different account) since it was
-/// last created? Ids are reused after a removal, so the latest row about it decides.
+/// last created? Older files reused ids after removal, so the latest row about it decides.
 fn fully_added(state: &Stored, id: &str) -> bool {
     state.changes.iter().rev().find(|c| c.id == id && (c.kind == "added" || c.kind == "removed"))
         .is_some_and(|c| c.kind == "added")
@@ -1441,7 +1441,7 @@ pub(crate) mod tests {
         assert!(accounts.evaluate(&readings(reading(10., HOUR, 30., 72 * HOUR), reading(0., HOUR, 99., 48 * HOUR)), Some(93), NOW + 2).unwrap());
         accounts.remove(&work.id).unwrap();
         let spare = accounts.add("Spare").unwrap();
-        assert_eq!(spare.id, work.id, "the id is reused, and its old rows must not count as this adding");
+        assert_ne!(spare.id, work.id, "a canceled adding has its own identity and must leave no change rows");
         accounts.remove(&spare.id).unwrap();
         let rows = |a: &Accounts| a.changes().iter().map(|c| (c.kind.clone(), c.label.clone(), c.from.clone(), c.why.clone())).collect::<Vec<_>>();
         let expected = vec![
