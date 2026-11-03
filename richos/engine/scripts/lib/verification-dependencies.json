@@ -14489,7 +14489,7 @@
     },
     "mega-lander/tests/app.test.py": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "b1afd21a6ebbdabfc4979420e2f94cf858b12dafc96a24c43139219c36275edd",
+      "sha256": "7402119dcf31a6be92a167c1adbd9a1f6114e80c2292b01ed11a3f5d38cb5140",
       "evidence": "Full fixed unittest fixture, literal holder/probe subprocess programs and one literal spawn failure override. Private Git, ECS stores, registry, scope, land locks and explicit single-hook manifest bind the app/adapter entrypoint guarantees. No agent, model, arbitrary setup or MCP server is invoked. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): setUp copies the always-active five (engine/agents/{dean,clark,reed,frank,pierce}.md) as data and writes one literal fictional teammate, mark.md, into the private roster; cases name a teammate in prepare and read the duty texts mega-lander/duties/*.md as data. Renewed 2026-10-06 (proto-teammate shelf slice 3): one case prepares Clark with role consult and no repository, starts and ends it through the existing fixture helpers with literal fictional messages, and reads the fixture's private ECS store for work units. Renewed 2026-10-06 (proto-teammate shelf slice 4): one case lists and shows the shipped shelf (team/shelf/*.md read as data), saves literal fictional definitions into the fixture's private <app data>/team/ and calls prepare once more against the private roster. Renewed 2026-10-09 (echo-opus-review4, second review slice 4): cases write the scope's user words (literal fictional text and its hash) and read the brief and <id>.words prepare writes; one case loads scripts/app-engine-hook.py and calls only its mid_job_notice, which loads scripts/lib/app_review.py over a literal private ledger; one case loads scripts/lib/review_watch.py and runs app_mode --tick (AppWorld over the fixture's private registry partition, with REVIEW_WATCH_SECOND_REVIEW a literal fake script that records its arguments and sleeps) and Watcher.stop_own on that fake's recorded pid. No model, Claude CLI or real review runs. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case passes a list's append as mid_job_notice's emit and reads the text from it; nothing else changes. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): the app-watcher case also gives app_mode a fixture path as accounts (never created) and checks the fake second-review's recorded --accounts argument; nothing new is read. Renewed 2026-10-11 (echo-opus-skills2, second review of 79ba6eb7e, finding 2): one more case reads mega-lander/duties/consult.md as data, as the consult case already does, and the module imports re; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-11 (echo-opus-skills2, mid-job review of 7f6ea1dd8): that case asserts more words of the same consult.md text; nothing new is read. Renewed 2026-10-14 (echo-opus-hiresnag55b): one test also runs ecs/adapters/mcp.py serve in process (no server process) to prove a brief the limit accepts fits the transport's request line. Renewed 2026-10-15 (echo-opus-hire57): one case reads engine/agents/dean.md as data (setUp already copies it) and saves literal fictional definitions into the fixture's private <app data>/team/ through the team tool; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-18 (retired execution after app update): retirement reads the canonical workspaces agents/done records through existing workspaces.py helpers under the fixture private RICHOS_WORKSPACES_DIR; active cleanup intent cannot retire a worker. The new fixture calls the same canonical land and session lifecycle APIs used by existing integration/restart cases, then verifies actual ECS completion. No configuration key, environment variable, subprocess type or outside fixture file is added. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): setUp names a committer in the fixture repository with `git config` (every land is now a merge commit); two cases write literal pre-merge-commit hooks into the private fixture repository, and one installs and switches on the fence there by running scripts/operator-fences.sh install and on against a literal private entity orchestration.config. Renewed 2026-10-21 (zach-opus-landgate1, review finding 1): one more case installs the fence with RICHOS_LAND_LOCKS_DIR at a second private directory of the fixture (another account's home) and lands under the fixture's own. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): setUp sets HOME and XDG_CONFIG_HOME to a private empty home; two cases write a literal ~/.gitconfig there (a global core.hooksPath, or an includeIf gitdir naming the fixture repository) selecting a literal refusing pre-merge-commit hook, and a literal identity file as the lease's GIT_CONFIG_GLOBAL. Renewed 2026-10-29 (live host resources): a fixture starts a normal worker through existing prepare/start helpers, verifies its resource read and rejects other scoped tools and an unregistered agent. Uses the existing fixture roots and imports; the pause-message closure is unchanged. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): seven cases added and one rewritten (P1-A): they write the fixture scope's actions_allowed/closed fields, a canonical record's proof_report through W.Lock/save_agent in the fixture registry, and call dispatch_intent, prepare and the hook's handle() on fixture state only. Renewed 2026-10-31 (zach-opus-tok4b, second review of bb08b88e0): the worker-notice case loads scripts/lib/app-evidence.py by fixed path (edge added) and passes each fixture payload through capture into the fixture's private engine-state/evidence before worker_context, as scripts/app-engine-hook.py does. Renewed 2026-10-31 (echo-opus-w2, app-terminal differences finding 10): a docstring of the worker-notice case only. Nothing read changed. Renewed 2026-10-31 (zach-opus-look1): inspect without an id answers jobs, the status lines of workspaces.py status_lines for the conversation's jobs; one case also runs workspaces.sh status with the explicit fixture session over the same private registry and compares the two, and the other cases read full records by id. Renewed 2026-11-01: setUp explicitly sets CODEX_COORDINATION_ROOT to its private fixture, covering AppWorld dedicated channel discovery without consulting operator connections. Renewed 2026-11-03 (G2): receipt UTF-8 encoding and its consult boundary regression use the existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Completion and replacement share the dispatchability predicate, retain same-session preparations across turns and require explicit settlement; regressions cover both paths and preserve refused-work cleanup. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Create-only team saves atomically link a fully written same-folder file instead of replacing a racing save; a barrier fixture verifies one success, one refusal, intact text, cleanup and explicit replacement. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Inspection compares refreshed receipt contents before saving, always retries projection and preserves changed canonical evidence; regressions count real saves/fsync and reconcile an interrupted outbox. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Thread-seat reconciliation reads the app-data ledger beside engine-state; corrected production-layout fixtures cover missing/unreadable ledgers, retained live seats, released orphan seats and an ignored wrong-folder decoy. Existing fixture closure; no new configuration, import or external dependency.",
       "keys": [],
       "edges": [
@@ -16398,7 +16398,7 @@
     },
     "mega-lander/tests/app.test.py#pause-message-case": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "b1afd21a6ebbdabfc4979420e2f94cf858b12dafc96a24c43139219c36275edd",
+      "sha256": "7402119dcf31a6be92a167c1adbd9a1f6114e80c2292b01ed11a3f5d38cb5140",
       "evidence": "Added 2026-09-30 for workspaces.test.py's finding-20 case, which runs this suite with the one name test_pause_message_is_fixed. That selects only DesktopWork.test_pause_message_is_fixed_and_does_not_claim_delivery: setUp builds private Git repositories, a private orchestration.config, agent definitions copied from the engine as data, a private registry, scope, ECS store and land-locks directory, and loads app.py; the case renders pause messages and calls inspect over no receipts. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): the agent definitions setUp copies are now the always-active five plus a literal fictional teammate; the case still never reaches prepare. Renewed 2026-10-06 (proto-teammate shelf slice 3): a consult case was added beside it; this case is unchanged. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case elsewhere in the file changed; this case is unchanged. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): the case also calls resume_message and asserts both tools say NOT HELD / NOT RELEASED for the unregistered fixture name, against the same private registry; nothing else in setUp changed. Renewed 2026-10-15 (echo-opus-hire57): a Dean name-rule case was added elsewhere in the file; this case is unchanged. Renewed 2026-10-18: retired-execution reconciliation and two desktop dispatch cases changed elsewhere in these files; this selected fixture closure and setUp are unchanged. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): setUp also runs `git config` for user.name and user.email in the private fixture repository; this case is otherwise unchanged. Renewed 2026-10-21 (zach-opus-landgate1, review finding 1): cases elsewhere in the file changed; this case is unchanged. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): setUp also sets HOME and XDG_CONFIG_HOME to a private empty home; this case is otherwise unchanged. Renewed 2026-10-29 (live host resources): a fixture starts a normal worker through existing prepare/start helpers, verifies its resource read and rejects other scoped tools and an unregistered agent. Uses the existing fixture roots and imports; the pause-message closure is unchanged. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): cases elsewhere in the file changed; this case is unchanged. Renewed 2026-10-31 (echo-opus-w2, app-terminal differences finding 10): a docstring of the worker-notice case only. Nothing read changed. Renewed 2026-11-03 (G2): receipt UTF-8 encoding and its consult boundary regression use the existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Completion and replacement share the dispatchability predicate, retain same-session preparations across turns and require explicit settlement; regressions cover both paths and preserve refused-work cleanup. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Create-only team saves atomically link a fully written same-folder file instead of replacing a racing save; a barrier fixture verifies one success, one refusal, intact text, cleanup and explicit replacement. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Inspection compares refreshed receipt contents before saving, always retries projection and preserves changed canonical evidence; regressions count real saves/fsync and reconcile an interrupted outbox. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Thread-seat reconciliation reads the app-data ledger beside engine-state; corrected production-layout fixtures cover missing/unreadable ledgers, retained live seats, released orphan seats and an ignored wrong-folder decoy. Existing fixture closure; no new configuration, import or external dependency.",
       "keys": [],
       "edges": [
@@ -16746,7 +16746,7 @@
     },
     "scripts/lib/shell_c.py": {
       "source": "scripts/lib/shell_c.py",
-      "sha256": "5b9a80c177e923da43d8296aac6a641a9f8b6821a71675e57eb0421d6e4ab125",
+      "sha256": "eddf87240d8c98c67f783857db244b252ccc21e47c37329cc8453328ba9da7f0",
       "keys": [],
       "edges": [
         {
@@ -17604,7 +17604,7 @@
     },
     "scripts/lib/command_reader.py": {
       "source": "scripts/lib/command_reader.py",
-      "sha256": "266f86f2b2e91624c19f231e66cd64b6b5f9cc41daaf7b9dd54da8163c502461",
+      "sha256": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561",
       "keys": [],
       "edges": [
         {
@@ -17618,14 +17618,14 @@
     },
     "scripts/land-completeness-measure.py": {
       "source": "scripts/land-completeness-measure.py",
-      "sha256": "f09f1f00b785c7797c5fa813fa5f04721ce1ed291406485a83491f0cc934f74d",
+      "sha256": "8e0ae1df96d428a7e69de4ac69c55307ff8bf5589118f3f14352cd7d6b103075",
       "keys": [],
       "edges": [],
       "evidence": "Literal transcript diagnostic. G10 test imports only classify_land; no main execution or external operation."
     },
     "scripts/hooks/g10-command-readers.test.py": {
       "source": "scripts/hooks/g10-command-readers.test.py",
-      "sha256": "5f210245ec3e0ea62136aa162e94a1fe7123ff10896fdbb15516cfc24b3b18a5",
+      "sha256": "dcedf7efef30dc1fb32b3c13d6cf6499019506d5685acca1805c7df16668aacb",
       "keys": [],
       "edges": [
         {
@@ -17647,7 +17647,8 @@
           "to": "scripts/lib/command_reader.py"
         }
       ],
-      "evidence": "G10 parser regressions. Imports fixed helpers and invokes embedded classifiers on literal payloads. Uses disposable Playwright source fixtures; never launches a browser or executes a command being classified."
+      "evidence": "G10 parser regressions. Imports fixed helpers and invokes embedded classifiers on literal payloads. Uses disposable Playwright source fixtures; never launches a browser or executes a command being classified.",
+      "nonconfig_eval": "The eval strings are literal command-reader fixtures. The tests parse them as data and never execute eval or evaluate a configuration value."
     }
   },
   "units": {
@@ -17979,7 +17980,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
-        "scripts/lib/command_reader.py": "266f86f2b2e91624c19f231e66cd64b6b5f9cc41daaf7b9dd54da8163c502461",
+        "scripts/lib/command_reader.py": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838"
       }
@@ -18370,7 +18371,7 @@
         "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
         "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
-        "scripts/lib/command_reader.py": "266f86f2b2e91624c19f231e66cd64b6b5f9cc41daaf7b9dd54da8163c502461"
+        "scripts/lib/command_reader.py": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561"
       }
     },
     "scripts/hooks/mechanical-findings.test.sh": {
@@ -18464,7 +18465,7 @@
         "scripts/publication-completeness.py": "e559d239523982b91b0ddcbaed5e7ff5d79d059931fcead3bffea458c48c5045",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
         "scripts/lib/machine_paths.py": "c6c84b3946aa4f1f4be46d9f6176f9149b07a75c57163ad6f649aec5d396142a",
-        "scripts/lib/command_reader.py": "266f86f2b2e91624c19f231e66cd64b6b5f9cc41daaf7b9dd54da8163c502461",
+        "scripts/lib/command_reader.py": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838"
       },
@@ -18609,7 +18610,7 @@
         "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
         "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
-        "scripts/lib/command_reader.py": "266f86f2b2e91624c19f231e66cd64b6b5f9cc41daaf7b9dd54da8163c502461"
+        "scripts/lib/command_reader.py": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561"
       }
     },
     "scripts/hooks/stop-hook-visibility.test.sh": {
@@ -18851,7 +18852,7 @@
         "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
         "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
-        "scripts/lib/command_reader.py": "266f86f2b2e91624c19f231e66cd64b6b5f9cc41daaf7b9dd54da8163c502461"
+        "scripts/lib/command_reader.py": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561"
       },
       "evidence": "R1 checks event/matcher registrations of these five hooks. Dispatcher manifest is independently bound; no other hook registration runs."
     },
@@ -19070,7 +19071,7 @@
         "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
         "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
-        "scripts/lib/command_reader.py": "266f86f2b2e91624c19f231e66cd64b6b5f9cc41daaf7b9dd54da8163c502461"
+        "scripts/lib/command_reader.py": "9de1af26004a4e0590a7a9b752dc33dccda79608cf3a0b0acb3ed1b6eee87561"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
     },

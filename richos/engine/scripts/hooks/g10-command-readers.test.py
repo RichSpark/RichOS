@@ -58,10 +58,29 @@ class G10(unittest.TestCase):
                                 text=True, capture_output=True, check=True)
         return result.stdout.strip()
 
+    def test_47_delegating_wrappers(self):
+        for prefix in ["flock /fictional/lock", "watch -n 5", "arch -arm64", "sudo -iu root",
+                       "unbuffer", "script -q /dev/null", "parallel"]:
+            with self.subTest(prefix=prefix):
+                self.assertIsNotNone(shell.verdict(prefix + " bash -c x"))
+                self.assertIsNone(shell.verdict(prefix + " printf '%s' 'bash -c'"))
+        for cmd in ["bash +e -c x", "bash +o pipefail -c x", "eval \"bash -c 'x'\"",
+                    "ssh host bash -c x", "ssh -p22 host \"bash -c 'x'\"",
+                    "script -c 'bash -c x'", "unknown-runner bash -c x"]:
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(shell.verdict(cmd))
+        for cmd in ["eval \"printf '%s' 'bash -c'\"", "ssh host \"printf '%s' 'bash -c'\""]:
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(shell.verdict(cmd))
+        for cmd in ["git commit -m 'mention bash -c'", "git commit -am 'mention bash -c'",
+                    "git grep 'bash -c'", "git log --grep='bash -c'"]:
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(shell.verdict(cmd))
+
     def test_49_printed_git_is_not_commit(self):
         for hook in ["guard-completeness-commits.sh", "guard-hook-registration-commits.sh"]:
             for cmd in ["printf '%s %s' git commit", "echo git push", "true # git commit",
-                        "git log --grep commit", "cat <<'EOF'\ngit commit\nEOF"]:
+                        "git log --grep commit", "ssh host git commit", "cat <<'EOF'\ngit commit\nEOF"]:
                 with self.subTest(hook=hook, cmd=cmd):
                     self.assertEqual(self.classifier(hook, cmd), "PASS")
             for cmd in ["git commit -m 'git push'", "env X=1 git -C repo -c a=b commit -am x",
@@ -117,6 +136,11 @@ class G10(unittest.TestCase):
         self.assertEqual(land.classify_land("git merge --no-ff -m 'land fixture' cc/fixture"), "cc/fixture")
         self.assertEqual(land.classify_land("cd repo && git merge cc/fixture"), "cc/fixture")
         self.assertEqual(land.classify_land("true || echo skipped; git merge cc/fixture"), "cc/fixture")
+        for cmd in ["git merge cc/fixture 2>&1", "git merge cc/fixture &>/dev/null",
+                    "cd repo && git merge cc/fixture >/dev/null 2>&1"]:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(land.classify_land(cmd), "cc/fixture")
+        self.assertIsNone(land.classify_land("git merge cc/fixture >file & true"))
 
     def test_58_whole_branch(self):
         name = "cc/fixture"

@@ -162,7 +162,12 @@ def _command_tokens(cmd):
         lex = shlex.shlex(cmd, posix=True, punctuation_chars="();|&\n")
         lex.whitespace = " \t\r"
         lex.whitespace_split = True
-        return list(lex)
+        tokens = list(lex)
+        # In a descriptor redirect, & belongs to >& or &>, not to a background
+        # job. Preserve actual background separators after a redirect operand.
+        return [token for i, token in enumerate(tokens) if not (
+            token == "&" and ((i and tokens[i - 1].endswith((">", "<")))
+                              or (i + 1 < len(tokens) and tokens[i + 1].startswith(">"))))]
     except Exception:
         return []
 

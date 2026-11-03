@@ -14,6 +14,39 @@ from unguarded_rm import tokenize, _match_paren
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 GIT_VALUES = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"}
+COMMAND_WRAPPERS = WRAPPERS | {"flock", "watch", "arch", "unbuffer", "script", "parallel"}
+EXTRA_VALUES = {
+    "sudo": {"--user", "--group", "--host", "--prompt", "--close-from", "--chdir",
+             "--chroot", "--command-timeout", "--other-user"},
+    "flock": {"-w", "--timeout", "-E", "--conflict-exit-code"},
+    "watch": {"-n", "--interval"},
+    "script": {"-t"},
+    "parallel": {"-j", "--jobs", "-a", "--arg-file", "-S", "--sshlogin", "-I", "--replace"},
+}
+SSH_VALUES = {"-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L",
+              "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w"}
+
+
+def _consumes_next(option, values):
+    if option in values:
+        return True
+    if option.startswith("--"):
+        return False
+    for index, flag in enumerate(option[1:], 1):
+        if "-" + flag in values:
+            return index == len(option) - 1
+    return False
+
+
+def ssh_command(argv):
+    """The remote shell text, for the shell rule only; remote Git is not local Git."""
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        if argv[i] == "--":
+            i += 1
+            break
+        i += 2 if _consumes_next(argv[i], SSH_VALUES) else 1
+    return " ".join(argv[i + 1:])  # skip the destination
 
 
 def _redirect_parts(word):
@@ -84,17 +117,16 @@ def _unwrap(words):
             i += 1
             continue
         base = os.path.basename(word)
-        if base not in WRAPPERS:
+        if base not in COMMAND_WRAPPERS:
             break
         i += 1
-        values = _OPTS_WITH_ARG.get(base, set())
-        if base == "sudo":
-            values = values | {"--user", "--group", "--host", "--prompt", "--close-from",
-                               "--chdir", "--chroot", "--command-timeout", "--other-user"}
+        values = _OPTS_WITH_ARG.get(base, set()) | EXTRA_VALUES.get(base, set())
         while i < len(words):
             word = words[i]
             if base == "command" and word in ("-v", "-V"):
                 return []  # lookup only
+            if base == "script" and word in ("-c", "--command"):
+                return _unwrap(shlex.split(words[i + 1]) + words[i + 2:])
             if base == "env" and (word in ("-S", "--split-string") or word.startswith("--split-string=")):
                 value = word.split("=", 1)[1] if "=" in word else words[i + 1]
                 rest = words[i + (1 if "=" in word else 2):]
@@ -105,10 +137,10 @@ def _unwrap(words):
                 i += 1
                 break
             elif word.startswith("-") and word != "-":
-                i += 2 if word in values else 1
+                i += 2 if _consumes_next(word, values) else 1
             else:
                 break
-        if base in _POSITIONAL_VALUE:
+        if base in _POSITIONAL_VALUE or base in ("flock", "script"):
             i += 1
     return words[i:]
 
@@ -119,10 +151,10 @@ def _shell_stdin(argv):
         option = argv[i]
         if option == "--":
             return i + 1 == len(argv)
-        if not option.startswith("-") or option == "-":
+        if not option.startswith(("-", "+")) or option in ("-", "+"):
             return False
         if not option.startswith("--"):
-            if "c" in option:
+            if option.startswith("-") and "c" in option:
                 return False
             if "s" in option:
                 return True
@@ -143,6 +175,8 @@ def commands(text, depth=0):
         if not argv:
             continue
         yield argv
+        if os.path.basename(argv[0]) == "eval":
+            yield from commands(" ".join(argv[1:]), depth + 1)
         if os.path.basename(argv[0]) == "find":
             for k, arg in enumerate(argv):
                 if arg in ("-exec", "-execdir", "-ok", "-okdir"):

@@ -21,7 +21,51 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from command_reader import commands, SHELLS
+from command_reader import commands, SHELLS, GIT_VALUES, ssh_command
+
+TEXT_COMMANDS = {"echo", "printf", "grep", "egrep", "fgrep", "rg", "true", ":"}
+SHELL_WORD = re.compile(r"(?<![\w.\-])(bash|sh|zsh|dash|ksh)(?![\w.\-])")
+OPTION_WORD = re.compile(r"(?<![^\s'\"`;|&(){}<>])-(?!-)[A-Za-z0-9-]+")
+GIT_DATA = {"-m", "--message", "-F", "--file", "--author", "--date", "--trailer",
+            "--grep", "-G", "-S"}
+
+
+def _git_action_args(argv):
+    """Remove positively identified message/search data, retaining other arguments."""
+    index = 1
+    while index < len(argv) and argv[index].startswith("-"):
+        index += 2 if argv[index] in GIT_VALUES else 1
+    if index >= len(argv) or argv[index] not in {"commit", "merge", "tag", "notes", "log", "show", "grep", "diff"}:
+        return argv
+    if index < len(argv) and argv[index] == "grep" and not any(
+            arg.startswith("--open-files-in-pager") for arg in argv[index + 1:]):
+        return argv[:index]  # the built-in search consumes patterns as data
+    out, skip = [], False
+    for arg in argv:
+        if skip:
+            skip = False
+        elif arg in GIT_DATA:
+            skip = True
+        elif arg.split("=", 1)[0] in GIT_DATA and "=" in arg:
+            continue
+        elif re.match(r"^-[A-Za-z]*?m", arg):
+            skip = arg.endswith("m")  # -am TEXT or -mTEXT
+        else:
+            out.append(arg)
+    return out
+
+
+def _unknown_shell(argv):
+    """Keep the old conservative refusal where an action cannot be classified.
+
+    A new wrapper must not become a bypass. Only known print/search operations
+    and message operands earn the mention exemption.
+    """
+    text = " ".join(argv)
+    for shell in SHELL_WORD.finditer(text):
+        if any("c" in option.group(0) for option in OPTION_WORD.finditer(text, shell.end())):
+            return shell.group(1)
+    return None
 
 MESSAGE = (
     "=== guard-no-shell-c: BLOCKED ===\n"
@@ -34,21 +78,34 @@ MESSAGE = (
 )
 
 
-def verdict(command):
+def verdict(command, depth=0):
     """Return the shell name for an inline script, otherwise None."""
+    if depth > 8:
+        return None
     for argv in commands(command):
         name = os.path.basename(argv[0])
+        if name == "ssh":
+            nested = verdict(ssh_command(argv), depth + 1)
+            if nested:
+                return nested
+            continue
         if name not in SHELLS:
+            if name == "eval" or (name in TEXT_COMMANDS and not (
+                    name == "rg" and any(arg.startswith("--pre") for arg in argv[1:]))):
+                continue
+            unknown = _unknown_shell(_git_action_args(argv) if name == "git" else argv)
+            if unknown:
+                return unknown
             continue
         i = 1
         while i < len(argv):
             option = argv[i]
-            if option == "--" or not option.startswith("-") or option == "-":
+            if option == "--" or not option.startswith(("-", "+")) or option in ("-", "+"):
                 break  # subsequent words are the script's arguments
             if option.startswith("--"):
                 i += 2 if option in ("--rcfile", "--init-file") else 1
                 continue
-            if "c" in option:
+            if option.startswith("-") and "c" in option:
                 return name
             i += 2 if option.endswith(("o", "O")) else 1
     return None
