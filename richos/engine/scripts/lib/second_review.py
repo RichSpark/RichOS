@@ -167,6 +167,7 @@ import signal
 import subprocess
 import sys
 import time
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -953,33 +954,27 @@ def version_of(binary):
 
 
 def run_bounded(argv, cwd, prompt, out_path, err_path, limit, env=None):
-    """(exit code or None on the time limit, seconds).
+    """(exit code or None on the time limit, seconds), after owned-tree cleanup.
 
-    THE REVIEWER STAYS IN THIS COMMAND'S PROCESS GROUP (second review of b5ff41f02, finding 1).
-    review-watch starts second-review.sh leading a process group of its own and stops a review by
-    signaling that group, so the reviewer, and whatever it starts in its group, ends with it
-    whenever it was forked: nothing has to be registered before a stop can reach it. Until
-    b5ff41f02 the reviewer led a session of its own, and one forked after the watcher's last read
-    of the process table outlived the SIGKILL. Past the limit the reviewer itself is stopped by its
-    process id: SIGTERM, ten seconds, SIGKILL."""
+    The existing supervisor owns descendants before exec, on direct timeouts and
+    caller death too. It stays in the watcher's group; its reviewer tree is also
+    discoverable through the watcher's inherited ownership mark.
+    """
+    import proc_tree
     start = time.monotonic()
-    with open(out_path, "wb") as out, open(err_path, "wb") as err:
-        p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=out, stderr=err, env=build_env(env))
-        _REVIEWER["proc"] = p
-        try:
-            p.communicate(prompt.encode("utf-8"), timeout=limit)
-            return p.returncode, time.monotonic() - start
-        except subprocess.TimeoutExpired:
-            for stop in (p.terminate, p.kill):
-                stop()
-                try:
-                    p.wait(timeout=10)
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-            return None, time.monotonic() - start
-        finally:
-            _REVIEWER["proc"] = None
+    with tempfile.TemporaryDirectory(prefix="review-timeout-", dir=os.path.dirname(out_path)) as scratch:
+        marker = os.path.join(scratch, "expired")
+        command = proc_tree.command(argv)
+        split = command.index("--")
+        command[split:split] = ["--deadline", str(limit), "--timeout-marker", marker]
+        with open(out_path, "wb") as out, open(err_path, "wb") as err:
+            p = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=out, stderr=err, env=build_env(env))
+            _REVIEWER["proc"] = p
+            try:
+                p.communicate(prompt.encode("utf-8"))
+                return (None if os.path.exists(marker) else p.returncode), time.monotonic() - start
+            finally:
+                _REVIEWER["proc"] = None
 
 
 def build_env(env=None):
@@ -993,9 +988,9 @@ def build_env(env=None):
 
 
 def _on_stop(signum, _frame):
-    """Stopped from outside. review-watch signals this command's whole process group, which holds
-    the reviewer too, so the reviewer has the signal already; it is passed on for a stop sent to
-    this process alone (by hand), and this process exits."""
+    """Pass a direct stop to the supervisor, which cleans its owned reviewer tree.
+    The watcher also signals the supervisor through this command's process group.
+    """
     p = _REVIEWER.get("proc")
     if p is not None:
         try:
