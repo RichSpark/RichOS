@@ -904,22 +904,24 @@ def pending_paths(state_dir):
     latest = {}
     try:
         with open(os.path.join(state_dir, "ceo-inputs.jsonl"), encoding="utf-8") as fh:
-            lines = fh.readlines()[-500:]
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                for p in rec.get("committed") or []:
+                    latest.pop(p, None)
+                for r in rec.get("refused") or []:
+                    if isinstance(r, dict) and r.get("path"):
+                        if r.get("pending"):
+                            latest[r["path"]] = True
+                        else:
+                            latest.pop(r["path"], None)
+                for p in rec.get("reported") or []:
+                    latest.pop(p, None)
     except OSError:
         return []
-    for line in lines:
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        for p in rec.get("committed") or []:
-            latest[p] = False
-        for r in rec.get("refused") or []:
-            if isinstance(r, dict) and r.get("path"):
-                latest[r["path"]] = bool(r.get("pending"))
-        for p in rec.get("reported") or []:
-            latest[p] = False
-    return [p for p, pending in latest.items() if pending]
+    return list(latest)
 
 
 # ---------------------------------------------------------------------------
