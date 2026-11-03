@@ -142,16 +142,19 @@ def main():
             # Block repeated interruptions while the owned clone is being removed.
             for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP):signal.signal(sig,signal.SIG_IGN)
             try:
-                # End descendants even after boot/scenario leaders exit. Keep the slot until done.
-                left=proc_tree.finish_scope(child,tracker) if child else []
-                if state.exists():
-                    # restore_signals=False: stop.sh inherits this process's ignored SIGPIPE (and the
-                    # interruptions ignored above), so a caller that died and took this script's
-                    # stderr pipe with it cannot kill the cleanup halfway (2026-09-27: two clones
-                    # were left stopped but undeleted exactly that way).
-                    subprocess.run([str(HERE/'stop.sh'),vm],check=True,timeout=120,restore_signals=False)
-                    if state.exists():raise RuntimeError('VM state remains after cleanup: '+str(state))
-                if left:raise RuntimeError('walk cleanup left owned processes: '+str(left))
+                try:
+                    if state.exists():
+                        # restore_signals=False: stop.sh inherits this process's ignored SIGPIPE (and the
+                        # interruptions ignored above), so a caller that died and took this script's
+                        # stderr pipe with it cannot kill the cleanup halfway (2026-09-27: two clones
+                        # were left stopped but undeleted exactly that way).
+                        subprocess.run([str(HERE/'stop.sh'),vm],check=True,timeout=120,restore_signals=False)
+                        if state.exists():raise RuntimeError('VM state remains after cleanup: '+str(state))
+                finally:
+                    # Preserve graceful guest shutdown before ending boot-owned helpers.
+                    # The host tree is still ended if stop.sh fails; the slot stays held.
+                    left=proc_tree.finish_scope(child,tracker) if child else []
+                    if left:raise RuntimeError('walk cleanup left owned processes: '+str(left))
                 result['cleanup_complete']=True
             except Exception as exc:
                 result.update(cleanup_complete=False,cleanup_error=str(exc))

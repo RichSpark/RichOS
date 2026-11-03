@@ -6,12 +6,14 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 ROOT=Path(os.environ.get('G8_ROOT',Path(__file__).resolve().parents[5]))
 HERE=ROOT/'richos/app/scripts/testvm'
@@ -62,6 +64,38 @@ sys.exit(0)
                 finally:
                     for s,h in handlers.items(): signal.signal(s,h)
                     self.cleanup(pidfile)
+
+    def test_walk_stops_guest_before_tree_and_sweeps_even_if_stop_fails(self):
+        for fail_stop in (False, True):
+            with self.subTest(fail_stop=fail_stop), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); events=[]
+                @contextlib.contextmanager
+                def slot(**kwargs): yield root/'slot'
+                class Tracker:
+                    def __init__(self,*args): pass
+                    def refresh(self,**kwargs): pass
+                def finish(*args): events.append('tree'); return []
+                tree=SimpleNamespace(SCOPE_ENV='FIXTURE_SCOPE',TrackedTree=Tracker,finish_scope=finish)
+                class Child:
+                    pid=12345
+                    def __init__(self,args,**kwargs):
+                        if args[0]=='boot': (root/'run'/args[1]).mkdir(parents=True)
+                    def wait(self,**kwargs): return 0
+                    def poll(self): return 0
+                def stop(args,**kwargs):
+                    events.append('guest stop')
+                    if fail_stop: raise subprocess.CalledProcessError(1,args)
+                    shutil.rmtree(root/'run'/args[1])
+                handlers={sig:signal.getsignal(sig) for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)}
+                try:
+                    with patch.dict(os.environ,TESTVM_ROOT=tmp),patch.object(walk,'guest_slot',slot),patch.object(walk,'boot_argv',side_effect=lambda vm,*a:['boot',vm]),patch.object(walk,'proc_tree',tree,create=True),patch.object(walk.subprocess,'Popen',Child),patch.object(walk.subprocess,'run',stop),patch.object(sys,'argv',['run-walk.py','--bundle','fixture','--home',tmp,'--engine','fixture','--report',str(root/'report.json'),'--','/usr/bin/true']):
+                        if fail_stop:
+                            with self.assertRaises(subprocess.CalledProcessError): walk.main()
+                        else: self.assertEqual(walk.main(),0)
+                    self.assertEqual(events,['guest stop','tree'])
+                    self.assertEqual(json.loads((root/'report.json').read_text())['cleanup_complete'],not fail_stop)
+                finally:
+                    for sig,handler in handlers.items(): signal.signal(sig,handler)
 
     def test_stop_probe_cleans_after_provider_exits(self):
         with tempfile.TemporaryDirectory() as tmp:
