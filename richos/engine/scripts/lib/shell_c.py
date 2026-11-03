@@ -8,15 +8,9 @@ this." (The same prompt reached him on 2026-10-07 from the lead's own commands.)
 check an inline shell script, so it asks the person. A PreToolUse refusal runs first, so the agent
 gets the rewrite and the person never sees a prompt.
 
-What is refused: ONE plain match over the whole command text, quotes and comments included: a word
-named bash, sh, zsh, dash or ksh (with or without a path or quotes) followed, anywhere later in the
-command (across lines and separators), by a short-option group containing c (-c, -lc, ...).
-`bash test.sh && git diff --cached` passes (--cached is a long option); `bash x.sh | grep -c y` is refused, an accepted false positive; `bash test.sh -c x` is refused, an
-accepted false positive. A command that only MENTIONS `bash -c` (a commit message, an echo) is refused too:
-an accepted false positive; the message says to put the text in a file (git commit -F <file>).
-
-IT IS A TEXT MATCH AND LEAKS (eval, a script file that itself runs bash -c). Its job is to stop the
-habitual command, not to out-think the shell. Any error in the check is a pass.
+Refuse actual shell command words with a -c option before their script operand.
+Printed text, comments, heredoc data and options belonging to another command pass.
+Like the other shell guards, this reads literal syntax without evaluating it.
 Shared by the operator-install rule (scripts/hooks/guard-no-shell-c.sh) and by the RichOS app's hook
 (mega-lander/app.py validate_shell_target).
 """
@@ -24,11 +18,10 @@ import json
 import re
 import sys
 
-SHELL_WORD = re.compile(r"(?<![\w.\-])(bash|sh|zsh|dash|ksh)(?![\w.\-])")
-# An option word starts a word of the command: at the start of the text, or after whitespace, a quote
-# or shell punctuation. Never mid-word or after a / (2026-10-24: a session scratch folder of the shape
-# /private/tmp/claude-<uid>/-Users-<user>-<project>/... was read as the option group -Users-...).
-OPTION_WORD = re.compile(r"(?<![^\s'\"`;|&(){}<>])-[A-Za-z0-9-]*")
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_reader import commands, SHELLS
 
 MESSAGE = (
     "=== guard-no-shell-c: BLOCKED ===\n"
@@ -37,21 +30,27 @@ MESSAGE = (
     "  you want to proceed?'). The user is never the fallback check.\n"
     "  FIX: run the steps as separate commands (one step per Bash call), or write the script to a file\n"
     "  in your scratch folder and run `bash <file>`. Running a script file stays allowed.\n"
-    "  This check is a plain text match, so it also refuses a command that only MENTIONS `{shell} -c`\n"
-    "  (a commit message, an echo): write that text to a file instead, for example `git commit -F <file>`."
+
 )
 
 
 def verdict(command):
-    """Return the shell name when `command` has a shell word followed, anywhere later (across lines
-    and separators), by a short-option group containing c; else None. A group ends at the first
-    character that is not a letter, digit or -, so -c</dev/null and -c'x' count; --long options do
-    not, and neither does a hyphen inside a path or word (/-Users-sample). Nothing is split into
-    segments: a line continuation or &> cannot hide the pair."""
-    for m in SHELL_WORD.finditer(command):
-        for o in OPTION_WORD.finditer(command, m.end()):
-            if re.fullmatch(r"-(?!-)[A-Za-z0-9-]+", o.group(0)) and "c" in o.group(0):
-                return m.group(1)
+    """Return the shell name for an inline script, otherwise None."""
+    for argv in commands(command):
+        name = os.path.basename(argv[0])
+        if name not in SHELLS:
+            continue
+        i = 1
+        while i < len(argv):
+            option = argv[i]
+            if option == "--" or not option.startswith("-") or option == "-":
+                break  # subsequent words are the script's arguments
+            if option.startswith("--"):
+                i += 2 if option in ("--rcfile", "--init-file") else 1
+                continue
+            if "c" in option:
+                return name
+            i += 2 if option.endswith(("o", "O")) else 1
     return None
 
 

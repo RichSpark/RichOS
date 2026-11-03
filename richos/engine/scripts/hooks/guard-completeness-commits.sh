@@ -385,35 +385,16 @@ if not isinstance(d, dict) or d.get("tool_name") != "Bash":
 ti = d.get("tool_input") or {}
 cmd = (ti.get("command", "") if isinstance(ti, dict) else "") or ""
 
-# QUOTED SPANS ARE STRIPPED FIRST, and this is not cosmetic. A commit whose
-# MESSAGE is "stop pushing to main" is not a push, and a classifier that
-# thought it was would audit the tree on a wholly unrelated verb. Its sibling
-# learned the same lesson on `-a`; the fix is the same and is applied before
-# any matching.
-unquoted = re.sub(r'"[^"]*"', " ", cmd)
-unquoted = re.sub(r"'[^']*'", " ", unquoted)
-
-# `git ... commit` / `git ... push`, tolerating -C/-c/flags in between but never
-# crossing a statement separator, so an unrelated later `git` cannot bleed in.
-verb = ""
-if re.search(r"\bgit\b[^\n;|&]*\bcommit\b", unquoted):
-    verb = "commit"
-elif re.search(r"\bgit\b[^\n;|&]*\bpush\b", unquoted):
-    verb = "push"
+sys.path.insert(0, sys.argv[1])
+from command_reader import git_commands
+operations = list(git_commands(cmd))
+verb = next((v for v, _ in operations if v == "commit"), "") or \
+       next((v for v, _ in operations if v == "push"), "")
 if not verb:
     print("PASS"); raise SystemExit
-
-# DOES THIS COMMAND STAGE ANYTHING BEFORE IT COMMITS? This is the difference
-# between auditing the tree that exists and auditing the tree that is about to.
-# `git add -A && git commit -m x` is ONE Bash call, and a PreToolUse hook runs
-# BEFORE any of it — so at decision time the new file is still untracked, absent
-# from the index, and invisible to a checker that (correctly) defines the
-# published tree as what git tracks. The flywheel README was a NEW file. Read
-# naively, this guard would have reported it clean and let it through, which is
-# the failure it exists to prevent, wearing the costume of a green tick.
-stages = bool(re.search(r"\bgit\b[^\n;|&]*\badd\b", unquoted)) or \
-         bool(re.search(r"(?:^|\s)-[a-zA-Z]*a[a-zA-Z]*\b", unquoted)) or \
-         bool(re.search(r"(?:^|\s)--all\b", unquoted))
+stages = any(v == "add" or (v == "commit" and any(
+    a == "--all" or re.fullmatch(r"-[A-Za-z]*a[A-Za-z]*", a) for a in args))
+    for v, args in operations)
 
 # WHERE the command points is NOT decided here any more. It used to be, in this
 # file and in four others, by reading an explicit `git -C` and falling back to
@@ -425,7 +406,7 @@ PYEOF
 
 # Payload bytes use stdin: environment strings have a much smaller per-value
 # limit on Linux. A failed classifier must never become an unevaluated pass.
-if ! CLASS="$(python3 -c "$_CC_CLASSIFIER" <<<"$INPUT")"; then
+if ! CLASS="$(python3 -c "$_CC_CLASSIFIER" "$ENGINE_ROOT/scripts/lib" <<<"$INPUT")"; then
     echo "ERROR: guard-completeness-commits.sh: payload classifier failed; refusing unevaluated operation" >&2
     exit 2
 fi
