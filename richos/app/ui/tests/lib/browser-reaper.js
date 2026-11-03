@@ -33,6 +33,7 @@ const POLL_MS = 100;
 
 function table() {
   const r = spawnSync("ps", ["-axo", "pid=,ppid=,lstart="], { encoding: "utf8" });
+  if (r.error || r.status !== 0) return null;
   const rows = new Map();
   for (const line of (r.stdout || "").split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
@@ -41,12 +42,13 @@ function table() {
   return rows;
 }
 
-function watch(parent) {
+function watch(parent, birth) {
   const owned = new Map(); // pid -> start time, recorded while the parent was alive
   const self = process.pid;
   const tick = () => {
     const rows = table();
-    if (rows.has(parent)) {
+    if (!rows) return; // A failed read proves neither presence nor absence.
+    if (rows.get(parent)?.start === birth) {
       const mine = new Set([parent]);
       for (let grew = true; grew; ) {
         grew = false;
@@ -81,8 +83,10 @@ function watch(parent) {
 let started = false;
 function start() {
   if (started) return;
+  const birth = table()?.get(process.pid)?.start;
+  if (!birth) throw new Error("cannot establish browser suite process identity");
   started = true;
-  const child = spawn(process.execPath, [__filename, "--watch", String(process.pid)], {
+  const child = spawn(process.execPath, [__filename, "--watch", String(process.pid), birth], {
     detached: true,
     stdio: "ignore",
   });
@@ -104,6 +108,6 @@ function install(pw) {
   return pw;
 }
 
-if (require.main === module && process.argv[2] === "--watch") watch(Number(process.argv[3]));
+if (require.main === module && process.argv[2] === "--watch") watch(Number(process.argv[3]), process.argv[4]);
 
 module.exports = { install, start };

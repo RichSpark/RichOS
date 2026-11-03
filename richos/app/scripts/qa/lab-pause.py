@@ -68,7 +68,7 @@ def check_listener(pid, data):
     directory (mac-server.mjs gives each lab its RICHOS_MOBILE_MAC_DIR in the environment; every
     lab runs the same command name, so the name alone names no lab). `ps -E` appends the
     environment, which this user's own processes show."""
-    done = subprocess.run(["ps", "-E", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    done = subprocess.run(["ps", "-E", "-p", str(pid), "-o", "lstart=,command="], capture_output=True, text=True)
     command = done.stdout
     if done.returncode != 0 or LISTENER not in command:
         raise CannotAnswer(f"pid {pid} is not the lab's listener ({LISTENER}): refusing to pause it")
@@ -76,6 +76,11 @@ def check_listener(pid, data):
     command = re.sub(r"/{2,}", "/", command)
     if not re.search(r"(?:^|\s)RICHOS_MOBILE_MAC_DIR=" + re.escape(re.sub(r"/{2,}", "/", str(data))) + r"(?:\s|$)", command):
         raise CannotAnswer(f"pid {pid} is a listener of another lab, not the one whose data is {data}: refusing to pause it")
+
+    birth = re.match(r"^\s*(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+", command)
+    if not birth:
+        raise CannotAnswer(f"cannot read the birth identity of pid {pid}")
+    return " ".join(birth[1].split())
 
 
 def newest_log(directory, since, deadline):
@@ -125,14 +130,14 @@ def main(argv):
     a = p.parse_args(argv)
     result = {"tries": []}
     pid = None
-    # The pid is continued ONLY while this tool holds it stopped. A stopped process cannot exit on
-    # its own, so between our SIGSTOP and our SIGCONT the pid is still the checked listener; outside
-    # that window it may belong to anything (pid reuse after a long wait), and is never signalled.
+    # SIGKILL can end even a stopped listener. Recheck the lab and birth before continuing.
     held = []
 
     def resume():
         if held:
-            held.clear()
+            birth = held.pop()
+            if check_listener(pid, data) != birth:
+                raise CannotAnswer(f"pid {pid} changed identity while stopped: refusing to continue it")
             try:
                 os.kill(pid, signal.SIGCONT)
             except ProcessLookupError:
@@ -173,8 +178,8 @@ def main(argv):
                 result["error"] = f"try {n}: no line matching the stop mark within {a.timeout:g} s"
                 print(json.dumps(result, indent=2))
                 return 1
-            check_listener(pid, data)  # the wait above may have been long: still the same lab's listener?
-            held.append(pid)  # first: a signal arriving between the two lines still continues it
+            birth = check_listener(pid, data)  # recheck after the wait
+            held.append(birth)  # first: a signal arriving between the two lines still continues it
             os.kill(pid, signal.SIGSTOP)
             try_record.update(stopped=round(time.time(), 3), stopMark=line[-200:])
             try:
