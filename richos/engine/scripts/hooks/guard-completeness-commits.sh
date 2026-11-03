@@ -392,9 +392,29 @@ verb = next((v for v, _ in operations if v == "commit"), "") or \
        next((v for v, _ in operations if v == "push"), "")
 if not verb:
     print("PASS"); raise SystemExit
-stages = any(v == "add" or (v == "commit" and any(
-    a == "--all" or re.fullmatch(r"-[A-Za-z]*a[A-Za-z]*", a) for a in args))
-    for v, args in operations)
+def commit_stages(args):
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+            continue
+        if arg == "--":
+            break
+        if arg == "--all":
+            return True
+        if arg in {"--message", "--file", "--author", "--date", "--trailer",
+                   "--reuse-message", "--reedit-message", "--fixup", "--squash", "--pathspec-from-file"}:
+            skip = True
+        elif arg.startswith("-") and not arg.startswith("--"):
+            for index, flag in enumerate(arg[1:], 1):
+                if flag == "a":
+                    return True
+                if flag in "mFCcS":
+                    skip = flag != "S" and index == len(arg) - 1
+                    break
+    return False
+
+stages = any(v == "add" or (v == "commit" and commit_stages(args)) for v, args in operations)
 
 # WHERE the command points is NOT decided here any more. It used to be, in this
 # file and in four others, by reading an explicit `git -C` and falling back to

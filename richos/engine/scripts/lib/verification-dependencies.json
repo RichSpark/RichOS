@@ -4083,7 +4083,7 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#undeclared-target": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
       "evidence": "Git-jurisdiction fixture supplies a new target repository with no publication declaration. Module setup, payload classifier and seat/Git resolution run; pb_load_declaration returns absent before the checker or corpus path. Broken-library copies exit still earlier. Full source hash binds both the early return and excluded continuation. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -6337,7 +6337,7 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#fixture-trees": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
       "evidence": "Full guard reviewed: real seat adoption and fixed jurisdiction helpers parse the supplied payload; all audited targets are generated repositories. The declaration/checker use those fixture roots with fixed declaration defaults, not shipped config values. The staging arm copies the fixture index and only stages its intent-to-add view. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -6714,7 +6714,7 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#benign-bash": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
       "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -9615,7 +9615,7 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
       "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -11000,7 +11000,7 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#inventory-write": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
       "evidence": "The inventory parser expands dispatcher modules, while matcher_of finds no direct registration and chooses Write. This module sees a private Write payload or malformed JSON; its reviewed classifier prefix returns before Bash-only operations. Bootstrap helpers remain bound. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -15073,7 +15073,7 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#find-payload": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
       "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -17625,7 +17625,7 @@
     },
     "scripts/hooks/g10-command-readers.test.py": {
       "source": "scripts/hooks/g10-command-readers.test.py",
-      "sha256": "63db658080f897881a578c44f6a8dd0e20f57b88301b0ef6d56615a0bfbdb9b4",
+      "sha256": "70740b061be99d4578535886b839a789502e0ae35481f63ce0eb53a69a1f079e",
       "keys": [],
       "edges": [
         {
@@ -18264,7 +18264,7 @@
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
         "scripts/hooks/guard-ci-turn-gate.py": "db95b04be404a331206f540d6114f3c901038f17c4c85b4e68c0be340af0c9d9",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
-        "scripts/hooks/guard-completeness-commits.sh": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
         "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
         "scripts/hook-registration-completeness.sh": "025ddda2c7449dbe3df8b5ef516adf4ad134582f96e9668bdab74dd53f585cfc",
@@ -18452,7 +18452,7 @@
       "sources": {
         "scripts/hooks/completeness-commits.test.sh": "a3224852ed2a5f6e74a6c85ce7813771aac758a343bb5f86810da33e1bbfc8af",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "scripts/hooks/guard-completeness-commits.sh": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
@@ -18565,7 +18565,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
-        "scripts/hooks/guard-completeness-commits.sh": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/hooks/dialect-guard.sh": "1f11608bc4ee85f825a44997bec5b2ac261189e5e8448eceb26ef0afbee4a67a",
@@ -18806,7 +18806,7 @@
         "scripts/lib/named-persons.sh": "2c28d15414eed56676bd2c5588d66fe88f30c03dfb78e5e2752ffc5de17fffc3",
         "scripts/hooks/guard-ceo-todos-commits.sh": "f5f1d0a12fdf1fb2e94cb64b8d58c1765f80134270e125e510e05f83e3e37904",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
-        "scripts/hooks/guard-completeness-commits.sh": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/hooks/guard-row-currency-commits.sh": "07e76b7854f576e17335d065ec4f509ac2ca7bb4da5fb5dbe6c4e2c8c18e5474",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "scripts/hooks/guard-vendoring-commits.sh": "7214a2d8d780c9988eb6a9e4f6ead5fe229b801da73f5548b52d43f041e858ed",
@@ -19033,7 +19033,7 @@
         "scripts/hooks/guard-bash-main-writes.sh": "cd39e99919a11b3e5da38c033597df03d55f92dbf98488db3ba7b6bd4ce6f0bd",
         "scripts/hooks/guard-ceo-todos-commits.sh": "f5f1d0a12fdf1fb2e94cb64b8d58c1765f80134270e125e510e05f83e3e37904",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
-        "scripts/hooks/guard-completeness-commits.sh": "a56d97f8b437763fdb9493e4a9c18ab8ee98d95f7b0f4ca39e1fe22c83d99f29",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
         "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",

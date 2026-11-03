@@ -64,6 +64,15 @@ class G10(unittest.TestCase):
                 with self.subTest(hook=hook, cmd=cmd):
                     self.assertIn(self.classifier(hook, cmd).split("\t")[0], ("commit", "push"))
 
+    def test_49_stage_options_belong_to_commit(self):
+        for cmd in ["git commit -m '-a'", "git commit -m '--all'", "git commit -mdata",
+                    "git commit --author '-a'", "git commit -- -a", "echo git add; git commit"]:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.classifier("guard-completeness-commits.sh", cmd), "commit\t0")
+        for cmd in ["git commit -am x", "git commit -qam x", "git add file && git commit -m x"]:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.classifier("guard-completeness-commits.sh", cmd), "commit\t1")
+
     def test_52_flag_searches(self):
         for cmd in ["grep -n -- '--headed' notes", "printf '%s' --headed", "rg -- --no-headless notes"]:
             with self.subTest(cmd=cmd):
