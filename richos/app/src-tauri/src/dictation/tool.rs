@@ -24,7 +24,7 @@ use super::keytap::{self, KeyTap, TapEvent};
 use super::{insert, log, menubar, scratch::Scratch, store};
 use richos_voice::capture::{self, AudioSource, Capture};
 use richos_voice::dictation::{
-    decode_bound, judge_recording, judge_transcript, pick_model, Insert, ModelPick, Phase, Problem, Recording, Session,
+    decode_bound, judge_recording, judge_transcript, pick_model, Draft, Drafts, Insert, ModelPick, Phase, Problem, Recording, Session,
     Stopped, TapAction,
 };
 use richos_voice::dictation_bar::{choice_for_model, hide_after, meter_level, model_for_choice, view_for, BarView, MeterGate, Rect};
@@ -49,6 +49,15 @@ const QUIT_BACKSTOP: Duration = Duration::from_secs(5);
 /// SIGTERM was delivered (launchd's `bootout`, a `kill`): read by a thread, never acted on in
 /// the handler.
 static TERMINATED: AtomicBool = AtomicBool::new(false);
+
+/// Unlike Instant on macOS, this clock also advances while the Mac sleeps.
+/// Wall-clock changes must never extend a draft's retention.
+fn draft_now() -> Duration {
+    unsafe extern "C" { fn clock_gettime_nsec_np(clock: libc::clockid_t) -> u64; }
+    // SAFETY: this documented clock takes no pointers, includes sleep and is
+    // available since macOS 10.12. Unlike CLOCK_UPTIME_RAW it counts sleep.
+    Duration::from_nanos(unsafe { clock_gettime_nsec_np(libc::CLOCK_MONOTONIC_RAW) })
+}
 
 extern "C" fn on_sigterm(_: libc::c_int) {
     TERMINATED.store(true, Ordering::SeqCst);
@@ -208,13 +217,15 @@ pub fn preview_problem(tag: Option<&str>) -> Option<Problem> {
 
 /// Everything the control loop hears.
 enum Control {
+    LivePreview { seq: u64, update: super::live_preview::Update },
     Vocabulary { seq: u64, client: u64, publication: super::vocabulary::Publication },
     Tap(TapEvent),
     CleanerLookup {id:String,result:Result<serde_json::Value,String>},
     CleanerReady {id:String,result:Result<serde_json::Value,String>},
     App(AppMessage),
     InputDied(u64),
-    Written { seq:u64, outcome: Result<(), Problem>, words: Option<Rect> },
+    Written { seq: u64, result: WriteResult },
+    DraftExpiry,
     Hour,
     Ui(UiEvent),
     BarExpired(u64),
@@ -231,6 +242,7 @@ enum Control {
 
 /// What the state message reports, shared with the socket thread.
 struct Shared {
+    data_dir: String,
     owner: String,
     on: bool,
     phase: Phase,
@@ -243,6 +255,7 @@ struct Shared {
 impl Shared {
     fn message(&self) -> ToolMessage {
         ToolMessage::State {
+            data_dir: self.data_dir.clone(),
             owner: self.owner.clone(),
             on: self.on,
             listening: matches!(self.phase, Phase::Listening { .. }),
@@ -272,6 +285,7 @@ impl Writing {
     /// worker, whose scratch folder then drops its files.
     fn stop_and_join(self) {
         self.stop.store(true, Ordering::SeqCst);
+        self.join.thread().unpark();
         if self.join.join().is_err() {
             log::line("the writing worker ended with a panic while being stopped");
         }
@@ -392,6 +406,7 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
             .ok();
     }
     let shared = Arc::new(Mutex::new(Shared {
+        data_dir: data_dir.display().to_string(),
         owner: own_bundle(),
         on: true,
         phase: Phase::Idle,
@@ -486,6 +501,7 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
             bar::dictation_page_ready,
             bar::dictation_bar_laid_out,
             bar::dictation_fix_it,
+            bar::dictation_bar_act,
             bar::dictation_menu_laid_out,
             bar::dictation_menu_act,
         ])
@@ -538,6 +554,18 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
 }
 
 struct Tool {
+    live_preview: Option<Writing>,
+    live_words: Option<String>,
+    live_preview_paused: bool,
+    destination: Option<insert::Destination>,
+    destination_name: String,
+    navigated: Arc<AtomicBool>,
+    pointer_observer: Option<keytap::PointerObserver>,
+    drafts: Drafts,
+    vocabulary_expanded: bool,
+    notice: Option<bar::DeliveryMessage>,
+    recovery_open: bool,
+    recovery_status: Option<&'static str>,
     vocabulary: Option<super::vocabulary::Publication>,
     recording_vocabulary: Option<super::vocabulary::Snapshot>,
     vocabulary_revoked: Arc<AtomicBool>,
@@ -596,6 +624,18 @@ impl Tool {
         preview: Option<Problem>,
     ) -> Tool {
         Tool {
+            live_preview: None,
+            live_words: None,
+            live_preview_paused: false,
+            destination: None,
+            destination_name: String::new(),
+            navigated: Arc::new(AtomicBool::new(false)),
+            pointer_observer: None,
+            drafts: Drafts::default(),
+            vocabulary_expanded: false,
+            notice: None,
+            recovery_open: false,
+            recovery_status: None,
             vocabulary: None,
             recording_vocabulary: None,
             vocabulary_revoked: Arc::new(AtomicBool::new(false)),
@@ -643,6 +683,7 @@ impl Tool {
     }
 
     fn publish(&mut self) {
+        if !matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing) { self.end_navigation(); }
         if let Phase::Problem(problem)=self.session.phase(){if let Some((id,_))=self.cleaner_target.take(){self.session.reset();self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":problem.tag()})});}}
 
         let message = {
@@ -663,11 +704,14 @@ impl Tool {
     /// The bar follows the session: each new view is drawn, and the ones that go by themselves
     /// get their timer (`dictation_bar::hide_after`).
     fn sync_bar(&mut self) {
-        if self.cleaner_pending.is_some() || self.cleaner_target.is_some(){self.bar.show(&self.app,BarView::Hidden,self.settings.key(),None,bar::look(&self.data_dir));return;}
+        if self.cleaner_pending.is_some() || self.cleaner_target.is_some(){self.bar.show(&self.app,BarView::Hidden,self.settings.key(),None,bar::look(&self.data_dir),bar::BarDetails::default());return;}
         if self.ending {
             return;
         }
-        let view = view_for(self.session.phase());
+        let view = if self.notice.as_ref().is_some_and(|n| n.state != "added")
+            && !matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing | Phase::Idle) {
+                BarView::Delivery
+            } else { view_for(self.session.phase()) };
         if self.bar.view() == Some(view) || (self.bar.view().is_none() && view == BarView::Hidden) {
             return;
         }
@@ -679,7 +723,16 @@ impl Tool {
             Phase::Listening { started_ms } => Some(started_ms),
             _ => None,
         };
-        let seq = self.bar.show(&self.app, view, self.settings.key(), started, bar::look(&self.data_dir));
+        let details = bar::BarDetails {
+            blocked_keys: self.secure.is_some(),
+            blocked_by: self.secure.clone().flatten(),
+            destination: (!self.destination_name.is_empty()).then(|| self.destination_name.clone()),
+            vocabulary: self.recording_vocabulary.as_ref().map(|v| v.company.name.clone()),
+            delivery: self.notice.clone(),
+            preview: self.live_words.clone(),
+            preview_paused: self.live_preview_paused,
+        };
+        let seq = self.bar.show(&self.app, view, self.settings.key(), started, bar::look(&self.data_dir), details);
         if let Some(after) = hide_after(view) {
             later(&self.tx, after, Control::BarExpired(seq));
         }
@@ -698,7 +751,9 @@ impl Tool {
         }
     }
 
-    fn menu_message(&self, seq: u64) -> MenuMessage {
+    fn menu_message(&mut self, seq: u64) -> MenuMessage {
+        let draft = self.drafts.recovery(draft_now()).cloned();
+        let recording = matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing);
         MenuMessage {
             seq,
             on: self.settings.on,
@@ -706,6 +761,20 @@ impl Tool {
             choice: choice_for_model(&self.settings.model),
             paused: self.secure.is_some(),
             secure_app: self.secure.clone().flatten(),
+            companies: self.vocabulary.as_ref().map(|v| v.companies.clone()).unwrap_or_default(),
+            vocabulary_company: self.vocabulary.as_ref().and_then(|v| v.active.as_ref()).map(|v| v.company.id.clone()),
+            vocabulary_error: self.vocabulary.as_ref().and_then(|v| v.error.clone()),
+            vocabulary_expanded: self.vocabulary_expanded,
+            recording,
+            recover_available: draft.is_some() && !recording,
+            recovery: self.recovery_open.then(|| bar::RecoveryMessage {
+                text: draft.as_ref().map(|d| d.text.clone()),
+                destination: draft.as_ref().map(|d| d.destination.clone()),
+                completed_ms: draft.as_ref().map(|d| d.completed_ms),
+                expires_ms: self.drafts.recovery_lifetime(draft_now()).map(|remaining|
+                    richos_core::util::now_millis().saturating_add(remaining.as_millis() as u64)),
+                status: self.recovery_status,
+            }),
             look: bar::look(&self.data_dir),
         }
     }
@@ -747,21 +816,86 @@ impl Tool {
         if let Some(tray) = self.tray.clone() {
             menubar::log_item_when_placed(tray);
         }
-        while let Ok(control) = rx.recv() {
+        loop {
+            self.drafts.expire(draft_now());
+            if self.recovery_open && matches!(self.recovery_status, None | Some("copy-failed"))
+                && self.drafts.recovery(draft_now()).is_none() {
+                self.recovery_status = Some("expired");
+                let message = self.menu_message(0);
+                self.menu.redraw(&self.app, |seq| MenuMessage { seq, ..message });
+            }
+            let control = if let Some(delay) = self.drafts.until_expiry(draft_now()) {
+                match rx.recv_timeout(delay.min(SECURE_POLL)) {
+                    Ok(control) => control,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Control::DraftExpiry,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match rx.recv() { Ok(control) => control, Err(_) => break }
+            };
             match control {
+                Control::LivePreview { seq, update } => {
+                    if seq != self.capture_seq || !matches!(self.session.phase(), Phase::Listening { .. }) { continue; }
+                    match update {
+                        super::live_preview::Update::Words { text, sampled_at, decode_ms } => {
+                            if sampled_at.elapsed() > Duration::from_secs(3) {
+                                self.stop_live_preview();
+                                self.live_preview_paused = true;
+                            } else {
+                                self.live_words = Some(text);
+                                log::line(&format!("preview decoded in {decode_ms} ms; recent window age {} ms", sampled_at.elapsed().as_millis()));
+                            }
+                        }
+                        super::live_preview::Update::Paused => {
+                            self.stop_live_preview();
+                            self.live_preview_paused = true;
+                            log::line("preview paused for this recording; capture and final recognition continue");
+                        }
+                        super::live_preview::Update::Unavailable => {
+                            self.stop_live_preview();
+                            self.live_words = None;
+                            self.live_preview_paused = false;
+                        }
+                        super::live_preview::Update::Quiet => self.live_words = None,
+                    }
+                    bar::preview(&self.app, self.bar.sequence(), self.live_words.as_deref(), self.live_preview_paused);
+                }
+                Control::DraftExpiry => {} // next loop expires and clears any open panel
                 Control::Vocabulary { seq, client, publication } => {
                     // Only the owning data profile supplies company identities.
                     if std::path::Path::new(&publication.data_dir) != self.data_dir { continue; }
                     if seq != 0 && !self.handover.as_ref().is_some_and(|h| h.seq == seq && h.told.contains(&client)) { continue; }
+                    let company_deleted = self.recording_vocabulary.as_ref().is_some_and(|recorded|
+                        !publication.companies.iter().any(|c| c.id == recorded.company.id));
+                    if company_deleted { self.cancel_recording(); self.publish(); }
                     if let Some(recorded) = &self.recording_vocabulary {
                         if publication.active.is_none() || !publication.companies.iter().any(|c| c.id == recorded.company.id) {
                             self.vocabulary_revoked.store(true, Ordering::Release);
                         }
                     }
-                    if seq != 0 { self.recording_vocabulary = publication.active.clone(); }
+                    if seq != 0 {
+                        self.recording_vocabulary = publication.active.clone();
+                        self.vocabulary_revoked.store(false, Ordering::Release);
+                        if matches!(self.session.phase(), Phase::Listening { .. }) { self.show_bar(BarView::Listening); }
+                    }
+                    if let Some(old) = &self.vocabulary {
+                        for company in &old.companies {
+                            if !publication.companies.iter().any(|c| c.id == company.id) { self.drafts.remove_company(&company.id); }
+                        }
+                    }
                     self.vocabulary = Some(publication);
+                    let message = self.menu_message(0);
+                    self.menu.redraw(&self.app, |seq| MenuMessage { seq, ..message });
                 }
                 Control::App(AppMessage::Vocabulary { .. }) => {} // carries its connection id above
+                Control::App(AppMessage::ClearDrafts { data_dir }) => {
+                    if std::path::Path::new(&data_dir) == self.data_dir {
+                        self.cancel_recording();
+                        self.drafts.clear();
+                        self.close_menu();
+                        self.publish();
+                    }
+                }
                 Control::Tap(TapEvent::Toggle) | Control::App(AppMessage::Finish) => self.toggle(matches!(control, Control::App(_))),
                 Control::CleanerReady{id,result}=>{
                     if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
@@ -808,15 +942,34 @@ impl Tool {
                         self.stop(duration_ms);
                     }
                 }
-                Control::Written { seq, outcome, words } => {
+                Control::Written { seq, mut result } => {
                     if seq!=self.capture_seq {continue;}
                     if let Some(w) = self.writing.take() {
                         // Done: joined at once, so the thread is reaped and nothing is owned.
                         w.stop_and_join();
                     }
+                    self.end_navigation();
+                    if let (Some(draft), Some(delivery)) = (result.draft.take(), result.delivery) {
+                        let copied = if delivery == insert::Delivery::Check
+                            && self.drafts.protects_unresolved(draft_now()) {
+                            insert::copy_only(&draft.text).is_ok()
+                        } else { matches!(delivery, insert::Delivery::NotAdded { copied: true, .. }) };
+                        let retention = self.drafts.complete(draft, delivery.unresolved(), copied, draft_now());
+                        self.notice = Some(bar::DeliveryMessage {
+                            state: delivery.tag(), destination: self.destination_name.clone(),
+                            copied: if delivery.unresolved() { Some(copied) } else { None },
+                            earlier_draft: retention.earlier_unresolved,
+                            replaced_copied_draft: retention.replaced_clipboard_only,
+                            recoverable: self.drafts.recovery(draft_now()).is_some(),
+                            destination_changed: matches!(delivery, insert::Delivery::NotAdded { destination_changed: true, .. }),
+                        });
+                    } else if result.delivery == Some(insert::Delivery::DiscardedSecure) {
+                        self.secure_notice(true);
+                    }
+                    let outcome = result.outcome;
                     if let Some((id,_))=self.cleaner_target.take(){if let Err(problem)=outcome{self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":problem.tag()})});}self.session.reset();}else{self.session.finish(outcome);}
                     self.publish();
-                    if let (Ok(()), Some(words)) = (outcome, words) {
+                    if let (Ok(()), Some(words)) = (outcome, result.words) {
                         self.fly(words);
                     }
                 }
@@ -906,6 +1059,12 @@ impl Tool {
                         Ok(s) => self.settings = s,
                         Err(why) => log::line(&why),
                     }
+                    if !self.settings.live_preview {
+                        self.stop_live_preview();
+                        self.live_words = None;
+                        self.live_preview_paused = false;
+                        bar::preview(&self.app, self.bar.sequence(), None, false);
+                    }
                     if !self.settings.on {
                         log::line("dictation was turned off; the tool stops");
                         // on=false reaches every connected copy before the tool ends (recheck
@@ -967,6 +1126,7 @@ impl Tool {
                     }
                     self.secure = now;
                     self.publish();
+                    if matches!(self.session.phase(), Phase::Listening { .. }) { self.show_bar(BarView::Listening); }
                     let m = self.menu_message(0);
                     self.menu.redraw(&self.app, |seq| MenuMessage { seq, ..m });
                 }
@@ -982,6 +1142,9 @@ impl Tool {
         if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
 
         self.capture = None;
+        self.stop_live_preview();
+        self.end_navigation();
+        self.drafts.clear();
         self.tap = None;
         self.handover = None;
         if let Some(w) = self.writing.take() {
@@ -995,12 +1158,30 @@ impl Tool {
     /// One event from a page or the menu bar item. `Some(code)` ends the tool.
     fn ui(&mut self, event: UiEvent) -> Option<i32> {
         match event {
+            UiEvent::BarAction { seq, act } => {
+                if self.bar.sequence() != seq { return None; }
+                match act.as_str() {
+                    "finish" if matches!(self.session.phase(), Phase::Listening { .. }) => self.toggle(true),
+                    "cancel" if matches!(self.session.phase(), Phase::Listening { .. }) => {
+                        self.cancel_recording();
+                        self.publish();
+                    }
+                    "recover" => { self.menu_act("recover", None); }
+                    "dismiss" if self.bar.view() == Some(BarView::Delivery) => {
+                        self.bar.expire(&self.app, seq);
+                        self.session.reset();
+                        self.notice = None;
+                        self.publish();
+                    }
+                    _ => {}
+                }
+            }
             UiEvent::Ready { role } => {
                 log::line(&format!("the {role} page is ready"));
                 if role == "bar" {
                     if let Some(p) = self.preview {
                         // Held, with no timer: the check reads it, clicks it and ends the tool.
-                        self.bar.show(&self.app, BarView::Problem(p), self.settings.key(), None, bar::look(&self.data_dir));
+                        self.bar.show(&self.app, BarView::Problem(p), self.settings.key(), None, bar::look(&self.data_dir), bar::BarDetails::default());
                     }
                 }
             }
@@ -1056,6 +1237,9 @@ impl Tool {
     }
 
     fn close_menu(&mut self) {
+        self.vocabulary_expanded = false;
+        self.recovery_open = false;
+        self.recovery_status = None;
         if self.menu.close(&self.app, self.kind).is_some() || !self.menu.is_open() {
             self.menu_closed_at = Some(Instant::now());
             log::line(&format!("menu closed; the front app is pid {:?}", appkit::frontmost_pid()));
@@ -1064,10 +1248,48 @@ impl Tool {
 
     fn menu_act(&mut self, act: &str, value: Option<&str>) -> Option<i32> {
         match act {
+            "vocabulary-expand" | "vocabulary-collapse" => {
+                self.vocabulary_expanded = act == "vocabulary-expand";
+                let message = self.menu_message(0);
+                self.menu.redraw(&self.app, |seq| MenuMessage { seq, ..message });
+            }
+            "recover" if !matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing) => {
+                self.drafts.recovery(draft_now())?;
+                self.recovery_open = true;
+                self.recovery_status = None;
+                let message = self.menu_message(0);
+                if self.menu.is_open() {
+                    self.menu.redraw(&self.app, |seq| MenuMessage { seq, ..message });
+                } else if let Some(tray) = self.tray.clone() {
+                    if let Some(item) = bar::ask_main(&self.app, move || menubar::item_rect(&tray)).flatten() {
+                        self.menu.open(&self.app, item, |seq| MenuMessage { seq, ..message });
+                    }
+                }
+            }
+            "recovery-copy" if self.recovery_open => {
+                if let Some(draft) = self.drafts.recovery(draft_now()) {
+                    if insert::copy_only(&draft.text).is_ok() {
+                        self.drafts.copied_recovery();
+                        self.recovery_status = Some("copied");
+                        self.notice = None;
+                        self.session.reset();
+                        self.publish();
+                    } else { self.recovery_status = Some("copy-failed"); }
+                } else { self.recovery_status = Some("expired"); }
+                let message = self.menu_message(0);
+                self.menu.redraw(&self.app, |seq| MenuMessage { seq, ..message });
+            }
+            "recovery-clear" if self.recovery_open => {
+                self.drafts.clear();
+                self.close_menu();
+                self.notice = None;
+                self.session.reset();
+                self.publish();
+            }
             "vocabulary" => {
                 let company = value.filter(|v| !v.is_empty()).map(str::to_string);
                 if company.as_ref().is_none_or(|id| self.vocabulary.as_ref().is_some_and(|v| v.companies.iter().any(|c| &c.id == id))) {
-                    self.hub.broadcast(&ToolMessage::SelectVocabulary { company });
+                    self.hub.broadcast(&ToolMessage::SelectVocabulary { data_dir: self.data_dir.display().to_string(), company });
                 }
             }
             "close" => {
@@ -1109,7 +1331,7 @@ impl Tool {
                         // starts a tool again that would undo this Off (recheck finding 2).
                         self.publish();
                         self.hub.broadcast(&ToolMessage::SettingsChanged);
-                        self.capture = None;
+                        self.cancel_recording();
                         self.tap = None;
                         self.show_bar(BarView::Off);
                         self.ending = true;
@@ -1159,16 +1381,31 @@ impl Tool {
     }
 
     fn cancel_cleaner(&mut self){
-        self.capture_seq+=1;
         let id=self.cleaner_pending.take().or_else(||self.cleaner_target.as_ref().map(|(id,_)|id.clone()));
         if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
-        self.capture=None;self.handover=None;
-        if let Some(writing)=self.writing.take(){writing.stop_and_join();}
-        self.recording.lock().unwrap_or_else(|p|p.into_inner()).take();self.cleaner_target=None;self.session.reset();self.publish();
+        self.cancel_recording();
+        self.cleaner_target=None;self.publish();
         if let Some(id)=id{self.hub.broadcast(&ToolMessage::Cleaner{id,action:"canceled".into(),payload:serde_json::json!({})});}
     }
     fn listen(&mut self) {
         self.capture_seq+=1;
+        self.close_menu();
+        self.notice = None;
+        self.live_words = None;
+        self.live_preview_paused = false;
+        self.destination = self.cleaner_target.is_none().then(insert::Destination::capture);
+        self.destination_name = self.destination.as_ref().map(|d| d.name.clone()).unwrap_or_default();
+        if self.destination.as_ref().is_some_and(|d| d.secure) {
+            self.secure_notice(false);
+            self.session.finish(Err(Problem::NoTextBox));
+            self.publish();
+            return;
+        }
+        self.navigated = self.tap.as_ref().map(|t| t.track_destination(true)).unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        if let Some(destination) = &self.destination {
+            self.pointer_observer = keytap::PointerObserver::start(&self.app, destination.pid, self.navigated.clone());
+            if self.pointer_observer.is_none() { log::line("destination pointer observer unavailable; unreadable-field navigation protection is unverified"); }
+        }
         self.vocabulary_revoked = Arc::new(AtomicBool::new(false));
         self.recording_vocabulary = self.vocabulary.as_ref().and_then(|v| v.active.clone());
         self.focused = insert::focused_window_rect();
@@ -1226,8 +1463,28 @@ impl Tool {
             }
         }) {
             Ok(c) => {
+                self.drafts.recording_started(draft_now());
                 log::line(&format!("listening ({})", c.source_label));
                 self.capture = Some(c);
+                if self.settings.live_preview && self.cleaner_target.is_none() {
+                    let recording = self.recording.clone();
+                    let data_dir = self.data_dir.clone();
+                    let sender = self.tx.clone();
+                    let stop = Arc::new(AtomicBool::new(false));
+                    let flag = stop.clone();
+                    match std::thread::Builder::new().name("dictation-live-preview".into()).spawn(move || {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            super::live_preview::run(recording, &data_dir, &flag,
+                                |update| { sender.send(Control::LivePreview { seq: capture_seq, update }).ok(); });
+                        }));
+                        if result.is_err() && !flag.load(Ordering::Acquire) {
+                            sender.send(Control::LivePreview { seq: capture_seq, update: super::live_preview::Update::Paused }).ok();
+                        }
+                    }) {
+                        Ok(join) => self.live_preview = Some(Writing { stop, join }),
+                        Err(_) => self.live_preview_paused = true,
+                    }
+                }
                 if let Some((id,_))=&self.cleaner_target{self.hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"listening".into(),payload:serde_json::json!({"key":self.settings.key()})});}
             }
             Err(e) => {
@@ -1241,6 +1498,7 @@ impl Tool {
     fn stop(&mut self, duration_ms: u64) {
         // Dropping the capture closes the microphone.
         self.capture = None;
+        self.stop_live_preview();
         self.handover = None;
         let recording = self.recording.lock().unwrap_or_else(|p| p.into_inner()).take().unwrap_or_default();
         self.publish();
@@ -1252,14 +1510,17 @@ impl Tool {
         let target=self.cleaner_target.as_ref().map(|(id,_)|id.clone());let hub=self.hub.clone();
         let vocabulary = self.recording_vocabulary.clone();
         let vocabulary_revoked = self.vocabulary_revoked.clone();
+        let destination = self.destination.take();
+        let navigated = self.navigated.clone();
         if let Some(id)=&target{self.hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"writing".into(),payload:serde_json::json!({})});}
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         match std::thread::Builder::new().name("dictation-write".into()).spawn(move || {
             let text = TextContext { cleaner: target.as_deref().map(|id|(id,hub.as_ref())),
-                                     vocabulary: vocabulary.as_ref(), vocabulary_revoked: &vocabulary_revoked };
-            let (outcome, words) = write(recording, duration_ms, &model, &data_dir, &app, &flag, text);
-            tx.send(Control::Written { seq:capture_seq, outcome, words }).ok();
+                                     vocabulary: vocabulary.as_ref(), vocabulary_revoked: &vocabulary_revoked,
+                                     destination: destination.as_ref(), navigated: &navigated };
+            let result = write(recording, duration_ms, &model, &data_dir, &app, &flag, text);
+            tx.send(Control::Written { seq:capture_seq, result }).ok();
         }) {
             Ok(join) => self.writing = Some(Writing { stop, join }),
             Err(e) => {
@@ -1268,6 +1529,35 @@ impl Tool {
                 self.publish();
             }
         }
+    }
+
+    fn end_navigation(&mut self) {
+        if let Some(tap) = &self.tap { tap.track_destination(false); }
+        self.pointer_observer = None;
+    }
+
+    fn stop_live_preview(&mut self) {
+        if let Some(preview) = self.live_preview.take() { preview.stop_and_join(); }
+    }
+
+    fn cancel_recording(&mut self) {
+        self.capture_seq += 1;
+        self.capture = None;
+        self.stop_live_preview();
+        self.handover = None;
+        if let Some(writing) = self.writing.take() { writing.stop_and_join(); }
+        self.recording.lock().unwrap_or_else(|p| p.into_inner()).take();
+        self.end_navigation();
+        self.destination = None;
+        self.live_words = None;
+        self.live_preview_paused = false;
+        self.notice = None;
+        self.session.reset();
+    }
+
+    fn secure_notice(&mut self, captured: bool) {
+        self.notice = Some(bar::DeliveryMessage { state: if captured { "discarded-secure" } else { "secure-field" }, destination: self.destination_name.clone(),
+            copied: None, earlier_draft: false, replaced_copied_draft: false, recoverable: false, destination_changed: false });
     }
 }
 
@@ -1293,20 +1583,21 @@ struct TextContext<'a> {
     cleaner: Option<(&'a str, &'a Hub)>,
     vocabulary: Option<&'a super::vocabulary::Snapshot>,
     vocabulary_revoked: &'a AtomicBool,
+    destination: Option<&'a insert::Destination>,
+    navigated: &'a AtomicBool,
 }
 
-fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool, text: TextContext<'_>) -> (Result<(), Problem>, Option<Rect>) {
-    match write_words(recording, duration_ms, chosen, data_dir, app, stop, text) {
-        Ok((then, landed)) => {
-            let words = landed.and_then(|(start, text)| insert::words_rect(start, &text));
-            (then.map_or(Ok(()), Err), words)
-        }
-        Err(p) => (Err(p), None),
-    }
+struct WriteResult {
+    outcome: Result<(), Problem>,
+    words: Option<Rect>,
+    draft: Option<Draft>,
+    delivery: Option<insert::Delivery>,
 }
 
-/// What was pasted and where the selection began, when Accessibility could read it.
-type Landed = Option<(isize, String)>;
+fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool, text: TextContext<'_>) -> WriteResult {
+    write_words(recording, duration_ms, chosen, data_dir, app, stop, text).unwrap_or_else(|problem|
+        WriteResult { outcome: Err(problem), words: None, draft: None, delivery: None })
+}
 
 /// Looks for the engine's decoder again when none is delivered, THEN picks the model: the pick's
 /// own check needs the decoder, so the order is the fix.
@@ -1323,7 +1614,7 @@ fn pick_after_engine_lookup(
 }
 
 /// The words in place: `Ok` with the problem to say afterwards (if any) and what was pasted where.
-fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool, text: TextContext<'_>) -> Result<(Option<Problem>, Landed), Problem> {
+fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool, text: TextContext<'_>) -> Result<WriteResult, Problem> {
     let secs = recording.secs();
     let then = match judge_recording(duration_ms, &recording) {
         Stopped::Refuse(p) => {
@@ -1384,8 +1675,9 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
     if let Some((id,hub))=text.cleaner {
         if stop.load(Ordering::Acquire){return Err(Problem::CouldNotWrite)}
         if hub.broadcast(&ToolMessage::Cleaner{id:id.into(),action:"transcript".into(),payload:serde_json::json!({"note":words})})==0{return Err(Problem::CouldNotWrite)}
-        return Ok((then,None));
+        return Ok(WriteResult { outcome: then.map_or(Ok(()), Err), words: None, draft: None, delivery: None });
     }
+    let original = words;
     let words = if !text.vocabulary_revoked.load(Ordering::Acquire) {
         text.vocabulary.filter(|snapshot| {
             store::read(data_dir).ok().and_then(|s| super::vocabulary::Saved::read(&s.vocabulary).ok())
@@ -1394,27 +1686,43 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
             // The owning app already checked the local English dictionary before
             // publishing. Re-check structure and protected common-word fixtures.
             richos_voice::dictation_vocabulary::Rules::checked(&snapshot.rules, |_| Some(false)).ok()
-        }).map(|rules| rules.apply(&words)).unwrap_or(words)
-    } else { words };
-    if !keytap::accessibility_allowed() {
-        let copied = insert::copy_only(&words);
-        log::line(&format!("dictation: model {id}, {secs:.2} s, {latency} ms: Accessibility is not allowed, words copied ({copied:?})"));
-        return Err(Problem::NoAccessibility);
+        }).map(|rules| rules.apply(&original)).unwrap_or_else(|| original.clone())
+    } else { original.clone() };
+    let destination_name = text.destination.map(|d| d.name.clone()).unwrap_or_else(|| "the destination app".into());
+    let mut draft = Draft { original, text: words.clone(), destination: destination_name,
+        company: text.vocabulary.map(|v| v.company.id.clone()), completed_ms: now_ms(), range: None };
+    if stop.load(Ordering::Acquire) { return Err(Problem::CouldNotWrite); }
+    if !keytap::accessibility_allowed() || text.destination.is_none() {
+        let copied = insert::copy_only(&words).is_ok();
+        log::line(&format!("dictation: model {id}, {secs:.2} s, {latency} ms: automatic delivery unavailable, copied={copied}"));
+        return Ok(WriteResult { outcome: Err(Problem::NoAccessibility), words: None,
+            draft: Some(draft), delivery: Some(insert::Delivery::NotAdded { copied, destination_changed: false }) });
     }
-    let inserted = insert::insert(&words, v_code_on_main(app)).map_err(|e| {
-        log::line(&format!("the words could not be put in place: {e}"));
-        Problem::CouldNotWrite
-    })?;
+    let inserted = match insert::insert(&words, v_code_on_main(app), text.destination.expect("checked destination"), text.navigated, stop) {
+        Ok(inserted) => inserted,
+        Err(_) if stop.load(Ordering::Acquire) => return Err(Problem::CouldNotWrite),
+        Err(_) => {
+            log::line("the words could not be put in place; the recognized draft is held for recovery");
+            return Ok(WriteResult { outcome: Err(Problem::CouldNotWrite), words: None, draft: Some(draft),
+                delivery: Some(insert::Delivery::NotAdded { copied: false, destination_changed: false }) });
+        }
+    };
+    if inserted.delivery == insert::Delivery::DiscardedSecure {
+        log::line("destination is secure; no paste, copy or retained draft");
+        return Ok(WriteResult { outcome: Err(Problem::NoTextBox), words: None, draft: None, delivery: Some(inserted.delivery) });
+    }
     log::line(&format!(
-        "dictation: model {id}, {secs:.2} s of audio, written in {latency} ms, {}{}; {}",
+        "dictation: model {id}, {secs:.2} s of audio, written in {latency} ms, {}{}; {}; delivery={}",
         if inserted.how == Insert::Paste { "pasted" } else { "copied (no text box)" },
-        if inserted.spaced { ", spacing read" } else { "" },
-        inserted.seen,
+        if inserted.spaced { ", spacing read" } else { "" }, inserted.seen, inserted.delivery.tag(),
     ));
-    if inserted.how == Insert::CopyOnly {
-        return Err(Problem::NoTextBox);
+    if let Some((start, actual)) = inserted.landed {
+        draft.range = Some((start, actual.encode_utf16().count() as isize));
+        draft.text = actual;
     }
-    Ok((then, inserted.landed))
+    draft.completed_ms = now_ms();
+    Ok(WriteResult { outcome: then.map_or(Ok(()), Err), words: inserted.rect,
+                    draft: Some(draft), delivery: Some(inserted.delivery) })
 }
 
 #[cfg(test)]
@@ -1473,7 +1781,7 @@ mod tests {
     /// and the key and model the tool actually uses (finding 4).
     #[test]
     fn the_state_carries_secure_event_input() {
-        let shared = Shared { owner: "o".into(), on: true, phase: Phase::Idle, key_tap: true, secure: Some(Some("1Password".into())), key: 5, model: "small.en".into() };
+        let shared = Shared { data_dir: String::new(), owner: "o".into(), on: true, phase: Phase::Idle, key_tap: true, secure: Some(Some("1Password".into())), key: 5, model: "small.en".into() };
         match shared.message() {
             ToolMessage::State { secure_input, secure_app, key, model, .. } => {
                 assert!(secure_input);

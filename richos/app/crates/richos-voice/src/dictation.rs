@@ -333,6 +333,12 @@ impl Recording {
         &self.samples
     }
 
+    /// A borrowed bounded preview window. The full recording remains untouched
+    /// for final recognition; the owner makes at most one short-lived copy.
+    pub fn preview_samples(&self) -> &[f32] {
+        &self.samples[self.samples.len().saturating_sub(8 * SAMPLE_RATE as usize)..]
+    }
+
     pub fn into_samples(self) -> Vec<f32> {
         self.samples
     }
@@ -590,6 +596,16 @@ pub struct Retention {
 }
 
 impl Drafts {
+    pub fn protects_unresolved(&mut self, now: Duration) -> bool {
+        self.expire(now);
+        self.held.as_ref().is_some_and(|h| h.unresolved)
+    }
+    pub fn until_expiry(&self, now: Duration) -> Option<Duration> {
+        self.held.iter().chain(self.current.iter()).map(|h| h.expires.saturating_sub(now)).min()
+    }
+    pub fn recovery_lifetime(&self, now: Duration) -> Option<Duration> {
+        self.held.as_ref().map(|h| h.expires.saturating_sub(now))
+    }
     pub fn recording_started(&mut self, now: Duration) {
         self.expire(now);
         self.current = None;
@@ -671,6 +687,15 @@ pub const WRITTEN_TYPES: [&str; 2] = [PLAIN_TEXT_TYPE, TRANSIENT_TYPE];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_reads_the_latest_eight_seconds_without_shortening_the_final_recording() {
+        let mut recording = Recording::new();
+        let samples: Vec<f32> = (0..(10 * SAMPLE_RATE)).map(|n| n as f32).collect();
+        recording.push(&samples);
+        assert_eq!(recording.preview_samples(), &samples[2 * SAMPLE_RATE as usize..]);
+        assert_eq!(recording.into_samples(), samples);
+    }
 
     #[test]
     fn destination_changes_and_secure_fields_fail_safely_without_regressing_unreadable_windows() {

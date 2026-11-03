@@ -70,6 +70,8 @@ extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
     fn AXIsProcessTrusted() -> bool;
+    fn CGWindowListCopyWindowInfo(options: u32, window: u32) -> *const c_void;
+    fn CGWindowLevelForKey(key: i32) -> i32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -113,6 +115,8 @@ fn now_ms() -> u64 {
 }
 
 struct Context {
+    tracking_destination: AtomicBool,
+    navigated: Arc<AtomicBool>,
     /// Cleared by `KeyTap::drop`. The tap thread runs its loop in slices while this is set, so a
     /// stop that lands before the loop has started is still seen: `CFRunLoopStop` on a run loop
     /// that is not running yet is forgotten when it starts (CF keeps the flag per run).
@@ -169,6 +173,13 @@ extern "C" fn callback(_proxy: *mut c_void, etype: u32, event: CGEventRef, user:
         }
         // SAFETY: the live event of this callback.
         let Some(read) = (unsafe { read_event(etype, event) }) else { return false };
+        if ctx.tracking_destination.load(Ordering::Relaxed)
+            && matches!(read, KeyEvent::Key { code: 48, down: true, .. })
+        {
+            // Tab with any modifiers. Keep only an uncertainty bit, never its
+            // characters/modifiers, and pass the event through unchanged.
+            ctx.navigated.store(true, Ordering::Release);
+        }
         // Key capture first: the F-key he presses is the answer, never a dictation.
         let until = ctx.capture_until.load(Ordering::Relaxed);
         if until != 0 {
@@ -205,6 +216,8 @@ impl KeyTap {
     /// is what it does without Accessibility.
     pub fn start(key: u8, tx: Sender<TapEvent>) -> Result<KeyTap, String> {
         let ctx = Arc::new(Context {
+            tracking_destination: AtomicBool::new(false),
+            navigated: Arc::new(AtomicBool::new(false)),
             running: AtomicBool::new(true),
             port: AtomicPtr::new(std::ptr::null_mut()),
             key: AtomicU8::new(key),
@@ -258,6 +271,12 @@ impl KeyTap {
         self.ctx.key.store(key, Ordering::Relaxed);
     }
 
+    pub fn track_destination(&self, on: bool) -> Arc<AtomicBool> {
+        if on { self.ctx.navigated.store(false, Ordering::Release); }
+        self.ctx.tracking_destination.store(on, Ordering::Release);
+        self.ctx.navigated.clone()
+    }
+
     /// Key capture: report the next F-key down as `Captured` (for [`CAPTURE_FOR_MS`] at most),
     /// or stop waiting.
     pub fn capture_next(&self, on: bool) {
@@ -267,6 +286,99 @@ impl KeyTap {
     /// The longest callback run so far, in microseconds, and reset to zero: the hourly number.
     pub fn take_longest_micros(&self) -> u64 {
         self.ctx.longest_ns.swap(0, Ordering::Relaxed) / 1000
+    }
+}
+
+/// One passive mouse observer for one dictation. NSEvent excludes events sent to
+/// this tool's own windows, so Finish and menu clicks cannot mark navigation.
+/// It is installed/removed on the main thread and never changes the active tap.
+pub struct PointerObserver {
+    token: usize,
+    app: tauri::AppHandle,
+    active: Arc<AtomicBool>,
+}
+
+impl PointerObserver {
+    pub fn start(app: &tauri::AppHandle, destination_pid: Option<i32>, navigated: Arc<AtomicBool>) -> Option<Self> {
+        let active = Arc::new(AtomicBool::new(true));
+        let flag = active.clone();
+        let token = super::bar::ask_main(app, move || {
+            let class = AnyClass::get(c"NSEvent")?;
+            let handler = block2::RcBlock::new(move |event: *mut AnyObject| {
+                if !flag.load(Ordering::Acquire) { return; }
+                let uncertain = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    pointer_may_navigate(event, destination_pid)
+                })).unwrap_or(true);
+                if uncertain { navigated.store(true, Ordering::Release); }
+            });
+            // SAFETY: documented listen-only global mouse monitor. AppKit copies
+            // the block; we retain exactly its returned token until removal.
+            unsafe {
+                let monitor: *mut AnyObject = msg_send![class,
+                    addGlobalMonitorForEventsMatchingMask: ((1usize << 1) | (1usize << 3) | (1usize << 25)),
+                    handler: &*handler];
+                Retained::retain(monitor).map(|token| Retained::into_raw(token) as usize)
+            }
+        })??;
+        Some(Self { token, app: app.clone(), active })
+    }
+}
+
+impl Drop for PointerObserver {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+        let token = self.token;
+        let removed = super::bar::ask_main(&self.app, move || {
+            // SAFETY: this is the one retained token from start. All monitor
+            // access stays on the main thread; removal releases AppKit's block.
+            unsafe {
+                let token = Retained::from_raw(token as *mut AnyObject);
+                if let (Some(class), Some(token)) = (AnyClass::get(c"NSEvent"), token) {
+                    let _: () = msg_send![class, removeMonitor: &*token];
+                }
+            }
+        });
+        if removed.is_none() { super::log::line("destination pointer observer removal was not acknowledged"); }
+    }
+}
+
+fn pointer_owner_may_navigate(destination: Option<i32>, owner: Option<i32>, menu_window: bool) -> bool {
+    if menu_window { return false; }
+    match (destination, owner) {
+        (Some(destination), Some(owner)) => destination == owner,
+        _ => true,
+    }
+}
+
+fn pointer_may_navigate(event: *mut AnyObject, destination: Option<i32>) -> bool {
+    use core_foundation::{base::TCFType, string::CFString};
+    // SAFETY: AppKit supplies a live NSEvent for this callback only. Query window
+    // metadata, not screen pixels, positions, titles or application text.
+    unsafe {
+        if event.is_null() { return true; }
+        let cg: CGEventRef = msg_send![event, CGEvent];
+        if cg.is_null() { return true; }
+        let window = CGEventGetIntegerValueField(cg, 92);
+        if window <= 0 { return true; }
+        let info = CGWindowListCopyWindowInfo(1 << 3, window as u32);
+        if info.is_null() { return true; }
+        let result = (|| {
+            let list = info as *mut AnyObject;
+            let count: usize = msg_send![list, count];
+            if count == 0 { return true; }
+            let row: *mut AnyObject = msg_send![list, objectAtIndex: 0usize];
+            let owner_key = CFString::from_static_string("kCGWindowOwnerPID");
+            let layer_key = CFString::from_static_string("kCGWindowLayer");
+            let owner: *mut AnyObject = msg_send![row, objectForKey: owner_key.as_concrete_TypeRef() as *mut AnyObject];
+            let layer: *mut AnyObject = msg_send![row, objectForKey: layer_key.as_concrete_TypeRef() as *mut AnyObject];
+            if owner.is_null() || layer.is_null() { return true; }
+            let pid: i32 = msg_send![owner, intValue];
+            let level: i32 = msg_send![layer, intValue];
+            let menu = [8, 9, 11].iter().any(|key| level == CGWindowLevelForKey(*key));
+            pointer_owner_may_navigate(destination, Some(pid), menu)
+        })();
+        CFRelease(info);
+        result
     }
 }
 
@@ -329,6 +441,14 @@ impl Drop for Activity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passive_pointer_navigation_counts_only_destination_or_unknown_windows_and_excludes_menus() {
+        assert!(pointer_owner_may_navigate(Some(10), Some(10), false));
+        assert!(!pointer_owner_may_navigate(Some(10), Some(20), false), "nonactivating notifications from another app");
+        assert!(!pointer_owner_may_navigate(Some(10), Some(10), true));
+        assert!(pointer_owner_may_navigate(Some(10), None, false));
+    }
 
     /// INVARIANT (M9): the mask is exactly key down, key up and system-defined.
     #[test]
