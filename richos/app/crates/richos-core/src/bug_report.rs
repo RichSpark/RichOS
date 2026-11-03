@@ -2757,12 +2757,12 @@ impl Outbox {
 
     /// Every report that went out, oldest first.
     pub fn sent(&self) -> io::Result<Vec<Sent>> {
-        let text = match std::fs::read_to_string(self.dir.join("sent.jsonl")) {
+        let bytes = match std::fs::read(self.dir.join("sent.jsonl")) {
             Ok(t) => t,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
             Err(e) => return Err(e),
         };
-        Ok(text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+        Ok(bytes.split(|b| *b == b'\n').filter_map(|l| serde_json::from_slice(l).ok()).collect())
     }
 
     /// **CANCEL, CONFIRMED.** Take a waiting report off this Mac and say what became of it:
@@ -2884,7 +2884,8 @@ impl Outbox {
     fn record_sent(&self, sent: &Sent) -> io::Result<()> {
         use io::Write;
         std::fs::create_dir_all(&self.dir)?;
-        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("sent.jsonl"))?;
+        let mut file = std::fs::OpenOptions::new().create(true).read(true).append(true).open(self.dir.join("sent.jsonl"))?;
+        crate::util::ensure_line_boundary(&mut file)?;
         file.write_all(format!("{}\n", serde_json::to_string(sent).map_err(io::Error::other)?).as_bytes())?;
         file.sync_all()?;
         // The synced receipt is authoritative even if cleanup fails or the app stops here.

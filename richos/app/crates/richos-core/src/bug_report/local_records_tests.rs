@@ -107,3 +107,37 @@ fn p1_57_an_identity_that_cannot_be_saved_sends_nothing() {
     assert!(bug::Outbox::open(&s.0).send(&public(), &Cred, &relay, 1).is_err());
     assert!(relay.identities.borrow().is_empty());
 }
+
+struct ReceiptFixture(AtomicUsize);
+impl bug::Transport for ReceiptFixture {
+    fn create_issue(&self, _: &bug::Credential, _: &str, _: &serde_json::Value) -> bug::Outcome {
+        let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 2 || n == 4 { bug::Outcome::Unreachable }
+        else { bug::Outcome::Created { number: n as u64, url: format!("https://fixture.invalid/issues/{n}") } }
+    }
+    fn graphql(&self, _: &bug::Credential, _: &serde_json::Value) -> bug::Reply { panic!("no network") }
+}
+#[test]
+fn p1_54_torn_sent_receipts_preserve_good_receipts_retries_and_cancellation() {
+    use std::io::Write;
+    let s = Scratch::new();
+    let transport = ReceiptFixture(AtomicUsize::new(0));
+    let outbox = bug::Outbox::open(&s.0);
+    assert!(matches!(outbox.send(&public(), &Cred, &transport, 1).unwrap(), bug::Delivery::Sent(_)));
+    assert!(matches!(outbox.send(&public(), &Cred, &transport, 2).unwrap(), bug::Delivery::Waiting { .. }));
+    let path = s.0.join("sent.jsonl");
+    fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{\"title\":\"torn \xe2").unwrap();
+    let reopened = bug::Outbox::open(&s.0);
+    assert_eq!(reopened.pending().unwrap().len(), 1);
+    assert_eq!(reopened.sent().unwrap().len(), 1);
+    assert!(matches!(reopened.send_due(&Cred, &transport, u64::MAX).unwrap().as_slice(), [bug::Delivery::Sent(_)]));
+    assert_eq!(reopened.sent().unwrap().len(), 2, "the next receipt must start on its own line");
+    assert!(reopened.send_due(&Cred, &transport, u64::MAX).unwrap().is_empty());
+    let bug::Delivery::Waiting { id, .. } = reopened.send(&public(), &Cred, &transport, 4).unwrap() else { panic!("fourth attempt must wait") };
+    fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"\xff").unwrap();
+    assert!(matches!(reopened.withdraw(&id).unwrap(), bug::Withdrawn::Canceled));
+    assert_eq!(reopened.sent().unwrap().len(), 2);
+    assert!(reopened.pending().unwrap().is_empty());
+    assert_eq!(transport.0.load(Ordering::SeqCst), 4);
+    assert!(fs::read(path).unwrap().contains(&0xe2), "damaged bytes are retained");
+}
