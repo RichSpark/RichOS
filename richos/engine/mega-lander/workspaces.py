@@ -68,6 +68,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -7396,7 +7397,7 @@ def _require_landed(rec, chain, ignored_ok="", deadline=None, record=True):
 def _keep_ignored(rec, chain, deadline=None):
     """Move every ignored entry the land would refuse (one the main checkout
     lacks, not generated at creation, not declared regenerable) out of the
-    work's workspaces into <state>/kept/<key>-<time>/<n>-<workspace>/<entry>,
+    work's workspaces into <state>/kept/<key>-<time>-<unique>/<n>-<workspace>/<entry>,
     and return that directory ("" when nothing was kept). In-flight ack files
     are deleted instead, never kept. Called only once every branch and HEAD is
     proved to be in the integration branch.
@@ -7437,7 +7438,8 @@ def _keep_ignored(rec, chain, deadline=None):
             return ""
     except OSError:
         return ""
-    root = _p("kept", "%s-%d" % (_key_segment(rec["key"]), int(now())))
+    os.makedirs(_p("kept"), exist_ok=True)
+    root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=_p("kept"))
     moved, dropped = [], []
     # An entry that holds the ack directory (a `.claude/` the main checkout
     # lacks) loses the acks first, so they are not kept inside it.

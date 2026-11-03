@@ -8756,6 +8756,29 @@ class HuntV5_01_WorkspaceOwnership(Base):
         self.assertEqual(len([i for i in items if i.get("damaged")]), 1)
 
 
+
+class HuntV5_03_PreservationRetries(Base):
+    def test_two_keeps_in_one_second_retain_both_versions(self):
+        name = "zach-opus-v5keep"
+        _aid, path = self.spawn(name)
+        rec = self.rec(name)
+        roots = []
+        with patch.object(ws, "now", return_value=1793700000):
+            for content in ("first unique work", "second unique work"):
+                with open(os.path.join(path, ".env"), "w") as stream:
+                    stream.write(content)
+                roots.append(ws._keep_ignored(rec, [rec]))
+        self.assertNotEqual(*roots, "a retry reused the earlier archive")
+        copies = []
+        for root in roots:
+            self.assertTrue(os.path.isdir(root))
+            for folder, _dirs, files in os.walk(root):
+                for file in files:
+                    with open(os.path.join(folder, file)) as stream:
+                        copies.append(stream.read())
+        self.assertCountEqual(copies, ["first unique work", "second unique work"])
+
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a
