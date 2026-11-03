@@ -735,13 +735,16 @@ impl Engine {
         if fresh {
             self.inner.lock().unwrap().resumed = false;
         }
+        let deadline = Instant::now() + adapter::OPERATION_BOUND;
         let line = adapter::user_message_with(&text, &pictures);
-        let sent = if fresh { session.begin(&line, Duration::from_secs(30)) } else { session.send(&line).map_err(|e| (Failure::Ended, e.to_string())) };
+        let sent = if fresh { session.begin(&line, Duration::from_secs(30)) } else {
+            session.send_until(&line, deadline).map_err(|e| (
+                if e.kind() == std::io::ErrorKind::TimedOut { Failure::Timeout } else { Failure::Ended }, e.to_string()))
+        };
         if let Err((f, _)) = sent {
             *slot = None;
             return if self.canceled.load(Ordering::SeqCst) { Err(None) } else { Err(Some(f)) };
         }
-        let deadline = Instant::now() + adapter::OPERATION_BOUND;
         let mut steps: Vec<String> = Vec::new();
         let ev = evidence::Store::at(&dir);
         let outcome = loop {

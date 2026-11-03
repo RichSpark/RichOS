@@ -217,11 +217,21 @@ fn scrub_headers(text: &str, removed: &mut Removed) -> String {
 fn find_term(text: &str, term: &str) -> Vec<(usize, usize)> {
     let lower = text.to_lowercase();
     let t = term.to_lowercase();
-    if lower.len() != text.len() || t.is_empty() {
-        // Case folding changed byte lengths (rare scripts): fall back to an exact match.
-        return text.match_indices(term).map(|(i, m)| (i, i + m.len())).filter(|&(s, e)| boundary(text, s, e)).collect();
+    if t.is_empty() { return Vec::new(); }
+    // Lowercasing can change individual byte lengths even when the total stays equal.
+    // Only whole original characters may delimit a replacement, never part of an expansion.
+    let mut offsets = vec![(0, 0)];
+    let mut folded = 0;
+    for (start, c) in text.char_indices() {
+        folded += c.to_lowercase().map(char::len_utf8).sum::<usize>();
+        offsets.push((folded, start + c.len_utf8()));
     }
-    lower.match_indices(&t).map(|(i, m)| (i, i + m.len())).filter(|&(s, e)| boundary(text, s, e)).collect()
+    let original = |offset| offsets.binary_search_by_key(&offset, |&(lower, _)| lower)
+        .ok().map(|index| offsets[index].1);
+    lower.match_indices(&t).filter_map(|(i, m)| {
+        let (s, e) = (original(i)?, original(i + m.len())?);
+        boundary(text, s, e).then_some((s, e))
+    }).collect()
 }
 
 fn boundary(text: &str, s: usize, e: usize) -> bool {
@@ -608,4 +618,24 @@ mod tests {
         assert_eq!(scrub(raw, &ctx()), scrub(raw, &ctx()));
         assert!(!scrub(raw, &ctx()).0.contains("abc"));
     }
+}
+
+#[cfg(test)]
+mod g5_unicode_tests {
+use crate::scrub::{self, Context, NAME};
+#[test]
+fn g5_unicode_case_changes_preserve_original_match_boundaries() {
+    let ctx = Context { terms: vec!["Acme".into()], ..Context::default() };
+    for (input, want) in [
+        ("İAcmeİK", "İAcmeİK".to_string()),
+        ("İ Acme İK", format!("İ {NAME} İK")),
+        ("İ aCmE K", format!("İ {NAME} K")),
+        ("Acme is waiting", format!("{NAME} is waiting")),
+    ] {
+        assert_eq!(scrub::scrub(input, &ctx).0, want, "input={input}");
+    }
+    let ctx = Context { terms: vec!["Kelvin".into()], ..Context::default() };
+    assert_eq!(scrub::scrub("KELVIN / KELVIN", &ctx).0, format!("{NAME} / {NAME}"));
+}
+
 }
