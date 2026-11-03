@@ -8781,9 +8781,8 @@ class HuntV5_03_PreservationRetries(Base):
 
 class HuntV5_04_BackgroundDelivery(Base):
     def pending_call(self):
-        hold_env = patch.dict(os.environ, {"RICHOS_AGENT_HOLD_DIR": os.path.join(self.env.root, "hold")})
-        hold_env.start()
-        self.addCleanup(hold_env.stop)
+        self.env.saved.setdefault("RICHOS_AGENT_HOLD_DIR", os.environ.get("RICHOS_AGENT_HOLD_DIR"))
+        os.environ["RICHOS_AGENT_HOLD_DIR"] = os.path.join(self.env.root, "hold")
         aid, _path = self.spawn("echo-opus-v5delivery")
         ah = ws._agent_hold()
         call = "toolu_delivery"
@@ -8815,6 +8814,20 @@ class HuntV5_04_BackgroundDelivery(Base):
                                 "message": {"role": "user", "content": notice}})
         self.finish(aid)
         self.assertIsNotNone(self.rec("echo-opus-v5delivery")["end"])
+
+    def test_host_notification_with_the_real_system_preamble_delivers_the_result(self):
+        aid, call, transcript = self.pending_call()
+        preamble = ("[SYSTEM NOTIFICATION - NOT USER INPUT]\n"
+                    "This is an automated background-task event, NOT a message from the user.\n\n")
+        notice = ("<task-notification>\n<task-id>bkdelivery</task-id>\n"
+                  "<tool-use-id>%s</tool-use-id>\n<status>completed</status>\n"
+                  "<summary>done</summary>\n</task-notification>" % call)
+        self.assertEqual(ws._running_calls(self.sid, aid), [(call, "fixture command")])
+        self.append(transcript, {"type": "user", "isMeta": True,
+                                "origin": {"kind": "task-notification", "producer": "session-task"},
+                                "message": {"role": "user", "content": preamble + notice}})
+        self.finish(aid)
+        self.assertIsNotNone(self.rec("echo-opus-v5delivery")["end"], "the real wake never delivered its result")
 
     def test_account_switch_keeps_the_original_transcripts_pending_result(self):
         aid, call, transcript = self.pending_call()

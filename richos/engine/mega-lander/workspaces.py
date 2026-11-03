@@ -2538,8 +2538,11 @@ def _undelivered_calls(session_id, agent_id, ah, running):
             texts = [notice] if isinstance(notice, str) else [
                 i.get("text", "") for i in notice or [] if isinstance(i, dict) and i.get("type") == "text"]
             for text in texts:
-                if re.fullmatch(r"\s*<task-notification>.*</task-notification>\s*", text, re.S):
-                    delivered.update(re.findall(r"<tool-use-id>([A-Za-z0-9_.-]+)</tool-use-id>", text))
+                # A host user row can prepend its SYSTEM NOTIFICATION notice.
+                notification = re.search(r"<task-notification>.*?</task-notification>\s*\Z", text, re.S)
+                if notification:
+                    delivered.update(re.findall(r"<tool-use-id>([A-Za-z0-9_.-]+)</tool-use-id>",
+                                                notification.group()))
             structured = b"backgroundTaskId" in line
             result = row.get("toolUseResult") if isinstance(row, dict) else None
             content = (row.get("message") or {}).get("content") if isinstance(row, dict) else None
