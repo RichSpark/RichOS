@@ -649,7 +649,7 @@ impl Accounts {
     /// `data_dir/claude-accounts/<id>/`.
     pub fn open(data_dir: &Path) -> io::Result<Self> {
         let path = data_dir.join(LIST_FILE);
-        let state = match fs::read(&path) {
+        let mut state = match fs::read(&path) {
             Ok(bytes) => {
                 let stored: Stored = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
                 if !stored.accounts.iter().any(|a| a.id == ACCOUNT_ONE) {
@@ -660,6 +660,8 @@ impl Accounts {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Stored::default(),
             Err(e) => return Err(e),
         };
+        // Initialize old files before any removal can erase their highest identity.
+        state.last_id = state.last_id.max(state.accounts.iter().filter_map(|a| a.id.parse::<u32>().ok()).max().unwrap_or(1));
         Ok(Self { path, root: data_dir.join("claude-accounts"), records: Mutex::new(None), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), replies: Mutex::new(BTreeMap::new()), waiting: Mutex::new(std::collections::BTreeSet::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
     }
 
@@ -794,9 +796,7 @@ impl Accounts {
     /// stock `claude auth login` with `CLAUDE_CONFIG_DIR` set to it (`provider_auth.rs`).
     pub fn add(&self, label: &str) -> io::Result<Account> {
         let mut state = self.state.lock().unwrap();
-        // Old files have no counter: start above every account they still contain.
-        let last = state.accounts.iter().filter_map(|a| a.id.parse::<u32>().ok()).max().unwrap_or(1).max(state.last_id);
-        let number = last.checked_add(1).ok_or_else(|| io::Error::other("No account identities remain."))?;
+        let number = state.last_id.checked_add(1).ok_or_else(|| io::Error::other("No account identities remain."))?;
         let id = number.to_string();
         let folder = self.root.join(&id);
         // The Keychain item Claude Code writes is named from a hash of this path string, and
@@ -1697,6 +1697,9 @@ fn g5_existing_account_files_allocate_above_their_largest_identity() {
     let root = std::env::temp_dir().join(format!("g5-legacy-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("claude-accounts.json"), r#"{"accounts":[{"id":"1","label":"Home","folder":null},{"id":"27","label":"Work","folder":null}],"inUse":"1"}"#).unwrap();
+    let accounts = Accounts::open(&root).unwrap();
+    accounts.remove("27").unwrap();
+    drop(accounts);
     let accounts = Accounts::open(&root).unwrap();
     assert_eq!(accounts.add("New").unwrap().id, "28");
     drop(accounts);
