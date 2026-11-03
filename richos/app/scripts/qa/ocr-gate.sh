@@ -118,16 +118,15 @@ fi
 NP="$HERE/../../../engine/scripts/lib/named-persons.py"
 NP_STATE="unavailable"
 if [ -f "$NP" ]; then
-    if printf '' | python3 "$NP" --scan-text "probe" >/dev/null 2>&1; then
-        NP_STATE="ready"
-    else
-        NP_STATE="$(printf '' | python3 "$NP" --scan-text "probe" 2>/dev/null \
-                     | head -1 | cut -f1 || true)"
-        [ -n "$NP_STATE" ] || NP_STATE="unavailable"
-    fi
+    NP_STATE="$(printf '' | python3 "$NP" --scan-text "probe" 2>/dev/null)" || {
+        echo "ocr-gate.sh: the named-person predicate failed; nothing was checked." >&2
+        exit 2
+    }
+    NP_STATE="${NP_STATE%%$'\n'*}"
+    NP_STATE="${NP_STATE%%$'\t'*}"
 fi
 case "$NP_STATE" in
-    ready)   echo "named-person predicate: ready" ;;
+    CLEAN|FOUND) echo "named-person predicate: ready" ;;
     ABSENT)
         echo "ocr-gate.sh: there is no named-person list on this machine." >&2
         echo "             That is NOT 'no names to check', it is 'nothing was" >&2
@@ -140,6 +139,10 @@ case "$NP_STATE" in
         echo "             See engine/scripts/lib/named-persons.py --doctor." >&2
         exit 2 ;;
     *)
+        if [ -f "$NP" ]; then
+            echo "ocr-gate.sh: the named-person predicate returned no usable verdict." >&2
+            exit 2
+        fi
         echo "ocr-gate.sh: the named-person predicate is not reachable at $NP." >&2
         echo "             Shape patterns below still run, but no ROSTER was checked." >&2
         NP="" ;;
@@ -176,13 +179,18 @@ if [ "${#TEXTS[@]}" -gt 0 ]; then
         exit 2
     fi
     for f in "${TFILES[@]}"; do
-        TXT="$(cat "$f")"
+        TXT="$(cat "$f")" || { echo "ocr-gate.sh: cannot read $f" >&2; exit 2; }
         FOUND=""
         HIT="$(printf '%s' "$TXT" | text_hits)"
         [ -n "$HIT" ] && FOUND="shape"
         if [ -n "$NP" ]; then
-            case "$(printf '%s' "$TXT" | python3 "$NP" --scan-text "$(basename "$f")" 2>/dev/null || true)" in
-                FOUND*) FOUND="${FOUND:+$FOUND+}roster" ;;
+            NPOUT="$(printf '%s' "$TXT" | python3 "$NP" --scan-text "$(basename "$f")" 2>/dev/null)" || {
+                echo "ocr-gate.sh: named-person scan failed for $f" >&2; exit 2;
+            }
+            case "${NPOUT%%$'\n'*}" in
+                FOUND|FOUND$'\t'*) FOUND="${FOUND:+$FOUND+}roster" ;;
+                CLEAN|CLEAN$'\t'*) ;;
+                *) echo "ocr-gate.sh: no usable named-person verdict for $f" >&2; exit 2 ;;
             esac
         fi
         if [ -n "$FOUND" ]; then
@@ -231,7 +239,7 @@ RICHOS_QA_TESSERACT="$TESS" python3 "$HERE/ocr-read.py" --export "$OCR_TEXTS" "$
 HITS=0
 FRAME_INDEX=0
 for f in "${FRAMES[@]}"; do
-    TXT="$(cat "$OCR_TEXTS/$FRAME_INDEX.txt")"
+    TXT="$(cat "$OCR_TEXTS/$FRAME_INDEX.txt")" || { echo "ocr-gate.sh: cannot read OCR text for $f" >&2; exit 2; }
     FRAME_INDEX=$((FRAME_INDEX + 1))
     FOUND=""
 
@@ -240,9 +248,13 @@ for f in "${FRAMES[@]}"; do
 
     ROSTER_HIT=""
     if [ -n "$NP" ]; then
-        NPOUT="$(printf '%s' "$TXT" | python3 "$NP" --scan-text "$(basename "$f")" 2>/dev/null || true)"
-        case "$NPOUT" in
-            FOUND*) ROSTER_HIT="yes"; FOUND="${FOUND:+$FOUND+}roster" ;;
+        NPOUT="$(printf '%s' "$TXT" | python3 "$NP" --scan-text "$(basename "$f")" 2>/dev/null)" || {
+            echo "ocr-gate.sh: named-person scan failed for $f" >&2; exit 2;
+        }
+        case "${NPOUT%%$'\n'*}" in
+            FOUND|FOUND$'\t'*) ROSTER_HIT="yes"; FOUND="${FOUND:+$FOUND+}roster" ;;
+            CLEAN|CLEAN$'\t'*) ;;
+            *) echo "ocr-gate.sh: no usable named-person verdict for $f" >&2; exit 2 ;;
         esac
     fi
 

@@ -41,14 +41,20 @@ pub fn caption(vtt: &str) -> (String, Vec<f64>) {
     let meta = re(r"^(Kind|Language|NOTE)\b");
     let tag = re(r"<[^>]+>");
     let inline = re(r"<(\d\d:\d\d:\d\d\.\d{3})>");
-    let (mut output, mut times, mut last, mut start) = (Vec::new(), Vec::new(), None::<String>, 0.);
-    for line in vtt.lines() {
+    let (mut output, mut times, mut start) = (Vec::new(), Vec::new(), 0.);
+    let mut lines = vtt.lines().peekable();
+    while let Some(line) = lines.next() {
         let s = line.trim();
         if cue.is_match(s) {
             start = seconds(s.split(" --> ").next().unwrap());
             continue;
         }
-        if s.is_empty() || s == "WEBVTT" || meta.is_match(s) || s.chars().all(|c| c.is_numeric()) {
+        // A numeric cue identifier precedes a timing line. Numbers inside the cue are speech.
+        if s.is_empty()
+            || s == "WEBVTT"
+            || meta.is_match(s)
+            || lines.peek().is_some_and(|next| cue.is_match(next.trim()))
+        {
             continue;
         }
         if rolling {
@@ -72,11 +78,10 @@ pub fn caption(vtt: &str) -> (String, Vec<f64>) {
                 at,
                 tag.replace_all(&s[offset..], "").split_whitespace().count(),
             ));
-        } else if last.as_deref() != Some(s) {
+        } else {
             output.push(s.into());
             times.extend(std::iter::repeat_n(start, s.split_whitespace().count()));
         }
-        last = Some(s.into());
     }
     (output.join(" "), times)
 }

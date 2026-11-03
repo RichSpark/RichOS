@@ -23,6 +23,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -f "$IN" ] && [ -f "$RD" ] && [ -n "$OUT" ] || { echo "branch-bundle-richdoctor.sh: --in, --richdoctor-zip and --out are required" >&2; exit 2; }
+# Resolve the destination before entering disposable staging directories.
+case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
+
 W="$(mktemp -d "${TMPDIR:-/tmp}/bbrd.XXXXXX")"
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/app" "$W/rd"

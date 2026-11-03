@@ -37,6 +37,10 @@ CONFIG_DIR=""
 WAIT=20
 while [ $# -gt 0 ]; do
   case "$1" in
+    --claude|--home|--config-dir|--wait)
+      [ "$#" -ge 2 ] || { echo "usage-shape.sh: $1 needs a value" >&2; exit 2; } ;;
+  esac
+  case "$1" in
     --help|-h) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --claude) CLAUDE="${2:-}"; shift 2 ;;
     --home) HOME_DIR="${2:-}"; shift 2 ;;
@@ -60,16 +64,94 @@ fi
 unset CLAUDECODE
 RAW="$(mktemp "${TMPDIR:-/tmp}/usage-shape.XXXXXX")" || { echo "usage-shape.sh: cannot make a temporary file" >&2; exit 2; }
 trap 'rm -f "$RAW"' EXIT INT TERM
-GAP=$((WAIT / 2))
-echo "claude: $("$CLAUDE" --version 2>&1 | head -1)"
-{
-  printf '%s\n' '{"type":"control_request","request_id":"quota-1","request":{"subtype":"initialize","hooks":{}}}'
-  sleep "$GAP"
-  printf '%s\n' '{"type":"control_request","request_id":"quota-2","request":{"subtype":"get_usage","hooks":{}}}'
-  sleep "$GAP"
-} | (cd "${HOME:-/}" && "$CLAUDE" --print --input-format=stream-json --output-format=stream-json \
-      --verbose --setting-sources "" --no-session-persistence --tools "" --strict-mcp-config \
-      --mcp-config '{"mcpServers":{}}') > "$RAW" 2>/dev/null
+python3 - "$CLAUDE" "$WAIT" "$RAW" <<'PYTHON' || exit 2
+import json
+import os
+import sys
+import selectors
+import signal
+import subprocess
+import time
+
+def read_wire(args, env, seconds, requests=(), gap=0, response_id=None, cwd='/var/empty'):
+    """Bound input scheduling and BOTH output pipes by one monotonic deadline.
+
+    Keep the direct child unreaped until its group is stopped. Its PID then cannot
+    be reused as an unrelated group between leader exit and cleanup.
+    """
+    end = time.monotonic() + seconds
+    p = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    buf, err = b'', b''
+    pending = list(requests)
+    next_send = time.monotonic()
+    try:
+        with selectors.DefaultSelector() as sel:
+            sel.register(p.stdout, selectors.EVENT_READ)
+            sel.register(p.stderr, selectors.EVENT_READ)
+            while sel.get_map():
+                now = time.monotonic()
+                if now >= end:
+                    break
+                if pending and now >= next_send:
+                    try:
+                        p.stdin.write((json.dumps(pending.pop(0), separators=(',', ':')) + '\n').encode())
+                        p.stdin.flush()
+                    except BrokenPipeError:
+                        pending.clear()
+                    next_send = now + gap
+                wait = end - now
+                if pending:
+                    wait = min(wait, max(0, next_send - now))
+                for key, _ in sel.select(timeout=wait):
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        sel.unregister(key.fileobj)
+                    elif key.fileobj is p.stdout:
+                        buf += chunk
+                    else:
+                        err = (err + chunk)[-1500:]
+                if response_id:
+                    for line in buf.splitlines(keepends=True):
+                        if not line.endswith(b'\n'):
+                            continue
+                        try:
+                            row = json.loads(line)
+                            if row.get('type') == 'control_response' and row.get('response', {}).get('request_id') == response_id:
+                                return buf, err
+                        except (ValueError, AttributeError):
+                            pass
+    finally:
+        # No poll()/wait() before this signal, even when stdout reached EOF.
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        p.wait(timeout=5)
+        for pipe in (p.stdin, p.stdout, p.stderr):
+            pipe.close()
+    return buf, err
+
+claude, seconds, raw = sys.argv[1:]
+seconds = float(seconds)
+end = time.monotonic() + seconds
+version, _ = read_wire([claude, '--version'], os.environ, seconds)
+print('claude: ' + version.decode(errors='replace').split('\n', 1)[0])
+remaining = end - time.monotonic()
+if remaining <= 0:
+    print('usage-shape.sh: version check used the probe deadline', file=sys.stderr)
+    sys.exit(2)
+requests = [{'type': 'control_request', 'request_id': 'quota-%d' % n,
+             'request': {'subtype': sub, 'hooks': {}}}
+            for n, sub in ((1, 'initialize'), (2, 'get_usage'))]
+args = [claude, '--print', '--input-format=stream-json', '--output-format=stream-json',
+        '--verbose', '--setting-sources', '', '--no-session-persistence', '--tools', '',
+        '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}']
+answer, _ = read_wire(args, os.environ, remaining, requests,
+                            gap=int(seconds) // 2, response_id='quota-2', cwd=os.environ.get('HOME') or '/')
+with open(raw, 'wb') as handle:
+    handle.write(answer)
+PYTHON
 /usr/bin/perl -MJSON::PP -e '
   my ($answered, $verdict, $label) = (0, "", "UNREADABLE");
   while (my $line = <STDIN>) {
