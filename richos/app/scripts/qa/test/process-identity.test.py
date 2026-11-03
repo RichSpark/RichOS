@@ -54,6 +54,34 @@ class Identity(unittest.TestCase):
             self.assertEqual(called.call_args.kwargs['env']['LC_ALL'],'C')
             self.assertEqual(called.call_args.kwargs['env']['TZ'],'UTC0')
 
+    def test_browser_identity_read_survives_sync_helper_failure_and_refuses_unknown_owner(self):
+        source=ROOT/'richos/app/ui/tests/lib/browser-reaper.js'
+        code=r"""
+const fs=require('fs'),vm=require('vm');
+(async()=>{
+ for(const works of [true,false]) {
+  let launches=0,spawns=0,reads=0;
+  const sandbox={require:()=>({
+   spawnSync:()=>({status:null,error:new Error('ETIMEDOUT'),stdout:''}),
+   execFile:(_file,_args,opts,done)=>{
+    reads++;if(!(opts.timeout>0))throw Error('unbounded identity read');
+    done(works?null:new Error('unreadable'),works?'101 1 original\n':'');
+   },
+   spawn:(_exe,args)=>{spawns++;if(args[3]!=='original')throw Error('missing parent birth');return {unref(){}};}
+  }),process:{pid:101,execPath:'/fixture/node'},__filename:'/fixture/reaper.js',module:{exports:{}},exports:{}};
+  vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),sandbox);
+  const pw=sandbox.module.exports.install({webkit:{launch:()=>{launches++;return 'launched';}}});
+  let result,error;
+  try{result=await Promise.all([pw.webkit.launch(),pw.webkit.launch()]);}catch(e){error=e;}
+  if(works){if(error||JSON.stringify(result)!=='["launched","launched"]'||spawns!==1||reads!==1)throw Error('did not preserve safe concurrent launch: '+error);}
+  else if(!error||launches||spawns)throw Error('launched without a proven owner');
+ }
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+        # load-bound: outer hang guard; launch/refusal and identity records determine correctness.
+        result=subprocess.run(['node','-e',code,str(source)],capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def test_browser_parent_reuse_does_not_adopt_foreign_children(self):
         source = ROOT / 'richos/app/ui/tests/lib/browser-reaper.js'
         code = r'''

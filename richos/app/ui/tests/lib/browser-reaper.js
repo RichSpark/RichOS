@@ -26,7 +26,7 @@
 // re-sign changes the signature, so no version of that patch works.
 "use strict";
 
-const { spawn, spawnSync } = require("child_process");
+const { spawn, spawnSync, execFile } = require("child_process");
 
 const MARK = Symbol.for("richos.browserReaper");
 const POLL_MS = 100;
@@ -34,8 +34,12 @@ const POLL_MS = 100;
 function table() {
   const r = spawnSync("ps", ["-axo", "pid=,ppid=,lstart="], { encoding: "utf8" });
   if (r.error || r.status !== 0) return null;
+  return parseTable(r.stdout);
+}
+
+function parseTable(stdout) {
   const rows = new Map();
-  for (const line of (r.stdout || "").split("\n")) {
+  for (const line of (stdout || "").split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
     if (m) rows.set(Number(m[1]), { ppid: Number(m[2]), start: m[3] });
   }
@@ -80,17 +84,25 @@ function watch(parent, birth) {
   setInterval(tick, POLL_MS);
 }
 
-let started = false;
+let startPromise;
 function start() {
-  if (started) return;
-  const birth = table()?.get(process.pid)?.start;
-  if (!birth) throw new Error("cannot establish browser suite process identity");
-  started = true;
-  const child = spawn(process.execPath, [__filename, "--watch", String(process.pid), birth], {
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
+  if (!startPromise) startPromise = (async () => {
+    // Keep the suite responsive while obtaining its birth identity. A bounded async
+    // read can still work when the host refuses synchronous diagnostic helpers.
+    const stdout = await new Promise((resolve) => {
+      // load-bound: only bounds a stuck helper; launch requires the returned birth, never a measured duration.
+      execFile("ps", ["-axo", "pid=,ppid=,lstart="], { encoding: "utf8", timeout: 10000 },
+        (error, output) => resolve(error ? null : output));
+    });
+    const birth = parseTable(stdout).get(process.pid)?.start;
+    if (!birth) throw new Error("cannot establish browser suite process identity");
+    const child = spawn(process.execPath, [__filename, "--watch", String(process.pid), birth], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  })();
+  return startPromise;
 }
 
 function install(pw) {
@@ -99,8 +111,8 @@ function install(pw) {
     const type = pw[name];
     if (!type || typeof type.launch !== "function" || type[MARK]) continue;
     const launch = type.launch.bind(type);
-    type.launch = (...args) => {
-      start();
+    type.launch = async (...args) => {
+      await start();
       return launch(...args);
     };
     type[MARK] = true;
