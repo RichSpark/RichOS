@@ -17424,7 +17424,7 @@
     },
     "scripts/lib/headed_browser.py": {
       "source": "scripts/lib/headed_browser.py",
-      "sha256": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+      "sha256": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
       "keys": [],
       "edges": [
         {
@@ -17438,7 +17438,7 @@
     },
     "scripts/hooks/guard-headed-browser.test.sh": {
       "source": "scripts/hooks/guard-headed-browser.test.sh",
-      "sha256": "239241233612d00e721c91a1608b3b7384fcdb4609f67d4d59a818aa2bb0751b",
+      "sha256": "21b215e11423a68d8d453fc8e9b8f4acf2ce2d64efb700d0647a8dd918d05583",
       "keys": [],
       "edges": [
         {
@@ -18331,7 +18331,7 @@
         "scripts/hooks/guard-host-sleep.sh": "5b1a3fba334b335b5c32bef8621022bba8f1847e906f928c712225ece24cd33e",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
-        "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+        "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
         "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
         "scripts/lib/command_reader.py": "9f3360f7c0e85535d01386f95fea9ace60767940327374c9516ba4c08d55778f"
@@ -18570,7 +18570,7 @@
         "scripts/hooks/guard-host-sleep.sh": "5b1a3fba334b335b5c32bef8621022bba8f1847e906f928c712225ece24cd33e",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
-        "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+        "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
         "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
         "scripts/lib/command_reader.py": "9f3360f7c0e85535d01386f95fea9ace60767940327374c9516ba4c08d55778f"
@@ -18812,7 +18812,7 @@
         "scripts/hooks/guard-host-sleep.sh": "5b1a3fba334b335b5c32bef8621022bba8f1847e906f928c712225ece24cd33e",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
-        "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+        "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
         "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
         "scripts/lib/command_reader.py": "9f3360f7c0e85535d01386f95fea9ace60767940327374c9516ba4c08d55778f"
@@ -19031,7 +19031,7 @@
         "scripts/hooks/guard-host-sleep.sh": "5b1a3fba334b335b5c32bef8621022bba8f1847e906f928c712225ece24cd33e",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
-        "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+        "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
         "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
         "scripts/lib/command_reader.py": "9f3360f7c0e85535d01386f95fea9ace60767940327374c9516ba4c08d55778f"

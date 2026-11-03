@@ -219,6 +219,10 @@ check 2 P5 'playwright test with a headed config' 'npx playwright test'
 check 2 P11 'playwright test naming a spec that launches headed' 'npx playwright test tests/e2e/headed.spec.js' "$FX/proj-specs"
 check 2 P11 'playwright test with the spec after options' 'npx playwright test --project=chromium ./tests/e2e/headed.spec.js' "$FX/proj-specs"
 check 2 P12 'plain playwright test discovers the headed spec under testDir' 'npx playwright test' "$FX/proj-specs"
+check 2 P12 'project value is not a path filter' 'npx playwright test --project chromium' "$FX/proj-specs"
+check 2 P12 'grep value is not a path filter' 'npx playwright test --grep walk' "$FX/proj-specs"
+check 2 P12 'short grep value is not a path filter' 'npx playwright test -g walk' "$FX/proj-specs"
+check 2 P12 'reporter value is not a path filter' 'npx playwright test --reporter list' "$FX/proj-specs"
 check 2 P12 'npm test running playwright test' 'npm test' "$FX/proj-specs"
 check 2 P12 'a name filter that selects the headed spec' 'npx playwright test e2e' "$FX/proj-specs"
 check 2 P5 'playwright test --config naming a headed config' "npx playwright test --config $FX/proj/playwright.config.ts" "$FX/proj-headless"
@@ -271,6 +275,9 @@ check 0 N1 'playwright-cli open, headless' 'playwright-cli open https://example.
 check 0 N1 'playwright install' 'npx playwright install chromium'
 check 0 N1 'an ordinary python script' 'python3 -m pytest tests/unit -q'
 check 0 N2 'echo naming the flag' 'echo "never pass --headed on the host"'
+check 0 N2 'printing the exact headed flag' 'printf "%s" --headed'
+check 0 N2 'searching for the exact headed flag' "grep -n -- '--headed' notes"
+check 0 N2 'rg searching for a no-headless flag' "rg -- '--no-headless' notes"
 check 0 N2 'grep for headless: false' 'grep -rn "headless: false" scripts'
 check 0 N2 'a commit message' "git commit -m 'guard: refuse headless: false and --headed on the host'"
 check 0 N2 'a comment' 'ls # npx playwright test --headed'
