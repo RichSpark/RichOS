@@ -12447,7 +12447,7 @@
     },
     "scripts/ci-shard.sh#synthetic-fixture": {
       "source": "scripts/ci-shard.sh",
-      "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
+      "sha256": "1ec3e1e5392155266b2a96202f7bf6b4ace328a4401ccc41aa7ce99aee2b6867",
       "evidence": "Reached through ci-shard.test.sh synthetic inventory only. Executes literal fixture suites and known-red shell predicates supplied by that test. Plan/weights/receipts/canary data do not execute config. The optional target-provenance route is not requested by the fixture. All actual runner helpers are bound below. The teammate-workspace default (2026-10-01: no selector in a cc/ worktree runs what ci-affected-units.sh maps the branch to; reads RICHOS_TEST_SCOPE through lib/workspace_scope.py) is inert here: the fixture copies no lib/workspace_scope.py, so that branch is skipped and neither the library nor ci-affected-units.sh is executed. The run's folder (2026-10-02) is allocated by sourcing the copied lib/scratch.sh (scratch_new/scratch_release, ledger under the suite's sandbox CLAUDE_CONFIG_DIR, TMPDIR the suite's or S24's sandbox); TERM/INT/HUP traps only defer the exit until the running unit returns. That copy is bound as a fixture (2026-10-02, integration of cc/zach-opus-tmpvanish1): its one configuration read, SCRATCH_DEFAULT_TTL_MINUTES, only sets a ledger row's ttl_minutes, which no case of ci-shard.test.sh reads, so no live configuration value can change a verdict.",
       "keys": [],
       "edges": [
@@ -12704,7 +12704,7 @@
     },
     "scripts/ci-shard.sh#boundary-fixture": {
       "source": "scripts/ci-shard.sh",
-      "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
+      "sha256": "1ec3e1e5392155266b2a96202f7bf6b4ace328a4401ccc41aa7ce99aee2b6867",
       "evidence": "Runner-boundaries fixture copies this runner into a synthetic engine and creates literal marker/status suites and known-red data. No target-proof receipt route; all actual runner helper sources remain bound. The teammate-workspace default (2026-10-01; lib/workspace_scope.py, ci-affected-units.sh, RICHOS_TEST_SCOPE) is inert here: the synthetic engine has no lib/workspace_scope.py, so that branch is skipped. The scratch-allocator branch (2026-10-02) is inert too: the fixture copies no lib/scratch.sh, so the run's folder is the bare mktemp fallback under the fixture's TMPDIR.",
       "keys": [],
       "edges": [
@@ -15365,7 +15365,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/ci-shard.sh",
-          "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
+          "sha256": "1ec3e1e5392155266b2a96202f7bf6b4ace328a4401ccc41aa7ce99aee2b6867",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -16673,7 +16673,7 @@
     },
     "scripts/lib/build_caches.py": {
       "source": "scripts/lib/build_caches.py",
-      "sha256": "f87e20920311f70a97b48b5db0ac2ff315caec761aa2a4fa3846d0a4343940a3",
+      "sha256": "57b2455b8ff53d12f09e148391cd5decdc818e67a8f42d6b7835bb0eb673f5d6",
       "evidence": "Cleanup roots use the shared machine_settings reader for the general cache, effective Cargo cache and selected RICHOS_BUILD_CACHE. Landed checkout cleanup and scheduled cleanup use the same roots. Git discovery reads registered project checkouts; bounded scans, Cargo locks and the existing cleanup walls are unchanged. Overlapping roots deduplicate discovered paths. No new configuration key or execution edge.",
       "keys": [],
       "edges": [
@@ -16771,7 +16771,7 @@
     },
     "scripts/lib/recovery_controls.py": {
       "source": "scripts/lib/recovery_controls.py",
-      "sha256": "9c28efc40db32c5bb3f63402db88de53ddfff82e30aaca47bd02bcb9ca334be5",
+      "sha256": "d69cfaa53cc19ffeb6e8b118f4f78cc5d0e5e4b17bd0eabc6dec43210a63b350",
       "evidence": "Workspace adapter closure includes recovery state, private registry/session records, exact Git commit/delta/untracked identities and owned-command observations. Production preservation uses the external SSD. Workspace fixtures hold an in-flight native tool so no WIP export is started. Ordinary fixture entities have no recovery declaration; no model launches on those paths. Observer reconciliation and scheduler errors are data gaps with no control refusal. Storage is selected by the recovery host helper, not an inherited model path. Admission reads no worker name; questions-only follows the observe branches of the same repository declaration and recovery state.",
       "keys": [],
       "edges": [

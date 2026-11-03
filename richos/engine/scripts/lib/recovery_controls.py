@@ -169,7 +169,7 @@ def snapshot(ws, rec, job):
     for n, space in enumerate(rec.get("workspaces") or []):
         path = space.get("path")
         if not path or not Path(path).is_dir():
-            continue
+            raise R.Unavailable("could not preserve WIP: declared workspace unavailable: " + str(path))
         directory = root / str(n)
         directory.mkdir(exist_ok=True)
         code, patch, why = ws.git(path, "diff", "--binary", "HEAD")

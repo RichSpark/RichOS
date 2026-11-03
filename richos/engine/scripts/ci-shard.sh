@@ -332,21 +332,20 @@ state_witness() { # <out-file> — every file under the state folder: size and s
 import hashlib, json, os, sys
 root, out = sys.argv[1], sys.argv[2]
 seen = {}
+def unreadable(error):
+    raise error
 if os.path.isdir(root):
-    for base, dirs, files in os.walk(root):
+    for base, dirs, files in os.walk(root, onerror=unreadable):
         dirs.sort()
         for name in sorted(files):
             path = os.path.join(base, name)
             rel = os.path.relpath(path, root)
-            try:
-                if os.path.islink(path):
-                    seen[rel] = {"link": os.readlink(path)}
-                    continue
-                with open(path, "rb") as stream:
-                    data = stream.read()
-                seen[rel] = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-            except OSError as exc:
-                seen[rel] = {"unreadable": str(exc)}
+            if os.path.islink(path):
+                seen[rel] = {"link": os.readlink(path)}
+                continue
+            with open(path, "rb") as stream:
+                data = stream.read()
+            seen[rel] = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 with open(out, "w") as stream:
     json.dump(seen, stream)
 PY
@@ -356,13 +355,17 @@ state_written() { # <before-file> — prints one line per changed file, nothing 
 import hashlib, json, os, sys
 root, before_file = sys.argv[1], sys.argv[2]
 try:
-    before = json.load(open(before_file))
+    with open(before_file) as stream:
+        before = json.load(stream)
 except (OSError, ValueError):
     print("the state witness taken before the unit could not be read")
     sys.exit(0)
 after = {}
+def unreadable(error):
+    print("the state folder could not be completely inspected after the unit: %s" % error)
+    sys.exit(1)
 if os.path.isdir(root):
-    for base, dirs, files in os.walk(root):
+    for base, dirs, files in os.walk(root, onerror=unreadable):
         for name in files:
             path = os.path.join(base, name)
             after[os.path.relpath(path, root)] = path
@@ -376,7 +379,8 @@ for rel in sorted(set(before) | set(after)):
             if old != {"link": os.readlink(path)}:
                 print("%s  link changed" % rel)
             continue
-        data = open(path, "rb").read()
+        with open(path, "rb") as stream:
+            data = stream.read()
     except OSError as exc:
         print("%s  unreadable after the unit (%s)" % (rel, exc))
         continue

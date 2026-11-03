@@ -248,13 +248,11 @@ def _blocks(st, seen):
 
 def walk(path, seen=None):
     """(bytes_on_disk, newest of mtime and atime, contains_git) for a tree. Reading a
-    directory entry's metadata does not change its access time."""
+    directory entry's metadata does not change its access time. An incomplete
+    measurement raises: it cannot justify deleting any part of the tree."""
     total, newest, has_git = 0, 0.0, False
     seen = set() if seen is None else seen
-    try:
-        st = os.lstat(path)
-    except OSError:
-        return 0, 0.0, False
+    st = os.lstat(path)
     total = _blocks(st, seen)
     newest = max(st.st_mtime, st.st_atime) if not stat.S_ISDIR(st.st_mode) else st.st_mtime
     if not stat.S_ISDIR(st.st_mode):
@@ -262,17 +260,11 @@ def walk(path, seen=None):
     stack = [path]
     while stack:
         cur = stack.pop()
-        try:
-            entries = list(os.scandir(cur))
-        except OSError:
-            continue
+        entries = list(os.scandir(cur))
         for e in entries:
             if e.name == ".git":
                 has_git = True
-            try:
-                st = e.stat(follow_symlinks=False)
-            except OSError:
-                continue
+            st = e.stat(follow_symlinks=False)
             total += _blocks(st, seen)
             if stat.S_ISDIR(st.st_mode):
                 # A directory's atime moves when anything lists it, including this walk's
@@ -380,7 +372,7 @@ def units(profile):
         base = os.path.join(profile, sub)
         try:
             entries = list(os.scandir(base))
-        except OSError:
+        except FileNotFoundError:
             continue
         for e in entries:
             if not e.is_dir(follow_symlinks=False):
@@ -396,7 +388,7 @@ def units(profile):
         base = os.path.join(profile, sub)
         try:
             entries = list(os.scandir(base))
-        except OSError:
+        except FileNotFoundError:
             continue
         for e in entries:
             key = _unit_key(e.name)
@@ -405,10 +397,7 @@ def units(profile):
             if e.is_dir(follow_symlinks=False):
                 size, newest, _git = walk(e.path, seen)
             else:
-                try:
-                    st = e.stat(follow_symlinks=False)
-                except OSError:
-                    continue
+                st = e.stat(follow_symlinks=False)
                 size, newest = _blocks(st, seen), max(st.st_mtime, st.st_atime)
             add(key, e.path, size, newest)
     return out
