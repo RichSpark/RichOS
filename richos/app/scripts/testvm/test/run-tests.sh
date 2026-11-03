@@ -2182,6 +2182,14 @@ t "hand-file: no recorded pid, no input sent"
   has "$out" "no app pid recorded"
 t_done
 
+t "bundle outputs: relative and absolute ZIPs survive staging cleanup (V09)"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/bundle-output.test.py" >"$TMP/bundle-output.log" 2>&1; ok $? "$(cat "$TMP/bundle-output.log")"
+t_done
+
+t "owned cleanup: Stop probe and walk descendants end after leader exit (R15)"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/owned-cleanup.test.py" >"$TMP/owned-cleanup.log" 2>&1; ok $? "$(cat "$TMP/owned-cleanup.log")"
+t_done
+
 # ===========================================================================
 echo
 if [ "$FAIL" -eq 0 ]; then
