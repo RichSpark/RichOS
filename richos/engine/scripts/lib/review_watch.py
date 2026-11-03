@@ -1035,7 +1035,7 @@ def due(items, book, now, seen, long_seconds):
         if it.state == "ended":
             if book.handover_verdict(key, it.work) or it.stopped_early:
                 continue                            # stopped early: its continuation's handover covers these commits
-            if running and running.get("trigger") in MID_JOB:
+            if running and running.get("work") == it.work and running.get("trigger") in MID_JOB:
                 out.append((it, "handover", running))  # the handover replaces a mid-job review of this tip
                 continue
             if running:
