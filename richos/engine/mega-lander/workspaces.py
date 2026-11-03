@@ -1199,7 +1199,9 @@ def damaged_records(include_done=True, root=None):
             # workspaces it owns; read as "none", the sweep made its live
             # workspace an orphan and the automatic land deleted it.
             elif not isinstance(v.get("workspaces"), list) or \
-                    not all(isinstance(w, dict) for w in v["workspaces"]):
+                    not all(isinstance(w, dict) and
+                            all(isinstance(w.get(k), str) for k in ("repo", "path", "branch")) and
+                            w["repo"] and (w["path"] or w["branch"]) for w in v["workspaces"]):
                 out.append((path, "its workspace list is missing or not a list of workspaces"))
     return out
 

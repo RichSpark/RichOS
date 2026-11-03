@@ -8723,6 +8723,39 @@ class LiveAppRegistry_RefusesFixtureShapedWrites(unittest.TestCase):
             ws.save_agent({"key": "echo-opus-fixture", "name": "echo-opus-fixture", "session_id": "s"})
 
 
+
+class HuntV5_01_WorkspaceOwnership(Base):
+    def test_incomplete_members_are_damaged_but_branch_only_members_are_valid(self):
+        rec = ws.new_record(ws.named_key(self.sid, "ownership"), session_id=self.sid)
+        valid = {"repo": self.entity, "path": "", "branch": "cc/ownership"}
+        for member in ({}, {"path": "/some/worktree"}, dict(valid, repo=""),
+                       dict(valid, path=None), dict(valid, branch=[]), dict(valid, branch="")):
+            with self.subTest(member=member):
+                rec["workspaces"] = [member]
+                ws.save_agent(rec)
+                self.assertEqual(len(ws.damaged_records()), 1)
+        rec["workspaces"] = [valid, dict(valid, path=self.entity, branch="")]
+        ws.save_agent(rec)
+        self.assertEqual(ws.damaged_records(), [])
+
+    def test_sweep_keeps_a_live_worker_with_an_empty_ownership_member(self):
+        name = "zach-opus-v5ownership"
+        _aid, path = self.spawn(name)
+        rec = self.rec(name)
+        sleeper = subprocess.Popen(["sleep", "300"], cwd=path)
+        self.env.procs.append(sleeper)
+        self.assertIn(sleeper.pid, ws.processes_in([path]))
+        rec["workspaces"] = [{}]
+        ws.save_agent(rec)
+        with patch.object(ws, "stop_containers", return_value={}), \
+                patch.object(ws, "stop_test_instances", return_value={}):
+            items = ws.pending(self.sid, self.entity, scan=True)
+        self.assertIsNone(sleeper.poll(), "the sweep stopped unfinished work")
+        self.assertTrue(os.path.isdir(path))
+        self.assertFalse([r for r in ws.all_agents() if r.get("orphan")])
+        self.assertEqual(len([i for i in items if i.get("damaged")]), 1)
+
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a
