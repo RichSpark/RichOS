@@ -76,6 +76,23 @@ def _unwrap(words):
     return words[i:]
 
 
+def _shell_stdin(argv):
+    i = 1
+    while i < len(argv):
+        option = argv[i]
+        if option == "--":
+            return i + 1 == len(argv)
+        if not option.startswith("-") or option == "-":
+            return False
+        if not option.startswith("--"):
+            if "c" in option:
+                return False
+            if "s" in option:
+                return True
+        i += 2 if option in ("--rcfile", "--init-file") or option.endswith(("o", "O")) else 1
+    return True
+
+
 def commands(text, depth=0):
     """Yield argv for literal commands and executable substitutions, not printed text."""
     if depth > 8:
@@ -93,7 +110,12 @@ def commands(text, depth=0):
             for k, arg in enumerate(argv):
                 if arg in ("-exec", "-execdir", "-ok", "-okdir"):
                     end = next((j for j in range(k + 1, len(argv)) if argv[j] in (";", "+")), len(argv))
-                    yield _unwrap(argv[k + 1:end])
+                    try:
+                        child = _unwrap(argv[k + 1:end])
+                    except (ValueError, IndexError):
+                        continue
+                    if child:
+                        yield child
     for body in nested:
         yield from commands(body, depth + 1)
     # Here-document data is executable only when it is stdin to a shell.
@@ -103,9 +125,8 @@ def commands(text, depth=0):
                 argv = _unwrap(_words(raw))
             except (ValueError, IndexError):
                 continue
-            if argv and os.path.basename(argv[0]) in SHELLS and len(argv) == 1:
+            if argv and os.path.basename(argv[0]) in SHELLS and _shell_stdin(argv):
                 yield from commands(body, depth + 1)
-
 
 
 def git_commands(text):

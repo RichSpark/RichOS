@@ -32,7 +32,7 @@ left = module("left_off", LIB / "left-off.py")
 class G10(unittest.TestCase):
     def test_47_mentions_and_unrelated_options(self):
         for cmd in ["printf '%s' 'bash -c'", "true # bash -c x", "bash fixture.sh | grep -c y",
-                    "bash fixture.sh -c config", "command -v bash -c", "bash; grep -c y", "cat <<'EOF'\nbash -c x\nEOF"]:
+                    "bash fixture.sh -c config", "command -v bash -c", "bash fixture.sh <<'EOF'\nsh -c x\nEOF", "bash; grep -c y", "cat <<'EOF'\nbash -c x\nEOF"]:
             with self.subTest(cmd=cmd):
                 self.assertIsNone(shell.verdict(cmd))
 
@@ -41,7 +41,8 @@ class G10(unittest.TestCase):
                     "bash</dev/null -c x", "bash &>/dev/null -c x", "bash&>/dev/null -c x", "bash -eo pipefail -c x",
                     "echo \"$(sh -c x)\"", "find . -exec sh -c x \\;", "xargs -I ITEM bash -c x",
                     "bash --rcfile file -c x", "env -S 'bash -c x'", "sudo --user root sh -c x",
-                    "bash <<'EOF'\nsh -c x\nEOF", "'bash' '-c' x", "zsh -c0 x", "ksh -c- x"]:
+                    "bash <<'EOF'\nsh -c x\nEOF", "bash -s <<'EOF'\nsh -c x\nEOF",
+                    "find . -exec command -v sh -c \\; ; bash -c x", "'bash' '-c' x", "zsh -c0 x", "ksh -c- x"]:
             with self.subTest(cmd=cmd):
                 self.assertIsNotNone(shell.verdict(cmd))
 
