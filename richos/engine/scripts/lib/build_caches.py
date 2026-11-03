@@ -46,6 +46,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import machine_settings as M
 
@@ -247,9 +248,19 @@ def _blocks(st, seen):
 
 
 def walk(path, seen=None):
-    """(bytes_on_disk, newest of mtime and atime, contains_git) for a tree. Reading a
-    directory entry's metadata does not change its access time. An incomplete
-    measurement raises: it cannot justify deleting any part of the tree."""
+    """Conservative (bytes, newest access, may_contain_git) deletion bounds.
+
+    An incomplete tree is protected as recently used and possibly containing Git.
+    Report the unknown inspection without aborting independent cleanup work.
+    """
+    try:
+        return _walk(path, seen)
+    except OSError as error:
+        print("build cache protected after incomplete inspection of %s: %s" % (path, error), file=sys.stderr)
+        return 0, time.time(), True
+
+
+def _walk(path, seen=None):
     total, newest, has_git = 0, 0.0, False
     seen = set() if seen is None else seen
     st = os.lstat(path)
@@ -357,6 +368,15 @@ def _unit_key(name):
 
 
 def units(profile):
+    """A profile with unreadable entries has no units eligible for collection."""
+    try:
+        return _units(profile)
+    except OSError as error:
+        print("Cargo profile kept after incomplete inspection of %s: %s" % (profile, error), file=sys.stderr)
+        return {}
+
+
+def _units(profile):
     """{key: {"paths": [...], "bytes": n, "newest": t}} for one profile directory.
     Each unit's newest is the latest write or read of any file it owns."""
     out = {}

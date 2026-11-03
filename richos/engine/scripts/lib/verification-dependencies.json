@@ -16673,7 +16673,7 @@
     },
     "scripts/lib/build_caches.py": {
       "source": "scripts/lib/build_caches.py",
-      "sha256": "57b2455b8ff53d12f09e148391cd5decdc818e67a8f42d6b7835bb0eb673f5d6",
+      "sha256": "4e1d4bcbd9e074886a33123930593bc2cfef3e6f33622c51cf3c5dcc3dceae3a",
       "evidence": "Cleanup roots use the shared machine_settings reader for the general cache, effective Cargo cache and selected RICHOS_BUILD_CACHE. Landed checkout cleanup and scheduled cleanup use the same roots. Git discovery reads registered project checkouts; bounded scans, Cargo locks and the existing cleanup walls are unchanged. Overlapping roots deduplicate discovered paths. No new configuration key or execution edge.",
       "keys": [],
       "edges": [
