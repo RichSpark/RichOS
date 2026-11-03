@@ -16,7 +16,7 @@ that teammate's work (its own record, or one it continues) that finished after
 that work was registered (the continued record's registration for a verdict on
 continued work), and was not yet delivered to this teammate, is printed as
 additionalContext, which reaches the teammate's model with that call. "Once" is
-a marker file per teammate and review, created exclusively, so two calls made
+a marker file per teammate and review, written after output is flushed under a lock, so two calls made
 at the same moment cannot both deliver it.
 
 It never blocks, never stops, edits or messages anything: every outcome is exit 0.
@@ -33,6 +33,7 @@ REVIEW_WATCH_STATE_DIR (the markers), RICHOS_WORKSPACES_DIR (the registry).
 """
 
 import calendar
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -155,6 +156,11 @@ def is_theirs(row, works, branches):
     return not work.startswith("app:") or (os.path.realpath(row.get("repo") or ""), row.get("branch")) in branches
 
 
+def marker(key, rid):
+    name = "%s-%s" % (hashlib.sha1(key.encode("utf-8")).hexdigest()[:16], rid)
+    return os.path.join(marker_dir(), name)
+
+
 def claim(key, rid):
     d = marker_dir()
     os.makedirs(d, exist_ok=True)
@@ -222,10 +228,22 @@ def main():
     rec, works, branches = who
     # "Once" is per teammate: the marker is keyed by THIS record, so a verdict
     # its predecessor already received still reaches the continuation, once.
-    texts = [render(r) for r in rows if is_theirs(r, works, branches) and claim(rec["key"], str(r["id"]))]
-    if texts:
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                                 "additionalContext": "\n\n".join(texts)}}))
+    os.makedirs(marker_dir(), exist_ok=True)
+    # Serialize selection through output and acknowledgement. The kernel releases
+    # the lock on failure or death, so a failed write/flush remains retryable.
+    with open(os.path.join(marker_dir(), ".delivery.lock"), "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+        pending = [r for r in rows if is_theirs(r, works, branches)
+                   and not os.path.exists(marker(rec["key"], str(r["id"])))]
+        if pending:
+            texts = [render(r) for r in pending]
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                     "additionalContext": "\n\n".join(texts)}}), flush=True)
+            for row in pending:
+                claim(rec["key"], str(row["id"]))
     return 0
 
 

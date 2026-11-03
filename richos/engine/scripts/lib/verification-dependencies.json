@@ -16745,7 +16745,7 @@
     },
     "scripts/lib/review_delivery.py": {
       "source": "scripts/lib/review_delivery.py",
-      "sha256": "fd80c3b657c965c6d8ba4badecbda34f9aabafac5f8996b679cbb08fc621fa3f",
+      "sha256": "e4bbaba57a00fc46547ba3ed0cf11bfabb2d8a5804c146e7271c716580167eec",
       "evidence": "Full program reviewed (2026-10-09): parses the payload's agent_id, reads second-review's ledger and verdict records as JSON data, loads the fixed workspaces.py for key_for_id, load_agent and _chain (registry reads only), creates one marker file per teammate and review under the review-watch state directory, and prints additionalContext. Nothing is executed, no configuration key is read, every outcome is exit 0. Renewed 2026-10-09 (review rv-20261009T031207Z-ba444a8a-607a, finding 2): each verdict is compared with the registered_at of the chain record whose work it is on, read from the same registry records; no new read, import or key. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR. Renewed 2026-10-31 (zach-opus-w1, mid-job review rv-20261031T185322Z-10c126b9-337c): rows whose work starts with app: are read as well as teammate: ones; teammate() also takes the loaded workspaces module's recovery_work_key(record) and _branch_targets(chain), both reads of the registry already loaded; a row on an app: key counts only when its repo and branch are one of the chain's own. No configuration key, environment variable or file is added.",
       "keys": [],
       "edges": [
