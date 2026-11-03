@@ -8927,6 +8927,27 @@ class HuntV5_02_ProcessReadDeadline(unittest.TestCase):
         kill.assert_not_called()
 
 
+class HuntV5_11_ClockOnlyHold(Base):
+    def test_evening_hold_from_the_morning_waits_until_this_evening(self):
+        morning = ws.calendar.timegm(time.strptime("2026-11-03T06:00:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+        with patch.object(ws, "now", return_value=morning):
+            held = ws.hold("evening-work", "work after the wait", "at:20:00Z", "requested wait", self.sid)
+            self.assertEqual(held["end"], "at:2026-11-03T20:00:00Z")
+            self.assertEqual(ws.due_set(self.sid, []), [])
+        with patch.object(ws, "now", return_value=morning + 14 * 3600):
+            due = ws.due_set(self.sid, [])
+            self.assertEqual([d["name"] for d in due], ["evening-work"])
+
+    def test_clock_only_uses_the_next_occurrence_and_explicit_dates_stay_exact(self):
+        at = ws.calendar.timegm(time.strptime("2026-11-03T23:30:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+        with patch.object(ws, "now", return_value=at):
+            self.assertEqual(ws._hold_time("20:00Z"), "2026-11-04T20:00:00Z")
+            self.assertEqual(ws._hold_time("01:00Z"), "2026-11-04T01:00:00Z")
+            self.assertEqual(ws._hold_time("23:30Z"), "2026-11-03T23:30:00Z")
+            self.assertEqual(ws._hold_time("2026-11-02T20:00Z"), "2026-11-02T20:00:00Z")
+            self.assertEqual(ws._hold_time("24:00Z"), "")
+
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a

@@ -3517,7 +3517,7 @@ def hold_end(text, strict=True):
 
 
 def _hold_time(value):
-    """An ISO UTC time, or HH:MMZ taken as its occurrence nearest to now; '' if neither."""
+    """An ISO UTC time, or HH:MMZ taken as its next occurrence (including now); '' if neither."""
     v = value.strip().upper()
     m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?Z", v)
     if m:
@@ -3533,7 +3533,8 @@ def _hold_time(value):
     t0 = now()
     day = calendar.timegm(time.gmtime(t0)[:3] + (0, 0, 0, 0, 0, 0))
     t = day + int(m.group(1)) * 3600 + int(m.group(2)) * 60
-    t = min((t - 86400, t, t + 86400), key=lambda c: abs(c - t0))
+    if t < t0:
+        t += 86400
     return iso(t)
 
 
