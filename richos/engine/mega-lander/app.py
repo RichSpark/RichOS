@@ -3107,10 +3107,13 @@ def inspect_receipts(scope, args, read_only=False):
                 if (obligation is None or record["request"]["obligation_id"] == obligation)
                 and (wanted is None or wanted in (record.get("id"), record.get("request_id"), record.get("name")))]
         for path, record in rows:
-            # The reconciliation stays on every lookup: ECS projection happens on inspection.
+            # As in observe, persist new evidence but leave unchanged receipts alone.
+            before = json.dumps(record, sort_keys=True)
             refresh(record)
             if not read_only:
-                save(path, record)
+                if json.dumps(record, sort_keys=True) != before:
+                    save(path, record)
+                # Pending ECS projections must still retry even without a refresh change.
                 project(scope, path, record)
         if wanted is not None:
             return {"records": [view(record) for _, record in rows]}

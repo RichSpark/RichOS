@@ -1873,6 +1873,36 @@ class DesktopWork(unittest.TestCase):
         self.app.W.record_end(self.session,aid,"SubagentStop")
         self.app.observe(self.scope,{"hook_event_name":"SubagentStop","session_id":self.session,"agent_id":aid,"last_assistant_message":report})
 
+    def test_inspection_saves_only_changed_receipts_and_still_reconciles(self):
+        runs=[]
+        for index in range(3):
+            ready=self.call("prepare",{"request_id":"inspect-%d"%index,"obligation_id":"fixture-task",
+                "role":"consult","teammate":"clark","title":"Research","brief":"Fictional question %d"%index})
+            self.start_fixture_worker(ready,"inspect-%d"%index)
+            self.finish_fixture_worker("inspect-%d"%index,"Fictional answer")
+            runs.append(ready)
+        self.call("inspect")
+        paths=[self.app.folder(self.scope)/(ready["id"]+".json") for ready in runs]
+        before={path:path.read_bytes() for path in paths}
+        with patch.object(self.app,"save",wraps=self.app.save) as saves, \
+                patch.object(self.app.os,"fsync",wraps=self.app.os.fsync) as flushes:
+            self.call("inspect")
+            self.call("inspect",{"id":runs[0]["id"]})
+        self.assertEqual({path:path.read_bytes() for path in paths},before)
+        self.assertEqual(saves.call_count,0)
+        self.assertEqual(flushes.call_count,0)
+        # A genuine new observation must still be saved, exactly once.
+        key=self.record_of(runs[0])["workspace_ref"]
+        with self.app.W.Lock():
+            canonical=self.app.W.load_agent(key)
+            canonical["end"]["detail"]="New canonical evidence"
+            self.app.W.save_agent(canonical)
+        with patch.object(self.app,"save",wraps=self.app.save) as saves:
+            self.call("inspect")
+            self.call("inspect")
+        self.assertEqual([call.args[0] for call in saves.call_args_list],[paths[0]])
+        self.assertEqual(self.app.bounded(paths[0])["end_observation"]["detail"],"New canonical evidence")
+
     def test_an_observation_rewrites_only_the_receipts_that_changed(self):
         """Part 4 (2026-09-29 hunt), finding 22: observe() saved every receipt in
         the conversation (write, flush, replace, directory flush) after every tool
