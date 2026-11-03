@@ -3631,9 +3631,12 @@ impl Spine {
         let entity = self.ledger.thread_binding(thread_id)?.entity_id().clone();
         let ledger = &self.ledger;
         let of_company = |thread: &str| ledger.thread_binding(thread).is_ok_and(|b| b.entity_id() == &entity);
-        self.resident.retain(|thread, _| {
+        self.resident.retain(|thread, desk| {
             let control=self.control.for_thread(thread);
-            if !of_company(thread) || control.active_turn().is_some() {return true;}
+            if !of_company(thread) || control.active_turn().is_some()
+                || control.front_desk_priming().is_some()
+                || std::sync::Arc::strong_count(&desk.lease) != 1
+                || Self::desk_is_busy(desk) { return true; }
             control.set_cancel(None);
             control.set_lease_session(None);
             false
@@ -3676,4 +3679,47 @@ impl Spine {
     pub fn debug_set_turn_in_progress(&mut self, in_progress: bool) {
         self.turn_in_progress = in_progress;
     }
+}
+
+#[cfg(test)]
+mod g5_app_message_tests {
+use crate::{
+    cognition::{BackgroundCommand, Cognition, CognitionError, TurnItem},
+    entity::{Entity, EntityId, EntityRegistry}, ledger::Ledger, spine::Spine,
+    lease_commands::CommandReading,
+};
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+struct Desk { drops: Arc<AtomicUsize>, busy: bool }
+impl Drop for Desk { fn drop(&mut self) { self.drops.fetch_add(1, Ordering::SeqCst); } }
+impl Cognition for Desk {
+    fn session_id(&self) -> &str { "g5-background-session" }
+    fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> { Ok("end_turn".into()) }
+    fn running_commands(&self) -> Option<CommandReading> { Some(if self.busy { CommandReading::Running(1) } else { CommandReading::Clear }) }
+    fn background_commands(&self) -> Option<Vec<BackgroundCommand>> {
+        Some(if self.busy { vec![BackgroundCommand { task_id: "command-1".into(), description: "Still running".into(), ended: None }] } else { vec![] })
+    }
+}
+#[test]
+fn g5_shortcut_change_keeps_another_conversations_busy_session_and_controls() {
+    for busy in [true, false] {
+        let root = std::env::temp_dir().join(format!("g5-key-change-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut spine = Spine::new(Ledger::open(root.join("ledger.jsonl")).unwrap());
+        spine.set_entity_registry(EntityRegistry::new(vec![Entity::new("company", "Company", &[]).unwrap()]).unwrap());
+        let company = EntityId::parse("company").unwrap();
+        let thread = spine.create_thread("Background work", &company).unwrap();
+        let drops = Arc::new(AtomicUsize::new(0));
+        spine.attach_lease(Box::new(Desk { drops: drops.clone(), busy }));
+        let control = spine.turn_control().for_thread(&thread);
+        let before = control.lease_session();
+        let feature = spine.create_thread("Dictation shortcut", &company).unwrap();
+        spine.replace_app_message(&feature, None, "Use F3", "Shortcut changed").unwrap();
+        assert_eq!(drops.load(Ordering::SeqCst), usize::from(!busy), "busy={busy}");
+        assert_eq!(spine.front_desk_is_resident(&thread), busy);
+        assert_eq!(control.lease_session(), if busy { before } else { None });
+        drop(spine);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 }

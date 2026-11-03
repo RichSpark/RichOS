@@ -179,26 +179,34 @@ impl bug::Credentials for ReportingRelay {
 }
 
 impl bug::Transport for ReportingRelay {
-    fn create_issue(&self, _: &bug::Credential, _: &str, request: &serde_json::Value) -> bug::Outcome {
-        self.file(false, request["title"].as_str().unwrap_or(""), request["body"].as_str().unwrap_or(""))
+    fn prepare_report(&self) -> std::io::Result<Option<bug::RelayIdentity>> {
+        Ok(Some(bug::RelayIdentity {
+            id: delivery::new_report_id()?,
+            receipt_secret: richdoctor_core::util::base64url(&richdoctor_core::util::random_bytes(32)?),
+        }))
     }
 
-    fn post_idea(&self, _: &bug::Credential, title: &str, body: &str) -> bug::Outcome {
-        self.file(true, title, body)
+    fn post_report(&self, _: &bug::Credential, post: bug::Post, pending: &bug::Pending) -> bug::Outcome {
+        self.file(post == bug::Post::Idea, pending)
     }
 
-    /// Never asked: an idea is posted in one step through the relay (`post_idea`).
+    // A relay send must carry the persisted identity through post_report.
+    fn create_issue(&self, _: &bug::Credential, _: &str, _: &serde_json::Value) -> bug::Outcome {
+        bug::Outcome::Status { code: 400 }
+    }
+
+    /// Never asked: both report kinds use the relay through post_report.
     fn graphql(&self, _: &bug::Credential, _: &serde_json::Value) -> bug::Reply {
         bug::Reply::Answered { status: 404, body: serde_json::Value::Null }
     }
 }
 
 impl ReportingRelay {
-    /// One send through the relay, under a new report ID, with the relay's footer line (its
-    /// report ID, which the relay requires as the body's last line) after the approved words.
+    /// One send through the relay, under the pending copy's saved ID and receipt key, with
+    /// the relay's required footer after the approved words.
     /// What came back, as GitHub's answer would have been, so the outbox keeps and retries it
     /// exactly as before.
-    fn file(&self, idea: bool, title: &str, body: &str) -> bug::Outcome {
+    fn file(&self, idea: bool, pending: &bug::Pending) -> bug::Outcome {
         let destination = match &self.destination {
             Ok(d) => d.clone(),
             Err(why) => {
@@ -206,9 +214,9 @@ impl ReportingRelay {
                 return bug::Outcome::Status { code: 400 };
             }
         };
-        let Ok(id) = delivery::new_report_id() else { return bug::Outcome::Status { code: 503 } };
-        let body = format!("{}\n\n{}", body.trim_end(), richdoctor_core::report::ending(&destination.relay, &id, 0));
-        let mut approved = match delivery::approve(&id, title, &body, vec![], &destination.relay, now_ms(), &self.installation) {
+        let Some(identity) = &pending.relay else { return bug::Outcome::Status { code: 400 } };
+        let body = format!("{}\n\n{}", pending.body.trim_end(), richdoctor_core::report::ending(&destination.relay, &identity.id, 0));
+        let mut approved = match delivery::approve(&identity.id, &pending.title, &body, vec![], &destination.relay, pending.created_at_ms, &self.installation) {
             Ok(a) => a,
             Err(problems) => {
                 eprintln!("[richos] bug report: not a report the relay takes ({problems:?}); it waits");
@@ -216,6 +224,7 @@ impl ReportingRelay {
             }
         };
         approved.idea = idea;
+        approved.receipt_secret = identity.receipt_secret.clone();
         // ITS OWN THREAD AND ITS OWN RUNTIME: a `#[tauri::command(async)]` runs on an async
         // runtime's worker thread, and blocking on a runtime there panics ("Cannot start a runtime
         // from within a runtime", walk-aba5c01c19ce). A plain thread has none around it.
@@ -1061,6 +1070,42 @@ mod tests {
         assert_eq!(outbox.pending().unwrap().len(), 3, "every one is kept on this Mac");
         let unset = ReportingRelay { destination: Destination::from_env(|k| (k == delivery::RELAY_ENV).then(|| "http://127.0.0.1:9".to_string())), installation: String::new() };
         assert!(matches!(outbox.send(&approved("t", "b"), &unset, &unset, 1).unwrap(), bug::Delivery::Waiting { reason: bug::Reason::Refused, .. }), "half a test override sends nothing");
+    }
+
+    #[test]
+    fn an_unconfirmed_report_keeps_its_relay_identity_and_key_after_reopening() {
+        for post in [bug::Post::Bug, bug::Post::Idea] {
+            let url = match post {
+                bug::Post::Bug => "https://github.com/richos-test/report-relay-local/issues/7",
+                bug::Post::Idea => "https://github.com/richos-test/report-relay-local/discussions/7",
+            };
+            let reply = match post {
+                bug::Post::Bug => r#"{"state":"delivered","issue_url":"https://github.com/richos-test/report-relay-local/issues/7","issue_number":7}"#,
+                bug::Post::Idea => r#"{"state":"delivered","issue_url":"https://github.com/richos-test/report-relay-local/discussions/7","issue_number":7}"#,
+            };
+            let (base, server) = stand_in_answering(vec![
+                ("200 OK", r#"{"state":"ready"}"#),
+                // Completion may have succeeded remotely, but its answer is not a receipt.
+                ("502 Bad Gateway", ""),
+                ("200 OK", r#"{"state":"ready"}"#),
+                ("201 Created", reply),
+            ]);
+            let dir = folder();
+            let relay = relay_at(&base);
+            let outbox = bug::Outbox::open_for(&dir.0, post);
+            assert!(matches!(outbox.send(&approved("Window froze", "It froze."), &relay, &relay, 1).unwrap(), bug::Delivery::Waiting { .. }));
+            let id = outbox.pending().unwrap()[0].id.clone();
+            drop(outbox);
+            let outbox = bug::Outbox::open_for(&dir.0, post);
+            let result = outbox.try_now(&id, &relay, &relay, 2).unwrap();
+            assert!(matches!(result, Some(bug::Delivery::Sent(sent)) if sent.url == url));
+            let seen = server.join().unwrap();
+            let first: serde_json::Value = serde_json::from_str(&seen[0].2).unwrap();
+            let retry: serde_json::Value = serde_json::from_str(&seen[2].2).unwrap();
+            assert_eq!(first, retry, "the same ID, key, words and approval time go out on every attempt");
+            assert_eq!(seen[1].0, seen[3].0, "both completions name the same remote report");
+            assert_eq!(seen[1].2, seen[3].2, "both present the same receipt key");
+        }
     }
 
     #[test]

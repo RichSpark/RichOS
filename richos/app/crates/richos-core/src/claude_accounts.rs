@@ -109,6 +109,9 @@ pub struct LastSwitch {
 #[serde(rename_all = "camelCase")]
 struct Stored {
     accounts: Vec<Account>,
+    /// Identities and sign-in folders must not be reused while old reads or leases exist.
+    #[serde(default)]
+    last_id: u32,
     in_use: String,
     #[serde(default)]
     at_threshold: AtThreshold,
@@ -137,6 +140,7 @@ impl Default for Stored {
     fn default() -> Self {
         Self {
             accounts: vec![Account { id: ACCOUNT_ONE.into(), label: "Account 1".into(), folder: None }],
+            last_id: 1,
             in_use: ACCOUNT_ONE.into(),
             at_threshold: AtThreshold::Pause,
             limited_until: BTreeMap::new(),
@@ -360,7 +364,7 @@ fn push_change(state: &mut Stored, change: Change) {
 }
 
 /// Was `id`'s adding finished (its sign-in came back as a different account) since it was
-/// last created? Ids are reused after a removal, so the latest row about it decides.
+/// last created? Older files reused ids after removal, so the latest row about it decides.
 fn fully_added(state: &Stored, id: &str) -> bool {
     state.changes.iter().rev().find(|c| c.id == id && (c.kind == "added" || c.kind == "removed"))
         .is_some_and(|c| c.kind == "added")
@@ -645,7 +649,7 @@ impl Accounts {
     /// `data_dir/claude-accounts/<id>/`.
     pub fn open(data_dir: &Path) -> io::Result<Self> {
         let path = data_dir.join(LIST_FILE);
-        let state = match fs::read(&path) {
+        let mut state = match fs::read(&path) {
             Ok(bytes) => {
                 let stored: Stored = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
                 if !stored.accounts.iter().any(|a| a.id == ACCOUNT_ONE) {
@@ -656,6 +660,8 @@ impl Accounts {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Stored::default(),
             Err(e) => return Err(e),
         };
+        // Initialize old files before any removal can erase their highest identity.
+        state.last_id = state.last_id.max(state.accounts.iter().filter_map(|a| a.id.parse::<u32>().ok()).max().unwrap_or(1));
         Ok(Self { path, root: data_dir.join("claude-accounts"), records: Mutex::new(None), state: Mutex::new(state), pending: Mutex::new(None), back_ends: Mutex::new(BTreeMap::new()), replies: Mutex::new(BTreeMap::new()), waiting: Mutex::new(std::collections::BTreeSet::new()), notice: Mutex::new(None), utc_offset_minutes: Mutex::new(None), queued: Mutex::new(std::collections::BTreeSet::new()) })
     }
 
@@ -790,7 +796,8 @@ impl Accounts {
     /// stock `claude auth login` with `CLAUDE_CONFIG_DIR` set to it (`provider_auth.rs`).
     pub fn add(&self, label: &str) -> io::Result<Account> {
         let mut state = self.state.lock().unwrap();
-        let id = (state.accounts.iter().filter_map(|a| a.id.parse::<u32>().ok()).max().unwrap_or(1) + 1).to_string();
+        let number = state.last_id.checked_add(1).ok_or_else(|| io::Error::other("No account identities remain."))?;
+        let id = number.to_string();
         let folder = self.root.join(&id);
         // The Keychain item Claude Code writes is named from a hash of this path string, and
         // the reset reader refuses non-ASCII custom paths (`reset_transport.rs`).
@@ -809,6 +816,7 @@ impl Accounts {
         let label = if label.is_empty() { format!("Account {id}") } else { label.chars().filter(|c| !c.is_control()).take(40).collect() };
         let account = Account { id, label, folder: Some(folder) };
         let mut next = state.clone();
+        next.last_id = number;
         next.accounts.push(account.clone());
         self.save(&next)?;
         *state = next;
@@ -1433,7 +1441,7 @@ pub(crate) mod tests {
         assert!(accounts.evaluate(&readings(reading(10., HOUR, 30., 72 * HOUR), reading(0., HOUR, 99., 48 * HOUR)), Some(93), NOW + 2).unwrap());
         accounts.remove(&work.id).unwrap();
         let spare = accounts.add("Spare").unwrap();
-        assert_eq!(spare.id, work.id, "the id is reused, and its old rows must not count as this adding");
+        assert_ne!(spare.id, work.id, "a canceled adding has its own identity and must leave no change rows");
         accounts.remove(&spare.id).unwrap();
         let rows = |a: &Accounts| a.changes().iter().map(|c| (c.kind.clone(), c.label.clone(), c.from.clone(), c.why.clone())).collect::<Vec<_>>();
         let expected = vec![
@@ -1664,4 +1672,38 @@ pub(crate) mod tests {
         again.share_records(&home).unwrap();
         assert_eq!(listing(&shared), before, "a second launch moves nothing");
     }
+}
+
+#[cfg(test)]
+mod g5_identity_tests {
+use crate::claude_accounts::Accounts;
+#[test]
+fn g5_account_identity_is_not_reused_after_removal_or_restart() {
+    let root = std::env::temp_dir().join(format!("g5-accounts-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let accounts = Accounts::open(&root).unwrap();
+    let old = accounts.add("Old").unwrap();
+    accounts.remove(&old.id).unwrap();
+    drop(accounts);
+    let accounts = Accounts::open(&root).unwrap();
+    let new = accounts.add("New").unwrap();
+    assert_ne!(new.id, old.id);
+    assert_ne!(new.folder, old.folder);
+    drop(accounts);
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn g5_existing_account_files_allocate_above_their_largest_identity() {
+    let root = std::env::temp_dir().join(format!("g5-legacy-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("claude-accounts.json"), r#"{"accounts":[{"id":"1","label":"Home","folder":null},{"id":"27","label":"Work","folder":null}],"inUse":"1"}"#).unwrap();
+    let accounts = Accounts::open(&root).unwrap();
+    accounts.remove("27").unwrap();
+    drop(accounts);
+    let accounts = Accounts::open(&root).unwrap();
+    assert_eq!(accounts.add("New").unwrap().id, "28");
+    drop(accounts);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 }

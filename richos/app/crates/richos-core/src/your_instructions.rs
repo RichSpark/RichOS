@@ -63,11 +63,29 @@ pub fn read(folder: &Path) -> Result<String, String> {
 /// Write the whole text, atomically, and read it back. A file that is a link (the user keeps it
 /// somewhere else) is written where the link points, so the link stays the user's.
 pub fn save(folder: &Path, text: &str) -> Result<(), String> {
+    let (target, _lock) = locked_target(folder)?;
+    save_target(&target, text)
+}
+
+// Lock a stable sidecar, not the atomically replaced instructions inode. Independent
+// conversation servers and the settings writer hold this same lock through readback.
+fn locked_target(folder: &Path) -> Result<(PathBuf, std::fs::File), String> {
     let mut target = path(folder);
     if std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
         target = std::fs::canonicalize(&target).map_err(|e| format!("Your instructions could not be saved: {e}"))?;
     }
-    crate::doctrine::write_verified(&target, text).map_err(|e| match e {
+    let lock = (|| -> std::io::Result<std::fs::File> {
+        std::fs::create_dir_all(target.parent().unwrap())?;
+        let lock_path = target.with_file_name(format!("{}.lock", target.file_name().unwrap().to_string_lossy()));
+        let file = std::fs::OpenOptions::new().create(true).read(true).write(true).truncate(false).open(lock_path)?;
+        file.lock()?;
+        Ok(file)
+    })().map_err(|e| format!("Your instructions could not be saved: {e}"))?;
+    Ok((target, lock))
+}
+
+fn save_target(target: &Path, text: &str) -> Result<(), String> {
+    crate::doctrine::write_verified(target, text).map_err(|e| match e {
         crate::doctrine::DoctrineError::Unwritable { why, .. } => format!("Your instructions could not be saved: {why}"),
         crate::doctrine::DoctrineError::NoHome => "Your instructions could not be saved: there is no home folder".into(),
     })
@@ -110,6 +128,7 @@ pub fn add_rules(folder: &Path, rules: &[String]) -> Result<Vec<String>, String>
             clean.push(rule.to_string());
         }
     }
+    let (target, _lock) = locked_target(folder)?;
     let mut text = read(folder)?;
     let present: Vec<String> = text.lines().map(|l| bare(l).to_string()).collect();
     let mut added = false;
@@ -126,7 +145,7 @@ pub fn add_rules(folder: &Path, rules: &[String]) -> Result<Vec<String>, String>
         added = true;
     }
     if added {
-        save(folder, &text)?;
+        save_target(&target, &text)?;
     }
     Ok(clean)
 }
@@ -296,3 +315,7 @@ mod tests {
         assert!(items(&root, "other", "t1").is_empty(), "another company's conversation of the same id");
     }
 }
+
+#[cfg(test)]
+#[path = "your_instructions/local_records_tests.rs"]
+mod local_records_tests;
