@@ -1054,7 +1054,7 @@ def removal_workspaces():
             parent = os.path.dirname(parent)
         sources.add(parent)
     workspaces = {}
-    for source in sources - {""}:
+    for source in {os.path.realpath(p) for p in sources if p}:
         workspace, branch = "", ""
         fields = _git(source, "worktree", "list", "--porcelain", "-z").split("\0")
         for field in fields + [""]:

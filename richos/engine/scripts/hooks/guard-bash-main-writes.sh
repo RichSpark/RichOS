@@ -354,20 +354,44 @@ def verb_and_args(stmt):
         return None, [], cwd
     return word, rest, cwd
 
-def inspect(text, base, depth=0):
+def heredoc_projection(text):
+    # Heredoc bytes are data to the surrounding shell, including in $(...).
+    # Keep their bodies for shell consumers, but never parse prose as quoting.
+    chars, docs, cursor = list(text), {}, 0
+    for head, body in heredocs(text):
+        start = text.find(head + '<<', cursor)
+        if start < 0:
+            continue
+        start = text.find('\n', start + len(head)) + 1
+        end = start + len(body)
+        if not start or text[start:end] != body:
+            continue
+        for i in range(start, end):
+            if chars[i] != '\n':
+                chars[i] = ' '
+        cursor = end
+        # Inside a substitution the returned head can start in its parent's
+        # quote. The last $( introduces the command that owns this heredoc.
+        try:
+            heads = list(statements(head))
+        except ValueError:
+            heads = list(statements(head.rsplit('$(', 1)[-1]))
+        if heads:
+            docs.setdefault(tuple(heads[-1][0]), []).append(body)
+    return ''.join(chars), docs
+
+
+def inspect(text, base, depth=0, docs=None):
     global cwd
     if depth > 6:
         return
+    if docs is None:
+        text, docs = heredoc_projection(text)
     saved, cwd = cwd, base
-    docs = {}
-    for head, body in heredocs(text):
-        heads = list(statements(head))
-        if heads:
-            docs.setdefault(tuple(heads[-1][0]), []).append(body)
     try:
         for st, redirects, nested in statements(text):
             for body in nested:
-                inspect(body, cwd, depth + 1)
+                inspect(body, cwd, depth + 1, docs)
             verb, args, location = verb_and_args(st)
             bodies = docs.get(tuple(st), [])
             if bodies:

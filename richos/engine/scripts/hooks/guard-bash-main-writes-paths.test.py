@@ -81,6 +81,22 @@ class WritePaths(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse((lib / '__pycache__').exists())
 
+    def test_heredocs_in_commit_and_pr_substitutions(self):
+        for command in (
+                'git commit -m "$(cat <<\'EOF\'\nfix: keep guard\nEOF\n)"',
+                'git commit -m "$(cat <<EOF\nfix: keep guard\nEOF\n)"',
+                'gh pr create --title t --body "$(cat <<\'EOF\'\nbody\nEOF\n)"',
+                'git tag -a v1 -m "$(cat <<\'EOF\'\nrelease\nEOF\n)"',
+                'git commit -m "$(cat <<\'EOF\'\nfix: don\'t change the target\nEOF\n)"'):
+            with self.subTest(command=command):
+                self.verdict(command, 0, self.work)
+        command = f'git commit -m "$(cat <<\'EOF\'\nmessage\nEOF\n)"; echo hi > "{self.root}/src/file"'
+        self.verdict(command, 2, self.work)
+        command = f'git commit -m "$(cat <<\'EOF\'\ndon\'t change quoting\nEOF\n)"; echo hi > "{self.root}/src/file"'
+        self.verdict(command, 2, self.work)
+        command = f'git commit -m "$(bash <<\'EOF\'\necho "don\'t"; touch "{self.root}/src/file"\nEOF\n)"'
+        self.verdict(command, 2, self.work)
+
     def test_32_physical_aliases(self):
         for target in (self.root / 'src/file', self.alias / 'src/file'):
             with self.subTest(target=target):

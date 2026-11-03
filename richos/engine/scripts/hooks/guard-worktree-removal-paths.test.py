@@ -93,6 +93,13 @@ exec "{real_git}" "$@"
         calls = marker.read_text().splitlines()
         self.assertLessEqual(sum('worktree list --porcelain' in line for line in calls), 1, calls)
         self.assertFalse(any('symbolic-ref' in line for line in calls), calls)
+        marker.unlink()
+        alias = self.root / 'repo-alias'
+        alias.symlink_to(self.repo, target_is_directory=True)
+        self.verdict('rm -rf ordinary', 0, cwd=alias,
+                     PATH=str(wrapper) + ':' + self.env['PATH'], G9_GIT_CALLS=str(marker))
+        calls = marker.read_text().splitlines()
+        self.assertLessEqual(sum('worktree list --porcelain' in line for line in calls), 1, calls)
 
     def test_44_parent_child_and_relative_paths(self):
         for command, cwd in (
