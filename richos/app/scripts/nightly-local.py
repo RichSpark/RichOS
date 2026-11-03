@@ -2234,8 +2234,13 @@ class Runner:
 
         def lint_tauri():
             with self.phase("gates/lint-tauri"):
+                suite_args = []
+                if "gates/script-suites" in self.reused_gates:
+                    suite_args = ["--suite-run-id",
+                                  self.gate_evidence.selected["gates/script-suites"]["run_id"]]
                 self.command("bash", self.source / SCRIPTS / "lint.sh", "--all",
-                             "--suite-results", results, timeout=GATE_BUDGETS["gates/lint-tauri"])
+                             "--suite-results", results, *suite_args,
+                             timeout=GATE_BUDGETS["gates/lint-tauri"])
 
         # The workspace-spec mutation pass: 86 deliberately broken copies of the workspace code,
         # each of which one of the suite's checks must catch. OFF every land and ON before
