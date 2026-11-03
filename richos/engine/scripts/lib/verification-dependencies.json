@@ -656,7 +656,7 @@
     },
     "scripts/lib/affected_units.py#validate-config": {
       "source": "scripts/lib/affected_units.py",
-      "sha256": "e30dd9847772eb5f6c1cbd2a1d6d67a2743ca6fd341c69e3d869edd4b3c67c6b",
+      "sha256": "5ec287178a4b353ca8241e1b6ea3fe7bd748c94184d62b1ab8450f78196c54c0",
       "evidence": "validate_config reads the real config and its declared key registry, rejecting unsupported syntax and unknown keys. Renewed 2026-10-05: digest-only declaration comparison reads base/target JSON as data and retains every non-digest field; --validate-pins reuses Dependencies.node and hook_reader, reading the same reviewed source, inventory and external bindings as the existing validators.",
       "keys": [],
       "edges": [
@@ -1136,7 +1136,7 @@
     },
     "scripts/lib/affected_units.py": {
       "source": "scripts/lib/affected_units.py",
-      "sha256": "e30dd9847772eb5f6c1cbd2a1d6d67a2743ca6fd341c69e3d869edd4b3c67c6b",
+      "sha256": "5ec287178a4b353ca8241e1b6ea3fe7bd748c94184d62b1ab8450f78196c54c0",
       "evidence": "The selector can validate a supplied engine configuration and can compute config/hook/ordinary selections from supplied snapshots. Its only subprocesses are read-only Git operations. Renewed 2026-09-28: ordinary selection also names scripts/verification-inputs.test.sh for a path this same declaration pins (pinned_sources reads the already-loaded declaration only; no new file, setting or subprocess). Renewed 2026-10-01: ordinary selection also reads the change's base side through the same read-only Snapshot (a path the base had and the selected tree lacks is listed as removed, never unmapped), and an unmapped path is listed once; no new file, setting or subprocess kind. Renewed 2026-10-05: digest-only declaration comparison reads base/target JSON as data and retains every non-digest field; --validate-pins reuses Dependencies.node and hook_reader, reading the same reviewed source, inventory and external bindings as the existing validators.",
       "keys": [],
       "edges": [
@@ -1161,7 +1161,7 @@
     },
     "scripts/affected-units.test.py": {
       "source": "scripts/affected-units.test.py",
-      "sha256": "0d381e7bf08bb25ce5ee7a3c7df275478b9d1e4d70eb8da3d32e4b53dce1ab82",
+      "sha256": "22658fe8db428e123ba9306a53daa8cb2841c9371ad8a7f716832cc86fc174ce",
       "evidence": "All config reads use newly written fixture files or literal before/after text. The real-file planning case reads only hooks.json and source-bound registration declarations. Nested CLI invocations use a newly created Git repository, and selected commands are never executed. The added real dependency/selection cases only read bound source and hook JSON as data and use synthetic config deltas; they never launch selected suites. Renewed 2026-09-28: the pinned-reader case reads the real declaration and every suite's text as data and adds one synthetic node in memory; nothing is executed. Renewed 2026-10-01: the removal case runs the selector on a newly created Git repository with an inert owner suite, and the two-roads case reads hooks.json as data; nothing is executed. Renewed 2026-10-05: pin-renewal controls use private reader/map/Git fixtures and invoke only read-only selection/validation; they never execute planned suites.",
       "keys": [],
       "edges": [
@@ -16656,7 +16656,7 @@
       "keys": [],
       "edges": [
         {
-          "to": "scripts/lib/spawn.py"
+          "to": "scripts/lib/spawn.py#fixture-guards"
         }
       ]
     },
