@@ -1151,7 +1151,15 @@ def team(args):
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 stream.write(body if body.endswith("\n") else body + "\n")
                 stream.flush(); os.fsync(stream.fileno())
-            os.replace(temporary, path)
+            if replace:
+                os.replace(temporary, path)
+            else:
+                # Publish the complete file without replacing a concurrent save.
+                try:
+                    os.link(temporary, path)
+                except FileExistsError:
+                    raise ValueError(f"{name} is already the user's teammate, and that copy is the user's: it is kept. "
+                                     "Set replace only to make a change the user asked for") from None
         finally:
             temporary.unlink(missing_ok=True)
         return {"saved": str(path), "name": name, "replaced": existed,

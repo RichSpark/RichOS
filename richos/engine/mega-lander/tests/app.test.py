@@ -689,6 +689,42 @@ class DesktopWork(unittest.TestCase):
         self.app.save(path,record)
         self.assertEqual(self.app.bounded(path)["consult_answer"]["message"],"\x00"*self.app.CONSULT_ANSWER_LIMIT)
 
+    def test_concurrent_create_only_team_saves_publish_exactly_one_complete_definition(self):
+        gate=threading.Barrier(2)
+        real=self.app.os.fdopen
+        results=[]
+        definitions=[MARK+"\nCustomization one.\n",MARK+"\nCustomization two.\n"]
+        def opened(*args,**kwargs):
+            stream=real(*args,**kwargs)
+            # A finite hang guard for a broken fixture. The barrier, not elapsed
+            # time, proves that both writers passed the initial absence check.
+            # load-bound: hang guard only; the barrier proves both absence checks ran before publication.
+            try: gate.wait(timeout=10)
+            except BaseException:
+                stream.close()
+                raise
+            return stream
+        def write(body):
+            try: results.append(self.app.team({"action":"save","name":"mark","text":body}))
+            except Exception as error: results.append(error)
+        with patch.object(self.app.os,"fdopen",side_effect=opened):
+            writers=[threading.Thread(target=write,args=(body,)) for body in definitions]
+            for writer in writers: writer.start()
+            for writer in writers: writer.join()
+        saved=[result for result in results if isinstance(result,dict)]
+        refused=[result for result in results if isinstance(result,ValueError)]
+        self.assertEqual(len(saved),1,results)
+        self.assertEqual(len(refused),1,results)
+        self.assertIn("that copy is the user's: it is kept",str(refused[0]))
+        self.assertFalse(saved[0]["replaced"])
+        path=self.root/"team/mark.md"
+        self.assertIn(path.read_text(),definitions)
+        self.assertEqual(path.stat().st_mode&0o777,0o600)
+        self.assertEqual(list(path.parent.glob(".*.incoming")),[])
+        replaced=self.app.team({"action":"save","name":"mark","text":MARK,"replace":True})
+        self.assertTrue(replaced["replaced"])
+        self.assertEqual(path.read_text(),MARK)
+
     def test_the_team_tool_lists_and_shows_the_shelf_and_saves_the_users_own_copy(self):
         """Slice 4 of the proto-teammate shelf plan (richos-hq
         docs/plans/2026-10-06-proto-teammate-shelf.md §2, §4, §10): the back end lists the
