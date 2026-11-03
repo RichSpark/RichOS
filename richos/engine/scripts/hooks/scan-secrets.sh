@@ -339,40 +339,15 @@ def is_generic_nonsecret(value):
     # OPT-IN (SECRET_SCAN_CODE_AWARE=1). Applies to the GENERIC key=value
     # detector ONLY — the vendor-prefix and PEM patterns never consult it.
     #
-    # This is a PRECISION setting, and it is not free. It exempts two shapes
-    # that a real secret can also have, so it is off unless a repository asks
-    # for it, and the trade is named here rather than buried:
-    #   * a CODE reference — a value carrying structural code punctuation
-    #     ( ) [ ] < > ? ! { } or shaped as a dotted member path. An expression,
-    #     a type annotation (`token: NSObjectProtocol?`), a generic
-    #     (`Array<String>`), a subscript (`dict[key]`). None of those
-    #     characters appear in a base64/hex/token secret, so this half is
-    #     close to free.
-    #   * a DESCRIPTIVE literal — every '-'/'_'-separated segment is either
-    #     purely alphabetic or purely numeric ("test-password",
-    #     "BEARER_PROTOCOL_FUTURE_TOKEN", "verification-token"). Real generic
-    #     secrets interleave digits and mixed case into dense tokens whose
-    #     segments are neither ("aB3xQ9zM2kP7wR5vN8tL"). This half is where
-    #     test-fixture and doc-example false positives concentrate — and it is
-    #     also where the cost sits: measured, it lets through an all-alpha
-    #     passphrase, an all-alpha random token, an all-digit long value, and
-    #     an alpha-dash-alpha token that the strict scanner catches. Turn it on
-    #     when fixture noise is costing you more than that risk.
+    # Only structural code references are inferred. Separators and letter case
+    # cannot prove a literal is descriptive: random passwords have those shapes
+    # too. Intentional fixture literals use SECRET_SCAN_ALLOWLIST explicitly.
     if CODE_MEMBER_PATH.match(value):
         return True
     if any(c in value for c in '()[]<>?!{}'):
         return True
-    segs = [s for s in re.split(r'[-_]', value) if s]
-    # P3-25: a DESCRIPTIVE literal has separators. A single unseparated run of
-    # letters or digits (a passphrase, a long numeric secret) is not descriptive.
-    # v3 re-check: and each segment is spelled like a WORD (lower, UPPER or
-    # Capitalized) or a number. Random letters in mixed case joined by an
-    # underscore ("QqWwEe..._OoPpAa...") are a password, not a name.
-    if len(segs) >= 2 and all(WORD_SEGMENT.fullmatch(s) for s in segs):
-        return True
     return False
 
-WORD_SEGMENT = re.compile(r'[a-z]+|[A-Z]+|[A-Z][a-z]+|[0-9]+')
 
 def redact(value):
     if len(value) <= 10:
