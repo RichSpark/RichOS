@@ -2461,11 +2461,7 @@ def _running_calls(session_id, agent_id):
 
 def _agent_transcript(session_id, agent_id):
     """The platform's own transcript of this agent, beside its meta.json (platform_agent_record)."""
-    if "/" in session_id:
-        return ""
-    hits = sorted(glob.glob(os.path.join(_platform_projects_dir(), "*", session_id, "subagents",
-                                         "agent-%s.jsonl" % agent_id)))
-    return hits[0] if hits else ""
+    return platform_agent_transcript({"session_id": session_id, "agent_id": agent_id})
 
 
 # The host's own background receipt, as the tool result's text says it. The app's sdk-cli
@@ -2523,15 +2519,28 @@ def _undelivered_calls(session_id, agent_id, ah, running):
     receipts, delivered = set(), set()
     with open(path, "rb") as f:
         for line in f:
-            for m in re.finditer(rb"<tool-use-id>([A-Za-z0-9_.-]+)</tool-use-id>", line):
-                delivered.add(m.group(1).decode())
-            structured = b"backgroundTaskId" in line
-            if not structured and b"Output is being written to: " not in line:
-                continue
             try:
                 row = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(row, dict):
+                continue
+            # Only the host's notification delivers a result. Assistant prose,
+            # user quotations and command output can contain the same tags.
+            message = row.get("message") or {}
+            origin = row.get("origin") or {}
+            attachment = row.get("attachment") or {}
+            notice = None
+            if row.get("type") == "user" and origin.get("kind") == "task-notification":
+                notice = message.get("content")
+            elif row.get("type") == "attachment" and attachment.get("type") == "queued_command":
+                notice = attachment.get("prompt")
+            texts = [notice] if isinstance(notice, str) else [
+                i.get("text", "") for i in notice or [] if isinstance(i, dict) and i.get("type") == "text"]
+            for text in texts:
+                if re.fullmatch(r"\s*<task-notification>.*</task-notification>\s*", text, re.S):
+                    delivered.update(re.findall(r"<tool-use-id>([A-Za-z0-9_.-]+)</tool-use-id>", text))
+            structured = b"backgroundTaskId" in line
             result = row.get("toolUseResult") if isinstance(row, dict) else None
             content = (row.get("message") or {}).get("content") if isinstance(row, dict) else None
             if not isinstance(content, list):
