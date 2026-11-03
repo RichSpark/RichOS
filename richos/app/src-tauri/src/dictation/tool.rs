@@ -208,6 +208,7 @@ pub fn preview_problem(tag: Option<&str>) -> Option<Problem> {
 
 /// Everything the control loop hears.
 enum Control {
+    Vocabulary { seq: u64, client: u64, publication: super::vocabulary::Publication },
     Tap(TapEvent),
     CleanerLookup {id:String,result:Result<serde_json::Value,String>},
     CleanerReady {id:String,result:Result<serde_json::Value,String>},
@@ -411,6 +412,7 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
                 // A voice-yielded is tied to the connection that sent it, by the id the Hub
                 // gave that connection (fourth review, finding 1); its bundle is for the log.
                 let control = match m {
+                    AppMessage::Vocabulary { seq, publication } => Control::Vocabulary { seq, client, publication },
                     AppMessage::VoiceYielded { seq, bundle } => Control::Yielded { seq, client, bundle },
                     m => Control::App(m),
                 };
@@ -536,6 +538,9 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
 }
 
 struct Tool {
+    vocabulary: Option<super::vocabulary::Publication>,
+    recording_vocabulary: Option<super::vocabulary::Snapshot>,
+    vocabulary_revoked: Arc<AtomicBool>,
     settings: store::Settings,
     data_dir: PathBuf,
     shared: Arc<Mutex<Shared>>,
@@ -591,6 +596,9 @@ impl Tool {
         preview: Option<Problem>,
     ) -> Tool {
         Tool {
+            vocabulary: None,
+            recording_vocabulary: None,
+            vocabulary_revoked: Arc::new(AtomicBool::new(false)),
             settings,
             data_dir,
             shared,
@@ -741,6 +749,19 @@ impl Tool {
         }
         while let Ok(control) = rx.recv() {
             match control {
+                Control::Vocabulary { seq, client, publication } => {
+                    // Only the owning data profile supplies company identities.
+                    if std::path::Path::new(&publication.data_dir) != self.data_dir { continue; }
+                    if seq != 0 && !self.handover.as_ref().is_some_and(|h| h.seq == seq && h.told.contains(&client)) { continue; }
+                    if let Some(recorded) = &self.recording_vocabulary {
+                        if publication.active.is_none() || !publication.companies.iter().any(|c| c.id == recorded.company.id) {
+                            self.vocabulary_revoked.store(true, Ordering::Release);
+                        }
+                    }
+                    if seq != 0 { self.recording_vocabulary = publication.active.clone(); }
+                    self.vocabulary = Some(publication);
+                }
+                Control::App(AppMessage::Vocabulary { .. }) => {} // carries its connection id above
                 Control::Tap(TapEvent::Toggle) | Control::App(AppMessage::Finish) => self.toggle(matches!(control, Control::App(_))),
                 Control::CleanerReady{id,result}=>{
                     if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
@@ -1043,6 +1064,12 @@ impl Tool {
 
     fn menu_act(&mut self, act: &str, value: Option<&str>) -> Option<i32> {
         match act {
+            "vocabulary" => {
+                let company = value.filter(|v| !v.is_empty()).map(str::to_string);
+                if company.as_ref().is_none_or(|id| self.vocabulary.as_ref().is_some_and(|v| v.companies.iter().any(|c| &c.id == id))) {
+                    self.hub.broadcast(&ToolMessage::SelectVocabulary { company });
+                }
+            }
             "close" => {
                 if self.menu.is_open() {
                     self.close_menu();
@@ -1142,6 +1169,8 @@ impl Tool {
     }
     fn listen(&mut self) {
         self.capture_seq+=1;
+        self.vocabulary_revoked = Arc::new(AtomicBool::new(false));
+        self.recording_vocabulary = self.vocabulary.as_ref().and_then(|v| v.active.clone());
         self.focused = insert::focused_window_rect();
         // The accuracy for THIS dictation is the one chosen when it begins (finding 6).
         self.recording_model = self.settings.model.clone();
@@ -1221,11 +1250,15 @@ impl Tool {
         let app = self.app.clone();
         let capture_seq=self.capture_seq;
         let target=self.cleaner_target.as_ref().map(|(id,_)|id.clone());let hub=self.hub.clone();
+        let vocabulary = self.recording_vocabulary.clone();
+        let vocabulary_revoked = self.vocabulary_revoked.clone();
         if let Some(id)=&target{self.hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"writing".into(),payload:serde_json::json!({})});}
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         match std::thread::Builder::new().name("dictation-write".into()).spawn(move || {
-            let (outcome, words) = write(recording, duration_ms, &model, &data_dir, &app, &flag,target.as_deref().map(|id|(id,hub.as_ref())));
+            let text = TextContext { cleaner: target.as_deref().map(|id|(id,hub.as_ref())),
+                                     vocabulary: vocabulary.as_ref(), vocabulary_revoked: &vocabulary_revoked };
+            let (outcome, words) = write(recording, duration_ms, &model, &data_dir, &app, &flag, text);
             tx.send(Control::Written { seq:capture_seq, outcome, words }).ok();
         }) {
             Ok(join) => self.writing = Some(Writing { stop, join }),
@@ -1256,8 +1289,14 @@ fn v_code_on_main(app: &tauri::AppHandle) -> u16 {
 
 /// One dictation, from the recording to the words in place, and where they landed on screen
 /// when Accessibility says. Never logs the words.
-fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool,target:Option<(&str,&Hub)>) -> (Result<(), Problem>, Option<Rect>) {
-    match write_words(recording, duration_ms, chosen, data_dir, app, stop,target) {
+struct TextContext<'a> {
+    cleaner: Option<(&'a str, &'a Hub)>,
+    vocabulary: Option<&'a super::vocabulary::Snapshot>,
+    vocabulary_revoked: &'a AtomicBool,
+}
+
+fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool, text: TextContext<'_>) -> (Result<(), Problem>, Option<Rect>) {
+    match write_words(recording, duration_ms, chosen, data_dir, app, stop, text) {
         Ok((then, landed)) => {
             let words = landed.and_then(|(start, text)| insert::words_rect(start, &text));
             (then.map_or(Ok(()), Err), words)
@@ -1284,7 +1323,7 @@ fn pick_after_engine_lookup(
 }
 
 /// The words in place: `Ok` with the problem to say afterwards (if any) and what was pasted where.
-fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool,target:Option<(&str,&Hub)>) -> Result<(Option<Problem>, Landed), Problem> {
+fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool, text: TextContext<'_>) -> Result<(Option<Problem>, Landed), Problem> {
     let secs = recording.secs();
     let then = match judge_recording(duration_ms, &recording) {
         Stopped::Refuse(p) => {
@@ -1342,11 +1381,21 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
             return Err(then.unwrap_or(p));
         }
     };
-    if let Some((id,hub))=target {
+    if let Some((id,hub))=text.cleaner {
         if stop.load(Ordering::Acquire){return Err(Problem::CouldNotWrite)}
         if hub.broadcast(&ToolMessage::Cleaner{id:id.into(),action:"transcript".into(),payload:serde_json::json!({"note":words})})==0{return Err(Problem::CouldNotWrite)}
         return Ok((then,None));
     }
+    let words = if !text.vocabulary_revoked.load(Ordering::Acquire) {
+        text.vocabulary.filter(|snapshot| {
+            store::read(data_dir).ok().and_then(|s| super::vocabulary::Saved::read(&s.vocabulary).ok())
+                .is_some_and(|s| s.selected_company.is_some() && s.by_company.contains_key(&snapshot.company.id))
+        }).and_then(|snapshot| {
+            // The owning app already checked the local English dictionary before
+            // publishing. Re-check structure and protected common-word fixtures.
+            richos_voice::dictation_vocabulary::Rules::checked(&snapshot.rules, |_| Some(false)).ok()
+        }).map(|rules| rules.apply(&words)).unwrap_or(words)
+    } else { words };
     if !keytap::accessibility_allowed() {
         let copied = insert::copy_only(&words);
         log::line(&format!("dictation: model {id}, {secs:.2} s, {latency} ms: Accessibility is not allowed, words copied ({copied:?})"));

@@ -30,3 +30,4 @@ pub mod menubar;
 pub mod scratch;
 pub mod store;
 pub mod tool;
+pub mod vocabulary;

@@ -24,6 +24,7 @@ pub const SOCKET_NAME: &str = "dictation.sock";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum AppMessage {
+    Vocabulary { seq: u64, publication: super::vocabulary::Publication },
     /// Request-scoped file capture. Never interpreted as ordinary Finish.
     Cleaner { id:String, action:String, payload:serde_json::Value },
     /// Who is connecting: its version, its bundle and its data folder.
@@ -72,6 +73,7 @@ pub enum AppMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ToolMessage {
+    SelectVocabulary { company: Option<String> },
     Cleaner { id:String, action:String, payload:serde_json::Value },
     /// Where dictation is. `owner` is the bundle of the copy whose tool holds the key, so an app
     /// can tell whether that is its own copy.

@@ -3946,6 +3946,12 @@ fn main() {
             #[cfg(target_os = "macos")]
             dictation_app::dictation_status,
             #[cfg(target_os = "macos")]
+            dictation_app::dictation_vocabulary,
+            #[cfg(target_os = "macos")]
+            dictation_app::dictation_set_vocabulary,
+            #[cfg(target_os = "macos")]
+            dictation_app::dictation_set_preview,
+            #[cfg(target_os = "macos")]
             dictation_app::dictation_set_on,
             #[cfg(target_os = "macos")]
             dictation_app::dictation_set_key,
@@ -4431,6 +4437,34 @@ struct AppVoice {
 
 #[cfg(target_os = "macos")]
 impl dictation_app::VoiceMode for AppVoice {
+    fn preview_available(&self) -> bool {
+        richos_voice::stt::model_verified(richos_voice::dictation::FASTER).is_ok()
+    }
+    fn vocabulary_companies(&self) -> Vec<dictation::vocabulary::Company> {
+        let Some(state) = self.app.try_state::<AppState>() else { return Vec::new() };
+        state.reader.snapshot().entity_registry().entities().iter()
+            .map(|e| dictation::vocabulary::Company { id: e.id.to_string(), name: e.display_name.clone() }).collect()
+    }
+
+    fn vocabulary(&self) -> Option<dictation::vocabulary::Publication> {
+        self.app.try_state::<Arc<dictation_app::Host>>().map(|host| host.vocabulary_publication())
+    }
+
+    fn check_vocabulary(&self, rules: Vec<richos_voice::dictation_vocabulary::Rule>) -> Result<(), String> {
+        dictation::vocabulary::checked_on_main(&self.app, rules).map(|_| ())
+    }
+
+    fn select_vocabulary(&self, company: Option<String>) {
+        if let Some(host) = self.app.try_state::<Arc<dictation_app::Host>>() {
+            if host.change_vocabulary(company, None).is_err() {
+                // The prior valid choice remains authoritative. Publish its state
+                // again; never let a menu claim a setting that was not saved.
+                let mut publication = host.vocabulary_publication();
+                publication.error = Some("Your choice wasn't saved. The previous vocabulary still applies.".into());
+                host.link.tell(&dictation::ipc::AppMessage::Vocabulary { seq: 0, publication });
+            }
+        }
+    }
     fn end_for_dictation(&self) -> bool {
         let Some(handle) = self.app.try_state::<VoiceHandle>() else { return false };
         // The gate FIRST: dropping the controller drains its recognizer, and whatever it still
