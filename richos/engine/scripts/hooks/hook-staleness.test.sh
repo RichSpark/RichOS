@@ -104,8 +104,10 @@ bad() { FAIL=$((FAIL + 1)); FAIL_NAMES+=("$1"); printf '  FAIL  %s  %s\n' "$1" "
 
 SESSION_ID="cafebabe-0000-4000-8000-000000000000"
 SESSION_SHORT="cafebabe"
-SANDBOXES=()
-cleanup() { for d in ${SANDBOXES+"${SANDBOXES[@]}"}; do [ -n "$d" ] && rm -rf "$d"; done; }
+# The parent owns one scratch root. Factories may run in command substitutions
+# without losing ownership of the children they allocate.
+SUITE_SCRATCH="$(mktemp -d "${TMPDIR:?}/hook-staleness-suite.XXXXXX")"
+cleanup() { rm -rf "$SUITE_SCRATCH"; }
 trap cleanup EXIT
 
 # make_sandbox — an adopted repo with a copy of the real registration surface.
@@ -114,8 +116,7 @@ trap cleanup EXIT
 # doing nothing.
 make_sandbox() {
     local root
-    root="$(mktemp -d -t hook-staleness.XXXXXX)"
-    SANDBOXES+=("$root")
+    root="$(mktemp -d "$SUITE_SCRATCH/sandbox.XXXXXX")"
     mkdir -p "$root/.claude/state"
     printf 'PROTECTED_PATHS="src"\n' >"$root/orchestration.config"
     cp "$REAL_HOOKS" "$root/hooks.json"
@@ -446,8 +447,7 @@ fi
 # ===========================================================================
 # 8. STAND-DOWN AND THE SETTINGS SURFACE
 # ===========================================================================
-R12="$(mktemp -d -t hook-staleness-unadopted.XXXXXX)"
-SANDBOXES+=("$R12")
+R12="$(mktemp -d "$SUITE_SCRATCH/unadopted.XXXXXX")"
 mkdir -p "$R12/.claude/state"
 cp "$REAL_HOOKS" "$R12/hooks.json"      # deliberately NO orchestration.config
 # The not-adopted STATUS is reached through the candidate chain, never through
@@ -711,14 +711,12 @@ fi
 # ===========================================================================
 
 # A sandbox that IS an engine: install.sh takes its repo root from its own
-# ../.., so the whole tree is copied rather than stubbed. mktemp lands under
-# /var/folders, which install.sh classifies as EPHEMERAL and therefore never
-# mints the operator's engine pointer from; CLAUDE_CONFIG_DIR is redirected as
-# a second, independent guarantee of the same thing.
+# ../.., so the whole tree is copied rather than stubbed. Scratch stays under
+# the configured TMPDIR. CLAUDE_CONFIG_DIR is redirected so fixture installs
+# cannot change the operator's engine pointer.
 make_engine_sandbox() {
     local root
-    root="$(mktemp -d -t hook-staleness-engine.XXXXXX)"
-    SANDBOXES+=("$root")
+    root="$(mktemp -d "$SUITE_SCRATCH/engine.XXXXXX")"
     cp -R "$ENGINE_ROOT/." "$root/" 2>/dev/null || true
     mkdir -p "$root/fake-config"
     printf '%s' "$root"

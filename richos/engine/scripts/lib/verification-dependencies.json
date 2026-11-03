@@ -2748,7 +2748,7 @@
     },
     "scripts/hooks/hook-staleness.test.sh": {
       "source": "scripts/hooks/hook-staleness.test.sh",
-      "sha256": "bcac2b4fc072a139f1af6b502bf3b2aba948b830bbd796888a89f17a1708dff7",
+      "sha256": "f59b07882623aa0a379008e841f02f14cb8f507dd266fa47ddc4a9638db37ebc",
       "evidence": "Snapshot/notice calls use generated adopted roots and explicit copied registration surfaces. Installer cases copy the engine and run only install.sh with private CLAUDE_CONFIG_DIR. That private-home installer closure never consumes config values; copying settings is transport. Guards named in registration mutations and generated script bodies are data, not executed suites.",
       "keys": [],
       "edges": [
