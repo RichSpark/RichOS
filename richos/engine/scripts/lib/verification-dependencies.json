@@ -4083,8 +4083,8 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#undeclared-target": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
-      "evidence": "Git-jurisdiction fixture supplies a new target repository with no publication declaration. Module setup, payload classifier and seat/Git resolution run; pb_load_declaration returns absent before the checker or corpus path. Broken-library copies exit still earlier. Full source hash binds both the early return and excluded continuation.",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
+      "evidence": "Git-jurisdiction fixture supplies a new target repository with no publication declaration. Module setup, payload classifier and seat/Git resolution run; pb_load_declaration returns absent before the checker or corpus path. Broken-library copies exit still earlier. Full source hash binds both the early return and excluded continuation. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -4101,6 +4101,9 @@
         },
         {
           "to": "scripts/lib/publication-boundary.sh#undeclared"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -4220,8 +4223,8 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#private-inventory": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
-      "evidence": "Runs the fixed checker on the caller's private target after payload/Git classification. Root helper resolves the engine location only; no entity-config values are loaded. Literal commit/ack payloads are data and ACK_LOG is supplied privately. Generated hooks.json and registered-hooks.sh in the private target are adoption markers, not the shipped manifest.",
+      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "evidence": "Runs the fixed checker on the caller's private target after payload/Git classification. Root helper resolves the engine location only; no entity-config values are loaded. Literal commit/ack payloads are data and ACK_LOG is supplied privately. Generated hooks.json and registered-hooks.sh in the private target are adoption markers, not the shipped manifest. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -4235,6 +4238,9 @@
         },
         {
           "to": "scripts/hook-registration-completeness.sh#private-inventory"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ]
     },
@@ -4852,14 +4858,14 @@
     },
     "scripts/lib/left-off.py#human-classifier": {
       "source": "scripts/lib/left-off.py",
-      "sha256": "bc8ee52b63ab677a5c055ce2b7da434bbb786058867cf3128a9b3cf3337433b4",
+      "sha256": "0a2a741b559084783f4d66c48ba0180219de051f7335843ad50095341ba7c622",
       "evidence": "Import only installs constants/functions. Failure-type calls is_human and text_of plus reads MACHINE_ENVELOPES. Both functions classify supplied record values without files, commands or config. Other report/CLI helpers are not invoked.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/failure-type.py": {
       "source": "scripts/lib/failure-type.py",
-      "sha256": "4979df06ab98e4bf1c1c0d86fb6a471db9fff8d6aa3efca88988118d24f81a9f",
+      "sha256": "24fe80fbc30542333c46f565e521f0b06e9a98bb54e2cc0e8574773e8b9cb1c5",
       "evidence": "Complete reviewed analyzer reads supplied register/transcript/corpus and fixed Git metadata; payload commands are inspected as strings, never executed. Configuration reaches it only as explicit RICHOS_FT_* wrapper arguments. The fixed left-off import uses just its human classifiers.",
       "keys": [],
       "edges": [
@@ -6331,8 +6337,8 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#fixture-trees": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
-      "evidence": "Full guard reviewed: real seat adoption and fixed jurisdiction helpers parse the supplied payload; all audited targets are generated repositories. The declaration/checker use those fixture roots with fixed declaration defaults, not shipped config values. The staging arm copies the fixture index and only stages its intent-to-add view.",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
+      "evidence": "Full guard reviewed: real seat adoption and fixed jurisdiction helpers parse the supplied payload; all audited targets are generated repositories. The declaration/checker use those fixture roots with fixed declaration defaults, not shipped config values. The staging arm copies the fixture index and only stages its intent-to-add view. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -6354,6 +6360,9 @@
         {
           "to": "scripts/publication-completeness.sh#fixture-trees",
           "fixture": true
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ]
     },
@@ -6705,8 +6714,8 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#benign-bash": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
-      "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached.",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
+      "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -6723,6 +6732,9 @@
         },
         {
           "to": "scripts/lib/publication-boundary.sh#load"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -6759,8 +6771,8 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#benign-bash": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
-      "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached.",
+      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -6771,6 +6783,9 @@
         },
         {
           "to": "scripts/lib/unevaluated-notice.sh"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -8186,7 +8201,7 @@
     },
     "scripts/lib/left-off.py": {
       "source": "scripts/lib/left-off.py",
-      "sha256": "bc8ee52b63ab677a5c055ce2b7da434bbb786058867cf3128a9b3cf3337433b4",
+      "sha256": "0a2a741b559084783f4d66c48ba0180219de051f7335843ad50095341ba7c622",
       "evidence": "Reviewed CLI/build, all file reads, subprocess sites and dynamic sibling calls. Transcript/prompt/state fields are data; Git calls are fixed read-only queries. Finite sibling imports read workspace mapping/integration, unlanded repository discovery and escalation rows. Wall clock, Git refs/reflogs and external ledger content remain execution inputs, not config readers.",
       "keys": [],
       "edges": [
@@ -9600,8 +9615,8 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
-      "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config.",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
+      "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -9618,6 +9633,9 @@
         },
         {
           "to": "scripts/lib/publication-boundary.sh#load"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -9681,8 +9699,8 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
-      "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config.",
+      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -9693,6 +9711,9 @@
         },
         {
           "to": "scripts/lib/unevaluated-notice.sh"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -10257,8 +10278,8 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#unadopted-target": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
-      "evidence": "The fixed private repository carries no engine hook inventory. Full bootstrap, classifier and target resolution through the explicit HR_ADOPTED check reviewed; returns before the completeness checker.",
+      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "evidence": "The fixed private repository carries no engine hook inventory. Full bootstrap, classifier and target resolution through the explicit HR_ADOPTED check reviewed; returns before the completeness checker. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -10269,6 +10290,9 @@
         },
         {
           "to": "scripts/lib/unevaluated-notice.sh"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -10976,8 +11000,8 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#inventory-write": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
-      "evidence": "The inventory parser expands dispatcher modules, while matcher_of finds no direct registration and chooses Write. This module sees a private Write payload or malformed JSON; its reviewed classifier prefix returns before Bash-only operations. Bootstrap helpers remain bound.",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
+      "evidence": "The inventory parser expands dispatcher modules, while matcher_of finds no direct registration and chooses Write. This module sees a private Write payload or malformed JSON; its reviewed classifier prefix returns before Bash-only operations. Bootstrap helpers remain bound. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -10994,6 +11018,9 @@
         },
         {
           "to": "scripts/lib/publication-boundary.sh#load"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -11018,8 +11045,8 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#inventory-write": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
-      "evidence": "The inventory parser expands dispatcher modules, while matcher_of finds no direct registration and chooses Write. This module sees a private Write payload or malformed JSON; its reviewed classifier prefix returns before Bash-only operations. Bootstrap helpers remain bound.",
+      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "evidence": "The inventory parser expands dispatcher modules, while matcher_of finds no direct registration and chooses Write. This module sees a private Write payload or malformed JSON; its reviewed classifier prefix returns before Bash-only operations. Bootstrap helpers remain bound. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -11030,6 +11057,9 @@
         },
         {
           "to": "scripts/lib/unevaluated-notice.sh"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -14459,7 +14489,7 @@
     },
     "mega-lander/tests/app.test.py": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "b1afd21a6ebbdabfc4979420e2f94cf858b12dafc96a24c43139219c36275edd",
+      "sha256": "7402119dcf31a6be92a167c1adbd9a1f6114e80c2292b01ed11a3f5d38cb5140",
       "evidence": "Full fixed unittest fixture, literal holder/probe subprocess programs and one literal spawn failure override. Private Git, ECS stores, registry, scope, land locks and explicit single-hook manifest bind the app/adapter entrypoint guarantees. No agent, model, arbitrary setup or MCP server is invoked. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): setUp copies the always-active five (engine/agents/{dean,clark,reed,frank,pierce}.md) as data and writes one literal fictional teammate, mark.md, into the private roster; cases name a teammate in prepare and read the duty texts mega-lander/duties/*.md as data. Renewed 2026-10-06 (proto-teammate shelf slice 3): one case prepares Clark with role consult and no repository, starts and ends it through the existing fixture helpers with literal fictional messages, and reads the fixture's private ECS store for work units. Renewed 2026-10-06 (proto-teammate shelf slice 4): one case lists and shows the shipped shelf (team/shelf/*.md read as data), saves literal fictional definitions into the fixture's private <app data>/team/ and calls prepare once more against the private roster. Renewed 2026-10-09 (echo-opus-review4, second review slice 4): cases write the scope's user words (literal fictional text and its hash) and read the brief and <id>.words prepare writes; one case loads scripts/app-engine-hook.py and calls only its mid_job_notice, which loads scripts/lib/app_review.py over a literal private ledger; one case loads scripts/lib/review_watch.py and runs app_mode --tick (AppWorld over the fixture's private registry partition, with REVIEW_WATCH_SECOND_REVIEW a literal fake script that records its arguments and sleeps) and Watcher.stop_own on that fake's recorded pid. No model, Claude CLI or real review runs. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case passes a list's append as mid_job_notice's emit and reads the text from it; nothing else changes. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): the app-watcher case also gives app_mode a fixture path as accounts (never created) and checks the fake second-review's recorded --accounts argument; nothing new is read. Renewed 2026-10-11 (echo-opus-skills2, second review of 79ba6eb7e, finding 2): one more case reads mega-lander/duties/consult.md as data, as the consult case already does, and the module imports re; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-11 (echo-opus-skills2, mid-job review of 7f6ea1dd8): that case asserts more words of the same consult.md text; nothing new is read. Renewed 2026-10-14 (echo-opus-hiresnag55b): one test also runs ecs/adapters/mcp.py serve in process (no server process) to prove a brief the limit accepts fits the transport's request line. Renewed 2026-10-15 (echo-opus-hire57): one case reads engine/agents/dean.md as data (setUp already copies it) and saves literal fictional definitions into the fixture's private <app data>/team/ through the team tool; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-18 (retired execution after app update): retirement reads the canonical workspaces agents/done records through existing workspaces.py helpers under the fixture private RICHOS_WORKSPACES_DIR; active cleanup intent cannot retire a worker. The new fixture calls the same canonical land and session lifecycle APIs used by existing integration/restart cases, then verifies actual ECS completion. No configuration key, environment variable, subprocess type or outside fixture file is added. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): setUp names a committer in the fixture repository with `git config` (every land is now a merge commit); two cases write literal pre-merge-commit hooks into the private fixture repository, and one installs and switches on the fence there by running scripts/operator-fences.sh install and on against a literal private entity orchestration.config. Renewed 2026-10-21 (zach-opus-landgate1, review finding 1): one more case installs the fence with RICHOS_LAND_LOCKS_DIR at a second private directory of the fixture (another account's home) and lands under the fixture's own. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): setUp sets HOME and XDG_CONFIG_HOME to a private empty home; two cases write a literal ~/.gitconfig there (a global core.hooksPath, or an includeIf gitdir naming the fixture repository) selecting a literal refusing pre-merge-commit hook, and a literal identity file as the lease's GIT_CONFIG_GLOBAL. Renewed 2026-10-29 (live host resources): a fixture starts a normal worker through existing prepare/start helpers, verifies its resource read and rejects other scoped tools and an unregistered agent. Uses the existing fixture roots and imports; the pause-message closure is unchanged. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): seven cases added and one rewritten (P1-A): they write the fixture scope's actions_allowed/closed fields, a canonical record's proof_report through W.Lock/save_agent in the fixture registry, and call dispatch_intent, prepare and the hook's handle() on fixture state only. Renewed 2026-10-31 (zach-opus-tok4b, second review of bb08b88e0): the worker-notice case loads scripts/lib/app-evidence.py by fixed path (edge added) and passes each fixture payload through capture into the fixture's private engine-state/evidence before worker_context, as scripts/app-engine-hook.py does. Renewed 2026-10-31 (echo-opus-w2, app-terminal differences finding 10): a docstring of the worker-notice case only. Nothing read changed. Renewed 2026-10-31 (zach-opus-look1): inspect without an id answers jobs, the status lines of workspaces.py status_lines for the conversation's jobs; one case also runs workspaces.sh status with the explicit fixture session over the same private registry and compares the two, and the other cases read full records by id. Renewed 2026-11-01: setUp explicitly sets CODEX_COORDINATION_ROOT to its private fixture, covering AppWorld dedicated channel discovery without consulting operator connections. Renewed 2026-11-03 (G2): receipt UTF-8 encoding and its consult boundary regression use the existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Completion and replacement share the dispatchability predicate, retain same-session preparations across turns and require explicit settlement; regressions cover both paths and preserve refused-work cleanup. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Create-only team saves atomically link a fully written same-folder file instead of replacing a racing save; a barrier fixture verifies one success, one refusal, intact text, cleanup and explicit replacement. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Inspection compares refreshed receipt contents before saving, always retries projection and preserves changed canonical evidence; regressions count real saves/fsync and reconcile an interrupted outbox. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Thread-seat reconciliation reads the app-data ledger beside engine-state; corrected production-layout fixtures cover missing/unreadable ledgers, retained live seats, released orphan seats and an ignored wrong-folder decoy. Existing fixture closure; no new configuration, import or external dependency.",
       "keys": [],
       "edges": [
@@ -15043,8 +15073,8 @@
     },
     "scripts/hooks/guard-completeness-commits.sh#find-payload": {
       "source": "scripts/hooks/guard-completeness-commits.sh",
-      "sha256": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
-      "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary.",
+      "sha256": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
+      "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -15061,6 +15091,9 @@
         },
         {
           "to": "scripts/lib/publication-boundary.sh#load"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -15124,8 +15157,8 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#find-payload": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
-      "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary.",
+      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
         {
@@ -15136,6 +15169,9 @@
         },
         {
           "to": "scripts/lib/unevaluated-notice.sh"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
         }
       ],
       "region": [
@@ -16362,7 +16398,7 @@
     },
     "mega-lander/tests/app.test.py#pause-message-case": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "b1afd21a6ebbdabfc4979420e2f94cf858b12dafc96a24c43139219c36275edd",
+      "sha256": "7402119dcf31a6be92a167c1adbd9a1f6114e80c2292b01ed11a3f5d38cb5140",
       "evidence": "Added 2026-09-30 for workspaces.test.py's finding-20 case, which runs this suite with the one name test_pause_message_is_fixed. That selects only DesktopWork.test_pause_message_is_fixed_and_does_not_claim_delivery: setUp builds private Git repositories, a private orchestration.config, agent definitions copied from the engine as data, a private registry, scope, ECS store and land-locks directory, and loads app.py; the case renders pause messages and calls inspect over no receipts. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): the agent definitions setUp copies are now the always-active five plus a literal fictional teammate; the case still never reaches prepare. Renewed 2026-10-06 (proto-teammate shelf slice 3): a consult case was added beside it; this case is unchanged. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case elsewhere in the file changed; this case is unchanged. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): the case also calls resume_message and asserts both tools say NOT HELD / NOT RELEASED for the unregistered fixture name, against the same private registry; nothing else in setUp changed. Renewed 2026-10-15 (echo-opus-hire57): a Dean name-rule case was added elsewhere in the file; this case is unchanged. Renewed 2026-10-18: retired-execution reconciliation and two desktop dispatch cases changed elsewhere in these files; this selected fixture closure and setUp are unchanged. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): setUp also runs `git config` for user.name and user.email in the private fixture repository; this case is otherwise unchanged. Renewed 2026-10-21 (zach-opus-landgate1, review finding 1): cases elsewhere in the file changed; this case is unchanged. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): setUp also sets HOME and XDG_CONFIG_HOME to a private empty home; this case is otherwise unchanged. Renewed 2026-10-29 (live host resources): a fixture starts a normal worker through existing prepare/start helpers, verifies its resource read and rejects other scoped tools and an unregistered agent. Uses the existing fixture roots and imports; the pause-message closure is unchanged. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): cases elsewhere in the file changed; this case is unchanged. Renewed 2026-10-31 (echo-opus-w2, app-terminal differences finding 10): a docstring of the worker-notice case only. Nothing read changed. Renewed 2026-11-03 (G2): receipt UTF-8 encoding and its consult boundary regression use the existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Completion and replacement share the dispatchability predicate, retain same-session preparations across turns and require explicit settlement; regressions cover both paths and preserve refused-work cleanup. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Create-only team saves atomically link a fully written same-folder file instead of replacing a racing save; a barrier fixture verifies one success, one refusal, intact text, cleanup and explicit replacement. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Inspection compares refreshed receipt contents before saving, always retries projection and preserves changed canonical evidence; regressions count real saves/fsync and reconcile an interrupted outbox. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Thread-seat reconciliation reads the app-data ledger beside engine-state; corrected production-layout fixtures cover missing/unreadable ledgers, retained live seats, released orphan seats and an ignored wrong-folder decoy. Existing fixture closure; no new configuration, import or external dependency.",
       "keys": [],
       "edges": [
@@ -16710,14 +16746,18 @@
     },
     "scripts/lib/shell_c.py": {
       "source": "scripts/lib/shell_c.py",
-      "sha256": "fcdb0ec3db92d4cfd9dc6e0d6da3bf6c2807a224ec41732f62372293a421e003",
+      "sha256": "e21b640ea9f1351f5f77d13c2aa5249b319a66ab94d48fa4d8806eed654a62cc",
       "keys": [],
-      "edges": [],
-      "evidence": "Classifies the supplied command text with its own masking and word scan (json, re, sys only): a shell (bash, sh, zsh, dash, ksh) at a command position with a -c option. No orchestration key, no subprocess, no file read or write."
+      "edges": [
+        {
+          "to": "scripts/lib/command_reader.py"
+        }
+      ],
+      "evidence": "Classifies the supplied command text with its own masking and word scan (json, re, sys only): a shell (bash, sh, zsh, dash, ksh) at a command position with a -c option. No orchestration key, no subprocess, no file read or write. G10: command words and Git verbs are now read by command_reader.py."
     },
     "scripts/hooks/guard-no-shell-c.test.sh": {
       "source": "scripts/hooks/guard-no-shell-c.test.sh",
-      "sha256": "4e2d77aaac32e3dd3fe4dcf4f63eeff36fd577ff910c8d6def45ad71b663107b",
+      "sha256": "97ed73159838965db6251e674922b1bf359afa79e888ad68f83b7764235e52d3",
       "keys": [],
       "edges": [
         {
@@ -16725,6 +16765,9 @@
         },
         {
           "to": "scripts/hooks/dispatch-pretooluse.sh#find-payload"
+        },
+        {
+          "to": "scripts/hooks/g10-command-readers.test.py"
         }
       ],
       "evidence": "Feeds PreToolUse[Bash] payloads to the hook; no command under test is executed. D1 sends two non-commit Bash payloads (bash -c with rm, and a script file, no agent_id) through the real Bash dispatcher, which runs every module on the same non-commit route as the find-payload fragment."
@@ -17384,7 +17427,7 @@
     },
     "scripts/lib/headed_browser.py": {
       "source": "scripts/lib/headed_browser.py",
-      "sha256": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+      "sha256": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
       "keys": [],
       "edges": [
         {
@@ -17398,7 +17441,7 @@
     },
     "scripts/hooks/guard-headed-browser.test.sh": {
       "source": "scripts/hooks/guard-headed-browser.test.sh",
-      "sha256": "239241233612d00e721c91a1608b3b7384fcdb4609f67d4d59a818aa2bb0751b",
+      "sha256": "21b215e11423a68d8d453fc8e9b8f4acf2ce2d64efb700d0647a8dd918d05583",
       "keys": [],
       "edges": [
         {
@@ -17558,6 +17601,54 @@
       "evidence": "Shared dedicated-channel protocol, 2026-11-01. Standard-library imports only and no execution at import. Explicit scope/request arguments and CODEX_COORDINATION_ROOT else HOME select ordinary local JSON/JSONL files. Reads endpoint/default metadata and retained source journals, uses flock/fsync/atomic replacement for writer/setup operations and advisory positions for scanners. No orchestration.config key, engine subprocess, model or native chat identity. Review callers use registered/connection/records/position/append; all use the same framing and writer. CLI main additionally accepts a host scope and JSON stdin request; no arbitrary module/path execution.",
       "keys": [],
       "edges": []
+    },
+    "scripts/lib/command_reader.py": {
+      "source": "scripts/lib/command_reader.py",
+      "sha256": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/host_sleep.py"
+        },
+        {
+          "to": "scripts/lib/unguarded_rm.py"
+        }
+      ],
+      "evidence": "G10 literal command reader. Uses the existing tokenizer and wrapper option tables, never executes or expands shell input. Reads no orchestration value."
+    },
+    "scripts/land-completeness-measure.py": {
+      "source": "scripts/land-completeness-measure.py",
+      "sha256": "8e0ae1df96d428a7e69de4ac69c55307ff8bf5589118f3f14352cd7d6b103075",
+      "keys": [],
+      "edges": [],
+      "evidence": "Literal transcript diagnostic. G10 test imports only classify_land; no main execution or external operation."
+    },
+    "scripts/hooks/g10-command-readers.test.py": {
+      "source": "scripts/hooks/g10-command-readers.test.py",
+      "sha256": "cd71175e3bcc321eec3be89d878b80a44f2d2a356dc470d622178521818d4a27",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/shell_c.py"
+        },
+        {
+          "to": "scripts/lib/headed_browser.py"
+        },
+        {
+          "to": "scripts/lib/failure-type.py"
+        },
+        {
+          "to": "scripts/lib/left-off.py"
+        },
+        {
+          "to": "scripts/land-completeness-measure.py"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
+        }
+      ],
+      "evidence": "G10 parser regressions. Imports fixed helpers and invokes embedded classifiers on literal payloads. Uses disposable Playwright source fixtures; never launches a browser or executes a command being classified.",
+      "nonconfig_eval": "The eval strings are literal command-reader fixtures. The tests parse them as data and never execute eval or evaluate a configuration value."
     }
   },
   "units": {
@@ -17884,11 +17975,14 @@
       "sources": {
         "scripts/hook-registration-completeness.test.sh": "8eff1056f8b176698b6a9fb82c3d89cae1ff4125bf10af32c0b4ec9c931f856e",
         "scripts/hook-registration-completeness.sh": "025ddda2c7449dbe3df8b5ef516adf4ad134582f96e9668bdab74dd53f585cfc",
-        "scripts/hooks/guard-hook-registration-commits.sh": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
+        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
-        "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833"
+        "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
+        "scripts/lib/command_reader.py": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5",
+        "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
+        "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838"
       }
     },
     "scripts/hooks/session-start-stdin.test.sh": {
@@ -18153,8 +18247,8 @@
         "scripts/hooks/detect-nonnative-worktree.sh": "c1fc4740b019bf311a56f69aae0df1761e9c2383e77dd2f36ee1af2dbce3bfaf",
         "scripts/hooks/dispatch-pretooluse.sh": "a8040d635cb70a1ac4d29c140ea398684e6e8f78b6738ac3acc35063d970b602",
         "scripts/hooks/failure-type-lookup.sh": "7c4e881d1c4b1ba62ef0acd876387092ce88fb55981a9497705f86ffa876bfff",
-        "scripts/lib/failure-type.py": "4979df06ab98e4bf1c1c0d86fb6a471db9fff8d6aa3efca88988118d24f81a9f",
-        "scripts/lib/left-off.py": "bc8ee52b63ab677a5c055ce2b7da434bbb786058867cf3128a9b3cf3337433b4",
+        "scripts/lib/failure-type.py": "24fe80fbc30542333c46f565e521f0b06e9a98bb54e2cc0e8574773e8b9cb1c5",
+        "scripts/lib/left-off.py": "0a2a741b559084783f4d66c48ba0180219de051f7335843ad50095341ba7c622",
         "scripts/hooks/failure-type.test.sh": "59a268fcbfbe1b56b60e69d59753352931ab690010a7a97041345639881d6459",
         "scripts/hooks/failure-type.mutation.sh": "b9bc6705e29fd7b055c3c94e90aaceb978c404693e22ed4888bf3bc20134122f",
         "scripts/hooks/guard-agent-state-claims.py": "341d0223962f9ccfa6298b3d6982dc55b5f3ea19ec5ea4ba1deb162380811ab5",
@@ -18171,9 +18265,9 @@
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
         "scripts/hooks/guard-ci-turn-gate.py": "db95b04be404a331206f540d6114f3c901038f17c4c85b4e68c0be340af0c9d9",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
-        "scripts/hooks/guard-completeness-commits.sh": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
+        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
         "scripts/hook-registration-completeness.sh": "025ddda2c7449dbe3df8b5ef516adf4ad134582f96e9668bdab74dd53f585cfc",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-land-lease-commands.sh": "2156203295cbfcc8000ea30ccef483617645ae9d230e914fdb45b38f9541781a",
@@ -18274,9 +18368,10 @@
         "scripts/hooks/guard-host-sleep.sh": "5b1a3fba334b335b5c32bef8621022bba8f1847e906f928c712225ece24cd33e",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
-        "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+        "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798"
+        "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
+        "scripts/lib/command_reader.py": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5"
       }
     },
     "scripts/hooks/mechanical-findings.test.sh": {
@@ -18358,7 +18453,7 @@
       "sources": {
         "scripts/hooks/completeness-commits.test.sh": "a3224852ed2a5f6e74a6c85ce7813771aac758a343bb5f86810da33e1bbfc8af",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "scripts/hooks/guard-completeness-commits.sh": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
@@ -18369,7 +18464,10 @@
         "scripts/publication-completeness.sh": "49a7df0809304e4e62de627d04fdcd1cb5840760df4b490057895a9ba2feaf99",
         "scripts/publication-completeness.py": "e559d239523982b91b0ddcbaed5e7ff5d79d059931fcead3bffea458c48c5045",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
-        "scripts/lib/machine_paths.py": "c6c84b3946aa4f1f4be46d9f6176f9149b07a75c57163ad6f649aec5d396142a"
+        "scripts/lib/machine_paths.py": "c6c84b3946aa4f1f4be46d9f6176f9149b07a75c57163ad6f649aec5d396142a",
+        "scripts/lib/command_reader.py": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5",
+        "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
+        "scripts/lib/unguarded_rm.py": "23ffb1b7d209152936e0f59c2978b233342b72e85557c6f855d9f1a6c973e838"
       },
       "evidence": "Only the fixed guard registration is resolved through both real surfaces. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [
@@ -18468,12 +18566,12 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
-        "scripts/hooks/guard-completeness-commits.sh": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/hooks/dialect-guard.sh": "1f11608bc4ee85f825a44997bec5b2ac261189e5e8448eceb26ef0afbee4a67a",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
+        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-inflight-notify.sh": "d68756010cfebf50af7af7320e774d71c07bbc0ded5e4c017c09370e0565816c",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
@@ -18509,9 +18607,10 @@
         "scripts/hooks/guard-host-sleep.sh": "5b1a3fba334b335b5c32bef8621022bba8f1847e906f928c712225ece24cd33e",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
-        "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+        "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798"
+        "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
+        "scripts/lib/command_reader.py": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5"
       }
     },
     "scripts/hooks/stop-hook-visibility.test.sh": {
@@ -18708,12 +18807,12 @@
         "scripts/lib/named-persons.sh": "2c28d15414eed56676bd2c5588d66fe88f30c03dfb78e5e2752ffc5de17fffc3",
         "scripts/hooks/guard-ceo-todos-commits.sh": "f5f1d0a12fdf1fb2e94cb64b8d58c1765f80134270e125e510e05f83e3e37904",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
-        "scripts/hooks/guard-completeness-commits.sh": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/hooks/guard-row-currency-commits.sh": "07e76b7854f576e17335d065ec4f509ac2ca7bb4da5fb5dbe6c4e2c8c18e5474",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "scripts/hooks/guard-vendoring-commits.sh": "7214a2d8d780c9988eb6a9e4f6ead5fe229b801da73f5548b52d43f041e858ed",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
-        "scripts/hooks/guard-hook-registration-commits.sh": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
+        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-public-record-repo.sh": "a01a080c7f91a20f9b031cf51546861d04a49ae7c2a3815c9b827ac72dd6539b",
@@ -18750,9 +18849,10 @@
         "scripts/hooks/guard-host-sleep.sh": "5b1a3fba334b335b5c32bef8621022bba8f1847e906f928c712225ece24cd33e",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
-        "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+        "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798"
+        "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
+        "scripts/lib/command_reader.py": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5"
       },
       "evidence": "R1 checks event/matcher registrations of these five hooks. Dispatcher manifest is independently bound; no other hook registration runs."
     },
@@ -18832,8 +18932,8 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/guard-definition-drift.sh": "e1e94650120b4a381286594c5bfa7abc530ebca3b2fd517ea0156d85b6314821",
         "scripts/hooks/guard-failure-type-answer.sh": "2ee4e179524f1e1cb385c53c79ac20e7d2aedd103254b17b8925e86bbda31484",
-        "scripts/lib/failure-type.py": "4979df06ab98e4bf1c1c0d86fb6a471db9fff8d6aa3efca88988118d24f81a9f",
-        "scripts/lib/left-off.py": "bc8ee52b63ab677a5c055ce2b7da434bbb786058867cf3128a9b3cf3337433b4",
+        "scripts/lib/failure-type.py": "24fe80fbc30542333c46f565e521f0b06e9a98bb54e2cc0e8574773e8b9cb1c5",
+        "scripts/lib/left-off.py": "0a2a741b559084783f4d66c48ba0180219de051f7335843ad50095341ba7c622",
         "scripts/hooks/failure-type.test.sh": "59a268fcbfbe1b56b60e69d59753352931ab690010a7a97041345639881d6459",
         "scripts/hooks/failure-type-lookup.sh": "7c4e881d1c4b1ba62ef0acd876387092ce88fb55981a9497705f86ffa876bfff",
         "scripts/hooks/failure-type.mutation.sh": "b9bc6705e29fd7b055c3c94e90aaceb978c404693e22ed4888bf3bc20134122f",
@@ -18934,10 +19034,10 @@
         "scripts/hooks/guard-bash-main-writes.sh": "cd39e99919a11b3e5da38c033597df03d55f92dbf98488db3ba7b6bd4ce6f0bd",
         "scripts/hooks/guard-ceo-todos-commits.sh": "f5f1d0a12fdf1fb2e94cb64b8d58c1765f80134270e125e510e05f83e3e37904",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
-        "scripts/hooks/guard-completeness-commits.sh": "e60e47815bdb55a270225fa5775a20af8f00d05fc348c94d424b7bf94ff2aaf9",
+        "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "b41cdaaf570a0b2247a6e6558da7db49c17fa2cbf4234adacab5f10800a73560",
+        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
         "scripts/hooks/guard-inflight-notify.sh": "d68756010cfebf50af7af7320e774d71c07bbc0ded5e4c017c09370e0565816c",
         "scripts/hooks/guard-interactive-prompt.sh": "360c596b01ac3a67bfb0a38635274539801ad40412b3183d6c93eca319788a1e",
         "scripts/lib/interactive-prompt.py": "fd95664d486aa1cde400a9c216e1d2fda2eeb5f21a202a8ccce2b2d1a7b11af8",
@@ -18968,9 +19068,10 @@
         "scripts/hooks/guard-host-sleep.sh": "5b1a3fba334b335b5c32bef8621022bba8f1847e906f928c712225ece24cd33e",
         "scripts/lib/host_sleep.py": "f631259126caab6c9eb86d1453500c407b2ba876e3b1daacd03c5be80aab4c80",
         "scripts/hooks/guard-headed-browser.sh": "174d6b62951f24d130aca8f8241d852f061601bb7cca991693e525d712796e06",
-        "scripts/lib/headed_browser.py": "1f7a44dc154143f9858405268908565838e5536261193e937e785cb97eeee1d2",
+        "scripts/lib/headed_browser.py": "5512b0071f688584e1e0b5bdba0a94909f0a5e1d3218567a5c36785aa2d276c9",
         "scripts/hooks/guard-toolchain.sh": "9e067833647e47e0e3702568bc8afb57022f12920235e4574aa06922b5f400b1",
-        "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798"
+        "scripts/lib/toolchain.py": "ff2d6d204a5ac3de22bed957435004c0902df9cc7ab9be23d8a2e9324d9e5798",
+        "scripts/lib/command_reader.py": "d029bf1f11a23667ea404e2ca2e8debb8860c0e53607c049ebf1de4ecc1f54c5"
       },
       "evidence": "Enumerates PreToolUse/Stop registrations and matcher payloads; boundary assertion classifies every event. Full dynamic helper inventory is source-bound."
     },

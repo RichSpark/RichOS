@@ -281,20 +281,14 @@ if not isinstance(d, dict) or d.get("tool_name") != "Bash":
 ti = d.get("tool_input") or {}
 cmd = (ti.get("command", "") if isinstance(ti, dict) else "") or ""
 
-# QUOTED SPANS ARE STRIPPED FIRST, and this is not cosmetic: a commit whose
-# MESSAGE is "stop pushing to main" is not a push, and a classifier that thought
-# it was would audit against the wrong baseline.
-unquoted = re.sub(r'"[^"]*"', " ", cmd)
-unquoted = re.sub(r"'[^']*'", " ", unquoted)
-
-verb = ""
-if re.search(r"\bgit\b[^\n;|&]*\bcommit\b", unquoted):
-    verb = "commit"
-elif re.search(r"\bgit\b[^\n;|&]*\bpush\b", unquoted):
-    verb = "push"
+sys.path.insert(0, sys.argv[1])
+from command_reader import git_commands
+operations = list(git_commands(cmd))
+verb = next((v for v, _ in operations if v == "commit"), "") or \
+       next((v for v, _ in operations if v == "push"), "")
 if not verb:
     print("PASS"); raise SystemExit
-if "--dry-run" in unquoted:
+if any(v == verb and "--dry-run" in args for v, args in operations):
     print("PASS"); raise SystemExit
 
 # The ack is read off the COMMAND LINE, not out of a file: the claim is then
@@ -308,7 +302,7 @@ for m in re.finditer(r"hook-inventory-ack:\s*([^\n#]+)", cmd):
 print("%s\t%s" % (verb, " ;; ".join(acks)))
 PYEOF
 
-if ! CLASS="$(python3 -c "$_HR_CLASSIFIER" <<<"$INPUT")"; then
+if ! CLASS="$(python3 -c "$_HR_CLASSIFIER" "$ENGINE_ROOT/scripts/lib" <<<"$INPUT")"; then
     echo "ERROR: guard-hook-registration-commits.sh: payload classifier failed; refusing unevaluated operation" >&2
     exit 2
 fi

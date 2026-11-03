@@ -68,7 +68,7 @@ check 2 P3 "after nohup" "nohup bash -c 'sleep 1' &"
 check 2 P3 "xargs" "ls | xargs -I{} bash -c 'echo {}'"
 check 2 P3 "find -exec" "find . -name '*.tmp' -exec sh -c 'rm \"\$1\"' _ {} \\;"
 
-echo "=== guard-no-shell-c: second-review cases (plain match over the whole text) ==="
+echo "=== guard-no-shell-c: second-review cases (command words only) ==="
 check 2 R1 "quoted shell name" "'bash' -c 'echo hi'"
 check 2 R1 "double-quoted shell name" '"sh" -c "echo hi"'
 check 2 R1 "shell inside a quoted substitution" 'echo "$(bash -c "echo hi")"'
@@ -78,25 +78,20 @@ check 2 R3 "a tab instead of a space" $'bash\t-c\t\'echo hi\''
 check 2 R3 "a tab before the option" $'x=1\tbash\t-lc\t\'echo hi\''
 check 2 R4 "after a quoted heredoc mention" $'cat <<\'EOF\'\nbash -c is banned\nEOF\nbash -c \'echo hi\''
 check 2 R5 "after a ; inside a comment" $'echo a # note; x\nbash -c \'echo hi\''
-check 2 R6 "mention: echo (accepted false positive)" "echo 'run bash -c here'"
-check 2 R6 "mention: commit message (accepted false positive)" 'git commit -m "refuse bash -c wrappers"'
-if printf '%s' "$LAST_OUT" | grep -qF 'git commit -F <file>'; then
-    ok "R6 the mention refusal says how to avoid it"
-else
-    bad "R6 the mention refusal does not say how to avoid it" "$LAST_OUT"
-fi
+check 0 R6 "mention: echo" "echo 'run bash -c here'"
+check 0 R6 "mention: commit message" 'git commit -m "refuse bash -c wrappers"'
 
 echo "=== guard-no-shell-c: passes ==="
 check 0 N1 "bash file.sh" "bash /Volumes/E1TB/tmp/claude/zach/run.sh"
 check 0 N1 "bash -x file.sh" "bash -x ./run.sh arg"
 check 0 N1 "sh ./x.sh" "sh ./x.sh"
-check 2 P4 "accepted false positive: script with its own -c" "bash ./run.sh -c config"
+check 0 N1 "script with its own -c" "bash ./run.sh -c config"
 check 0 N1 "bash reading a file" "bash < ./run.sh"
 check 0 N1 "an ordinary command" "ls -la /tmp && git -C /tmp status"
 check 0 N1 "a tool with -c" "python3 -c 'print(1)'"
 check 0 N1 "git -c" "git -c core.editor=true commit -m x"
 check 2 P1 "adjacent redirection bash -c</dev/null" "bash -c</dev/null 'printf INLINE'"
-check 2 P2 "mention with attached semicolon" "echo 'bash -c'; printf ORDINARY"
+check 0 N2 "mention with attached semicolon" "echo 'bash -c'; printf ORDINARY"
 check 2 P3 "bash -o pipefail -c still refused" "bash -o pipefail -c 'x'"
 check 0 N1 "bash script then git diff --cached" "bash test.sh && git diff --cached"
 check 2 P5 "redirection before -c" "bash</dev/null -c 'printf INLINE'"
@@ -109,11 +104,11 @@ check 2 P6 "zsh -f -c0 (digit in the group)" "zsh -f -c0 'printf INLINE'"
 check 2 P6 "ksh -c- (dash in the group)" "ksh -c- 'printf INLINE'"
 check 2 P7 "line continuation before -c" $'bash \\\n-c \'printf INLINE\''
 check 2 P7 "&> redirection before -c" "bash &>/dev/null -c 'printf INLINE'"
-check 2 P7 "pipe to grep -c after a shell word (accepted false positive)" "bash x.sh | grep -c y"
+check 0 N1 "pipe to grep -c after a shell word" "bash x.sh | grep -c y"
 check 2 P8 "&> attached to the shell name" "bash&>/dev/null -c 'printf INLINE'"
-check 2 P8 "line continuation attached to the shell name" $'bash\\\n-c \'printf INLINE\''
-check 2 P8 "pipe attached to the shell name" "bash|grep -c y"
-check 2 P8 "semicolon attached to the shell name" "bash; grep -c y"
+check 0 N1 "line continuation joins a different program name" $'bash\\\n-c \'printf INLINE\''
+check 0 N1 "pipe attached to the shell name" "bash|grep -c y"
+check 0 N1 "semicolon attached to the shell name" "bash; grep -c y"
 check 0 N4 "script name test.sh then -c word" "test.sh -c x"
 check 0 N4 "bashrc is not a shell word" "bashrc -c x"
 check 0 N4 "ssh -C host" "ssh -C host"
@@ -147,6 +142,16 @@ else
 fi
 out="$(payload "bash /tmp/x.sh" | bash "$SCRIPT_DIR/dispatch-pretooluse.sh" Bash 2>&1)"; rc=$?
 if printf '%s' "$out" | grep -qF 'guard-no-shell-c'; then bad "D1 dispatcher passes a script file" "$out"; else ok "D1 dispatcher lets a script file past this rule"; fi
+
+# command_reader.py is exercised through the shell guard on every fixture above.
+# G10 also exercises shell_c.py, headed_browser.py, failure-type.py, left-off.py
+# and land-completeness-measure.py on parsing fixtures. No browser is launched.
+if python3 -B "$SCRIPT_DIR/g10-command-readers.test.py"; then
+    ok "G10 command-reader regressions"
+else
+    bad "G10 command-reader regressions"
+fi
+
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

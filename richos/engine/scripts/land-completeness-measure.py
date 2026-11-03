@@ -159,11 +159,17 @@ _SEPARATORS = {";", "&&", "||", "|", "&", "(", "{", "then", "do", "else", "!"}
 def _command_tokens(cmd):
     """shlex tokens with `;`, `&&`, `|` split out as their own tokens."""
     try:
-        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars="();|&\n")
+        lex.whitespace = " \t\r"
         lex.whitespace_split = True
-        return list(lex)
+        tokens = list(lex)
+        # In a descriptor redirect, & belongs to >& or &>, not to a background
+        # job. Preserve actual background separators after a redirect operand.
+        return [token for i, token in enumerate(tokens) if not (
+            token == "&" and ((i and tokens[i - 1].endswith((">", "<")))
+                              or (i + 1 < len(tokens) and tokens[i + 1].startswith(">"))))]
     except Exception:
-        return cmd.split()
+        return []
 
 
 def _at_command_position(toks, i):
@@ -221,6 +227,25 @@ def classify_land(cmd):
         return None
     cmd = strip_noncommand(cmd)
     toks = _command_tokens(cmd)
+    # Only the final foreground list determines a successful shell result.
+    # Earlier lists can fail or skip a merge while a later `true` hides it.
+    while toks and toks[-1] in (";", "\n"):
+        toks.pop()
+    depth, start = 0, 0
+    for index, token in enumerate(toks):
+        if token and set(token) == {"("}:
+            depth += len(token)
+        elif token and set(token) == {")"}:
+            depth -= len(token)
+        elif token in (";", "\n") and depth == 0:
+            start = index + 1
+    toks = toks[start:]
+    # Success proves every member of an && chain ran and succeeded. Compound
+    # commands, pipelines, || and background jobs need evidence we do not have.
+    if any(t != "&&" and t and set(t) <= set(";|&()\n") for t in toks) or any(
+            t in {"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "!", "{"}
+            for t in toks):
+        return None
     i = 0
     while i < len(toks):
         t = toks[i]

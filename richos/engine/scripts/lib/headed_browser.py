@@ -11,7 +11,7 @@ TWO SURFACES, one rule.
 
 BASH (`check`), wherever the command sits (after && ; | & newline, in ( ), { }, $( ), backticks,
 sh -c scripts, behind sudo/env/nohup/exec/time/timeout/xargs), refuses:
-  1. a headed flag on any command: --headed, --headless=false, --no-headless
+  1. a headed flag on a launch command (literal print/search commands pass): --headed, --headless=false, --no-headless
   2. a Playwright command that always opens a window: open, codegen, cr, ff, wk, show-trace,
      show-report, and `test --ui` / `test --debug` (playwright, npx/pnpm/yarn/bunx playwright)
   3. PWDEBUG=<anything> or HEADED=1 in front of a command or behind `env` (Playwright's debug
@@ -379,6 +379,36 @@ def _filter_matches(pattern, path):
         return pattern in path
 
 
+# These tools consume a flag as text, not as a request to launch a browser.
+TEXT_COMMANDS = {"echo", "printf", "grep", "egrep", "fgrep", "rg"}
+PLAYWRIGHT_VALUE_OPTIONS = {
+    "-c", "--config", "-g", "--grep", "--grep-invert", "-j", "--workers",
+    "--project", "--reporter", "--output", "--timeout", "--global-timeout",
+    "--retries", "--repeat-each", "--shard", "--max-failures", "--trace",
+    "--update-snapshots", "--update-source-method", "--test-list", "--test-list-invert",
+    "--last-failed-file", "--ui-host", "--ui-port", "--browser", "--channel",
+    "--device", "--viewport-size", "--wait-for-selector", "--wait-for-timeout",
+    "--save-storage", "--load-storage", "--timezone", "--lang", "--color-scheme",
+}
+
+
+def _playwright_positionals(args):
+    out, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            out.extend(args[i + 1:])
+            break
+        if arg in PLAYWRIGHT_VALUE_OPTIONS:
+            i += 2
+        elif arg.startswith("-"):
+            i += 1
+        else:
+            out.append(arg)
+            i += 1
+    return out
+
+
 def judge(ctx, words, depth):
     env = _assignments(words)
     argv = _strip_prefix(words)
@@ -405,13 +435,13 @@ def judge(ctx, words, depth):
                 % (env["PWDEBUG"], shown))
     if str(env.get("HEADED", "")).lower() in ("1", "true", "yes"):
         ctx.add("`HEADED=%s %s`: asks the script for a visible browser" % (env["HEADED"], shown))
-    for a in argv[1:]:
+    for a in ([] if name in TEXT_COMMANDS else argv[1:]):
         if HEADED_FLAG.match(a):
             ctx.add("`%s`: %s opens a visible browser window" % (shown, a))
             break
     tool, pw = _playwright_tool(argv)
     if pw is not None:
-        positional = [a for a in pw if not a.startswith("-")]
+        positional = _playwright_positionals(pw)
         if positional and positional[0] in PLAYWRIGHT_WINDOW_SUBCOMMANDS and tool != "playwright-cli":
             ctx.add("`%s`: `playwright %s` always opens a window" % (shown, positional[0]))
         # `playwright screenshot --channel chromium`, `playwright-cli open --browser=chromium`: both
