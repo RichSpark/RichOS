@@ -962,7 +962,7 @@ def run_bounded(argv, cwd, prompt, out_path, err_path, limit, env=None):
     """
     import proc_tree
     start = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="review-timeout-", dir=os.path.dirname(out_path)) as scratch:
+    with tempfile.TemporaryDirectory(prefix="review-timeout-") as scratch:
         marker = os.path.join(scratch, "expired")
         command = proc_tree.command(argv)
         split = command.index("--")

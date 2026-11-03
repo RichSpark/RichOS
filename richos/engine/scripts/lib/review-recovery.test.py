@@ -149,10 +149,10 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(W.due([item], W.Book([], {item.key: running}, []), 100, {}, 10),
                          [(item, 'handover', running)])
 
-    def test_shared_tip_review_executes_for_its_own_work(self):
+    def check_review_for_own_work(self, recheck=""):
         work = types.SimpleNamespace(repo=str(self.root), tip='tip', base='base',
                                      work_key='job-two', words=['second request'], claims=[])
-        args = types.SimpleNamespace(trigger='handover', name='', recheck='')
+        args = types.SimpleNamespace(trigger='handover', name='', recheck=recheck)
         row = dict(id='first', repo=work.repo, tip='tip', work='job-one', verdict='passed',
                    trigger='handover', input_identity='other-inputs')
         with patch.object(S, 'resolve_work', return_value=work), \
@@ -164,6 +164,17 @@ class Fixtures(unittest.TestCase):
                 patch.object(S, '_review_owned', return_value=0) as review:
             self.assertEqual(S.review(args), 0)
             review.assert_called_once_with(args, work)
+
+    def test_shared_tip_review_executes_for_its_own_work(self):
+        self.check_review_for_own_work()
+
+    def test_explicit_recheck_can_name_another_work_at_the_same_source(self):
+        self.check_review_for_own_work(recheck='first')
+
+    def test_direct_review_accepts_devnull_output(self):
+        rc, _ = S.run_bounded([sys.executable, '-B', '-c', 'pass'], str(self.root), '',
+                              os.devnull, os.devnull, 10)
+        self.assertEqual(rc, 0)
 
     def test_direct_timeout_stops_stubborn_descendant(self):
         child_file = self.root / 'child.json'
