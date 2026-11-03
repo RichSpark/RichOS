@@ -37,6 +37,10 @@ CONFIG_DIR=""
 WAIT=20
 while [ $# -gt 0 ]; do
   case "$1" in
+    --claude|--home|--config-dir|--wait)
+      [ "$#" -ge 2 ] || { echo "usage-shape.sh: $1 needs a value" >&2; exit 2; } ;;
+  esac
+  case "$1" in
     --help|-h) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --claude) CLAUDE="${2:-}"; shift 2 ;;
     --home) HOME_DIR="${2:-}"; shift 2 ;;
