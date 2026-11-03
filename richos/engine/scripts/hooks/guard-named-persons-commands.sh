@@ -272,7 +272,7 @@ case "$NP_BOUND_RC" in
   *) exit 0 ;;   # this repository does not publish — the precision floor
 esac
 
-if ! RESULT="$(printf '%s' "$INPUT" | python3 "$NP_PREDICATE" --scan-payload 2>/dev/null)"; then
+if ! RESULT="$(python3 "$NP_PREDICATE" --scan-payload <<< "$INPUT" 2>/dev/null)"; then
     echo "ERROR: guard-named-persons-commands.sh: name checker failed; no verdict was obtained. Refusing." >&2
     exit 2
 fi

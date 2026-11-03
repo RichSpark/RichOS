@@ -215,6 +215,26 @@ class G4(unittest.TestCase):
                     dict(self.env, RICHOS_ENTITY_ROOT=str(engine)))
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
+    def test_28_absent_list_allows_large_writes(self):
+        engine = self.engine("guard-named-persons-writes.sh", "guard-named-persons-commands.sh")
+        repo = self.repo()
+        (repo / ".publication-boundary").write_text('PRIVATE_RECORD="private-record"\n')
+        env = dict(self.env, RICHOS_ENTITY_ROOT=str(engine),
+                   RICHOS_NAMED_PERSONS_FILE=str(self.tmp / "absent-list"))
+        for size in (100, 300000):
+            for hook, tool, ti in (
+                ("guard-named-persons-writes.sh", "Write", {"file_path": str(repo / "docs/new.md"), "content": "x" * size}),
+                ("guard-named-persons-commands.sh", "Bash", {"command": "git commit -m " + "x" * size}),
+            ):
+                with self.subTest(hook=hook, size=size):
+                    result = self.run_hook(engine / "scripts/hooks" / hook,
+                                           {"tool_name": tool, "cwd": str(repo), "tool_input": ti}, env)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("checker failed", result.stderr)
+                    # The first notice may be deduplicated on the second size.
+                    if size == 100:
+                        self.assertIn("ABSENT", result.stderr)
+
     def test_28_crashed_name_checker_never_returns_clean(self):
         engine = self.engine("guard-named-persons-writes.sh", "guard-named-persons-commands.sh")
         repo = self.repo()
