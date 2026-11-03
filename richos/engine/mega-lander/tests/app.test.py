@@ -2838,10 +2838,8 @@ class DesktopWork(unittest.TestCase):
         return seat
 
     def ledger(self,*threads):
-        """The app's own record of which conversation threads exist, at the path
-        the app actually writes it to: `$RICHOS_APP_STATE/conversation-ledger.jsonl`
-        (src-tauri/src/main.rs:1461, whose data_dir is the engine's state root)."""
-        path=Path(os.environ["RICHOS_APP_STATE"])/"conversation-ledger.jsonl"
+        """The production ledger is in app data, beside engine-state (V5-12)."""
+        path=Path(os.environ["RICHOS_APP_STATE"]).parent/"conversation-ledger.jsonl"
         path.parent.mkdir(parents=True,exist_ok=True)
         path.write_text("".join(json.dumps({"event":"ThreadCreated","thread_id":t,
             "title":"a conversation","at":1}) +"\n" for t in threads)
@@ -2850,6 +2848,19 @@ class DesktopWork(unittest.TestCase):
             + json.dumps({"event":"TurnStarted","turn_id":"t-1","thread_id":threads[0] if threads else "",
                           "at":2})+"\n")
         return path
+
+    def test_thread_seats_read_app_data_ledger_instead_of_an_engine_state_decoy(self):
+        live=self.ceo_thread_seat("thread-live")
+        orphan=self.ceo_thread_seat("thread-orphan")
+        self.ledger("thread-a","thread-live")
+        # A stale file in the old location must not decide which live seat to release.
+        decoy=self.app.state()/"conversation-ledger.jsonl"
+        decoy.write_text(json.dumps({"event":"ThreadCreated","thread_id":"thread-orphan"})+"\n")
+        self.assertEqual(self.app.conversation_threads(),{"thread-a","thread-live"})
+        report=self.call("inspect")["seats"]
+        self.assertEqual([(row["seat"],row["reason"]) for row in report["released"]],[(orphan,"thread absent")])
+        self.assertIn(live,[row["seat"] for row in report["retained"]])
+        self.assertEqual(report["unreconciled"],[])
 
     def test_his_orphan_thread_seat_is_reconciled_and_a_live_threads_never_is(self):
         """HIS SEAT IS ONE PER CONVERSATION THREAD, and until 2026-09-17 nothing

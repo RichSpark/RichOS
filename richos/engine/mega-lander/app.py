@@ -2682,12 +2682,9 @@ def conversation_threads():
     conversation thread still exists is the app's knowledge; what the store can
     prove is movement" (ecs/CONTRACT.md).
 
-    `conversation-ledger.jsonl` under `$RICHOS_APP_STATE`. The two are the same
-    directory by construction rather than by convention: `src-tauri/src/main.rs`
-    opens the ledger at `data_dir.join("conversation-ledger.jsonl")` (:1461) and
-    hands that same `data_dir` to `EngineProfile::prepare` (:1852 ->
-    engine_profile.rs:45-53), which canonicalizes it and exports it as
-    `RICHOS_APP_STATE` (:205).
+    The ledger is in app data, beside `engine-state`. EngineProfile exports
+    that child folder as RICHOS_APP_STATE; assignment_instruction uses the
+    same app-data location.
 
     A THREAD IS NEVER DELETED FROM THAT LOG. `KNOWN_EVENT_TAGS` in ledger.rs has
     `ThreadCreated` and no removal of any kind, so "this thread still exists" is
@@ -2701,7 +2698,7 @@ def conversation_threads():
     look" is the difference between deleting every one of his seats and deleting
     none of them."""
     try:
-        path = state() / "conversation-ledger.jsonl"
+        path = state().parent / "conversation-ledger.jsonl"
         if not path.is_file():
             return None
         threads = set()
