@@ -272,12 +272,19 @@ case "$NP_BOUND_RC" in
   *) exit 0 ;;   # this repository does not publish — the precision floor
 esac
 
-RESULT="$(printf '%s' "$INPUT" | python3 "$NP_PREDICATE" --scan-payload 2>/dev/null || printf 'PARSEFAIL\n')"
+if ! RESULT="$(printf '%s' "$INPUT" | python3 "$NP_PREDICATE" --scan-payload 2>/dev/null)"; then
+    echo "ERROR: guard-named-persons-commands.sh: name checker failed; no verdict was obtained. Refusing." >&2
+    exit 2
+fi
 VERDICT="$(printf '%s' "$RESULT" | sed -n '1p' | cut -f1)"
 
 case "$VERDICT" in
-  CLEAN|PARSEFAIL)
+  CLEAN)
     exit 0
+    ;;
+  PARSEFAIL)
+    echo "ERROR: guard-named-persons-commands.sh: name checker could not read the payload; no verdict was obtained. Refusing." >&2
+    exit 2
     ;;
   ABSENT)
     np_announce_absent "scripts/hooks/guard-named-persons-commands.sh" "$NP_REPO"
