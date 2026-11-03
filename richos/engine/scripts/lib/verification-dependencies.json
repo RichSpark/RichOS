@@ -13075,7 +13075,7 @@
         {
           "root": "repository",
           "path": "richos/app/crates/richos-devtools/src/caption.rs",
-          "sha256": "2c0ad590d650764f6d24bc910828608784682e9a7767550bbc446a18583b131f",
+          "sha256": "7afbb9b1c126d1e8828fe6ac89f0184ac435b08d26953e185e9948cd3486cee1",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         },
         {
@@ -13189,7 +13189,7 @@
         {
           "root": "repository",
           "path": "richos/app/crates/richos-devtools/src/caption.rs",
-          "sha256": "2c0ad590d650764f6d24bc910828608784682e9a7767550bbc446a18583b131f",
+          "sha256": "7afbb9b1c126d1e8828fe6ac89f0184ac435b08d26953e185e9948cd3486cee1",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         },
         {

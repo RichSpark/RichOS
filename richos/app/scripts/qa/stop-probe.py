@@ -35,6 +35,10 @@ the PID it captured at spawn, never by name.
 import argparse, json, os, signal, subprocess, sys, threading, time, uuid
 from pathlib import Path
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'engine/scripts/lib'))
+import proc_tree
+
 WORKER_ANSWER = "WORKER-STILL-HERE"
 WORKER_SLEEP = 30
 # Claude Code refuses a bare `sleep N` ("Blocked: standalone sleep"), so the long command is a
@@ -67,7 +71,7 @@ def clean_env():
 
 
 def descendants(root):
-    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=True, timeout=10).stdout
     kids, cmd = {}, {}
     for line in out.splitlines():
         parts = line.split(None, 2)
@@ -108,115 +112,117 @@ def main():
     (work / "long-task.sh").write_text(TASK_SCRIPT)
     session = str(uuid.uuid4())
     t0 = time.time()
-    proc = subprocess.Popen(lead_args(a.claude, session, a.model), cwd=work, env=clean_env(), stdin=subprocess.PIPE,
+    scope = uuid.uuid4().hex
+    env = clean_env()
+    env[proc_tree.SCOPE_ENV] = env.get(proc_tree.SCOPE_ENV, '') + ':' + scope
+    tracker = proc_tree.TrackedTree(os.getpid(), scope)
+    proc = subprocess.Popen(lead_args(a.claude, session, a.model), cwd=work, env=env, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=open(out / "stderr.txt", "w"), text=True,
                             start_new_session=True)
-    frames_file = open(out / "frames.jsonl", "w")
-    lock = threading.Lock()
-    st = {"bash_tool": None, "bash_started_at": None, "bash_task": None, "agent_tool": None, "agent_task": None,
-          "bash_result": None, "results": [], "notifications": [], "control": [], "worker_answer_seen": False,
-          "sleeps": []}
+    try:
+        tracker.refresh(tags=True)
+        frames_file = open(out / "frames.jsonl", "w")
+        lock = threading.Lock()
+        st = {"bash_tool": None, "bash_started_at": None, "bash_task": None, "agent_tool": None, "agent_task": None,
+              "bash_result": None, "results": [], "notifications": [], "control": [], "worker_answer_seen": False,
+              "sleeps": []}
 
-    def send(obj):
-        line = json.dumps(obj)
-        with lock:
-            frames_file.write(json.dumps({"t": round(time.time() - t0, 3), "dir": "out", "frame": obj}) + "\n")
-            frames_file.flush()
-        proc.stdin.write(line + "\n"); proc.stdin.flush()
-
-    def reader():
-        for line in proc.stdout:
-            try:
-                f = json.loads(line)
-            except ValueError:
-                continue
-            t = round(time.time() - t0, 3)
+        def send(obj):
+            line = json.dumps(obj)
             with lock:
-                frames_file.write(json.dumps({"t": t, "dir": "in", "frame": f}) + "\n"); frames_file.flush()
-            ty, sub = f.get("type"), f.get("subtype")
-            if ty == "assistant" and not f.get("parent_tool_use_id"):
-                for block in f.get("message", {}).get("content", []):
-                    if block.get("type") != "tool_use":
-                        continue
-                    if block.get("name") == "Bash" and FOREGROUND in block.get("input", {}).get("command", ""):
-                        st["bash_tool"] = block["id"]; st["bash_started_at"] = t
-                    if block.get("name") in ("Agent", "Task"):
-                        st["agent_tool"] = block["id"]
-            if ty == "user" and not f.get("parent_tool_use_id"):
-                for block in f.get("message", {}).get("content", []) or []:
-                    if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id") == st["bash_tool"]:
-                        st["bash_result"] = {"t": t, "content": str(block.get("content"))[:400], "is_error": block.get("is_error")}
-            if ty == "system" and sub == "task_started":
-                if f.get("tool_use_id") == st["bash_tool"] and st["bash_tool"]:
-                    st["bash_task"] = f.get("task_id"); st["bash_task_at"] = t
-                if f.get("tool_use_id") == st["agent_tool"] and st["agent_tool"]:
-                    st["agent_task"] = f.get("task_id")
-            if ty == "system" and sub == "task_notification":
-                st["notifications"].append({"t": t, "task_id": f.get("task_id"), "status": f.get("status"),
-                                            "summary": str(f.get("summary"))[:300]})
-            if WORKER_ANSWER in line:
-                # The worker's own answer: its notification, its text reply, or a later result.
-                # Not the Agent call or the worker's prompt, which only quote the word.
-                worker_text = ty == "assistant" and f.get("parent_tool_use_id") and any(
-                    b.get("type") == "text" and b.get("text", "").strip() == WORKER_ANSWER
-                    for b in f.get("message", {}).get("content", []))
-                notice = ty == "system" and sub == "task_notification" and str(f.get("summary", "")).strip() == WORKER_ANSWER
-                if notice or worker_text:
-                    st["worker_answer_seen"] = True
-                    st.setdefault("worker_answer_at", t)
-            if ty == "result":
-                st["results"].append({"t": t, "subtype": sub, "terminal_reason": f.get("terminal_reason"),
-                                      "result": str(f.get("result"))[:300]})
-            if ty == "control_response":
-                st["control"].append({"t": t, "response": f.get("response")})
+                frames_file.write(json.dumps({"t": round(time.time() - t0, 3), "dir": "out", "frame": obj}) + "\n")
+                frames_file.flush()
+            proc.stdin.write(line + "\n"); proc.stdin.flush()
 
-    threading.Thread(target=reader, daemon=True).start()
-    send({"type": "control_request", "request_id": "probe_init", "request": {"subtype": "initialize"}})
-    send({"type": "user", "uuid": str(uuid.uuid4()), "message": {"role": "user", "content": [{"type": "text", "text": PROMPT}]}})
+        def reader():
+            for line in proc.stdout:
+                try:
+                    f = json.loads(line)
+                except ValueError:
+                    continue
+                t = round(time.time() - t0, 3)
+                with lock:
+                    frames_file.write(json.dumps({"t": t, "dir": "in", "frame": f}) + "\n"); frames_file.flush()
+                ty, sub = f.get("type"), f.get("subtype")
+                if ty == "assistant" and not f.get("parent_tool_use_id"):
+                    for block in f.get("message", {}).get("content", []):
+                        if block.get("type") != "tool_use":
+                            continue
+                        if block.get("name") == "Bash" and FOREGROUND in block.get("input", {}).get("command", ""):
+                            st["bash_tool"] = block["id"]; st["bash_started_at"] = t
+                        if block.get("name") in ("Agent", "Task"):
+                            st["agent_tool"] = block["id"]
+                if ty == "user" and not f.get("parent_tool_use_id"):
+                    for block in f.get("message", {}).get("content", []) or []:
+                        if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id") == st["bash_tool"]:
+                            st["bash_result"] = {"t": t, "content": str(block.get("content"))[:400], "is_error": block.get("is_error")}
+                if ty == "system" and sub == "task_started":
+                    if f.get("tool_use_id") == st["bash_tool"] and st["bash_tool"]:
+                        st["bash_task"] = f.get("task_id"); st["bash_task_at"] = t
+                    if f.get("tool_use_id") == st["agent_tool"] and st["agent_tool"]:
+                        st["agent_task"] = f.get("task_id")
+                if ty == "system" and sub == "task_notification":
+                    st["notifications"].append({"t": t, "task_id": f.get("task_id"), "status": f.get("status"),
+                                                "summary": str(f.get("summary"))[:300]})
+                if WORKER_ANSWER in line:
+                    # The worker's own answer: its notification, its text reply, or a later result.
+                    # Not the Agent call or the worker's prompt, which only quote the word.
+                    worker_text = ty == "assistant" and f.get("parent_tool_use_id") and any(
+                        b.get("type") == "text" and b.get("text", "").strip() == WORKER_ANSWER
+                        for b in f.get("message", {}).get("content", []))
+                    notice = ty == "system" and sub == "task_notification" and str(f.get("summary", "")).strip() == WORKER_ANSWER
+                    if notice or worker_text:
+                        st["worker_answer_seen"] = True
+                        st.setdefault("worker_answer_at", t)
+                if ty == "result":
+                    st["results"].append({"t": t, "subtype": sub, "terminal_reason": f.get("terminal_reason"),
+                                          "result": str(f.get("result"))[:300]})
+                if ty == "control_response":
+                    st["control"].append({"t": t, "response": f.get("response")})
 
-    # Wait for the foreground call, then for its own task id (bounded).
-    deadline = time.time() + a.start_within
-    while time.time() < deadline and not st["bash_started_at"]:
-        time.sleep(0.1)
-    if not st["bash_started_at"]:
-        st["error"] = "the foreground call never started"
-    else:
-        fire_at = t0 + st["bash_started_at"] + a.stop_after
-        while time.time() < fire_at:
-            time.sleep(0.05)
-        st["sleeps_before_stop"] = sleeps(proc.pid)
-        st["stop_sent_at"] = round(time.time() - t0, 3)
-        if a.mode == "interrupt":
-            send({"type": "control_request", "request_id": "probe_interrupt", "request": {"subtype": "interrupt"}})
-        elif a.mode == "stop_task":
-            if st["bash_task"]:
-                send({"type": "control_request", "request_id": "probe_stop_task",
-                      "request": {"subtype": "stop_task", "task_id": st["bash_task"]}})
-            else:
-                st["error"] = "the foreground call had no task id to stop"
-        time.sleep(3)
-        st["sleeps_3s_after_stop"] = sleeps(proc.pid)
-        end = time.time() + a.observe
-        while time.time() < end:
-            if any(n["task_id"] == st["agent_task"] and n["status"] != "running" for n in st["notifications"]) \
-                    and len(st["results"]) >= 1 and st["bash_result"]:
-                break
-            time.sleep(0.5)
-        time.sleep(min(5.0, a.observe))
-    st["sleeps_at_end"] = sleeps(proc.pid)
-    # End the one process tree this probe owns, by the PID captured at spawn.
-    try:
-        proc.stdin.close()
-    except OSError:
-        pass
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGTERM)
+        threading.Thread(target=reader, daemon=True).start()
+        send({"type": "control_request", "request_id": "probe_init", "request": {"subtype": "initialize"}})
+        send({"type": "user", "uuid": str(uuid.uuid4()), "message": {"role": "user", "content": [{"type": "text", "text": PROMPT}]}})
+
+        # Wait for the foreground call, then for its own task id (bounded).
+        deadline = time.time() + a.start_within
+        while time.time() < deadline and not st["bash_started_at"]:
+            time.sleep(0.1)
+        if not st["bash_started_at"]:
+            st["error"] = "the foreground call never started"
+        else:
+            fire_at = t0 + st["bash_started_at"] + a.stop_after
+            while time.time() < fire_at:
+                time.sleep(0.05)
+            st["sleeps_before_stop"] = sleeps(proc.pid)
+            st["stop_sent_at"] = round(time.time() - t0, 3)
+            if a.mode == "interrupt":
+                send({"type": "control_request", "request_id": "probe_interrupt", "request": {"subtype": "interrupt"}})
+            elif a.mode == "stop_task":
+                if st["bash_task"]:
+                    send({"type": "control_request", "request_id": "probe_stop_task",
+                          "request": {"subtype": "stop_task", "task_id": st["bash_task"]}})
+                else:
+                    st["error"] = "the foreground call had no task id to stop"
+            time.sleep(3)
+            st["sleeps_3s_after_stop"] = sleeps(proc.pid)
+            end = time.time() + a.observe
+            while time.time() < end:
+                if any(n["task_id"] == st["agent_task"] and n["status"] != "running" for n in st["notifications"]) \
+                        and len(st["results"]) >= 1 and st["bash_result"]:
+                    break
+                time.sleep(0.5)
+            time.sleep(min(5.0, a.observe))
+        st["sleeps_at_end"] = sleeps(proc.pid)
+    finally:
         try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+            proc.stdin.close()
+        except OSError:
+            pass
+        left = proc_tree.finish_scope(proc, tracker)
+        if left:
+            raise RuntimeError(f"Stop-probe cleanup left owned processes: {left}")
+        proc.wait(timeout=5)
     worker = [n for n in st["notifications"] if n["task_id"] == st["agent_task"]]
     summary = {
         "claude_version": subprocess.run([a.claude, "--version"], capture_output=True, text=True).stdout.strip(),
@@ -240,4 +246,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(f"stop-probe: {exc}; this run could not be measured", file=sys.stderr)
+        sys.exit(2)

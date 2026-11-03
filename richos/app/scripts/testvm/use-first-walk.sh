@@ -62,7 +62,18 @@ menu() {  # menu open|closed
   ax click --title 'Settings' --role AXPopUpButton >/dev/null 2>&1 || note "no Settings button"
   sleep 2
 }
-theme() { menu open; ax click --title "$1 theme" >/dev/null 2>&1 || note "no $1 theme control"; sleep 1; menu closed; }
+theme() { # A failed press must end the walk before any capture is labeled with this theme.
+  local selected=0
+  menu open
+  for _ in 1 2 3; do
+    if ax click --title "$1 theme" >/dev/null 2>&1; then selected=1; break; fi
+    sleep 2
+    menu open
+  done
+  if [ "$selected" -eq 0 ]; then note "FAILED: could not select $1 theme"; exit 1; fi
+  sleep 1
+  menu closed
+}
 sheet_open() { ax find --title 'Close Claude Code quota' --first >/dev/null 2>&1; }
 open_panel() {  # the quota row by its coordinate, as round16-panel-walk.sh opens it, then checked
   for try in 1 2; do

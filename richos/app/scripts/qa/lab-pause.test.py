@@ -39,7 +39,7 @@ class ContinuesOnlyWhatItStopped(unittest.TestCase):
 
     def ps(self, *_a, **_k):
         where = self.data if self.owned else self.lab / "foreign-lab"
-        return SimpleNamespace(returncode=0, stdout=f"{lab_pause.LISTENER} RICHOS_MOBILE_MAC_DIR={where}")
+        return SimpleNamespace(returncode=0, stdout=f"Tue Nov 3 10:00:00 2026 {lab_pause.LISTENER} RICHOS_MOBILE_MAC_DIR={where}")
 
     def main(self, wait_line):
         with patch.object(lab_pause.subprocess, "run", self.ps), patch.object(lab_pause, "wait_line", wait_line), \

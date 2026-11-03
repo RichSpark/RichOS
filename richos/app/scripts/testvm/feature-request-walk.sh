@@ -65,16 +65,18 @@ wait_text() {
   done
   return 1
 }
-theme() { # dark | light, through the Settings button's own theme row, then the menu closed
-  # Each press stops at the first match and is tried up to three times, and Escape closes the menu
-  # after: walk-166ae6c12266's dark and light captures were both light, with the menu left open
-  # over the card.
-  local name="Dark theme"; [ "$1" = light ] && name="Light theme"
+theme() { # A failed press must end the walk before any capture is labeled with this theme.
+  local name="Dark theme" selected=0
+  [ "$1" = light ] && name="Light theme"
   "$T/ax.sh" "$VM" click --title "Settings" --first >/dev/null 2>&1 || true
   sleep 1
-  for _ in 1 2 3; do "$T/ax.sh" "$VM" click --title "$name" --first >/dev/null 2>&1 && break; sleep 2; done
+  for _ in 1 2 3; do
+    if "$T/ax.sh" "$VM" click --title "$name" --first >/dev/null 2>&1; then selected=1; break; fi
+    sleep 2
+  done
+  if [ "$selected" -eq 0 ]; then note "FAILED: could not select $name"; exit 1; fi
   sleep 1
-  "$T/ax.sh" "$VM" --key 53 >/dev/null 2>&1 || true
+  "$T/ax.sh" "$VM" --key 53 >/dev/null 2>&1 || { note "FAILED: could not close theme menu"; exit 1; }
   sleep 2
 }
 both() { # $1 name: one capture in each theme, dark first, and back to dark

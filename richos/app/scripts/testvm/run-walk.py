@@ -34,6 +34,10 @@ import uuid
 from slots import guest_ram_mb, guest_slot
 from relaunch import guest
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'engine/scripts/lib'))
+import proc_tree
+
 HERE=Path(__file__).resolve().parent
 
 # Commands that are refused here, before a slot or a boot, with the way forward.
@@ -104,11 +108,18 @@ def main():
     with guest_slot(root=root,wait_seconds=a.wait,purpose='run-walk '+vm+' '+Path(command[0]).name) as slot:
         if state.exists():raise RuntimeError('owned VM name already exists')
         child=None;began=time.monotonic();result={'vm':vm,'load':os.getloadavg()[0],'outcome':'harness failure','reservation':str(slot.resolve()),'resources':{'TESTVM_CPU':os.environ.get('TESTVM_CPU','4'),'TESTVM_RAM_MB':str(guest_ram_mb()),'TESTVM_DISPLAY':os.environ.get('TESTVM_DISPLAY','1680x1050')}}
+        scope=uuid.uuid4().hex
+        env=dict(os.environ)
+        env[proc_tree.SCOPE_ENV]=env.get(proc_tree.SCOPE_ENV,'')+':'+scope
+        tracker=proc_tree.TrackedTree(os.getpid(),scope)
         try:
             # Give each subprocess a group so interruption cannot strand the SSH
             # command. stop.sh subsequently reaps the captured VM process.
             boot=boot_argv(vm,a.bundle,a.home,a.engine,a.tailnet,a.new_user)
-            child=subprocess.Popen(boot,start_new_session=True)
+            active_scope=uuid.uuid4().hex
+            child=subprocess.Popen(boot,start_new_session=True,
+                                   env={**env,proc_tree.SCOPE_ENV:env[proc_tree.SCOPE_ENV]+':'+active_scope})
+            tracker.refresh(tags=True)
             rc=child.wait(timeout=480)
             result['boot_seconds']=time.monotonic()-began
             if rc:return rc
@@ -122,27 +133,42 @@ def main():
                 if len(apps)!=1:raise RuntimeError('previous bundle must contain exactly one app')
                 command += ['--previous-app',apps[0]]
             scenario_start=time.monotonic()
-            child=subprocess.Popen([command[0],vm,*command[1:]],start_new_session=True)
+            active_scope=uuid.uuid4().hex
+            child=subprocess.Popen([command[0],vm,*command[1:]],start_new_session=True,
+                                   env={**env,proc_tree.SCOPE_ENV:env[proc_tree.SCOPE_ENV]+':'+active_scope})
+            tracker.refresh(tags=True)
             rc=child.wait();result['scenario_seconds']=time.monotonic()-scenario_start
             result.pop('outcome',None)
             result.update(execution='completed',scenario_exit=rc)
             return rc
         finally:
             cleanup_start=time.monotonic()
-            if child and child.poll() is None:
-                os.killpg(child.pid,signal.SIGTERM)
-                try:child.wait(timeout=25)
-                except subprocess.TimeoutExpired:os.killpg(child.pid,signal.SIGKILL);child.wait()
             # Block repeated interruptions while the owned clone is being removed.
             for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP):signal.signal(sig,signal.SIG_IGN)
             try:
-                if state.exists():
-                    # restore_signals=False: stop.sh inherits this process's ignored SIGPIPE (and the
-                    # interruptions ignored above), so a caller that died and took this script's
-                    # stderr pipe with it cannot kill the cleanup halfway (2026-09-27: two clones
-                    # were left stopped but undeleted exactly that way).
-                    subprocess.run([str(HERE/'stop.sh'),vm],check=True,timeout=120,restore_signals=False)
-                    if state.exists():raise RuntimeError('VM state remains after cleanup: '+str(state))
+                try:
+                    # An interrupted command must stop before it can race guest deletion.
+                    # Its separate scope leaves a completed boot's VM available for graceful stop.
+                    if child and child.poll() is None:
+                        try:
+                            active_tree=proc_tree.TrackedTree(child.pid,active_scope)
+                        except RuntimeError:
+                            if child.poll() is None:raise
+                        else:
+                            left=proc_tree.finish_scope(child,active_tree)
+                            if left:raise RuntimeError('active walk command remains: '+str(left))
+                    if state.exists():
+                        # restore_signals=False: stop.sh inherits this process's ignored SIGPIPE (and the
+                        # interruptions ignored above), so a caller that died and took this script's
+                        # stderr pipe with it cannot kill the cleanup halfway (2026-09-27: two clones
+                        # were left stopped but undeleted exactly that way).
+                        subprocess.run([str(HERE/'stop.sh'),vm],check=True,timeout=120,restore_signals=False)
+                        if state.exists():raise RuntimeError('VM state remains after cleanup: '+str(state))
+                finally:
+                    # Preserve graceful guest shutdown before ending boot-owned helpers.
+                    # The host tree is still ended if stop.sh fails; the slot stays held.
+                    left=proc_tree.finish_scope(child,tracker) if child else []
+                    if left:raise RuntimeError('walk cleanup left owned processes: '+str(left))
                 result['cleanup_complete']=True
             except Exception as exc:
                 result.update(cleanup_complete=False,cleanup_error=str(exc))

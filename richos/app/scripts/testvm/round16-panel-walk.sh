@@ -27,12 +27,13 @@
 # The working row ("3 agents working on Work") exists only while a turn of this conversation
 # runs (main.rs get_worker_status reads the conversation's lease during its turn), so each
 # conversation state that round 16 draws with the row holds one turn open for its shots.
-set -u
+set -euo pipefail
 VM="$1"
 S="${2:?usage: round16-panel-walk.sh <vm> <out-dir>}"
 T="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$S"
 note() { echo "[walk] $(date -u +%H:%M:%SZ) $*" | tee -a "$S/walk.log"; }
+fail() { note "FAILED: $*"; exit 1; }
 ax() { "$T/ax.sh" "$VM" "$@"; }
 wait_for() {
   for _ in $(seq 1 30); do
@@ -47,16 +48,18 @@ wait_for() {
 menu_open() { ax find --title 'Light theme' --first >/dev/null 2>&1; }
 menu() {  # menu open|closed
   if [ "$1" = open ]; then menu_open && return 0; else menu_open || return 0; fi
-  ax click --title 'Settings' --role AXPopUpButton >/dev/null 2>&1 || note "no Settings button"
+  ax click --title 'Settings' --role AXPopUpButton >/dev/null 2>&1 || fail "no Settings button"
   sleep 2
 }
-theme() {  # the Settings menu's own theme control, then the menu closed again
+theme() { # A failed press must end the walk before any capture is labeled with this theme.
+  local selected=0
   menu open
-  if ! ax click --title "$1 theme" >/dev/null 2>&1; then
-    # 2026-10-04 run 5 lost the menu here once on a loaded host: read it again, once.
-    sleep 2; menu open
-    ax click --title "$1 theme" >/dev/null 2>&1 || note "no $1 theme control"
-  fi
+  for _ in 1 2 3; do
+    if ax click --title "$1 theme" >/dev/null 2>&1; then selected=1; break; fi
+    sleep 2
+    menu open
+  done
+  if [ "$selected" -eq 0 ]; then note "FAILED: could not select $1 theme"; exit 1; fi
   sleep 1
   menu closed
 }
@@ -64,17 +67,19 @@ sheet_open() { ax find --title 'Close Claude Code quota' --first >/dev/null 2>&1
 open_panel() {  # the quota row by its coordinate, as fill-first-walk.sh opens it, then checked
   for try in 1 2; do
     menu open
-    ax click --at 1330,327 || true
+    ax click --at 1330,327
     sleep 4
     sheet_open && return 0
     note "quota sheet not open after try $try"
   done
+  fail "quota sheet never opened"
 }
 close_panel() {
   sheet_open || return 0
-  ax click --title 'Close Claude Code quota' >/dev/null 2>&1 || true
+  ax click --title 'Close Claude Code quota' >/dev/null 2>&1
   sleep 2
-  sheet_open && { ax --key 53 || true; sleep 2; }
+  if sheet_open; then ax --key 53; sleep 2; fi
+  if sheet_open; then fail "quota sheet did not close"; fi
   return 0
 }
 pair() {  # a conversation state, dark then light, then back to dark
@@ -111,82 +116,82 @@ PY
 
 wait_for 'Not now' || true
 ax click --title 'Not now' --first || true
-wait_for 'Add this company' || true
+wait_for 'Add this company'
 sleep 2
 for attempt in 1 2 3; do
-  ax type 'Northwind Traders' --role AXTextField --first --replace || true
+  ax type 'Northwind Traders' --role AXTextField --first --replace
   sleep 1
-  ax click --title 'Add this company' || true
+  ax click --title 'Add this company'
   sleep 6
   ax find --title 'Add this company' --first >/dev/null 2>&1 || break
   note "company not added yet (attempt $attempt)"
 done
 
 note "technical view on"
-ax click --title 'Settings' --role AXPopUpButton || true
+ax click --title 'Settings' --role AXPopUpButton
 sleep 2
-ax click --at 1492,284 || true
+ax click --at 1492,284
 sleep 2
-ax click --title 'Turn it on' || true
+ax click --title 'Turn it on'
 sleep 2
 
 note "0 no reading: get_usage answers rate_limits null; the pause on"
 open_panel
-ax click --title 'Automatically pause' --contains --first || note "no pause switch"
+ax click --title 'Automatically pause' --contains --first || fail "no pause switch"
 sleep 3
 # Read, never assumed: the entry to a second account and the way to ask again are on the sheet.
-if ax find --title '+ Add account' --first >/dev/null 2>&1; then note "+ Add account offered with no reading"; else note "+ Add account MISSING with no reading"; fi
-if ax find --title 'Ask Claude Code' --first >/dev/null 2>&1; then note "Ask Claude Code offered"; else note "Ask Claude Code MISSING"; fi
-if ax find --value 'nothing is held' --contains --first >/dev/null 2>&1; then note "the card says nothing is held"; else note "the no-reading card MISSING"; fi
-ax tree --depth 40 > "$S/0-no-reading-ax.txt" 2>&1 || true
+if ax find --title '+ Add account' --first >/dev/null 2>&1; then note "+ Add account offered with no reading"; else fail "+ Add account MISSING with no reading"; fi
+if ax find --title 'Ask Claude Code' --first >/dev/null 2>&1; then note "Ask Claude Code offered"; else fail "Ask Claude Code MISSING"; fi
+if ax find --value 'nothing is held' --contains --first >/dev/null 2>&1; then note "the card says nothing is held"; else fail "the no-reading card MISSING"; fi
+ax tree --depth 40 > "$S/0-no-reading-ax.txt" 2>&1
 pair_sheet 0-no-reading
-ax click --title 'Automatically pause' --contains --first || note "no pause switch to turn off"
+ax click --title 'Automatically pause' --contains --first || fail "no pause switch to turn off"
 sleep 3
 # The figures arrive: Claude Code answers again, and Ask Claude Code reads them now.
 usage /Users/admin/fill-first/usage-1.json 41 28 "$HOME_FIVE" "$HOME_WEEK"
-ax click --title 'Ask Claude Code' --first || note "no Ask Claude Code to click"
+ax click --title 'Ask Claude Code' --first || fail "no Ask Claude Code to click"
 sleep 8
 close_panel
 
 note "1 one account"
 open_panel
-ax tree --depth 40 > "$S/1-one-account-ax.txt" 2>&1 || true
+ax tree --depth 40 > "$S/1-one-account-ax.txt" 2>&1
 pair_sheet 1-one-account
 
 note "2 Add account: name both Home and Work"
-ax click --title '+ Add account' || true
+ax click --title '+ Add account'
 sleep 2
 if ! ax type 'Home' --title 'The account signed in now' --contains --replace; then
   # Add account focuses its first field itself (quota.js openAdd); type there, Tab to the next.
   note "current-account field not matched by its label; typing into the focused field"
-  ax 'tell application "System Events" to keystroke "Home"' || true
-  ax 'tell application "System Events" to key code 48' || true
-  ax 'tell application "System Events" to keystroke "Work"' || note "no new-account field"
+  ax 'tell application "System Events" to keystroke "Home"'
+  ax 'tell application "System Events" to key code 48'
+  ax 'tell application "System Events" to keystroke "Work"' || fail "no new-account field"
 else
-  ax type 'Work' --title 'The new account' --contains --replace || note "no new-account field"
+  ax type 'Work' --title 'The new account' --contains --replace || fail "no new-account field"
 fi
 sleep 1
-ax click --title 'Add and sign in' || true
+ax click --title 'Add and sign in'
 sleep 8
 # shellcheck disable=SC2016  # the $(...) is meant to expand in the guest's shell, not here
 DATA=$("$T/guest.sh" "$VM" 'dirname "$(find /Users/admin/testvm -type d -name claude-accounts 2>/dev/null | head -1)"')
 note "app data: $DATA"
 WORK="$DATA/claude-accounts/2/usage.json"
 usage "$WORK" 10 20 "$WORK_FIVE" "$WORK_WEEK"
-ax click --title 'Refresh' --first || true
+ax click --title 'Refresh' --first
 sleep 6
 note "the automatic switch on (Pause, the default)"
-ax click --title 'Automatic pause or switch at the line' || note "no switch"
+ax click --title 'Automatic pause or switch at the line' || fail "no switch"
 sleep 3
-ax tree --depth 40 > "$S/2-two-accounts-ax.txt" 2>&1 || true
+ax tree --depth 40 > "$S/2-two-accounts-ax.txt" 2>&1
 pair_sheet 2-two-accounts
 
 note "3 Switch chosen; Home's five-hour window at 95%"
-ax click --title 'switch to Work' --contains --first || note "no switch verb"
+ax click --title 'switch to Work' --contains --first || fail "no switch verb"
 sleep 2
 usage /Users/admin/fill-first/usage-1.json 95 28 "$HOME_FIVE" "$HOME_WEEK"
 sleep 6
-ax click --title 'Refresh' --first || true
+ax click --title 'Refresh' --first
 sleep 8
 "$T/guest.sh" "$VM" "cat \"$DATA/claude-accounts.json\"" > "$S/3-accounts-after-switch.txt" 2>&1
 pair_sheet 3-switched-sheet
@@ -199,20 +204,21 @@ pair_sheet 3-switched-sheet
 # background agent per line of the agents file; and it answers with reply.txt.
 put() {  # put <guest path> <text>: a file the fake reads, pushed rather than quoted
   printf '%s\n' "$2" > "$S/.put"
-  "$T/guest.sh" "$VM" --push "$S/.put" "$1" || note "could not write $1"
+  "$T/guest.sh" "$VM" --push "$S/.put" "$1" || fail "could not write $1"
   rm -f "$S/.put"
 }
 hold_turn() {  # hold_turn <message> <reply>: send, then wait for the working row itself
   put /Users/admin/fill-first/reply.txt "$2"
   "$T/guest.sh" "$VM" 'touch /Users/admin/fill-first/slow'
-  ax type "$1" --role AXTextArea --first --replace || note "no composer"
-  ax click --title 'Send' --first || note "no Send"
+  ax type "$1" --role AXTextArea --first --replace || fail "no composer"
+  ax click --title 'Send' --first || fail "no Send"
   for _ in $(seq 1 45); do
     ax find --value 'agents working on' --contains --first >/dev/null 2>&1 && return 0
     sleep 2
   done
   note "the working row never appeared"
   ax tree --depth 40 > "$S/$3-no-row-ax.txt" 2>&1 || true
+  fail "the working row never appeared"
 }
 release_turn() {  # the fake answers; the turn has ended once Send is back
   "$T/guest.sh" "$VM" 'rm -f /Users/admin/fill-first/slow'
@@ -220,10 +226,11 @@ release_turn() {  # the fake answers; the turn has ended once Send is back
     ax find --title 'Send' --first >/dev/null 2>&1 && break
     sleep 2
   done
+  ax find --title 'Send' --first >/dev/null 2>&1 || fail "the held turn did not end"
   sleep 3
 }
 evidence() {  # every lease's journal as the app reads it, for the record of this run
-  "$T/guest.sh" "$VM" "for d in \"$DATA/engine-state/evidence\"/*/; do echo \"== \$d\"; cat \"\$d/callbacks.jsonl\"; done" > "$S/$1-evidence.txt" 2>&1 || true
+  "$T/guest.sh" "$VM" "for d in \"$DATA/engine-state/evidence\"/*/; do echo \"== \$d\"; cat \"\$d/callbacks.jsonl\"; done" > "$S/$1-evidence.txt" 2>&1
 }
 
 note "4 the panel closed: Rich's switch line, then a turn on Work with three agents working"
@@ -259,9 +266,9 @@ rm -f "$S/rise.sh"
 # check); the rise stops after shot 5, about 4 minutes in, near 46%, far under that line.
 "$T/guest.sh" "$VM" "rm -f /Users/admin/fill-first/stop-rise; nohup sh /Users/admin/fill-first/rise.sh \"$WORK\" 10 20 3 1 /Users/admin/fill-first/stop-rise $WORK_FIVE $WORK_WEEK </dev/null >/dev/null 2>&1 &"
 open_panel
-ax click --title 'Refresh' --first || true
+ax click --title 'Refresh' --first
 sleep 35
-ax click --title 'Refresh' --first || true
+ax click --title 'Refresh' --first
 sleep 6
 pair_sheet 5-fast-sheet
 
@@ -276,7 +283,7 @@ release_turn
 
 note "7 flat readings: normal usage stays in the panel, then a turn with the working row"
 open_panel
-ax click --title 'Refresh' --first || true
+ax click --title 'Refresh' --first
 sleep 6
 close_panel
 # Normal meter readings also stay out of the conversation.

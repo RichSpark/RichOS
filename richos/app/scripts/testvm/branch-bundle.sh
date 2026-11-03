@@ -37,6 +37,9 @@ done
 [ -n "$ENGINE_VERSION" ] && [ -n "$ENGINE_URL" ] && [ -n "$ENGINE_SHA256" ] || {
   echo "branch-bundle.sh: --engine-version, --engine-url and --engine-sha256 are required: a first run cannot install an engine without a pin" >&2; exit 2; }
 
+# Resolve the destination before entering disposable staging directories.
+case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
+
 SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
 JSON="$(mktemp "${TMPDIR:-/tmp}/branch-bundle.XXXXXX")"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/branch-bundle.XXXXXX")"
