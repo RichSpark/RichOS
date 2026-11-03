@@ -2309,13 +2309,25 @@ pub enum Outcome {
 /// The network calls, made by the shell: a bug report is one REST request to the issues
 /// endpoint; a feature idea is GraphQL ([`post_discussion`]), never the issues endpoint.
 pub trait Transport {
+    /// The relay's retry identity, saved in the pending copy before its first request.
+    /// Direct GitHub transports need no relay identity.
+    fn prepare_report(&self) -> io::Result<Option<RelayIdentity>> { Ok(None) }
+
+    /// Send this pending report, including its persisted retry identity when using a relay.
+    fn post_report(&self, credential: &Credential, post: Post, pending: &Pending) -> Outcome {
+        match post {
+            Post::Bug => self.create_issue(credential, &format!("/repos/{REPOSITORY}/issues"),
+                &serde_json::json!({ "title": pending.title, "body": pending.body })),
+            Post::Idea => self.post_idea(credential, &pending.title, &pending.body),
+        }
+    }
+
     fn create_issue(&self, credential: &Credential, path: &str, request: &serde_json::Value) -> Outcome;
     /// One GraphQL request (`POST /graphql`, `request` being `{query, variables}`), and GitHub's
     /// answer as it came: its HTTP status and its JSON.
     fn graphql(&self, credential: &Credential, request: &serde_json::Value) -> Reply;
     /// **AN IDEA, POSTED** as a discussion under Ideas: through GitHub's GraphQL API
-    /// ([`post_discussion`]) unless the transport posts it in one step itself (the shell's RichOS
-    /// reporting relay does).
+    /// ([`post_discussion`]). Relay transports override post_report to carry their retry identity.
     fn post_idea(&self, credential: &Credential, title: &str, body: &str) -> Outcome {
         post_discussion(self, credential, title, body)
     }
@@ -2441,10 +2453,25 @@ pub fn classify(outcome: &Outcome) -> Result<(u64, String), Reason> {
     }
 }
 
+/// The relay ID and one-time receipt key. Both are kept before any request and reused.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayIdentity {
+    pub id: String,
+    pub receipt_secret: String,
+}
+
+impl std::fmt::Debug for RelayIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelayIdentity").field("id", &self.id).field("receipt_secret", &"<hidden>").finish()
+    }
+}
+
 /// A report on this Mac that has not gone out yet, exactly as it was approved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<RelayIdentity>,
     pub created_at_ms: u64,
     pub title: String,
     pub body: String,
@@ -2783,6 +2810,7 @@ impl Outbox {
     pub fn send(&self, public: &Public, credentials: &dyn Credentials, transport: &dyn Transport, now_ms: u64) -> io::Result<Delivery> {
         let pending = Pending {
             id: uuid::Uuid::new_v4().to_string(),
+            relay: None,
             created_at_ms: now_ms,
             title: public.title().to_string(),
             body: public.body().to_string(),
@@ -2823,17 +2851,14 @@ impl Outbox {
         let outcome = match credentials.credential() {
             None => Err((Reason::NotSetUp, None)),
             Some(credential) => {
-                // THE ONE DIFFERENCE BETWEEN THE TWO: where it is posted. A bug report is an issue;
-                // a feature idea is a discussion under Ideas, and never reaches the issues endpoint
-                // (CEO, 2026-10-11: "I don't want feature requests to be submitted or branded as
-                // "issues" on GitHub").
-                let answer = match self.post {
-                    Post::Bug => {
-                        let request = serde_json::json!({ "title": pending.title, "body": pending.body });
-                        transport.create_issue(&credential, &format!("/repos/{REPOSITORY}/issues"), &request)
+                if pending.relay.is_none() {
+                    if let Some(identity) = transport.prepare_report()? {
+                        pending.relay = Some(identity);
+                        // Also upgrades an older waiting copy. Failure here sends nothing.
+                        self.write(&pending)?;
                     }
-                    Post::Idea => transport.post_idea(&credential, &pending.title, &pending.body),
-                };
+                }
+                let answer = transport.post_report(&credential, self.post, &pending);
                 classify(&answer).map(|ok| (ok, credential.account)).map_err(|r| (r, Some(answer)))
             }
         };
