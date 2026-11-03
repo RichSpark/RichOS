@@ -723,9 +723,13 @@ def collect_rm(text, depth=0):
         return
     # Split shell statements, never interpret an argument to printf as a verb.
     # Existing executable_text has already removed non-shell heredoc bodies.
+    # In shell, # starts a comment only at a word boundary. shlex's built-in
+    # commenters also strips the suffix of an unquoted filename like a#b.
+    text = re.sub(r"""'[^']*'|"(?:\\.|[^"\\])*"|\\[\s\S]|(?<![^\s;&|()])#[^\n]*""",
+                  lambda m: " " if m.group().startswith("#") else m.group(), text)
     lex = shlex.shlex(text.replace("\n", " ; "), posix=True, punctuation_chars=";&|()")
     lex.whitespace_split = True
-    lex.commenters = "#"
+    lex.commenters = ""
     cwd = str(d.get("cwd") or os.environ.get("WTR_ENTITY_ROOT") or os.getcwd())
     stmt = []
 

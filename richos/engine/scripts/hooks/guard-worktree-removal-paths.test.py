@@ -55,6 +55,13 @@ class RemovalPaths(unittest.TestCase):
                            timeout=60)  # load-bound: hook hang guard; verdict is exit code, never duration.
         self.assertEqual(p.returncode, expected, f'{cmd}\n{p.stdout}\n{p.stderr}')
 
+    def test_44_comment_character_in_filename(self):
+        target = self.parent / 'hash#mark'
+        self.git('-C', str(self.repo), 'worktree', 'add', '-qb', 'codex/g9-hash-fixture', str(target))
+        self.verdict('rm -rf hash#mark', 2, cwd=self.parent)
+        self.verdict('true # ; rm -rf hash#mark', 0, cwd=self.parent)
+        self.verdict("printf '%s' 'rm -rf hash#mark'", 0, cwd=self.parent)
+
     def test_44_guarded_variables(self):
         for command in (f'd="{self.worker}"; rm -rf "${{d:?}}"',
                         f'd="{self.worker}" && rm -rf "$d"',
