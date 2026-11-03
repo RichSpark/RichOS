@@ -87,6 +87,7 @@ git -C "$REPO" add -A >/dev/null 2>&1
 git -C "$REPO" commit -qm init >/dev/null 2>&1
 git -C "$REPO" branch -M main >/dev/null 2>&1
 git -C "$REPO" remote add origin "$ORIGIN" >/dev/null 2>&1
+PUSH_STARTED="$(date +%s)"
 git -C "$REPO" push -q origin main >/dev/null 2>&1
 # Now it looks like GitHub, which is what the slug is parsed from. The
 # remote-tracking ref the push just wrote is untouched by this.
@@ -148,14 +149,14 @@ PY
 # transcript <path> — one assistant turn that pushed richos-hq, in the shape
 # this project's own lands actually take.
 write_transcript() {
-    python3 - "$1" "$REPO" "$SANDBOX" <<'PY'
+    python3 - "$1" "$REPO" "$SANDBOX" "$PUSH_STARTED" <<'PY'
 import json, sys, time
 path, repo, cwd = sys.argv[1], sys.argv[2], sys.argv[3]
 rec = {
     "type": "assistant",
     "cwd": cwd,
     "sessionId": "feedface-0000-4000-8000-000000000001",
-    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[4]))),
     "message": {"role": "assistant", "content": [
         {"type": "text", "text": "landing"},
         {"type": "tool_use", "id": "toolu_01", "name": "Bash",
@@ -164,6 +165,8 @@ rec = {
 }
 with open(path, "w", encoding="utf-8") as fh:
     fh.write(json.dumps(rec) + "\n")
+    fh.write(json.dumps({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_01", "content": "ok"}]}}) + "\n")
 PY
 }
 
@@ -506,6 +509,9 @@ print(json.dumps({"type": "assistant", "cwd": sys.argv[3],
                       {"type": "tool_use", "id": "t1", "name": "Bash",
                        "input": {"command": "cd %s && git push -q origin dev/x" % sys.argv[2]}}]}}),
       file=open(sys.argv[1], "w"))
+with open(sys.argv[1], "a") as fh:
+    fh.write(json.dumps({"message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}) + "\n")
 PY
 rm -rf "$GONE"          # the worktree is landed and removed, as they always are
 gone_fire() {

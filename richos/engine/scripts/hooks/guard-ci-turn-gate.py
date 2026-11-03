@@ -36,8 +36,8 @@ of FALSE POSITIVES, not of weakness. So the hold is a conjunction:
      from a list somebody typed: a `git push` this session actually ran. A
      session that pushed nothing is never held, and cannot be.
   2. THE COMMIT IS THE ONE THAT WENT. Not "the repository is red" — the
-     commit `git push` sent, read from the local `refs/remotes/origin/<branch>`
-     that the push itself updated. Somebody else's red, on somebody else's
+     commit `git push` sent, recovered from its push reflog entry and saved
+     by immutable SHA. Somebody else's red, on somebody else's
      commit, holds nothing here.
   3. GITHUB SAYS THAT COMMIT FAILED. A completed run whose conclusion is one
      of the not-green values. Not slow, not skipped, not never-run — those are
@@ -459,6 +459,21 @@ def parse_pushes(command, cwd):
     return out
 
 
+def push_updates(output):
+    """Successful branch updates in Git's ordinary or --porcelain output."""
+    updates = {}
+    for line in output.splitlines():
+        ordinary = re.match(
+            r"^\s*(?:[+*] +)?(?P<summary>[0-9a-f]+\.\.\.?[0-9a-f]+|\[new branch\])"
+            r" +\S+ +-> +(?:refs/heads/)?(?P<branch>\S+)", line)
+        porcelain = re.match(r"^[ *+]\t[^\t:]+:refs/heads/(?P<branch>[^\t]+)\t(?P<summary>.*)$", line)
+        row = ordinary or porcelain
+        if row:
+            tip = re.search(r"\.\.\.?([0-9a-f]+)", row["summary"])
+            updates[row["branch"]] = tip[1] if tip else ""
+    return updates
+
+
 def observe_pushes(transcript_path, state, budget):
     """Walk the new bytes of the transcript and record every push seen.
 
@@ -477,10 +492,11 @@ def observe_pushes(transcript_path, state, budget):
     offset = int(tr.get("offset") or 0)
     if tr.get("path") != transcript_path or offset > size:
         offset = 0                       # a different or a truncated transcript
+        tr.pop("pending", None)
     seen = []
-    # A Bash call whose result is an error was refused or failed before it ran
-    # its push; it creates no CI obligation (hunt part 3 v3, finding 19).
-    refused = set()
+    # Calls remain pending across incremental reads. A call alone says nothing
+    # about whether the tool ran, and an error can include a successful ref.
+    pending = tr.setdefault("pending", {})
     try:
         # READLINE, NEVER `for line in fh`. Iterating a text file disables
         # tell() ("telling position disabled by next() call"), and the byte
@@ -501,7 +517,7 @@ def observe_pushes(transcript_path, state, budget):
                 line = raw.decode("utf-8", "replace").strip()
                 if not line:
                     continue
-                if ('"Bash"' not in line or "push" not in line) and '"is_error"' not in line:
+                if ('"Bash"' not in line or "push" not in line) and '"tool_result"' not in line:
                     continue
                 try:
                     rec = json.loads(line)
@@ -514,25 +530,44 @@ def observe_pushes(transcript_path, state, budget):
                 cwd = rec.get("cwd") or ""
                 ts = _epoch(rec.get("timestamp"))
                 for block in content:
-                    if (isinstance(block, dict) and block.get("type") == "tool_result"
-                            and block.get("is_error") is True and block.get("tool_use_id")):
-                        refused.add(block["tool_use_id"])
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        calls = pending.pop(block.get("tool_use_id"), [])
+                        output = block.get("content") or ""
+                        if isinstance(output, list):
+                            output = "\n".join(str(c.get("text") or "") for c in output
+                                               if isinstance(c, dict))
+                        updates = push_updates(str(output))
+                        expanded = []
+                        for p in calls:
+                            if not p.get("branch") and updates:
+                                expanded.extend(dict(p, branch=branch) for branch in updates)
+                            else:
+                                expanded.append(p)
+                        for p in expanded:
+                            branch = p.get("branch")
+                            if block.get("is_error") is True and branch not in updates:
+                                # An error may still have updated some refs.
+                                continue
+                            if "Everything up-to-date" in str(output) and branch not in updates:
+                                continue  # keep the existing obligation
+                            if updates.get(branch):
+                                p["tip"] = updates[branch]
+                            p["completed_at"] = ts
+                            seen.append(p)
                         continue
                     if not isinstance(block, dict) or block.get("type") != "tool_use":
                         continue
                     if block.get("name") != "Bash":
                         continue
                     cmd = (block.get("input") or {}).get("command") or ""
-                    for p in parse_pushes(cmd, cwd):
+                    calls = parse_pushes(cmd, cwd)
+                    for p in calls:
                         p["at"] = ts
-                        p["_call"] = block.get("id")
-                        seen.append(p)
+                    if calls and block.get("id"):
+                        pending[block["id"]] = calls
     except OSError as exc:
         return [], "the transcript could not be read (%s)" % exc
 
-    seen = [p for p in seen if not (p.get("_call") and p["_call"] in refused)]
-    for p in seen:
-        p.pop("_call", None)
     tr["path"] = transcript_path
     tr["offset"] = offset
     return seen, ""
@@ -542,6 +577,8 @@ def _epoch(stamp):
     if not stamp:
         return time.time()
     try:
+        if isinstance(stamp, (int, float)):
+            return float(stamp)
         return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
     except Exception:
         return time.time()
@@ -550,10 +587,8 @@ def _epoch(stamp):
 # ---------------------------------------------------------------------------
 # 2. FROM A PUSH TO A COMMIT AND A REPOSITORY SLUG
 # ---------------------------------------------------------------------------
-# THE COMMIT COMES OFF THE LOCAL REMOTE-TRACKING REF, which `git push` itself
-# updated on success. That is the strongest local evidence of "what went", it
-# costs no network, and it is a thing the reader can re-run by hand — which is
-# why the refusal prints it.
+# The push reflog distinguishes our update from a later fetch. Once resolved,
+# the ledger retains the SHA rather than rereading a mutable tracking ref.
 
 def repo_facts(directory, remote, budget, cache):
     """(repo_root, slug, error) for a directory. Cached per turn."""
@@ -600,24 +635,31 @@ def slug_of(url):
     return "%s/%s" % (m.group(1), m.group(2))
 
 
-def head_of(root, remote, branch, budget):
-    """The commit at the remote tip, as this checkout knows it.
+def head_of(root, remote, branch, budget, pushed_at=None, completed_at=None, tip=None):
+    """Read the push's reflog entry, never a later fetch's tracking tip.
 
-    THE LOCAL BRANCH IS NOT A FALLBACK, and the temptation to make it one is
-    the whole reason this note exists. `refs/remotes/<remote>/<branch>` is
-    written BY THE PUSH; the local branch is what is sitting here, pushed or
-    not. Substituting one for the other would let this gate judge — and name in
-    a refusal — a commit that never left the machine. If the remote-tracking
-    ref is absent, the honest answer is that nothing here records what went.
+    New observations supply the call/result interval and save the SHA. Git's
+    output tip disambiguates multiple updates within a reflog's one-second tick.
     """
     ref = "refs/remotes/%s/%s" % (remote, branch)
-    rc, out, _err = run(["git", "-C", root, "rev-parse", "--verify", "--quiet", ref], budget)
-    if rc == 0 and out.strip():
-        return out.strip(), ""
-    if rc == TIMEOUT_RC:
-        return "", TRANSIENT + _err
-    return "", ("nothing here records which commit was pushed: there is no `%s` in "
-                "this checkout" % ref)
+    if pushed_at is not None:
+        rc, out, err = run(["git", "-C", root, "reflog", "show", "--date=unix",
+                            "--format=%H%x09%gD%x09%gs", ref], budget)
+        if rc == TIMEOUT_RC:
+            return "", TRANSIENT + err
+        candidates = set()
+        for line in out.splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) != 3 or parts[2] != "update by push":
+                continue
+            stamp = re.search(r"@\{(\d+)\}$", parts[1])
+            if stamp and int(pushed_at) <= int(stamp.group(1)) <= int(completed_at):
+                if not tip or parts[0].startswith(tip):
+                    candidates.add(parts[0])
+        if len(candidates) == 1:
+            return candidates.pop(), ""
+        return "", "no unambiguous successful push is recorded for `%s` during this tool call" % ref
+    return "", "the old push record has no commit identity or transcript evidence for `%s`" % ref
 
 
 def current_branch(root, budget):
@@ -760,13 +802,27 @@ def verdict_for(slug, sha, budget):
 # ---------------------------------------------------------------------------
 # 4. THE ESCAPE HATCH
 # ---------------------------------------------------------------------------
-_ACK = re.compile(r"^[ \t>*\-]*ci-red-ack:[ \t]*(.+)$", re.IGNORECASE | re.MULTILINE)
+_ACK = re.compile(r"^[ \t]*(?:[-*] )?ci-red-ack:[ \t]*(.+)$", re.IGNORECASE | re.MULTILINE)
 
 
 def parse_acks(message):
     """[(target, reason, raw)] from the turn's final message."""
     acks = []
-    for m in _ACK.finditer(message or ""):
+    fence = None
+    live = []
+    for line in (message or "").splitlines():
+        mark = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if mark and mark[1][0] == fence[0] and len(mark[1]) >= len(fence) and not mark[2].strip():
+                fence = None
+            continue
+        if mark:
+            fence = mark[1]
+            continue
+        if line.startswith(("    ", "\t")) or line.lstrip().startswith(">"):
+            continue
+        live.append(line)
+    for m in _ACK.finditer("\n".join(live)):
         body = m.group(1).strip().rstrip("`'\"")
         parts = re.split(r"\s*(?:—|–|--|:)\s*", body, maxsplit=1)
         target = parts[0].strip().rstrip(",.").strip()
@@ -969,6 +1025,12 @@ def evaluate(payload, budget):
     session = str(payload.get("session_id") or "")
     message = str(payload.get("last_assistant_message") or "")
     state = load_state(session)
+    if state.get("push_schema") != 2 and os.path.isfile(payload.get("transcript_path") or ""):
+        # Old ledgers discarded call identities and SHAs. Rebuild from the
+        # transcript once rather than carrying those ambiguous obligations.
+        state.pop("pushes", None)
+        state.pop("transcript", None)
+        state["push_schema"] = 2
 
     seen, cannot = observe_pushes(str(payload.get("transcript_path") or ""), state, budget)
 
@@ -980,8 +1042,7 @@ def evaluate(payload, budget):
                               p.get("branch") or "")
         prev = pushes.get(key) or {}
         if float(p.get("at") or 0) >= float(prev.get("at") or 0):
-            pushes[key] = {"dir": p["dir"], "remote": p.get("remote") or "origin",
-                           "branch": p.get("branch") or "", "at": p.get("at")}
+            pushes[key] = dict(p)
 
     notices = []
     if cannot and not pushes and pause_for(payload.get("cwd") or os.getcwd()):
@@ -999,13 +1060,8 @@ def evaluate(payload, budget):
 
     findings, running, unreadable = [], [], []
     facts_cache = {}
-    # Never-checked targets first (newest first), then the longest-unchecked, so
-    # an older obligation is not starved by newer ones (P3-17).
-    # A target goes to the back of that rotation only once it was actually
-    # JUDGED this turn (a verdict, a pause, a duplicate of one judged). One
-    # that was only SELECTED, then ran out of budget, keeps its place: stamping
-    # the whole selected batch up front let one slow lookup starve the other
-    # five every turn (P3-17, v3 re-check).
+    # Rotate only targets actually attempted with time left. Unknown is an
+    # attempt too; it keeps its obligation but must not monopolise later turns.
     targets = sorted(pushes.items(), key=lambda kv: (float((kv[1] or {}).get("checked_at") or 0),
                                                      -float((kv[1] or {}).get("at") or 0)))[:MAX_TARGETS]
     _now = time.time()
@@ -1033,6 +1089,9 @@ def evaluate(payload, budget):
             unreadable.append(sentence)
 
     for key, push in targets:
+        if budget.left() <= 0.05:  # run() cannot start a lookup below this floor
+            break
+        push["checked_at"] = time.time()
         remote = push.get("remote") or "origin"
         root, slug, err = repo_facts(push["dir"], remote, budget, facts_cache)
         if slug and pause_for(slug):
@@ -1057,7 +1116,13 @@ def evaluate(payload, budget):
             push["checked_at"] = _now
             continue
         judged.add((slug, branch))
-        sha, err = head_of(root, remote, branch, budget)
+        sha, err = push.get("sha"), ""
+        if not sha:
+            interval = ([push["at"], push["completed_at"], push.get("tip")]
+                        if "completed_at" in push else [])
+            sha, err = head_of(root, remote, branch, budget, *interval)
+            if sha:
+                push["sha"] = sha
         if err.startswith(TRANSIENT):
             judged.discard((slug, branch))
             unreadable.append("%s: %s" % (slug, err[len(TRANSIENT):]))

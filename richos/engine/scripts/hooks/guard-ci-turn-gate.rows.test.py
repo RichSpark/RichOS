@@ -7,6 +7,8 @@ Each test is red on the code before the fix and green after. Run:
 import importlib.util
 import json
 import os
+import subprocess
+from unittest.mock import patch
 import sys
 import tempfile
 import time
@@ -45,7 +47,7 @@ class Rows(unittest.TestCase):
 
     def test_p3_18_half_written_line_is_not_skipped(self):
         rec = {"cwd": "/tmp", "timestamp": "2026-10-02T00:00:00Z",
-               "message": {"content": [{"type": "tool_use", "name": "Bash",
+               "message": {"content": [{"type": "tool_use", "name": "Bash", "id": "half",
                                         "input": {"command": "git push origin main"}}]}}
         line = json.dumps(rec) + "\n"
         with tempfile.TemporaryDirectory() as d:
@@ -57,6 +59,8 @@ class Rows(unittest.TestCase):
             self.assertEqual(seen, [])
             with open(path, "w") as fh:
                 fh.write(line)                           # the rest arrives
+                fh.write(json.dumps({"message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "half", "content": "ok"}]}}) + "\n")
             seen, _ = gate.observe_pushes(path, state, gate.Budget(5))
             self.assertEqual([p["branch"] for p in seen], ["main"])
 
@@ -206,6 +210,158 @@ class Rows(unittest.TestCase):
                 gate.repo_facts, gate.head_of, gate.verdict_for = real
             self.assertEqual(sorted(set(read)),
                              sorted("fixture/%d" % n for n in range(gate.MAX_TARGETS)))
+
+
+class G3(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="g3-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        self.transcript = os.path.join(self.root, "transcript.jsonl")
+        self.enterContext(patch.object(gate, "STATE_DIR", os.path.join(self.root, "state")))
+        self.enterContext(patch.object(gate, "pause_for", lambda *_: False))
+        self.enterContext(patch.object(gate, "log_ack", lambda *_: None))
+        self.payload = {"session_id": "g3", "transcript_path": self.transcript}
+
+    def record(self, blocks, cwd=None):
+        with open(self.transcript, "a") as f:
+            f.write(json.dumps({"cwd": cwd or self.root, "timestamp": time.time(),
+                                "message": {"content": blocks}}) + "\n")
+
+    def call(self, cmd, cwd=None, ident="push"):
+        self.record([{"type": "tool_use", "name": "Bash", "id": ident,
+                      "input": {"command": cmd}}], cwd)
+
+    def result(self, output="ok", error=False, ident="push"):
+        self.record([{"type": "tool_result", "tool_use_id": ident,
+                      "is_error": error, "content": output}])
+
+    def git(self, directory, *args, check=True):
+        return subprocess.run(["git", "-C", directory, *args], capture_output=True,
+                              text=True, check=check, env={**os.environ,
+                              "GIT_CONFIG_GLOBAL": os.devnull,
+                              "GIT_CONFIG_NOSYSTEM": "1"})
+
+    def repo(self):
+        bare = os.path.join(self.root, "remote.git")
+        repo = os.path.join(self.root, "repo")
+        os.mkdir(bare)
+        os.mkdir(repo)
+        self.git(bare, "init", "--bare", "-q")
+        self.git(repo, "init", "-q", "-b", "main")
+        for key, value in (("user.name", "Fixture"), ("user.email", "f@example.invalid"),
+                           ("core.hooksPath", os.devnull), ("commit.gpgsign", "false")):
+            self.git(repo, "config", key, value)
+        self.git(repo, "commit", "--allow-empty", "-qm", "initial")
+        self.git(repo, "remote", "add", "origin", bare)
+        self.enterContext(patch.object(gate, "repo_facts", lambda d, *_: (d, "fixture/repo", "")))
+        return repo, bare
+
+    def test_p3_19_refusal_across_scans_never_creates_obligation(self):
+        repo, _ = self.repo()
+        self.git(repo, "push", "origin", "main")
+        self.call("git push origin main", repo)
+        self.enterContext(patch.object(gate, "verdict_for", lambda *_: {"state": "red"}))
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+        self.result("PreToolUse refused; command never ran", True)
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+        self.assertFalse(gate.load_state("g3").get("pushes"))
+
+    def test_p3_19_partial_push_keeps_only_successful_ref(self, quiet=False):
+        repo, bare = self.repo()
+        self.git(repo, "push", "origin", "main:release")
+        self.git(repo, "checkout", "--orphan", "release")
+        self.git(repo, "commit", "--allow-empty", "-qm", "unrelated")
+        self.git(repo, "checkout", "main")
+        options = ["-q"] if quiet else []
+        self.call("git push " + " ".join(options + ["origin", "main", "release"]), repo)
+        pushed = self.git(repo, "push", *options, "origin", "main", "release", check=False)
+        self.assertNotEqual(pushed.returncode, 0)
+        self.result(pushed.stdout + pushed.stderr, True)
+        read = []
+        self.enterContext(patch.object(gate, "verdict_for", lambda slug, sha, b:
+                                      read.append(sha) or {"state": "red"}))
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+        own = self.git(bare, "rev-parse", "main").stdout.strip()
+        self.assertEqual(read, [own])
+        self.assertEqual([p["branch"] for p in gate.load_state("g3")["pushes"].values()], ["main"])
+
+    def test_p3_19_quiet_partial_push_keeps_successful_ref(self):
+        self.test_p3_19_partial_push_keeps_only_successful_ref(quiet=True)
+
+    def test_successful_updates_include_porcelain_and_forced_pushes(self):
+        output = (" + abc1234...def5678 topic -> topic (forced update)\n"
+                  "*\trefs/heads/new:refs/heads/new\t[new branch]\n"
+                  " \trefs/heads/main:refs/heads/main\tabc1234..def5678\n"
+                  "!\trefs/heads/release:refs/heads/release\t[rejected]\n")
+        self.assertEqual(gate.push_updates(output),
+                         {"topic": "def5678", "new": "", "main": "def5678"})
+
+    def test_noop_push_keeps_existing_failed_obligation(self):
+        repo, _ = self.repo()
+        self.call("git push origin main", repo)
+        self.git(repo, "push", "origin", "main")
+        self.result()
+        self.enterContext(patch.object(gate, "verdict_for", lambda *_: {"state": "red"}))
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+        self.call("git push origin main", repo, "noop")
+        self.result("Everything up-to-date", ident="noop")
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+
+    def test_p3_45_fetch_before_and_after_first_check_keeps_pushed_sha(self):
+        repo, bare = self.repo()
+        self.call("git push origin main", repo)
+        self.git(repo, "push", "origin", "main")
+        self.result()
+        own = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+        other = os.path.join(self.root, "other")
+        self.git(self.root, "clone", "-q", "-b", "main", bare, other)
+        for key, value in (("user.name", "Fixture"), ("user.email", "f@example.invalid"),
+                           ("core.hooksPath", os.devnull), ("commit.gpgsign", "false")):
+            self.git(other, "config", key, value)
+        self.git(other, "commit", "--allow-empty", "-qm", "other")
+        self.git(other, "push", "origin", "main")
+        self.git(repo, "fetch", "origin")
+        read = []
+        self.enterContext(patch.object(gate, "verdict_for", lambda slug, sha, b:
+                                      read.append(sha) or {"state": "green" if sha == own else "red"}))
+        for _ in range(2):
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+        self.assertEqual(read, [own, own])
+
+    def test_p3_17_unknown_attempt_rotates_without_losing_obligations(self):
+        pushes = {str(n): {"dir": str(n), "branch": "main", "sha": "abc", "at": n}
+                  for n in range(gate.MAX_TARGETS)}
+        gate.save_state("g3", {"pushes": pushes})
+        self.enterContext(patch.object(gate, "repo_facts", lambda d, r, b, c:
+                                      ("", "", gate.TRANSIENT + "budget spent") if b.left() <= 0.05
+                                      else (d, "fixture/" + d, "")))
+        self.enterContext(patch.object(gate, "head_of", lambda *_: ("abc", "")))
+        read = []
+        def unknown(slug, sha, budget):
+            read.append(slug)
+            # Leave less than run()'s admission floor. Untouched targets must
+            # retain their place even though spent() is not quite true yet.
+            budget.seconds = time.time() - budget.start + 0.01
+            return {"state": "unknown"}
+        self.enterContext(patch.object(gate, "verdict_for", unknown))
+        for _ in pushes:
+            gate.evaluate(self.payload, gate.Budget(5))
+        self.assertEqual(set(read), {"fixture/" + str(n) for n in range(gate.MAX_TARGETS)})
+        self.assertEqual(len(gate.load_state("g3")["pushes"]), len(pushes))
+
+    def test_p3_50_only_live_waiver_clears_refusal(self):
+        gate.save_state("g3", {"pushes": {"p": {"dir": self.root, "branch": "main", "sha": "abc"}}})
+        self.enterContext(patch.object(gate, "repo_facts", lambda d, *_: (d, "fixture/repo", "")))
+        self.enterContext(patch.object(gate, "head_of", lambda *_: ("abc", "")))
+        self.enterContext(patch.object(gate, "verdict_for", lambda *_: {"state": "red"}))
+        ack = "ci-red-ack: fixture/repo -- Credentials are unavailable until the operator restores access."
+        for text in ("Example only:\n```text\n" + ack + "\n```", "> " + ack,
+                     "Example:\n~~~~text\n" + ack + "\n~~~~", "    " + ack):
+            self.payload["last_assistant_message"] = text
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2, text)
+        self.payload["last_assistant_message"] = ack
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
 
 
 if __name__ == "__main__":
