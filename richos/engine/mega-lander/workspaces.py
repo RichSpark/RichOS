@@ -68,6 +68,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -1199,7 +1200,9 @@ def damaged_records(include_done=True, root=None):
             # workspaces it owns; read as "none", the sweep made its live
             # workspace an orphan and the automatic land deleted it.
             elif not isinstance(v.get("workspaces"), list) or \
-                    not all(isinstance(w, dict) for w in v["workspaces"]):
+                    not all(isinstance(w, dict) and
+                            all(isinstance(w.get(k), str) for k in ("repo", "path", "branch")) and
+                            w["repo"] and (w["path"] or w["branch"]) for w in v["workspaces"]):
                 out.append((path, "its workspace list is missing or not a list of workspaces"))
     return out
 
@@ -2458,11 +2461,7 @@ def _running_calls(session_id, agent_id):
 
 def _agent_transcript(session_id, agent_id):
     """The platform's own transcript of this agent, beside its meta.json (platform_agent_record)."""
-    if "/" in session_id:
-        return ""
-    hits = sorted(glob.glob(os.path.join(_platform_projects_dir(), "*", session_id, "subagents",
-                                         "agent-%s.jsonl" % agent_id)))
-    return hits[0] if hits else ""
+    return platform_agent_transcript({"session_id": session_id, "agent_id": agent_id})
 
 
 # The host's own background receipt, as the tool result's text says it. The app's sdk-cli
@@ -2520,15 +2519,31 @@ def _undelivered_calls(session_id, agent_id, ah, running):
     receipts, delivered = set(), set()
     with open(path, "rb") as f:
         for line in f:
-            for m in re.finditer(rb"<tool-use-id>([A-Za-z0-9_.-]+)</tool-use-id>", line):
-                delivered.add(m.group(1).decode())
-            structured = b"backgroundTaskId" in line
-            if not structured and b"Output is being written to: " not in line:
-                continue
             try:
                 row = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(row, dict):
+                continue
+            # Only the host's notification delivers a result. Assistant prose,
+            # user quotations and command output can contain the same tags.
+            message = row.get("message") or {}
+            origin = row.get("origin") or {}
+            attachment = row.get("attachment") or {}
+            notice = None
+            if row.get("type") == "user" and origin.get("kind") == "task-notification":
+                notice = message.get("content")
+            elif row.get("type") == "attachment" and attachment.get("type") == "queued_command":
+                notice = attachment.get("prompt")
+            texts = [notice] if isinstance(notice, str) else [
+                i.get("text", "") for i in notice or [] if isinstance(i, dict) and i.get("type") == "text"]
+            for text in texts:
+                # A host user row can prepend its SYSTEM NOTIFICATION notice.
+                notification = re.search(r"<task-notification>.*?</task-notification>\s*\Z", text, re.S)
+                if notification:
+                    delivered.update(re.findall(r"<tool-use-id>([A-Za-z0-9_.-]+)</tool-use-id>",
+                                                notification.group()))
+            structured = b"backgroundTaskId" in line
             result = row.get("toolUseResult") if isinstance(row, dict) else None
             content = (row.get("message") or {}).get("content") if isinstance(row, dict) else None
             if not isinstance(content, list):
@@ -3505,7 +3520,7 @@ def hold_end(text, strict=True):
 
 
 def _hold_time(value):
-    """An ISO UTC time, or HH:MMZ taken as its occurrence nearest to now; '' if neither."""
+    """An ISO UTC time, or HH:MMZ taken as its next occurrence (including now); '' if neither."""
     v = value.strip().upper()
     m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?Z", v)
     if m:
@@ -3521,7 +3536,8 @@ def _hold_time(value):
     t0 = now()
     day = calendar.timegm(time.gmtime(t0)[:3] + (0, 0, 0, 0, 0, 0))
     t = day + int(m.group(1)) * 3600 + int(m.group(2)) * 60
-    t = min((t - 86400, t, t + 86400), key=lambda c: abs(c - t0))
+    if t < t0:
+        t += 86400
     return iso(t)
 
 
@@ -4648,11 +4664,11 @@ def _past(deadline):
 def _bounded(deadline, cap):
     """A subprocess timeout that does not outlive the caller's deadline (hunt
     part 4 v2, V2-03): the smaller of `cap` and what is left, and at least one
-    second, so a call already admitted is never handed zero. A caller that
+    millisecond, so a call already admitted is never handed zero. A caller that
     must not START a step past its deadline checks _past first."""
     if deadline is None:
         return cap
-    return max(1.0, min(float(cap), deadline - now()))
+    return max(0.001, min(float(cap), deadline - now()))
 
 
 def _within(until, fn, *args, **kw):
@@ -6726,7 +6742,7 @@ def merge_and_land(ref, me="", message="", only=None):
     repository's main checkout (which must be on that branch), with git's own
     hooks and checks, then lands it exactly as the automatic land does
     (ignored files are kept, never a reason to stay). A merge git refuses
-    stops here with git's words; nothing is landed. In a repository listed in
+    stops further merges with git's words; completed merges remain. In a repository listed in
     SECOND_REVIEW_REPOS nothing is merged unless the newest handover verdict
     on exactly each branch tip says passed (_review_check, CEO §113), and the
     merge message names that review. Returns (merged, land result).
@@ -6806,7 +6822,7 @@ def merge_and_land(ref, me="", message="", only=None):
                 r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True,
                                    env=_land_env(target, offered))
                 if r.returncode != 0:
-                    raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
+                    raise SpecError("git merge of %s into %s of %s failed (exit %d):\n%s\n%s"
                                     % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
                                        _abort_own_merge(main, before, t)))
             else:
@@ -6814,6 +6830,11 @@ def merge_and_land(ref, me="", message="", only=None):
             merged.append((repo, b))
             event("merged", key=rec["key"], repo=repo, branch=b, into=target)
         return merged, land(rec["key"], me, keep_ignored=True)
+    except SpecError as e:
+        if merged:
+            raise SpecError("%s\nAlready merged by this call (these merges remain):\n%s" %
+                            (e, "\n".join("  %s: %s" % (repo, b) for repo, b in merged))) from e
+        raise
     finally:
         for main, holder in taken:
             _release_land_lease(main, holder)
@@ -6866,14 +6887,14 @@ def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
         os.makedirs(parent, exist_ok=True)
     except (ValueError, OSError) as e:
         raise SpecError("cannot merge %s: the engine's state location for a temporary checkout of %s cannot be "
-                        "used (%s); nothing was landed" % (b, target, e))
+                        "used (%s); no merge was attempted in this repository" % (b, target, e))
     path = os.path.join(os.path.realpath(parent), "%s-%d" % (_key_segment(target), os.getpid()))
     _remove_temporary_checkout(main, path)
     rc, out, err = git(main, "worktree", "add", "--quiet", path, target, timeout=600)
     if rc != 0:
         _remove_temporary_checkout(main, path)
-        raise SpecError("cannot merge %s: a temporary checkout of %s could not be made (exit %d); nothing was "
-                        "landed:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
+        raise SpecError("cannot merge %s: a temporary checkout of %s could not be made (exit %d); no merge was "
+                        "attempted in this repository:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
     try:
         # git's own checks (pre-merge-commit) run here and may take minutes.
         r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True,
@@ -6881,7 +6902,7 @@ def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
     finally:
         left = _remove_temporary_checkout(main, path)
     if r.returncode != 0:
-        raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed and %s did not move:"
+        raise SpecError("git merge of %s into %s of %s failed (exit %d); %s did not move:"
                         "\n%s%s" % (b, target, main, r.returncode, target, (r.stdout + r.stderr).strip()[-3000:],
                                     "\n" + left if left else ""))
     if left:
@@ -7394,7 +7415,7 @@ def _require_landed(rec, chain, ignored_ok="", deadline=None, record=True):
 def _keep_ignored(rec, chain, deadline=None):
     """Move every ignored entry the land would refuse (one the main checkout
     lacks, not generated at creation, not declared regenerable) out of the
-    work's workspaces into <state>/kept/<key>-<time>/<n>-<workspace>/<entry>,
+    work's workspaces into <state>/kept/<key>-<time>-<unique>/<n>-<workspace>/<entry>,
     and return that directory ("" when nothing was kept). In-flight ack files
     are deleted instead, never kept. Called only once every branch and HEAD is
     proved to be in the integration branch.
@@ -7435,7 +7456,8 @@ def _keep_ignored(rec, chain, deadline=None):
             return ""
     except OSError:
         return ""
-    root = _p("kept", "%s-%d" % (_key_segment(rec["key"]), int(now())))
+    os.makedirs(_p("kept"), exist_ok=True)
+    root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=_p("kept"))
     moved, dropped = [], []
     # An entry that holds the ack directory (a `.claude/` the main checkout
     # lacks) loses the acks first, so they are not kept inside it.
@@ -7968,6 +7990,17 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=
                             save_agent(fresh)
                 event("landing-reopened", key=rec["key"], why=str(e))
                 return False
+        elif disposition.get("kind") == "continued":
+            # Shutdown can flush new work after the pre-spawn clean check.
+            # Keep it for reconciliation; the existing deletion retry rechecks it.
+            try:
+                _require_clean(current, "delete continued workspaces", deadline=deadline)
+            except Deadline as e:
+                deferred = str(e)
+                held = True
+            except SpecError as e:
+                failures.append(str(e))
+                held = True
 
         for w in workspaces:
             # Point 3: the branches the agent created are its branches too, and
@@ -8311,18 +8344,22 @@ def _names_a_path(args, paths):
 
 def _protected_pids(deadline=None):
     """This process, its ancestors and every claude process: never stopped.
-    Its `ps` reads are bounded by the caller's deadline (V3-02)."""
+    Its `ps` reads are bounded by the caller's deadline; None means incomplete."""
     keep = set()
     pid = os.getpid()
     for _ in range(64):
+        if _past(deadline):
+            return None
         if not pid or pid <= 1:
             break
         keep.add(pid)
         pid, _c = _ps_parent_and_comm(pid, timeout=_bounded(deadline, 10))
+    if _past(deadline):
+        return None
     for p, a in _process_args(timeout=_bounded(deadline, 30)).items():
         if os.path.basename((a.split() or [""])[0]) == "claude":
             keep.add(p)
-    return keep
+    return None if _past(deadline) else keep
 
 
 def processes_in(paths, deadline=None):
@@ -8355,17 +8392,23 @@ def processes_in(paths, deadline=None):
     if not paths:
         return []
     keep = _protected_pids(deadline)
+    if keep is None or _past(deadline):
+        return None
     hits = set(_gradle_daemons(paths))
+    if _past(deadline):
+        return None
     cwds = _process_cwds(timeout=_bounded(deadline, 60), strict=True)
-    if cwds is None:
+    if cwds is None or _past(deadline):
         return None
     for pid, cwd in cwds.items():
         c = realpath(cwd)
         if any(c == p or c.startswith(p + os.sep) for p in paths):
             hits.add(pid)
     hits -= keep
+    if _past(deadline):
+        return None
     table = process_table(timeout=_bounded(deadline, 30), strict=True)
-    if table is None:
+    if table is None or _past(deadline):
         return None
     grew = bool(hits)
     while grew:
@@ -8383,6 +8426,8 @@ def _named_only(paths, owned, deadline=None):
     caller's deadline (V3-02)."""
     paths = [realpath(p) for p in paths if p]
     keep = _protected_pids(deadline)
+    if keep is None or _past(deadline):
+        return []
     out = []
     for pid, args in _process_args(timeout=_bounded(deadline, 30)).items():
         if pid in owned or pid in keep:
@@ -8435,9 +8480,13 @@ def stop_processes(paths, deadline=None):
     # PIDs are reused, so the history keeps each one's start time (V2-11).
     process_start_before = {}
     for p in pids:
+        if _past(deadline):
+            return {"stopped": [], "survivors": pids}
         st, when = process_start(p, timeout=_bounded(deadline, 10))
         if st == "ok":
             process_start_before[p] = when
+    if _past(deadline):
+        return {"stopped": [], "survivors": pids}
     for p in pids:
         try:
             os.kill(p, signal.SIGTERM)
