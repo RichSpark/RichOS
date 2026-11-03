@@ -2,6 +2,8 @@
 """token-track report: fixture transcript + fixture readings give a known tokens-per-point."""
 import json
 import os
+from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -14,6 +16,28 @@ T0 = 1791360000  # 2026-10-07T06:40:00Z
 def iso(epoch):
     import datetime
     return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+class Install(unittest.TestCase):
+    def test_token_tracker_installs_in_fresh_home(self):
+        with tempfile.TemporaryDirectory(prefix='token-install-') as temporary:
+            root = Path(temporary)
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            launchctl = bin_dir / 'launchctl'
+            launchctl.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/calls"\n')
+            launchctl.chmod(0o755)
+            home = root / 'home'
+            home.mkdir()
+            env = dict(os.environ, HOME=str(home), PATH=str(bin_dir) + os.pathsep + os.environ['PATH'])
+            result = subprocess.run(['bash', str(Path(HERE) / 'token-track-launchd.sh'), 'install'],
+                                    env=env, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            plist = home / 'Library/LaunchAgents/com.richos.token-track.plist'
+            data = plistlib.loads(plist.read_bytes())
+            self.assertEqual(data['Label'], 'com.richos.token-track')
+            self.assertEqual(len(data['StartCalendarInterval']), 60)
+            self.assertIn('load ' + str(plist), (home / 'calls').read_text().splitlines())
 
 
 class Report(unittest.TestCase):

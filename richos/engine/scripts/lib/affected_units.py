@@ -177,8 +177,11 @@ def validate_pins(engine):
     """Use the selector's existing reader validation, without running parser fixtures."""
     document = json.loads((engine / DEPENDENCY_MAP).read_text())
     graph = Dependencies(engine, document)
-    for name in document["nodes"]:
+    for name, row in document["nodes"].items():
         graph.node(name)
+        for edge in row.get("edges", []):
+            if edge["to"] not in document["nodes"]:
+                raise Unsupported("unqualified reader " + edge["to"] + " referenced by " + name)
     for row in document.get("hook_readers", {}).values():
         hook_reader(row, graph.read)
     return len(document["nodes"]), len(document.get("hook_readers", {}))

@@ -493,7 +493,7 @@
     },
     "scripts/lib/cpu_guard.py": {
       "source": "scripts/lib/cpu_guard.py",
-      "sha256": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+      "sha256": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
       "evidence": "Token and supervisor callers use registration, health, admission and verification-client APIs before HostMemory. These read native process data and their private controller records, never orchestration.config. They do not invoke the watch/install CLI or its HostMemory provider. Caller commands remain separate declared edges. Installed launcher inventory reads source bytes as data and compares hashes; no configured setting values are consumed by this version check.",
       "keys": [],
       "edges": [
@@ -662,7 +662,7 @@
     },
     "scripts/lib/affected_units.py#validate-config": {
       "source": "scripts/lib/affected_units.py",
-      "sha256": "e30dd9847772eb5f6c1cbd2a1d6d67a2743ca6fd341c69e3d869edd4b3c67c6b",
+      "sha256": "5ec287178a4b353ca8241e1b6ea3fe7bd748c94184d62b1ab8450f78196c54c0",
       "evidence": "validate_config reads the real config and its declared key registry, rejecting unsupported syntax and unknown keys. Renewed 2026-10-05: digest-only declaration comparison reads base/target JSON as data and retains every non-digest field; --validate-pins reuses Dependencies.node and hook_reader, reading the same reviewed source, inventory and external bindings as the existing validators.",
       "keys": [],
       "edges": [
@@ -1142,7 +1142,7 @@
     },
     "scripts/lib/affected_units.py": {
       "source": "scripts/lib/affected_units.py",
-      "sha256": "e30dd9847772eb5f6c1cbd2a1d6d67a2743ca6fd341c69e3d869edd4b3c67c6b",
+      "sha256": "5ec287178a4b353ca8241e1b6ea3fe7bd748c94184d62b1ab8450f78196c54c0",
       "evidence": "The selector can validate a supplied engine configuration and can compute config/hook/ordinary selections from supplied snapshots. Its only subprocesses are read-only Git operations. Renewed 2026-09-28: ordinary selection also names scripts/verification-inputs.test.sh for a path this same declaration pins (pinned_sources reads the already-loaded declaration only; no new file, setting or subprocess). Renewed 2026-10-01: ordinary selection also reads the change's base side through the same read-only Snapshot (a path the base had and the selected tree lacks is listed as removed, never unmapped), and an unmapped path is listed once; no new file, setting or subprocess kind. Renewed 2026-10-05: digest-only declaration comparison reads base/target JSON as data and retains every non-digest field; --validate-pins reuses Dependencies.node and hook_reader, reading the same reviewed source, inventory and external bindings as the existing validators.",
       "keys": [],
       "edges": [
@@ -1167,7 +1167,7 @@
     },
     "scripts/affected-units.test.py": {
       "source": "scripts/affected-units.test.py",
-      "sha256": "0d381e7bf08bb25ce5ee7a3c7df275478b9d1e4d70eb8da3d32e4b53dce1ab82",
+      "sha256": "22658fe8db428e123ba9306a53daa8cb2841c9371ad8a7f716832cc86fc174ce",
       "evidence": "All config reads use newly written fixture files or literal before/after text. The real-file planning case reads only hooks.json and source-bound registration declarations. Nested CLI invocations use a newly created Git repository, and selected commands are never executed. The added real dependency/selection cases only read bound source and hook JSON as data and use synthetic config deltas; they never launch selected suites. Renewed 2026-09-28: the pinned-reader case reads the real declaration and every suite's text as data and adds one synthetic node in memory; nothing is executed. Renewed 2026-10-01: the removal case runs the selector on a newly created Git repository with an inert owner suite, and the two-roads case reads hooks.json as data; nothing is executed. Renewed 2026-10-05: pin-renewal controls use private reader/map/Git fixtures and invoke only read-only selection/validation; they never execute planned suites.",
       "keys": [],
       "edges": [
@@ -12456,7 +12456,7 @@
     },
     "scripts/ci-shard.sh#synthetic-fixture": {
       "source": "scripts/ci-shard.sh",
-      "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
+      "sha256": "1ec3e1e5392155266b2a96202f7bf6b4ace328a4401ccc41aa7ce99aee2b6867",
       "evidence": "Reached through ci-shard.test.sh synthetic inventory only. Executes literal fixture suites and known-red shell predicates supplied by that test. Plan/weights/receipts/canary data do not execute config. The optional target-provenance route is not requested by the fixture. All actual runner helpers are bound below. The teammate-workspace default (2026-10-01: no selector in a cc/ worktree runs what ci-affected-units.sh maps the branch to; reads RICHOS_TEST_SCOPE through lib/workspace_scope.py) is inert here: the fixture copies no lib/workspace_scope.py, so that branch is skipped and neither the library nor ci-affected-units.sh is executed. The run's folder (2026-10-02) is allocated by sourcing the copied lib/scratch.sh (scratch_new/scratch_release, ledger under the suite's sandbox CLAUDE_CONFIG_DIR, TMPDIR the suite's or S24's sandbox); TERM/INT/HUP traps only defer the exit until the running unit returns. That copy is bound as a fixture (2026-10-02, integration of cc/zach-opus-tmpvanish1): its one configuration read, SCRATCH_DEFAULT_TTL_MINUTES, only sets a ledger row's ttl_minutes, which no case of ci-shard.test.sh reads, so no live configuration value can change a verdict.",
       "keys": [],
       "edges": [
@@ -12713,7 +12713,7 @@
     },
     "scripts/ci-shard.sh#boundary-fixture": {
       "source": "scripts/ci-shard.sh",
-      "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
+      "sha256": "1ec3e1e5392155266b2a96202f7bf6b4ace328a4401ccc41aa7ce99aee2b6867",
       "evidence": "Runner-boundaries fixture copies this runner into a synthetic engine and creates literal marker/status suites and known-red data. No target-proof receipt route; all actual runner helper sources remain bound. The teammate-workspace default (2026-10-01; lib/workspace_scope.py, ci-affected-units.sh, RICHOS_TEST_SCOPE) is inert here: the synthetic engine has no lib/workspace_scope.py, so that branch is skipped. The scratch-allocator branch (2026-10-02) is inert too: the fixture copies no lib/scratch.sh, so the run's folder is the bare mktemp fallback under the fixture's TMPDIR.",
       "keys": [],
       "edges": [
@@ -15347,7 +15347,7 @@
     },
     "scripts/lib/cpu_guard.py#policy-fixtures": {
       "source": "scripts/lib/cpu_guard.py",
-      "sha256": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+      "sha256": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
       "keys": [],
       "edges": [
         {
@@ -15374,7 +15374,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/ci-shard.sh",
-          "sha256": "f43b1b062424dfa8b3f8ca7bccc2e909e13947f1e782a40e4810a08a5526acad",
+          "sha256": "1ec3e1e5392155266b2a96202f7bf6b4ace328a4401ccc41aa7ce99aee2b6867",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15398,7 +15398,7 @@
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/cpu_guard.py",
-          "sha256": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+          "sha256": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15488,7 +15488,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "9a194448f467fca50b19627f13f6b5fe7809427fc9e25a1110c45bd5680e70a6",
+          "sha256": "f7a0393fe06f961b3b2d41f714be096fbee054f1b539c0f094fb388e300be7a1",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15535,7 +15535,7 @@
     },
     "scripts/lib/cpu_guard.test.py": {
       "source": "scripts/lib/cpu_guard.test.py",
-      "sha256": "e61a4b5d58288e101e7c44cc72ca2ba79c6c4f9900d4c1d7c7bbf97bfc8df1d2",
+      "sha256": "6b1a154a9bc056ddf04b8f05c96d17c74dd4a000bc44b881d6fd5cdc9775fbc5",
       "keys": [],
       "edges": [
         {
@@ -16665,7 +16665,7 @@
       "keys": [],
       "edges": [
         {
-          "to": "scripts/lib/spawn.py"
+          "to": "scripts/lib/spawn.py#fixture-guards"
         }
       ]
     },
@@ -16682,7 +16682,7 @@
     },
     "scripts/lib/build_caches.py": {
       "source": "scripts/lib/build_caches.py",
-      "sha256": "f87e20920311f70a97b48b5db0ac2ff315caec761aa2a4fa3846d0a4343940a3",
+      "sha256": "4e1d4bcbd9e074886a33123930593bc2cfef3e6f33622c51cf3c5dcc3dceae3a",
       "evidence": "Cleanup roots use the shared machine_settings reader for the general cache, effective Cargo cache and selected RICHOS_BUILD_CACHE. Landed checkout cleanup and scheduled cleanup use the same roots. Git discovery reads registered project checkouts; bounded scans, Cargo locks and the existing cleanup walls are unchanged. Overlapping roots deduplicate discovered paths. No new configuration key or execution edge.",
       "keys": [],
       "edges": [
@@ -16780,7 +16780,7 @@
     },
     "scripts/lib/recovery_controls.py": {
       "source": "scripts/lib/recovery_controls.py",
-      "sha256": "9c28efc40db32c5bb3f63402db88de53ddfff82e30aaca47bd02bcb9ca334be5",
+      "sha256": "d69cfaa53cc19ffeb6e8b118f4f78cc5d0e5e4b17bd0eabc6dec43210a63b350",
       "evidence": "Workspace adapter closure includes recovery state, private registry/session records, exact Git commit/delta/untracked identities and owned-command observations. Production preservation uses the external SSD. Workspace fixtures hold an in-flight native tool so no WIP export is started. Ordinary fixture entities have no recovery declaration; no model launches on those paths. Observer reconciliation and scheduler errors are data gaps with no control refusal. Storage is selected by the recovery host helper, not an inherited model path. Admission reads no worker name; questions-only follows the observe branches of the same repository declaration and recovery state.",
       "keys": [],
       "edges": [
@@ -17210,7 +17210,7 @@
     },
     "scripts/lib/launchd-install.sh": {
       "source": "scripts/lib/launchd-install.sh",
-      "sha256": "6cb609622e5a0ef1478750bb42bb8d18c6f3b117e7723f49ec9ea9ff1a9bb8c5",
+      "sha256": "935bb6866b6621e6ac3e744660935a022fadb2c3b561e70bc284fb6b24bc63e2",
       "evidence": "Calls launchctl print/bootout/bootstrap, cmp, grep and sed on the label, plist and generated file its caller passes. Resolves its state directory from CLAUDE_CONFIG_DIR or HOME; reads ps for a recorded waiter pid; starts the fixed sibling launchd-install-after-run.sh through python3 with the install command, wait and poll its caller passes. No configuration lookup.",
       "keys": [],
       "edges": [
@@ -17784,7 +17784,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c"
       },
@@ -17827,7 +17827,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c"
       },
@@ -17867,7 +17867,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4"
@@ -17980,7 +17980,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
@@ -18089,7 +18089,7 @@
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
         "scripts/lib/ceo-todos.sh": "03a36a2915fa3bc7029261d8a92418734b671093f2cb50b6294faedb83c24b7b",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
@@ -18332,7 +18332,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
@@ -18458,7 +18458,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
@@ -18578,7 +18578,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c"
       }
@@ -18607,7 +18607,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
@@ -18737,7 +18737,7 @@
         "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
@@ -18844,7 +18844,7 @@
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
@@ -19088,7 +19088,7 @@
         "scripts/lib/agent_hold.py": "8a88b276d74977963790a3bfc3287aac9f95ebd161284bb0c37de434778ac003",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
         "scripts/lib/containers.py": "21ae0f0f3b978556873fd5bdae04e3f70c57387a9efb42f472ada4cc10303142",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/engine_pass.py": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -19166,7 +19166,7 @@
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "owned-systems.declaration": "a5f48969f23adfc3fc8e289ed29a4911d24bdb7bb19a486fc8b276ff2172374c",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/hooks/owned-state.test.sh": "487d91383cd87f56a5e0b7c5a186aa4ba31a167a3e6559661b1df7f8a6562a5a",
         "scripts/lib/escalations.py": "71dae88f354ed235bd9f7552e63941ac55841467eb396c2faf9db423cc628022",
         "scripts/escalate.sh": "b3c8b3e5207d14ea166e6b39cf9bddf81895bd95374c472ecc62d7c6dad54b4a",
@@ -19191,7 +19191,7 @@
       "sources": {
         "scripts/lib/cpu_policy.py": "371b63d15a28ba5936d14e490b7262fe6d9f03c84288b598b08fe9285e5c05a1",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
-        "scripts/lib/cpu_guard.py": "fcb24b44af34fc10659ac5d7dd711b8dbcc2bb0c12598e49ad74c478844b3e47",
+        "scripts/lib/cpu_guard.py": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
         "scripts/lib/ceo-todos.py": "5e6264edc76c9dc03b0c569c63de251dd5b053bd88e40aa7101538bbbeaf406b",
         "scripts/ceo-todos-init.sh": "a98539a81ad89d378ab1cb43462fb7056e01988e6696c1b3dddae8535591fec6",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",

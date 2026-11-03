@@ -458,6 +458,7 @@ def main(argv=None):
                         help="with --changed: refuse any count this change grows, whatever room the ceiling has")
     parser.add_argument("--trusted-ref", default="refs/heads/main")
     parser.add_argument("--suite-results", type=Path, help="current nightly script-suite receipt")
+    parser.add_argument("--suite-run-id", help="actual script-suite run validated by nightly gate reconciliation")
     parser.add_argument("--json-out", type=Path, help="write detailed measurement output to the named file")
     args = parser.parse_args(argv)
     started = time.monotonic()
@@ -492,12 +493,11 @@ def main(argv=None):
             return 0
         tool_versions = versions(ROOT, cargo=not args.static)
         report["versions"] = tool_versions
-        # lint.test.sh runs `lint.sh --all` (fast AND Tauri) inside the script suites. When this
-        # run's receipt shows it passed, the same source already passed every check `--all`
-        # makes here, Tauri Clippy included, so none is repeated (hunt part 2 v3, R47: only
-        # the fast phase was reused, and the nightly ran Tauri Clippy twice).
-        if args.all and fast_was_run(args.suite_results, os.environ.get("RICHOS_NIGHTLY_RUN_ID")):
-            print("lint.test.sh passed `lint.sh --all` in this run's script suites: its fast and "
+        # lint.test.sh runs `lint.sh --all` (fast AND Tauri) inside the script suites.
+        # Gate reconciliation may qualify an earlier run with identical inputs.
+        # Match that actual run's receipt without changing its recorded provenance.
+        if args.all and fast_was_run(args.suite_results, args.suite_run_id or os.environ.get("RICHOS_NIGHTLY_RUN_ID")):
+            print("lint.test.sh passed `lint.sh --all` in the proven script-suite run: its fast and "
                   "Tauri lint are not run again", flush=True)
             report["reused"] = "lint.test.sh"
         else:

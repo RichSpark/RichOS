@@ -45,7 +45,10 @@ def canonical_state():
 CANONICAL_STATE = canonical_state()
 # Preserve the existing kernel lock inodes across rollout and older worktrees.
 CANONICAL_WORKERS = Path(pwd.getpwuid(os.getuid()).pw_dir) / '.richos-nightly/worker-budget-v1'
-CANONICAL_ENGINE_PASS = CANONICAL_STATE.parent / 'engine-pass-v1'
+# The engine pool has its own machine setting and does not move with the controller.
+# Ignore session overrides here, just as canonical_state does for the policy anchor.
+CANONICAL_ENGINE_PASS = M.state('engine-pass-v1', 'RICHOS_ENGINE_PASS_DIR', environment={
+    'HOME': str(Path(pwd.getpwuid(os.getuid()).pw_dir))})
 
 
 def installed_verification_policy():

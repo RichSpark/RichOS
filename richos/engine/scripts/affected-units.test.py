@@ -653,6 +653,26 @@ class PinRenewals(unittest.TestCase):
                         before.replace(self.sha('reader.sh'), 'not-a-digest')):
             self.assertFalse(digest_only_change(before, invalid))
 
+    def test_spawn_arguments_do_not_depend_on_quota_configuration(self):
+        from verification_inputs import Dependencies
+        engine = HERE.parent
+        document = json.loads((engine / DEPENDENCY_MAP).read_text())
+        graph = Dependencies(engine, document)
+        unit = 'scripts/spawn-effort.test.sh'
+        self.assertEqual(graph.config_units(dict(content=False, keys=[], presence=False, fallback=[]), [unit]), {})
+        self.assertEqual(graph.config_units(dict(content=True, keys=['QUOTA_PAUSE_PERCENT'],
+                                                presence=False, fallback=[]), [unit]), {})
+
+    def test_fast_validator_refuses_dangling_dependency_targets(self):
+        self.document['nodes']['reader']['edges'] = [{'to': 'reader#missing'}]
+        self.write_map()
+        with self.assertRaisesRegex(Unsupported, 'reader#missing'):
+            validate_pins(self.root)
+        self.document['nodes']['reader']['edges'] = [{'to': 'reader'}]
+        self.write_map()
+        self.assertEqual(validate_pins(self.root), (1, 1))
+
+
     def test_fast_validator_refuses_stale_missing_and_omitted_key_or_execute_inputs(self):
         self.assertEqual(validate_pins(self.root), (1, 1))
         (self.root / 'reader.sh').write_text('echo changed\n')

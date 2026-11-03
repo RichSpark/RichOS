@@ -46,6 +46,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import machine_settings as M
 
@@ -247,14 +248,22 @@ def _blocks(st, seen):
 
 
 def walk(path, seen=None):
-    """(bytes_on_disk, newest of mtime and atime, contains_git) for a tree. Reading a
-    directory entry's metadata does not change its access time."""
+    """Conservative (bytes, newest access, may_contain_git) deletion bounds.
+
+    An incomplete tree is protected as recently used and possibly containing Git.
+    Report the unknown inspection without aborting independent cleanup work.
+    """
+    try:
+        return _walk(path, seen)
+    except OSError as error:
+        print("build cache protected after incomplete inspection of %s: %s" % (path, error), file=sys.stderr)
+        return 0, time.time(), True
+
+
+def _walk(path, seen=None):
     total, newest, has_git = 0, 0.0, False
     seen = set() if seen is None else seen
-    try:
-        st = os.lstat(path)
-    except OSError:
-        return 0, 0.0, False
+    st = os.lstat(path)
     total = _blocks(st, seen)
     newest = max(st.st_mtime, st.st_atime) if not stat.S_ISDIR(st.st_mode) else st.st_mtime
     if not stat.S_ISDIR(st.st_mode):
@@ -262,17 +271,11 @@ def walk(path, seen=None):
     stack = [path]
     while stack:
         cur = stack.pop()
-        try:
-            entries = list(os.scandir(cur))
-        except OSError:
-            continue
+        entries = list(os.scandir(cur))
         for e in entries:
             if e.name == ".git":
                 has_git = True
-            try:
-                st = e.stat(follow_symlinks=False)
-            except OSError:
-                continue
+            st = e.stat(follow_symlinks=False)
             total += _blocks(st, seen)
             if stat.S_ISDIR(st.st_mode):
                 # A directory's atime moves when anything lists it, including this walk's
@@ -365,6 +368,15 @@ def _unit_key(name):
 
 
 def units(profile):
+    """A profile with unreadable entries has no units eligible for collection."""
+    try:
+        return _units(profile)
+    except OSError as error:
+        print("Cargo profile kept after incomplete inspection of %s: %s" % (profile, error), file=sys.stderr)
+        return {}
+
+
+def _units(profile):
     """{key: {"paths": [...], "bytes": n, "newest": t}} for one profile directory.
     Each unit's newest is the latest write or read of any file it owns."""
     out = {}
@@ -380,7 +392,7 @@ def units(profile):
         base = os.path.join(profile, sub)
         try:
             entries = list(os.scandir(base))
-        except OSError:
+        except FileNotFoundError:
             continue
         for e in entries:
             if not e.is_dir(follow_symlinks=False):
@@ -396,7 +408,7 @@ def units(profile):
         base = os.path.join(profile, sub)
         try:
             entries = list(os.scandir(base))
-        except OSError:
+        except FileNotFoundError:
             continue
         for e in entries:
             key = _unit_key(e.name)
@@ -405,10 +417,7 @@ def units(profile):
             if e.is_dir(follow_symlinks=False):
                 size, newest, _git = walk(e.path, seen)
             else:
-                try:
-                    st = e.stat(follow_symlinks=False)
-                except OSError:
-                    continue
+                st = e.stat(follow_symlinks=False)
                 size, newest = _blocks(st, seen), max(st.st_mtime, st.st_atime)
             add(key, e.path, size, newest)
     return out
