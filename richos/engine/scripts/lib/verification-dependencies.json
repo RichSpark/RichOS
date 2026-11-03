@@ -895,7 +895,7 @@
     },
     "scripts/hooks/commit-ceo-inputs.py#unfenced-fixtures": {
       "source": "scripts/hooks/commit-ceo-inputs.py",
-      "sha256": "23341c30830399611efc4d9979df6bcdfc5b5d06f05c71d53da2755452aa6134",
+      "sha256": "5777885f69efcf674ddf9b7b867f7b5e6242959b87a8dfb85b942494690b7f9a",
       "evidence": "The ingress suite supplies only paths in its freshly initialized private repositories, with no installed reference-transaction launcher. Git/file classification and commits execute the secret/publication write gates. fence_on returns false, so land-lease commands are not invoked in this context.",
       "keys": [],
       "edges": [
@@ -944,7 +944,7 @@
     },
     "scripts/hooks/ceo-inputs.test.sh": {
       "source": "scripts/hooks/ceo-inputs.test.sh",
-      "sha256": "9555e3d4581e5ee9345a20f8a8f614688947a15b43d02b6ad4b8e87e56f7b236",
+      "sha256": "f0a6bb9a538edb3de49d93e84ae3155e18a83b7670f5987b4170aafc4a8198ee",
       "evidence": "Every new_repo config is created from literal PROTECTED_PATHS and explicit opt-out settings. All normal/broken-wrapper and Stop calls pin RICHOS_ENTITY_ROOT to those private repositories. Even the outside-seat and unadopted target files are created inside this suite sandbox; it never copies the real config.",
       "keys": [],
       "edges": [
@@ -10099,7 +10099,7 @@
     },
     "scripts/hooks/commit-ceo-inputs.py#fenced-fixtures": {
       "source": "scripts/hooks/commit-ceo-inputs.py",
-      "sha256": "23341c30830399611efc4d9979df6bcdfc5b5d06f05c71d53da2755452aa6134",
+      "sha256": "5777885f69efcf674ddf9b7b867f7b5e6242959b87a8dfb85b942494690b7f9a",
       "evidence": "The private fenced ingress fixture executes classification and secret/publication gates plus take_lease/release_lease through fixed land-lease.sh. The seat, ingress state and repository inputs are literal private fixture paths.",
       "keys": [],
       "edges": [
@@ -18138,7 +18138,7 @@
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
         "hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
         "scripts/hooks/commit-ceo-inputs.sh": "332b5ec9ce51872486cca4c5aa7dc5e74b6608cd06ebf4c95b830cf9ebd7288a",
-        "scripts/hooks/commit-ceo-inputs.py": "23341c30830399611efc4d9979df6bcdfc5b5d06f05c71d53da2755452aa6134",
+        "scripts/hooks/commit-ceo-inputs.py": "5777885f69efcf674ddf9b7b867f7b5e6242959b87a8dfb85b942494690b7f9a",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/hooks/detect-nonnative-worktree.sh": "c1fc4740b019bf311a56f69aae0df1761e9c2383e77dd2f36ee1af2dbce3bfaf",
@@ -18887,7 +18887,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "532decef909388ea70be6cc22e5348bbbdd7a0f8f56d131bff8f849db277105f",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/hooks/notice-ceo-inputs-unheld.sh": "fc44a75854df8c13eed1d926300a58e1d72ffd7c1136b18e99a1137daa1cf650",
-        "scripts/hooks/commit-ceo-inputs.py": "23341c30830399611efc4d9979df6bcdfc5b5d06f05c71d53da2755452aa6134",
+        "scripts/hooks/commit-ceo-inputs.py": "5777885f69efcf674ddf9b7b867f7b5e6242959b87a8dfb85b942494690b7f9a",
         "scripts/hooks/scan-secrets.sh": "1f9f7dc2923f12417d7d86155733b65f84f837d2b72d1d8fa1864a7d970415d4",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "c7d745cc6544f879eee24428b32ce8a964a217f36de7b27684b0d3cd190057f0",

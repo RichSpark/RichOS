@@ -51,7 +51,7 @@ say() { [ "$VERBOSE" -eq 1 ] && printf '\n----- %s -----\n%s\n' "$1" "$2"; retur
 command -v python3 >/dev/null 2>&1 || { echo "FATAL: python3 required" >&2; exit 1; }
 command -v git     >/dev/null 2>&1 || { echo "FATAL: git required" >&2; exit 1; }
 
-SANDBOX="$(cd "$(mktemp -d -t ceo-inputs.XXXXXX)" && pwd -P)"
+SANDBOX="$(cd "$(mktemp -d "${TMPDIR:?}/ceo-inputs.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 # A string that appears inside every specimen file and nowhere else. Section G
@@ -538,7 +538,7 @@ esac
 # Its fixture repository is removed however the fragment ends, and it is made
 # in a temp directory of its own so the suite can SEE that nothing was left
 # behind (hunt part 3 v3, finding 42: every run used to leave a repository).
-P322_TMP="$(mktemp -d -t p322-tmp.XXXXXX)"
+P322_TMP="$(mktemp -d "${TMPDIR:?}/p322-tmp.XXXXXX")"
 P322_OUT="$(TMPDIR="$P322_TMP" python3 - "$SRC_DIR/commit-ceo-inputs.py" <<'PYT' 2>&1
 import importlib.util, os, shutil, subprocess, sys, tempfile
 spec = importlib.util.spec_from_file_location("cci", sys.argv[1])
