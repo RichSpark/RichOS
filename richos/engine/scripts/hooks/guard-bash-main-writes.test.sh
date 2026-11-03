@@ -41,6 +41,8 @@ cp "$SRC_DIR/../lib/resolve-main-checkout.sh" "$TMPROOT/scripts/lib/" 2>/dev/nul
 # hook correctly refuses to start ("BROKEN INSTALL") and every case below would
 # fail for that reason rather than the one under test.
 cp "$SRC_DIR/../lib/resolve-roots.sh" "$TMPROOT/scripts/lib/"
+cp "$SRC_DIR/../lib/unguarded_rm.py" "$TMPROOT/scripts/lib/"
+cp "$SRC_DIR/../lib/host_sleep.py" "$TMPROOT/scripts/lib/"
 printf 'PROTECTED_PATHS="%s"\n' "$PROTECTED_PATHS" > "$TMPROOT/orchestration.config"
 HOOK="$TMPROOT/scripts/hooks/guard-bash-main-writes.sh"
 ROOT="$TMPROOT"

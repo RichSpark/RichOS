@@ -90,6 +90,9 @@ class StubAliases(unittest.TestCase):
         renamed = self.root / 'builder'
         renamed.symlink_to(self.stubs / 'make')
         self.assertEqual(mod.stub_name(str(renamed), self.env), 'make')
+        other_launcher = self.root / 'objdump'
+        os.link(self.stubs / 'make', other_launcher)
+        self.assertEqual(mod.stub_name(str(other_launcher), self.env), 'objdump')
         real = self.root / 'make'
         real.write_text('#!/bin/sh\nexit 0\n')
         real.chmod(0o755)

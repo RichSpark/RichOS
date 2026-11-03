@@ -155,7 +155,7 @@ def stub_name(word, env):
         for name in names:
             try:
                 if os.path.samefile(candidate, os.path.join(shim_dir(), name)):
-                    return name
+                    return name if os.path.basename(word) in SHIMS else os.path.basename(os.path.realpath(candidate))
             except OSError:
                 pass
         return None  # the first executable is the one PATH would run

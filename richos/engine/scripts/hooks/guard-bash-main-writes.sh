@@ -44,8 +44,8 @@
 # cd-compound) still blocks — pinned as pairs in guard-bash-main-writes.test.sh.
 #
 # Acknowledged, deliberate limit — this is shell-TEXT analysis, not a shell
-# parser or a sandbox: it does not see through command substitution
-# (`$(mkdir ...)`), and it cannot know whether an interpreter invocation like
+# parser or a sandbox: it checks shell substitutions in their own directory
+# scope, but cannot know whether an interpreter invocation like
 # `python3 <tree>/tool.py` performs file I/O of its own. That was never caught
 # before or after this change; the hook's scope is and always was the Bash-cwd
 # drift vector, not arbitrary-code sandboxing.
@@ -174,8 +174,14 @@ fi
 
 # (payload already read above, before root resolution)
 
+_BMW_PARSER="$SCRIPT_DIR/../lib/unguarded_rm.py"
+_BMW_HEREDOC="$SCRIPT_DIR/../lib/host_sleep.py"
 read -r -d '' _BMW_CLASSIFIER <<'PYEOF' || true
-import json, re, os, sys
+import json, re, os, sys, runpy
+reader = runpy.run_path(os.environ['GUARD_PARSER'])
+tokenize, match_paren = reader['tokenize'], reader['_match_paren']
+sys.path.insert(0, os.path.dirname(os.environ['GUARD_PARSER']))
+heredocs = runpy.run_path(os.environ['GUARD_HEREDOC'])['heredocs']
 try:
     d = json.loads(sys.stdin.read() or '{}')
 except Exception:
@@ -190,11 +196,11 @@ if not prefixes:
 cwd = d.get('cwd') or ROOT
 ROOT = os.path.realpath(ROOT)
 
-def check_targets(tokens):
+def check_targets(tokens, base=None):
     for tok in tokens:
         if not tok or tok.startswith('-'):
             continue
-        target = os.path.realpath(os.path.join(cwd, os.path.expanduser(tok)))
+        target = os.path.realpath(os.path.join(base or cwd, os.path.expanduser(tok)))
         for prefix in prefixes:
             protected = os.path.join(ROOT, prefix.strip('/'))
             if target == protected or target.startswith(protected + os.sep):
@@ -203,7 +209,6 @@ def check_targets(tokens):
 
 # 1) write-verb clauses — only THAT verb's own argument list (up to the next
 #    ; & | control operator) is checked, never the whole command line.
-VERB_CLAUSE = re.compile(r'(?:^|[;&|]\s*|\s)(mkdir|cp|mv|rm|tee|touch|rsync)\b(?P<args>[^;&|]*)')
 def write_targets(verb, toks):
     # cp and rsync only READ their sources: just the destination is a write.
     # mv removes its source and rm/tee/touch/mkdir write every argument, so
@@ -246,34 +251,15 @@ WRAPPERS = {'sudo': ('-u', '-g', '-C', '-D', '-h', '-p', '-R', '-T', '-U'),
 KEYWORDS = ('!', '{', '}', 'then', 'do', 'else', 'elif', 'if', 'while', 'until')
 ASSIGN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 
-def strip_comments(text):
-    # A # that begins a word, outside quotes, starts a comment to end of line.
-    out, q, i = [], '', 0
-    while i < len(text):
-        c = text[i]
-        if q:
-            if c == q:
-                q = ''
-            elif c == BS and q == Q2 and i + 1 < len(text):
-                out.append(c); i += 1; c = text[i]
-        elif c == BS and i + 1 < len(text):
-            out.append(c); i += 1; c = text[i]
-        elif c in (Q1, Q2):
-            q = c
-        elif c == '#' and (i == 0 or text[i - 1] in ' \t\n;&|()'):
-            j = text.find('\n', i)
-            if j < 0:
-                break
-            i = j
-            continue
-        out.append(c); i += 1
-    return ''.join(out)
-
 def shell_tokens(text):
     # Keep syntax separate from word values: a quoted or escaped > is data.
     word, started, quote, i = [], False, '', 0
     while i < len(text):
         c = text[i]
+        if text.startswith('$(', i) and quote != Q1:
+            end = match_paren(text, i)
+            word.append(text[i:end]); started = True; i = end
+            continue
         if quote:
             if c == quote:
                 quote = ''
@@ -313,21 +299,27 @@ def shell_tokens(text):
 
 
 def statements(text):
-    stmt, redirects, pending = [], [], None
-    for tok, operator in shell_tokens(strip_comments(text)):
-        if operator:
-            if '<' in tok or '>' in tok:
-                pending = tok
-                continue
-            yield stmt, redirects
-            stmt, redirects, pending = [], [], None
-        elif pending:
-            if pending in ('>', '>>'):
-                redirects.append(tok)
-            pending = None
-        else:
-            stmt.append(tok)
-    yield stmt, redirects
+    # The existing engine tokenizer skips data heredocs and keeps each command
+    # substitution inside its outer word. It never changes the parent's cwd.
+    for raw_stmt in tokenize(text)[0]:
+        stmt, redirects, pending, nested = [], [], None, []
+        for raw in raw_stmt:
+            nested.extend(tokenize(raw)[1])
+            parts = list(shell_tokens(raw))
+            if (len(parts) > 1 and not parts[0][1] and parts[0][0].isdigit()
+                    and parts[1][1] and ('<' in parts[1][0] or '>' in parts[1][0])):
+                parts = parts[1:]  # adjacent IO number: 2>file is not an operand
+            for tok, operator in parts:
+                if operator:
+                    if '<' in tok or '>' in tok:
+                        pending = tok
+                elif pending:
+                    if pending in ('>', '>>'):
+                        redirects.append(tok)
+                    pending = None
+                else:
+                    stmt.append(tok)
+        yield stmt, redirects, nested
 
 def verb_and_args(stmt):
     k = 0
@@ -345,41 +337,63 @@ def verb_and_args(stmt):
             continue
         break
     if k >= len(stmt):
-        return None, []
+        return None, [], cwd
     word = os.path.basename(stmt[k].lstrip(BT))
     rest = stmt[k + 1:]
     if word == 'git':
+        location = cwd
         i = 0
         while i < len(rest) and rest[i].startswith('-'):
+            if rest[i] == '-C' and i + 1 < len(rest):
+                location = os.path.realpath(os.path.join(location, rest[i + 1]))
+            elif rest[i].startswith('-C') and len(rest[i]) > 2:
+                location = os.path.realpath(os.path.join(location, rest[i][2:]))
             i += 2 if rest[i] in ('-C', '-c', '--git-dir', '--work-tree') else 1
         if i < len(rest) and rest[i] in ('rm', 'mv'):
-            return rest[i], rest[i + 1:]
-        return None, []
-    return word, rest
+            return rest[i], rest[i + 1:], location
+        return None, [], cwd
+    return word, rest, cwd
+
+def inspect(text, base, depth=0):
+    global cwd
+    if depth > 6:
+        return
+    saved, cwd = cwd, base
+    docs = {}
+    for head, body in heredocs(text):
+        heads = list(statements(head))
+        if heads:
+            docs.setdefault(tuple(heads[-1][0]), []).append(body)
+    try:
+        for st, redirects, nested in statements(text):
+            for body in nested:
+                inspect(body, cwd, depth + 1)
+            verb, args, location = verb_and_args(st)
+            bodies = docs.get(tuple(st), [])
+            if bodies:
+                body = bodies.pop(0)
+                if verb in ('bash', 'sh', 'zsh', 'dash', 'ksh'):
+                    inspect(body, cwd, depth + 1)
+            hit = check_targets(redirects)
+            if not hit and verb in ('mkdir', 'cp', 'mv', 'rm', 'tee', 'touch', 'rsync'):
+                hit = check_targets(write_targets(verb, args), location)
+            if hit:
+                print('BLOCK ' + hit); raise SystemExit
+            if verb == 'cd' and args:
+                dest = [t for t in args if t not in ('--', '-P', '-L')]
+                if dest:
+                    cwd = os.path.realpath(os.path.join(cwd, os.path.expanduser(dest[0])))
+    finally:
+        cwd = saved
 
 try:
-    for st, redirects in statements(cmd):
-        verb, args = verb_and_args(st)
-        hit = check_targets(redirects)
-        if not hit and verb in ('mkdir', 'cp', 'mv', 'rm', 'tee', 'touch', 'rsync'):
-            hit = check_targets(write_targets(verb, args))
-        if hit:
-            print('BLOCK ' + hit); raise SystemExit
-        # Only an actual cd changes the base for later relative operands.
-        if verb == 'cd' and args:
-            dest = [t for t in args if t not in ('--', '-P', '-L')]
-            if dest:
-                cwd = os.path.realpath(os.path.join(cwd, os.path.expanduser(dest[0])))
+    inspect(cmd, cwd)
 except ValueError:
-    # Preserve the conservative malformed-input fallback.
-    for vm in VERB_CLAUSE.finditer(cmd):
-        hit = check_targets(write_targets(vm.group(1), re.findall(r'\S+', vm.group('args'))))
-        if hit:
-            print('BLOCK ' + hit); raise SystemExit
+    print('BLOCK unreadable-shell-syntax'); raise SystemExit
 
 print('PASS')
 PYEOF
-if ! RESULT="$(GUARD_ROOT="$ENTITY_ROOT" GUARD_TREES="$PROTECTED_PATHS" python3 -c "$_BMW_CLASSIFIER" <<<"$INPUT")"; then
+if ! RESULT="$(GUARD_ROOT="$ENTITY_ROOT" GUARD_TREES="$PROTECTED_PATHS" GUARD_PARSER="$_BMW_PARSER" GUARD_HEREDOC="$_BMW_HEREDOC" python3 -c "$_BMW_CLASSIFIER" <<<"$INPUT")"; then
     echo "ERROR: guard-bash-main-writes.sh: payload classifier failed; refusing unevaluated operation" >&2
     exit 2
 fi

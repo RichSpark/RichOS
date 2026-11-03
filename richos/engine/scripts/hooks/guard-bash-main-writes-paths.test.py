@@ -45,6 +45,17 @@ class WritePaths(unittest.TestCase):
         self.verdict('cat src/file 2>&1', 0)
         self.verdict('cat src/file >&2', 0)
 
+    def test_review_shell_scopes_and_git_directory(self):
+        self.verdict(f'git -C "{self.root}/src" rm file', 2, self.work)
+        self.verdict(f'git -C "{self.root}" -C src mv file other', 2, self.work)
+        self.verdict(f'git -C "{self.work}" rm src/new', 0)
+        self.verdict(f"cat > /dev/null <<'EOF'\ndon't\nEOF\necho hi > {self.root}/src/file", 2, self.work)
+        self.verdict(f'D=$(cd {self.root}/src && pwd); echo "$D" > notes.txt', 0, self.work)
+        self.verdict(f'cp notes {self.root}/src/file 2>/dev/null', 2, self.work)
+        self.verdict(f"cat <<'EOF'\n> {self.root}/src/file\ndon't\nEOF", 0, self.work)
+        self.verdict(f'printf hi >"{self.root}/src/"file', 2)
+        self.verdict(f"cd {self.root}/src && bash <<'EOF'\ntouch file\nEOF", 2)
+
     def test_32_physical_aliases(self):
         for target in (self.root / 'src/file', self.alias / 'src/file'):
             with self.subTest(target=target):

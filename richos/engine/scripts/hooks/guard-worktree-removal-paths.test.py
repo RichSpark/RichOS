@@ -2,6 +2,7 @@
 """P3-44: guard only, never execute the proposed filesystem removal."""
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -66,9 +67,32 @@ class RemovalPaths(unittest.TestCase):
         for command in (f'd="{self.worker}"; rm -rf "${{d:?}}"',
                         f'd="{self.worker}" && rm -rf "$d"',
                         'rm -rf "${G9_WORKER:?}"',
-                        'rm -rf "${unknown_workspace:?}"'):
+                        'rm -rf "${G9_WORKER:?}/.git"'):
             with self.subTest(command=command):
                 self.verdict(command, 2, G9_WORKER=str(self.worker))
+
+    def test_auditor_loop_and_wrapped_removals(self):
+        self.verdict(f': "worktree-remove-ack: fixture"; for d in "{self.worker}"; do rm -rf "${{d:?}}"; done', 2)
+        self.verdict(f'for d in "{self.repo}/ordinary" "{self.worker}"; do rm -rf "${{d:?}}"; done', 2)
+        for prefix in ('timeout 30', 'time', 'timeout -k 5 30'):
+            with self.subTest(prefix=prefix):
+                self.verdict(f'{prefix} rm -rf "{self.worker}"', 2)
+        self.verdict(f'find . -maxdepth 0 -exec rm -rf "{self.worker}" +', 2)
+
+    def test_registry_is_read_without_per_worktree_git_calls(self):
+        wrapper = self.root / 'bin'
+        wrapper.mkdir()
+        marker = self.root / 'git-calls'
+        real_git = shutil.which('git')
+        (wrapper / 'git').write_text(f'''#!/bin/sh
+printf '%s\\n' "$*" >> "$G9_GIT_CALLS"
+exec "{real_git}" "$@"
+''')
+        (wrapper / 'git').chmod(0o755)
+        self.verdict('rm -rf ordinary', 0, PATH=str(wrapper) + ':' + self.env['PATH'], G9_GIT_CALLS=str(marker))
+        calls = marker.read_text().splitlines()
+        self.assertLessEqual(sum('worktree list --porcelain' in line for line in calls), 1, calls)
+        self.assertFalse(any('symbolic-ref' in line for line in calls), calls)
 
     def test_44_parent_child_and_relative_paths(self):
         for command, cwd in (
@@ -89,6 +113,19 @@ class RemovalPaths(unittest.TestCase):
         detached_root.mkdir(parents=True)
         self.verdict(f'rm -rf "{detached_root.parent}"', 2,
                      WTR_CODEX_WORKTREE_ROOTS=str(detached_root))
+
+    def test_review_normal_cleanup_and_known_expansions(self):
+        for command in ('rm -rf "${TMPDIR:?}/g9-scratch"',
+                        'tmp=$(mktemp -d) && rm -rf "${tmp:?}"',
+                        'rm -rf build/*',
+                        'find . -name __pycache__ -type d -print0 | xargs -0 rm -rf',
+                        'rm -rf "${unknown_workspace:?}"'):
+            with self.subTest(command=command):
+                self.verdict(command, 0)
+        self.verdict('d=ordinary; rm -rf "${d:?}"', 0)
+        self.verdict(f"d=\"{self.worker}\"; rm -rf '$d'", 0)
+        self.verdict('rm -rf "${G9_WORKER:?}"', 2, G9_WORKER=str(self.worker))
+        self.verdict(f'rm -rf "{self.parent}"/*', 2)
 
     def test_44_harmless_text_and_unrelated_paths(self):
         self.verdict(f'printf \'rm -rf "{self.worker}"\'', 0)
