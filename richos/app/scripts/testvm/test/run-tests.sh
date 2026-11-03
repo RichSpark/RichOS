@@ -2190,6 +2190,10 @@ t "owned cleanup: Stop probe and walk descendants end after leader exit (R15)"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/owned-cleanup.test.py" >"$TMP/owned-cleanup.log" 2>&1; ok $? "$(cat "$TMP/owned-cleanup.log")"
 t_done
 
+t "walk failures: required guest steps, captures and theme presses cannot pass (R37)"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/walk-failures.test.py" >"$TMP/walk-failures.log" 2>&1; ok $? "$(cat "$TMP/walk-failures.log")"
+t_done
+
 # ===========================================================================
 echo
 if [ "$FAIL" -eq 0 ]; then

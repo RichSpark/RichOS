@@ -126,14 +126,14 @@ def main():
         st = {"bash_tool": None, "bash_started_at": None, "bash_task": None, "agent_tool": None, "agent_task": None,
               "bash_result": None, "results": [], "notifications": [], "control": [], "worker_answer_seen": False,
               "sleeps": []}
-    
+
         def send(obj):
             line = json.dumps(obj)
             with lock:
                 frames_file.write(json.dumps({"t": round(time.time() - t0, 3), "dir": "out", "frame": obj}) + "\n")
                 frames_file.flush()
             proc.stdin.write(line + "\n"); proc.stdin.flush()
-    
+
         def reader():
             for line in proc.stdout:
                 try:
@@ -179,11 +179,11 @@ def main():
                                           "result": str(f.get("result"))[:300]})
                 if ty == "control_response":
                     st["control"].append({"t": t, "response": f.get("response")})
-    
+
         threading.Thread(target=reader, daemon=True).start()
         send({"type": "control_request", "request_id": "probe_init", "request": {"subtype": "initialize"}})
         send({"type": "user", "uuid": str(uuid.uuid4()), "message": {"role": "user", "content": [{"type": "text", "text": PROMPT}]}})
-    
+
         # Wait for the foreground call, then for its own task id (bounded).
         deadline = time.time() + a.start_within
         while time.time() < deadline and not st["bash_started_at"]:

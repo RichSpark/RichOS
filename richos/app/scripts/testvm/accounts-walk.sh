@@ -114,12 +114,15 @@ menu() {
   if [ "$1" = closed ]; then ax --key 53 >/dev/null 2>&1 || true; sleep 2; menu_open || return 0; fi
   note "the menu would not be $1"
 }
-theme() {  # theme Light|Dark; the press is retried only while the menu is still open to take it
+theme() { # A failed press must end the walk before any capture is labeled with this theme.
+  local selected=0
   menu open
   for _ in 1 2 3; do
-    ax click --title "$1 theme" >/dev/null 2>&1 && break
+    if ax click --title "$1 theme" >/dev/null 2>&1; then selected=1; break; fi
     sleep 2
+    menu open
   done
+  if [ "$selected" -eq 0 ]; then note "FAILED: could not select $1 theme"; exit 1; fi
   sleep 1
   menu closed
 }
