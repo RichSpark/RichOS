@@ -32,12 +32,16 @@ left = module("left_off", LIB / "left-off.py")
 class G10(unittest.TestCase):
     def test_47_mentions_and_unrelated_options(self):
         for cmd in ["printf '%s' 'bash -c'", "true # bash -c x", "bash fixture.sh | grep -c y",
-                    "bash fixture.sh -c config", "command -v bash -c", "bash fixture.sh <<'EOF'\nsh -c x\nEOF", "bash; grep -c y", "cat <<'EOF'\nbash -c x\nEOF"]:
+                    "bash fixture.sh -c config", "bash '2'>file -c config", r"bash \&>file -c config",
+                    "command -v bash -c", "bash fixture.sh <<'EOF'\nsh -c x\nEOF", "bash; grep -c y", "cat <<'EOF'\nbash -c x\nEOF"]:
             with self.subTest(cmd=cmd):
                 self.assertIsNone(shell.verdict(cmd))
 
     def test_47_real_inline_scripts(self):
         for cmd in ["bash -c x", "env X=1 /bin/sh -lc x", "bash -o pipefail -c x",
+                    "'/bin/bash'</dev/null -c x", '"/bin/bash"</dev/null -c x',
+                    'ba"sh"</dev/null -c x', 'bash >"file > name" -c x',
+                    "bash >&file -c x", "bash 2>&1 -c x",
                     "bash</dev/null -c x", "bash &>/dev/null -c x", "bash&>/dev/null -c x", "bash -eo pipefail -c x",
                     "echo \"$(sh -c x)\"", "find . -exec sh -c x \\;", "xargs -I ITEM bash -c x",
                     "bash --rcfile file -c x", "env -S 'bash -c x'", "sudo --user root sh -c x",

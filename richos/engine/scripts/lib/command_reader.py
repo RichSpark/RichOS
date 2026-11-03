@@ -9,11 +9,50 @@ import re
 import shlex
 
 from host_sleep import _OPTS_WITH_ARG, _POSITIONAL_VALUE, WRAPPERS, heredocs
-from unguarded_rm import tokenize
+from unguarded_rm import tokenize, _match_paren
 
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 GIT_VALUES = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"}
+
+
+def _redirect_parts(word):
+    """Split only unquoted redirects, keeping literal words and substitutions intact."""
+    start, i, quote = 0, 0, None
+    while i < len(word):
+        char = word[i]
+        if char == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote == "'":
+            if char == quote:
+                quote = None
+        elif word.startswith("$(", i) or (quote is None and word[i:i + 2] in ("<(", ">(")):
+            i = _match_paren(word, i)
+            continue
+        elif char == "`":
+            i += 1
+            while i < len(word) and word[i] != "`":
+                i += 2 if word[i] == "\\" else 1
+        elif quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char in "<>":
+            if start < i:
+                yield False, word[start:i]
+            end = i + 1
+            while end < len(word) and word[end] in "<>":
+                end += 1
+            if end < len(word) and word[end] == "&":
+                end += 1
+            yield True, word[i:end]
+            start = i = end
+            continue
+        i += 1
+    if start < len(word):
+        yield False, word[start:]
 
 
 def _words(raw):
@@ -21,21 +60,19 @@ def _words(raw):
     result = []
     skip = False
     for word in raw:
-        lex = shlex.shlex(word, posix=True, punctuation_chars="<>")
-        lex.whitespace_split = True
-        lex.commenters = ""
-        parts = list(lex)
-        for part in parts:
+        attached = None
+        for redirect, part in _redirect_parts(word):
             if skip:
                 skip = False
-            elif part and set(part) <= set("<>") and part in word and not word.startswith(("'", '"')):
-                if result and (result[-1].isdigit() or result[-1] == "&"):
+            elif redirect:
+                if attached and result and (attached.isdigit() or attached == "&"):
                     result.pop()
-                elif result and result[-1].endswith("&"):
+                elif attached and result and attached.endswith("&") and not attached.endswith("\\&"):
                     result[-1] = result[-1][:-1]
                 skip = part != "<<"  # tokenizer already consumed the heredoc delimiter
             else:
-                result.append(part)
+                result.extend(shlex.split(part))
+            attached = None if redirect else part
     return result
 
 
