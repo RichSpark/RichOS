@@ -4247,6 +4247,48 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert_eq!(words(51 * 3_600_000), "2 d 3 h");
     }
 
+    #[test]
+    fn g5_removed_accounts_late_reading_cannot_hold_its_replacement() {
+        use std::sync::{Arc, mpsc};
+        struct Delayed { entered: mpsc::Sender<()>, release: mpsc::Receiver<()> }
+        impl Source for Delayed {
+            fn read(&mut self, _: &Path, _: &Path) -> Result<Vec<Window>, ReadError> {
+                self.entered.send(()).unwrap();
+                // Hang guard only: the test releases this read after the replacement is read.
+                self.release.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+                Ok(live(99.5).windows)
+            }
+        }
+        let root = Scratch::new();
+        let service = Arc::new(Service::open(root.path()).unwrap());
+        service.set_policy(policy()).unwrap();
+        *service.snapshot.lock().unwrap() = live(99.5);
+        let old = service.accounts.add("Old").unwrap();
+        let (entered, started) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        service.extra.lock().unwrap().insert(old.id.clone(), (
+            Arc::new(Mutex::new(Box::new(Delayed { entered, release: released }) as Box<dyn Source>)), Snapshot::default()));
+        let reading = service.clone();
+        let pending = std::thread::spawn(move || reading.refresh_accounts(Path::new("unused-provider"), true));
+        // Hang guard only: the observed fact is that the old read entered its provider.
+        started.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        service.remove_account(&old.id).unwrap();
+        let replacement = service.accounts.add("New").unwrap();
+        service.extra.lock().unwrap().insert(replacement.id.clone(), (
+            Arc::new(Mutex::new(Box::new(FakeSource {
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)), result: Ok(live(10.).windows),
+            }) as Box<dyn Source>)), Snapshot::default()));
+        service.refresh_accounts(Path::new("unused-provider"), true);
+        service.decide();
+        assert!(service.view().admission.allows_work());
+        release.send(()).unwrap();
+        pending.join().unwrap();
+        service.decide();
+        let view = service.view();
+        assert!(view.admission.allows_work(), "a removed account held the replacement: {view:?}");
+        assert_eq!(service.extra.lock().unwrap()[&replacement.id].1.windows[1].used_percent, 10.);
+    }
+
     struct FakeSource {
         calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         result: Result<Vec<Window>, ReadError>,
