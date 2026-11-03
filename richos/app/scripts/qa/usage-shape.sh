@@ -95,7 +95,7 @@ def read_wire(args, env, seconds, requests=(), gap=0, response_id=None, cwd='/va
                     break
                 if pending and now >= next_send:
                     try:
-                        p.stdin.write((json.dumps(pending.pop(0)) + '\n').encode())
+                        p.stdin.write((json.dumps(pending.pop(0), separators=(',', ':')) + '\n').encode())
                         p.stdin.flush()
                     except BrokenPipeError:
                         pending.clear()
