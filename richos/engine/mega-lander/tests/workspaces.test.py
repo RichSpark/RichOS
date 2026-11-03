@@ -8948,6 +8948,29 @@ class HuntV5_11_ClockOnlyHold(Base):
             self.assertEqual(ws._hold_time("24:00Z"), "")
 
 
+class HuntV5_06_PartialMerge(Base):
+    def test_second_repository_failure_reports_the_first_repositorys_real_merge(self):
+        name = "zach-opus-v5partial"
+        cc = self.make_cc(name)
+        aid, native = self.spawn(name, cc)
+        self.commit(cc)
+        tip = run("git", "-C", cc, "rev-parse", "HEAD").stdout.strip()
+        self.commit(native, "README", "worker version\n")
+        self.commit(self.entity, "README", "conflicting target version\n")
+        self.finish(aid)
+        with self.assertRaises(ws.SpecError) as raised:
+            ws.merge_and_land(name, self.sid)
+        self.assertTrue(ws.is_ancestor(self.other, tip, "main"))
+        self.assertNotEqual(run("git", "-C", self.entity, "rev-parse", "-q", "--verify", "MERGE_HEAD",
+                                check=False).returncode, 0, "failed merge was not aborted")
+        self.assertTrue(os.path.isdir(cc), "failed command should retain workspaces")
+        error = str(raised.exception)
+        self.assertNotIn("nothing was landed", error)
+        self.assertIn("Already merged by this call", error)
+        self.assertIn(self.other, error)
+        self.assertIn("cc/" + name, error)
+
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a

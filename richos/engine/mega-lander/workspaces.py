@@ -6739,7 +6739,7 @@ def merge_and_land(ref, me="", message="", only=None):
     repository's main checkout (which must be on that branch), with git's own
     hooks and checks, then lands it exactly as the automatic land does
     (ignored files are kept, never a reason to stay). A merge git refuses
-    stops here with git's words; nothing is landed. In a repository listed in
+    stops further merges with git's words; completed merges remain. In a repository listed in
     SECOND_REVIEW_REPOS nothing is merged unless the newest handover verdict
     on exactly each branch tip says passed (_review_check, CEO §113), and the
     merge message names that review. Returns (merged, land result).
@@ -6819,7 +6819,7 @@ def merge_and_land(ref, me="", message="", only=None):
                 r = subprocess.run(["git", "-C", main] + args, capture_output=True, text=True,
                                    env=_land_env(target, offered))
                 if r.returncode != 0:
-                    raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed:\n%s\n%s"
+                    raise SpecError("git merge of %s into %s of %s failed (exit %d):\n%s\n%s"
                                     % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
                                        _abort_own_merge(main, before, t)))
             else:
@@ -6827,6 +6827,11 @@ def merge_and_land(ref, me="", message="", only=None):
             merged.append((repo, b))
             event("merged", key=rec["key"], repo=repo, branch=b, into=target)
         return merged, land(rec["key"], me, keep_ignored=True)
+    except SpecError as e:
+        if merged:
+            raise SpecError("%s\nAlready merged by this call (these merges remain):\n%s" %
+                            (e, "\n".join("  %s: %s" % (repo, b) for repo, b in merged))) from e
+        raise
     finally:
         for main, holder in taken:
             _release_land_lease(main, holder)
@@ -6879,14 +6884,14 @@ def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
         os.makedirs(parent, exist_ok=True)
     except (ValueError, OSError) as e:
         raise SpecError("cannot merge %s: the engine's state location for a temporary checkout of %s cannot be "
-                        "used (%s); nothing was landed" % (b, target, e))
+                        "used (%s); no merge was attempted in this repository" % (b, target, e))
     path = os.path.join(os.path.realpath(parent), "%s-%d" % (_key_segment(target), os.getpid()))
     _remove_temporary_checkout(main, path)
     rc, out, err = git(main, "worktree", "add", "--quiet", path, target, timeout=600)
     if rc != 0:
         _remove_temporary_checkout(main, path)
-        raise SpecError("cannot merge %s: a temporary checkout of %s could not be made (exit %d); nothing was "
-                        "landed:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
+        raise SpecError("cannot merge %s: a temporary checkout of %s could not be made (exit %d); no merge was "
+                        "attempted in this repository:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
     try:
         # git's own checks (pre-merge-commit) run here and may take minutes.
         r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True,
@@ -6894,7 +6899,7 @@ def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
     finally:
         left = _remove_temporary_checkout(main, path)
     if r.returncode != 0:
-        raise SpecError("git merge of %s into %s of %s failed (exit %d); nothing was landed and %s did not move:"
+        raise SpecError("git merge of %s into %s of %s failed (exit %d); %s did not move:"
                         "\n%s%s" % (b, target, main, r.returncode, target, (r.stdout + r.stderr).strip()[-3000:],
                                     "\n" + left if left else ""))
     if left:
