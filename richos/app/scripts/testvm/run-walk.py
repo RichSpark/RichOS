@@ -116,7 +116,9 @@ def main():
             # Give each subprocess a group so interruption cannot strand the SSH
             # command. stop.sh subsequently reaps the captured VM process.
             boot=boot_argv(vm,a.bundle,a.home,a.engine,a.tailnet,a.new_user)
-            child=subprocess.Popen(boot,start_new_session=True,env=env)
+            active_scope=uuid.uuid4().hex
+            child=subprocess.Popen(boot,start_new_session=True,
+                                   env={**env,proc_tree.SCOPE_ENV:env[proc_tree.SCOPE_ENV]+':'+active_scope})
             tracker.refresh(tags=True)
             rc=child.wait(timeout=480)
             result['boot_seconds']=time.monotonic()-began
@@ -131,7 +133,9 @@ def main():
                 if len(apps)!=1:raise RuntimeError('previous bundle must contain exactly one app')
                 command += ['--previous-app',apps[0]]
             scenario_start=time.monotonic()
-            child=subprocess.Popen([command[0],vm,*command[1:]],start_new_session=True,env=env)
+            active_scope=uuid.uuid4().hex
+            child=subprocess.Popen([command[0],vm,*command[1:]],start_new_session=True,
+                                   env={**env,proc_tree.SCOPE_ENV:env[proc_tree.SCOPE_ENV]+':'+active_scope})
             tracker.refresh(tags=True)
             rc=child.wait();result['scenario_seconds']=time.monotonic()-scenario_start
             result.pop('outcome',None)
@@ -143,6 +147,16 @@ def main():
             for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP):signal.signal(sig,signal.SIG_IGN)
             try:
                 try:
+                    # An interrupted command must stop before it can race guest deletion.
+                    # Its separate scope leaves a completed boot's VM available for graceful stop.
+                    if child and child.poll() is None:
+                        try:
+                            active_tree=proc_tree.TrackedTree(child.pid,active_scope)
+                        except RuntimeError:
+                            if child.poll() is None:raise
+                        else:
+                            left=proc_tree.finish_scope(child,active_tree)
+                            if left:raise RuntimeError('active walk command remains: '+str(left))
                     if state.exists():
                         # restore_signals=False: stop.sh inherits this process's ignored SIGPIPE (and the
                         # interruptions ignored above), so a caller that died and took this script's
