@@ -31,7 +31,7 @@ PY
 }
 case "${1:-}" in
 install)
-  mkdir -p "$HOME/.claude/state/token-track"
+  mkdir -p "$HOME/.claude/state/token-track" "$(dirname "$plist")"
   render "$plist"
   launchctl unload "$plist" 2>/dev/null || true
   launchctl load "$plist"
