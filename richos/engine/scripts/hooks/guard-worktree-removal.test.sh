@@ -69,6 +69,7 @@ mkdir -p "$TMPROOT/entity/scripts/hooks" "$TMPROOT/entity/scripts/lib"
 cp "$SRC_GUARD" "$TMPROOT/entity/scripts/hooks/guard-worktree-removal.sh"
 chmod +x "$TMPROOT/entity/scripts/hooks/guard-worktree-removal.sh"
 cp "$SRC_DIR/../lib/resolve-roots.sh" "$TMPROOT/entity/scripts/lib/"
+cp "$SRC_DIR/../lib/unguarded_rm.py" "$TMPROOT/entity/scripts/lib/"
 printf 'PROTECTED_PATHS=""\n' > "$TMPROOT/entity/orchestration.config"
 GUARD="$TMPROOT/entity/scripts/hooks/guard-worktree-removal.sh"
 

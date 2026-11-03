@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""G9 write guards: actual redirects and physical, cwd-relative targets."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+HERE = Path(__file__).resolve().parent
+
+
+class WritePaths(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='g9-writes-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / 'src/sub').mkdir(parents=True)
+        (self.root / 'src/file').write_text('unchanged')
+        (self.root / 'orchestration.config').write_text('PROTECTED_PATHS="src"\n')
+        self.work = self.root / '.claude/worktrees/worker'
+        (self.work / 'src').mkdir(parents=True)
+        self.alias = self.root / '.claude/worktrees/alias'
+        self.alias.symlink_to(self.root, target_is_directory=True)
+        self.env = dict(os.environ, RICHOS_ENTITY_ROOT=str(self.root))
+
+    def verdict(self, command, expected, cwd=None, hook='guard-bash-main-writes.sh', **inputs):
+        payload = {'tool_name': 'Bash', 'tool_input': dict(command=command, **inputs),
+                   'cwd': str(cwd or self.root)}
+        if hook == 'guard-main-checkout-writes.sh':
+            payload['tool_name'] = 'Write'
+        p = subprocess.run(['/bin/bash', str(HERE / hook)], input=json.dumps(payload),
+                           text=True, capture_output=True, env=self.env, timeout=60)  # load-bound: hang guard only; verdict uses exit and file identity, never elapsed time.
+        self.assertEqual(p.returncode, expected, f'{command}\n{p.stdout}\n{p.stderr}')
+        self.assertEqual((self.root / 'src/file').read_text(), 'unchanged')
+
+    def test_39_printed_and_commented_redirects(self):
+        for command in (f"printf '%s\\n' '> {self.root}/src/file'",
+                        f'true # > {self.root}/src/file',
+                        f'printf "> {self.root}/src/file"',
+                        f'echo \\> {self.root}/src/file'):
+            with self.subTest(command=command):
+                self.verdict(command, 0)
+        self.verdict(f'printf hi > {self.root}/src/file', 2)
+        self.verdict('cat src/file 2>&1', 0)
+        self.verdict('cat src/file >&2', 0)
+
+    def test_review_shell_scopes_and_git_directory(self):
+        self.verdict(f'git -C "{self.root}/src" rm file', 2, self.work)
+        self.verdict(f'git -C "{self.root}" -C src mv file other', 2, self.work)
+        self.verdict(f'git -C "{self.work}" rm src/new', 0)
+        self.verdict(f"cat > /dev/null <<'EOF'\ndon't\nEOF\necho hi > {self.root}/src/file", 2, self.work)
+        self.verdict(f'D=$(cd {self.root}/src && pwd); echo "$D" > notes.txt', 0, self.work)
+        self.verdict(f'cp notes {self.root}/src/file 2>/dev/null', 2, self.work)
+        self.verdict(f"cat <<'EOF'\n> {self.root}/src/file\ndon't\nEOF", 0, self.work)
+        self.verdict(f'printf hi >"{self.root}/src/"file', 2)
+        self.verdict(f"cd {self.root}/src && bash <<'EOF'\ntouch file\nEOF", 2)
+
+    def test_guard_imports_do_not_write_into_the_engine(self):
+        hooks = self.root / 'scripts/hooks'
+        lib = self.root / 'scripts/lib'
+        hooks.mkdir(parents=True)
+        lib.mkdir()
+        for name in ('resolve-roots.sh', 'resolve-main-checkout.sh', 'hook-python.sh',
+                     'unguarded_rm.py', 'host_sleep.py'):
+            shutil.copyfile(HERE.parent / 'lib' / name, lib / name)
+        guard = hooks / 'guard-bash-main-writes.sh'
+        shutil.copyfile(HERE / guard.name, guard)
+        runtime = self.root / 'runtime/bin'
+        runtime.mkdir(parents=True)
+        (runtime / 'python3').symlink_to(sys.executable)
+        env = dict(self.env)
+        env.pop('PYTHONDONTWRITEBYTECODE', None)
+        payload = {'tool_name': 'Bash', 'cwd': str(self.root),
+                   'tool_input': {'command': 'printf harmless'}}
+        p = subprocess.run(['/bin/bash', str(guard)], input=json.dumps(payload),
+                           text=True, capture_output=True, env=env,
+                           timeout=60)  # load-bound: hang guard; verdict uses exit and filesystem contents.
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse((lib / '__pycache__').exists())
+
+    def test_heredocs_in_commit_and_pr_substitutions(self):
+        for command in (
+                'git commit -m "$(cat <<\'EOF\'\nfix: keep guard\nEOF\n)"',
+                'git commit -m "$(cat <<EOF\nfix: keep guard\nEOF\n)"',
+                'gh pr create --title t --body "$(cat <<\'EOF\'\nbody\nEOF\n)"',
+                'git tag -a v1 -m "$(cat <<\'EOF\'\nrelease\nEOF\n)"',
+                'git commit -m "$(cat <<\'EOF\'\nfix: don\'t change the target\nEOF\n)"'):
+            with self.subTest(command=command):
+                self.verdict(command, 0, self.work)
+        command = f'git commit -m "$(cat <<\'EOF\'\nmessage\nEOF\n)"; echo hi > "{self.root}/src/file"'
+        self.verdict(command, 2, self.work)
+        command = f'git commit -m "$(cat <<\'EOF\'\ndon\'t change quoting\nEOF\n)"; echo hi > "{self.root}/src/file"'
+        self.verdict(command, 2, self.work)
+        command = f'git commit -m "$(bash <<\'EOF\'\necho "don\'t"; touch "{self.root}/src/file"\nEOF\n)"'
+        self.verdict(command, 2, self.work)
+
+    def test_32_physical_aliases(self):
+        for target in (self.root / 'src/file', self.alias / 'src/file'):
+            with self.subTest(target=target):
+                self.verdict(f'touch {target}', 2)
+                self.verdict('', 2, hook='guard-main-checkout-writes.sh', file_path=str(target))
+        self.verdict(f'touch {self.work}/src/new', 0)
+
+    def test_41_relative_and_quoted_targets(self):
+        for command, cwd in (
+                ('touch ./src/file', self.root),
+                ('touch ../file', self.root / 'src/sub'),
+                (f'printf hi > "{self.root}/src/file"', self.root),
+                ('printf hi > ./src/file', self.root),
+                ('printf hi > "../file"', self.root / 'src/sub'),
+                (f'cd "{self.root}/src/sub" && touch ../file', self.work),
+                (f'cd "{self.root}/src/sub"\nprintf hi > ../file', self.work)):
+            with self.subTest(command=command, cwd=cwd):
+                self.verdict(command, 2, cwd)
+        self.verdict(f'cd {self.work} && touch src/new', 0)
+        self.verdict(f'cd {self.work} && echo hi > src/new', 0)
+        self.verdict(f'printf "cd {self.work}"; touch src/file', 2)
+        self.verdict(f'cd {self.work} && cd {self.root} && touch src/file', 2)
+        self.verdict('touch ../../notes', 0, self.root / 'src/sub')
+        self.verdict('cp src/file ./notes', 0)
+        self.verdict('cp ./notes src/file', 2)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

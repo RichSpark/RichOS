@@ -49,15 +49,22 @@ case "$_hp_lib" in
 esac
 _hp_py=""
 
+# -ef compares the executable's device/inode, following directory and file
+# symlinks as well as hard links. Never execute a candidate to identify it.
+_hp_is_stub() {
+    [ "$1" -ef "$_hp_stubs/python3" ] || [ "$1" -ef /usr/bin/python3 ]
+}
+
 # 1. The bundled runtime, by its place beside this engine's scripts.
-if [ -f "$_hp_engine/runtime/bin/python3" ] && [ -x "$_hp_engine/runtime/bin/python3" ]; then
+if [ -f "$_hp_engine/runtime/bin/python3" ] && [ -x "$_hp_engine/runtime/bin/python3" ] &&
+    ! _hp_is_stub "$_hp_engine/runtime/bin/python3"; then
     _hp_py="$_hp_engine/runtime/bin/python3"
 fi
 # Is a stub folder on PATH at all? Only then can the bare name reach a stub.
 _hp_stub_on_path=""
 _hp_ifs="$IFS"; IFS=:
 for _hp_d in $PATH; do
-    if [ "$_hp_d" = /usr/bin ] || [ "$_hp_d" = "$_hp_stubs" ]; then _hp_stub_on_path=1; break; fi
+    if [ "$_hp_d" = /usr/bin ] || [ "$_hp_d" = "$_hp_stubs" ] || _hp_is_stub "$_hp_d/python3"; then _hp_stub_on_path=1; break; fi
 done
 IFS="$_hp_ifs"
 # 2. The first python3 on PATH that is not in a stub folder.
@@ -65,7 +72,8 @@ if [ -z "$_hp_py" ]; then
     _hp_ifs="$IFS"; IFS=:
     for _hp_d in $PATH; do
         if [ -n "$_hp_d" ] && [ "$_hp_d" != /usr/bin ] && [ "$_hp_d" != "$_hp_stubs" ] &&
-            [ -f "$_hp_d/python3" ] && [ -x "$_hp_d/python3" ]; then
+            [ -f "$_hp_d/python3" ] && [ -x "$_hp_d/python3" ] &&
+            ! _hp_is_stub "$_hp_d/python3"; then
             _hp_py="$_hp_d/python3"
             break
         fi
@@ -81,7 +89,8 @@ if [ -z "$_hp_py" ] && [ -n "$_hp_stub_on_path" ]; then
     fi
     for _hp_d in "${DEVELOPER_DIR:-}" "$_hp_link" "$_hp_root/Applications/Xcode.app/Contents/Developer" \
         "$_hp_root/Library/Developer/CommandLineTools"; do
-        if [ -n "$_hp_d" ] && [ -f "$_hp_d/usr/bin/python3" ] && [ -x "$_hp_d/usr/bin/python3" ]; then
+        if [ -n "$_hp_d" ] && [ -f "$_hp_d/usr/bin/python3" ] && [ -x "$_hp_d/usr/bin/python3" ] &&
+            ! _hp_is_stub "$_hp_d/usr/bin/python3"; then
             _hp_py="$_hp_d/usr/bin/python3"
             break
         fi
@@ -98,7 +107,7 @@ if [ -n "$_hp_py" ]; then
     _hp_ifs="$IFS"; IFS=:
     for _hp_d in $PATH; do
         if [ "$_hp_d" = "${_hp_py%/*}" ]; then _hp_first=py; break; fi
-        if [ "$_hp_d" = /usr/bin ] || [ "$_hp_d" = "$_hp_stubs" ]; then _hp_first=stub; break; fi
+        if [ "$_hp_d" = /usr/bin ] || [ "$_hp_d" = "$_hp_stubs" ] || _hp_is_stub "$_hp_d/python3"; then _hp_first=stub; break; fi
     done
     IFS="$_hp_ifs"
     if [ "$_hp_first" != py ]; then
@@ -114,3 +123,4 @@ elif [ -n "$_hp_stub_on_path" ]; then
     export -f python3
 fi
 unset _hp_root _hp_stubs _hp_lib _hp_engine _hp_py _hp_ifs _hp_d _hp_link _hp_first _hp_dir _hp_stub_on_path
+unset -f _hp_is_stub

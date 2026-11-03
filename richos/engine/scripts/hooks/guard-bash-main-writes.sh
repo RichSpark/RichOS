@@ -25,11 +25,9 @@
 #     2. a real write-redirection (`>` / `>>`) whose TARGET TOKEN is protected.
 #        fd-duplication (`2>&1`, `>&2`, `N>&M`) is excluded up front: it
 #        duplicates a file descriptor and creates no file at all.
-#   Each target found by (1) or (2) is then classified as before:
-#     - an absolute path under <root>/<protected>/ NOT inside .claude/worktrees/,
-#     - a relative protected target behind a compound `cd <repo-root> ...`, or
-#     - a relative protected target while the Bash cwd IS the main checkout
-#       (the real drift vector — no cd needed).
+#   Resolve each target against the call's cwd and preceding cd commands, then
+#   follow filesystem aliases before comparing with the main checkout's trees.
+#   A worktree-looking symlink is no exemption.
 #   Everything else passes: git commands, worktree-scoped paths, reads, tests,
 #   scratchpad writes, docs/scripts/config writes.
 #
@@ -46,8 +44,8 @@
 # cd-compound) still blocks — pinned as pairs in guard-bash-main-writes.test.sh.
 #
 # Acknowledged, deliberate limit — this is shell-TEXT analysis, not a shell
-# parser or a sandbox: it does not see through command substitution
-# (`$(mkdir ...)`), and it cannot know whether an interpreter invocation like
+# parser or a sandbox: it checks shell substitutions in their own directory
+# scope, but cannot know whether an interpreter invocation like
 # `python3 <tree>/tool.py` performs file I/O of its own. That was never caught
 # before or after this change; the hook's scope is and always was the Bash-cwd
 # drift vector, not arbitrary-code sandboxing.
@@ -176,8 +174,14 @@ fi
 
 # (payload already read above, before root resolution)
 
-if ! RESULT="$(GUARD_ROOT="$ENTITY_ROOT" GUARD_TREES="$PROTECTED_PATHS" python3 -c "
-import json, re, os, sys
+_BMW_PARSER="$SCRIPT_DIR/../lib/unguarded_rm.py"
+_BMW_HEREDOC="$SCRIPT_DIR/../lib/host_sleep.py"
+read -r -d '' _BMW_CLASSIFIER <<'PYEOF' || true
+import json, re, os, sys, runpy
+reader = runpy.run_path(os.environ['GUARD_PARSER'])
+tokenize, match_paren = reader['tokenize'], reader['_match_paren']
+sys.path.insert(0, os.path.dirname(os.environ['GUARD_PARSER']))
+heredocs = runpy.run_path(os.environ['GUARD_HEREDOC'])['heredocs']
 try:
     d = json.loads(sys.stdin.read() or '{}')
 except Exception:
@@ -189,64 +193,22 @@ ROOT = (os.environ.get('GUARD_ROOT') or '').rstrip('/')
 prefixes = [p for p in (os.environ.get('GUARD_TREES') or '').split() if p]
 if not prefixes:
     print('PASS'); raise SystemExit
-WT = '/.claude/worktrees/'
-# Protected SOURCE trees (repo-root-relative prefixes) -> regex alternation.
-TREES = r'(?:' + '|'.join(re.escape(p.strip('/')) for p in prefixes) + r')'
-cwd = (d.get('cwd') or '').rstrip('/')
+cwd = d.get('cwd') or ROOT
+ROOT = os.path.realpath(ROOT)
 
-def is_abs_protected(tok):
-    # Absolute path under the MAIN checkout's protected tree, outside any worktree.
-    if not ROOT:
-        return False
-    if not re.match(r'^' + re.escape(ROOT) + r'/' + TREES + r'(?:/|\$)', tok):
-        return False
-    return WT not in tok
-
-def is_rel_protected(tok):
-    return bool(re.match(r'^' + TREES + r'(?:/|\$)', tok))
-
-def cd_into_worktree_precedes():
-    return bool(re.search(r'cd\s+\S*' + re.escape(WT), cmd))
-
-def cd_to_root_precedes():
-    if not ROOT:
-        return False
-    return bool(re.search(r'(?:^|[;&|]\s*)cd\s+' + re.escape(ROOT) + r'/?(?:\s|&&|;|\$)', cmd))
-
-def classify_relative_hit():
-    # Branch ORDER and conditions are the pre-anchoring ones, unchanged: branch
-    # 2 has no in-worktree-cd exclusion (deliberately conservative), branch 3
-    # does. Only the ANCHORING to a real write target is new.
-    if cd_to_root_precedes():
-        return 'cd-compound'
-    if not cd_into_worktree_precedes() and (cwd == ROOT or not cwd):
-        return 'cwd-main-relative'
-    return None
-
-def cwd_in_protected():
-    # The call RUNS INSIDE a protected tree of the main checkout (cwd is
-    # ROOT/<tree>/...) and moves nowhere first: every relative operand then
-    # lands in that tree, whatever its spelling (hunt part 3 v3, finding 41).
-    return bool(cwd) and is_abs_protected(cwd) and not re.search(r'(?:^|[;&|(]\s*)(?:cd|pushd)\s', cmd)
-
-def check_targets(tokens):
-    for raw in tokens:
-        tok = raw.strip('\'\"')
-        if not tok:
+def check_targets(tokens, base=None):
+    for tok in tokens:
+        if not tok or tok.startswith('-'):
             continue
-        if is_abs_protected(tok):
-            return 'abs:' + tok[:120]
-        if is_rel_protected(tok):
-            cat = classify_relative_hit()
-            if cat:
-                return cat
-        if not tok.startswith(('/', '-', '~')) and cwd_in_protected():
-            return 'cwd-in-protected:' + tok[:120]
+        target = os.path.realpath(os.path.join(base or cwd, os.path.expanduser(tok)))
+        for prefix in prefixes:
+            protected = os.path.join(ROOT, prefix.strip('/'))
+            if target == protected or target.startswith(protected + os.sep):
+                return 'physical:' + target[:120]
     return None
 
 # 1) write-verb clauses — only THAT verb's own argument list (up to the next
 #    ; & | control operator) is checked, never the whole command line.
-VERB_CLAUSE = re.compile(r'(?:^|[;&|]\s*|\s)(mkdir|cp|mv|rm|tee|touch|rsync)\b(?P<args>[^;&|]*)')
 def write_targets(verb, toks):
     # cp and rsync only READ their sources: just the destination is a write.
     # mv removes its source and rm/tee/touch/mkdir write every argument, so
@@ -257,7 +219,7 @@ def write_targets(verb, toks):
     # P3-33: rsync --remove-source-files / --remove-sent-files DELETES its sources.
     # Quoting the flag does not change it ('--remove-source-files' is the same
     # argument to rsync), so compare it with its quotes removed (v3 re-check).
-    if verb == 'rsync' and any(t.strip('\'\"') in ('--remove-source-files', '--remove-sent-files') for t in toks):
+    if verb == 'rsync' and any(t.strip('\'"') in ('--remove-source-files', '--remove-sent-files') for t in toks):
         return toks
     dest = []
     plain = []
@@ -281,7 +243,6 @@ def write_targets(verb, toks):
 # (printf '%s' touch FILE) or sits in a COMMENT (true # touch FILE) writes
 # nothing (hunt part 3, finding 39). Text the shell cannot split (an unclosed
 # quote) falls back to the verb anywhere, as before.
-import shlex
 Q1, Q2, BS, BT = chr(39), chr(34), chr(92), chr(96)
 WRAPPERS = {'sudo': ('-u', '-g', '-C', '-D', '-h', '-p', '-R', '-T', '-U'),
             'env': ('-u', '-C', '-S', '--unset', '--chdir'),
@@ -290,49 +251,75 @@ WRAPPERS = {'sudo': ('-u', '-g', '-C', '-D', '-h', '-p', '-R', '-T', '-U'),
 KEYWORDS = ('!', '{', '}', 'then', 'do', 'else', 'elif', 'if', 'while', 'until')
 ASSIGN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 
-def strip_comments(text):
-    # A # that begins a word, outside quotes, starts a comment to end of line.
-    out, q, i = [], '', 0
+def shell_tokens(text):
+    # Keep syntax separate from word values: a quoted or escaped > is data.
+    word, started, quote, i = [], False, '', 0
     while i < len(text):
         c = text[i]
-        if q:
-            if c == q:
-                q = ''
-            elif c == BS and q == Q2 and i + 1 < len(text):
-                out.append(c); i += 1; c = text[i]
-        elif c == BS and i + 1 < len(text):
-            out.append(c); i += 1; c = text[i]
-        elif c in (Q1, Q2):
-            q = c
-        elif c == '#' and (i == 0 or text[i - 1] in ' \t\n;&|()'):
-            j = text.find('\n', i)
-            if j < 0:
-                break
-            i = j
+        if text.startswith('$(', i) and quote != Q1:
+            end = match_paren(text, i)
+            word.append(text[i:end]); started = True; i = end
             continue
-        out.append(c); i += 1
-    return ''.join(out)
+        if quote:
+            if c == quote:
+                quote = ''
+            elif c == BS and quote == Q2 and i + 1 < len(text) and text[i + 1] in (Q2, BS, '$', BT, '\n'):
+                i += 1
+                if text[i] != '\n':
+                    word.append(text[i])
+            else:
+                word.append(c)
+        elif c in (Q1, Q2):
+            quote, started = c, True
+        elif c == BS and i + 1 < len(text):
+            i += 1
+            if text[i] != '\n':
+                word.append(text[i]); started = True
+        elif c.isspace() or c in '();&|<>':
+            if started:
+                yield ''.join(word), False
+                word, started = [], False
+            if c == '\n':
+                yield ';', True
+            elif not c.isspace():
+                op = c
+                while i + 1 < len(text) and text[i + 1] == c and c in '&|<>':
+                    i += 1; op += c
+                # >& and <& duplicate file descriptors, not file writes.
+                if c in '<>' and i + 1 < len(text) and text[i + 1] == '&':
+                    i += 1; op += '&'
+                yield op, True
+        else:
+            word.append(c); started = True
+        i += 1
+    if quote:
+        raise ValueError('unclosed shell quote')
+    if started:
+        yield ''.join(word), False
+
 
 def statements(text):
-    lex = shlex.shlex(strip_comments(text).replace('\n', ' ; '), posix=True, punctuation_chars=True)
-    lex.whitespace_split = True
-    lex.commenters = ''
-    stmt, skip = [], False
-    for tok in lex:
-        if tok and all(c in '();&|<>' for c in tok):
-            if '<' in tok or '>' in tok:
-                skip = True   # a redirection: its target is checked in 2), not an operand
-                continue
-            if stmt:
-                yield stmt
-            stmt = []
-            continue
-        if skip:
-            skip = False
-            continue
-        stmt.append(tok)
-    if stmt:
-        yield stmt
+    # The existing engine tokenizer skips data heredocs and keeps each command
+    # substitution inside its outer word. It never changes the parent's cwd.
+    for raw_stmt in tokenize(text)[0]:
+        stmt, redirects, pending, nested = [], [], None, []
+        for raw in raw_stmt:
+            nested.extend(tokenize(raw)[1])
+            parts = list(shell_tokens(raw))
+            if (len(parts) > 1 and not parts[0][1] and parts[0][0].isdigit()
+                    and parts[1][1] and ('<' in parts[1][0] or '>' in parts[1][0])):
+                parts = parts[1:]  # adjacent IO number: 2>file is not an operand
+            for tok, operator in parts:
+                if operator:
+                    if '<' in tok or '>' in tok:
+                        pending = tok
+                elif pending:
+                    if pending in ('>', '>>'):
+                        redirects.append(tok)
+                    pending = None
+                else:
+                    stmt.append(tok)
+        yield stmt, redirects, nested
 
 def verb_and_args(stmt):
     k = 0
@@ -350,46 +337,87 @@ def verb_and_args(stmt):
             continue
         break
     if k >= len(stmt):
-        return None, []
+        return None, [], cwd
     word = os.path.basename(stmt[k].lstrip(BT))
     rest = stmt[k + 1:]
     if word == 'git':
+        location = cwd
         i = 0
         while i < len(rest) and rest[i].startswith('-'):
+            if rest[i] == '-C' and i + 1 < len(rest):
+                location = os.path.realpath(os.path.join(location, rest[i + 1]))
+            elif rest[i].startswith('-C') and len(rest[i]) > 2:
+                location = os.path.realpath(os.path.join(location, rest[i][2:]))
             i += 2 if rest[i] in ('-C', '-c', '--git-dir', '--work-tree') else 1
         if i < len(rest) and rest[i] in ('rm', 'mv'):
-            return rest[i], rest[i + 1:]
-        return None, []
-    return word, rest
+            return rest[i], rest[i + 1:], location
+        return None, [], cwd
+    return word, rest, cwd
+
+def heredoc_projection(text):
+    # Heredoc bytes are data to the surrounding shell, including in $(...).
+    # Keep their bodies for shell consumers, but never parse prose as quoting.
+    chars, docs, cursor = list(text), {}, 0
+    for head, body in heredocs(text):
+        start = text.find(head + '<<', cursor)
+        if start < 0:
+            continue
+        start = text.find('\n', start + len(head)) + 1
+        end = start + len(body)
+        if not start or text[start:end] != body:
+            continue
+        for i in range(start, end):
+            if chars[i] != '\n':
+                chars[i] = ' '
+        cursor = end
+        # Inside a substitution the returned head can start in its parent's
+        # quote. The last $( introduces the command that owns this heredoc.
+        try:
+            heads = list(statements(head))
+        except ValueError:
+            heads = list(statements(head.rsplit('$(', 1)[-1]))
+        if heads:
+            docs.setdefault(tuple(heads[-1][0]), []).append(body)
+    return ''.join(chars), docs
+
+
+def inspect(text, base, depth=0, docs=None):
+    global cwd
+    if depth > 6:
+        return
+    if docs is None:
+        text, docs = heredoc_projection(text)
+    saved, cwd = cwd, base
+    try:
+        for st, redirects, nested in statements(text):
+            for body in nested:
+                inspect(body, cwd, depth + 1, docs)
+            verb, args, location = verb_and_args(st)
+            bodies = docs.get(tuple(st), [])
+            if bodies:
+                body = bodies.pop(0)
+                if verb in ('bash', 'sh', 'zsh', 'dash', 'ksh'):
+                    inspect(body, cwd, depth + 1)
+            hit = check_targets(redirects)
+            if not hit and verb in ('mkdir', 'cp', 'mv', 'rm', 'tee', 'touch', 'rsync'):
+                hit = check_targets(write_targets(verb, args), location)
+            if hit:
+                print('BLOCK ' + hit); raise SystemExit
+            if verb == 'cd' and args:
+                dest = [t for t in args if t not in ('--', '-P', '-L')]
+                if dest:
+                    cwd = os.path.realpath(os.path.join(cwd, os.path.expanduser(dest[0])))
+    finally:
+        cwd = saved
 
 try:
-    clauses = []
-    for st in statements(cmd):
-        verb, args = verb_and_args(st)
-        if verb in ('mkdir', 'cp', 'mv', 'rm', 'tee', 'touch', 'rsync'):
-            clauses.append((verb, args))
+    inspect(cmd, cwd)
 except ValueError:
-    clauses = [(vm.group(1), re.findall(r'\S+', vm.group('args'))) for vm in VERB_CLAUSE.finditer(cmd)]
-for verb, args in clauses:
-    hit = check_targets(write_targets(verb, args))
-    if hit:
-        print('BLOCK ' + hit); raise SystemExit
-
-
-# 2) real write-redirection (> / >>) — only the redirect's OWN target token is
-#    checked. fd-duplication (2>&1, >&2, N>&M) creates no file, so it is never
-#    a write no matter what path text sits elsewhere on the line.
-REDIRECT = re.compile(r'>{1,2}\s*(\S+)')
-for rdm in REDIRECT.finditer(cmd):
-    target = rdm.group(1)
-    if target.startswith('&'):
-        continue  # fd duplication, e.g. 2>&1 / >&2 — not a file write
-    hit = check_targets([target])
-    if hit:
-        print('BLOCK ' + hit); raise SystemExit
+    print('BLOCK unreadable-shell-syntax'); raise SystemExit
 
 print('PASS')
-" <<<"$INPUT")"; then
+PYEOF
+if ! RESULT="$(GUARD_ROOT="$ENTITY_ROOT" GUARD_TREES="$PROTECTED_PATHS" GUARD_PARSER="$_BMW_PARSER" GUARD_HEREDOC="$_BMW_HEREDOC" python3 -B -c "$_BMW_CLASSIFIER" <<<"$INPUT")"; then
     echo "ERROR: guard-bash-main-writes.sh: payload classifier failed; refusing unevaluated operation" >&2
     exit 2
 fi

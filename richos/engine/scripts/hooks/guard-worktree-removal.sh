@@ -212,8 +212,10 @@ HOOK_TAG="(hook: scripts/hooks/guard-worktree-removal.sh)"
 # Measured: `bash -n` reported "syntax error near unexpected token `('" 150
 # lines further down, pointing at innocent code. A heredoc assignment is
 # scanned once, as text, so the class is impossible.
+_WTR_PARSER="$SCRIPT_DIR/../lib/unguarded_rm.py"
 read -r -d '' _WTR_CLASSIFIER <<'PYEOF' || true
-import json, os, re, shlex, subprocess, sys
+import glob, itertools, json, os, re, runpy, shlex, subprocess, sys
+rm_tokenize = runpy.run_path(os.environ["WTR_PARSER"])["tokenize"]
 
 try:
     d = json.loads(sys.stdin.read() or "{}")
@@ -718,27 +720,161 @@ def collect_git(text):
 #
 #    FIX 2 — the target must BE a workspace to make the command destructive:
 #    decided structurally, below, from git.
-RM_CLAUSE = re.compile(r"(?:^|[;&|(]\s*|\s)rm\b(?P<args>[^;&|)]*)")
+def rm_word(raw, env):
+    """Known shell word value and glob pattern, or None. Never run expansions.
 
+    Keep single-quoted dollars and quoted wildcards literal. Unknown values
+    remain unknown; ordinary dynamic scratch cleanup is not a workspace removal.
+    """
+    value, pattern, quote, i = [], [], "", 0
 
-def collect_rm(text):
-  for m in RM_CLAUSE.finditer(text):
-    before = text[:m.start()].rstrip()
-    if before.split()[-1:] == ["git"]:
-        continue  # `git rm` — an index removal, not a filesystem removal
-    args = m.group("args")
-    if not (re.search(r"(?:^|\s)-[A-Za-z]*[rR][A-Za-z]*\b", args) or re.search(r"--recursive\b", args)):
-        continue
-    for raw in re.findall(r"\S+", args):
-        tok = raw.strip("\"'")
-        if not tok or tok.startswith("-"):
-            continue
-        if re.search(r"\.claude/worktrees/agent-\S*", tok):
-            # Structural, self-describing, and decided without touching disk.
-            spec.append("rm -r of a .claude/worktrees/agent-* workspace (point 6: native "
-                        "workspaces are deleted by a land or a discard)")
+    def add(text, literal=False):
+        value.append(text)
+        pattern.append(glob.escape(text) if literal else text)
+
+    while i < len(raw):
+        c = raw[i]
+        if c in "'\"" and (not quote or quote == c):
+            quote = "" if quote else c
+        elif c == "\\" and quote != "'" and i + 1 < len(raw):
+            if not quote or raw[i + 1] in '$`\\"\n':
+                i += 1
+                if raw[i] != "\n":
+                    add(raw[i], True)
+            else:
+                add(c, True)
+        elif c == "$" and quote != "'":
+            m = re.match(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)(?::\?[^}]*)?\})", raw[i:])
+            if not m:
+                return None
+            known = env.get(m.group(1) or m.group(2))
+            if not isinstance(known, str):
+                return None
+            add(known, bool(quote))
+            i += m.end() - 1
+        elif c == "`" and quote != "'":
+            return None
         else:
-            rm_paths.append(tok)
+            add(c, bool(quote))
+        i += 1
+    return None if quote else ("".join(value), "".join(pattern))
+
+
+def rm_candidates(raw, env):
+    names = [name for name, value in env.items() if isinstance(value, list)
+             and re.search(r"\$\{?" + re.escape(name) + r"(?:[^A-Za-z0-9_]|$)", raw)]
+    values = itertools.product(*(env[name] for name in names))
+    for choices in values:
+        known = rm_word(raw, dict(env, **dict(zip(names, choices))))
+        if known is not None:
+            yield known
+
+
+def collect_rm(text, depth=0, initial_cwd=None, environment=None):
+    if depth > 6:
+        return
+    commands, nested = rm_tokenize(text)
+    cwd = initial_cwd or str(d.get("cwd") or os.environ.get("WTR_ENTITY_ROOT") or os.getcwd())
+    env = dict(os.environ if environment is None else environment)
+    for words in commands:
+        i, assignments = 0, {}
+        while i < len(words):
+            raw = words[i]
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", raw):
+                key, body = raw.split("=", 1)
+                values = list(dict.fromkeys(value for value, _ in rm_candidates(body, env)))
+                assignments[key] = values[0] if len(values) == 1 else values or None
+                i += 1
+                continue
+            known = rm_word(raw, env)
+            if known is None:
+                break
+            word = known[0]
+            if word in ("do", "then", "if", "!", "{"):
+                i += 1
+            elif os.path.basename(word) in ("sudo", "env", "xargs", "command", "exec", "nice", "nohup", "time", "timeout", "gtimeout", "stdbuf"):
+                i += 1
+                while i < len(words) and words[i].startswith("-"):
+                    i += 2 if words[i] in ("-u", "-g", "-n", "-I", "-L", "-P", "-C", "-D", "-k", "-s", "--kill-after", "--signal") else 1
+                if os.path.basename(word) in ("timeout", "gtimeout") and i < len(words):
+                    i += 1  # duration, then the actual command
+            else:
+                break
+        if i >= len(words):
+            env.update(assignments)  # standalone assignments persist
+            continue
+        known = rm_word(words[i], env)
+        if known is None:
+            continue
+        verb, args = os.path.basename(known[0]), words[i + 1:]
+        if verb == "for" and len(args) >= 2 and args[1] == "in":
+            values = []
+            for raw in args[2:]:
+                for value, pattern in rm_candidates(raw, env):
+                    if glob.has_magic(pattern) and cwd:
+                        values.extend(glob.glob(os.path.join(cwd, pattern)))
+                    else:
+                        values.append(value)
+            env[args[0]] = list(dict.fromkeys(values)) or None
+            continue
+        if verb == "find":
+            for flag in ("-exec", "-execdir"):
+                if flag in args:
+                    start = args.index(flag) + 1
+                    end = next((k for k in range(start, len(args)) if args[k] in ("\\;", ";", "+")), len(args))
+                    collect_rm(" ".join(args[start:end]), depth + 1, cwd, env)
+            continue
+        if verb == "export":
+            for raw in args:
+                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", raw):
+                    key, body = raw.split("=", 1)
+                    known = rm_word(body, env)
+                    env[key] = known[0] if known else None
+            continue
+        if verb == "cd" and args:
+            dest = [a for a in args if a not in ("--", "-P", "-L")]
+            known = rm_word(dest[0], env) if dest else None
+            cwd = os.path.realpath(os.path.join(cwd, os.path.expanduser(known[0]))) if cwd and known else None
+            continue
+        if verb in ("bash", "sh", "zsh", "dash", "ksh"):
+            for k, arg in enumerate(args[:-1]):
+                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
+                    body = rm_word(args[k + 1], env)
+                    if body:
+                        collect_rm(body[0], depth + 1, cwd, env)
+                    break
+            continue
+        if verb != "rm":
+            continue
+        operands, options, recursive = [], True, False
+        expanded = [known for raw in args for known in rm_candidates(raw, env)]
+        for value, pattern in expanded:
+            if options and value == "--":
+                options = False
+            elif options and value.startswith("-"):
+                recursive |= value == "--recursive" or bool(re.fullmatch(r"-[A-Za-z]*[rR][A-Za-z]*", value))
+            else:
+                operands.append((value, pattern))
+        for value, pattern in operands:
+            if not recursive and not value.rstrip("/").endswith("/.git"):
+                continue
+            value, pattern = os.path.expanduser(value), os.path.expanduser(pattern)
+            if cwd is None and not os.path.isabs(value):
+                continue
+            path = os.path.join(cwd or os.sep, value)
+            pattern = os.path.join(cwd or os.sep, pattern)
+            targets = glob.glob(pattern) if glob.has_magic(pattern) else [path]
+            for target in targets:
+                # rm removes a final symlink itself; a slash explicitly follows it.
+                if not target.endswith("/") and os.path.islink(target):
+                    continue
+                if re.search(r"\.claude/worktrees/agent-\S*", target):
+                    spec.append("rm -r of a .claude/worktrees/agent-* workspace (point 6: native "
+                                "workspaces are deleted by a land or a discard)")
+                else:
+                    rm_paths.append(os.path.realpath(target))
+    for body in nested:
+        collect_rm(body, depth + 1, initial_cwd, env)
 
 
 # 5) Nobody starts a session in its own workspace (point 3).
@@ -843,7 +979,6 @@ collect_git(scan)
 collect_rm(scan)
 for _sub in _SUBST.finditer(scan):
     collect_git(_sub.group(0))
-    collect_rm(_sub.group(0))
 if CLAUDE_WT.search(scan):
     spec.append("claude --worktree / -w (nobody starts a session in its own workspace in "
                 "RichOS; it is not allowed — point 3)")
@@ -908,15 +1043,65 @@ def workspace_kind(p):
     return "other"
 
 
-for tok in paths + rm_paths:
-    k = workspace_kind(tok)
-    if k == "codex":
+def removal_workspaces():
+    # Git's registry sees sibling worktrees even when the rm target is their
+    # parent, not a checkout itself. Also query the target's nearest repository
+    # so a literal path into another repository is protected as before.
+    sources = {str(d.get("cwd") or ""), os.environ.get("WTR_ENTITY_ROOT", "")}
+    for target in rm_paths:
+        parent = target
+        while not os.path.isdir(parent) and parent != os.path.dirname(parent):
+            parent = os.path.dirname(parent)
+        sources.add(parent)
+    workspaces = {}
+    for source in {os.path.realpath(p) for p in sources if p}:
+        workspace, branch = "", ""
+        fields = _git(source, "worktree", "list", "--porcelain", "-z").split("\0")
+        for field in fields + [""]:
+            if field.startswith("worktree ") or not field:
+                if workspace and os.path.isfile(os.path.join(workspace, ".git")):
+                    if branch.startswith("codex/") or any(workspace.startswith(r + os.sep) for r in CODEX_WORKTREE_ROOTS):
+                        kind = "codex"
+                    elif branch.startswith(("cc/", "worktree-")) or "/.claude/worktrees/" in workspace + "/":
+                        kind = "system"
+                    else:
+                        kind = "other"
+                    workspaces[workspace] = kind
+                workspace = os.path.realpath(field[len("worktree "):]) if field else ""
+                branch = ""
+            elif field.startswith("branch refs/heads/"):
+                branch = field[len("branch refs/heads/"):]
+    return workspaces
+
+
+def refuse_workspace(tok, kind):
+    if kind == "codex":
         spec.append("a codex/ workspace (%s) — codex/ is never touched (point 2)" % tok)
-    elif k == "system":
+    elif kind == "system":
         spec.append("an agent's workspace (%s) — deleted by a land or a discard, with every "
                     "workspace and branch it has (points 4, 7, 10)" % tok)
-    elif k == "other" and tok in rm_paths:
+    elif kind == "other":
         reasons.append("rm -r of a linked git worktree (%s)" % tok)
+
+
+for tok in paths:
+    kind = workspace_kind(tok)
+    if kind in ("codex", "system"):
+        refuse_workspace(tok, kind)
+if rm_paths:
+    registered = removal_workspaces()
+    for target in rm_paths:
+        for root in CODEX_WORKTREE_ROOTS:
+            if os.path.isdir(root) and (target == root or target.startswith(root + os.sep)
+                                       or root.startswith(target.rstrip(os.sep) + os.sep)):
+                refuse_workspace(target, "codex")
+                break
+        for workspace, kind in registered.items():
+            marker = os.path.join(workspace, ".git")
+            if (target == workspace or workspace.startswith(target.rstrip(os.sep) + os.sep)
+                    or target == marker or target.startswith(marker + os.sep)
+                    or (kind == "codex" and target.startswith(workspace + os.sep))):
+                refuse_workspace(target, kind)
 
 if AGENT:
     for how, p in _codex_workspace_paths(scan, str(d.get("cwd") or "")):
@@ -948,7 +1133,7 @@ PYEOF
 # The library path travels in the environment so rule 6b can ask the registry
 # which branches are recorded; the payload itself never does.
 export WTR_WORKSPACES_LIB="$SCRIPT_DIR/../../mega-lander/workspaces.py"
-if ! RESULT="$(python3 -c "$_WTR_CLASSIFIER" <<<"$INPUT")"; then
+if ! RESULT="$(WTR_ENTITY_ROOT="$ENTITY_ROOT" WTR_PARSER="$_WTR_PARSER" python3 -B -c "$_WTR_CLASSIFIER" <<<"$INPUT")"; then
     echo "ERROR: guard-worktree-removal.sh: payload classifier failed; refusing unevaluated operation" >&2
     exit 2
 fi
