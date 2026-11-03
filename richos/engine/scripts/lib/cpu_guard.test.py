@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest.mock import patch, Mock
 import cpu_guard as G
@@ -20,6 +21,52 @@ spec.loader.exec_module(N)
 
 
 class GuardTests(unittest.TestCase):
+    def test_custom_controller_state_keeps_the_normal_engine_pool(self):
+        self.custom_controller_pool(False)
+
+    def test_custom_controller_state_honors_the_machine_engine_pool(self):
+        self.custom_controller_pool(True)
+
+    def custom_controller_pool(self, configured):
+        import engine_pass
+        import machine_settings as M
+        home = G.STATE / ('configured-home' if configured else 'home')
+        bulk = G.STATE / ('configured-bulk' if configured else 'bulk')
+        bulk.mkdir()
+        settings = home / 'Library/Application Support/RichOS/.env'
+        settings.parent.mkdir(parents=True)
+        controller = bulk / 'custom/controller'
+        G.write_json(controller / 'verification-enabled.json', {'protocol': 1})
+        settings.write_text(f'RICHOS_BULK_ROOT={bulk}\nRICHOS_CPU_GUARD_STATE={controller}\n')
+        env = {k: v for k, v in os.environ.items()
+               if k not in (*M.KEYS, M.RESOLVED, 'RICHOS_ENV_FILE',
+                            'RICHOS_VERIFICATION_MODE', 'RICHOS_VERIFICATION_FIXTURE_ROOT')}
+        env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / '.claude'))
+        pool = bulk / ('custom/engine-pass-v1' if configured else 'state/richos/engine-pass-v1')
+        if configured:
+            settings.write_text(settings.read_text() + f'RICHOS_ENGINE_PASS_DIR={pool}\n')
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(G.pwd, 'getpwuid', return_value=types.SimpleNamespace(pw_dir=str(home))):
+            spec = importlib.util.spec_from_file_location('custom_state_guard', G.__file__)
+            guard = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(guard)
+            with patch.dict(sys.modules, {'cpu_guard': guard}):
+                self.assertEqual(engine_pass.directory(), str(pool.resolve()))
+                private = bulk / 'private-pool'
+                with patch.dict(os.environ, {'RICHOS_ENGINE_PASS_DIR': str(private)}):
+                    with self.assertRaisesRegex(ValueError, 'private capacity/controller'):
+                        engine_pass.directory()
+                self.assertFalse(private.exists())
+
+    def test_custom_controller_state_accepts_symlinked_temporary_paths(self):
+        target = G.STATE / 'target'
+        target.mkdir()
+        alias = G.STATE / 'alias'
+        alias.symlink_to(target, target_is_directory=True)
+        with patch.object(G, 'STATE', alias):
+            for configured in (False, True):
+                self.custom_controller_pool(configured)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='cpu-guard-test-', dir=os.environ['TMPDIR'])
         self.addCleanup(self.tmp.cleanup)
