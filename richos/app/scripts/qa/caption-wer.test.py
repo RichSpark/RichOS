@@ -45,8 +45,8 @@ class Contracts(unittest.TestCase):
     def test_rolling_cues_are_read_once(self):
         self.assertEqual(m.caption_text(ROLLING), 'Before we use Claude and Tailscale, stop.')
 
-    def test_plain_repeated_cue_lines_are_read_once(self):
-        self.assertEqual(m.caption_text(PLAIN), 'Hello there general Kenobi')
+    def test_plain_repeated_cues_preserve_each_utterance(self):
+        self.assertEqual(m.caption_text(PLAIN), 'Hello there Hello there general Kenobi')
 
     def test_identical_words_are_zero_and_case_and_punctuation_do_not_count(self):
         r = m.compare(ROLLING, 'before we use claude, and Tailscale stop')
