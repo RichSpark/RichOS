@@ -160,8 +160,6 @@ def human_requests(path):
         for text in stream:
             if not text.endswith("\n"):
                 break
-            if "tool_result" in text or not ("user" in text or "queued_command" in text):
-                continue
             try:
                 row = json.loads(text)
             except ValueError:
