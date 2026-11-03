@@ -8862,6 +8862,71 @@ class HuntV5_08_ContinuationShutdown(Base):
         self.assertIn("cc/" + old_name, branches(self.other))
 
 
+class HuntV5_02_ProcessReadDeadline(unittest.TestCase):
+    def setUp(self):
+        for name in ("event", "_forget_gradle_daemons"):
+            isolated = patch.object(ws, name)
+            isolated.start()
+            self.addCleanup(isolated.stop)
+
+    def test_ancestor_walk_stops_reading_when_its_budget_expires(self):
+        clock, reads = [100.0], []
+        def parent(pid, timeout):
+            reads.append((clock[0], timeout))
+            clock[0] += .06
+            return (pid - 1 if len(reads) < 5 else 1), "fixture"
+        with patch.object(ws, "now", side_effect=lambda: clock[0]), \
+                patch.object(ws, "_ps_parent_and_comm", side_effect=parent), \
+                patch.object(ws, "_process_args", return_value={}) as args:
+            result = ws._protected_pids(deadline=100.04)
+        self.assertEqual(len(reads), 1, "new process reads began after expiry")
+        self.assertLessEqual(reads[0][1], .04 + 1e-10)
+        self.assertIsNone(result, "a partial protection set was treated as complete")
+        args.assert_not_called()
+
+    def test_expired_cleanup_reads_and_signals_no_process(self):
+        with patch.object(ws, "now", return_value=100), \
+                patch.object(ws, "_ps_parent_and_comm", return_value=(1, "fixture")) as parent, \
+                patch.object(ws, "_process_args", return_value={}) as args, \
+                patch.object(ws, "_process_cwds", return_value={}) as cwds, \
+                patch.object(ws, "process_table", return_value={}) as table, \
+                patch.object(ws.os, "kill") as kill:
+            result = ws.stop_processes(["/fixture/worktree"], deadline=99)
+        self.assertTrue(result.get("unknown"))
+        for reader in (parent, args, cwds, table, kill):
+            reader.assert_not_called()
+
+    def test_expiry_between_cwd_and_parent_listings_stays_unknown(self):
+        clock = [100.0]
+        def cwds(**kw):
+            clock[0] = 101.0
+            return {}
+        with patch.object(ws, "now", side_effect=lambda: clock[0]), \
+                patch.object(ws, "_protected_pids", return_value={os.getpid()}), \
+                patch.object(ws, "_gradle_daemons", return_value=[]), \
+                patch.object(ws, "_process_cwds", side_effect=cwds), \
+                patch.object(ws, "process_table", return_value={}) as table:
+            result = ws.processes_in(["/fixture/worktree"], deadline=100.04)
+        self.assertIsNone(result)
+        table.assert_not_called()
+
+    def test_expiry_during_identity_reads_does_not_admit_more_reads_or_signals(self):
+        clock, reads = [100.0], []
+        def identity(pid, timeout):
+            reads.append(pid)
+            clock[0] = 101.0
+            return "ok", "fixture start"
+        with patch.object(ws, "now", side_effect=lambda: clock[0]), \
+                patch.object(ws, "processes_in", return_value=[12345001, 12345002]), \
+                patch.object(ws, "_named_only", return_value=[]), \
+                patch.object(ws, "process_start", side_effect=identity), \
+                patch.object(ws.os, "kill") as kill:
+            result = ws.stop_processes(["/fixture/worktree"], deadline=100.04)
+        self.assertEqual(reads, [12345001])
+        self.assertEqual(result["survivors"], [12345001, 12345002])
+        kill.assert_not_called()
+
+
 if __name__ == "__main__":
     # No arguments: every point. Arguments: the named classes or tests only,
     # e.g. `workspaces.test.py Point05_Guarantee` -- one point's proof -- or a

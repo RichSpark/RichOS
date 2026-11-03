@@ -4660,11 +4660,11 @@ def _past(deadline):
 def _bounded(deadline, cap):
     """A subprocess timeout that does not outlive the caller's deadline (hunt
     part 4 v2, V2-03): the smaller of `cap` and what is left, and at least one
-    second, so a call already admitted is never handed zero. A caller that
+    millisecond, so a call already admitted is never handed zero. A caller that
     must not START a step past its deadline checks _past first."""
     if deadline is None:
         return cap
-    return max(1.0, min(float(cap), deadline - now()))
+    return max(0.001, min(float(cap), deadline - now()))
 
 
 def _within(until, fn, *args, **kw):
@@ -8335,18 +8335,22 @@ def _names_a_path(args, paths):
 
 def _protected_pids(deadline=None):
     """This process, its ancestors and every claude process: never stopped.
-    Its `ps` reads are bounded by the caller's deadline (V3-02)."""
+    Its `ps` reads are bounded by the caller's deadline; None means incomplete."""
     keep = set()
     pid = os.getpid()
     for _ in range(64):
+        if _past(deadline):
+            return None
         if not pid or pid <= 1:
             break
         keep.add(pid)
         pid, _c = _ps_parent_and_comm(pid, timeout=_bounded(deadline, 10))
+    if _past(deadline):
+        return None
     for p, a in _process_args(timeout=_bounded(deadline, 30)).items():
         if os.path.basename((a.split() or [""])[0]) == "claude":
             keep.add(p)
-    return keep
+    return None if _past(deadline) else keep
 
 
 def processes_in(paths, deadline=None):
@@ -8379,17 +8383,23 @@ def processes_in(paths, deadline=None):
     if not paths:
         return []
     keep = _protected_pids(deadline)
+    if keep is None or _past(deadline):
+        return None
     hits = set(_gradle_daemons(paths))
+    if _past(deadline):
+        return None
     cwds = _process_cwds(timeout=_bounded(deadline, 60), strict=True)
-    if cwds is None:
+    if cwds is None or _past(deadline):
         return None
     for pid, cwd in cwds.items():
         c = realpath(cwd)
         if any(c == p or c.startswith(p + os.sep) for p in paths):
             hits.add(pid)
     hits -= keep
+    if _past(deadline):
+        return None
     table = process_table(timeout=_bounded(deadline, 30), strict=True)
-    if table is None:
+    if table is None or _past(deadline):
         return None
     grew = bool(hits)
     while grew:
@@ -8407,6 +8417,8 @@ def _named_only(paths, owned, deadline=None):
     caller's deadline (V3-02)."""
     paths = [realpath(p) for p in paths if p]
     keep = _protected_pids(deadline)
+    if keep is None or _past(deadline):
+        return []
     out = []
     for pid, args in _process_args(timeout=_bounded(deadline, 30)).items():
         if pid in owned or pid in keep:
@@ -8459,9 +8471,13 @@ def stop_processes(paths, deadline=None):
     # PIDs are reused, so the history keeps each one's start time (V2-11).
     process_start_before = {}
     for p in pids:
+        if _past(deadline):
+            return {"stopped": [], "survivors": pids}
         st, when = process_start(p, timeout=_bounded(deadline, 10))
         if st == "ok":
             process_start_before[p] = when
+    if _past(deadline):
+        return {"stopped": [], "survivors": pids}
     for p in pids:
         try:
             os.kill(p, signal.SIGTERM)
