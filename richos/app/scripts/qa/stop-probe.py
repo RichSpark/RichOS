@@ -67,7 +67,7 @@ def clean_env():
 
 
 def descendants(root):
-    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=True, timeout=10).stdout
     kids, cmd = {}, {}
     for line in out.splitlines():
         parts = line.split(None, 2)
