@@ -3,7 +3,9 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -55,6 +57,29 @@ class WritePaths(unittest.TestCase):
         self.verdict(f"cat <<'EOF'\n> {self.root}/src/file\ndon't\nEOF", 0, self.work)
         self.verdict(f'printf hi >"{self.root}/src/"file', 2)
         self.verdict(f"cd {self.root}/src && bash <<'EOF'\ntouch file\nEOF", 2)
+
+    def test_guard_imports_do_not_write_into_the_engine(self):
+        hooks = self.root / 'scripts/hooks'
+        lib = self.root / 'scripts/lib'
+        hooks.mkdir(parents=True)
+        lib.mkdir()
+        for name in ('resolve-roots.sh', 'resolve-main-checkout.sh', 'hook-python.sh',
+                     'unguarded_rm.py', 'host_sleep.py'):
+            shutil.copyfile(HERE.parent / 'lib' / name, lib / name)
+        guard = hooks / 'guard-bash-main-writes.sh'
+        shutil.copyfile(HERE / guard.name, guard)
+        runtime = self.root / 'runtime/bin'
+        runtime.mkdir(parents=True)
+        (runtime / 'python3').symlink_to(sys.executable)
+        env = dict(self.env)
+        env.pop('PYTHONDONTWRITEBYTECODE', None)
+        payload = {'tool_name': 'Bash', 'cwd': str(self.root),
+                   'tool_input': {'command': 'printf harmless'}}
+        p = subprocess.run(['/bin/bash', str(guard)], input=json.dumps(payload),
+                           text=True, capture_output=True, env=env,
+                           timeout=60)  # load-bound: hang guard; verdict uses exit and filesystem contents.
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse((lib / '__pycache__').exists())
 
     def test_32_physical_aliases(self):
         for target in (self.root / 'src/file', self.alias / 'src/file'):

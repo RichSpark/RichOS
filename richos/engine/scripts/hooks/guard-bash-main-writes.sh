@@ -393,7 +393,7 @@ except ValueError:
 
 print('PASS')
 PYEOF
-if ! RESULT="$(GUARD_ROOT="$ENTITY_ROOT" GUARD_TREES="$PROTECTED_PATHS" GUARD_PARSER="$_BMW_PARSER" GUARD_HEREDOC="$_BMW_HEREDOC" python3 -c "$_BMW_CLASSIFIER" <<<"$INPUT")"; then
+if ! RESULT="$(GUARD_ROOT="$ENTITY_ROOT" GUARD_TREES="$PROTECTED_PATHS" GUARD_PARSER="$_BMW_PARSER" GUARD_HEREDOC="$_BMW_HEREDOC" python3 -B -c "$_BMW_CLASSIFIER" <<<"$INPUT")"; then
     echo "ERROR: guard-bash-main-writes.sh: payload classifier failed; refusing unevaluated operation" >&2
     exit 2
 fi

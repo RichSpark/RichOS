@@ -1133,7 +1133,7 @@ PYEOF
 # The library path travels in the environment so rule 6b can ask the registry
 # which branches are recorded; the payload itself never does.
 export WTR_WORKSPACES_LIB="$SCRIPT_DIR/../../mega-lander/workspaces.py"
-if ! RESULT="$(WTR_ENTITY_ROOT="$ENTITY_ROOT" WTR_PARSER="$_WTR_PARSER" python3 -c "$_WTR_CLASSIFIER" <<<"$INPUT")"; then
+if ! RESULT="$(WTR_ENTITY_ROOT="$ENTITY_ROOT" WTR_PARSER="$_WTR_PARSER" python3 -B -c "$_WTR_CLASSIFIER" <<<"$INPUT")"; then
     echo "ERROR: guard-worktree-removal.sh: payload classifier failed; refusing unevaluated operation" >&2
     exit 2
 fi
