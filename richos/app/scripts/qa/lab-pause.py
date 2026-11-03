@@ -68,7 +68,8 @@ def check_listener(pid, data):
     directory (mac-server.mjs gives each lab its RICHOS_MOBILE_MAC_DIR in the environment; every
     lab runs the same command name, so the name alone names no lab). `ps -E` appends the
     environment, which this user's own processes show."""
-    done = subprocess.run(["ps", "-E", "-p", str(pid), "-o", "lstart=,command="], capture_output=True, text=True)
+    done = subprocess.run(["ps", "-E", "-p", str(pid), "-o", "lstart=,command="], capture_output=True, text=True,
+                          env=dict(os.environ, LC_ALL="C", TZ="UTC0"))
     command = done.stdout
     if done.returncode != 0 or LISTENER not in command:
         raise CannotAnswer(f"pid {pid} is not the lab's listener ({LISTENER}): refusing to pause it")

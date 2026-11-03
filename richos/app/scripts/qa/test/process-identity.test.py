@@ -44,6 +44,16 @@ class Identity(unittest.TestCase):
                 self.assertEqual(sent, [signal.SIGSTOP,signal.SIGCONT] if change=='none' else [signal.SIGSTOP])
                 self.assertEqual(rc, 0 if change=='none' else 2)
 
+    def test_listener_birth_is_independent_of_en_gb_locale(self):
+        def ps(*args, **kwargs):
+            env=kwargs.get('env',os.environ)
+            stamp='Tue Nov 3 10:00:00 2026' if env.get('LC_ALL')=='C' else 'Tue  3 Nov 10:00:00 2026'
+            return SimpleNamespace(returncode=0,stdout=f'{stamp} {pause.LISTENER} RICHOS_MOBILE_MAC_DIR=/fixture/lab')
+        with patch.dict(os.environ,LANG='en_GB.UTF-8',LC_ALL='en_GB.UTF-8',TZ='Europe/London'),patch.object(pause.subprocess,'run',side_effect=ps) as called:
+            self.assertEqual(pause.check_listener(12345,Path('/fixture/lab')),'Tue Nov 3 10:00:00 2026')
+            self.assertEqual(called.call_args.kwargs['env']['LC_ALL'],'C')
+            self.assertEqual(called.call_args.kwargs['env']['TZ'],'UTC0')
+
     def test_browser_parent_reuse_does_not_adopt_foreign_children(self):
         source = ROOT / 'richos/app/ui/tests/lib/browser-reaper.js'
         code = r'''
