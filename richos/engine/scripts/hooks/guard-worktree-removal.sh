@@ -718,27 +718,89 @@ def collect_git(text):
 #
 #    FIX 2 — the target must BE a workspace to make the command destructive:
 #    decided structurally, below, from git.
-RM_CLAUSE = re.compile(r"(?:^|[;&|(]\s*|\s)rm\b(?P<args>[^;&|)]*)")
+def collect_rm(text, depth=0):
+    if depth > 6:
+        return
+    # Split shell statements, never interpret an argument to printf as a verb.
+    # Existing executable_text has already removed non-shell heredoc bodies.
+    lex = shlex.shlex(text.replace("\n", " ; "), posix=True, punctuation_chars=";&|()")
+    lex.whitespace_split = True
+    lex.commenters = "#"
+    cwd = str(d.get("cwd") or os.environ.get("WTR_ENTITY_ROOT") or os.getcwd())
+    stmt = []
 
+    def inspect(words):
+        nonlocal cwd
+        i = 0
+        valued = {"-u", "-g", "-n", "-I", "-L", "-P", "-C", "-D"}
+        while i < len(words):
+            word = words[i]
+            base = os.path.basename(word)
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word) or word in ("do", "then", "if", "!", "{"):
+                i += 1
+            elif base in ("sudo", "env", "xargs", "command", "exec", "nice", "nohup"):
+                i += 1
+                while i < len(words) and words[i].startswith("-"):
+                    i += 2 if words[i] in valued else 1
+            else:
+                break
+        if i >= len(words):
+            return
+        verb, args = os.path.basename(words[i]), words[i + 1:]
+        if verb == "cd" and args:
+            dest = [a for a in args if a not in ("--", "-P", "-L")]
+            if dest:
+                cwd = (None if cwd is None or _unreadable_operand(dest[0]) else
+                       os.path.abspath(os.path.join(cwd, os.path.expanduser(dest[0]))))
+            return
+        if verb in ("bash", "sh", "zsh", "dash", "ksh"):
+            for k, arg in enumerate(args[:-1]):
+                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
+                    collect_rm(args[k + 1], depth + 1)
+                    break
+            return
+        if verb != "rm":
+            return
+        recursive = any(a == "--recursive" or re.fullmatch(r"-[A-Za-z]*[rR][A-Za-z]*", a)
+                        for a in args if a != "--")
+        operands, options = [], True
+        for arg in args:
+            if options and arg == "--":
+                options = False
+            elif not (options and arg.startswith("-")):
+                operands.append(arg)
+        # Match the Git-removal rule: an opaque target cannot prove that it
+        # leaves Codex's workspaces intact. No shell evaluation is attempted.
+        if recursive and (not operands or any(_unreadable_operand(a) for a in operands)):
+            spec.append("rm -r of an unreadable target; name each path literally so this guard "
+                        "can prove it is not a codex/ workspace (point 2)")
+            return
+        for tok in operands:
+            if not recursive and not tok.rstrip("/").endswith("/.git"):
+                continue
+            if re.search(r"\.claude/worktrees/agent-\S*", tok):
+                spec.append("rm -r of a .claude/worktrees/agent-* workspace (point 6: native "
+                            "workspaces are deleted by a land or a discard)")
+            else:
+                if cwd is None and not os.path.isabs(tok):
+                    spec.append("rm relative to an unreadable cd target; name the full path (point 2)")
+                    continue
+                path = os.path.join(cwd or os.sep, os.path.expanduser(tok))
+                # rm removes a final symlink itself; a slash explicitly follows it.
+                if not tok.endswith("/") and os.path.islink(path):
+                    continue
+                rm_paths.append(os.path.realpath(path))
 
-def collect_rm(text):
-  for m in RM_CLAUSE.finditer(text):
-    before = text[:m.start()].rstrip()
-    if before.split()[-1:] == ["git"]:
-        continue  # `git rm` — an index removal, not a filesystem removal
-    args = m.group("args")
-    if not (re.search(r"(?:^|\s)-[A-Za-z]*[rR][A-Za-z]*\b", args) or re.search(r"--recursive\b", args)):
-        continue
-    for raw in re.findall(r"\S+", args):
-        tok = raw.strip("\"'")
-        if not tok or tok.startswith("-"):
-            continue
-        if re.search(r"\.claude/worktrees/agent-\S*", tok):
-            # Structural, self-describing, and decided without touching disk.
-            spec.append("rm -r of a .claude/worktrees/agent-* workspace (point 6: native "
-                        "workspaces are deleted by a land or a discard)")
-        else:
-            rm_paths.append(tok)
+    try:
+        for token in lex:
+            if token and all(c in ";&|()" for c in token):
+                inspect(stmt); stmt = []
+            else:
+                stmt.append(token)
+        inspect(stmt)
+    except ValueError:
+        if re.search(r"(?:^|\s)rm\s", text):
+            spec.append("rm with unreadable shell syntax; name each path literally (point 2)")
 
 
 # 5) Nobody starts a session in its own workspace (point 3).
@@ -908,15 +970,52 @@ def workspace_kind(p):
     return "other"
 
 
-for tok in paths + rm_paths:
-    k = workspace_kind(tok)
-    if k == "codex":
+def removal_workspaces():
+    # Git's registry sees sibling worktrees even when the rm target is their
+    # parent, not a checkout itself. Also query the target's nearest repository
+    # so a literal path into another repository is protected as before.
+    sources = {str(d.get("cwd") or ""), os.environ.get("WTR_ENTITY_ROOT", "")}
+    for target in rm_paths:
+        parent = target
+        while not os.path.isdir(parent) and parent != os.path.dirname(parent):
+            parent = os.path.dirname(parent)
+        sources.add(parent)
+    workspaces = set()
+    for source in sources - {""}:
+        for field in _git(source, "worktree", "list", "--porcelain", "-z").split("\0"):
+            if field.startswith("worktree "):
+                workspaces.add(os.path.realpath(field[len("worktree "):]))
+    return {p: workspace_kind(p) for p in workspaces}
+
+
+def refuse_workspace(tok, kind):
+    if kind == "codex":
         spec.append("a codex/ workspace (%s) — codex/ is never touched (point 2)" % tok)
-    elif k == "system":
+    elif kind == "system":
         spec.append("an agent's workspace (%s) — deleted by a land or a discard, with every "
                     "workspace and branch it has (points 4, 7, 10)" % tok)
-    elif k == "other" and tok in rm_paths:
+    elif kind == "other":
         reasons.append("rm -r of a linked git worktree (%s)" % tok)
+
+
+for tok in paths:
+    kind = workspace_kind(tok)
+    if kind in ("codex", "system"):
+        refuse_workspace(tok, kind)
+if rm_paths:
+    registered = removal_workspaces()
+    for target in rm_paths:
+        for root in CODEX_WORKTREE_ROOTS:
+            if os.path.isdir(root) and (target == root or target.startswith(root + os.sep)
+                                       or root.startswith(target.rstrip(os.sep) + os.sep)):
+                refuse_workspace(target, "codex")
+                break
+        for workspace, kind in registered.items():
+            marker = os.path.join(workspace, ".git")
+            if (target == workspace or workspace.startswith(target.rstrip(os.sep) + os.sep)
+                    or target == marker or target.startswith(marker + os.sep)
+                    or (kind == "codex" and target.startswith(workspace + os.sep))):
+                refuse_workspace(target, kind)
 
 if AGENT:
     for how, p in _codex_workspace_paths(scan, str(d.get("cwd") or "")):
@@ -948,7 +1047,7 @@ PYEOF
 # The library path travels in the environment so rule 6b can ask the registry
 # which branches are recorded; the payload itself never does.
 export WTR_WORKSPACES_LIB="$SCRIPT_DIR/../../mega-lander/workspaces.py"
-if ! RESULT="$(python3 -c "$_WTR_CLASSIFIER" <<<"$INPUT")"; then
+if ! RESULT="$(WTR_ENTITY_ROOT="$ENTITY_ROOT" python3 -c "$_WTR_CLASSIFIER" <<<"$INPUT")"; then
     echo "ERROR: guard-worktree-removal.sh: payload classifier failed; refusing unevaluated operation" >&2
     exit 2
 fi
