@@ -4858,14 +4858,14 @@
     },
     "scripts/lib/left-off.py#human-classifier": {
       "source": "scripts/lib/left-off.py",
-      "sha256": "bc8ee52b63ab677a5c055ce2b7da434bbb786058867cf3128a9b3cf3337433b4",
+      "sha256": "0a2a741b559084783f4d66c48ba0180219de051f7335843ad50095341ba7c622",
       "evidence": "Import only installs constants/functions. Failure-type calls is_human and text_of plus reads MACHINE_ENVELOPES. Both functions classify supplied record values without files, commands or config. Other report/CLI helpers are not invoked.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/failure-type.py": {
       "source": "scripts/lib/failure-type.py",
-      "sha256": "4979df06ab98e4bf1c1c0d86fb6a471db9fff8d6aa3efca88988118d24f81a9f",
+      "sha256": "24fe80fbc30542333c46f565e521f0b06e9a98bb54e2cc0e8574773e8b9cb1c5",
       "evidence": "Complete reviewed analyzer reads supplied register/transcript/corpus and fixed Git metadata; payload commands are inspected as strings, never executed. Configuration reaches it only as explicit RICHOS_FT_* wrapper arguments. The fixed left-off import uses just its human classifiers.",
       "keys": [],
       "edges": [
@@ -8201,7 +8201,7 @@
     },
     "scripts/lib/left-off.py": {
       "source": "scripts/lib/left-off.py",
-      "sha256": "bc8ee52b63ab677a5c055ce2b7da434bbb786058867cf3128a9b3cf3337433b4",
+      "sha256": "0a2a741b559084783f4d66c48ba0180219de051f7335843ad50095341ba7c622",
       "evidence": "Reviewed CLI/build, all file reads, subprocess sites and dynamic sibling calls. Transcript/prompt/state fields are data; Git calls are fixed read-only queries. Finite sibling imports read workspace mapping/integration, unlanded repository discovery and escalation rows. Wall clock, Git refs/reflogs and external ledger content remain execution inputs, not config readers.",
       "keys": [],
       "edges": [
@@ -16757,7 +16757,7 @@
     },
     "scripts/hooks/guard-no-shell-c.test.sh": {
       "source": "scripts/hooks/guard-no-shell-c.test.sh",
-      "sha256": "3dfff7f5de562be2235ff793508c8bd0dfded5d000f815b4d9f3c9c74aaaa7d0",
+      "sha256": "97ed73159838965db6251e674922b1bf359afa79e888ad68f83b7764235e52d3",
       "keys": [],
       "edges": [
         {
@@ -16765,6 +16765,9 @@
         },
         {
           "to": "scripts/hooks/dispatch-pretooluse.sh#find-payload"
+        },
+        {
+          "to": "scripts/hooks/g10-command-readers.test.py"
         }
       ],
       "evidence": "Feeds PreToolUse[Bash] payloads to the hook; no command under test is executed. D1 sends two non-commit Bash payloads (bash -c with rm, and a script file, no agent_id) through the real Bash dispatcher, which runs every module on the same non-commit route as the find-payload fragment."
@@ -17612,6 +17615,39 @@
         }
       ],
       "evidence": "G10 literal command reader. Uses the existing tokenizer and wrapper option tables, never executes or expands shell input. Reads no orchestration value."
+    },
+    "scripts/land-completeness-measure.py": {
+      "source": "scripts/land-completeness-measure.py",
+      "sha256": "f09f1f00b785c7797c5fa813fa5f04721ce1ed291406485a83491f0cc934f74d",
+      "keys": [],
+      "edges": [],
+      "evidence": "Literal transcript diagnostic. G10 test imports only classify_land; no main execution or external operation."
+    },
+    "scripts/hooks/g10-command-readers.test.py": {
+      "source": "scripts/hooks/g10-command-readers.test.py",
+      "sha256": "63db658080f897881a578c44f6a8dd0e20f57b88301b0ef6d56615a0bfbdb9b4",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/shell_c.py"
+        },
+        {
+          "to": "scripts/lib/headed_browser.py"
+        },
+        {
+          "to": "scripts/lib/failure-type.py"
+        },
+        {
+          "to": "scripts/lib/left-off.py"
+        },
+        {
+          "to": "scripts/land-completeness-measure.py"
+        },
+        {
+          "to": "scripts/lib/command_reader.py"
+        }
+      ],
+      "evidence": "G10 parser regressions. Imports fixed helpers and invokes embedded classifiers on literal payloads. Uses disposable Playwright source fixtures; never launches a browser or executes a command being classified."
     }
   },
   "units": {
@@ -18210,8 +18246,8 @@
         "scripts/hooks/detect-nonnative-worktree.sh": "c1fc4740b019bf311a56f69aae0df1761e9c2383e77dd2f36ee1af2dbce3bfaf",
         "scripts/hooks/dispatch-pretooluse.sh": "a8040d635cb70a1ac4d29c140ea398684e6e8f78b6738ac3acc35063d970b602",
         "scripts/hooks/failure-type-lookup.sh": "7c4e881d1c4b1ba62ef0acd876387092ce88fb55981a9497705f86ffa876bfff",
-        "scripts/lib/failure-type.py": "4979df06ab98e4bf1c1c0d86fb6a471db9fff8d6aa3efca88988118d24f81a9f",
-        "scripts/lib/left-off.py": "bc8ee52b63ab677a5c055ce2b7da434bbb786058867cf3128a9b3cf3337433b4",
+        "scripts/lib/failure-type.py": "24fe80fbc30542333c46f565e521f0b06e9a98bb54e2cc0e8574773e8b9cb1c5",
+        "scripts/lib/left-off.py": "0a2a741b559084783f4d66c48ba0180219de051f7335843ad50095341ba7c622",
         "scripts/hooks/failure-type.test.sh": "59a268fcbfbe1b56b60e69d59753352931ab690010a7a97041345639881d6459",
         "scripts/hooks/failure-type.mutation.sh": "b9bc6705e29fd7b055c3c94e90aaceb978c404693e22ed4888bf3bc20134122f",
         "scripts/hooks/guard-agent-state-claims.py": "341d0223962f9ccfa6298b3d6982dc55b5f3ea19ec5ea4ba1deb162380811ab5",
@@ -18895,8 +18931,8 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/guard-definition-drift.sh": "e1e94650120b4a381286594c5bfa7abc530ebca3b2fd517ea0156d85b6314821",
         "scripts/hooks/guard-failure-type-answer.sh": "2ee4e179524f1e1cb385c53c79ac20e7d2aedd103254b17b8925e86bbda31484",
-        "scripts/lib/failure-type.py": "4979df06ab98e4bf1c1c0d86fb6a471db9fff8d6aa3efca88988118d24f81a9f",
-        "scripts/lib/left-off.py": "bc8ee52b63ab677a5c055ce2b7da434bbb786058867cf3128a9b3cf3337433b4",
+        "scripts/lib/failure-type.py": "24fe80fbc30542333c46f565e521f0b06e9a98bb54e2cc0e8574773e8b9cb1c5",
+        "scripts/lib/left-off.py": "0a2a741b559084783f4d66c48ba0180219de051f7335843ad50095341ba7c622",
         "scripts/hooks/failure-type.test.sh": "59a268fcbfbe1b56b60e69d59753352931ab690010a7a97041345639881d6459",
         "scripts/hooks/failure-type-lookup.sh": "7c4e881d1c4b1ba62ef0acd876387092ce88fb55981a9497705f86ffa876bfff",
         "scripts/hooks/failure-type.mutation.sh": "b9bc6705e29fd7b055c3c94e90aaceb978c404693e22ed4888bf3bc20134122f",

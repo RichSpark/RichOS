@@ -642,18 +642,19 @@ def reflog_entries(repo, branch, limit=400):
 
 
 def names_ref(name, text):
-    """True when `name` appears in `text` as a whole branch name.
+    """Match a complete branch token, allowing surrounding prose punctuation.
 
-    Hunt P5-58: substring containment credited cc/mark-opus-f10's landing to
-    cc/mark-opus-f1. A match must not be flanked by a character that continues
-    a branch name.
-
-    v3: `/` and `.` continue a branch name too (cc/mark-opus-f1/other,
-    cc/mark-opus-f1.other) when a name character follows them; a sentence's
-    closing period or a `:` still ends the match."""
+    Git allows punctuation such as +, @ and $ in refs. Enumerating just word
+    characters lets a longer branch borrow its prefix's landing (P5-58).
+    Quotes/backticks and sentence-ending periods delimit names in these records.
+    """
     if not name:
         return False
-    return re.search(r"(?<![\w-])%s(?![\w-]|[./][\w-])" % re.escape(name), text) is not None
+    # Git's forbidden ref characters, plus the quoting used by these records.
+    tokens = re.findall(r"[^\s\x00-\x20\x7f~^:?*\[\\'\"`<>()]+", text)
+    # Job names can omit the branch namespace (mark-opus-f1 vs cc/mark-opus-f1).
+    return any(token.rstrip(".") == name or token.rstrip(".").endswith("/" + name)
+               for token in tokens)
 
 
 def landing_verdict(repos_info, name, as_of=None, workspaces=None):

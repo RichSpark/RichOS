@@ -706,12 +706,70 @@ def bash_reads_register(cmd, reg_path, rel, base):
         for a in files:
             if path_matches_register(a, reg_path, rel, base):
                 return True
+        if program is not None and verb in ("python", "python3"):
+            if any(path_matches_register(p, reg_path, rel, base)
+                   for p in _python_read_targets(program, rest)):
+                return True
+            continue
         if program is not None and (
                 any(path_matches_register(p, reg_path, rel, base) for p in _read_targets(program))
                 or (_READ_CALL.search(program)
                     and any(path_matches_register(a, reg_path, rel, base) for a in rest))):
             return True
     return False
+
+
+def _python_read_targets(program, rest):
+    """Read-call operands from Python syntax. Strings and comments are never code.
+
+    Resolve literal paths and literal sys.argv indices only. An unsupported
+    expression earns no credit; the agent can use Read or cat instead.
+    """
+    import ast
+    try:
+        tree = ast.parse(program)
+    except (SyntaxError, ValueError, RecursionError):
+        return []
+
+    def path(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
+                and isinstance(node.value.value, ast.Name) and node.value.value.id == "sys"
+                and node.value.attr == "argv" and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, int) and 1 <= node.slice.value <= len(rest)):
+            return rest[node.slice.value - 1]
+        return None
+
+    targets = []
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        func = call.func
+        operand = None
+        mode_index = 1
+        if isinstance(func, ast.Name) and func.id == "open":
+            operand = call.args[0] if call.args else next(
+                (k.value for k in call.keywords if k.arg == "file"), None)
+        elif isinstance(func, ast.Attribute) and func.attr in ("read_text", "read_bytes", "open"):
+            receiver = func.value
+            if (isinstance(receiver, ast.Call) and receiver.args
+                    and ((isinstance(receiver.func, ast.Name) and receiver.func.id == "Path")
+                         or (isinstance(receiver.func, ast.Attribute) and receiver.func.attr == "Path"))):
+                operand = receiver.args[0]
+                mode_index = 0
+        if operand is None:
+            continue
+        if isinstance(func, ast.Name) or getattr(func, "attr", None) == "open":
+            mode = call.args[mode_index] if len(call.args) > mode_index else None
+            mode = next((k.value for k in call.keywords if k.arg == "mode"), mode)
+            if mode is not None and (not isinstance(mode, ast.Constant)
+                                     or not isinstance(mode.value, str) or any(c in mode.value for c in "wax")):
+                continue
+        target = path(operand)
+        if target is not None:
+            targets.append(target)
+    return targets
 
 
 # Hunt P5-57 (v3): the register's name anywhere in a program that reads SOMETHING

@@ -144,6 +144,14 @@ out="$(payload "bash /tmp/x.sh" | bash "$SCRIPT_DIR/dispatch-pretooluse.sh" Bash
 if printf '%s' "$out" | grep -qF 'guard-no-shell-c'; then bad "D1 dispatcher passes a script file" "$out"; else ok "D1 dispatcher lets a script file past this rule"; fi
 
 # command_reader.py is exercised through the shell guard on every fixture above.
+# G10 also exercises shell_c.py, headed_browser.py, failure-type.py, left-off.py
+# and land-completeness-measure.py on parsing fixtures. No browser is launched.
+if python3 -B "$SCRIPT_DIR/g10-command-readers.test.py"; then
+    ok "G10 command-reader regressions"
+else
+    bad "G10 command-reader regressions"
+fi
+
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
