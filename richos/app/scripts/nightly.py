@@ -1134,7 +1134,9 @@ def cached_gpl_source(row, cache, mirrors=()):
     path = Path(cache) / row["asset"]
     if path.is_file() and sha256_file(path) == row["sha256"]:
         return path
-    partial = Path(cache) / f".{row['asset']}.partial"
+    fd, temporary = tempfile.mkstemp(prefix=f".{row['asset']}.", suffix=".partial", dir=cache)
+    os.close(fd)
+    partial = Path(temporary)
     print(f"Fetching the source of {row['name']} {row['version']}...", flush=True)
     refusals = []
     try:
