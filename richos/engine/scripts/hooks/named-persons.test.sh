@@ -86,7 +86,7 @@ unset CLAUDE_PROJECT_DIR
 
 PASS=0
 FAIL=0
-SCRATCH="$(mktemp -d -t nptest.XXXXXX)"
+SCRATCH="$(mktemp -d "${TMPDIR:?}/nptest.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 ok()  { printf '  PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
@@ -131,7 +131,7 @@ fi
 # --- sandboxes --------------------------------------------------------------
 make_repo() { # <declare-boundary: yes|no>
     local sb
-    sb="$(mktemp -d -t nprepo.XXXXXX)"
+    sb="$(mktemp -d "$SCRATCH/repo.XXXXXX")"
     git -C "$sb" init -q
     git -C "$sb" config user.email t@example.com
     git -C "$sb" config user.name T

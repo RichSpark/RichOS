@@ -225,12 +225,19 @@ if pb_path_is_ignored "$NP_REPO" "$FILE_PATH"; then
     exit 0
 fi
 
-RESULT="$(printf '%s' "$INPUT" | python3 "$NP_PREDICATE" --scan-payload 2>/dev/null || printf 'PARSEFAIL\n')"
+if ! RESULT="$(python3 "$NP_PREDICATE" --scan-payload <<< "$INPUT" 2>/dev/null)"; then
+    echo "ERROR: guard-named-persons-writes.sh: name checker failed; no verdict was obtained. Refusing." >&2
+    exit 2
+fi
 VERDICT="$(printf '%s' "$RESULT" | head -1 | cut -f1)"
 
 case "$VERDICT" in
-  CLEAN|PARSEFAIL)
+  CLEAN)
     exit 0
+    ;;
+  PARSEFAIL)
+    echo "ERROR: guard-named-persons-writes.sh: name checker could not read the payload; no verdict was obtained. Refusing." >&2
+    exit 2
     ;;
   ABSENT)
     np_announce_absent "scripts/hooks/guard-named-persons-writes.sh" "$NP_REPO"

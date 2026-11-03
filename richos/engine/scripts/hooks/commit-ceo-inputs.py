@@ -193,7 +193,7 @@ GIT_TIMEOUT_S = 8
 # The content gates get their own budget; they build a corpus and can be slower.
 GATE_TIMEOUT_S = 10
 
-# THE WHOLE RUN'S BUDGET, and it exists because he is waiting behind it. This
+# THE NEW WORK'S BUDGET, and it exists because he is waiting behind it. This
 # hook sits between him pressing enter and the model seeing his message, so a
 # slow repository must not become a slow product. The event's default timeout is
 # 30000 ms and the registration asks for 25; this deadline sits below both so
@@ -202,6 +202,39 @@ GATE_TIMEOUT_S = 10
 # not-examined, never dropped: a file that was skipped for time is not a file
 # that was found clean.
 DEADLINE_S = 18
+# After a reference moves, sync the real index and release an acquired lease.
+# One shared reserve keeps that cleanup below the host's 25-second timeout;
+# it never permits another scan, lease acquisition or commit to start.
+CLEANUP_GRACE_S = 6
+LEASE_CALL_GRACE_S = 5
+
+# One work deadline and a bounded cleanup reserve. Imported helpers have no
+# run deadline. Only post-reference index sync and lease release use the reserve.
+_deadline = None
+_cleanup_deadline = None
+
+
+class IngressDeadline(Exception):
+    pass
+
+
+def check_budget(cleanup=False):
+    deadline = _cleanup_deadline if cleanup else _deadline
+    if deadline is not None and time.monotonic() >= deadline:
+        if cleanup:
+            raise IngressDeadline("the ingress exhausted its cleanup allowance")
+        raise IngressDeadline("the ingress ran out of its %ds budget; remaining work was not examined" % DEADLINE_S)
+
+
+def run_command(*args, timeout, cleanup=False, **kwargs):
+    check_budget(cleanup)
+    deadline = _cleanup_deadline if cleanup else _deadline
+    if deadline is not None:
+        timeout = min(timeout, max(0, deadline - time.monotonic()))
+        if timeout <= 0:
+            check_budget(cleanup)
+    return subprocess.run(*args, timeout=timeout, **kwargs)
+
 
 TRAILING = ".,;:!?—-’'\")]}>*"
 LEADING = "(“\"'[{<*"
@@ -368,17 +401,20 @@ def resolve(raw, cwd):
 # ---------------------------------------------------------------------------
 # GIT
 # ---------------------------------------------------------------------------
-def git(args, cwd, timeout=GIT_TIMEOUT_S, stdin_bytes=None):
+def git(args, cwd, timeout=GIT_TIMEOUT_S, stdin_bytes=None, cleanup=False):
     """(rc, stdout, undecided_reason). A non-empty third element is never a pass."""
     try:
-        r = subprocess.run(
+        r = run_command(
             ["git", "--no-optional-locks"] + args,
             cwd=cwd,
             input=stdin_bytes,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
+            cleanup=cleanup,
         )
+    except IngressDeadline as exc:
+        return (124, "", str(exc))
     except FileNotFoundError:
         return (127, "", "git-absent")
     except subprocess.TimeoutExpired:
@@ -449,6 +485,7 @@ def companion_files(path, repo):
         return []
     out = []
     for name in sorted(os.listdir(assets)):
+        check_budget()
         if not name.startswith(vid + "-"):
             continue
         d = os.path.join(assets, name)
@@ -516,6 +553,7 @@ def gate_git_ready(path, repo):
 
 def read_text(path):
     """(text, refusal). Gate 4: unscannable is refused, never assumed clean."""
+    check_budget()
     try:
         size = os.path.getsize(path)
     except OSError as exc:
@@ -581,7 +619,7 @@ def run_gate(script, repo, path, text, seat):
     env["RICHOS_ENTITY_ROOT"] = seat
     env.pop("CLAUDE_PROJECT_DIR", None)
     try:
-        r = subprocess.run(
+        r = run_command(
             ["bash", script],
             input=payload.encode("utf-8"),
             stdout=subprocess.PIPE,
@@ -590,8 +628,8 @@ def run_gate(script, repo, path, text, seat):
             env=env,
             timeout=GATE_TIMEOUT_S,
         )
-    except subprocess.TimeoutExpired:
-        return ("undecided", "gate timed out after %ds" % GATE_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        return ("undecided", "gate timed out after %gs" % exc.timeout)
     except OSError as exc:
         return ("undecided", "gate could not run (%s)" % exc.__class__.__name__)
     if r.returncode == 0:
@@ -661,29 +699,15 @@ def commit(path, repo, session, stamp, data=None, extras=()):
         if xrel.startswith("..") or os.path.isabs(xrel):
             return (False, "a companion file's path and its repository's path are in "
                            "different spellings, so nothing was committed")
-        xr = subprocess.run(
-            ["git", "--no-optional-locks", "hash-object", "-w", "--stdin"],
-            cwd=repo, input=xdata, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, timeout=GIT_TIMEOUT_S,
-        )
-        xblob = xr.stdout.decode("utf-8", "replace").strip()
-        if xr.returncode != 0 or not xblob:
-            return (False, "hash-object failed for a companion file (rc=%d)" % xr.returncode)
+        rc, xblob, undecided = git(["hash-object", "-w", "--stdin"], repo, stdin_bytes=xdata)
+        if undecided or rc != 0 or not xblob:
+            return (False, "hash-object failed for a companion file (%s)" % (undecided or "rc=%d" % rc))
         entries.append(("100755" if os.access(xpath, os.X_OK) else "100644", xblob, xrel))
 
     if data is not None:
         # P3-22: commit the BYTES THE GATES CHECKED, never a re-read of the live
         # file, which can have been replaced since the scan.
-        try:
-            hr = subprocess.run(
-                ["git", "--no-optional-locks", "hash-object", "-w", "--stdin"],
-                cwd=repo, input=data, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, timeout=GIT_TIMEOUT_S,
-            )
-            rc, blob, undecided = (hr.returncode,
-                                   hr.stdout.decode("utf-8", "replace").strip(), "")
-        except Exception as exc:
-            rc, blob, undecided = (1, "", exc.__class__.__name__)
+        rc, blob, undecided = git(["hash-object", "-w", "--stdin"], repo, stdin_bytes=data)
     else:
         rc, blob, undecided = git(["hash-object", "-w", "--", path], repo)
     if undecided or rc != 0 or not blob:
@@ -708,7 +732,7 @@ def commit(path, repo, session, stamp, data=None, extras=()):
 
     def gi(args):
         try:
-            r = subprocess.run(
+            r = run_command(
                 ["git", "--no-optional-locks"] + args,
                 cwd=repo,
                 env=env_index,
@@ -756,7 +780,7 @@ def commit(path, repo, session, stamp, data=None, extras=()):
             len(extras), os.path.dirname(os.path.relpath(extras[0][0], repo)))
 
     try:
-        r = subprocess.run(
+        r = run_command(
             ["git", "--no-optional-locks", "commit-tree", tree, "-p", old, "-F", "-"],
             cwd=repo,
             input=message.encode("utf-8"),
@@ -799,7 +823,7 @@ def commit(path, repo, session, stamp, data=None, extras=()):
     # reported as a clean capture; the failure is named with the repair.
     for emode, eblob, erel in entries:
         rc, _o, undecided = git(
-            ["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (emode, eblob, erel)], repo
+            ["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (emode, eblob, erel)], repo, cleanup=True
         )
         if undecided or rc != 0:
             break
@@ -856,8 +880,8 @@ def take_lease(repo, engine_root, wait):
     """('acquired' | 'renewed' | 'off' | 'held' | 'failed', detail)."""
     script = os.path.join(engine_root, "scripts", "land-lease.sh")
     try:
-        r = subprocess.run(["bash", script, "acquire", "--repo", repo, "--wait", str(wait)],
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=wait + 5)
+        r = run_command(["bash", script, "acquire", "--repo", repo, "--wait", str(wait)],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=wait + LEASE_CALL_GRACE_S)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return ("failed", "land-lease.sh could not run (%s)" % exc.__class__.__name__)
     out = r.stdout.decode("utf-8", "replace")
@@ -880,9 +904,9 @@ def take_lease(repo, engine_root, wait):
 
 def release_lease(repo, engine_root):
     try:
-        subprocess.run(["bash", os.path.join(engine_root, "scripts", "land-lease.sh"), "release", "--repo", repo],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
-    except (OSError, subprocess.TimeoutExpired):
+        run_command(["bash", os.path.join(engine_root, "scripts", "land-lease.sh"), "release", "--repo", repo],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45, cleanup=True)
+    except (OSError, subprocess.TimeoutExpired, IngressDeadline):
         pass    # a lease left held at rest is released by the turn-end hook (release-land-leases.sh)
 
 
@@ -891,22 +915,24 @@ def pending_paths(state_dir):
     latest = {}
     try:
         with open(os.path.join(state_dir, "ceo-inputs.jsonl"), encoding="utf-8") as fh:
-            lines = fh.readlines()[-500:]
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                for p in rec.get("committed") or []:
+                    latest.pop(p, None)
+                for r in rec.get("refused") or []:
+                    if isinstance(r, dict) and r.get("path"):
+                        if r.get("pending"):
+                            latest[r["path"]] = True
+                        else:
+                            latest.pop(r["path"], None)
+                for p in rec.get("reported") or []:
+                    latest.pop(p, None)
     except OSError:
         return []
-    for line in lines:
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        for p in rec.get("committed") or []:
-            latest[p] = False
-        for r in rec.get("refused") or []:
-            if isinstance(r, dict) and r.get("path"):
-                latest[r["path"]] = bool(r.get("pending"))
-        for p in rec.get("reported") or []:
-            latest[p] = False
-    return [p for p, pending in latest.items() if pending]
+    return list(latest)
 
 
 # ---------------------------------------------------------------------------
@@ -935,6 +961,9 @@ def ledger_append(state_dir, record):
 
 
 def main():
+    global _deadline, _cleanup_deadline
+    _deadline = time.monotonic() + DEADLINE_S
+    _cleanup_deadline = _deadline + CLEANUP_GRACE_S
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw)
@@ -980,7 +1009,12 @@ def main():
         if not is_handover_file(p):
             continue
         seen.add(p)
-        state, repo, detail = classify(p)
+        try:
+            check_budget()
+            state, repo, detail = classify(p)
+        except IngressDeadline as exc:
+            undecided.append({"path": p, "why": str(exc)})
+            continue
         states[state] = states.get(state, 0) + 1
         if state == "indeterminate":
             undecided.append({"path": p, "why": detail or "unknown"})
@@ -1014,138 +1048,143 @@ def main():
             )
         unheld = []
 
-    started = time.monotonic()
     for p, repo, source in unheld:
-        if time.monotonic() - started > DEADLINE_S:
-            undecided.append(
-                {
-                    "path": p,
-                    "why": "the ingress ran out of its %ds budget before "
-                           "reaching this file, so nothing is known about it — "
-                           "a file skipped for time is not a file found clean"
-                           % DEADLINE_S,
-                }
-            )
-            continue
-        why = gate_git_ready(p, repo)
-        if why:
-            refused.append({"path": p, "repo": repo, "why": why})
-            continue
-
-        # Gate 5 — the gates below are run FROM the seat, and the seat is what
-        # makes the credential scanner scan instead of standing down. Without
-        # one there is no adopted repository to run them from, so nothing is
-        # known about the content and nothing is committed.
-        if not seat_root:
-            refused.append(
-                {
-                    "path": p,
-                    "repo": repo,
-                    "why": "the ingress could not name an adopted repository "
-                           "to run the credential and publication gates from, "
-                           "so nothing is known about this file's content — "
-                           "and an unscanned automatic commit is not on the "
-                           "table",
-                }
-            )
-            continue
-
-        body, why = read_text(p)
-        if body is None:
-            refused.append({"path": p, "repo": repo, "why": why})
-            continue
-
-        # Companion files go through the same two gates; one refusal and
-        # nothing at all is committed.
-        extras = []
-        for cp in companion_files(p, repo):
-            cbody, cwhy = read_text(cp)
-            if cbody is None or os.path.islink(cp):
-                why = cwhy or "a companion is a symbolic link"
-                break
-            extras.append((cp, cbody))
-        else:
-            why = ""
-        if why:
-            refused.append({"path": p, "repo": repo,
-                            "why": "a companion file could not be committed with it (%s)" % why})
-            continue
-
-        blocked = False
-        for name, script in (
-            ("credential scanner", os.path.join(engine_root, "scripts/hooks/scan-secrets.sh")),
-            ("publication boundary", os.path.join(engine_root, "scripts/hooks/guard-publication-writes.sh")),
-        ):
-            verdict, detail = run_gate(script, repo, p, body, seat_root)
-            for cp, cbody in extras:
-                if verdict != "pass":
-                    break
-                verdict, detail = run_gate(script, repo, cp, cbody, seat_root)
-            if verdict == "refuse":
-                refused.append(
-                    {
-                        "path": p,
-                        "repo": repo,
-                        "why": "the %s refused it (%s). It is not committed; "
-                               "put it somewhere gitignored, or in the private "
-                               "record, and say so." % (name, detail),
-                    }
-                )
-                blocked = True
-                break
-            if verdict == "undecided":
-                refused.append(
-                    {
-                        "path": p,
-                        "repo": repo,
-                        "why": "the %s could not run (%s), so nothing is known "
-                               "about this file's content — and a gate that "
-                               "could not look never reports nothing found"
-                               % (name, detail),
-                    }
-                )
-                blocked = True
-                break
-        if blocked:
-            continue
-
         lease = "none"
-        if fence_on(repo) and git(["symbolic-ref", "--quiet", "HEAD"], repo)[1] == "refs/heads/main":
-            if repo in held:
-                lease, detail = "held", held[repo]
-            else:
-                wait = 0 if source == "pending" else \
-                    max(0, min(LEASE_WAIT_S, int(DEADLINE_S - (time.monotonic() - started))))
-                lease, detail = take_lease(repo, engine_root, wait)
-            if lease == "held":
-                held[repo] = detail
-                pending.append({"path": p, "repo": repo, "pending": True,
-                                "why": "not committed yet: %s is landing in this repository, and a "
-                                       "commit onto main needs the land lease. It stays pending and is "
-                                       "retried on your next message" % detail})
+        try:
+            check_budget()
+            why = gate_git_ready(p, repo)
+            if why:
+                refused.append({"path": p, "repo": repo, "why": why})
                 continue
-            if lease in ("acquired", "renewed"):
-                lease_notes.extend(n for n in detail if n not in lease_notes)
-            if lease == "failed":
-                refused.append({"path": p, "repo": repo, "failed": True,
-                                "why": "the land lease could not be taken, so nothing was committed (%s)"
-                                       % detail})
+
+            # Gate 5 — the gates below are run FROM the seat, and the seat is what
+            # makes the credential scanner scan instead of standing down. Without
+            # one there is no adopted repository to run them from, so nothing is
+            # known about the content and nothing is committed.
+            if not seat_root:
+                refused.append(
+                    {
+                        "path": p,
+                        "repo": repo,
+                        "why": "the ingress could not name an adopted repository "
+                               "to run the credential and publication gates from, "
+                               "so nothing is known about this file's content — "
+                               "and an unscanned automatic commit is not on the "
+                               "table",
+                    }
+                )
                 continue
-        ok, result = commit(p, repo, session, stamp, data=body.encode("utf-8"),
-                         extras=[(cp, cb.encode("utf-8")) for cp, cb in extras])
-        if lease == "acquired":
-            release_lease(repo, engine_root)
-        if ok:
-            committed.append(
-                {"path": p, "repo": repo, "sha": result,
-                 "relpath": os.path.relpath(p, repo), "source": source}
-            )
-        else:
-            if result.startswith(INDEX_STALE):
-                why = "THE CAPTURE LEFT THE INDEX STALE: %s" % result[len(INDEX_STALE):]
+
+            body, why = read_text(p)
+            if body is None:
+                refused.append({"path": p, "repo": repo, "why": why})
+                continue
+
+            # Companion files go through the same two gates; one refusal and
+            # nothing at all is committed.
+            extras = []
+            for cp in companion_files(p, repo):
+                check_budget()
+                cbody, cwhy = read_text(cp)
+                if cbody is None or os.path.islink(cp):
+                    why = cwhy or "a companion is a symbolic link"
+                    break
+                extras.append((cp, cbody))
             else:
-                why = "THE COMMIT ITSELF FAILED: %s" % result
-            refused.append({"path": p, "repo": repo, "why": why, "failed": True})
+                why = ""
+            if why:
+                refused.append({"path": p, "repo": repo,
+                                "why": "a companion file could not be committed with it (%s)" % why})
+                continue
+
+            blocked = False
+            for name, script in (
+                ("credential scanner", os.path.join(engine_root, "scripts/hooks/scan-secrets.sh")),
+                ("publication boundary", os.path.join(engine_root, "scripts/hooks/guard-publication-writes.sh")),
+            ):
+                check_budget()
+                verdict, detail = run_gate(script, repo, p, body, seat_root)
+                for cp, cbody in extras:
+                    if verdict != "pass":
+                        break
+                    check_budget()
+                    verdict, detail = run_gate(script, repo, cp, cbody, seat_root)
+                if verdict == "refuse":
+                    refused.append(
+                        {
+                            "path": p,
+                            "repo": repo,
+                            "why": "the %s refused it (%s). It is not committed; "
+                                   "put it somewhere gitignored, or in the private "
+                                   "record, and say so." % (name, detail),
+                        }
+                    )
+                    blocked = True
+                    break
+                if verdict == "undecided":
+                    refused.append(
+                        {
+                            "path": p,
+                            "repo": repo,
+                            "why": "the %s could not run (%s), so nothing is known "
+                                   "about this file's content — and a gate that "
+                                   "could not look never reports nothing found"
+                                   % (name, detail),
+                        }
+                    )
+                    blocked = True
+                    break
+            if blocked:
+                continue
+
+            check_budget()
+            if fence_on(repo) and git(["symbolic-ref", "--quiet", "HEAD"], repo)[1] == "refs/heads/main":
+                if repo in held:
+                    lease, detail = "held", held[repo]
+                else:
+                    remaining = _deadline - time.monotonic()
+                    if remaining < LEASE_CALL_GRACE_S:
+                        pending.append({"path": p, "repo": repo, "pending": True,
+                                        "why": "not committed yet: the ingress has too little time left "
+                                               "to try the land lease safely. It stays pending and is "
+                                               "retried on your next message"})
+                        continue
+                    wait = 0 if source == "pending" else \
+                        max(0, min(LEASE_WAIT_S, int(remaining - LEASE_CALL_GRACE_S)))
+                    lease, detail = take_lease(repo, engine_root, wait)
+                if lease == "held":
+                    held[repo] = detail
+                    pending.append({"path": p, "repo": repo, "pending": True,
+                                    "why": "not committed yet: %s is landing in this repository, and a "
+                                           "commit onto main needs the land lease. It stays pending and is "
+                                           "retried on your next message" % detail})
+                    continue
+                if lease in ("acquired", "renewed"):
+                    lease_notes.extend(n for n in detail if n not in lease_notes)
+                if lease == "failed":
+                    refused.append({"path": p, "repo": repo, "failed": True,
+                                    "why": "the land lease could not be taken, so nothing was committed (%s)"
+                                           % detail})
+                    continue
+            check_budget()
+            ok, result = commit(p, repo, session, stamp, data=body.encode("utf-8"),
+                             extras=[(cp, cb.encode("utf-8")) for cp, cb in extras])
+            if ok:
+                committed.append(
+                    {"path": p, "repo": repo, "sha": result,
+                     "relpath": os.path.relpath(p, repo), "source": source}
+                )
+            else:
+                if result.startswith(INDEX_STALE):
+                    why = "THE CAPTURE LEFT THE INDEX STALE: %s" % result[len(INDEX_STALE):]
+                else:
+                    why = "THE COMMIT ITSELF FAILED: %s" % result
+                refused.append({"path": p, "repo": repo, "why": why, "failed": True})
+        except IngressDeadline as exc:
+            undecided.append({"path": p, "repo": repo, "why": str(exc)})
+        finally:
+            if lease == "acquired":
+                release_lease(repo, engine_root)
 
     result = {
         "stamp": stamp,

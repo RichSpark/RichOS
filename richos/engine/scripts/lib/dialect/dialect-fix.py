@@ -28,13 +28,12 @@ except through a skip the old guard also had: fixing replaces the refusal, it ne
            in a stylesheet).
   FIXED    by file class:
              prose (md, markdown, mdx, txt, rst): every match outside a double-quoted run;
-             code (rs, swift, kt, js, ts, py, sh and kin): matches in comments, and in
-             string literals that contain whitespace (sentences, which are UI copy);
+             code (rs, swift, kt, js, ts, py, sh and kin): matches in comments;
            in every fixable context the word must be lowercase, all capitals, or
            capitalized at the start of a sentence (a capital mid-sentence is a name).
   REFUSED  everything else: markup, styles, config and any other file class (a fix there
            can change behavior: a class name, a wire value, a key); in code, the code
-           itself and single-token string literals; a double-quoted run (a quotation is
+           itself and all string literals; a double-quoted run (a quotation is
            somebody's words); a capital mid-sentence; a hyphenated token, markup or an
            interpolation inside a code string; in JS and TS, a regular-expression literal
            and an attribute value (name="..." is a class list or a prop); in a MultiEdit,
@@ -174,7 +173,6 @@ FENCE_RE = re.compile(r"^\s*(```|~~~)")
 # The reason must START WITH A WORD CHARACTER: `<!-- dialect-exempt: -->` is a bare marker
 # wearing a reason, and a bare marker exempts nothing.
 DECLARED_EXEMPT_RE = re.compile(r"dialect-exempt:\s*[A-Za-z0-9]")
-MARKUP_RE = re.compile(r"<[A-Za-z/!]")
 CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^\\'\n])'")
 
 
@@ -240,15 +238,6 @@ for _spec in LANG_SPECS.values():
 LANG_SPECS["js"]["finder"] = re.compile(r'//|/\*|`|"|\'|/')
 REGEX_KEYWORDS = frozenset(("return", "typeof", "case", "in", "of", "delete", "void", "throw",
                             "new", "instanceof", "yield", "await", "do", "else"))
-
-
-def _attribute_value(text, rs):
-    """Is the string whose content starts at `rs` a markup attribute's value: name="..." or
-    name={"..."}, the `=` glued to the name? In JSX that is a class list or a prop, not UI copy."""
-    j = rs - 2
-    if j >= 0 and text[j] == "{":
-        j -= 1
-    return j >= 1 and text[j] == "=" and is_word_char(text[j - 1])
 
 
 def _regex_end(text, s):
@@ -346,25 +335,6 @@ def lex(text, lang):
             cm = CHAR_LITERAL_RE.match(text, s)
             i = cm.end() if cm else s + 1
     return regions
-
-
-INTERPOLATIONS = (("${", "}"), ("$(", ")"), ("\\(", ")"), ("%(", ")"), ("{", "}"))
-
-
-def _masked(content, rel):
-    """True when offset `rel` of a string's content sits inside an interpolation or a format
-    field: {...}, ${...}, $(...), \\(...), %(...). A word there is code."""
-    for opener, closer in INTERPOLATIONS:
-        start = 0
-        while True:
-            a = content.find(opener, start)
-            if a < 0 or a >= rel:
-                break
-            b = content.find(closer, a + len(opener))
-            if b < 0 or b >= rel:
-                return True
-            start = b + 1
-    return False
 
 
 # --- context ----------------------------------------------------------------
@@ -529,23 +499,14 @@ def scan(text, kind, lang, ext, table, allowlist=(), region=None):
                 ctx_lo = max(rs, ls)
                 if _in_code_span(text, ctx_lo, s):
                     continue
-                content = text[rs:rend]
                 if rkind == "regex":
                     action, why = "refuse", "a regular expression: a fix would change what it matches"
                 elif rkind == "comment":
                     action, why = _prose_decision(text, s, e, run, ctx_lo, rs)
-                elif lang == "js" and _attribute_value(text, rs):
-                    action, why = "refuse", "an attribute value (markup in a JS or TS file): a fix could change a class or an attribute"
-                elif not any(ch.isspace() for ch in content):
-                    action, why = "refuse", "a single-token string literal: it may be a wire value or a key"
-                elif MARKUP_RE.search(content):
-                    action, why = "refuse", "markup inside a string: a fix could change a class or an attribute"
-                elif _masked(content, s - rs):
-                    action, why = "refuse", "an interpolation or a format field: that is code"
-                elif "-" in tok:
-                    action, why = "refuse", "a hyphenated token inside a string: it may be a class name or a key"
                 else:
-                    action, why = _prose_decision(text, s, e, run, ctx_lo, rs)
+                    # Whitespace cannot distinguish UI copy from a filename,
+                    # command, query or wire value. Never rewrite executable data.
+                    action, why = "refuse", "a string literal: changing it may change program behavior; use dialect-exempt: with a reason for an intentional spelling"
         else:
             action, why = "refuse", "markup, styles or config: a fix could change behavior"
         findings.append(Finding(s, e, run, written_target, action, why, idx + 1))
