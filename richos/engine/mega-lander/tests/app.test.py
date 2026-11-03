@@ -954,7 +954,11 @@ class DesktopWork(unittest.TestCase):
             {"commit":commit,"verdict":"passed","checks":["synthetic reviewer observation"]}))
         landed=self.call("integrate",{"worker_id":worker["id"],"reviewer_id":final["id"]})
         self.assertTrue(landed["work_integrated"])
-        # Today this refused: "this assignment still has unresolved execution; reconcile it before completion".
+        # These preparations still dispatch in this session. Explicitly withdraw the
+        # unused briefs; the refused preparations continue to settle automatically.
+        for ready in (placeholder,committed,dirty):
+            self.call("settle",{"request_id":self.record_of(ready)["request_id"],
+                                "reason":"This unused brief was replaced by the verified result."})
         done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[worker["id"]]})
         self.assertTrue(done["obligation_closed"])
         self.assertEqual(landed["cleanup_pending"],[],"integrate tried to land reviews that never ran")
@@ -1273,31 +1277,40 @@ class DesktopWork(unittest.TestCase):
             self.call("settle",{"request_id":"prepare-one","reason":"It must not be settled here."})
         self.assertEqual(self.receipt_of(worker)["status"],"running")
 
-    def test_completion_never_settles_a_parallel_worker_prepared_in_this_turn(self):
-        """Tom's review of the c2ad4fb8c merge (2026-10-28): `never_started` counted a `prepared`
-        receipt of THIS turn that nothing refused as never-run, so `complete` settled it and
-        withdrew the worktree of a parallel worker that was about to be dispatched. It is
-        unresolved work: completion refuses, nothing is settled or removed, and it can still
-        run. The same receipt from an earlier turn is still settled and cleaned up."""
+    def test_completion_never_settles_a_dispatchable_parallel_worker(self):
+        """A turn change does not withdraw work that dispatch still accepts (V5-09)."""
         args=self.reviewed_pair("landed")
         self.assertTrue(self.call("integrate",args)["work_integrated"])
         parallel=self.call("prepare",{**self.args,"request_id":"parallel","title":"Create the second result",
                                       "brief":"Create second.txt with FICTIONAL in the assigned target worktree. Commit only that file."})
         branch=self.registered_branch(parallel)
-        with self.assertRaisesRegex(ValueError,"unresolved execution"):
-            self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
-        self.assertEqual(self.receipt_of(parallel)["status"],"prepared")
-        self.assertNotIn("settled",self.receipt_of(parallel))
-        self.assertTrue(self.target_of(parallel).is_dir(),"a parallel worker's worktree was withdrawn before it ran")
-        self.assertTrue(self.branch_exists(branch))
-        # CONTROL: in a later turn the same preparation can no longer be admitted as it stands,
-        # so completion settles it and removes what it created, as before.
-        self.next_turn(2)
-        done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
-        self.assertTrue(done["obligation_closed"])
-        self.assertEqual(self.receipt_of(parallel)["status"],"blocked")
+        for turn in (1,2):
+            if turn==2: self.next_turn(2)
+            self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"parallel-call",
+                                                "tool_input":parallel["agent_call"]},inspect_only=True)
+            with self.assertRaisesRegex(ValueError,"unresolved execution"):
+                self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
+            self.assertEqual(self.receipt_of(parallel)["status"],"prepared")
+            self.assertNotIn("settled",self.receipt_of(parallel))
+            self.assertTrue(self.target_of(parallel).is_dir())
+            self.assertTrue(self.branch_exists(branch))
+        # Only an explicit withdrawal proves this still-dispatchable work is unwanted.
+        self.call("settle",{"request_id":"parallel","reason":"The user withdrew the second result."})
+        self.assertTrue(self.call("complete",{"obligation_id":"fixture-task",
+                                             "worker_ids":[args["worker_id"]]})["obligation_closed"])
         self.assertFalse(self.target_of(parallel).exists())
         self.assertFalse(self.branch_exists(branch))
+
+    def test_later_turn_preparation_preserves_a_dispatchable_parallel_worker(self):
+        first=self.call("prepare",self.args)
+        branch=self.registered_branch(first)
+        self.next_turn(2)
+        self.call("prepare",{**self.args,"request_id":"parallel-later","brief":"Implement another independent result."})
+        self.assertNotIn("settled",self.record_of(first))
+        self.assertTrue(self.target_of(first).is_dir())
+        self.assertTrue(self.branch_exists(branch))
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"first-next-turn",
+                                            "tool_input":first["agent_call"]},inspect_only=True)
 
     def test_a_stray_fixture_record_is_moved_out_of_the_registry_and_a_record_that_may_own_work_is_not(self):
         """2026-10-28: record-canary.test.sh wrote agents/wait-regression.json into the live
