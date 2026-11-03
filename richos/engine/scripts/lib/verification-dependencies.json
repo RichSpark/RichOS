@@ -2728,7 +2728,7 @@
     },
     "scripts/hooks/notice-hook-staleness.sh": {
       "source": "scripts/hooks/notice-hook-staleness.sh",
-      "sha256": "b16f959b0a1b047d911442efef9c282e876bb6d9825f3ab1c6ac87720953e519",
+      "sha256": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
       "evidence": "Root resolution tests adoption presence only. The snapshot/notice logic derives registration rows and reads/writes the supplied snapshot state. Registered command paths are parsed as data, never executed. No config value is sourced.",
       "keys": [],
       "edges": [
@@ -2748,7 +2748,7 @@
     },
     "scripts/hooks/hook-staleness.test.sh": {
       "source": "scripts/hooks/hook-staleness.test.sh",
-      "sha256": "cdf85fef47b67cdb1849f005c2fdc9befe222bf5c3f35b69dbb3ae07b7dc325e",
+      "sha256": "bcac2b4fc072a139f1af6b502bf3b2aba948b830bbd796888a89f17a1708dff7",
       "evidence": "Snapshot/notice calls use generated adopted roots and explicit copied registration surfaces. Installer cases copy the engine and run only install.sh with private CLAUDE_CONFIG_DIR. That private-home installer closure never consumes config values; copying settings is transport. Guards named in registration mutations and generated script bodies are data, not executed suites.",
       "keys": [],
       "edges": [
@@ -7464,7 +7464,7 @@
     },
     "scripts/hooks/notice-hook-staleness.sh#unadopted-stop": {
       "source": "scripts/hooks/notice-hook-staleness.sh",
-      "sha256": "b16f959b0a1b047d911442efef9c282e876bb6d9825f3ab1c6ac87720953e519",
+      "sha256": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
       "evidence": "Visibility suite invokes this hook with no CLI arguments and a new unadopted directory, first as explicit bad root then as cwd/payload. Root-failure/not-adopted paths terminate before entity config, transcript predicates or live-state checks. Bootstrap, module initialization and any pre-root session-recovery helper remain bound. The negative control only replaces stop_notice_abnormal output.",
       "keys": [],
       "edges": [
@@ -18213,7 +18213,7 @@
         "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
         "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
-        "scripts/hooks/notice-hook-staleness.sh": "b16f959b0a1b047d911442efef9c282e876bb6d9825f3ab1c6ac87720953e519",
+        "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
         "scripts/hooks/notice-protected-ref-moves.sh": "a7d72e3c248439acf00ec585f442cd0d09385b691c041fcfb902578cebb4ac87",
         "scripts/lib/protected-ref-moves.py": "e9eabe8c92572d0a08d03938b12d59cb407a6429cc41360b11fd3e70bf30975b",
         "scripts/hooks/protected-ref-moves.test.sh": "830d43434a876df2fed6f4f989b0f9dcb8e833aad5f6977e04a54d8e529f4de1",
@@ -18534,7 +18534,7 @@
         "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
-        "scripts/hooks/notice-hook-staleness.sh": "b16f959b0a1b047d911442efef9c282e876bb6d9825f3ab1c6ac87720953e519",
+        "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
         "scripts/hooks/notice-inflight-acks.sh": "b17504876f715a764cb28b656e0d1a50fdf16a18567e4c10bc7384382b0c4f7d",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/hooks/notice-mechanical-findings.sh": "b22d5adbc9e4927b792daf005ed4406136d742326512df5214b07227dea9b3c5",
@@ -18897,7 +18897,7 @@
         "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
         "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
-        "scripts/hooks/notice-hook-staleness.sh": "b16f959b0a1b047d911442efef9c282e876bb6d9825f3ab1c6ac87720953e519",
+        "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
         "scripts/hooks/notice-inflight-acks.sh": "b17504876f715a764cb28b656e0d1a50fdf16a18567e4c10bc7384382b0c4f7d",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/lib/inflight.py": "26ef7903949c9d2805c0cbc51a85aaf7016b7c3ea6549a19b14a2056a9c417da",

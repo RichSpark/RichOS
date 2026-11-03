@@ -437,8 +437,8 @@ take_baseline "$R11"
 unwire_hook "$R11/hooks.json" "guard-workflow-ban.sh"
 OUT="$(run_notice "$R11")"
 if printf '%s' "$OUT" | grep -q 'guard-workflow-ban.sh' \
-   && printf '%s' "$OUT" | grep -qi 'still firing'; then
-    ok "7   a registration REMOVED mid-session is reported as STILL FIRING this session"
+   && printf '%s' "$OUT" | grep -qi 'inventory row(s) REMOVED'; then
+    ok "7   removed inventory is reported without guessing its host or manifest origin"
 else
     bad "7   removal reported" "(said: ${OUT:-<nothing>})"
 fi
