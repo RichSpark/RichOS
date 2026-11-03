@@ -112,7 +112,7 @@ const WALK = `
       const s = getComputedStyle(el);
       const bg = behind(el);
       const fg = M.compositeOver(parse(s.color), bg);
-      out.text.push({ text: el.textContent.trim().slice(0, 60), px: parseFloat(s.fontSize), weight: s.fontWeight,
+      out.text.push({ text: el.textContent.trim().slice(0, 60), px: parseFloat(s.fontSize), weight: s.fontWeight, quietPreviewLabel: el.matches('.dhx-tag'),
         ratio: M.round2(M.contrastRatio(fg, bg)) });
     }
     for (const [name, sel, prop, against] of indicators) {
@@ -140,12 +140,99 @@ async function main() {
   const run = createRun("the dictation bar, the words' flight and the menu bar menu");
   const browser = await loadPlaywright().webkit.launch();
 
+  await run.check("preview stays provisional and quiet for VoiceOver; Finish and Cancel reach the owning recording", async () => {
+    const page = await open(browser, BAR);
+    await say(page, "dictation-bar", bar("listening", {destination:"Mail",vocabulary:"Example Company",preview:"Please send the forecast"}));
+    assertEqual(await text(page,".dhx-dest"), "To Mail · Vocabulary: Example Company");
+    assertEqual(await text(page,".dhx-words"), "Please send the forecast");
+    assertEqual(await page.locator(".dhx-top").getAttribute("aria-live"), "off");
+    assertEqual(await page.locator(".dhx-top").evaluate(n => !!n.closest('[aria-live="polite"], [role="status"]')), false);
+    await say(page, "dictation-live-preview", {seq:6,text:"stale words"});
+    assertEqual(await text(page,".dhx-words"), "Please send the forecast", "old recordings cannot change this preview");
+    await page.locator('[data-bar-act="finish"]').click();
+    await page.locator('[data-bar-act="cancel"]').click();
+    assertEqual(await page.evaluate(() => window.__calls.filter(c=>c[0]==="dictation_bar_act").map(c=>c[1])), [{seq:7,act:"finish"},{seq:7,act:"cancel"}]);
+    await say(page, "dictation-live-preview", {seq:7,paused:true});
+    assertEqual(await text(page,".dhx-top"), "Preview paused");
+    assertEqual(await text(page,".dh-label"), "Listening", "preview failure leaves recording available");
+    await say(page, "dictation-bar", bar("writing", {seq:8}));
+    await say(page, "dictation-live-preview", {seq:7,text:"late preview"});
+    assertEqual(await page.locator(".dhx-top").count(),0, "preview never becomes the final text");
+    await page.close();
+  });
+
+  await run.check("delivery messages distinguish sent, uncertain, copied and secure results", async () => {
+    const page = await open(browser,BAR);
+    const states = [
+      [{state:"sent"}, "Sent to Mail", false],
+      [{state:"check",recoverable:true}, "Check Mail", true],
+      [{state:"not-added",copied:true,destinationChanged:true}, "Not added. Copied.", false],
+      [{state:"not-added",copied:false,recoverable:true}, "Not added. Couldn't copy.", true],
+      [{state:"check",copied:false,earlierDraft:true}, "Check Mail. Couldn't copy.", false],
+      [{state:"secure-field"}, "RichScribe can't dictate into a password field.", false],
+      [{state:"discarded-secure"}, "Recording discarded because the destination is a password field.", false],
+    ];
+    for (const [delivery,head,recover] of states) {
+      await say(page,"dictation-bar",bar("delivery",{delivery:{destination:"Mail",...delivery}}));
+      assertEqual(await text(page,".dhm-head"),head);
+      assertEqual(await page.locator('[data-bar-act="recover"]').count(),recover?1:0);
+      if (delivery.destinationChanged) assert((await text(page,".dhm-sub")).startsWith("The destination changed."));
+      if (delivery.earlierDraft) assert((await text(page,".dhm-sub")).includes("These newest words aren't kept anywhere else."));
+      if (delivery.state==="sent") assertEqual(await page.locator(".dh.is-neutral").count(),1);
+    }
+    await page.close();
+  });
+
+  await run.check("supporting notices allow twelve seconds of reading and pause while hovered", async () => {
+    const page = await open(browser,BAR);
+    await page.clock.install({time:new Date("2026-11-03T12:00:00Z")});
+    await page.clock.pauseAt(new Date("2026-11-03T12:00:01Z"));
+    await page.evaluate(msg => window.__say("dictation-bar",msg), bar("delivery",{delivery:{state:"check",destination:"Mail",recoverable:true}}));
+    await page.clock.runFor(4000);
+    await page.locator(".dhm").dispatchEvent("mouseenter");
+    await page.clock.runFor(20000);
+    const dismissed=()=>page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_bar_act"&&c[1].act==="dismiss").length);
+    assertEqual(await dismissed(),0,"hover pauses the reading time");
+    await page.locator(".dhm").dispatchEvent("mouseleave");
+    await page.clock.runFor(7999);
+    assertEqual(await dismissed(),0,"twelve seconds have not elapsed");
+    await page.clock.runFor(2);
+    assertEqual(await dismissed(),1,"exactly one dismiss for this result");
+    await page.close();
+  });
+
+  await run.check("recovery shows the complete selectable draft and removes its text on copy, close and expiry", async () => {
+    const page=await open(browser,MENU);
+    const draft="<not markup>\n"+"A full business sentence. ".repeat(2000)+"END OF DRAFT";
+    const msg={seq:11,on:true,key:"F1",theme:"dark",recovery:{text:draft,destination:"Mail",completedMs:Date.now(),expiresMs:Date.now()+1800000}};
+    await say(page,"dictation-menu",msg);
+    assertEqual(await page.locator('.rp-text').textContent(),draft,"long recordings are not truncated");
+    assertEqual(await page.locator('.rp-text').evaluate(n=>getComputedStyle(n).getPropertyValue('-webkit-user-select')),"text");
+    assertEqual(await page.locator('#sbMenu').getAttribute('role'),"dialog");
+    await page.getByRole('button',{name:'Copy',exact:true}).click();
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").pop()[1].act),"recovery-copy");
+    await say(page,"dictation-menu",{...msg,seq:12,recovery:{status:"copied"}});
+    assertEqual(await page.locator('.rp-text').count(),0);
+    assert((await text(page,"#sbMenu")).includes("Copied."));
+    await say(page,"dictation-menu",{closed:true});
+    assertEqual(await page.locator('#sbMenu').textContent(),"","hidden panel keeps no draft text");
+    await page.clock.install({time:new Date("2026-11-03T12:00:00Z")});
+    await page.clock.pauseAt(new Date("2026-11-03T12:00:01Z"));
+    await page.evaluate(m=>window.__say("dictation-menu",m),{...msg,seq:13,recovery:{...msg.recovery,expiresMs:Date.parse("2026-11-03T12:00:02Z")}});
+    await page.clock.runFor(1001);
+    assertEqual(await page.locator('.rp-text').count(),0,"expiry clears rendered words");
+    assert((await text(page,"#sbMenu")).includes("This draft has expired."));
+    await page.keyboard.press("Escape");
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").pop()[1].act),"close");
+    await page.close();
+  });
+
   await run.check("every state the bar draws, word for word, with Fix it only where round 19 puts it", async () => {
     const page = await open(browser, BAR);
     await say(page, "dictation-bar", bar("listening", { startedMs: Date.now() - 3200 }));
     assertEqual(await page.locator(".dh.is-listen .dh-meter i").count(), 9, "the meter's nine bars");
     const listening = await text(page, "#dhud");
-    assert(/^Listening 0:0[3-4] Tap F1 to finish$/.test(listening), "listening reads: " + listening);
+    assert(/^Listening 0:0[3-4] Tap F1 to finish Finish Cancel$/.test(listening), "listening reads: " + listening);
     await say(page, "dictation-bar", bar("writing"));
     assertEqual(await text(page, "#dhud"), "Writing it down…", "writing");
     await say(page, "dictation-bar", bar("added"));
@@ -269,7 +356,7 @@ async function main() {
     assertEqual(await text(page, ".sb-head"), "RichScribe On", "the heading");
     assertEqual(await text(page, ".sb-say"), "Tap F1 to start and again to stop.", "the line under it");
     const rows = await page.locator(".sb-item").allInnerTexts();
-    assertEqual(JSON.stringify(rows.map((r) => r.trim())), JSON.stringify(["More accurate", "Faster", "RichScribe settings…", "Turn RichScribe off", "Open RichOS"]), "the rows");
+    assertEqual(rows.map(r => r.replace(/\s+/g," ").trim()), ["More accurate", "Faster", "Vocabulary: None ›", "Recover last draft No recent draft", "RichScribe settings…", "Turn RichScribe off", "Open RichOS"], "the approved rows");
     assertEqual(await page.locator('.sb-item[aria-checked="true"]').innerText(), "More accurate", "the tick");
     await say(page, "dictation-menu", menu({ choice: "fast" }));
     assertEqual(await page.locator('.sb-item[aria-checked="true"]').innerText(), "Faster", "the tick follows the model");
@@ -317,7 +404,9 @@ async function main() {
         for (const t of result.text) {
           const large = C.isLargeText(t.px, t.weight);
           if (t.ratio < (large ? 3 : 4.5)) failures.push(`${where}: "${t.text}" ${t.ratio}:1`);
-          if (t.px < 16) failures.push(`${where}: "${t.text}" is ${t.px}px`);
+          // The approved preview badge is a quiet 14px label; body text and
+          // controls retain the existing 16px floor.
+          if (t.px < (t.quietPreviewLabel ? 14 : 16)) failures.push(`${where}: "${t.text}" is ${t.px}px`);
           if (t.ratio < worst.ratio) worst = Object.assign({ where }, t);
         }
         for (const i of result.indicators) {
@@ -326,7 +415,13 @@ async function main() {
           else notes.push(`${i.name} ${i.ratio}`);
         }
       };
-      const views = [bar("listening", { startedMs: Date.now() }), bar("writing"), bar("added"), bar("off")]
+      const views = [bar("listening", { startedMs: Date.now() }),
+        bar("listening", {destination:"Mail",vocabulary:"Example Company",preview:"Please send the revised forecast."}),
+        bar("listening", {destination:"Mail",previewPaused:true,blockedKeys:true,blockedBy:"1Password"}),
+        ...[{state:"sent"},{state:"check",recoverable:true},{state:"not-added",copied:true,destinationChanged:true},
+          {state:"not-added",copied:false,recoverable:true},{state:"not-added",copied:true,earlierDraft:true,replacedCopiedDraft:true},
+          {state:"secure-field"},{state:"discarded-secure"}].map(delivery=>bar("delivery",{delivery:{destination:"Mail",...delivery}})),
+        bar("writing"), bar("added"), bar("off")]
         .concat(Object.keys(LINES).map((p) => bar("problem", { problem: p })));
       for (const v of views) {
         for (const [gname, ground] of [["over white", WHITE], ["over black", BLACK]]) {
@@ -340,11 +435,13 @@ async function main() {
           await page.close();
         }
       }
-      for (const m of [{ on: true }, { on: true, paused: true, secureApp: "1Password" }, { on: true, paused: true }, { on: false }]) {
+      for (const m of [{ on: true }, { on: true, paused: true, secureApp: "1Password" }, { on: true, paused: true }, { on: false },
+        {on:true,vocabularyExpanded:true,companies:[{id:"example",name:"Example Company"}],recording:true},
+        {on:true,recovery:{text:"Please send the board update.",destination:"Mail",completedMs:Date.now(),expiresMs:Date.now()+1800000}}]) {
         for (const [gname, ground] of [["over white", WHITE], ["over black", BLACK]]) {
           const page = await open(browser, MENU, theme);
           await say(page, "dictation-menu", Object.assign({ seq: 1, key: "F1", choice: "accurate", paused: false, secureApp: null, theme, fontScale: 100 }, m));
-          judge(`menu ${JSON.stringify(m)} ${gname}`, await walk(page, ground, [["the tick", ".sb-check path", "stroke", ".sbmenu"]]));
+          judge(`menu ${JSON.stringify(m)} ${gname}`, await walk(page, ground, m.recovery ? [] : [["the tick", ".sb-check path", "stroke", ".sbmenu"]]));
           await page.close();
         }
       }

@@ -23,6 +23,8 @@ window.RichDictationBar = (function () {
     mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 7.5v6"/><path d="M12 17v.5"/></svg>',
+    sent: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg>',
+    lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10.5 5 5 5-5"/><path d="M5 20h14"/></svg>',
   };
 
@@ -79,6 +81,76 @@ window.RichDictationBar = (function () {
     return Promise.resolve();
   }
 
+  function deliveryHtml(message) {
+    var result = message.delivery || {}, app = esc(result.destination || "the destination app");
+    var head = "", sub = "", tone = "is-problem", recover = false;
+    if (result.state === "sent") { head = "Sent to " + app; tone = "is-neutral"; }
+    else if (result.state === "secure-field") { head = "RichScribe can't dictate into a password field."; tone = "is-lock"; }
+    else if (result.state === "discarded-secure") { head = "Recording discarded because the destination is a password field."; tone = "is-lock"; }
+    else if (result.state === "check") {
+      head = "Check " + app;
+      if (result.earlierDraft) {
+        head += result.copied ? ". Copied." : ". Couldn't copy.";
+        sub = "An earlier draft is in Recover last draft.";
+        if (!result.copied) sub += " These newest words aren't kept anywhere else.";
+      } else { sub = "Your draft is in Recover last draft."; recover = !!result.recoverable; }
+    } else {
+      head = result.copied ? "Not added. Copied." : "Not added. Couldn't copy.";
+      if (result.earlierDraft) {
+        sub = "An earlier draft is in Recover last draft.";
+        if (!result.copied) sub += " These newest words aren't kept anywhere else.";
+      } else if (result.copied) sub = "Press " + kcap("⌘V") + " to paste your words.";
+      else { sub = "Your draft is in Recover last draft."; recover = !!result.recoverable; }
+    }
+    if (result.replacedCopiedDraft) sub = "This replaces the previous copied draft. The earlier draft is still in Recover last draft.";
+    if (result.destinationChanged) sub = "The destination changed. " + sub;
+    var acts = recover ? '<span class="dhx-acts"><button class="dov-btn is-quiet" type="button" data-bar-act="recover">Recover last draft</button></span>' : "";
+    var icon = tone === "is-neutral" ? IC.sent : tone === "is-lock" ? IC.lock : IC.alert;
+    return '<div class="dh dhm ' + tone + '"><span class="dh-orb">' + icon + '</span><span class="dhm-text" role="status" aria-live="polite" aria-atomic="true"><span class="dhm-head">' + head + '</span>' +
+      (sub ? '<span class="dhm-sub">' + sub + '</span>' : "") + '</span>' + acts + (sub ? '<span class="dhm-linger" aria-hidden="true"></span>' : "") + '</div>';
+  }
+
+  function noticeClock(milliseconds) {
+    clearTimeout(D.noticeTimer);
+    D.noticeLeft = milliseconds;
+    function start() {
+      if (D.noticeLeft <= 0) return;
+      D.noticeAt = performance.now();
+      var seq = D.seq;
+      D.noticeTimer = setTimeout(function () {
+        D.noticeLeft = 0;
+        if (D.seq === seq && D.view === "delivery") invoke("dictation_bar_act", {seq:seq,act:"dismiss"});
+      }, D.noticeLeft);
+    }
+    var pill = document.querySelector("#dhud > *");
+    if (!pill) return;
+    pill.addEventListener("mouseenter", function () {
+      clearTimeout(D.noticeTimer);
+      D.noticeLeft = Math.max(0, D.noticeLeft - (performance.now() - D.noticeAt));
+    });
+    pill.addEventListener("mouseleave", start);
+    start();
+    if (pill.matches(":hover")) {
+      clearTimeout(D.noticeTimer);
+      D.noticeLeft = milliseconds;
+    }
+  }
+
+  function updatePreview(message) {
+    if (message.seq !== D.seq || D.view !== "listening") return;
+    var pill = document.getElementById("dhEl");
+    if (!pill) return;
+    var line = document.getElementById("dhPreview");
+    if (!line) {
+      line = document.createElement("div"); line.id = "dhPreview"; line.className = "dhx-top";
+      line.setAttribute("aria-live", "off"); pill.insertBefore(line, pill.firstChild);
+    }
+    line.innerHTML = message.paused ? '<span class="dhx-paused">Preview paused</span>'
+      : message.text ? '<span class="dhx-tag">Preview</span><span class="dhx-words" aria-live="off">' + esc(message.text) + '</span>' : "";
+    line.hidden = !message.paused && !message.text;
+    report();
+  }
+
   /// Draw one view: { seq, view, problem, key, startedMs, theme, fontScale }.
   function render(msg) {
     look(msg);
@@ -89,13 +161,20 @@ window.RichDictationBar = (function () {
     D.view = msg.view;
     if (msg.view === "listening") {
       D.started = msg.startedMs || Date.now();
-      html =
-        '<div class="dh is-listen" id="dhEl"><span class="dh-orb">' + IC.mic + '</span><span class="dh-meter">' +
-        new Array(10).join("<i></i>") +
-        '</span><span class="dh-label">Listening</span><span class="dh-time" id="dhTime">0:00</span><span class="dh-hint">Tap ' +
-        kcap(k) + " to finish</span></div>";
+      var warning = msg.blockedKeys ? '<p class="dhx-warn">' + IC.alert + '<span>' +
+        (msg.blockedBy ? '<b>' + esc(msg.blockedBy) + '</b>' : 'Another app') + ' is hiding your keys, so ' + kcap(k) + " can't reach me.</span></p>" : "";
+      var destination = msg.destination ? '<span class="dhx-dest"><span>To <b>' + esc(msg.destination) + '</b></span>' +
+        (msg.vocabulary ? '<span class="dhx-dot" aria-hidden="true">·</span><span>Vocabulary: ' + esc(msg.vocabulary) + '</span>' : "") + '</span>' : "";
+      html = '<div class="dh dhx is-listen" id="dhEl">' + warning +
+        '<div class="dhx-row"><span class="dh-orb">' + IC.mic + '</span><span class="dh-meter" aria-hidden="true">' +
+        new Array(10).join("<i></i>") + '</span><span class="dh-label" role="status" aria-live="polite">Listening</span>' +
+        '<span class="dh-time" id="dhTime">0:00</span>' + destination +
+        (msg.blockedKeys ? "" : '<span class="dh-hint">Tap ' + kcap(k) + ' to finish</span>') +
+        '<span class="dhx-acts"><button class="dov-btn" type="button" data-bar-act="finish">Finish</button><button class="dov-btn is-quiet" type="button" data-bar-act="cancel">Cancel</button></span></div></div>';
     } else if (msg.view === "writing") {
       html = '<div class="dh is-write"><span class="dh-orb"></span><span class="dh-label">Writing it down…</span></div>';
+    } else if (msg.view === "delivery") {
+      html = deliveryHtml(msg);
     } else if (msg.view === "added") {
       html = '<div class="dh is-done"><span class="dh-orb">' + IC.check + '</span><span class="dh-label">Added</span></div>';
     } else if (msg.view === "problem" && PROBLEMS[msg.problem]) {
@@ -107,7 +186,11 @@ window.RichDictationBar = (function () {
     } else if (msg.view === "off") {
       html = '<div class="dov-notice">RichScribe is off.</div>';
     }
+    clearTimeout(D.noticeTimer);
     h.innerHTML = html;
+    h.querySelectorAll(".dh-label, .dov-notice").forEach(function (label) { label.setAttribute("role", "status"); });
+    if (msg.view === "listening") updatePreview({seq:D.seq,text:msg.preview,paused:msg.previewPaused});
+    if (msg.view === "delivery") noticeClock(h.querySelector(".dhm-sub") ? 12000 : msg.delivery && msg.delivery.state === "sent" ? 1500 : 4200);
     D.bars = Array.prototype.slice.call(h.querySelectorAll(".dh-meter i"));
     var fixBtn = document.getElementById("fixIt");
     if (fixBtn) {
@@ -236,12 +319,18 @@ window.RichDictationBar = (function () {
     return { reduced: false, light: light };
   }
 
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest && event.target.closest("[data-bar-act]");
+    if (button) invoke("dictation_bar_act", {seq:D.seq,act:button.dataset.barAct});
+  });
+
   if (tauri && tauri.event) {
     // Ready only once every listener is registered, so nothing the tool says first is lost.
     var heard = ROLE === "bar"
       ? [
           tauri.event.listen("dictation-bar", function (e) { render(e.payload); }),
           tauri.event.listen("dictation-level", function (e) { level(e.payload.level); }),
+          tauri.event.listen("dictation-live-preview", function (e) { updatePreview(e.payload); }),
         ]
       : [tauri.event.listen("dictation-flight", function (e) { fly(e.payload); })];
     Promise.all(heard).then(function () {
@@ -249,5 +338,5 @@ window.RichDictationBar = (function () {
     });
   }
 
-  return { ROLE: ROLE, PROBLEMS: PROBLEMS, render: render, layout: layout, level: level, fly: fly };
+  return { ROLE: ROLE, PROBLEMS: PROBLEMS, render: render, layout: layout, level: level, fly: fly, updatePreview: updatePreview };
 })();

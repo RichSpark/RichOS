@@ -382,6 +382,86 @@ async function main() {
   });
 
   // ---- 7. accuracy --------------------------------------------------------------------------
+  await run.check("company vocabulary starts at None, keeps failed edits and saves only the chosen company's spelling", async () => {
+    const page=await open("dark",ALLOWED);
+    await sheet(page);
+    await waitText(page,"#voc-company-name","None");
+    assertEqual(await page.locator("#dict-more-body").count(),0,"advanced choices start collapsed");
+    await page.locator('#voc-company').click();
+    const company=page.locator('.voc-opt').nth(1);
+    const companyId=await company.getAttribute('data-company');
+    await company.click();
+    await page.locator('[data-act="voc-add"]').click();
+    await page.locator('#voc-spell').fill('RichScribe');
+    await page.locator('#voc-heard').fill('rich scribe');
+    assert((await text(page,'#voc-preview')).includes('RichScribe'),"approval shows the exact output");
+    await page.evaluate(()=>window.__RICHOS_MOCK__.dictationVocabularySet({failNextSave:"Your change wasn't saved. The previous rules still apply."}));
+    await page.locator('#voc-save').click();
+    await waitText(page,'#voc-save','Save again');
+    assertEqual(await page.locator('#voc-spell').inputValue(),'RichScribe');
+    assertEqual(await page.locator('#voc-heard').inputValue(),'rich scribe');
+    assertEqual(await page.locator('.voc-spell').count(),0,"failed save did not install the rule");
+    await page.locator('#voc-save').click();
+    await waitText(page,'.voc-spell','RichScribe');
+    const writes=await page.evaluate(()=>window.__RICHOS_MOCK__.dictationCalls().filter(c=>c.cmd==="dictation_set_vocabulary"));
+    assertEqual(writes.at(-1).company,companyId);
+    assertEqual(writes.at(-1).rules,[{spelling:'RichScribe',heardAs:'rich scribe'}]);
+    await page.locator('[data-act="voc-edit"]').click();
+    assertEqual(await page.locator('.voc-table #voc-spell').count(),1,"edit replaces that row");
+    await page.locator('#voc-spell').fill('Edited name');
+    await page.locator('[data-act="voc-cancel"]').click();
+    await waitText(page,'.voc-spell','RichScribe');
+    await page.locator('#voc-company').click();
+    await page.locator('.voc-opt').nth(2).click();
+    assertEqual(await page.locator('.voc-spell').count(),0,"another company has no inherited rule");
+    await page.locator('#voc-company').click();
+    await page.locator('.voc-opt').first().click();
+    await waitText(page,'#voc-company-name','None');
+    await page.close();
+  });
+
+  await run.check("vocabulary validation preserves input and a changed company cannot receive a stale edit", async () => {
+    const page=await open("dark",ALLOWED);
+    await sheet(page);
+    await page.locator('#voc-company').click();
+    const other=await page.locator('.voc-opt').nth(2).getAttribute('data-company');
+    await page.locator('.voc-opt').nth(1).click();
+    await page.locator('[data-act="voc-add"]').click();
+    await page.locator('#voc-spell').fill('Monday');
+    await page.evaluate(()=>window.__RICHOS_MOCK__.dictationVocabularySet({failNextSave:"Those words could change ordinary English. Enter a more specific phrase in Heard as."}));
+    await page.locator('#voc-save').click();
+    await page.locator('#voc-error').waitFor();
+    assertEqual(await text(page,'#voc-save'),'Save',"validation errors are not storage retries");
+    assertEqual(await page.locator('#voc-spell').inputValue(),'Monday');
+    await page.locator('#voc-spell').focus();
+    await page.locator('#voc-spell').evaluate(n=>n.setSelectionRange(1,4));
+    await set(page,{key:5});
+    await waitText(page,'.dict-key-row .dict-key-say','F5 starts and stops RichScribe. Pick one you rarely use.');
+    assertEqual(await page.locator('#voc-spell').evaluate(n=>[n.selectionStart,n.selectionEnd]),[1,4],"status changes preserve editing selection");
+    await page.evaluate(async id=>{await window.RichBridge.invoke('dictation_set_vocabulary',{company:id,rules:null});window.__RICHOS_MOCK__.dictationVocabularySet({});},other);
+    await page.waitForFunction(()=>document.querySelector('#voc-save').disabled);
+    assertEqual(await page.locator('#voc-spell').inputValue(),'Monday');
+    assert((await text(page,'#voc-error')).includes('selected company changed'));
+    await page.locator('[data-act="voc-cancel"]').click();
+    await page.close();
+  });
+
+  await run.check("More options contains one preview switch and gives no download or engine choice when unavailable", async () => {
+    const page=await open("light",ALLOWED);
+    await sheet(page);
+    await page.locator('[data-act="voc-more"]').click();
+    const toggle=page.getByRole('switch',{name:'Live preview',exact:true});
+    assertEqual(await toggle.getAttribute('aria-checked'),'true');
+    await toggle.click();
+    await page.waitForFunction(()=>document.querySelector('[data-act="voc-preview"]').getAttribute('aria-checked')==='false');
+    assert((await calls(page)).includes('dictation_set_preview:false'));
+    await page.evaluate(()=>window.__RICHOS_MOCK__.dictationVocabularySet({previewAvailable:false}));
+    await page.waitForFunction(()=>document.querySelector('[data-act="voc-preview"]').disabled);
+    assert((await text(page,'#dict-more-body')).includes("Live preview isn't available on this Mac. RichScribe still works."));
+    assertEqual(await page.locator('#dict-more-body button').count(),1,"one switch, no model or download setup");
+    await page.close();
+  });
+
   await run.check("Accuracy: Faster is chosen and saved, and says so", async () => {
     const page = await open("dark", ALLOWED);
     await sheet(page);
@@ -525,6 +605,16 @@ async function main() {
     ["starting", { ...ALLOWED, owner: "none", keyTap: false }, sheet],
     ["no-tap", { ...ALLOWED, keyTap: false }, sheet],
     ["row-no-tap", { ...ALLOWED, keyTap: false }, menu],
+    ["vocabulary-form", ALLOWED, async p => {
+      await sheet(p); await p.locator('#voc-company').click(); await p.locator('.voc-opt').nth(1).click();
+      await p.locator('[data-act="voc-add"]').click(); await p.locator('#voc-spell').fill('RichScribe');
+      await p.locator('#voc-heard').fill('rich scribe');
+    }],
+    ["preview-unavailable", ALLOWED, async p => {
+      await sheet(p); await p.evaluate(()=>window.__RICHOS_MOCK__.dictationVocabularySet({previewAvailable:false}));
+      await p.locator('[data-act="voc-more"]').click();
+      await p.waitForFunction(()=>document.querySelector('[data-act="voc-preview"]').disabled);
+    }],
   ];
   const ROOTS = "#dictation-sheet:not([hidden]) .dict-panel, #set-dictation-open";
   // Declared skippable (style.css's own note): the 14px "Settings" breadcrumb over the 32px title.

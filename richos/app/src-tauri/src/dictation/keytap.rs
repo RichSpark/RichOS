@@ -302,7 +302,10 @@ impl PointerObserver {
     pub fn start(app: &tauri::AppHandle, destination_pid: Option<i32>, navigated: Arc<AtomicBool>) -> Option<Self> {
         let active = Arc::new(AtomicBool::new(true));
         let flag = active.clone();
-        let token = super::bar::ask_main(app, move || {
+        let owner = app.clone();
+        // Return the owner, not a bare token. If the main-thread reply arrives
+        // after the caller timed out, dropping that reply still removes it.
+        super::bar::ask_main(app, move || {
             let class = AnyClass::get(c"NSEvent")?;
             let handler = block2::RcBlock::new(move |event: *mut AnyObject| {
                 if !flag.load(Ordering::Acquire) { return; }
@@ -317,10 +320,11 @@ impl PointerObserver {
                 let monitor: *mut AnyObject = msg_send![class,
                     addGlobalMonitorForEventsMatchingMask: ((1usize << 1) | (1usize << 3) | (1usize << 25)),
                     handler: &*handler];
-                Retained::retain(monitor).map(|token| Retained::into_raw(token) as usize)
+                Retained::retain(monitor).map(|token| Self {
+                    token: Retained::into_raw(token) as usize, app: owner, active,
+                })
             }
-        })??;
-        Some(Self { token, app: app.clone(), active })
+        })?
     }
 }
 
@@ -328,7 +332,7 @@ impl Drop for PointerObserver {
     fn drop(&mut self) {
         self.active.store(false, Ordering::Release);
         let token = self.token;
-        let removed = super::bar::ask_main(&self.app, move || {
+        let removed = self.app.run_on_main_thread(move || {
             // SAFETY: this is the one retained token from start. All monitor
             // access stays on the main thread; removal releases AppKit's block.
             unsafe {
@@ -338,7 +342,7 @@ impl Drop for PointerObserver {
                 }
             }
         });
-        if removed.is_none() { super::log::line("destination pointer observer removal was not acknowledged"); }
+        if removed.is_err() { super::log::line("destination pointer observer removal could not be scheduled"); }
     }
 }
 

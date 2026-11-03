@@ -684,6 +684,7 @@ impl Tool {
 
     fn publish(&mut self) {
         if !matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing) { self.end_navigation(); }
+        if !matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing) { self.end_navigation(); }
         if let Phase::Problem(problem)=self.session.phase(){if let Some((id,_))=self.cleaner_target.take(){self.session.reset();self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":problem.tag()})});}}
 
         let message = {
@@ -1390,6 +1391,7 @@ impl Tool {
     fn listen(&mut self) {
         self.capture_seq+=1;
         self.close_menu();
+        self.show_bar(BarView::Hidden);
         self.notice = None;
         self.live_words = None;
         self.live_preview_paused = false;
