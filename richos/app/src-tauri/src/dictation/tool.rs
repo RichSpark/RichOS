@@ -1501,6 +1501,9 @@ impl Tool {
         // Dropping the capture closes the microphone.
         self.capture = None;
         self.stop_live_preview();
+        // A key menu panel may still own the keyboard after a vocabulary or
+        // accuracy choice. Hide it before final decode and the single paste.
+        self.close_menu();
         self.handover = None;
         let recording = self.recording.lock().unwrap_or_else(|p| p.into_inner()).take().unwrap_or_default();
         self.publish();

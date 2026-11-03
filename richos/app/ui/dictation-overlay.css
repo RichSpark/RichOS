@@ -465,7 +465,7 @@ body {
 .sb-val { color: var(--gold-text); font-weight: 600; }
 .sb-mid { display: flex; gap: 8px; align-items: flex-start; margin: 2px 4px 4px 36px; font-size: 1rem; color: var(--ink-soft); line-height: 1.4; }
 
-.rpanel { position: absolute; z-index: 430; background: var(--hud-bg); outline: 1px solid var(--hud-line); border-radius: 20px; color: var(--ink); font-family: var(--font); box-shadow: 0 30px 60px -24px rgba(0,0,0,.6), 0 10px 24px -12px rgba(0,0,0,.45); -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3); animation: dovmenu .2s cubic-bezier(.2,.8,.25,1) both; }
+.rpanel { position: absolute; z-index: 1; background: var(--hud-bg); outline: 1px solid var(--hud-line); border-radius: 20px; color: var(--ink); font-family: var(--font); box-shadow: 0 30px 60px -24px rgba(0,0,0,.6), 0 10px 24px -12px rgba(0,0,0,.45); -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3); animation: dovmenu .2s cubic-bezier(.2,.8,.25,1) both; }
 :root[data-theme="light"] .rpanel { box-shadow: 0 24px 50px -24px rgba(46,40,22,.45), 0 8px 18px -10px rgba(46,40,22,.25); }
 .rpanel :is(button, a, [tabindex]):focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .rp-head { display: flex; align-items: center; gap: 12px; padding: 16px 16px 0 18px; }

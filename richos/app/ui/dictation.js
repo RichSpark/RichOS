@@ -243,6 +243,7 @@
     const company = companies.find(c => c.id === selected);
     if (!companies.length) {
       html += `<div class="voc-empty">${ICON.info}<p class="voc-empty-t">Add a company in RichOS to save its vocabulary.</p><button class="dict-btn" type="button" data-act="voc-add-company">Add company</button></div>`;
+      if (vocabularyForm) html += spellingFormHtml();
     } else {
       html += `<div class="voc-pick"><span class="voc-pick-l" id="voc-company-label">Company</span><div class="voc-pop"><button class="voc-select" type="button" id="voc-company" aria-labelledby="voc-company-label voc-company-name" aria-haspopup="listbox" aria-expanded="${vocabularyPicker}" aria-controls="voc-companies" data-act="voc-picker" ${vocabularyBusy || vocabularyForm ? "disabled" : ""}><span id="voc-company-name">${esc(company ? company.name : "None")}</span>${downChevron}</button>`;
       if (vocabularyPicker) {
@@ -255,7 +256,10 @@
       }
       html += '</div></div>';
       if (vocabularyError || vocabulary.error) html += `<div class="voc-warn" role="alert">${ICON.info}<p>${esc(vocabularyError || vocabulary.error)}</p></div>`;
-      if (!company) html += '<p class="voc-state">No vocabulary selected.</p>';
+      if (!company) {
+        html += '<p class="voc-state">No vocabulary selected.</p>';
+        if (vocabularyForm) html += spellingFormHtml();
+      }
       else {
         const rules = vocabulary.rules || [];
         if (rules.length) {
@@ -313,7 +317,12 @@
         vocabularyForm = {company:vocabulary.selectedCompany,index,spelling:rule.spelling,heardAs:rule.heardAs || "",error:null};
         vocabularyPicker = false; paint(); $("voc-spell").focus({preventScroll:true}); break;
       }
-      case "voc-cancel": vocabularyForm = null; paint(); $("voc-company").focus({preventScroll:true}); break;
+      case "voc-cancel": {
+        vocabularyForm = null; paint();
+        const next = $("voc-company") || col.querySelector('[data-act="voc-add-company"]');
+        if (next) next.focus({preventScroll:true});
+        break;
+      }
       case "voc-save": {
         const form = vocabularyForm;
         if (!form || form.company !== vocabulary.selectedCompany) return;

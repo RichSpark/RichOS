@@ -442,6 +442,11 @@ async function main() {
     await page.waitForFunction(()=>document.querySelector('#voc-save').disabled);
     assertEqual(await page.locator('#voc-spell').inputValue(),'Monday');
     assert((await text(page,'#voc-error')).includes('selected company changed'));
+    await page.evaluate(async()=>{await window.RichBridge.invoke('dictation_set_vocabulary',{company:null,rules:null});window.__RICHOS_MOCK__.dictationVocabularySet({});});
+    await waitText(page,'#voc-company-name','None');
+    assertEqual(await page.locator('#voc-spell').inputValue(),'Monday',"disabling vocabulary keeps the unsaved input accessible");
+    assert(await page.locator('[data-act="voc-cancel"]').isVisible(),"the stale editor retains a way out");
+    assert(await page.locator('#voc-save').isDisabled());
     await page.locator('[data-act="voc-cancel"]').click();
     await page.close();
   });
