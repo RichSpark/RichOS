@@ -4109,6 +4109,40 @@ class GateReconciliationTests(unittest.TestCase):
         self.assertEqual(seen, ["core", "updater-retry", "smoke"])
         self.assertEqual(second.gate_evidence.selected["gates/core-tests"]["status"], "reused")
 
+    def test_resumed_script_lint_uses_its_actual_proven_run(self):
+        first = self.retry_runner("20261007T170000Z-11111111")
+        report = {"commit": "a" * 40, "run_id": first.env["RICHOS_NIGHTLY_RUN_ID"],
+                  "suites": [{"name": "lint.test.sh", "state": "passed"}]}
+        first.state.mkdir(parents=True)
+        def scripts():
+            (first.state / m.SUITE_RESULTS).write_text(json.dumps(report))
+        with contextlib.redirect_stdout(io.StringIO()):
+            first.run_gates(first.reconcile_gates([("gates/script-suites", scripts)], None, True))
+        second = self.retry_runner("20261007T170100Z-22222222")
+        lint = Path(m.__file__).parent / 'lint'
+        with patch.object(sys, 'path', [str(lint), *sys.path]):
+            spec = importlib.util.spec_from_file_location('reconciled_lint_driver', lint / 'driver.py')
+            driver = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(driver)
+        def run_lint(*args, **kwargs):
+            self.assertEqual(args[:2], ('bash', second.source / m.SCRIPTS / 'lint.sh'))
+            self.assertEqual(driver.main([str(a) for a in args[2:]]), 0)
+        second.command = run_lint
+        second.run_gates = lambda gates: dict(gates)['gates/lint-tauri']()
+        with patch.dict(os.environ, second.env), \
+                patch.object(driver, 'inventory', return_value={}), \
+                patch.object(driver, 'checked', return_value='fixture'), \
+                patch.object(driver, 'versions', return_value={}), \
+                patch.object(driver, 'static_full') as static, \
+                patch.object(driver, 'rust_fast') as fast, \
+                patch.object(driver, 'tauri') as tauri, \
+                contextlib.redirect_stdout(io.StringIO()):
+            second.gates(skip_unchanged=True, no_host_screen=True)
+        self.assertEqual((static.call_count, fast.call_count, tauri.call_count), (0, 0, 0))
+        self.assertEqual(json.loads((second.state / m.SUITE_RESULTS).read_text()), report)
+        self.assertEqual(second.gate_evidence.selected['gates/script-suites']['run_id'], report['run_id'])
+
+
     def test_a_reused_script_gate_restores_its_frozen_report(self):
         first = self.retry_runner("20261007T170000Z-11111111")
         report = {"commit": "a" * 40, "run_id": first.env["RICHOS_NIGHTLY_RUN_ID"], "suites": []}

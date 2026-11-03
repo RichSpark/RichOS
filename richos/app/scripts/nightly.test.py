@@ -5,6 +5,7 @@ The publishing tests substitute build/upload commands. No release, signing ident
 or installed app is touched by this suite.
 """
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import importlib.util
 import hashlib
@@ -18,6 +19,7 @@ import subprocess
 import shutil
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -25,6 +27,31 @@ spec = importlib.util.spec_from_file_location("nightly", Path(__file__).with_nam
 n = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(n)
 NOW = datetime(2026, 9, 11, 23, 59, tzinfo=timezone.utc)
+
+
+class SourceCacheConcurrencyTests(unittest.TestCase):
+    def test_overlapping_downloads_own_their_partials(self):
+        data = b'pinned source archive'
+        row = dict(asset='source.tar.gz', name='fixture', version='1', url='fixture',
+                   sha256=hashlib.sha256(data).hexdigest())
+        ready = threading.Barrier(2)
+        destinations = []
+        def fetch(_url, destination):
+            destinations.append(destination)
+            destination.write_bytes(data)
+            ready.wait(timeout=30)  # load-bound: hang guard only; the barrier establishes overlap.
+        with tempfile.TemporaryDirectory() as cache, \
+                patch.object(n, 'fetch_source_archive', side_effect=fetch), \
+                ThreadPoolExecutor(max_workers=2) as pool:
+            calls = [pool.submit(n.cached_gpl_source, row, cache) for _ in range(2)]
+            paths = [call.result() for call in calls]
+            self.assertEqual(paths, [Path(cache) / row['asset']] * 2)
+            self.assertEqual(paths[0].read_bytes(), data)
+            self.assertEqual(len(set(destinations)), 2)
+            self.assertEqual(list(Path(cache).iterdir()), [paths[0]])
+            with patch.object(n, 'fetch_source_archive') as cached_fetch:
+                self.assertEqual(n.cached_gpl_source(row, cache), paths[0])
+                cached_fetch.assert_not_called()
 
 
 class VersionTests(unittest.TestCase):

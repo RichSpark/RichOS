@@ -55,6 +55,7 @@
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::os::fd::AsRawFd;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -473,7 +474,16 @@ impl Session {
                 }
             }
         });
-        Ok(Session { child, stdin, lines, stderr_tail, checked: false })
+        let session = Session { child, stdin, lines, stderr_tail, checked: false };
+        if let Some(stdin) = session.stdin.as_ref() {
+            let fd = stdin.as_raw_fd();
+            // SAFETY: stdin owns this open pipe; only its status flags are changed.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+                return Err((Failure::Ended, std::io::Error::last_os_error().to_string()));
+            }
+        }
+        Ok(session)
     }
 
     /// **THE FIRST MESSAGE, AND THE INVENTORY CHECK.** In stream-json input mode the CLI prints
@@ -483,13 +493,16 @@ impl Session {
     /// model's first answer can come back, and on any difference the whole process group is
     /// ended: no tool call can have been made, because a tool call follows a model answer.
     pub fn begin(&mut self, line: &str, within: Duration) -> Result<(), (Failure, String)> {
-        if let Err(e) = self.send(line) {
+        let deadline = Instant::now() + within;
+        if let Err(e) = self.send_until(line, deadline) {
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                return Err((Failure::Timeout, e.to_string()));
+            }
             std::thread::sleep(Duration::from_millis(100));
             let why = self.stderr_text();
             self.stop();
             return Err((if why.is_empty() { Failure::Ended } else { classify(&why) }, e.to_string()));
         }
-        let deadline = Instant::now() + within;
         loop {
             match self.next(deadline) {
                 Next::Event(StreamEvent::Init(init)) => {
@@ -530,12 +543,44 @@ impl Session {
 
     /// Hand Claude one more user message (after [`Session::begin`]).
     pub fn send(&mut self, line: &str) -> std::io::Result<()> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| std::io::Error::other("the session has ended"))?;
-        stdin.write_all(line.as_bytes())?;
-        if !line.ends_with('\n') {
-            stdin.write_all(b"\n")?;
-        }
-        stdin.flush()
+        self.send_until(line, Instant::now() + OPERATION_BOUND)
+    }
+
+    /// Input and response share the caller's operation deadline. A full pipe cannot hold
+    /// preparation open indefinitely; a partial write is never reused as another request.
+    pub fn send_until(&mut self, line: &str, deadline: Instant) -> std::io::Result<()> {
+        let result = (|| {
+            let stdin = self.stdin.as_mut().ok_or_else(|| std::io::Error::other("the session has ended"))?;
+            let mut write = |mut bytes: &[u8]| -> std::io::Result<()> {
+                while !bytes.is_empty() {
+                    if Instant::now() >= deadline {
+                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "request input deadline reached"));
+                    }
+                    match stdin.write(bytes) {
+                        Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+                        Ok(n) => bytes = &bytes[n..],
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            let left = deadline.saturating_duration_since(Instant::now());
+                            let ms = left.as_millis().saturating_add(1).min(i32::MAX as u128) as i32;
+                            let mut pipe = libc::pollfd { fd: stdin.as_raw_fd(), events: libc::POLLOUT, revents: 0 };
+                            // SAFETY: poll borrows one valid descriptor for this bounded wait.
+                            if unsafe { libc::poll(&mut pipe, 1, ms) } < 0 {
+                                let error = std::io::Error::last_os_error();
+                                if error.kind() != std::io::ErrorKind::Interrupted { return Err(error); }
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                Ok(())
+            };
+            write(line.as_bytes())?;
+            if !line.ends_with('\n') { write(b"\n")?; }
+            stdin.flush()
+        })();
+        if result.is_err() { self.stop(); }
+        result
     }
 
     /// The next event, waiting until `deadline` at most.
@@ -741,4 +786,63 @@ mod tests {
         assert_eq!(d.evidence_used, ["ev-0123456789ab"]);
         assert!(parse_drafted("no report here").is_none());
     }
+}
+
+#[cfg(test)]
+mod g5_pipe_tests {
+use crate::adapter::{Failure, Session, Spec};
+use std::{os::unix::fs::PermissionsExt, sync::mpsc, time::Duration};
+
+#[test]
+fn g5_startup_deadline_includes_a_request_the_child_never_reads() {
+    let root = std::env::temp_dir().join(format!("g5-pipe-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = root.join("provider");
+    std::fs::write(&bin, "#!/bin/sh\nexec /bin/sleep 1000\n").unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let spec = Spec { server_exe: root.join("unused-server"), draft_dir: root.join("draft") };
+    let mut session = Session::start(&bin, &spec, &root.join("work"), &[]).unwrap();
+    let stopper = session.stopper();
+    let (done, result) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        done.send(session.begin(&"x".repeat(2 << 20), Duration::ZERO)).unwrap();
+    });
+    // load-bound: hang guard only; a zero deadline must return Timeout without an external Stopper.
+    let outcome = result.recv_timeout(Duration::from_secs(5));
+    stopper.stop();
+    worker.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(matches!(outcome, Ok(Err((Failure::Timeout, _)))), "{outcome:?}");
+}
+
+#[test]
+fn g5_a_stalled_continuing_request_times_out_and_cannot_be_reused() {
+    let root = std::env::temp_dir().join(format!("g5-continue-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = root.join("provider");
+    let init = r#"{"type":"system","subtype":"init","tools":["mcp__richdoctor__collect_diagnostics","mcp__richdoctor__read_evidence"],"mcp_servers":[{"name":"richdoctor","status":"connected"}],"permissionMode":"dontAsk","slash_commands":[],"skills":[],"plugins":[]}"#;
+    std::fs::write(&bin, format!("#!/bin/sh\nread first\nprintf '%s\\n' '{init}'\nexec /bin/sleep 1000\n")).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let spec = Spec { server_exe: root.join("unused-server"), draft_dir: root.join("draft") };
+    let mut session = Session::start(&bin, &spec, &root.join("work"), &[]).unwrap();
+    // Hang guard only: the fixture emits the measured inventory after its first input.
+    session.begin("first", Duration::from_secs(5)).unwrap();
+    assert!(session.checked());
+    let stopper = session.stopper();
+    let (done, result) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        // load-bound: the child never reads again; only the operation deadline releases this write, regardless of host load.
+        let answer = session.send_until(&"x".repeat(2 << 20), std::time::Instant::now() + Duration::from_millis(10));
+        let kind = answer.unwrap_err().kind();
+        assert!(session.send("cannot reuse a partial request").is_err());
+        done.send(kind).unwrap();
+    });
+    // load-bound: hang guard only; the returned error and closed session prove the deadline, not elapsed time.
+    let outcome = result.recv_timeout(Duration::from_secs(5));
+    stopper.stop();
+    worker.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(outcome.unwrap(), std::io::ErrorKind::TimedOut);
+}
+
 }

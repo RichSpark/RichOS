@@ -53,6 +53,9 @@ pub struct Row {
 
 #[derive(Default, Serialize, Deserialize)]
 struct Saved {
+    /// Only this prefix of seen.bin belongs to these totals. None is the legacy format.
+    #[serde(default)]
+    seen_len: Option<u64>,
     offsets: BTreeMap<PathBuf, u64>,
     recent: Vec<Request>,
     rows: Vec<Row>,
@@ -68,6 +71,10 @@ struct State {
     seen: HashMap<u64, (u32, u32)>,
     /// Records added since the last save (appended to `seen.bin`, 16 bytes each).
     unsaved_seen: Vec<(u64, u32, u32)>,
+    /// Bytes committed with the current saved totals; any trailing bytes are uncommitted.
+    seen_len: u64,
+    /// The old snapshot still needs its prefix recorded before the first upgraded append.
+    legacy: bool,
     recent: HashMap<String, Request>,
     totals: BTreeMap<(u64, Card, Option<String>), (i64, Buckets)>,
     /// The latest request by its own time, for the live line.
@@ -203,7 +210,11 @@ impl Ledger {
         if let Some(saved) = fs::read(dir.join(STATE_FILE)).ok().and_then(|b| serde_json::from_slice::<Saved>(&b).ok()) {
             let mut seen_bytes = Vec::new();
             let seen_ok = fs::File::open(dir.join(SEEN_FILE)).and_then(|mut f| f.read_to_end(&mut seen_bytes)).is_ok();
-            if seen_ok {
+            let committed = saved.seen_len.unwrap_or(seen_bytes.len() as u64 / 16 * 16);
+            if seen_ok && committed <= seen_bytes.len() as u64 && committed % 16 == 0 {
+                seen_bytes.truncate(committed as usize);
+                state.seen_len = committed;
+                state.legacy = saved.seen_len.is_none();
                 // Later records of one message replace earlier ones: its latest known size.
                 state.seen = seen_bytes.chunks_exact(16).map(|c| (
                     u64::from_le_bytes(c[..8].try_into().unwrap()),
@@ -289,7 +300,9 @@ impl Ledger {
         if !state.dirty || (!force && now < state.saved_at + SAVE_EVERY_MS) {
             return;
         }
+        let seen_len = state.seen_len + state.unsaved_seen.len() as u64 * 16;
         let saved = Saved {
+            seen_len: Some(seen_len),
             offsets: state.offsets.clone(),
             recent: state.recent.values().cloned().collect(),
             rows: state.totals.iter().map(|((slot, card, effort), (requests, buckets))| Row {
@@ -303,15 +316,25 @@ impl Ledger {
             .collect();
         let written = (|| -> std::io::Result<()> {
             fs::create_dir_all(&self.dir)?;
-            // The ids first: a crash between the two writes then re-reads bytes whose messages
-            // are already marked seen, and nothing counts twice.
-            fs::OpenOptions::new().create(true).append(true).open(self.dir.join(SEEN_FILE))?.write_all(&seen)?;
-            let tmp = self.dir.join(format!("{STATE_FILE}.tmp"));
-            fs::write(&tmp, serde_json::to_vec(&saved)?)?;
-            fs::rename(&tmp, self.dir.join(STATE_FILE))
+            if state.legacy {
+                let mut previous: Saved = serde_json::from_slice(&fs::read(self.dir.join(STATE_FILE))?)?;
+                previous.seen_len = Some(state.seen_len);
+                write_saved(&self.dir, &previous)?;
+                state.legacy = false;
+            }
+            // Keep the ids before the totals, but commit their length with the totals.
+            // A failed save or crash leaves a tail that open() ignores and the next save
+            // replaces, so replay can neither skip unsaved requests nor count saved ones twice.
+            let mut ids = fs::OpenOptions::new().create(true).write(true).truncate(false).open(self.dir.join(SEEN_FILE))?;
+            ids.set_len(state.seen_len)?;
+            ids.seek(SeekFrom::Start(state.seen_len))?;
+            ids.write_all(&seen)?;
+            ids.sync_all()?;
+            write_saved(&self.dir, &saved)
         })();
         match written {
             Ok(()) => {
+                state.seen_len = seen_len;
                 state.unsaved_seen.clear();
                 state.dirty = false;
                 state.saved_at = now;
@@ -353,6 +376,15 @@ impl Ledger {
         t.families = families.into_values().collect();
         t
     }
+}
+
+// One atomic snapshot commits the totals, offsets and the corresponding seen prefix.
+fn write_saved(dir: &Path, saved: &Saved) -> std::io::Result<()> {
+    let tmp = dir.join(format!("{STATE_FILE}.tmp"));
+    let mut totals = fs::File::create(&tmp)?;
+    totals.write_all(&serde_json::to_vec(saved)?)?;
+    totals.sync_all()?;
+    fs::rename(&tmp, dir.join(STATE_FILE))
 }
 
 /// The complete lines of `path` from `offset`, and where the read stopped (the end of the last
@@ -654,3 +686,7 @@ impl LastRequest {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ledger/local_records_tests.rs"]
+mod local_records_tests;

@@ -2309,13 +2309,25 @@ pub enum Outcome {
 /// The network calls, made by the shell: a bug report is one REST request to the issues
 /// endpoint; a feature idea is GraphQL ([`post_discussion`]), never the issues endpoint.
 pub trait Transport {
+    /// The relay's retry identity, saved in the pending copy before its first request.
+    /// Direct GitHub transports need no relay identity.
+    fn prepare_report(&self) -> io::Result<Option<RelayIdentity>> { Ok(None) }
+
+    /// Send this pending report, including its persisted retry identity when using a relay.
+    fn post_report(&self, credential: &Credential, post: Post, pending: &Pending) -> Outcome {
+        match post {
+            Post::Bug => self.create_issue(credential, &format!("/repos/{REPOSITORY}/issues"),
+                &serde_json::json!({ "title": pending.title, "body": pending.body })),
+            Post::Idea => self.post_idea(credential, &pending.title, &pending.body),
+        }
+    }
+
     fn create_issue(&self, credential: &Credential, path: &str, request: &serde_json::Value) -> Outcome;
     /// One GraphQL request (`POST /graphql`, `request` being `{query, variables}`), and GitHub's
     /// answer as it came: its HTTP status and its JSON.
     fn graphql(&self, credential: &Credential, request: &serde_json::Value) -> Reply;
     /// **AN IDEA, POSTED** as a discussion under Ideas: through GitHub's GraphQL API
-    /// ([`post_discussion`]) unless the transport posts it in one step itself (the shell's RichOS
-    /// reporting relay does).
+    /// ([`post_discussion`]). Relay transports override post_report to carry their retry identity.
     fn post_idea(&self, credential: &Credential, title: &str, body: &str) -> Outcome {
         post_discussion(self, credential, title, body)
     }
@@ -2441,10 +2453,25 @@ pub fn classify(outcome: &Outcome) -> Result<(u64, String), Reason> {
     }
 }
 
+/// The relay ID and one-time receipt key. Both are kept before any request and reused.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayIdentity {
+    pub id: String,
+    pub receipt_secret: String,
+}
+
+impl std::fmt::Debug for RelayIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelayIdentity").field("id", &self.id).field("receipt_secret", &"<hidden>").finish()
+    }
+}
+
 /// A report on this Mac that has not gone out yet, exactly as it was approved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<RelayIdentity>,
     pub created_at_ms: u64,
     pub title: String,
     pub body: String,
@@ -2555,7 +2582,9 @@ impl Outbox {
 
     /// Every waiting report, oldest first. A file this build cannot read is skipped, never deleted.
     pub fn pending(&self) -> io::Result<Vec<Pending>> {
+        let sent: std::collections::HashSet<_> = self.sent()?.into_iter().map(|s| s.id).collect();
         let mut out: Vec<Pending> = read_all(&self.waiting_dir())?;
+        out.retain(|p| !sent.contains(&p.id));
         out.sort_by_key(|p| (p.created_at_ms, p.id.clone()));
         Ok(out)
     }
@@ -2728,12 +2757,12 @@ impl Outbox {
 
     /// Every report that went out, oldest first.
     pub fn sent(&self) -> io::Result<Vec<Sent>> {
-        let text = match std::fs::read_to_string(self.dir.join("sent.jsonl")) {
+        let bytes = match std::fs::read(self.dir.join("sent.jsonl")) {
             Ok(t) => t,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
             Err(e) => return Err(e),
         };
-        Ok(text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+        Ok(bytes.split(|b| *b == b'\n').filter_map(|l| serde_json::from_slice(l).ok()).collect())
     }
 
     /// **CANCEL, CONFIRMED.** Take a waiting report off this Mac and say what became of it:
@@ -2745,13 +2774,12 @@ impl Outbox {
     /// The shell calls this under the same one-at-a-time lock as every send, so a retry already
     /// in flight finishes first, and its record of going out is what this finds.
     pub fn withdraw(&self, id: &str) -> io::Result<Withdrawn> {
-        if self.cancel(id)? {
-            return Ok(Withdrawn::Canceled);
+        if let Some(sent) = self.sent()?.into_iter().find(|s| s.id == id) {
+            self.cleanup_sent(id);
+            return Ok(Withdrawn::AlreadySent(sent));
         }
-        Ok(match self.sent()?.into_iter().find(|s| s.id == id) {
-            Some(sent) => Withdrawn::AlreadySent(sent),
-            None => Withdrawn::Canceled,
-        })
+        self.cancel(id)?;
+        Ok(Withdrawn::Canceled)
     }
 
     /// **IS IT STILL WAITING HERE?** `None` while its copy waits on this Mac; otherwise what became
@@ -2760,13 +2788,10 @@ impl Outbox {
     /// waiting report being changed keeps its copy until the changed words are saved (CEO §156).
     /// Called under the same one-at-a-time lock as every send, so a retry in flight finishes first.
     pub fn gone(&self, id: &str) -> io::Result<Option<Withdrawn>> {
-        if self.path_of(id).is_some_and(|p| p.exists()) {
-            return Ok(None);
+        if let Some(sent) = self.sent()?.into_iter().find(|s| s.id == id) {
+            return Ok(Some(Withdrawn::AlreadySent(sent)));
         }
-        Ok(Some(match self.sent()?.into_iter().find(|s| s.id == id) {
-            Some(sent) => Withdrawn::AlreadySent(sent),
-            None => Withdrawn::Canceled,
-        }))
+        Ok(if self.path_of(id).is_some_and(|p| p.exists()) { None } else { Some(Withdrawn::Canceled) })
     }
 
     /// Remove a waiting report. `false` when there was none by that id.
@@ -2785,6 +2810,7 @@ impl Outbox {
     pub fn send(&self, public: &Public, credentials: &dyn Credentials, transport: &dyn Transport, now_ms: u64) -> io::Result<Delivery> {
         let pending = Pending {
             id: uuid::Uuid::new_v4().to_string(),
+            relay: None,
             created_at_ms: now_ms,
             title: public.title().to_string(),
             body: public.body().to_string(),
@@ -2825,17 +2851,14 @@ impl Outbox {
         let outcome = match credentials.credential() {
             None => Err((Reason::NotSetUp, None)),
             Some(credential) => {
-                // THE ONE DIFFERENCE BETWEEN THE TWO: where it is posted. A bug report is an issue;
-                // a feature idea is a discussion under Ideas, and never reaches the issues endpoint
-                // (CEO, 2026-10-11: "I don't want feature requests to be submitted or branded as
-                // "issues" on GitHub").
-                let answer = match self.post {
-                    Post::Bug => {
-                        let request = serde_json::json!({ "title": pending.title, "body": pending.body });
-                        transport.create_issue(&credential, &format!("/repos/{REPOSITORY}/issues"), &request)
+                if pending.relay.is_none() {
+                    if let Some(identity) = transport.prepare_report()? {
+                        pending.relay = Some(identity);
+                        // Also upgrades an older waiting copy. Failure here sends nothing.
+                        self.write(&pending)?;
                     }
-                    Post::Idea => transport.post_idea(&credential, &pending.title, &pending.body),
-                };
+                }
+                let answer = transport.post_report(&credential, self.post, &pending);
                 classify(&answer).map(|ok| (ok, credential.account)).map_err(|r| (r, Some(answer)))
             }
         };
@@ -2861,12 +2884,20 @@ impl Outbox {
     fn record_sent(&self, sent: &Sent) -> io::Result<()> {
         use io::Write;
         std::fs::create_dir_all(&self.dir)?;
-        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("sent.jsonl"))?;
+        let mut file = std::fs::OpenOptions::new().create(true).read(true).append(true).open(self.dir.join("sent.jsonl"))?;
+        crate::util::ensure_line_boundary(&mut file)?;
         file.write_all(format!("{}\n", serde_json::to_string(sent).map_err(io::Error::other)?).as_bytes())?;
         file.sync_all()?;
-        // The record of it going out is on disk before the waiting copy goes, so a crash between
-        // the two leaves a report both sent and waiting (filed twice at worst), never neither.
-        self.cancel(&sent.id).map(|_| ())
+        // The synced receipt is authoritative even if cleanup fails or the app stops here.
+        // pending() excludes it, and the UI still answers that it was sent.
+        self.cleanup_sent(&sent.id);
+        Ok(())
+    }
+
+    fn cleanup_sent(&self, id: &str) {
+        if let Err(e) = self.cancel(id) {
+            eprintln!("[richos] bug report {id}: sent, but its waiting copy could not be removed ({e})");
+        }
     }
 }
 
@@ -3146,3 +3177,7 @@ mod tests {
         assert!(exact > 2500, "only {exact} of 3000 generated reports were exact ({doubted} in doubt)");
     }
 }
+
+#[cfg(test)]
+#[path = "bug_report/local_records_tests.rs"]
+mod local_records_tests;
