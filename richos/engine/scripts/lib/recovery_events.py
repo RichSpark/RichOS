@@ -160,8 +160,6 @@ def human_requests(path):
         for text in stream:
             if not text.endswith("\n"):
                 break
-            if "tool_result" in text or not ("user" in text or "queued_command" in text):
-                continue
             try:
                 row = json.loads(text)
             except ValueError:
@@ -758,7 +756,9 @@ def main(argv=None):
             return 0  # one drain at a time; the next tick picks up what changed
         before = fingerprint(ws, args.entity)
         summary = drain(args.engine, args.entity, ws)
-        if not any("kept pending" in g for g in summary["gaps"]):
+        # Any unobserved or unprocessed input needs another drain, even when
+        # restoring read access leaves its size/mtime fingerprint unchanged.
+        if not summary["gaps"]:
             R.F.write_json_atomic(str(R.root() / "events.cursor.json"), dict(fingerprint=before, at=time.time()))
         print(json.dumps(dict(summary, at=time.time()), sort_keys=True), flush=True)
         return 0

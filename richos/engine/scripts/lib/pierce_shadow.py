@@ -403,20 +403,19 @@ def finish_if_complete():
     counts = progress()
     if not all(kind_complete(counts, k) for k in (1, 2)):
         return
-    try:
-        fd = os.open(root() / "complete.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return
-    with os.fdopen(fd, "w") as out:
-        json.dump({"at": time.time(), "progress": counts}, out)
-    title = "Pierce on Haiku parallel track: the sample is collected and the track has stopped itself"
-    question = ("Both kinds have %d briefs with a real problem (%s). Who analyzes the data in %s?"
-                % (TARGET_POSITIVE_PER_KIND, json.dumps(counts), root()))
-    p = subprocess.run([sys.executable, "-B", str(HERE / "escalations.py"), "raise", "--title", title,
-                        "--state", "work-complete", "--for", "lead", "--question", question,
-                        "--teammate", "pierce-shadow"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       text=True, timeout=60)
-    log("sample complete; escalation exit %d: %s" % (p.returncode, p.stdout.strip()[:500]))
+    with held(root() / "completion.lock") as acquired:
+        if not acquired or (root() / "complete.json").exists():
+            return
+        title = "Pierce on Haiku parallel track: the sample is collected and the track has stopped itself"
+        question = ("Both kinds have %d briefs with a real problem (%s). Who analyzes the data in %s?"
+                    % (TARGET_POSITIVE_PER_KIND, json.dumps(counts), root()))
+        p = subprocess.run([sys.executable, "-B", str(HERE / "escalations.py"), "raise", "--title", title,
+                            "--state", "work-complete", "--for", "lead", "--question", question,
+                            "--teammate", "pierce-shadow"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, timeout=60)
+        log("sample complete; escalation exit %d: %s" % (p.returncode, p.stdout.strip()[:500]))
+        if p.returncode == 0:
+            write(root() / "complete.json", {"at": time.time(), "progress": counts})
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +455,7 @@ def run(job_path):
                       "read_roots": len(request.get("read_roots") or [])},
             "worker": job.get("worker")})
         if kind_complete(progress(), kind):
+            finish_if_complete()
             skip(pair, "kind %d sample complete" % kind)
             return 0
         why = refused()
