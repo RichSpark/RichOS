@@ -2169,7 +2169,7 @@ function flushRender() {
     // them. Read from the panel's own copy of `list_output`, never a second read.
     output: window.RichOutput ? window.RichOutput.links : undefined,
     // A file card whose file is gone offers "Ask Rich again" (`rich-files.js`): his words, sent.
-    sendText: (text) => send(text),
+    sendText: (text) => send(text, { pressed: "Ask Rich again" }),
   });
   // The DOM was just rebuilt; re-mark the open worker's chip.
   markSelectedChip();

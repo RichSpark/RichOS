@@ -224,12 +224,22 @@ async function main() {
     assertEqual(got[0].meta, "No longer on this Mac. It was moved or deleted.");
     assert(!got[0].openShown && !got[0].finderShown && got[0].askShown, "gone: only Ask Rich again");
     assertEqual(got[1].state, "ready", "the other file is untouched");
+    await p.evaluate(() => {
+      const invoke = RichBridge.invoke.bind(RichBridge);
+      window.generatedFileRequests = [];
+      RichBridge.invoke = (name, args, ...options) => {
+        if (name === "send_message") window.generatedFileRequests.push(args);
+        return invoke(name, args, ...options);
+      };
+    });
     // A click on the gone card's body opens nothing.
     await p.click('.tl-rfile[data-file-id="rf_0a1b2c3d4e5f6071"] .tl-rfile-name');
     await p.click('.tl-rfile[data-file-id="rf_0a1b2c3d4e5f6071"] .tl-rfile-ask');
-    await p.waitForFunction(() =>
-      [...document.querySelectorAll(".tl-user-text")].some((n) => n.textContent === "Please send Acme-counteroffer.pdf again.")
-    );
+    await p.waitForFunction(() => generatedFileRequests.length === 1);
+    const request = await p.evaluate(() => generatedFileRequests[0]);
+    assertEqual(request.text, "Please send Acme-counteroffer.pdf again.", "same generated file request");
+    assertEqual(request.pressed, true, "button-generated filename is not human-authored text");
+    assertEqual(await p.locator(".tl-user-text").filter({ hasText: request.text }).count(), 0, "no invented human message");
     const acts = await p.evaluate(() => window.__RICHOS_MOCK__.richFileActions());
     assertEqual(acts, [], "nothing was opened for a gone file");
     assertEqual(p.__errors, [], "the page reported errors");
