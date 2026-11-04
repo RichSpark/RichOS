@@ -3389,6 +3389,7 @@ fn main() {
                     (projection, None)
                 }
             };
+            let card_source_seen = card_source.is_some();
             if card_counts.available && (cached_ledger_source.as_ref() != spine.ledger().swearmeter_source_stamp()
                 || cached_card_counts.as_ref().map(|cache| &cache.source) != Some(&card_source)) {
                 let cards = richos_core::swearmeter_checkpoint::CachedCards { source: card_source, summary: card_counts.summary() };
@@ -3591,7 +3592,7 @@ fn main() {
 
             spine.detach_conversation_io();
             app.manage(AppState {
-                swearmeter: swearmeter_host::Service::new(app.handle().clone(), spine.reader(), control.clone(), card_counts),
+                swearmeter: swearmeter_host::Service::new(app.handle().clone(), spine.reader(), control.clone(), card_counts, card_source_seen),
                 quota: quota.clone(),
 
                 work,

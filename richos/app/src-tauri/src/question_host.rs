@@ -220,6 +220,7 @@ pub fn start(app: AppHandle) {
             for () in events {
                 let state = app.state::<AppState>();
                 let store = store(&state);
+                state.swearmeter.observe_card_source(directory.join("store.json").is_file());
                 if let Ok(questions) = store.all() {
                     let view = state.reader.snapshot();
                     let mut witness_pending = false;

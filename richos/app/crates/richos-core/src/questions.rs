@@ -658,9 +658,7 @@ impl Store {
         })?;
         if retained {
             if let Some(projection) = &self.swearmeter {
-                if let Ok(mut projection) = projection.lock() {
-                    projection.record(&saved_key, saved_origin, &submitted_text);
-                }
+                crate::swearmeter_questions::lock(projection).record(&saved_key, saved_origin, &submitted_text);
             }
         }
         Ok(result)

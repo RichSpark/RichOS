@@ -150,7 +150,7 @@ impl Projection {
                     if let Some(id) = intake_id { self.intakes.insert(*id, key.clone()); }
                     if let Some(id) = client_id { self.clients.insert((thread_id.clone(), id.clone())); }
                 }
-                if is_composite(&key) && authored_bytes.is_none() && authored_ranges.is_none() { self.composites.insert(key.clone()); }
+                if is_composite(&key) { self.composites.insert(key.clone()); }
                 self.count += count;
                 self.unknown_inputs += u64::from(unknown);
                 self.entries.insert(key, Entry { count, unknown });
@@ -211,6 +211,20 @@ mod tests {
     }
     fn replay(original: &str, next: &str) -> Event {
         Event::TurnReplayed { turn_id:original.into(), by_turn_id:next.into(), at:2 }
+    }
+
+    #[test]
+    fn modern_composite_source_coverage_survives_replay_and_checkpoint() {
+        let mut p = Projection::default();
+        let mut event = prompt("question-answer:source", "text", None, false);
+        if let Event::PromptReceived { authored_bytes, .. } = &mut event { *authored_bytes = Some(0); }
+        p.observe(&event);
+        p.observe(&replay("question-answer:source", "continuation"));
+        assert_eq!(p.count(), 0);
+        assert!(p.composites().contains("question-answer:source"));
+        let frozen = p.freeze(&[], 2);
+        assert!(frozen.valid());
+        assert!(Projection::from_frozen(frozen).composites().contains("question-answer:source"));
     }
 
     #[test]

@@ -409,3 +409,27 @@ fn edited_attachment_authorship_survives_intake_ledger_checkpoint_and_replay() {
     drop(ledger);
     assert_eq!(Ledger::open(&path).unwrap().swearmeter().count(), 2);
 }
+
+#[test]
+fn damaged_numeric_cache_cannot_reject_or_forget_a_durable_card_answer() {
+    let f = Fixture::new();
+    let questions = f.ask("front_desk");
+    let cache = f.cards.clone();
+    assert!(std::thread::spawn(move || {
+        let _guard = cache.lock().unwrap();
+        panic!("synthetic cache failure");
+    }).join().is_err());
+    f.answer(&questions[0], "after-cache-failure", "shit", AnswerOrigin::Direct);
+    assert_eq!(swearmeter_questions::lock(&f.cards).count, 1);
+    assert!(!swearmeter_questions::lock(&f.cards).available);
+    assert!(swearmeter_questions::rebuild(&f.cards, || Err("source unreadable".into())).is_err());
+    assert!(f.cards.is_poisoned());
+    swearmeter_questions::rebuild(&f.cards, || f.store.swearmeter_projection()).unwrap();
+    assert!(!f.cards.is_poisoned());
+    assert!(swearmeter_questions::lock(&f.cards).available);
+    assert_eq!(swearmeter_questions::lock(&f.cards).count, 1);
+    f.answer(&questions[0], "after-cache-failure", "shit", AnswerOrigin::Direct);
+    assert_eq!(swearmeter_questions::lock(&f.cards).count, 1);
+    f.answer(&questions[1], "new-input-after-recovery", "damn", AnswerOrigin::Direct);
+    assert_eq!(swearmeter_questions::lock(&f.cards).count, 2);
+}

@@ -17,6 +17,25 @@ pub struct Projection {
     pub revision: u64,
 }
 
+/// A failed statistics cache must never reject a durable human input. Keep the
+/// numerical state moving but qualify it until an explicit source rebuild.
+pub fn lock(cache: &std::sync::Mutex<Projection>) -> std::sync::MutexGuard<'_, Projection> {
+    cache.lock().unwrap_or_else(|poison| {
+        let mut projection = poison.into_inner();
+        projection.available = false;
+        projection
+    })
+}
+
+pub fn rebuild(cache: &std::sync::Mutex<Projection>, read: impl FnOnce() -> Result<Projection, String>) -> Result<(), String> {
+    let mut projection = lock(cache);
+    let rebuilt = read()?;
+    if !rebuilt.available { return Err("Some saved card inputs could not be read".into()); }
+    *projection = rebuilt;
+    cache.clear_poison();
+    Ok(())
+}
+
 impl Projection {
     pub fn empty() -> Self { Self { available: true, ..Self::default() } }
 
