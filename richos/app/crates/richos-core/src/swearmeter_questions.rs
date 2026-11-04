@@ -87,9 +87,8 @@ impl<'de> serde::Deserialize<'de> for OperationInputs {
                     #[serde(rename = "result")] _result: serde::de::IgnoredAny,
                 }
                 let mut inputs = OperationInputs::default();
-                let mut keys = HashSet::new();
                 while let Some((key, operation)) = map.next_entry::<String, Input>()? {
-                    if !keys.insert(key) { inputs.projection.available = false; }
+                    if !inputs.projection.seen.insert(key) { inputs.projection.available = false; }
                     match serde_json::from_str::<crate::questions::AnswerRequest>(&operation.request) {
                         Ok(request) => {
                             inputs.represented.insert(request.question_id);

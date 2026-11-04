@@ -433,3 +433,22 @@ fn damaged_numeric_cache_cannot_reject_or_forget_a_durable_card_answer() {
     f.answer(&questions[1], "new-input-after-recovery", "damn", AnswerOrigin::Direct);
     assert_eq!(swearmeter_questions::lock(&f.cards).count, 2);
 }
+
+#[test]
+fn source_rebuild_retains_identities_for_callbacks_waiting_after_the_save() {
+    let f = Fixture::new();
+    let questions = f.ask("front_desk");
+    // Durable acceptance has finished; its statistics callback has not run yet.
+    Store::new(&f.root).answer_from("fixture", "thread", AnswerRequest {
+        question_id:questions[0].id.clone(), client_id:"saved-before-rebuild".into(),
+        option_ids:vec![], text:"shit".into(), expected_revision:None,
+    }, "typed", "mac", (Some(1), AnswerOrigin::Direct)).unwrap();
+    swearmeter_questions::rebuild(&f.cards, || f.store.swearmeter_projection()).unwrap();
+    let mut counts = swearmeter_questions::lock(&f.cards);
+    assert_eq!(counts.count, 1);
+    // The real callback's record operation arrives after source recovery.
+    counts.record("fixture:thread:saved-before-rebuild", Some(AnswerOrigin::Direct), "shit");
+    assert_eq!(counts.count, 1);
+    counts.record("fixture:thread:next-real-input", Some(AnswerOrigin::Direct), "shit");
+    assert_eq!(counts.count, 2);
+}
