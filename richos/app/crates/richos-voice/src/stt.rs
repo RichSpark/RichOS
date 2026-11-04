@@ -395,6 +395,15 @@ pub fn decode_args(prompt: Option<&str>) -> Vec<String> {
 /// and sometimes a 487 MB model, and which already exists so that nothing surprising happens
 /// mid-sentence.
 fn choose_model(bin: &Path) -> crate::hardware::Resolution {
+    choose_model_with_elapsed(bin, |started| started.elapsed().as_secs_f64())
+}
+
+// Process fixtures control the decode observation, not the host's scheduling.
+// Shipping callers always use the real monotonic clock through `choose_model`.
+fn choose_model_with_elapsed(
+    bin: &Path,
+    elapsed: impl Fn(Instant) -> f64,
+) -> crate::hardware::Resolution {
     use crate::hardware::{self, Basis, Machine};
 
     let machine = Machine::read();
@@ -444,7 +453,7 @@ fn choose_model(bin: &Path) -> crate::hardware::Resolution {
             .clone()?;
         let model = resolve_model(id).ok()?;
         let earlier = hardware::load_unfinished(&key, id);
-        let secs = time_decode(bin, &model, &wav, costs.live_ceiling_secs, earlier, |best, reps| {
+        let secs = time_decode(bin, &model, &wav, costs.live_ceiling_secs, earlier, &elapsed, |best, reps| {
             hardware::record_unfinished(&key, id, best, reps)
         })?;
         hardware::record_speed(&key, id, secs);
@@ -569,6 +578,7 @@ fn time_decode(
     wav: &Path,
     ceiling_secs: f64,
     earlier: Option<(f64, usize)>,
+    elapsed: impl Fn(Instant) -> f64,
     mut keep: impl FnMut(f64, usize),
 ) -> Option<f64> {
     let (mut best, taken) = match earlier {
@@ -582,7 +592,7 @@ fn time_decode(
         if !out.status.success() {
             return None;
         }
-        let secs = started.elapsed().as_secs_f64();
+        let secs = elapsed(started);
         let min = best.map_or(secs, |b: f64| b.min(secs));
         best = Some(min);
         // Settled: the minimum cannot rise, so no further rep could turn this into a rejection.
@@ -1656,13 +1666,19 @@ mod launch_tests {
     /// (the window's readiness, the phone's voice desk, a lease's video model) asks at once.
     fn act_as_a_launch(callers: usize) {
         let bin = resolve_whisper_bin().expect("the stand-in decoder");
+        // These tests count walks, cache reuse and child cleanup. A scheduled
+        // stand-in may take longer than its sleep and legitimately trigger an
+        // extra rejection rep. Keep that unrelated wall clock out of the verdict.
+        let seconds: f64 = std::env::var("RICHOS_TEST_DECODE_SECS").unwrap().parse().unwrap();
         let start = std::sync::Arc::new(std::sync::Barrier::new(callers));
         let handles: Vec<_> = (0..callers)
             .map(|_| {
                 let (bin, start) = (bin.clone(), start.clone());
                 std::thread::spawn(move || {
                     start.wait();
-                    choose_model(&bin).model_id
+                    let resolution = choose_model_with_elapsed(&bin, |_| seconds);
+                    assert_eq!(resolution.measured_secs, Some(seconds), "the fixture controls its decode observation");
+                    resolution.model_id
                 })
             })
             .collect();
