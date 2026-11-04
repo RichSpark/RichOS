@@ -9,7 +9,14 @@ pub const EVENT_SWEARMETER: &str = "rich://swearmeter";
 
 /// Explicit English dictionary. A compound is one word even when multiple parts
 /// match. These are vocabulary entries, not quotations from anyone's messages.
-const WORDS: &[&str] = &[
+macro_rules! dictionary {
+    ($($word:literal),+ $(,)?) => {
+        #[cfg(test)]
+        const WORDS: &[&str] = &[$($word),+];
+        fn dictionary_match(word: &str) -> bool { matches!(word, $($word)|+) }
+    };
+}
+dictionary![
     "arse", "arsehole", "arseholes", "ass", "asshole", "assholes", "bastard",
     "bastards", "bitch", "bitches", "bitching", "bollocks", "bullshit", "crap",
     "crappy", "cunt", "cunts", "dammit", "damn", "damned", "dick", "dickhead",
@@ -23,21 +30,42 @@ const WORDS: &[&str] = &[
 fn word_part(c: char) -> bool { c.is_alphanumeric() || is_combining_mark(c) }
 fn joiner(c: char) -> bool { matches!(c, '-' | '\u{2010}' | '\u{2011}' | '\'' | '\u{2019}') }
 fn matched(word: &str) -> bool {
-    WORDS.binary_search(&word).is_ok()
-        || word.split(joiner).any(|part| WORDS.binary_search(&part).is_ok())
+    dictionary_match(word)
+        || (word.contains(joiner) && word.split(joiner).any(dictionary_match))
 }
 
 /// Every whole matching word contributes one, including hyphenated/apostrophe
 /// words. ASCII input avoids normalization allocation. Unicode uses the same
 /// standard-library caseless mapping as the existing private-name matcher.
 pub fn count(text: &str) -> u64 {
-    if text.is_ascii() && !text.bytes().any(|b| b.is_ascii_uppercase()) {
-        return count_normalized(text);
+    if text.is_ascii() {
+        if text.bytes().any(|b| b.is_ascii_uppercase()) {
+            return count_ascii(&text.to_ascii_lowercase());
+        }
+        return count_ascii(text);
     }
     let normalized: String = text.nfkc()
         .flat_map(|c| c.to_lowercase().flat_map(char::to_uppercase).flat_map(char::to_lowercase))
         .collect();
     count_normalized(&normalized)
+}
+
+// Byte boundaries are word boundaries for ASCII. Unicode retains the full
+// normalization and word-part rules below; this avoids its work on ordinary ASCII.
+fn count_ascii(text: &str) -> u64 {
+    let bytes = text.as_bytes();
+    let mut start = None;
+    let mut total = 0;
+    for (at, &byte) in bytes.iter().enumerate() {
+        if byte.is_ascii_alphanumeric() {
+            start.get_or_insert(at);
+        } else if !(matches!(byte, b'-' | b'\'') && at > 0 && bytes[at - 1].is_ascii_alphanumeric()
+            && bytes.get(at + 1).is_some_and(u8::is_ascii_alphanumeric)) {
+            if let Some(from) = start.take() { total += u64::from(matched(&text[from..at])); }
+        }
+    }
+    if let Some(from) = start { total += u64::from(matched(&text[from..])); }
+    total
 }
 
 fn count_normalized(text: &str) -> u64 {
