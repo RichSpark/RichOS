@@ -139,6 +139,8 @@ pub enum IntakeRecord {
         thread_id: String,
         entity_id: Option<EntityId>,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authored_bytes: Option<usize>,
         at: u64,
         /// WHICH MOUTH — `"phone"` today. A field rather than a variant, so a second
         /// channel is a new value here and not a new record type every older build then
@@ -200,6 +202,8 @@ pub enum IntakeRecord {
         thread_id: String,
         entity_id: Option<EntityId>,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authored_bytes: Option<usize>,
         at: u64,
     },
     /// §9.3 step 1: "Persist a stop request."
@@ -649,11 +653,20 @@ impl IntakeLog {
         client_id: Option<&str>,
         voice_note: bool,
     ) -> Result<IntakeRecord, SteeringError> {
+        self.channel_message_authored(thread_id, entity_id, text, channel, client_id, (voice_note, Some(text.len())))
+    }
+
+    pub fn channel_message_authored(
+        &mut self, thread_id: &str, entity_id: Option<EntityId>, text: &str,
+        channel: &str, client_id: Option<&str>, capture: (bool, Option<usize>),
+    ) -> Result<IntakeRecord, SteeringError> {
+        let (voice_note, authored_bytes) = capture;
         let rec = IntakeRecord::Channel {
             id: self.next_id,
             thread_id: thread_id.to_string(),
             entity_id,
             text: text.to_string(),
+            authored_bytes,
             at: now_millis(),
             channel: channel.to_string(),
             client_id: client_id.map(str::to_string),
@@ -678,11 +691,17 @@ impl IntakeLog {
         entity_id: Option<EntityId>,
         text: &str,
     ) -> Result<IntakeRecord, SteeringError> {
+        self.desk_message_authored(thread_id, entity_id, text, Some(text.len()))
+    }
+
+    pub fn desk_message_authored(&mut self, thread_id: &str, entity_id: Option<EntityId>,
+        text: &str, authored_bytes: Option<usize>) -> Result<IntakeRecord, SteeringError> {
         let rec = IntakeRecord::Desk {
             id: self.next_id,
             thread_id: thread_id.to_string(),
             entity_id,
             text: text.to_string(),
+            authored_bytes,
             at: now_millis(),
         };
         self.write(&rec)?;
@@ -1176,7 +1195,7 @@ impl TurnControl {
     pub fn submit_agent_message(&self, thread_id: &str, entity_id: Option<EntityId>, text: &str, sender: &str, message_id: &str) -> Result<IntakeRecord, SteeringError> {
         let mut guard = self.inner.intake.lock().unwrap();
         let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
-        let rec = IntakeRecord::Channel { id: log.next_id, thread_id: thread_id.into(), entity_id, text: text.into(), at: now_millis(), channel: sender.into(), client_id: Some(message_id.into()), voice_note: false, source: Some(crate::ledger::Source::Agent) };
+        let rec = IntakeRecord::Channel { id: log.next_id, thread_id: thread_id.into(), entity_id, text: text.into(), at: now_millis(), channel: sender.into(), client_id: Some(message_id.into()), voice_note: false, authored_bytes: Some(0), source: Some(crate::ledger::Source::Agent) };
         log.write(&rec)?;
         log.next_id += 1;
         log.pending.push(rec.clone());
@@ -1238,6 +1257,31 @@ impl TurnControl {
     /// **Durable before the caller can say anything.** `fsync` inside, like every write on
     /// this log, because the whole point is that nothing downstream is claimed before his
     /// words survive a crash.
+    /// The user-text boundary is kept with the existing intake write, not in a side log.
+    pub fn submit_from_desk_authored(&self, thread_id: &str, entity_id: Option<EntityId>,
+        text: &str, authored_bytes: Option<usize>) -> Result<IntakeRecord, SteeringError> {
+        let mut guard = self.inner.intake.lock().unwrap();
+        let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
+        log.desk_message_authored(thread_id, entity_id, text, authored_bytes)
+    }
+
+    pub fn submit_authored_from_channel(&self, thread_id: &str, entity_id: Option<EntityId>,
+        text: &str, channel: &str, client_id: Option<&str>, authored_bytes: usize,
+    ) -> Result<IntakeRecord, SteeringError> {
+        let mut guard = self.inner.intake.lock().unwrap();
+        let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
+        log.channel_message_authored(thread_id, entity_id, text, channel, client_id, (false, Some(authored_bytes)))
+    }
+
+    pub(crate) fn authored_bytes(&self, id: u64) -> Option<usize> {
+        let guard = self.inner.intake.lock().ok()?;
+        match guard.as_ref()?.pending.iter().find(|record| record.id() == id)? {
+            IntakeRecord::Desk { authored_bytes, .. } | IntakeRecord::Channel { authored_bytes, .. } => *authored_bytes,
+            IntakeRecord::Steer { text, .. } => Some(text.len()),
+            _ => None,
+        }
+    }
+
     pub fn submit_from_desk(
         &self,
         thread_id: &str,

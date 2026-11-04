@@ -2430,6 +2430,7 @@ mod tests {
             client_id: None,
             voice_note: false,
             pressed: false,
+            authored_bytes: None,
         }
     }
 

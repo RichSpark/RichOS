@@ -3,7 +3,7 @@ use crate::{ledger::{Event, Source}, swearmeter};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Default)]
-struct Entry { count: u64 }
+struct Entry { count: u64, unknown: bool }
 
 #[derive(Clone, Default)]
 pub struct Projection {
@@ -11,6 +11,8 @@ pub struct Projection {
     intakes: HashMap<u64, String>,
     aliases: HashMap<String, String>,
     count: u64,
+    unknown_inputs: u64,
+    revision: u64,
     composites: HashSet<String>,
 }
 
@@ -20,6 +22,8 @@ pub fn is_composite(id: &str) -> bool {
 
 impl Projection {
     pub fn count(&self) -> u64 { self.count }
+    pub fn unknown_inputs(&self) -> u64 { self.unknown_inputs }
+    pub fn revision(&self) -> u64 { self.revision }
     pub fn composites(&self) -> &HashSet<String> { &self.composites }
 
     fn root(&self, id: &str) -> String {
@@ -31,7 +35,8 @@ impl Projection {
 
     pub(crate) fn observe(&mut self, event: &Event) {
         match event {
-            Event::PromptReceived { turn_id, text, source, intake_id, pressed, .. } => {
+            Event::PromptReceived { turn_id, text, source, intake_id, pressed, authored_bytes, .. } => {
+                self.revision += 1;
                 let key = self.root(turn_id);
                 if self.entries.contains_key(&key) { return; }
                 let eligible = matches!(source, Source::Text | Source::Jam)
@@ -43,16 +48,26 @@ impl Projection {
                         return;
                     }
                 }
-                let count = if eligible { swearmeter::count(text) } else { 0 };
+                let authored = match authored_bytes {
+                    Some(bytes) => text.get(..*bytes),
+                    None if ambiguous_legacy_attachment(text) => None,
+                    None => Some(text.as_str()),
+                };
+                let unknown = eligible && authored.is_none();
+                let count = if eligible { authored.map(swearmeter::count).unwrap_or(0) } else { 0 };
                 if eligible {
                     if let Some(id) = intake_id { self.intakes.insert(*id, key.clone()); }
                 }
-                if is_composite(&key) { self.composites.insert(key.clone()); }
+                if is_composite(&key) && authored_bytes.is_none() { self.composites.insert(key.clone()); }
                 self.count += count;
-                self.entries.insert(key, Entry { count });
+                self.unknown_inputs += u64::from(unknown);
+                self.entries.insert(key, Entry { count, unknown });
             }
             Event::TurnReplayed { turn_id, by_turn_id, .. }
-            | Event::TurnSuperseded { turn_id, by_turn_id, .. } => self.link(turn_id, by_turn_id),
+            | Event::TurnSuperseded { turn_id, by_turn_id, .. } => {
+                self.revision += 1;
+                self.link(turn_id, by_turn_id);
+            }
             _ => {}
         }
     }
@@ -61,18 +76,30 @@ impl Projection {
         let parent = self.root(original);
         let child = self.root(continuation);
         if parent == child { return; }
+        let legacy = self.composites.contains(&parent) || self.composites.contains(&child)
+            || (!self.entries.contains_key(&parent) && is_composite(&parent));
         if let Some(mut duplicate) = self.entries.remove(&child) {
             self.count -= duplicate.count;
+            self.unknown_inputs -= u64::from(duplicate.unknown);
             if !self.entries.contains_key(&parent) {
-                if is_composite(&parent) { duplicate.count = 0; }
+                if is_composite(&parent) { duplicate.count = 0; duplicate.unknown = false; }
                 self.count += duplicate.count;
+                self.unknown_inputs += u64::from(duplicate.unknown);
                 self.entries.insert(parent.clone(), duplicate);
             }
         }
         self.composites.remove(&child);
-        if is_composite(&parent) { self.composites.insert(parent.clone()); }
+        if legacy { self.composites.insert(parent.clone()); }
         self.aliases.insert(child, parent);
     }
+}
+
+// Older records did not retain the producer's text boundary. An exact attachment
+// descriptor shape is ambiguous without it. Do not count its generated words or
+// silently strip a possible quotation: qualify the whole old input as unknown.
+fn ambiguous_legacy_attachment(text: &str) -> bool {
+    text.lines().any(|line| (line.starts_with("Attached on this Mac (")
+        || line.starts_with("Attached from the phone (")) && line.ends_with("):"))
 }
 
 #[cfg(test)]
@@ -130,5 +157,26 @@ mod tests {
         p.observe(&prompt("old-plain-copy", "text", None, false));
         p.observe(&replay("question-followup:legacy", "old-plain-copy"));
         assert_eq!(p.count(), 2);
+    }
+
+    #[test]
+    fn attachment_producer_boundary_preserves_quotes_and_excludes_generated_paths() {
+        let quoted = "shit\n\nAttached on this Mac (1 file, saved by RichOS):\n- /fixture/wtf.png (image/png, 1 bytes)";
+        let mut attached = serde_json::to_value(prompt("attached", "text", None, false)).unwrap();
+        attached["text"] = quoted.into();
+        attached["authored_bytes"] = 4.into();
+        let mut p = Projection::default();
+        p.observe(&serde_json::from_value(attached.clone()).unwrap());
+        assert_eq!(p.count(), 1);
+        // The exact same characters can be a genuine pasted quotation.
+        attached["turn_id"] = "quotation".into();
+        attached["authored_bytes"] = quoted.len().into();
+        p.observe(&serde_json::from_value(attached.clone()).unwrap());
+        assert_eq!(p.count(), 3);
+        attached["turn_id"] = "legacy".into();
+        attached.as_object_mut().unwrap().remove("authored_bytes");
+        p.observe(&serde_json::from_value(attached).unwrap());
+        assert_eq!(p.count(), 3);
+        assert_eq!(p.unknown_inputs(), 1);
     }
 }

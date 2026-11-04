@@ -314,6 +314,30 @@ let sendBlockedReason = null; // §21: non-null means send is refused, with this
 let idlePlaceholder = "Talk to Rich…";
 const expandedEntities = new Set(); // entity ids whose "Show more" has been used
 const drafts = new Map(); // threadId -> unsent composer text (§3.1)
+// Provenance only for app-composed attachment bodies restored as drafts. The text
+// is the existing draft's string; only its prefix length is added to parked data.
+const authoredDrafts = new Map();
+const utf8Length = (text) => new TextEncoder().encode(text).length;
+function draftAuthorshipKey() {
+  return draftEntityId ? ENTITY_DRAFT_PREFIX + draftEntityId : activeThreadId;
+}
+function authoredDraftBytes(key, text) {
+  const saved = authoredDrafts.get(key);
+  if (!saved || saved.text.trim() !== text) return utf8Length(text);
+  const leading = saved.text.slice(0, saved.text.length - saved.text.trimStart().length);
+  return Math.max(0, saved.bytes - utf8Length(leading));
+}
+function editDraftAuthorship() {
+  const key = draftAuthorshipKey();
+  const saved = authoredDrafts.get(key);
+  if (!saved) return;
+  const suffix = new TextDecoder().decode(new TextEncoder().encode(saved.text).subarray(saved.bytes));
+  const text = inputEl.value;
+  if (suffix && text.trimEnd().endsWith(suffix)) {
+    authoredDrafts.set(key, { text, bytes: utf8Length(text.trimEnd()) - utf8Length(suffix) });
+  } else authoredDrafts.delete(key);
+}
+
 const scrollTops = new Map(); // threadId -> conversation scrollTop (§3.1)
 
 // ---- and they survive a crash, which they did not until 2026-08-31 ----------------------
@@ -382,6 +406,12 @@ function loadParkedViewState() {
     for (const [key, text] of Object.entries(savedDrafts)) {
       if (typeof text === "string" && text) drafts.set(key, text);
     }
+    for (const [key, bytes] of Object.entries(savedDrafts.__authoredPrefixBytes || {})) {
+      const text = savedDrafts[key];
+      if (typeof text === "string" && Number.isInteger(bytes) && bytes >= 0 && bytes <= utf8Length(text)) {
+        authoredDrafts.set(key, { text, bytes });
+      }
+    }
   }
   const savedScroll = readJsonLocal(KEY_SCROLL);
   if (savedScroll) {
@@ -407,6 +437,9 @@ function parkViewStateNow() {
   if ((mainView === "conversation" || mainView === "opening") && activeThreadId) put(activeThreadId, inputEl.value);
   else if (mainView === "entity" && viewEntityId) put(ENTITY_DRAFT_PREFIX + viewEntityId, inputEl.value);
   for (const [key, text] of drafts) if (!(key in out)) put(key, text);
+  const prefixes = {};
+  for (const [key, saved] of authoredDrafts) if (out[key] === saved.text) prefixes[key] = saved.bytes;
+  if (Object.keys(prefixes).length) out.__authoredPrefixBytes = prefixes;
   writeJsonLocal(KEY_DRAFTS, out);
 
   const tops = {};
@@ -2661,6 +2694,7 @@ async function send(explicitText, opts) {
   // Start/Resume sends its own acceptance without silently submitting or deleting a draft.
   const preserveDraft = typeof explicitText === "string";
   let text = preserveDraft ? explicitText.trim() : inputEl.value.trim();
+  const authoredBytes = preserveDraft ? utf8Length(text) : authoredDraftBytes(draftAuthorshipKey(), text);
   // FILES HE DROPPED OR PASTED (CEO §86). Never on a Start/Resume send, which is not his
   // composer's content.
   const files = preserveDraft || !window.RichAttachments ? null : window.RichAttachments.forSend();
@@ -2701,6 +2735,7 @@ async function send(explicitText, opts) {
     const foldThread = activeThreadId;
     const folded = await foldAttachments(text, foldThread, files);
     if (folded === null) return;
+    authoredDrafts.set(foldThread, { text: folded, bytes: authoredBytes });
     if (activeThreadId !== foldThread || (mainView !== "conversation" && mainView !== "opening")) {
       // He moved in the milliseconds the files took. They are filed under the thread he sent
       // from, so the message stays with it, as its draft, ready to send.
@@ -2835,6 +2870,7 @@ async function send(explicitText, opts) {
         return;
       }
       text = folded;
+      authoredDrafts.set(newId, { text: folded, bytes: authoredBytes });
     }
     drafts.delete(ENTITY_DRAFT_PREFIX + entityId);
     if (preserveDraft && keptDraft) drafts.set(newId, keptDraft);
@@ -2901,7 +2937,7 @@ async function send(explicitText, opts) {
   try {
     await Bridge.invoke(
       "send_message",
-      pressed ? { text, threadId: sentThreadId, pressed: true } : { text, threadId: sentThreadId }
+      pressed ? { text, threadId: sentThreadId, pressed: true } : { text, threadId: sentThreadId, authoredBytes }
     );
     if (pressedTurnFailed()) return false;
   } catch (e) {
@@ -3997,6 +4033,7 @@ function syncComposerShell(glide) {
 }
 
 inputEl.addEventListener("input", () => {
+  editDraftAuthorship();
   placeTalk(true);
   autoGrow();
   // §9.2's "replaces or sits beside send when the composer is empty" is a function of what

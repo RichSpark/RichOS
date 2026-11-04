@@ -36,7 +36,7 @@ const sendLineState = main.match(/^let send(?:Line|WaitingForAcceptance) = [^\n]
 assert(sendLineState.length === 2, "main.js no longer declares its send-line state; update this test");
 
 function makeShell() {
-  const c = vm.createContext({ console });
+  const c = vm.createContext({ console, TextEncoder, TextDecoder });
   c.window = c;
   vm.runInContext(fs.readFileSync(path.join(root, "timeline.js"), "utf8"), c);
   vm.runInContext(
@@ -54,6 +54,8 @@ function makeShell() {
     let firstRunState, firstRunRead = 0, drillItems, techy;
     let navTicket = 0, handNavigations = 0, carriedPendingUserId = null;
     let activeContext = null, threadViewEpoch = 0, pendingScrollRestore = null;
+    const authoredDrafts = new Map();
+    const utf8Length = text => new TextEncoder().encode(text).length;
     const drafts = new Map(), scrollTops = new Map(), threadViews = new Map();
     const pendingSends = new Map();
     const ENTITY_DRAFT_PREFIX = 'entity:';
@@ -89,7 +91,7 @@ function makeShell() {
   `,
     c
   );
-  for (const name of ["stashThreadViewState", "restoreThreadViewState", "loadTimeline", "send", "openThread"]) {
+  for (const name of ["draftAuthorshipKey", "authoredDraftBytes", "stashThreadViewState", "restoreThreadViewState", "loadTimeline", "send", "openThread"]) {
     vm.runInContext(source(name), c);
   }
   return { run: (code) => vm.runInContext(code, c) };

@@ -135,6 +135,7 @@ fn a_channel_record_carries_no_steering_turn_id_because_there_is_no_turn_to_attr
         thread_id: "thr_1".into(),
         entity_id: None,
         text: "hello".into(),
+            authored_bytes: None,
         at: 1,
         channel: "phone".into(),
         client_id: None,

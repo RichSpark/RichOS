@@ -1900,12 +1900,17 @@ impl Spine {
     /// spec r3 (s); the operator-client record's §7 item 3). Turned on by the shell only on an
     /// operator install, before the first turn, so the host can tell a phone assignment from
     /// one given at the desk without the walk handing it in. Never turned on anywhere else.
+    pub fn submit_prompt_to_authored(&mut self, thread_id: &str, text: &str, authored_bytes: usize) -> Result<String, SpineError> {
+        if self.active_thread() != Some(thread_id) { self.activate(thread_id)?; }
+        self.submit_prompt_inner(text, Source::Text, None, false, Some(authored_bytes))
+    }
+
     pub fn keep_intake_channel(&mut self, keep: bool) {
         self.keep_intake_channel = keep;
     }
 
     pub fn submit_prompt(&mut self, text: &str, source: Source) -> Result<String, SpineError> {
-        self.submit_prompt_inner(text, source, None, false)
+        self.submit_prompt_inner(text, source, None, false, None)
     }
 
     /// **Words the app sends Rich because he pressed a button**, into `thread_id` (product hunt
@@ -1917,7 +1922,7 @@ impl Spine {
         if self.active_thread() != Some(thread_id) {
             self.activate(thread_id)?;
         }
-        self.submit_prompt_inner(text, Source::Text, None, true)
+        self.submit_prompt_inner(text, Source::Text, None, true, None)
     }
 
     /// A SPOKEN prompt, carrying what the capture path measured about Rich's own audible
@@ -1937,7 +1942,7 @@ impl Spine {
         source: Source,
         rich_audible: bool,
     ) -> Result<String, SpineError> {
-        self.submit_prompt_inner(text, source, Some(rich_audible), false)
+        self.submit_prompt_inner(text, source, Some(rich_audible), false, None)
     }
 
     fn submit_prompt_inner(
@@ -1946,13 +1951,14 @@ impl Spine {
         source: Source,
         rich_audible: Option<bool>,
         pressed: bool,
+        authored_bytes: Option<usize>,
     ) -> Result<String, SpineError> {
         let binding = self.ensure_active_thread()?;
         let intake_id = self.control.take_input_order();
         let turn_id = if pressed {
             self.accept_pressed_prompt(&binding, text, intake_id)?
         } else {
-            self.accept_prompt(&binding, text, source, rich_audible, intake_id, DESK_CHANNEL)?
+            self.accept_prompt(&binding, text, source, (rich_audible, authored_bytes), intake_id, DESK_CHANNEL)?
         };
 
         self.deliver(&turn_id, &binding, text, true)?;
@@ -1965,55 +1971,29 @@ impl Spine {
     /// With keeping off, this is exactly the write each road made before, byte for byte: the
     /// channel is never written on a product install.
     fn record_prompt(
-        &mut self,
-        binding: &ThreadBinding,
-        text: &str,
-        source: Source,
-        rich_audible: Option<bool>,
-        intake_id: Option<u64>,
-        channel: &str,
+        &mut self, binding: &ThreadBinding, text: &str, source: Source,
+        capture: (Option<bool>, Option<usize>), intake_id: Option<u64>, channel: &str,
     ) -> Result<String, SpineError> {
-        if self.keep_intake_channel {
-            return Ok(self.ledger.record_prompt_received_via(binding, text, source, intake_id, rich_audible, channel)?);
-        }
-        Ok(self.ledger.record_prompt_received_desktop(binding, text, source, intake_id, rich_audible, false)?)
+        let authored = capture.1.or_else(|| match intake_id {
+            Some(id) => self.control.authored_bytes(id), None => Some(text.len()),
+        });
+        let kept = self.keep_intake_channel.then_some(channel);
+        Ok(self.ledger.record_prompt_received_desktop(binding, text, source, intake_id,
+            capture.0, (false, kept, authored))?)
     }
 
-    /// **ACCEPTING one CEO utterance: everything that happens between his sentence arriving
-    /// and the decision to queue or deliver it.** Persist, announce, and look at it for the
-    /// three correction families — in that order, and never in any other.
-    ///
-    /// # Why this is a function now, and what it stops from happening
-    ///
-    /// It was the body of [`Self::submit_prompt_inner`], whose own comment calls that
-    /// function *"the ONE function every CEO utterance passes through"*. That was true, and
-    /// then it stopped being true in one place: `drain_intake` files an intake-borne message
-    /// straight into the ledger and pushes it on the queue, so it emits the `queued` pair and
-    /// stages NOTHING. Today that only costs the phone. The moment a typed message can be
-    /// deferred through the same log (`IntakeRecord::Desk`, the CEO's §55), a correction he
-    /// typed during a front-desk prime would be dropped on the floor with no trace — the
-    /// flywheel's trigger silently not firing because of WHICH ROAD his words took.
-    ///
-    /// So the claim is restored as a function rather than as a sentence: every path that
-    /// accepts a CEO utterance calls this, and a path that does not, does not compile into
-    /// the same shape.
-    ///
-    /// `intake_id` is `Some` when the utterance came off the intake log. It rides into the
-    /// ledger so the de-duplication key survives a crash between the ledger write and
-    /// `mark_drained` — that window is the whole reason `record_prompt_received_from_intake`
-    /// exists, and it is at-least-once into a ledger that can spot the replay.
     fn accept_prompt(
         &mut self,
         binding: &ThreadBinding,
         text: &str,
         source: Source,
-        rich_audible: Option<bool>,
+        capture: (Option<bool>, Option<usize>),
         intake_id: Option<u64>,
         channel: &str,
     ) -> Result<String, SpineError> {
         // (1) persist-before-send, under a verified scope — the message is durable before
         //     any risk, and it is never durable without an entity.
-        let turn_id = self.record_prompt(binding, text, source, rich_audible, intake_id, channel)?;
+        let turn_id = self.record_prompt(binding, text, source, capture, intake_id, channel)?;
 
         // ADDITIVE (§13): the turn is durably `received`, so its first authoritative state
         // transition is emittable — §11's `queued`, the state whose timeline treatment is
@@ -2054,7 +2034,7 @@ impl Spine {
     /// durable write and the same queued status, recorded `pressed`, and none of the three
     /// correction seams, which read only what he said.
     fn accept_pressed_prompt(&mut self, binding: &ThreadBinding, text: &str, intake_id: Option<u64>) -> Result<String, SpineError> {
-        let turn_id = self.ledger.record_prompt_received_desktop(binding, text, Source::Text, intake_id, None, true)?;
+        let turn_id = self.ledger.record_prompt_received_desktop(binding, text, Source::Text, intake_id, None, (true, None, Some(0)))?;
         self.emit_live(self.turn_status_event(binding, &turn_id, TurnStatus::Queued, None));
         self.emit_live(self.thread_summary_event(binding, &turn_id, ThreadStatus::Queued));
         Ok(turn_id)
@@ -2967,7 +2947,7 @@ impl Spine {
                         continue;
                     }
                     let binding = self.fence_binding(&thread_id)?;
-                    let turn_id = self.record_prompt(&binding, &text, Source::Text, None, Some(id), DESK_CHANNEL)?;
+                    let turn_id = self.record_prompt(&binding, &text, Source::Text, (None, None), Some(id), DESK_CHANNEL)?;
                     self.emit_live(self.turn_status_event(&binding, &turn_id, TurnStatus::Queued, None));
                     // AND WHAT HE ACTUALLY SAID — the same line `accept_prompt` carries, for the
                     // same reason. See the `Channel` arm below, where its absence was a defect a
@@ -2977,7 +2957,7 @@ impl Spine {
                     self.deliver(&turn_id, &binding, &text, true)?;
                     if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                 }
-                IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, source, .. } => {
+                IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, source, authored_bytes, .. } => {
                     if self.ledger.turn_for_intake(id).is_some() || client_id.as_ref().is_some_and(|key|
                         self.ledger.thread_turns(&thread_id).is_ok_and(|turns| turns.iter().any(|turn| turn.client_id.as_ref() == Some(key)))) {
                         if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
@@ -2986,7 +2966,7 @@ impl Spine {
                     let binding = self.fence_binding(&thread_id)?;
                     let source = source.unwrap_or(Source::Text);
                     let kept = (self.keep_intake_channel || source == Source::Agent).then_some(channel.as_str());
-                    let turn_id = self.ledger.record_prompt_received_from_client(&binding, &text, source, id, kept, client_id.as_deref(), voice_note)?;
+                    let turn_id = self.ledger.record_prompt_received_from_client_authored(&binding, &text, source, id, kept, client_id.as_deref(), (voice_note, authored_bytes))?;
                     self.input_channels.insert(turn_id.clone(), channel);
                     self.emit_live(self.turn_status_event(&binding, &turn_id, TurnStatus::Queued, None));
                     self.emit_live(self.ceo_message_event(&binding, &turn_id));
@@ -3006,7 +2986,7 @@ impl Spine {
                         continue;
                     }
                     let binding = self.fence_binding(&thread_id)?;
-                    let turn_id = self.accept_prompt(&binding, &text, Source::Text, None, Some(id), DESK_CHANNEL)?;
+                    let turn_id = self.accept_prompt(&binding, &text, Source::Text, (None, None), Some(id), DESK_CHANNEL)?;
                     self.deliver(&turn_id, &binding, &text, true)?;
                     if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                 }

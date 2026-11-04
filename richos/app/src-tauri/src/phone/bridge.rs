@@ -158,6 +158,9 @@ impl Bridge for PhoneBridge {
     /// The transcript of a voice note: the same road as typed words, written as a voice note, so
     /// every row of the turn (the live one that can beat this POST's answer included) is a voice
     /// row from its first appearance (`rows::message_kind`).
+    fn submit_attached_text(&self, thread_id: Option<&str>, text: &str, client_id: &str, authored_bytes: usize) -> Result<Accepted, String> {
+        self.submit_words_authored(thread_id, text, "phone_typed", client_id, false, Some(authored_bytes))
+    }
     fn submit_voice(&self, thread_id: Option<&str>, text: &str, client_id: &str) -> Result<Accepted, String> {self.submit_words(thread_id,text,"phone_voice",client_id,true)}
 
     fn snapshot(&self, thread_id: Option<&str>) -> Result<Value, String> {
@@ -207,6 +210,11 @@ impl PhoneBridge {
 
 impl PhoneBridge {
     fn submit_words(&self, thread_id: Option<&str>, text: &str, channel:&str, client_id: &str, voice_note: bool) -> Result<Accepted, String> {
+        self.submit_words_authored(thread_id, text, channel, client_id, voice_note, None)
+    }
+
+    fn submit_words_authored(&self, thread_id: Option<&str>, text: &str, channel: &str,
+        client_id: &str, voice_note: bool, authored_bytes: Option<usize>) -> Result<Accepted, String> {
         let state = self.app.state::<AppState>();
         // The thread the words belong to, resolved HERE and never at drain time: the desktop's
         // active thread can move while a record waits, and re-scoping the CEO's words to wherever
@@ -223,7 +231,11 @@ impl PhoneBridge {
         // record, so no drain can make a turn of these words without it, and the row the Mac
         // sends back names the line the phone is already showing. Whether the words are a voice
         // note's transcript goes into the same record for the same reason.
-        let record = write_phone_words(&state.control, &thread, entity, text, channel, client_id, voice_note)?;
+        let record = if let Some(bytes) = authored_bytes {
+            state.control.submit_authored_from_channel(&thread, entity, text, channel, Some(client_id), bytes).map_err(|e| e.to_string())?
+        } else {
+            write_phone_words(&state.control, &thread, entity, text, channel, client_id, voice_note)?
+        };
         let intake_id = record.id();
 
         crate::dispatch_incoming_messages(&self.app, &thread)?;

@@ -155,6 +155,10 @@ pub trait Bridge: Send + Sync {
     /// the CEO row the Mac sends back names the message the phone is already showing, even
     /// when that row beats the receipt (adoption ledger §2.8 row C5; `rows::client_id_of`).
     fn submit_text(&self, thread_id: Option<&str>, text: &str, client_id: &str) -> Result<Accepted, String>;
+    /// Preserve the producer boundary; route fixtures without a ledger retain their seam.
+    fn submit_attached_text(&self, thread_id: Option<&str>, text: &str, client_id: &str, _authored_bytes: usize) -> Result<Accepted, String> {
+        self.submit_text(thread_id, text, client_id)
+    }
     fn submit_voice(&self, thread_id: Option<&str>, text: &str, client_id: &str) -> Result<Accepted, String> {self.submit_text(thread_id,text,client_id)}
 
     /// The CEO-gated timeline payload for one thread. **Obtained through `view(ViewMode::Ceo)`
@@ -886,7 +890,7 @@ fn attachments_message(channel: &Channel, request: &Incoming, body: &Value, clie
             // Revocation while the files were being checked must prevent a new command.
             if channel.devices.paired().is_none_or(|d| d.id != device.id) { return Err("revoked".into()); }
             let stored = desk.commit(&device.id, client_id, thread, &files).map_err(|e| e.to_string())?;
-            let accepted = channel.bridge.submit_text(Some(thread), &describe(&text, &stored), client_id)?;
+            let accepted = channel.bridge.submit_attached_text(Some(thread), &describe(&text, &stored), client_id, text.len())?;
             let files: Vec<Value> = stored.iter()
                 .map(|f| json!({"id": f.id, "name": f.name, "media_type": f.media_type, "size": f.size}))
                 .collect();

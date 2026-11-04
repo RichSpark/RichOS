@@ -111,3 +111,38 @@ fn unknown_legacy_origins_are_partial_only_for_nonempty_text() {
     forged.as_object_mut().unwrap().remove("origin");
     assert!(serde_json::from_value::<AnswerRequest>(forged).is_ok());
 }
+
+mod support;
+
+#[test]
+fn attachment_authorship_survives_a_durable_queue_and_a_restart() {
+    use richos_core::{cognition::MockLeaseFactory, steering::TurnControl};
+    let f = Fixture::new();
+    let path = f.root.join("ledger.jsonl");
+    let intake = f.root.join("intake.jsonl");
+    let entity = EntityId::parse("femcboost").unwrap();
+    let mut spine = support::spine(Ledger::open(&path).unwrap());
+    let thread = spine.create_thread("Attachments", &entity).unwrap();
+    spine.switch_thread(&thread).unwrap();
+    spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["Ready", "Received"])));
+    let text = "damn résumé";
+    let folded = format!("{text}\n\nAttached from the phone (1 file):\n/fixture/wtf.png");
+    let control = TurnControl::open(&intake).unwrap();
+    control.submit_authored_from_channel(&thread, Some(entity), &folded, "phone", Some("attachment"), text.len()).unwrap();
+    drop(control);
+    spine.set_turn_control(TurnControl::open(&intake).unwrap());
+    spine.poll_intake().unwrap();
+    assert_eq!(spine.ledger().swearmeter().count(), 1);
+    let binding = spine.ledger().thread_binding(&thread).unwrap();
+    let turns = spine.ledger().thread_turns_scoped(&binding).unwrap();
+    let turn = turns.iter().find(|t| t.user_text == folded).expect("full model message is preserved");
+    assert_eq!(turn.authored_bytes, Some(text.len()));
+    drop(spine);
+    let mut ledger = Ledger::open(&path).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 1);
+    assert_eq!(ledger.swearmeter().unknown_inputs(), 0);
+    let binding = ledger.thread_binding(&thread).unwrap();
+    // A deliberately pasted lookalike is wholly human text, including its filename.
+    ledger.record_prompt_received(&binding, &folded, Source::Text).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 3);
+}
