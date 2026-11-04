@@ -12,10 +12,14 @@ pub enum Update {
     Quiet,
 }
 
+// Enough recent words for the three-line display, still only the latest
+// provisional window rather than an accumulating transcript.
+const PREVIEW_WORD_LIMIT: usize = 32;
+
 pub fn recent_words(text: &str) -> String {
     let words: Vec<_> = text.split_whitespace().collect();
-    let tail = words[words.len().saturating_sub(10)..].join(" ");
-    if words.len() > 10 { format!("…{tail}") } else { tail }
+    let tail = words[words.len().saturating_sub(PREVIEW_WORD_LIMIT)..].join(" ");
+    if words.len() > PREVIEW_WORD_LIMIT { format!("…{tail}") } else { tail }
 }
 
 /// Owned by the ordinary dictation's writing-worker lifecycle. `park_timeout`
@@ -76,7 +80,11 @@ mod tests {
     fn preview_keeps_only_recent_words_and_does_not_present_them_as_final_text() {
         assert_eq!(recent_words("one two"), "one two");
         assert_eq!(recent_words("one two three four five six seven eight nine ten eleven twelve"),
-                   "…three four five six seven eight nine ten eleven twelve");
+                   "one two three four five six seven eight nine ten eleven twelve");
+        let full = (1..=32).map(|n| format!("word{n}")).collect::<Vec<_>>().join(" ");
+        assert_eq!(recent_words(&full), full);
+        assert_eq!(recent_words(&format!("discarded {full}")), format!("…{full}"));
+        assert_eq!(recent_words("  one\n\ttwo  "), "one two");
         assert_eq!(recent_words(""), "");
     }
 

@@ -226,6 +226,10 @@ window.RichDictationBar = (function () {
     document.documentElement.style.setProperty("--dictation-screen-width", width + "px");
     var pill = document.querySelector("#dhud > *");
     if (!pill) return null;
+    // At three lines keep the newest words visible, including after a desktop
+    // width change. Hidden overflow has no scrollbar or transcript history UI.
+    var words = pill.querySelector(".dhx-words");
+    if (words) words.scrollTop = words.scrollHeight;
     var out = {
       seq: D.seq,
       w: Math.ceil(pill.offsetWidth + PAD_X * 2),
