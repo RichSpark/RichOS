@@ -28,7 +28,7 @@ impl Timings {
     }
     fn entry(&self, stage: &str, elapsed_ms: u64, since_finish_ms: Option<u64>, detail: Value) -> Value {
         json!({"schema":1,"pid":std::process::id(),"seq":self.seq,
-            "version":env!("CARGO_PKG_VERSION"),"profile":if cfg!(debug_assertions) {"debug"} else {"release"},
+            "version":env!("CARGO_PKG_VERSION"),"source":crate::engine::source_commit(),"profile":if cfg!(debug_assertions) {"debug"} else {"release"},
             "model":self.model,"preview":self.preview,"stage":stage,
             "elapsed_ms":elapsed_ms,"since_finish_ms":since_finish_ms,"detail":detail})
     }
