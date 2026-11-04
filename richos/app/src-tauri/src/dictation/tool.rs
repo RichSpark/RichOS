@@ -1472,7 +1472,7 @@ impl Tool {
         }) {
             Ok(c) => {
                 self.timings = Some(super::timings::Timings::new(self.capture_seq, &self.recording_model,
-                    self.settings.live_preview && self.cleaner_target.is_none()));
+                    self.settings.live_preview && self.cleaner_target.is_none(), &self.version));
                 self.drafts.recording_started(draft_now());
                 log::line(&format!("listening ({})", c.source_label));
                 self.capture = Some(c);

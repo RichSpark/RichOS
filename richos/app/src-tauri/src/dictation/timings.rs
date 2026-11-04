@@ -6,6 +6,7 @@ use std::time::Instant;
 
 pub struct Timings {
     seq: u64,
+    version: String,
     model: &'static str,
     preview: bool,
     began: Instant,
@@ -19,16 +20,16 @@ pub struct Timings {
 }
 
 impl Timings {
-    pub fn new(seq: u64, model: &str, preview: bool) -> Self {
+    pub fn new(seq: u64, model: &str, preview: bool, version: &str) -> Self {
         let model = match model { "small.en" => "small.en", "large-v3-turbo-q5_0" => "large-v3-turbo-q5_0", _ => "other" };
-        let value = Self { seq, model, preview, began: Instant::now(), stopped: None,
+        let value = Self { seq, version: version.chars().take(80).collect(), model, preview, began: Instant::now(), stopped: None,
             updates: 0, first_ms: None, max_decode_ms: 0, max_window_ms: 0, complete: false, cpu_at_start: cpu_usage() };
         value.event("capture_ready", json!({}));
         value
     }
     fn entry(&self, stage: &str, elapsed_ms: u64, since_finish_ms: Option<u64>, detail: Value) -> Value {
         json!({"schema":1,"pid":std::process::id(),"seq":self.seq,
-            "version":env!("CARGO_PKG_VERSION"),"source":crate::engine::source_commit(),"profile":if cfg!(debug_assertions) {"debug"} else {"release"},
+            "version":self.version,"source":crate::engine::source_commit(),"profile":if cfg!(debug_assertions) {"debug"} else {"release"},
             "selected_model":self.model,"preview_enabled":self.preview,"stage":stage,
             "elapsed_ms":elapsed_ms,"since_finish_ms":since_finish_ms,"detail":detail})
     }
@@ -88,7 +89,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("dictation-timing-collection-{}", std::process::id()));
         let data = home.join("Library/Application Support/com.richos.app");
         std::fs::create_dir_all(&data).unwrap();
-        let mut t = Timings::new(7, "large-v3-turbo-q5_0", true);
+        let mut t = Timings::new(7, "large-v3-turbo-q5_0", true, "1.2.9-dev.fixture");
         let at = 1_798_784_000_000;
         let entry = t.entry("recognition_completed", 4010, Some(420), json!({"model":"small.en","recognition_ms":300}));
         std::fs::write(data.join("dictation.log"), format!("{} dictation timing {entry}\n", richdoctor_core::util::utc_stamp(at))).unwrap();
@@ -97,6 +98,7 @@ mod tests {
         assert_eq!(collected[0].status, Status::Collected);
         let raw = collected[0].text.split_once("dictation timing ").unwrap().1;
         let record: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(record["version"], "1.2.9-dev.fixture");
         assert_eq!(record["selected_model"], "large-v3-turbo-q5_0");
         assert_eq!(record["detail"]["model"], "small.en", "fallback must not masquerade as the selected model");
         assert_eq!(record["since_finish_ms"], 420);
@@ -108,7 +110,7 @@ mod tests {
 
     #[test]
     fn stage_records_preserve_distinct_monotonic_spans_and_omit_user_content() {
-        let mut t = Timings::new(7, "untrusted model text", true);
+        let mut t = Timings::new(7, "untrusted model text", true, "1.2.9-dev.fixture");
         let v = t.entry("preview_stopped", 4010, Some(420), json!({}));
         assert_eq!(v["elapsed_ms"], 4010);
         assert_eq!(v["since_finish_ms"], 420);
