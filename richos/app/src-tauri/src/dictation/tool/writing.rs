@@ -26,6 +26,12 @@ pub(super) struct Assistance {
 
 impl Assistance {
     fn owns(&self, client:u64, id:&str)->bool {self.client==client && self.id==id}
+    fn retry(&mut self, now:Instant)->String {
+        let earlier=std::mem::replace(&mut self.id,richos_core::cleaner::capture_id());
+        self.began=now;self.stage="checking";self.failure=None;
+        self.ready=(self.mode==Mode::Cleanup || self.instruction.is_some()).then_some(now);
+        earlier
+    }
     fn request_expired(&self, now:Instant)->bool {
         self.ready.is_some_and(|ready|now.saturating_duration_since(ready)>=writing::DEADLINE)
     }
@@ -216,14 +222,19 @@ impl Tool {
                 let Some(binding)=&a.binding else{return};
                 a.stage="checking";
                 a.ready=(a.mode==Mode::Cleanup || a.instruction.is_some()).then(Instant::now);
-                self.hub.send_to(a.client,&ToolMessage::Writing {id:a.id.clone(),action:"consent".into(),payload:json!({"account":binding.account,"destination":binding.destination})});
+                if !self.hub.send_to(a.client,&ToolMessage::Writing {id:a.id.clone(),action:"consent".into(),payload:json!({"account":binding.account,"destination":binding.destination})}) {
+                    self.writing_failure(Failure::Unavailable);return;
+                }
                 self.show_writing();
             }
             "writing-retry"=>{
                 let a=self.assistance.as_mut().unwrap();
                 if a.stage!="error" {return}
-                a.stage="checking";a.ready=(a.mode==Mode::Cleanup || a.instruction.is_some()).then(Instant::now);a.failure=None;
-                self.hub.send_to(a.client,&ToolMessage::Writing {id:a.id.clone(),action:"prepare".into(),payload:json!({"mode":a.mode})});
+                let earlier=a.retry(Instant::now());
+                self.hub.send_to(a.client,&ToolMessage::Writing {id:earlier,action:"cancel".into(),payload:json!({})});
+                if !self.hub.send_to(a.client,&ToolMessage::Writing {id:a.id.clone(),action:"prepare".into(),payload:json!({"mode":a.mode})}) {
+                    self.writing_failure(Failure::Unavailable);return;
+                }
                 self.show_writing();
             }
             "writing-copy"=>{
@@ -274,6 +285,21 @@ mod tests {
     fn operation(now:Instant)->Assistance {
         Assistance {id:"current".into(),client:8,mode:Mode::Rewrite,stage:"consent",original:"Do not commit £36,000 before Friday.".into(),destination:"TextEdit".into(),anchor:None,
             instruction:None,proposal:None,binding:None,began:now,expires:now+Duration::from_secs(1800),ready:None,failure:None,status:None}
+    }
+    #[test]
+    fn an_explicit_retry_rejects_already_queued_old_replies_without_extending_retention() {
+        let now=Instant::now();let mut a=operation(now);
+        let expiry=a.expires;
+        a.stage="error";a.instruction=Some("Keep the refusal, make it polite.".into());a.failure=Some(Failure::Timeout);
+        let old=a.retry(now+Duration::from_secs(20));
+        assert_eq!(old,"current");
+        assert!(!a.owns(8,&old),"An already queued old result cannot satisfy the new attempt");
+        assert!(a.owns(8,&a.id));
+        assert_eq!(a.expires,expiry,"Explicit retries do not extend the original's lifetime");
+        assert_eq!(a.original,"Do not commit £36,000 before Friday.");
+        assert_eq!(a.instruction.as_deref(),Some("Keep the refusal, make it polite."));
+        assert_eq!(a.ready,Some(now+Duration::from_secs(20)));
+        assert_eq!(a.failure,None);
     }
     #[test]
     fn doctor_receives_the_actual_content_free_writing_timing_record() {
