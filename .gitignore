@@ -61,6 +61,8 @@ richos/app/ui/tests/receipts/
 
 # Source link for the pinned helper; binary bytes live in the external build cache.
 /richos/app/src-tauri/connect-helper
+# The same for the meeting-notes capture companion (scripts/prepare-companion.py).
+/richos/app/src-tauri/companion-helper
 
 # The app's build and test output, DECLARED regenerable so the workspace lander
 # (mega-lander/workspaces.py, V2-02) lands or continues a workspace that holds it

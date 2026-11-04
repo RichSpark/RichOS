@@ -288,6 +288,83 @@
   //   * `harbor-private` is also a STRING prefix match of `harbor`'s first root, which is
   //     the case component-wise resolution exists for;
   //   * six of them, because several suites assert positions in a six-long row.
+  // ---- document search's synthetic folder (see the `search_documents` case) ----------------
+  const MOCK_DOCS = [
+    { id: "doc-iphone", path: "2025/iphone-build-three-seconds.md", title: "Why the iPhone build takes three seconds to show anything", date: Date.UTC(2026, 2, 14), subjects: ["startup", "mobile"],
+      passages: [{ heading: "Why the iPhone build takes three seconds to show anything", line: 3, text: "Three seconds at launch on iOS usually comes from work done before the first frame is drawn. The database migration check, the font registration and the analytics handshake all run on the main thread." }] },
+    { id: "doc-refund", path: "2025/refund-window.md", title: "Refund window for annual plans", date: Date.UTC(2026, 1, 2), subjects: ["refunds"],
+      passages: [{ heading: "Refund window for annual plans", line: 5, text: "Keep it to one sentence a coach can quote: cancel within 30 days of the first charge and the money comes back, no questions asked." }] },
+    { id: "doc-thirty", path: "2024/refund-thirty-days-draft.md", title: "Early draft of the refund rule", date: Date.UTC(2025, 9, 20), subjects: ["refunds"],
+      passages: [{ heading: "Early draft of the refund rule", line: 5, text: "Customers who cancel within thirty days of signing up get their money back." }] },
+    { id: "doc-pricing", path: "2025/pricing-and-support-cost.md", title: "Pricing the coach tier", date: Date.UTC(2026, 3, 9), subjects: ["pricing"],
+      passages: [{ heading: "Later in the same conversation", line: 11, text: "The support cost per coach is the number most people forget. At two tickets a month it is larger than hosting." }] },
+  ];
+  for (let i = 1; i <= 30; i++) {
+    MOCK_DOCS.push({ id: "doc-sub-" + i, path: "2024/subscription-notes-" + i + ".md", title: "Subscription pricing notes " + i, date: Date.UTC(2025, i % 12, 1 + i), subjects: ["pricing"],
+      passages: [{ heading: "Notes " + i, line: 3 + i, text: "Subscription pricing, part " + i + ": monthly against yearly plans and what each costs a coach." }] });
+  }
+  const MOCK_SUBJECTS = {
+    startup: ["slow", "launch", "startup", "seconds", "open", "loading"],
+    refunds: ["refund", "cancel", "money"],
+    pricing: ["pricing", "price", "cost", "plan", "plans"],
+    mobile: ["app", "iphone", "phone"],
+  };
+  const MOCK_STOP = new Set("a an the that this on in of to for and or with it is was felt first".split(" "));
+  const mockOpenedDocuments = [];
+
+  function mockDocStatus() {
+    const preset = (window.__RICHOS_MOCK_PRESET__ || {}).documentSearch || "ready";
+    const files = MOCK_DOCS.length;
+    const passages = files;
+    const folder = preset === "none" ? { state: "none" }
+      : preset === "error" ? { state: "error", message: "Search folder not found: /Users/someone/Archive" }
+      : { state: "ready", files, passages, skipped: 0, links_skipped: 0 };
+    const meaning = preset === "indexing" ? { state: "indexing", files_done: 20, files_total: files, passages_done: 20, passages_total: passages }
+      : preset === "unavailable" ? { state: "unavailable", reason: "Apple's sentence embedding for 'en' is not available on this Mac." }
+      : { state: "ready", files, passages };
+    return { folder, meaning, index_location: "/Users/someone/Library/Caches/RichOS/search", generation: 1 };
+  }
+
+  function mockDocSearch(req) {
+    const status = mockDocStatus();
+    const query = String(req.query || "");
+    const spans = [];
+    query.replace(/"([^"]*)"/g, (_, s) => { if (s.trim()) spans.push(s.trim().toLowerCase().replace(/\s+/g, " ")); return " "; });
+    const unmatched = ((query.match(/"/g) || []).length % 2) === 1;
+    const all = [...new Set(query.toLowerCase().replace(/"/g, " ").split(/[^a-z0-9'.-]+/).filter(Boolean))];
+    // As the real service: stop words go unless they are all there is.
+    const content = all.filter((w) => !MOCK_STOP.has(w));
+    const words = content.length || spans.length ? content : all;
+    const superOn = !!req.super_finder && (status.meaning.state === "ready" || status.meaning.state === "indexing");
+    const base = { requested: { super_finder: !!req.super_finder, strict: !!req.strict }, effective: { super_finder: superOn, strict: !!req.strict },
+      status, total: 0, offset: req.offset || 0, hits: [], dropped: 0, empty: null, spans, words, elapsed_ms: 3 };
+    if (status.folder.state !== "ready") return { ...base, empty: "no_folder" };
+    if (!words.length && !spans.length) return { ...base, empty: "no_query" };
+    if (req.strict && unmatched) return { ...base, empty: "quote_mismatch" };
+    const text = (d) => (d.title + " " + d.passages.map((p) => p.text).join(" ")).toLowerCase();
+    const hasWord = (t, w) => new RegExp("(^|[^a-z0-9])" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(s|es)?([^a-z0-9]|$)").test(t);
+    const rows = [];
+    for (const d of MOCK_DOCS) {
+      const t = text(d);
+      const sp = spans.filter((s) => t.includes(s));
+      if (req.strict && sp.length < spans.length) continue;
+      const lexical = words.filter((w) => hasWord(t, w)).length + sp.length;
+      let meaning = 0;
+      if (superOn) for (const s of d.subjects) meaning += (MOCK_SUBJECTS[s] || []).filter((w) => words.includes(w)).length;
+      if (!lexical && meaning < 2) continue;
+      rows.push({ d, sp, lexical, meaning: meaning >= 2 });
+    }
+    rows.sort((a, b) => b.sp.length - a.sp.length || (b.lexical + (b.meaning ? 1 : 0)) - (a.lexical + (a.meaning ? 1 : 0)) || b.d.date - a.d.date);
+    const offset = req.offset || 0;
+    const limit = Math.min(req.limit || 12, 12);
+    const hits = rows.slice(offset, offset + limit).map((r) => ({
+      source_id: r.d.id, title: r.d.title, rel_path: r.d.path, modified_ms: r.d.date,
+      why: r.sp.length ? "exact" : r.lexical && r.meaning ? "both" : r.meaning ? "meaning" : "words",
+      exact: r.sp, passage: r.d.passages[0],
+    }));
+    return { ...base, total: rows.length, hits, empty: rows.length ? null : req.strict && spans.length ? "no_exact" : "no_match" };
+  }
+
   const entities = [
     { id: "northwind", display_name: "Northwind Traders", status: "active", roots: ["/Users/you/Projects/northwind"] },
     { id: "lumen", display_name: "Lumen Labs", status: "active", roots: ["/Users/you/Projects/lumen"] },
@@ -1761,6 +1838,12 @@
   // the Mac reports about Codex later.
   const codexReviews = Object.assign({ on: false, codex: "ready" }, preset.codexReviews || {});
   const codexReviewCalls = [];
+  // MEETING NOTES (round 25, src-tauri meetings.rs): `meeting_state` in the app's shape. Available,
+  // not paused, nothing recording, as a fresh install opens; `preset.meetingNotes` overrides any
+  // fact, `__RICHOS_MOCK__.meetingSet` changes them later and sends `meeting-state`, as the app does.
+  const meetingNotes = Object.assign({ available: true, paused: false, recording: false, startedAt: null, processing: null },
+    preset.meetingNotes || {});
+  const meetingCalls = [];
   // API-EQUIVALENT TOKEN SPEND (round 22.1, `spend.js`): `spend_view` and `spend_live`, in the shape
   // richos-core's spend ledger answers them (`spend::ledger::Totals`). A seeded record of 47 days
   // ANCHORED TO THE FIRST OF THIS MONTH (30 days before it, 17 from it), so this month's figure is
@@ -3763,6 +3846,21 @@
         case "codex_reviews_status":
           codexReviewCalls.push({ cmd });
           return structuredClone(codexReviews);
+        // MEETING NOTES (meetings.rs): the main window's view, the manual start/stop and the pause.
+        case "meeting_state":
+          meetingCalls.push({ cmd });
+          return structuredClone(meetingNotes);
+        case "meeting_start_or_stop":
+          meetingCalls.push({ cmd });
+          if (meetingNotes.recording) Object.assign(meetingNotes, { recording: false, startedAt: null });
+          else Object.assign(meetingNotes, { recording: true, startedAt: Date.now() });
+          emit("meeting-state", structuredClone(meetingNotes));
+          return structuredClone(meetingNotes);
+        case "meeting_set_paused":
+          meetingCalls.push({ cmd, paused: !!args.paused });
+          meetingNotes.paused = !!args.paused;
+          emit("meeting-state", structuredClone(meetingNotes));
+          return structuredClone(meetingNotes);
         case "codex_reviews_set":
           codexReviewCalls.push({ cmd, on: !!args.on });
           if (!(args.on && !codexReviews.on && codexReviews.codex !== "ready")) codexReviews.on = !!args.on;
@@ -4028,6 +4126,27 @@
           messagesByThread[id] = [];
           activeThreadId = id;
           return id;
+        }
+        // DOCUMENT SEARCH (search PRD v3.1, design round 26), shaped exactly like
+        // `richos_search::service::SearchResponse` and `Status`. A small synthetic folder and
+        // the same rules as the real service at a toy scale: the text list matches whole words
+        // (plurals allowed) and quoted spans; Super Finder adds documents found "by meaning"
+        // through a tiny subject table; Require quoted text needs every span. Nothing about
+        // search quality is claimed here, only the shapes the palette draws.
+        // `__RICHOS_MOCK_PRESET__.documentSearch` picks the folder state: "ready" (default),
+        // "indexing", "unavailable", "none" or "error".
+        case "search_documents_status": {
+          return mockDocStatus();
+        }
+        case "search_documents": {
+          const req = (args && args.request) || {};
+          return mockDocSearch(req);
+        }
+        case "open_search_document": {
+          const doc = MOCK_DOCS.find((d) => d.id === (args && args.sourceId));
+          if (!doc) throw "That document is not in the search folder.";
+          mockOpenedDocuments.push(doc.id);
+          return null;
         }
         case "search_nav": {
           const q = String(args.query || "").trim().toLowerCase();
@@ -5543,6 +5662,11 @@
     codexSet(codex) { codexReviews.codex = codex; },
     /// The Codex switch's calls, in order, each with its arguments.
     codexReviewCalls() { return codexReviewCalls.slice(); },
+    /// Meeting notes: change what the app reports (recording, paused, processing) and send
+    /// `meeting-state`, as meetings.rs does on every change.
+    meetingSet(patch) { Object.assign(meetingNotes, patch || {}); emit("meeting-state", structuredClone(meetingNotes)); },
+    /// The meeting-notes calls, in order, each with its arguments.
+    meetingCalls() { return meetingCalls.slice(); },
     /// Token spend (spend.js): a request on record now; the first count done; the agents working.
     spendLand(r) { spendMock.land(r); },
     spendReady() { spendMock.state.ready = true; },

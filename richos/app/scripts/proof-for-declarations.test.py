@@ -378,6 +378,39 @@ class Declarations(unittest.TestCase):
             self.select("docs/a-file-that-is-only-prose.md")
         self.assertEqual(clocks, [None])
 
+    def test_include_readers_are_exact_and_scanned_once_for_a_bulk_change(self):
+        wrapper = self.root / "bin"
+        wrapper.mkdir()
+        log = self.root / "include-scans"
+        grep = shutil.which("grep")
+        script = wrapper / "grep"
+        script.write_text(f"#!{sys.executable}\n" +
+                         "import os, sys\n" +
+                         "if any('include_str!' in arg for arg in sys.argv[1:]):\n" +
+                         f"    with open({str(log)!r}, 'a') as stream: stream.write('scan\\n')\n" +
+                         f"os.execv({grep!r}, [{grep!r}, *sys.argv[1:]])\n")
+        script.chmod(0o755)
+        env = dict(os.environ, PATH=str(wrapper) + os.pathsep + os.environ["PATH"])
+        def selected(paths):
+            log.write_text("")
+            result = subprocess.run(["/bin/bash", str(SCRIPTS / "proof-for.sh"), "--gate",
+                                     "--quiet", "--paths", ",".join(paths)],
+                                    cwd=ROOT, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            readers = {line.strip() for line in result.stdout.splitlines()
+                       if "--test feedback_no_outbound_tests" in line or "--test launch_no_outbound_tests" in line}
+            return readers, len(log.read_text().splitlines())
+        readers, scans = selected(["richos/app/ui/main.js"])
+        self.assertTrue(any("--test feedback_no_outbound_tests" in line for line in readers))
+        self.assertTrue(any("--test launch_no_outbound_tests" in line for line in readers))
+        bulk, bulk_scans = selected(["richos/app/ui/main.js"] +
+                                    [f"richos/app/third-party/qdrant-edge/unrelated-{i}.md" for i in range(8)])
+        self.assertEqual(bulk, readers)
+        self.assertGreater(scans, 0)
+        self.assertEqual(bulk_scans, scans, "unchanged test sources are scanned once per selection")
+        unrelated, _ = selected(["richos/app/ui/main.js.extra.md"])
+        self.assertEqual(unrelated, set(), "a filename prefix must not select an include reader")
+
 
 if __name__ == "__main__":
     unittest.main()

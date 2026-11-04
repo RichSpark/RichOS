@@ -86,6 +86,11 @@ pub enum WriteSource {
     /// (d) a worker's file landed into the connected repository by `integrate` (slice S2b).
     /// The row carries the worktree copy it retires in [`WriteRow::landed_from`].
     Land,
+    /// (e) a file the APP itself wrote for this thread and named in Rich's message: meeting
+    /// notes' `brief.md` and the `transcript.md` beside it (Granola PRD V4), recorded under the
+    /// turn that delivered them so the message's `brief.md` is the normal file link. Key
+    /// `app:<turn>:<path>`.
+    App,
 }
 
 /// One witnessed write (§4.2). No file content, no tool input, no command text — paths and
@@ -1326,6 +1331,25 @@ mod tests {
         assert!(!roots.is_scratch("/Users/alex/proj/.claude/skills/x/SKILL.md"));
         assert!(roots.is_scratch("/Users/alex/proj/.claude/worktrees/agent-1/notes.txt"));
         assert!(!roots.is_scratch("/tmpfoo/a.md"), "prefix is by folder, not by letters");
+    }
+
+    #[test]
+    fn output_the_apps_own_meeting_files_are_witness_e_under_the_delivering_turn() {
+        let dir = Dir::new("output-app");
+        let brief = dir.file("brief.md", "**Acme pricing review · 12 October 2026**");
+        let transcript = dir.file("transcript.md", "# Transcript");
+        let store = OutputStore::new(dir.0.join("output"));
+        let rows: Vec<WriteRow> = [&brief, &transcript]
+            .iter()
+            .map(|p| WriteRow::witnessed(format!("app:turn_9:{p}"), "thr_out", Some("turn_9"), p, Actor::Rich, WriteSource::App, 5))
+            .collect();
+        assert_eq!(store.append("thr_out", &rows).unwrap().len(), 2);
+        assert_eq!(serde_json::to_value(WriteSource::App).unwrap(), serde_json::json!("app"));
+        let entries = project("thr_out", &store.read("thr_out").unwrap().rows);
+        let mut names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["brief.md", "transcript.md"]);
+        assert!(entries.iter().all(|e| e.turn_id.as_deref() == Some("turn_9") && e.source == WriteSource::App && e.exists));
     }
 
     #[test]

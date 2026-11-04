@@ -7,6 +7,8 @@ import subprocess
 import time
 
 APP = "richos/app/"
+# Vendored third-party source (`.richos/vendored-material`): upstream's code, linted upstream.
+THIRD_PARTY = APP + "third-party/"
 
 
 class Refusal(RuntimeError):
@@ -77,7 +79,7 @@ def tracked(root):
 
 def classify(path):
     """The inventory row for one repository-relative path, or None when it is not scanned."""
-    if not path.startswith(APP):
+    if not path.startswith(APP) or path.startswith(THIRD_PARTY):
         return None
     p = Path(path)
     if p.suffix not in {".sh", ".rs", ".js"}:

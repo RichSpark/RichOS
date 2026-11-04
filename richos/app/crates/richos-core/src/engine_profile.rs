@@ -150,6 +150,12 @@ pub struct EngineProfile {
     /// nothing is set: the skill tells the CEO it watched the pictures only. Resolved by the shell
     /// because this crate does not depend on `richos-voice` (no native audio here).
     pub speech_model: Option<PathBuf>,
+    /// **The corpus whose company meeting folders this lease may read** (Granola PRD V4, "Notes
+    /// and history through Rich"). Set by the shell on the conversation lease; with a company
+    /// scope, [`Self::configure`] adds that company's `companies/<id>/evidence/meetings` (only
+    /// when it exists) to the read roots and describes its layout. Never another company's
+    /// folder. `None` everywhere else.
+    pub meetings_corpus: Option<PathBuf>,
     /// **The model each session starts on** (the CEO's §119, 2026-10-10): read by
     /// [`Self::prepare`] from `config.json` in the data directory, so every lease spawn sees the
     /// setting as it is at that moment. `native.rs` gives the conversation lease (Rich) `rich`
@@ -710,7 +716,7 @@ impl EngineProfile {
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None, codex_root:crate::codex_bridge::root(),
-                  claude_account: None, token_sink: None, speech_model: None,
+                  claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None,
                   lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
         write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
         Ok(profile)
@@ -758,6 +764,13 @@ impl EngineProfile {
     pub fn attachments_folder(&self) -> Option<PathBuf> {
         let (_, thread) = self.work_scope.as_ref()?;
         Some(crate::attachments::conversation_folder(self.state.parent()?, thread))
+    }
+
+    /// This company's meeting folder, when the lease was given a corpus and the folder exists.
+    pub fn meetings_folder(&self) -> Option<PathBuf> {
+        let (entity, _) = self.work_scope.as_ref()?;
+        let zone = crate::meeting_notes::meeting_zone(self.meetings_corpus.as_ref()?, Some(entity));
+        zone.is_dir().then_some(zone)
     }
 
     pub fn scope_to(&mut self, binding: &crate::entity::ThreadBinding) -> Result<(), RuntimeError> {
@@ -983,10 +996,12 @@ impl EngineProfile {
         // This native option is variadic. One occurrence preserves every root;
         // repeated occurrences can replace the earlier list in the CLI parser.
         let attachments = self.attachments_folder();
+        let meetings = self.meetings_folder();
         let mut read_roots = repos.clone();
         if self.work_scope.is_some() {
             read_roots.push(self.target_state());
             read_roots.extend(attachments.iter().cloned());
+            read_roots.extend(meetings.iter().cloned());
             // Dedicated channels belong to this permanent conversation only.
             // Scoped tools use the shared writer; no session sees another chat's
             // reply journals through a broad legacy-folder grant.
@@ -998,6 +1013,9 @@ impl EngineProfile {
         // Read-only inspectors inherit exactly this company's/conversation's
         // host-selected folders. A path in a model's brief is not a grant.
         command.env("RICHOS_APP_READ_ROOTS", serde_json::to_string(&read_roots).unwrap());
+        if let Some(zone) = &meetings {
+            command.arg("--append-system-prompt").arg(crate::meeting_notes::folder_description(zone));
+        }
         command.arg("--plugin-dir").arg(&self.plugin)
             .args(["--permission-mode", "bypassPermissions"])
             .arg("--settings").arg(self.lease_settings().to_string())

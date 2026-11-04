@@ -209,6 +209,8 @@ class Scope(unittest.TestCase):
         self.assertIsNone(load_rules.language_of(APP + "ui/tests/fixtures/stalled-host-preload.js"))
         self.assertIsNone(load_rules.language_of(APP + "ui/main.js"))
         self.assertIsNone(load_rules.language_of(APP + "scripts/lint.sh"))
+        # Vendored third-party source is somebody else's code, linted by its upstream.
+        self.assertIsNone(load_rules.language_of(APP + "third-party/qdrant-edge/src/segment/x.rs"))
         self.assertEqual(load_rules.language_of(APP + "ui/tests/lib/harness.js"), "javascript")
 
 

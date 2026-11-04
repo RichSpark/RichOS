@@ -26,8 +26,12 @@ KEYS = (
     'GRADLE_USER_HOME',
     'RICHOS_ENGINE_CHECK_PROOF_DIR',
     'RICHOS_CAMPAIGN_PARENT',
+    'RICHOS_SEARCH_DOCUMENTS_ROOT',
 )
 RESOLVED = 'RICHOS_MACHINE_SETTINGS_RESOLVED'
+# The CEO's search folder is read by the app's own search service and handed to no child
+# process, gate or worker (search PRD v3.1): environment() and `env` leave it out.
+NOT_FORWARDED = ('RICHOS_SEARCH_DOCUMENTS_ROOT',)
 
 # NUMBERS, NOT PATHS, AND NEVER IN .env. Every reader of `.env`, the engine the app
 # has installed included, refuses a key it does not know (`parse` below), so a number written
@@ -143,11 +147,16 @@ def limit(key, default, environment=None, home=None):
 
 def apply():
     os.environ.update(environment())
+    # environment() leaves these out; an inherited copy must not survive either.
+    for key in NOT_FORWARDED:
+        os.environ.pop(key, None)
 
 
 def environment(environment=None, home=None):
     env = dict(os.environ if environment is None else environment)
     env.update(load(env, home))
+    for key in NOT_FORWARDED:
+        env.pop(key, None)
     env[RESOLVED] = '1'
     return env
 
@@ -281,9 +290,12 @@ def main():
         if args.command == 'values':
             print(json.dumps({**load(), RESOLVED: '1'}))
         elif args.command == 'env':
-            values = load()
+            values = {key: value for key, value in load().items() if key not in NOT_FORWARDED}
             for key, value in {**values, RESOLVED: '1'}.items():
                 print(f'export {key}={shlex.quote(value)}')
+            # A shell that already exported one of these keeps it unless it is unset here.
+            for key in NOT_FORWARDED:
+                print(f'unset {key}')
             if args.array:
                 print('RICHOS_MACHINE_ENV=(' + ' '.join(shlex.quote(key+'='+value) for key,value in {**values, RESOLVED: '1'}.items()) + ')')
         elif args.command == 'show':

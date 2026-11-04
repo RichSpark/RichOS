@@ -23,6 +23,16 @@ class Inputs(unittest.TestCase):
                 manifest.write_text(original.replace('unused_must_use="warn"', ''))
                 self.assertNotEqual(before, rust.lint_rules(root))
 
+    def test_vendored_third_party_manifest_is_not_a_lint_rule(self):
+        with tempfile.TemporaryDirectory(prefix='lint-manifest-') as tmp:
+            root = Path(tmp)
+            path = 'richos/app/third-party/qdrant-edge/Cargo.toml'
+            manifest = root / path
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text('[package]\nname="qdrant-edge"\n')
+            with patch('rust.tracked', return_value=[path]):
+                self.assertEqual(rust.lint_rules(root), {"toolchain-default-diagnostics": "blocking-count-ceiling"})
+
     def test_skipped_suite_is_not_current_fast_proof(self):
         with tempfile.TemporaryDirectory(prefix='lint-receipt-') as tmp:
             path = Path(tmp) / 'receipt.json'

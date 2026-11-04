@@ -32,7 +32,7 @@ to query current grant status (architecture §5.2). So:
 
 - **Verified on this Mac WITHOUT any grant:** everything except the live OS tap — the companion
   launches, writes `session.json` at capture START, opens the WAV, writes `health.ndjson`, mixes the
-  frozen L/R channels, and produces a valid contract directory that **P1 transcribes into a
+  frozen L/R channels and produces a valid contract directory that **P1 transcribes into a
   speaker-attributed `transcript.md`** (see "Verification" below). This is proven via the headless
   `ingest` path, which runs the *same* `SessionWriter`/`ChannelMixer`/`WavWriter` code the live
   capture uses.
@@ -60,6 +60,13 @@ richos-companion ingest --stereo <wav> [--zone DIR] [--started-at MS]
 richos-companion ingest --mic <monoWav> --system <monoWav> [--zone DIR]
     Headless: push a pre-made sample through the REAL contract writer (no grant) → a valid session
     dir the P1 pipeline transcribes. This is the on-Mac proof of the contract + handoff.
+
+richos-companion watch [--exclude-pid N]... [--exclude-bundle ID]... [--poll S] [--trace]
+    Report OTHER processes' microphone use as JSON lines (Core Audio's per-process
+    kAudioProcessPropertyIsRunningInput; no permission, no device opened). The app's meeting
+    prompts and end-of-call detection read it (Granola PRD V4). RichOS's own voice/dictation and
+    the capture process are excluded by the caller. Exits when stdin closes, so it dies with the
+    app that started it. --trace adds every process's input/output flags, for measurement only.
 ```
 
 Drop zone resolves exactly as the pipeline's `config.js#dropZone` does — `$RICHOS_DROP_ZONE`, else
@@ -72,8 +79,15 @@ resolved path and which rule produced it.
 
 ```
 swift build
-swift test        # 36 deterministic unit tests: channel mapping, mix/failover, contract shape,
-                  # WAV, coordination parsing, drop-zone resolution + the in-repo refusal
+swift test        # deterministic unit tests: channel mapping, mix/failover, contract shape, WAV,
+                  # coordination parsing, drop-zone resolution + the in-repo refusal, the
+                  # microphone-activity tracker behind `watch`
+```
+
+The proof selector's seat for this package is `richos/app/scripts/companion-macos.test.sh`: the
+unit tests (it reads the passing count back) and `watch`'s exit-on-stdin-close contract.
+
+```
 ```
 
 ## Reliability model (matches the shared guarantees, §6)
@@ -83,10 +97,10 @@ swift test        # 36 deterministic unit tests: channel mapping, mix/failover, 
 - **In-call health (§6.2):** `health.ndjson`, one row per second — per-channel peak/RMS, byte growth,
   tap/mic liveness, level, problems.
 - **Outside watchdog (§6.3):** the companion holds its own 1 Hz timer; **no byte growth for 15 s**
-  raises a loud alarm (stderr + macOS notification) — catches a stalled tap, a device change, or a
+  raises a loud alarm (stderr + macOS notification) — catches a stalled tap, a device change or a
   **revoked System Audio Recording permission** (which macOS gives no query API for).
 - **Mic-vs-tap failover (§6.4):** if one source stalls while the other is live, the writer silence-
-  fills the dead side and keeps the live side recording, and alarms — it never freezes the whole
+  fills the dead side and keeps the live side recording and alarms — it never freezes the whole
   recording. (`MixDecision`, unit-tested.)
 - **Recoverable audio (§6.5):** the WAV is fsync'd and its RIFF/data size headers rewritten every
   second, so a crash loses at most ~1 s and the on-disk file is always a decodable prefix.
@@ -107,7 +121,7 @@ Single-part + continuous-write-with-periodic-fsync is exactly the companion reco
 §6.5 describes ("continuous write … worst case one chunk"). Multi-part Opus rolling (for
 belt-and-suspenders part isolation) is a clean later refinement if the pipeline's concat step is
 extended to a PCM-friendly container; it is **not** required for the contract or the reliability
-guarantee, and doing it now would break the frozen pipeline.
+guarantee and doing it now would break the frozen pipeline.
 
 ## Verification (run on this Mac, 2026-08-24)
 
