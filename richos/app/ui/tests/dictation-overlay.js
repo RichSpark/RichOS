@@ -496,6 +496,13 @@ async function main() {
         await say(page,"dictation-menu",make("error",{failure}));
         assert((await text(page,'.rp-body')).includes("Your original text hasn't changed"),failure+" preserves original");
         assertEqual(await page.locator('[data-act="writing-replace"]').count(),0,failure+" offers no write");
+        assert(await page.locator('[data-act="writing-cancel"]').isEnabled(),failure+" has a way back to the original app");
+        const retry=page.locator('[data-act="writing-retry"]');
+        assertEqual(await retry.count(),["empty","too-long"].includes(failure)?0:1,failure+" offers only a meaningful explicit retry");
+        if(await retry.count()) assert(await retry.isEnabled(),failure+" retry is usable");
+        const accounts=page.locator('[data-act="writing-accounts"]');
+        assertEqual(await accounts.count(),["quota","unavailable"].includes(failure)?1:0,failure+" offers account guidance only when relevant");
+        if(await accounts.count()) assert(await accounts.isEnabled(),failure+" account guidance is usable");
       }
       const original="Business paragraph. ".repeat(550)+"ORIGINAL END";
       const proposal="Revised paragraph. ".repeat(550)+"REVISION END";
