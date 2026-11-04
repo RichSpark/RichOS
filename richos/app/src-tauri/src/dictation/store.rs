@@ -27,6 +27,13 @@ pub const LOCK_NAME: &str = ".dictation.json.lock";
 #[serde(rename_all="camelCase")]
 pub struct WritingConsent { pub account: String, pub destination: String }
 
+// Optional cloud permission must fail closed without disabling local speech.
+// Unlike a dictionary, an invalid grant has no user-authored content to retain.
+fn optional_consent<'de,D:serde::Deserializer<'de>>(input:D)->Result<Option<WritingConsent>,D::Error> {
+    let value=serde_json::Value::deserialize(input)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -57,7 +64,7 @@ pub struct Settings {
     /// not disable ordinary dictation or be erased by an unrelated key change.
     pub vocabulary: serde_json::Value,
     pub live_preview: bool,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(default,deserialize_with="optional_consent",skip_serializing_if="Option::is_none")]
     pub writing_consent: Option<WritingConsent>,
 }
 
@@ -166,6 +173,23 @@ pub fn lock(data_dir: &Path) -> Result<std::fs::File, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn malformed_optional_writing_permission_cannot_disable_local_dictation() {
+        let data=dir("invalid-writing-consent");
+        std::fs::create_dir_all(&data).unwrap();
+        for invalid in [serde_json::json!({"account":"first"}),serde_json::json!(["invalid"]),serde_json::json!("invalid"),serde_json::json!(false)] {
+            let raw=serde_json::json!({"on":true,"key":5,"model":"small.en","writingConsent":invalid});
+            std::fs::write(path(&data),raw.to_string()).unwrap();
+            let settings=read(&data).expect("Optional writing permission must not disable local speech");
+            assert!(settings.on);
+            assert_eq!(settings.key(),5);
+            assert_eq!(settings.model,"small.en");
+            assert_eq!(settings.writing_consent,None,"Invalid optional data never grants external access");
+            let saved=update(&data,|s|s.key=4).unwrap();
+            assert!(saved.on && saved.writing_consent.is_none());
+        }
+        std::fs::remove_dir_all(data).unwrap();
+    }
     #[test]
     fn consent_is_account_bound_preserved_by_other_settings_and_revocable() {
         let data=dir("writing-consent");
