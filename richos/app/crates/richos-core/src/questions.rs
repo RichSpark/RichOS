@@ -332,14 +332,11 @@ impl Store {
             None
         };
         let result = f(&mut data)?;
-        if write
-            && before.as_deref()
-                != Some(
-                    serde_json::to_vec(&data)
-                        .map_err(|e| e.to_string())?
-                        .as_slice(),
-                )
-        {
+        if write {
+            // Reuse the canonical bytes already needed for the no-op comparison.
+            // Extra provenance fields must not add unbuffered per-field file writes.
+            let after = serde_json::to_vec(&data).map_err(|e| e.to_string())?;
+            if before.as_deref() == Some(after.as_slice()) { return Ok(result); }
             let temp = self.directory.join(format!("{}.new", id()));
             let saved = (|| -> Result<()> {
                 let mut file = OpenOptions::new()
@@ -347,7 +344,7 @@ impl Store {
                     .write(true)
                     .open(&temp)
                     .map_err(|e| e.to_string())?;
-                serde_json::to_writer(&mut file, &data).map_err(|e| e.to_string())?;
+                file.write_all(&after).map_err(|e| e.to_string())?;
                 file.write_all(b"\n").map_err(|e| e.to_string())?;
                 file.sync_all().map_err(|e| e.to_string())?;
                 std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
