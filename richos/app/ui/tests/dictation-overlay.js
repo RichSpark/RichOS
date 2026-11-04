@@ -59,8 +59,8 @@ const LINES = {
   "voice-still-listening": "Voice mode is still listening, so I didn't start. Tap F1 again in a moment.",
 };
 
-async function open(browser, url, theme, reduced) {
-  const page = await browser.newPage({ viewport: { width: 900, height: 400 } });
+async function open(browser, url, theme, reduced, dimensions = {}) {
+  const page = await browser.newPage({ viewport: { width: 900, height: 400 }, screen: {width:900,height:400}, ...dimensions });
   page.__errors = [];
   page.on("pageerror", (e) => page.__errors.push(String(e)));
   page.on("console", (m) => { if (m.type() === "error") page.__errors.push("console: " + m.text()); });
@@ -139,6 +139,36 @@ const BLACK = { r: 0, g: 0, b: 0, a: 1 };
 async function main() {
   const run = createRun("the dictation bar, the words' flight and the menu bar menu");
   const browser = await loadPlaywright().webkit.launch();
+
+  await run.check("native overlays grow back after a small result or menu without a viewport sizing loop", async () => {
+    const dimensions={viewport:{width:760,height:140},screen:{width:1680,height:1050}};
+    const page=await open(browser,BAR,"dark",true,dimensions);
+    // Playwright setViewportSize also resets its emulated screen dimensions.
+    // A native content-window resize leaves the desktop unchanged. Keep those
+    // two inputs independent here: https://playwright.dev/docs/api/class-page#page-set-viewport-size
+    await page.evaluate(()=>Object.defineProperty(window.screen,"availWidth",{value:1680}));
+    const listening=bar("listening",{destination:"TextEdit",vocabulary:"Example Company",preview:"Please send the revised forecast."});
+    await say(page,"dictation-bar",listening);
+    const measured=()=>page.evaluate(()=>window.RichDictationBar.layout());
+    const first=await measured();
+    assert(first.w>760,"recording may grow beyond the previous small native window");
+    await page.setViewportSize({width:first.w,height:first.h});
+    assertEqual((await measured()).w,first.w,"the desktop bound converges after native resize");
+    await say(page,"dictation-bar",bar("writing",{seq:8}));
+    const writing=await measured();
+    await page.setViewportSize({width:writing.w,height:writing.h});
+    await say(page,"dictation-bar",{...listening,seq:9});
+    assertEqual((await measured()).w,first.w,"a short result cannot constrain the next recording");
+    await page.close();
+    const menu=await open(browser,MENU,"dark",true,{viewport:{width:300,height:500},screen:{width:1680,height:1050}});
+    await menu.evaluate(()=>Object.defineProperty(window.screen,"availWidth",{value:1680}));
+    await say(menu,"dictation-menu",{seq:1,on:true,recovery:{text:"The complete draft.",destination:"Mail",completedMs:Date.now(),expiresMs:Date.now()+1800000}});
+    const panel=await menu.evaluate(()=>window.RichDictationMenu.size());
+    assert(panel.w>300,"recovery grows beyond a previously narrow menu");
+    await menu.setViewportSize({width:panel.w,height:panel.h});
+    assertEqual((await menu.evaluate(()=>window.RichDictationMenu.size())).w,panel.w);
+    await menu.close();
+  });
 
   await run.check("preview stays provisional and quiet for VoiceOver; Finish and Cancel reach the owning recording", async () => {
     const page = await open(browser, BAR);

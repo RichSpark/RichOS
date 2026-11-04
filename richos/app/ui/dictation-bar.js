@@ -220,6 +220,10 @@ window.RichDictationBar = (function () {
 
   /// The window this view needs, the orb's center and Fix it's box, all in window points.
   function layout() {
+    // This page lives in a content-sized native window. Its old viewport is
+    // not the desktop bound or a small result could permanently shrink it.
+    var width = window.screen.availWidth || window.screen.width || 1024;
+    document.documentElement.style.setProperty("--dictation-screen-width", width + "px");
     var pill = document.querySelector("#dhud > *");
     if (!pill) return null;
     var out = {

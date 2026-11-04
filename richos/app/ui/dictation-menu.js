@@ -137,6 +137,9 @@ window.RichDictationMenu = (function () {
   }
 
   function size() {
+    // Recovery must grow from the menu's previous small native viewport.
+    var width = window.screen.availWidth || window.screen.width || 1024;
+    document.documentElement.style.setProperty("--dictation-screen-width", width + "px");
     var m = document.getElementById("sbMenu");
     var r = m.getBoundingClientRect();
     return { seq: seq, w: Math.ceil(r.width + PAD_X * 2), h: Math.ceil(r.height + PAD_BOTTOM) };
