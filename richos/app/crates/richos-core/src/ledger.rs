@@ -836,6 +836,7 @@ impl HistoryHealth {
 type ReadObserver = std::sync::Arc<dyn Fn(&Event) + Send + Sync>;
 
 pub struct Ledger {
+    swearmeter: crate::swearmeter_ledger::Projection,
     path: PathBuf,
     file: Option<File>,
     read_observer: Option<ReadObserver>,
@@ -871,6 +872,7 @@ impl Ledger {
     pub(crate) fn read_copy(&self) -> Self {
         Self {
             path: self.path.clone(), file: None, read_observer: None,
+            swearmeter: self.swearmeter.clone(),
             threads: self.threads.clone(), turns: self.turns.clone(), actions: self.actions.clone(),
             handoff_summaries: self.handoff_summaries.clone(),
             scope_violations: self.scope_violations.clone(), skipped: self.skipped.clone(),
@@ -885,7 +887,7 @@ impl Ledger {
 
     pub(crate) fn apply_read_event(&mut self, event: Event) {
         let reconcile = matches!(event, Event::ThreadEntityBound { .. });
-        self.apply(event);
+        self.fold(event);
         if reconcile { self.reconcile_scope(); }
     }
 
@@ -896,6 +898,7 @@ impl Ledger {
             std::fs::create_dir_all(dir)?;
         }
         let mut ledger = Ledger {
+            swearmeter: Default::default(),
             path: path.clone(),
             file: Some(OpenOptions::new().create(true).append(true).read(true).open(&path)?),
             read_observer: None,
@@ -983,7 +986,7 @@ impl Ledger {
             match serde_json::from_str::<Event>(line) {
                 Ok(event) => {
                     self.records_applied += 1;
-                    self.apply(event);
+                    self.fold(event);
                 }
                 Err(_) => {
                     let record = Self::classify_skip(line_no, line);
@@ -1056,6 +1059,14 @@ impl Ledger {
             h.damaged,
             h.ambiguous
         );
+    }
+
+    /// The maintained count is independent of whether the home display is enabled.
+    pub fn swearmeter(&self) -> &crate::swearmeter_ledger::Projection { &self.swearmeter }
+
+    fn fold(&mut self, event: Event) {
+        self.swearmeter.observe(&event);
+        self.apply(event);
     }
 
     /// Fold one event into the in-memory projection. Pure; no I/O.
@@ -1593,7 +1604,7 @@ impl Ledger {
         if sync {
             file.sync_data()?;
         }
-        self.apply(event.clone());
+        self.fold(event.clone());
         if let Some(observer) = &self.read_observer {
             observer(&event);
         }

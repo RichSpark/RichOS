@@ -138,6 +138,8 @@ pub mod spine;
 pub mod spoken;
 /// Always-maintained local lexical statistics; display is a separate preference.
 pub mod swearmeter;
+pub mod swearmeter_ledger;
+pub mod swearmeter_questions;
 pub mod staging;
 pub mod steering;
 pub mod stream;

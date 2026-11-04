@@ -126,12 +126,13 @@ pub fn call(path: &Path, name: &str, args: Value) -> Result<Value, String> {
                 );
             }
             let request: AnswerRequest = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let result = store.answer(
+            let result = store.answer_from(
                 &s.entity_id,
                 &s.thread_id,
                 request,
                 &scope.answer_method,
                 &scope.surface,
+                (None, crate::questions::AnswerOrigin::Conversation),
             )?;
             // Limit in-turn delivery to the resolved question's set. Other queued sets
             // and late answers still enter the durable conversation intake.
