@@ -133,7 +133,7 @@ pub fn on_tool_message(message: &ToolMessage, voice: &dyn VoiceMode, link: &Link
                 if let Some(publication) = voice.vocabulary() { link.publish_vocabulary(0, publication); }
             }
         }
-        ToolMessage::Key { .. } | ToolMessage::Cleaner { .. } => {}
+        ToolMessage::Key { .. } | ToolMessage::Cleaner { .. } | ToolMessage::Writing { .. } => {}
         ToolMessage::ComeForward { sheet } => voice.come_forward(*sheet),
         ToolMessage::SettingsChanged => voice.settings_changed(),
         ToolMessage::SelectVocabulary { data_dir, company } => {

@@ -173,7 +173,10 @@ impl Provider {
                 .env("CLAUDE_CODE_MAX_RETRIES","0")
                 .env("CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK","1")
                 .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC","1")
-                .env("CLAUDE_CODE_ENABLE_TELEMETRY","0");
+                .env("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST","1")
+                .env_remove("CLAUDE_CODE_ENABLE_TELEMETRY")
+                .env_remove("CLAUDE_CODE_ENABLE_FEEDBACK_SURVEY_FOR_OTEL")
+                .env("DISABLE_TELEMETRY","1");
             // This action is consented for the current Claude subscription,
             // never an inherited API key or alternate processing endpoint.
             let names:Vec<_>=std::env::vars_os().map(|(key,_)|key)
@@ -244,6 +247,7 @@ impl Live {
                 Ok(frame)=>frame?,Err(mpsc::RecvTimeoutError::Timeout)=>continue,
                 Err(_)=>return Err("Classifier disconnected".into()),
             };
+            if self.private_text && crate::native::usage_limit_signal(&frame).is_some() {return Err("writing-quota".into())}
             if !self.tools && frame["type"]=="system" && frame["subtype"]=="init" && frame["tools"].as_array().is_some_and(|tools|!tools.is_empty()) {
                 return Err("Classifier unexpectedly has tools".into())
             }

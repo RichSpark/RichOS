@@ -46,6 +46,7 @@ pub enum Target {
 /// their device cannot install from. (Only the phone one appears here; the Mac is installed from
 /// `tailscale.com/download/mac`, which is the page Tailscale's own documentation sends people to.)
 const ALLOWED: &[(&str, Target)] = &[
+    ("www.anthropic.com/legal/privacy",Target::Page("https://www.anthropic.com/legal/privacy")),
     ("claude.ai/new#settings/usage", Target::Page("https://claude.ai/new#settings/usage")),
     // The setup sheet's "sign up there first and pick the Ultra tier" link (CEO, 2026-10-08).
     ("claude.com/pricing", Target::Page("https://claude.com/pricing")),
@@ -249,8 +250,10 @@ mod tests {
             resolve("github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md"),
             Some(Target::Page("https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md"))
         );
-        // Eight destinations, the changelog under both of its addresses.
-        assert_eq!(ALLOWED.len(), 9, "the allowlist grew or shrank without this test being told");
+        // Writing consent discloses the fixed privacy-policy destination.
+        assert_eq!(resolve("www.anthropic.com/legal/privacy"), Some(Target::Page("https://www.anthropic.com/legal/privacy")));
+        // Nine destinations, the changelog under both of its addresses.
+        assert_eq!(ALLOWED.len(), 10, "the allowlist grew or shrank without this test being told");
     }
 
     /// **AN ADDRESS OUTSIDE THE LIST IS REFUSED** — the check the brief asks for, over the near

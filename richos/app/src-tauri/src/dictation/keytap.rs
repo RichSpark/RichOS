@@ -96,6 +96,7 @@ pub fn accessibility_allowed() -> bool {
 /// What the tap tells the tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TapEvent {
+    WritingEscape,
     /// His key went down: start or finish a dictation.
     Toggle,
     /// macOS disabled the tap; it has already been re-enabled.
@@ -115,6 +116,7 @@ fn now_ms() -> u64 {
 }
 
 struct Context {
+    writing_escape: AtomicBool,
     tracking_destination: AtomicBool,
     navigated: Arc<AtomicBool>,
     /// Cleared by `KeyTap::drop`. The tap thread runs its loop in slices while this is set, so a
@@ -173,6 +175,10 @@ extern "C" fn callback(_proxy: *mut c_void, etype: u32, event: CGEventRef, user:
         }
         // SAFETY: the live event of this callback.
         let Some(read) = (unsafe { read_event(etype, event) }) else { return false };
+        if ctx.writing_escape.load(Ordering::Relaxed) && matches!(read,KeyEvent::Key {code:53,..}) {
+            if matches!(read,KeyEvent::Key {down:true,repeat:false,..}) {ctx.tx.send(TapEvent::WritingEscape).ok();}
+            return true;
+        }
         if ctx.tracking_destination.load(Ordering::Relaxed)
             && matches!(read, KeyEvent::Key { code: 48, down: true, .. })
         {
@@ -216,6 +222,7 @@ impl KeyTap {
     /// is what it does without Accessibility.
     pub fn start(key: u8, tx: Sender<TapEvent>) -> Result<KeyTap, String> {
         let ctx = Arc::new(Context {
+            writing_escape: AtomicBool::new(false),
             tracking_destination: AtomicBool::new(false),
             navigated: Arc::new(AtomicBool::new(false)),
             running: AtomicBool::new(true),
@@ -276,6 +283,8 @@ impl KeyTap {
         self.ctx.tracking_destination.store(on, Ordering::Release);
         self.ctx.navigated.clone()
     }
+
+    pub fn writing_escape(&self,on:bool) {self.ctx.writing_escape.store(on,Ordering::Release);}
 
     /// Key capture: report the next F-key down as `Captured` (for [`CAPTURE_FOR_MS`] at most),
     /// or stop waiting.

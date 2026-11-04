@@ -15,7 +15,7 @@ pub enum Mode { Cleanup, Rewrite }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all="kebab-case")]
-pub enum Failure { Empty, TooLong, Canceled, Timeout, Quota, Offline, Unavailable, Invalid }
+pub enum Failure { Empty, Instruction, TooLong, Canceled, Timeout, Quota, Offline, Unavailable, Invalid }
 
 /// Numeric endpoints only. Full text remains in the calling operation's memory.
 pub struct Revision {
@@ -26,17 +26,22 @@ pub struct Revision {
 }
 
 pub fn validate(mode:Mode, original:&str, instruction:&str)->Result<(),Failure> {
-    if original.trim().is_empty() || mode==Mode::Rewrite && instruction.trim().is_empty() {return Err(Failure::Empty)}
+    if original.trim().is_empty() {return Err(Failure::Empty)}
+    if mode==Mode::Rewrite && instruction.trim().is_empty() {return Err(Failure::Instruction)}
     if original.chars().count().saturating_add(instruction.chars().count())>MAX_CHARACTERS {return Err(Failure::TooLong)}
     Ok(())
 }
 
-pub fn revise(bin:&Path, profile:&EngineProfile, mode:Mode, original:&str, instruction:&str,
-    canceled:&AtomicBool)->Result<Revision,Failure> {
+pub struct Request<'a> {pub mode:Mode,pub original:&'a str,pub instruction:&'a str}
+
+pub fn revise(bin:&Path, profile:&EngineProfile, request:Request<'_>, canceled:&AtomicBool,
+    budget:Duration)->Result<Revision,Failure> {
+    let Request {mode,original,instruction}=request;
     validate(mode,original,instruction)?;
     let began=Instant::now();
-    let deadline=began+DEADLINE;
+    let deadline=began+budget.min(DEADLINE);
     if canceled.load(Ordering::Acquire) {return Err(Failure::Canceled)}
+    if Instant::now()>=deadline {return Err(Failure::Timeout)}
     let mut live=Provider::new(bin,profile,"app/writing.md","writing").private_text().start()
         .map_err(|_|Failure::Unavailable)?;
     let startup_ms=began.elapsed().as_millis() as u64;
@@ -77,7 +82,7 @@ mod tests {
 
     #[test]
     fn text_and_instruction_share_one_limit_without_truncation() {
-        assert_eq!(validate(Mode::Rewrite,"draft",""),Err(Failure::Empty));
+        assert_eq!(validate(Mode::Rewrite,"draft",""),Err(Failure::Instruction));
         assert_eq!(validate(Mode::Cleanup,&"a".repeat(MAX_CHARACTERS),""),Ok(()));
         assert_eq!(validate(Mode::Rewrite,&"a".repeat(MAX_CHARACTERS),"edit"),Err(Failure::TooLong));
         assert_eq!(answer(&json!({"result":"Proposal\n\n"})).unwrap(),"Proposal");
@@ -93,7 +98,8 @@ assert '--disable-slash-commands' in sys.argv
 assert sys.argv[sys.argv.index('--debug-file')+1]=='/dev/null'
 assert os.environ['CLAUDE_CODE_MAX_RETRIES']=='0'
 assert os.environ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']=='1'
-assert os.environ.get('CLAUDE_CODE_ENABLE_TELEMETRY')=='0'
+assert os.environ.get('CLAUDE_CODE_ENABLE_TELEMETRY') is None
+assert os.environ.get('DISABLE_TELEMETRY')=='1'
 open('argv.json','w').write(json.dumps(sys.argv))
 for line in sys.stdin:
     payload=json.loads(json.loads(line)['message']['content'])
@@ -102,7 +108,7 @@ for line in sys.stdin:
     print(json.dumps({'type':'assistant','message':{'model':'claude-haiku-5-5','content':[{'type':'text','text':result}]}}),flush=True)
     print(json.dumps({'type':'result','is_error':False,'result':result}),flush=True)
 "#);
-        let result=revise(&bin,&profile,Mode::Rewrite,"Review £36,000 by Monday.","Make this more polite.",&AtomicBool::new(false)).unwrap();
+        let result=revise(&bin,&profile,Request {mode:Mode::Rewrite,original:"Review £36,000 by Monday.",instruction:"Make this more polite."},&AtomicBool::new(false),DEADLINE).unwrap();
         assert_eq!(result.text,"Please review the £36,000 forecast by Monday.");
         let asked:Value=serde_json::from_str(&std::fs::read_to_string(profile.state.join("writing/asked.json")).unwrap()).unwrap();
         assert_eq!(asked,json!({"action":"rewrite","original":"Review £36,000 by Monday.","instruction":"Make this more polite."}));
@@ -116,7 +122,54 @@ for line in sys.stdin:
     #[test]
     fn cancellation_before_submission_starts_no_provider() {
         let (root,bin,profile,_)=fixture("");
-        assert!(matches!(revise(&bin,&profile,Mode::Cleanup,"draft","",&AtomicBool::new(true)),Err(Failure::Canceled)));
+        assert!(matches!(revise(&bin,&profile,Request {mode:Mode::Cleanup,original:"draft",instruction:""},&AtomicBool::new(true),DEADLINE),Err(Failure::Canceled)));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellation_stops_an_actual_request_and_reaps_its_provider() {
+        let (root,bin,profile,_)=fixture(r#"
+for line in sys.stdin:
+    open('submitted.pid.tmp','w').write(str(os.getpid()))
+    os.replace('submitted.pid.tmp','submitted.pid')
+    time.sleep(120) # Hang fixture; cancellation and child reaping decide the verdict.
+"#);
+        let marker=profile.state.join("writing/submitted.pid");
+        let stop=std::sync::Arc::new(AtomicBool::new(false));let canceled=stop.clone();
+        let worker=std::thread::spawn(move||revise(&bin,&profile,Request {mode:Mode::Cleanup,original:"Keep £36,000 and Monday.",instruction:""},&canceled,DEADLINE));
+        let guard=Instant::now()+Duration::from_secs(30);
+        // A finite hang guard, not a latency verdict: wait for actual submitted input.
+        while !marker.exists() {
+            if Instant::now()>=guard {panic!("The fixture never received its request")}
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid:i32=std::fs::read_to_string(marker).unwrap().parse().unwrap();
+        stop.store(true,Ordering::Release);
+        assert!(matches!(worker.join().unwrap(),Err(Failure::Canceled)));
+        assert_eq!(unsafe {libc::kill(pid,0)},-1,"The owned provider must be gone after cancellation");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_stalled_request_returns_timeout_without_retrying() {
+        let (root,bin,profile,_)=fixture(r#"
+for line in sys.stdin:
+    with open('requests','a') as log: log.write('request\n')
+    time.sleep(120) # The production deadline ends this child, not a success-path sleep.
+"#);
+        let result=revise(&bin,&profile,Request {mode:Mode::Cleanup,original:"No commitment before Friday.",instruction:""},&AtomicBool::new(false),DEADLINE);
+        assert!(matches!(result,Err(Failure::Timeout)));
+        assert_eq!(std::fs::read_to_string(profile.state.join("writing/requests")).unwrap(),"request\n");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_real_quota_signal_stops_without_switching_or_repeating() {
+        let (root,bin,profile,_)=fixture(r#"
+for line in sys.stdin:
+    print(json.dumps({'type':'rate_limit_event','rate_limit_info':{'status':'rejected'}}),flush=True)
+"#);
+        assert!(matches!(revise(&bin,&profile,Request {mode:Mode::Cleanup,original:"Keep the original.",instruction:""},&AtomicBool::new(false),DEADLINE),Err(Failure::Quota)));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

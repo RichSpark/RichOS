@@ -24,6 +24,10 @@ pub const FILE_NAME: &str = "dictation.json";
 pub const LOCK_NAME: &str = ".dictation.json.lock";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct WritingConsent { pub account: String, pub destination: String }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Dictation is on.
@@ -53,6 +57,8 @@ pub struct Settings {
     /// not disable ordinary dictation or be erased by an unrelated key change.
     pub vocabulary: serde_json::Value,
     pub live_preview: bool,
+    #[serde(skip_serializing_if="Option::is_none")]
+    pub writing_consent: Option<WritingConsent>,
 }
 
 impl Default for Settings {
@@ -69,6 +75,7 @@ impl Default for Settings {
             feature_key: None,
             vocabulary: serde_json::Value::Null,
             live_preview: false,
+            writing_consent: None,
         }
     }
 }
@@ -159,6 +166,18 @@ pub fn lock(data_dir: &Path) -> Result<std::fs::File, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn consent_is_account_bound_preserved_by_other_settings_and_revocable() {
+        let data=dir("writing-consent");
+        let binding=WritingConsent {account:"first".into(),destination:richos_core::writing::DESTINATION.into()};
+        update(&data,|s|s.writing_consent=Some(binding.clone())).unwrap();
+        update(&data,|s|s.live_preview=true).unwrap();
+        assert_eq!(read(&data).unwrap().writing_consent,Some(binding.clone()));
+        assert_ne!(binding,WritingConsent {account:"second".into(),destination:binding.destination.clone()});
+        update(&data,|s|s.writing_consent=None).unwrap();
+        assert_eq!(read(&data).unwrap().writing_consent,None);
+        std::fs::remove_dir_all(data).unwrap();
+    }
     use super::*;
 
     #[test]
