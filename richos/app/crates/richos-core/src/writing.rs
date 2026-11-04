@@ -1,0 +1,122 @@
+//! One explicit text-only revision, on the current account. No conversation,
+//! warm-up, automatic retry, tools or resident provider. The caller owns consent.
+use crate::{engine_profile::EngineProfile, request_classifier::Provider};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{path::Path, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
+
+pub const MAX_CHARACTERS: usize = 12_000;
+pub const DEADLINE: Duration = Duration::from_secs(10);
+pub const DESTINATION: &str = "https://api.anthropic.com";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="kebab-case")]
+pub enum Mode { Cleanup, Rewrite }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="kebab-case")]
+pub enum Failure { Empty, TooLong, Canceled, Timeout, Quota, Offline, Unavailable, Invalid }
+
+/// Numeric endpoints only. Full text remains in the calling operation's memory.
+pub struct Revision {
+    pub text: String,
+    pub startup_ms: u64,
+    pub response_ms: u64,
+    pub ready_to_result_ms: u64,
+}
+
+pub fn validate(mode:Mode, original:&str, instruction:&str)->Result<(),Failure> {
+    if original.trim().is_empty() || mode==Mode::Rewrite && instruction.trim().is_empty() {return Err(Failure::Empty)}
+    if original.chars().count().saturating_add(instruction.chars().count())>MAX_CHARACTERS {return Err(Failure::TooLong)}
+    Ok(())
+}
+
+pub fn revise(bin:&Path, profile:&EngineProfile, mode:Mode, original:&str, instruction:&str,
+    canceled:&AtomicBool)->Result<Revision,Failure> {
+    validate(mode,original,instruction)?;
+    let began=Instant::now();
+    let deadline=began+DEADLINE;
+    if canceled.load(Ordering::Acquire) {return Err(Failure::Canceled)}
+    let mut live=Provider::new(bin,profile,"app/writing.md","writing").private_text().start()
+        .map_err(|_|Failure::Unavailable)?;
+    let startup_ms=began.elapsed().as_millis() as u64;
+    let response=Instant::now();
+    let request=json!({"type":"user","message":{"role":"user","content":
+        json!({"action":mode,"original":original,"instruction":instruction}).to_string()}}).to_string();
+    let result=live.exchange(request,deadline,||canceled.load(Ordering::Acquire),answer);
+    let response_ms=response.elapsed().as_millis() as u64;
+    // Include the inherited owned-child cleanup in the visible deadline.
+    drop(live);
+    if canceled.load(Ordering::Acquire) {return Err(Failure::Canceled)}
+    if Instant::now()>=deadline {return Err(Failure::Timeout)}
+    let text=result.map_err(|error|match error.as_str() {
+        "writing-quota"=>Failure::Quota,"writing-offline"=>Failure::Offline,
+        "writing-invalid"=>Failure::Invalid,_=>Failure::Unavailable,
+    })?;
+    Ok(Revision {text,startup_ms,response_ms,ready_to_result_ms:began.elapsed().as_millis() as u64})
+}
+
+fn answer(frame:&Value)->Result<String,String> {
+    if frame["is_error"]==true {
+        let category=frame["subtype"].as_str().unwrap_or_default();
+        return Err(match category {
+            "error_rate_limit"|"rate_limit_error"=>"writing-quota",
+            "error_api_connection"|"api_connection_error"=>"writing-offline",
+            _=>"writing-invalid",
+        }.into())
+    }
+    let text=frame["result"].as_str().ok_or("writing-invalid")?;
+    if text.trim().is_empty() || text.chars().count()>MAX_CHARACTERS || text.contains('\0') {return Err("writing-invalid".into())}
+    Ok(text.trim_end_matches(['\r','\n']).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request_classifier::tests::fixture;
+
+    #[test]
+    fn text_and_instruction_share_one_limit_without_truncation() {
+        assert_eq!(validate(Mode::Rewrite,"draft",""),Err(Failure::Empty));
+        assert_eq!(validate(Mode::Cleanup,&"a".repeat(MAX_CHARACTERS),""),Ok(()));
+        assert_eq!(validate(Mode::Rewrite,&"a".repeat(MAX_CHARACTERS),"edit"),Err(Failure::TooLong));
+        assert_eq!(answer(&json!({"result":"Proposal\n\n"})).unwrap(),"Proposal");
+        assert!(answer(&json!({"result":""})).is_err());
+    }
+
+    #[test]
+    fn explicit_request_uses_only_exact_text_and_instruction_and_exits() {
+        let (root,bin,profile,_)=fixture(r#"
+assert sys.argv[sys.argv.index('--tools')+1]==''
+assert '--no-session-persistence' in sys.argv
+assert '--disable-slash-commands' in sys.argv
+assert sys.argv[sys.argv.index('--debug-file')+1]=='/dev/null'
+assert os.environ['CLAUDE_CODE_MAX_RETRIES']=='0'
+assert os.environ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']=='1'
+assert os.environ.get('CLAUDE_CODE_ENABLE_TELEMETRY')=='0'
+open('argv.json','w').write(json.dumps(sys.argv))
+for line in sys.stdin:
+    payload=json.loads(json.loads(line)['message']['content'])
+    open('asked.json','w').write(json.dumps(payload))
+    result='Please review the £36,000 forecast by Monday.'
+    print(json.dumps({'type':'assistant','message':{'model':'claude-haiku-5-5','content':[{'type':'text','text':result}]}}),flush=True)
+    print(json.dumps({'type':'result','is_error':False,'result':result}),flush=True)
+"#);
+        let result=revise(&bin,&profile,Mode::Rewrite,"Review £36,000 by Monday.","Make this more polite.",&AtomicBool::new(false)).unwrap();
+        assert_eq!(result.text,"Please review the £36,000 forecast by Monday.");
+        let asked:Value=serde_json::from_str(&std::fs::read_to_string(profile.state.join("writing/asked.json")).unwrap()).unwrap();
+        assert_eq!(asked,json!({"action":"rewrite","original":"Review £36,000 by Monday.","instruction":"Make this more polite."}));
+        let args:Vec<String>=serde_json::from_str(&std::fs::read_to_string(profile.state.join("writing/argv.json")).unwrap()).unwrap();
+        assert!(!args.iter().any(|a|a.contains("£36,000")),"User content never enters process arguments");
+        assert_eq!(args[args.iter().position(|a|a=="--system-prompt").unwrap()+1],std::fs::read_to_string(profile.engine.join("app/writing.md")).unwrap());
+        assert!(result.startup_ms<=result.ready_to_result_ms && result.response_ms<=result.ready_to_result_ms);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellation_before_submission_starts_no_provider() {
+        let (root,bin,profile,_)=fixture("");
+        assert!(matches!(revise(&bin,&profile,Mode::Cleanup,"draft","",&AtomicBool::new(true)),Err(Failure::Canceled)));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

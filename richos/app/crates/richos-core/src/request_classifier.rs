@@ -20,6 +20,7 @@ pub(crate) struct Live {
     model: Option<String>,
     /// Whether this launch may use tools (only [`Provider::writing`] gives it any).
     tools: bool,
+    private_text: bool,
 }
 impl Drop for Live {
     fn drop(&mut self) {
@@ -67,6 +68,7 @@ pub(crate) struct Provider {
     model: String,
     effort: &'static str,
     tools: &'static str,
+    private_text: bool,
 }
 
 impl RequestClassifier {
@@ -141,8 +143,12 @@ impl RequestClassifier {
 impl Provider {
     pub(crate) fn new(bin:&Path, profile:&EngineProfile, instructions:&'static str, folder:&'static str)->Self {
         Provider {bin:bin.to_path_buf(),profile:profile.clone(),instructions,folder,
-            model:HAIKU.into(),effort:"low",tools:""}
+            model:HAIKU.into(),effort:"low",tools:"",private_text:false}
     }
+
+    /// Explicit text assistance retains the existing login and tool-free launch,
+    /// with no automatic retries, diagnostics containing content or other traffic.
+    pub(crate) fn private_text(mut self)->Self { self.private_text=true; self }
 
     /// The same launch on `model` (a CLI alias) at high effort, with only the `tools` named.
     pub(crate) fn writing(mut self, model:&str, tools:&'static str)->Self {
@@ -162,6 +168,24 @@ impl Provider {
         command.args(crate::lease_commands::supervisor_args(&self.profile.engine,&state,&log)).arg(&self.bin);
         self.profile.configure(&mut command,&self.bin,&id,&folder.join("no-action-scope.json"));
         command.env_remove("CLAUDECODE");
+        if self.private_text {
+            command.args(["--disable-slash-commands","--debug-file","/dev/null","--max-turns","1"])
+                .env("CLAUDE_CODE_MAX_RETRIES","0")
+                .env("CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK","1")
+                .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC","1")
+                .env("CLAUDE_CODE_ENABLE_TELEMETRY","0");
+            // This action is consented for the current Claude subscription,
+            // never an inherited API key or alternate processing endpoint.
+            let names:Vec<_>=std::env::vars_os().map(|(key,_)|key)
+                .chain(command.get_envs().map(|(key,_)|key.to_owned())).collect();
+            for key in names {
+                let name=key.to_string_lossy();
+                if name.starts_with("ANTHROPIC_") || name.starts_with("OTEL_") ||
+                    matches!(name.as_ref(),"CLAUDE_CODE_USE_BEDROCK"|"CLAUDE_CODE_USE_VERTEX"|"CLAUDE_CODE_USE_FOUNDRY"|"CLAUDE_CODE_OAUTH_TOKEN") {
+                    command.env_remove(key);
+                }
+            }
+        }
         command.args(["-p","--model",&self.model,"--effort",self.effort,
             "--input-format","stream-json","--output-format","stream-json","--verbose",
             "--system-prompt",&standing,"--tools",self.tools,"--strict-mcp-config","--mcp-config",
@@ -199,7 +223,7 @@ impl Provider {
             }
         });
         Ok(Live {child,input:Some(input),frames,readers:vec![writer,reader],
-            model:(self.model==HAIKU).then(||self.model.clone()),tools:!self.tools.is_empty()})
+            model:(self.model==HAIKU).then(||self.model.clone()),tools:!self.tools.is_empty(),private_text:self.private_text})
     }
 
 }
@@ -229,6 +253,7 @@ impl Live {
                 model_seen=true;
             }
             if frame["type"]=="result" {
+                if self.private_text && frame["is_error"]==true { return answer(&frame); }
                 if !model_seen || frame["is_error"]!=false {return Err("Classifier failed".into())}
                 return answer(&frame);
             }
