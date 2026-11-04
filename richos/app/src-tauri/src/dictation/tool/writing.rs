@@ -237,9 +237,17 @@ impl Tool {
             }
             "writing-privacy"=>{crate::opener::open("www.anthropic.com/legal/privacy").ok();}
             "writing-replace"=>{
-                let Some(a)=self.assistance.as_ref().filter(|a|a.stage=="proposal") else{return};
-                let Some((anchor,proposal))=a.anchor.as_ref().zip(a.proposal.as_ref()) else{return};
-                let outcome=anchor.replace(proposal,super::v_code_on_main(&self.app),&AtomicBool::new(false));
+                if !self.assistance.as_ref().is_some_and(|a|a.stage=="proposal" && a.anchor.is_some() && a.proposal.is_some()) {return}
+                // A nonactivating panel still owns the keyboard. Return it before
+                // the single paste, then revalidate the target and source. The
+                // existing main-thread reply is a completion barrier, not a sleep.
+                self.close_menu();
+                let hidden=bar::ask_main(&self.app,||()).is_some();
+                let a=self.assistance.as_ref().unwrap();
+                timing(&self.version,json!({"id":a.id,"stage":"replacement_panel_hidden","completed":hidden}));
+                let outcome=if hidden {
+                    a.anchor.as_ref().unwrap().replace(a.proposal.as_ref().unwrap(),super::v_code_on_main(&self.app),&AtomicBool::new(false))
+                } else {Ok(insert::Replacement::CopyOnly)};
                 match outcome {
                     Ok(insert::Replacement::Replaced {text,anchor})=>{
                         if self.assistance.as_ref().is_some_and(|a|a.mode==Mode::Cleanup) {

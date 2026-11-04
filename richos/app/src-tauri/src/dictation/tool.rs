@@ -1255,6 +1255,7 @@ impl Tool {
             UiEvent::ItemClicked { item } => {
                 log::line("menu bar item pressed");
                 if self.menu.is_open() {
+                    self.cancel_assistance();
                     self.close_menu();
                 } else if self.menu_closed_at.is_some_and(|t| t.elapsed() < REOPEN_GUARD) {
                     // The click that took the keyboard from the menu: it stays closed.
@@ -1336,10 +1337,10 @@ impl Tool {
                 }
             }
             "close" => {
-                if self.menu.is_open() {
-                    if self.assistance.is_some() {self.cancel_assistance();}
-                    self.close_menu();
-                }
+                // A proposal is an explicit operation, ended by its identified
+                // Cancel/Escape action. Native blur can belong to our own hide
+                // before Replace, or the user checking/editing the destination.
+                if self.assistance.is_none() && self.menu.is_open() {self.close_menu();}
             }
             "mode" => {
                 let model = value.and_then(model_for_choice)?;
