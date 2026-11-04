@@ -132,7 +132,7 @@ window.RichDictationMenu = (function () {
       vocabulary + '<div class="sb-hr" role="separator"></div>' + recover +
       (msg.recording ? "" : '<div class="sb-hr" role="separator"></div>' +
         (msg.cleanupAvailable ? item("clean-up", "Clean up last dictation") : '<button class="sb-item is-unavail" type="button" role="menuitem" aria-disabled="true"><span class="sb-check"></span>Clean up last dictation<span class="sb-aside">Nothing to clean up</span></button>') + // richscribe-action: approved action names the last spoken passage.
-        item("rewrite", "Rewrite selected text")) +
+        (msg.on ? item("rewrite", "Rewrite selected text") : '<button class="sb-item is-unavail" type="button" role="menuitem" aria-disabled="true" data-act="rewrite"><span class="sb-check"></span>Rewrite selected text<span class="sb-aside">Turn RichScribe on</span></button>')) +
       '<div class="sb-hr" role="separator"></div>' +
       item("settings", "RichScribe settings…") +
       item("onoff", msg.on ? "Turn RichScribe off" : "Turn RichScribe on") +

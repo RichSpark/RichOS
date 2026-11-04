@@ -104,7 +104,7 @@ impl Tool {
         }
     }
     pub(super) fn begin_assistance(&mut self,mode:Mode) {
-        if matches!(self.session.phase(),Phase::Listening {..}|Phase::Writing) {return}
+        if matches!(self.session.phase(),Phase::Listening {..}|Phase::Writing) || mode==Mode::Rewrite && !self.settings.on {return}
         self.cancel_assistance();
         let (original,destination,anchor)=match mode {
             Mode::Cleanup=>{

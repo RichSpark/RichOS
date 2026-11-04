@@ -535,6 +535,9 @@ async function main() {
     await say(page, "dictation-menu", menu({ on: false }));
     assertEqual(await text(page, ".sb-head"), "RichScribe Off", "off");
     assertEqual(await text(page, ".sb-say"), "Turn it on to type with your voice.", "off's line");
+    assertEqual(await page.getAttribute('[data-act="rewrite"]','aria-disabled'),'true',"Off cannot start an instruction microphone capture");
+    await page.locator('[data-act="rewrite"]').click();
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").length),0,"the disabled voice action sends nothing");
     await say(page, "dictation-menu", menu());
     const size = await page.evaluate(() => window.__calls.filter((c) => c[0] === "dictation_menu_laid_out").pop()[1]);
     const box = await page.locator("#sbMenu").boundingBox();
