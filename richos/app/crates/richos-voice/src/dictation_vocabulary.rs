@@ -87,7 +87,7 @@ impl Rules {
             let matched = (!previous.is_some_and(word_char)).then(|| {
                 self.0.iter().find_map(|rule| {
                     let end = prefix_end(&text[at..], rule.trigger())? + at;
-                    if text[end..].chars().next().is_some_and(word_char)
+                    if !word_end(&text[end..])
                         || protected.iter().any(|&(start, stop)| at < stop && end > start)
                     {
                         return None;
@@ -110,6 +110,19 @@ impl Rules {
 
 fn word_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '\'' | '’')
+}
+
+fn word_end(suffix: &str) -> bool {
+    let mut chars = suffix.chars();
+    match chars.next() {
+        None => true,
+        Some(c) if !word_char(c) => true,
+        // Correct the approved name, preserving the possessive on original input.
+        // It must itself end at a boundary, never inside an identifier or word.
+        Some('\'' | '’') => matches!(chars.next(), Some('s' | 'S'))
+            && !chars.next().is_some_and(word_char),
+        _ => false,
+    }
 }
 
 fn prefix_end(text: &str, trigger: &str) -> Option<usize> {
@@ -167,7 +180,16 @@ mod tests {
         let rules = Rules::checked(&[rule("rich scribe", "RichScribe"), rule("Pria", "Priya")], |_| Some(false)).unwrap();
         assert_eq!(rules.apply("Rich scribe, ask PRIA. A rich scriber and prior notes."),
                    "RichScribe, ask Priya. A rich scriber and prior notes.");
-        assert_eq!(rules.apply("pria's x-pria pria_two"), "pria's x-pria pria_two");
+        assert_eq!(rules.apply("pria's x-pria pria_two"), "Priya's x-pria pria_two");
+    }
+
+    #[test]
+    fn possessive_names_and_phrases_keep_the_suffix_and_protected_boundaries() {
+        let rules = Rules::checked(&[rule("Pria", "Priya"), rule("acme corp", "Acme Corp")], |_| Some(false)).unwrap();
+        assert_eq!(rules.apply("Send Pria's deck to PRIA’S team. Acme corp's renewal and ACME CORP’s plan."),
+                   "Send Priya's deck to Priya’S team. Acme Corp's renewal and Acme Corp’s plan.");
+        let unchanged = "x-Pria's Pria'stone Pria’s_team Pria's-team Pria’s’s https://Pria's.com Pria's@example.com `Pria's`";
+        assert_eq!(rules.apply(unchanged), unchanged);
     }
 
     #[test]
