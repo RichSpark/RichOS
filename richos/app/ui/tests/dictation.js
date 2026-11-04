@@ -456,7 +456,10 @@ async function main() {
     await sheet(page);
     await page.locator('[data-act="voc-more"]').click();
     const toggle=page.getByRole('switch',{name:'Live preview',exact:true});
-    assertEqual(await toggle.getAttribute('aria-checked'),'true');
+    assertEqual(await toggle.getAttribute('aria-checked'),'false');
+    await toggle.click();
+    await page.waitForFunction(()=>document.querySelector('[data-act="voc-preview"]').getAttribute('aria-checked')==='true');
+    assert((await calls(page)).includes('dictation_set_preview:true'));
     await toggle.click();
     await page.waitForFunction(()=>document.querySelector('[data-act="voc-preview"]').getAttribute('aria-checked')==='false');
     assert((await calls(page)).includes('dictation_set_preview:false'));

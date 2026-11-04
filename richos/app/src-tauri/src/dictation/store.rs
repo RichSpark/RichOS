@@ -68,7 +68,7 @@ impl Default for Settings {
             feature_message: None,
             feature_key: None,
             vocabulary: serde_json::Value::Null,
-            live_preview: true,
+            live_preview: false,
         }
     }
 }
@@ -192,13 +192,14 @@ mod tests {
         assert!(!s.on);
         assert_eq!(s.key(), 1);
         assert_eq!(s.model, "large-v3-turbo-q5_0");
+        assert!(!s.live_preview, "a fresh profile does not enable unqualified preview");
     }
 
     /// INVARIANT: what the app writes is what the tool reads, under the names the plan gives.
     #[test]
     fn a_write_reads_back_with_the_plans_field_names() {
         let d = dir("roundtrip");
-        let s = Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: true, feature_thread: None, feature_message: None, feature_key: None, ..Default::default() };
+        let s = Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: true, feature_thread: None, feature_message: None, feature_key: None, live_preview: true, ..Default::default() };
         write(&d, &s).unwrap();
         assert_eq!(read(&d).unwrap(), s);
         let raw = std::fs::read_to_string(path(&d)).unwrap();
@@ -270,6 +271,7 @@ mod tests {
         assert!(s.on);
         assert_eq!(s.key(), 1);
         assert_eq!(s.model, "large-v3-turbo-q5_0", "a missing field takes its default");
+        assert!(!s.live_preview, "an existing profile without the preview field stays off");
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

@@ -1748,7 +1748,7 @@
   const dictationCalls = [];
   const vocabularyRules = {};
   let vocabularyCompany = null;
-  let vocabularyPreview = true;
+  let vocabularyPreview = false;
   const vocabularyFixture = Object.assign({previewAvailable:true,error:null,failNextSave:null}, preset.dictationVocabulary || {});
   function vocabularyView() {
     return {companies:entityChoiceOf().options.map(c => ({id:c.id,name:c.display_name})),
