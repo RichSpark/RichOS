@@ -49,6 +49,10 @@ pub struct Settings {
     pub feature_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feature_key: Option<u8>,
+    /// Raw optional data is preserved even when corrupt: a vocabulary error must
+    /// not disable ordinary dictation or be erased by an unrelated key change.
+    pub vocabulary: serde_json::Value,
+    pub live_preview: bool,
 }
 
 impl Default for Settings {
@@ -63,6 +67,8 @@ impl Default for Settings {
             feature_thread: None,
             feature_message: None,
             feature_key: None,
+            vocabulary: serde_json::Value::Null,
+            live_preview: false,
         }
     }
 }
@@ -92,11 +98,19 @@ pub fn read(data_dir: &Path) -> Result<Settings, String> {
 /// Write the settings atomically (a sibling file renamed over the old one), so the tool never
 /// reads half a file.
 pub fn write(data_dir: &Path, settings: &Settings) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     std::fs::create_dir_all(data_dir).map_err(|e| format!("the data folder could not be created: {e}"))?;
     let target = path(data_dir);
     let partial = data_dir.join(format!(".{FILE_NAME}.{}", std::process::id()));
     let body = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
-    std::fs::write(&partial, body).map_err(|e| format!("{FILE_NAME} could not be written: {e}"))?;
+    let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true)
+        .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&partial)
+        .map_err(|e| format!("{FILE_NAME} could not be written: {e}"))?;
+    if let Err(e) = file.write_all(&body).and_then(|_| file.sync_all()) {
+        std::fs::remove_file(&partial).ok();
+        return Err(format!("{FILE_NAME} could not be written: {e}"));
+    }
     std::fs::rename(&partial, &target).map_err(|e| {
         std::fs::remove_file(&partial).ok();
         format!("{FILE_NAME} could not be replaced: {e}")
@@ -107,9 +121,15 @@ pub fn write(data_dir: &Path, settings: &Settings) -> Result<(), String> {
 /// write it back atomically. What the app and the tool's menu both use, so a field the other
 /// wrote a moment ago is kept. A file that cannot be read is never overwritten.
 pub fn update(data_dir: &Path, change: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
+    try_update(data_dir, |s| { change(s); Ok(()) })
+}
+
+/// Validation and the change share the same lock/read, so concurrent editors do
+/// not overwrite an unrelated company or replace a corrupt dictionary silently.
+pub fn try_update(data_dir: &Path, change: impl FnOnce(&mut Settings) -> Result<(), String>) -> Result<Settings, String> {
     let _held = lock(data_dir)?;
     let mut settings = read(data_dir)?;
-    change(&mut settings);
+    change(&mut settings)?;
     write(data_dir, &settings)?;
     Ok(settings)
 }
@@ -141,6 +161,22 @@ pub fn lock(data_dir: &Path) -> Result<std::fs::File, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn corrupt_vocabulary_does_not_disable_dictation_or_get_erased_by_an_unrelated_change() {
+        let d = dir("optional-vocabulary");
+        let raw = serde_json::json!({"byCompany":{"a":"broken"}});
+        let settings = Settings { on: true, vocabulary: raw.clone(), ..Default::default() };
+        write(&d, &settings).unwrap();
+        assert!(super::super::vocabulary::Saved::read(&read(&d).unwrap().vocabulary).is_err());
+        let after = update(&d, |s| s.key = 4).unwrap();
+        assert!(after.on);
+        assert_eq!(after.vocabulary, raw);
+        assert_eq!(after.key(), 4);
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(std::fs::metadata(path(&d)).unwrap().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("richos-dictation-store-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
@@ -156,13 +192,14 @@ mod tests {
         assert!(!s.on);
         assert_eq!(s.key(), 1);
         assert_eq!(s.model, "large-v3-turbo-q5_0");
+        assert!(!s.live_preview, "a fresh profile does not enable unqualified preview");
     }
 
     /// INVARIANT: what the app writes is what the tool reads, under the names the plan gives.
     #[test]
     fn a_write_reads_back_with_the_plans_field_names() {
         let d = dir("roundtrip");
-        let s = Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: true, feature_thread: None, feature_message: None, feature_key: None };
+        let s = Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: true, feature_thread: None, feature_message: None, feature_key: None, live_preview: true, ..Default::default() };
         write(&d, &s).unwrap();
         assert_eq!(read(&d).unwrap(), s);
         let raw = std::fs::read_to_string(path(&d)).unwrap();
@@ -212,7 +249,7 @@ mod tests {
     #[test]
     fn an_update_keeps_what_it_does_not_change() {
         let d = dir("update");
-        let s = Settings { on: true, key: 5, model: "large-v3-turbo-q5_0".into(), mic_asked: true, ax_asked: true, offered: true, feature_thread: None, feature_message: None, feature_key: None };
+        let s = Settings { on: true, key: 5, model: "large-v3-turbo-q5_0".into(), mic_asked: true, ax_asked: true, offered: true, feature_thread: None, feature_message: None, feature_key: None, ..Default::default() };
         write(&d, &s).unwrap();
         let after = update(&d, |s| s.model = "small.en".into()).unwrap();
         assert_eq!(after, Settings { model: "small.en".into(), ..s.clone() });
@@ -234,6 +271,7 @@ mod tests {
         assert!(s.on);
         assert_eq!(s.key(), 1);
         assert_eq!(s.model, "large-v3-turbo-q5_0", "a missing field takes its default");
+        assert!(!s.live_preview, "an existing profile without the preview field stays off");
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

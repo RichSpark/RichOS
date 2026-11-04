@@ -1746,6 +1746,15 @@
     mic: "unknown", ax: "unknown", owner: "none", keyTap: false, secure: null }, preset.dictationView || {});
   let dictationAxAsked = !!preset.dictationAxAsked;
   const dictationCalls = [];
+  const vocabularyRules = {};
+  let vocabularyCompany = null;
+  let vocabularyPreview = false;
+  const vocabularyFixture = Object.assign({previewAvailable:true,error:null,failNextSave:null}, preset.dictationVocabulary || {});
+  function vocabularyView() {
+    return {companies:entityChoiceOf().options.map(c => ({id:c.id,name:c.display_name})),
+      selectedCompany:vocabularyCompany,rules:structuredClone(vocabularyRules[vocabularyCompany] || []),
+      error:vocabularyFixture.error,previewEnabled:vocabularyPreview,previewAvailable:vocabularyFixture.previewAvailable};
+  }
   // The "RichScribe feature" conversation (`dictation_offer.rs` FEATURE_TITLE and feature_text,
   // the CEO's words, 2026-10-13): created once, its id kept as `featureThread` is.
   let dictationFeatureThread = null;
@@ -3675,6 +3684,26 @@
         case "dictation_status":
           dictationCalls.push({ cmd });
           return structuredClone(dictationView);
+        case "dictation_vocabulary":
+          return vocabularyView();
+        case "dictation_set_vocabulary": {
+          dictationCalls.push({cmd,company:args.company,rules:structuredClone(args.rules)});
+          if (vocabularyFixture.failNextSave) {
+            const error = vocabularyFixture.failNextSave;
+            vocabularyFixture.failNextSave = null;
+            throw error;
+          }
+          const company = args.company || null;
+          if (company && !entityChoiceOf().options.some(c => c.id === company)) throw "That company is no longer available. Choose a company again.";
+          if (args.rules && !company) throw "Choose a company before saving its spelling rules.";
+          vocabularyCompany = company;
+          if (args.rules) vocabularyRules[company] = structuredClone(args.rules);
+          return vocabularyView();
+        }
+        case "dictation_set_preview":
+          dictationCalls.push({cmd,on:!!args.on});
+          vocabularyPreview = !!args.on;
+          return vocabularyView();
         case "dictation_set_on":
           dictationCalls.push({ cmd, on: !!args.on });
           dictationView.on = !!args.on;
@@ -5536,6 +5565,7 @@
     /// What macOS or the tool says now (a prompt answered, System Settings, another app hiding
     /// keys, another copy's tool): merged into `dictation_status`, and the window told.
     dictationSet(patch) { Object.assign(dictationView, patch || {}); emit("rich://dictation", { changed: true }); },
+    dictationVocabularySet(patch) { Object.assign(vocabularyFixture, patch || {}); emit("dictation-settings-changed", {}); },
     /// The tool's key tap answered "Press a different key" with F`n`.
     dictationKey(n) { emit("rich://dictation", { key: n }); },
     /// What the Mac reports about Codex now: "ready", "signedout" or "missing". The row reads it

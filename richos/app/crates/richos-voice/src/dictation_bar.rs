@@ -29,6 +29,8 @@ pub enum BarView {
     Writing,
     /// "Added", then the bar goes (state 16).
     Added,
+    /// Honest delivery result. Its readable notice/hover timer belongs to the page.
+    Delivery,
     /// One drawn problem line (states 18 and 19, the other drawn moments, Iris's two lines).
     Problem(Problem),
     /// "Dictation is off." after **Turn dictation off** in the menu (round 19 `sb-onoff`).
@@ -43,6 +45,7 @@ impl BarView {
             BarView::Listening => "listening",
             BarView::Writing => "writing",
             BarView::Added => "added",
+            BarView::Delivery => "delivery",
             BarView::Problem(_) => "problem",
             BarView::Off => "off",
         }
@@ -85,7 +88,7 @@ pub fn hide_after(view: BarView) -> Option<Duration> {
         BarView::Added => Some(ADDED_FOR),
         BarView::Problem(p) => Some(problem_shown_for(p)),
         BarView::Off => Some(OFF_FOR),
-        BarView::Hidden | BarView::Listening | BarView::Writing => None,
+        BarView::Hidden | BarView::Listening | BarView::Writing | BarView::Delivery => None,
     }
 }
 
@@ -100,7 +103,7 @@ pub fn has_fix(p: Problem) -> bool {
 /// ignores the mouse except while a problem bar with Fix it is up"); every other moment a click
 /// on it reaches the app beneath.
 pub fn takes_mouse(view: BarView) -> bool {
-    matches!(view, BarView::Problem(p) if has_fix(p))
+    view == BarView::Listening || view == BarView::Delivery || matches!(view, BarView::Problem(p) if has_fix(p))
 }
 
 // =============================================================================================
@@ -405,7 +408,9 @@ mod tests {
             assert!(!takes_mouse(BarView::Problem(p)), "{p:?}");
         }
         assert!(takes_mouse(BarView::Problem(Problem::NoAccessibility)));
-        for v in [BarView::Hidden, BarView::Listening, BarView::Writing, BarView::Added, BarView::Off] {
+        assert!(takes_mouse(BarView::Listening), "Finish and Cancel are available while recording");
+        assert!(takes_mouse(BarView::Delivery), "Recover is available on failed-delivery notices");
+        for v in [BarView::Hidden, BarView::Writing, BarView::Added, BarView::Off] {
             assert!(!takes_mouse(v), "{v:?}");
         }
     }

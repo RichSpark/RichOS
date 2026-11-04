@@ -14,8 +14,8 @@ use core_foundation::string::CFString;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use richos_voice::dictation::{insert_plan, restore_clipboard, spaced, Insert, PLAIN_TEXT_TYPE, RESTORE_AFTER, TRANSIENT_TYPE};
-use richos_voice::dictation_bar::{paste_landed, words_range, Rect};
+use richos_voice::dictation::{delivery_permission, insert_plan, restore_clipboard, spaced, DeliveryPermission, FieldIdentity, Insert, PLAIN_TEXT_TYPE, RESTORE_AFTER, TRANSIENT_TYPE};
+use richos_voice::dictation_bar::{words_range, Rect};
 use std::ffi::{c_void, CStr, CString};
 use std::sync::Mutex;
 
@@ -42,6 +42,7 @@ extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(cf: CFTypeRef);
+    fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> bool;
     fn CFDataGetBytePtr(data: CFTypeRef) -> *const u8;
 }
 
@@ -80,7 +81,22 @@ const UC_NO_DEAD_KEYS: u32 = 1;
 /// One paste at a time, from saving his clipboard to putting it back: a second dictation's save
 /// must never capture the first one's words. The lock is held for a whole insert, and an insert
 /// first waits for the previous one's restore to finish.
-static PENDING_RESTORE: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+static PENDING_RESTORE: Mutex<Option<ClipboardRestore>> = Mutex::new(None);
+
+struct ClipboardRestore {
+    join: std::thread::JoinHandle<()>,
+    canceled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ClipboardRestore {
+    fn finish(self, cancel: bool) {
+        if cancel {
+            self.canceled.store(true, std::sync::atomic::Ordering::Release);
+            self.join.thread().unpark();
+        }
+        self.join.join().ok();
+    }
+}
 
 #[repr(C)]
 struct AxRange {
@@ -97,6 +113,71 @@ impl Drop for Owned {
             unsafe { CFRelease(self.0) };
         }
     }
+}
+
+/// Only native identities and a display name, never field contents. AX elements
+/// are immutable reference-counted proxies; the writer owns their references and uses
+/// Accessibility's thread-safe messaging APIs, without AppKit window access.
+pub struct Destination {
+    pub pid: Option<i32>,
+    pub name: String,
+    window: Option<Owned>,
+    field: Option<Owned>,
+    pub secure: bool,
+}
+
+// SAFETY: ownership transfers retained immutable AX proxy references. No mutable
+// application object or borrowed pointer crosses threads through this type.
+unsafe impl Send for Destination {}
+
+impl Destination {
+    pub fn capture() -> Self {
+        let pid = frontmost_pid();
+        let app = pid.map(|pid| Owned(unsafe { AXUIElementCreateApplication(pid) }));
+        let focused = app.as_ref().and_then(|a| attribute(a.0, "AXFocusedUIElement"))
+            .or_else(focused_element).filter(|e| {
+            let mut owner = 0;
+            (unsafe { AXUIElementGetPid(e.0, &mut owner) == 0 }) && Some(owner) == pid
+        });
+        let window = app.as_ref().and_then(|a| attribute(a.0, "AXFocusedWindow"))
+            .or_else(|| focused.as_ref().and_then(|e| attribute(e.0, "AXWindow")));
+        let secure = focused.as_ref().is_some_and(|e| {
+            ["AXRole", "AXSubrole"].iter().any(|attribute_name|
+                string_attribute(e.0, attribute_name).as_deref() == Some("AXSecureTextField"))
+        });
+        let field = focused.filter(|e| string_attribute(e.0, "AXRole").is_some_and(|role|
+            richos_voice::dictation::typing_role(&role)) || attribute(e.0, "AXSelectedTextRange").is_some());
+        let name = pid.and_then(app_name).unwrap_or_else(|| "the destination app".into());
+        Self { pid, name, window, field, secure }
+    }
+
+    pub fn permission(&self, navigated: bool) -> DeliveryPermission {
+        let now = Self::capture();
+        let same_app = self.pid.is_some() && self.pid == now.pid;
+        let same_window = self.window.as_ref().zip(now.window.as_ref())
+            .is_some_and(|(a, b)| unsafe { CFEqual(a.0, b.0) });
+        let field = match (&self.field, &now.field) {
+            (None, _) => FieldIdentity::UnreadableFromStart,
+            (Some(a), Some(b)) if unsafe { CFEqual(a.0, b.0) } => FieldIdentity::Same,
+            _ => FieldIdentity::ChangedOrLost,
+        };
+        delivery_permission(same_app, same_window, field, now.secure, navigated)
+    }
+}
+
+fn app_name(pid: i32) -> Option<String> {
+    objc2::rc::autoreleasepool(|_| {
+        let class = AnyClass::get(c"NSRunningApplication")?;
+        // SAFETY: documented read-only NSRunningApplication messages.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class, runningApplicationWithProcessIdentifier: pid];
+            if app.is_null() { return None; }
+            let name: *mut AnyObject = msg_send![app, localizedName];
+            if name.is_null() { return None; }
+            let utf8: *const std::ffi::c_char = msg_send![name, UTF8String];
+            (!utf8.is_null()).then(|| CStr::from_ptr(utf8).to_string_lossy().into_owned())
+        }
+    })
 }
 
 fn attribute(element: AXUIElementRef, name: &'static str) -> Option<Owned> {
@@ -205,7 +286,8 @@ pub fn focus() -> Focus {
     );
     if let Ok(element) = element {
         out.focused_element = true;
-        if let Some((around, start)) = around_cursor(element.0) {
+        let secure = string_attribute(element.0, "AXSubrole").as_deref() == Some("AXSecureTextField");
+        if let Some((around, start)) = (!secure).then(|| around_cursor(element.0)).flatten() {
             out.around = Some(around);
             out.selection_start = Some(start);
         }
@@ -249,43 +331,39 @@ pub fn focused_window_rect() -> Option<Rect> {
 /// 60 ms apart, for the app's cursor to sit right after the words (the paste is asynchronous:
 /// Command-V reaches the app on its own run loop), then asks `AXBoundsForRange` for their range.
 /// `None` when the app never says: then the bar says "Added" with no flight.
-pub fn words_rect(selection_start: isize, text: &str) -> Option<Rect> {
-    for _ in 0..10 {
-        std::thread::sleep(std::time::Duration::from_millis(60));
-        let Some(element) = focused_element() else { continue };
-        let Some(range) = attribute(element.0, "AXSelectedTextRange") else { continue };
-        let mut r = AxRange { location: 0, length: 0 };
-        // SAFETY: an AXValue and a CFRange-sized out-parameter.
-        if !unsafe { AXValueGetValue(range.0, AX_VALUE_CF_RANGE, &mut r as *mut _ as *mut c_void) } {
-            continue;
-        }
-        if !paste_landed(selection_start, text, r.location) {
-            continue;
-        }
-        let (location, length) = words_range(selection_start, text);
-        let want = AxRange { location, length };
-        // SAFETY: a CFRange AXValue we own, a CFString attribute name and an out-parameter.
-        let parameter = Owned(unsafe { AXValueCreate(AX_VALUE_CF_RANGE, &want as *const _ as *const c_void) });
-        if parameter.0.is_null() {
-            return None;
-        }
-        let name = CFString::from_static_string("AXBoundsForRange");
-        let mut value: CFTypeRef = std::ptr::null();
-        let error = unsafe {
-            AXUIElementCopyParameterizedAttributeValue(element.0, name.as_concrete_TypeRef() as CFTypeRef, parameter.0, &mut value)
-        };
-        let value = Owned(value);
-        if error != 0 || value.0.is_null() {
-            return None;
-        }
-        let mut b = [0f64; 4];
-        // SAFETY: an AXValue of kind CGRect and a CGRect-sized out-parameter.
-        if !unsafe { AXValueGetValue(value.0, AX_VALUE_CG_RECT, b.as_mut_ptr() as *mut c_void) } {
-            return None;
-        }
-        return Some(Rect { x: b[0], y: b[1], w: b[2], h: b[3] });
-    }
-    None
+fn words_rect(element: &Owned, selection_start: isize, text: &str) -> Option<Rect> {
+    let (location, length) = words_range(selection_start, text);
+    let want = AxRange { location, length };
+    // SAFETY: one owned CFRange and a parameterized AX read on a retained element.
+    let parameter = Owned(unsafe { AXValueCreate(AX_VALUE_CF_RANGE, &want as *const _ as *const c_void) });
+    if parameter.0.is_null() { return None; }
+    let name = CFString::from_static_string("AXBoundsForRange");
+    let mut value: CFTypeRef = std::ptr::null();
+    let error = unsafe {
+        AXUIElementCopyParameterizedAttributeValue(element.0, name.as_concrete_TypeRef() as CFTypeRef, parameter.0, &mut value)
+    };
+    let value = Owned(value);
+    if error != 0 || value.0.is_null() { return None; }
+    let mut bounds = [0f64; 4];
+    // SAFETY: AXValueGetValue writes a CGRect to a correctly sized four-double buffer.
+    if !unsafe { AXValueGetValue(value.0, AX_VALUE_CG_RECT, bounds.as_mut_ptr() as *mut c_void) } { return None; }
+    Some(Rect { x: bounds[0], y: bounds[1], w: bounds[2], h: bounds[3] })
+}
+
+fn range_text(element: &Owned, start: isize, length: isize) -> Option<String> {
+    if start < 0 || length < 0 { return None; }
+    let range = AxRange { location: start, length };
+    // SAFETY: one owned CFRange value and one retained AX proxy.
+    let parameter = Owned(unsafe { AXValueCreate(AX_VALUE_CF_RANGE, &range as *const _ as *const c_void) });
+    if parameter.0.is_null() { return None; }
+    let name = CFString::from_static_string("AXStringForRange");
+    let mut value: CFTypeRef = std::ptr::null();
+    let error = unsafe { AXUIElementCopyParameterizedAttributeValue(element.0, name.as_concrete_TypeRef() as CFTypeRef, parameter.0, &mut value) };
+    let owned = Owned(value);
+    if error != 0 || owned.0.is_null() { return None; }
+    // SAFETY: check the returned CF type before borrowing it as a string.
+    let typed = unsafe { CFType::wrap_under_get_rule(owned.0) };
+    typed.downcast::<CFString>().map(|s| s.to_string())
 }
 
 /// The front app's process, from `NSWorkspace`, when Accessibility cannot name it.
@@ -548,71 +626,148 @@ fn post_command(code: u16) {
 }
 
 /// What happened to the words.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Inserted {
-    pub how: Insert,
-    /// Whether the spacing rule could read the text around the cursor.
-    pub spaced: bool,
-    pub front_bundle: Option<String>,
-    /// What Accessibility answered ([`Focus::seen`]).
-    pub seen: String,
-    /// What was pasted (the words with the spacing rule applied) and where the selection began,
-    /// when Accessibility could read it: what [`words_rect`] needs for the flight.
-    pub landed: Option<(isize, String)>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Added,
+    Sent,
+    Check,
+    NotAdded { copied: bool, destination_changed: bool },
+    DiscardedSecure,
 }
 
-/// **Put `words` where the cursor is.** `v_code` is [`v_key_code`], read on the main thread.
-///
-/// Paste: his clipboard is saved, the words written and pasted, and after 1.0 s his clipboard is
-/// put back on a thread of its own, if nothing else wrote to it meanwhile. Copy only: the words
-/// are left on the clipboard for him.
-pub fn insert(words: &str, v_code: u16) -> Result<Inserted, String> {
+impl Delivery {
+    pub fn unresolved(self) -> bool { matches!(self, Self::Check | Self::NotAdded { .. }) }
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Added => "added", Self::Sent => "sent", Self::Check => "check",
+            Self::NotAdded { .. } => "not-added", Self::DiscardedSecure => "discarded-secure",
+        }
+    }
+}
+
+pub struct Inserted {
+    pub how: Insert,
+    pub spaced: bool,
+    pub seen: String,
+    pub landed: Option<(isize, String)>,
+    pub rect: Option<Rect>,
+    pub delivery: Delivery,
+}
+
+/// One serialized paste into the same captured app/window/available field. No
+/// focus switching, retry, Enter or execution. Clipboard restoration is prepared
+/// before dispatch, so a failure to create that worker cannot become a false
+/// "not added" after a paste was already sent.
+pub fn insert(words: &str, v_code: u16, destination: &Destination,
+              navigated: &std::sync::atomic::AtomicBool, stop: &std::sync::atomic::AtomicBool) -> Result<Inserted, String> {
+    use std::sync::atomic::Ordering;
     let mut pending = PENDING_RESTORE.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(previous) = pending.take() {
-        previous.join().ok();
+    if let Some(previous) = pending.take() { previous.finish(false); }
+    if stop.load(Ordering::Acquire) { return Err("dictation canceled".into()); }
+    let permission = destination.permission(navigated.load(Ordering::Acquire));
+    let empty = |delivery| Inserted { how: Insert::CopyOnly, spaced: false, seen: String::new(), landed: None, rect: None, delivery };
+    if permission == DeliveryPermission::DiscardSecure { return Ok(empty(Delivery::DiscardedSecure)); }
+    let pb = general().ok_or("no general pasteboard")?;
+    if permission == DeliveryPermission::Recover {
+        let copied = write_words(pb, words).is_some();
+        return Ok(empty(Delivery::NotAdded { copied, destination_changed: true }));
     }
     let f = focus();
     let how = insert_plan(f.focused_element, f.window_focused, f.finder_in_front, f.focused_role.as_deref());
-    let pb = general().ok_or("no general pasteboard")?;
     let text = match (how, f.around) {
         (Insert::Paste, Some((before, after))) => spaced(words, before, after),
         _ => words.to_string(),
     };
     if how == Insert::CopyOnly {
-        write_words(pb, &text).ok_or("the words could not be written to the clipboard")?;
-        return Ok(Inserted { how, spaced: false, front_bundle: f.front_bundle, seen: f.seen, landed: None });
+        let copied = write_words(pb, &text).is_some();
+        return Ok(empty(Delivery::NotAdded { copied, destination_changed: false }));
     }
-    let saved = save(pb);
-    let written = write_words(pb, &text).ok_or("the words could not be written to the clipboard")?;
-    post_command(v_code);
-    let pb_addr = pb as usize;
-    let restore = std::thread::Builder::new()
-        .name("dictation-clipboard".into())
-        .spawn(move || {
-            std::thread::sleep(RESTORE_AFTER);
-            let pb = pb_addr as *mut AnyObject;
-            if restore_clipboard(change_count(pb) as i64, written as i64) {
-                write_items(pb, saved.items());
+    let can_verify = f.selection_start.zip(destination.field.as_ref())
+        .is_some_and(|(start, field)| range_text(field, start, 0).is_some());
+    // Seeing the requested words afterward is not evidence of insertion if
+    // those exact words were already at that range before Command-V.
+    let already_present = f.selection_start.zip(destination.field.as_ref())
+        .is_some_and(|(start, field)| range_text(field, start, text.encode_utf16().count() as isize).as_deref() == Some(text.as_str()));
+    let (restore_tx, restore_rx) = std::sync::mpsc::channel::<(usize, isize, Saved)>();
+    let canceled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = canceled.clone();
+    let restore = std::thread::Builder::new().name("dictation-clipboard".into()).spawn(move || {
+        if let Ok((address, written, saved)) = restore_rx.recv() {
+            let deadline = std::time::Instant::now() + RESTORE_AFTER;
+            while let Some(wait) = deadline.checked_duration_since(std::time::Instant::now()) {
+                if flag.load(std::sync::atomic::Ordering::Acquire) { return; }
+                std::thread::park_timeout(wait);
             }
-        })
-        .map_err(|e| e.to_string())?;
-    *pending = Some(restore);
+            if flag.load(std::sync::atomic::Ordering::Acquire) { return; }
+            let pb = address as *mut AnyObject;
+            if restore_clipboard(change_count(pb) as i64, written as i64) { write_items(pb, saved.items()); }
+        }
+    }).map_err(|e| e.to_string())?;
+    let saved = save(pb);
+    let written = match write_words(pb, &text) {
+        Some(written) => written,
+        None => { drop(restore_tx); restore.join().ok(); return Ok(empty(Delivery::NotAdded { copied: false, destination_changed: false })); }
+    };
+    let permission = destination.permission(navigated.load(Ordering::Acquire));
+    if stop.load(Ordering::Acquire) || permission == DeliveryPermission::DiscardSecure {
+        if change_count(pb) == written { write_items(pb, saved.items()); }
+        drop(restore_tx); restore.join().ok();
+        return if stop.load(Ordering::Acquire) { Err("dictation canceled".into()) }
+               else { Ok(empty(Delivery::DiscardedSecure)) };
+    }
+    if permission == DeliveryPermission::Recover {
+        // No paste happened. The just-written words are the deliberate auto-copy.
+        drop(restore_tx); restore.join().ok();
+        return Ok(empty(Delivery::NotAdded { copied: true, destination_changed: true }));
+    }
+    post_command(v_code);
+    if restore_tx.send((pb as usize, written, saved)).is_err() {
+        super::log::line("clipboard restoration worker ended after dispatch; paste will not be retried");
+    }
+    *pending = Some(ClipboardRestore { join: restore, canceled });
     let landed = f.selection_start.map(|start| (start, text.clone()));
-    Ok(Inserted { how, spaced: f.around.is_some(), front_bundle: f.front_bundle, seen: f.seen, landed })
+    let mut delivery = Delivery::Sent;
+    let mut rect = None;
+    if can_verify {
+        delivery = Delivery::Check;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(600);
+        loop {
+            if already_present { break; }
+            if stop.load(Ordering::Acquire) { break; }
+            if destination.permission(navigated.load(Ordering::Acquire)) != DeliveryPermission::Paste { break; }
+            if let Some((start, field)) = f.selection_start.zip(destination.field.as_ref()) {
+                if range_text(field, start, text.encode_utf16().count() as isize).as_deref() == Some(text.as_str()) {
+                    delivery = Delivery::Added;
+                    rect = words_rect(field, start, &text);
+                    break;
+                }
+            }
+            if std::time::Instant::now() >= deadline { break; }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    Ok(Inserted { how, spaced: f.around.is_some(), seen: f.seen, landed, rect, delivery })
 }
 
 /// Copy `words` to the clipboard and nothing else: the case where the words are ready and
 /// Accessibility is not allowed ("I can't type into other apps yet, so I copied your words.").
 pub fn copy_only(words: &str) -> Result<(), String> {
-    let _pending = PENDING_RESTORE.lock().unwrap_or_else(|p| p.into_inner());
+    let mut pending = PENDING_RESTORE.lock().unwrap_or_else(|p| p.into_inner());
     let pb = general().ok_or("no general pasteboard")?;
+    copy_on(pb, words, &mut pending)
+}
+
+fn copy_on(pb: *mut AnyObject, words: &str, pending: &mut Option<ClipboardRestore>) -> Result<(), String> {
+    // Cancel and join before copying. A restore that already passed its change-
+    // count check must finish before the new copy, never overwrite it afterward.
+    if let Some(previous) = pending.take() { previous.finish(true); }
     write_words(pb, words).map(|_| ()).ok_or_else(|| "the words could not be written to the clipboard".to_string())
 }
 
 /// Wait for a restore still pending, so the tool never exits with his clipboard holding words.
 pub fn settle() {
     if let Some(previous) = PENDING_RESTORE.lock().unwrap_or_else(|p| p.into_inner()).take() {
-        previous.join().ok();
+        previous.finish(false);
     }
 }
 
@@ -670,6 +825,31 @@ mod tests {
         let class = AnyClass::get(c"NSPasteboard").unwrap();
         // SAFETY: a documented class method; a uniquely named pasteboard is never his clipboard.
         unsafe { msg_send![class, pasteboardWithUniqueName] }
+    }
+
+    #[test]
+    fn an_in_flight_restore_finishes_before_a_new_recovery_copy() {
+        let pb = private_pasteboard();
+        assert!(write_words(pb, "temporary dictation").is_some());
+        let address = pb as usize;
+        let canceled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = canceled.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let join = std::thread::spawn(move || {
+            // Model the old worker already past its change-count/cancel check.
+            // It deliberately writes even after cancellation. Joining it before
+            // the new copy is what makes that copy reliable.
+            ready_tx.send(()).unwrap();
+            while !flag.load(std::sync::atomic::Ordering::Acquire) { std::thread::park(); }
+            write_words(address as *mut AnyObject, "original clipboard").unwrap();
+        });
+        ready_rx.recv().unwrap();
+        let mut pending = Some(ClipboardRestore { join, canceled });
+        copy_on(pb, "recovered words", &mut pending).unwrap();
+        assert!(pending.is_none());
+        assert_eq!(string_on(pb, PLAIN_TEXT_TYPE).as_deref(), Some("recovered words"));
+        // SAFETY: only the private pasteboard created by this test.
+        unsafe { let _: () = msg_send![pb, releaseGlobally]; }
     }
 
     fn string_on(pb: *mut AnyObject, ty: &str) -> Option<String> {

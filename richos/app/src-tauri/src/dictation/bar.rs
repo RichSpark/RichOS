@@ -30,6 +30,7 @@ pub const MENU: &str = "dictation-menu";
 /// What the pages are told, by event name.
 pub const EVENT_BAR: &str = "dictation-bar";
 pub const EVENT_LEVEL: &str = "dictation-level";
+pub const EVENT_PREVIEW: &str = "dictation-live-preview";
 pub const EVENT_FLIGHT: &str = "dictation-flight";
 pub const EVENT_MENU: &str = "dictation-menu";
 
@@ -60,6 +61,7 @@ impl From<Box4> for Rect {
 /// What a page tells the tool.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiEvent {
+    BarAction { seq: u64, act: String },
     /// The bar page laid out one view: the window it needs, where the orb's center is in it,
     /// and Fix it's box when there is one.
     BarLaidOut { seq: u64, w: f64, h: f64, orb: (f64, f64), fix: Option<Box4> },
@@ -98,6 +100,11 @@ pub fn dictation_page_ready(app: AppHandle, role: String) {
 #[richos_command::command]
 pub fn dictation_fix_it(app: AppHandle) {
     send(&app, UiEvent::FixIt);
+}
+
+#[richos_command::command]
+pub fn dictation_bar_act(app: AppHandle, seq: u64, act: String) {
+    send(&app, UiEvent::BarAction { seq, act });
 }
 
 #[richos_command::command]
@@ -213,7 +220,50 @@ pub struct BarMessage {
     /// When listening began, milliseconds since the epoch, for the time on the bar.
     pub started_ms: Option<u64>,
     #[serde(flatten)]
+    pub details: BarDetails,
+    #[serde(flatten)]
     pub look: Look,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryMessage {
+    pub state: &'static str,
+    pub destination: String,
+    pub copied: Option<bool>,
+    pub earlier_draft: bool,
+    pub replaced_copied_draft: bool,
+    pub recoverable: bool,
+    pub destination_changed: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BarDetails {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub blocked_keys: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub preview_paused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryMessage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryMessage {
+    pub text: Option<String>,
+    pub destination: Option<String>,
+    pub completed_ms: Option<u64>,
+    pub expires_ms: Option<u64>,
+    pub status: Option<&'static str>,
 }
 
 /// The bar, placed and shown: what [`Bar::laid_out`] did with the page's size.
@@ -235,7 +285,7 @@ pub struct Bar {
 impl Bar {
     /// Tell the page to draw `view`. Hidden hides the window at once; anything else is shown
     /// once the page has laid it out ([`Bar::laid_out`]). Returns the view's sequence number.
-    pub fn show(&mut self, app: &AppHandle, view: BarView, key: u8, started_ms: Option<u64>, look: Look) -> u64 {
+    pub fn show(&mut self, app: &AppHandle, view: BarView, key: u8, started_ms: Option<u64>, look: Look, details: BarDetails) -> u64 {
         self.seq += 1;
         self.view = Some(view);
         if view == BarView::Hidden {
@@ -251,6 +301,7 @@ impl Bar {
             },
             key: format!("F{key}"),
             started_ms,
+            details,
             look,
         };
         if let Err(e) = app.emit_to(BAR, EVENT_BAR, &message) {
@@ -262,6 +313,8 @@ impl Bar {
     pub fn view(&self) -> Option<BarView> {
         self.view
     }
+
+    pub fn sequence(&self) -> u64 { self.seq }
 
     pub fn placed(&self) -> Option<Placed> {
         self.placed
@@ -313,6 +366,10 @@ pub fn level(app: &AppHandle, level: f32) {
     app.emit_to(BAR, EVENT_LEVEL, serde_json::json!({ "level": level })).ok();
 }
 
+pub fn preview(app: &AppHandle, seq: u64, text: Option<&str>, paused: bool) {
+    app.emit_to(BAR, EVENT_PREVIEW, serde_json::json!({"seq": seq, "text": text, "paused": paused})).ok();
+}
+
 /// What the flight page is told: where the orb is and where the words are, in its own window.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -362,6 +419,13 @@ pub struct MenuMessage {
     pub paused: bool,
     /// That app's name, when macOS gives it.
     pub secure_app: Option<String>,
+    pub companies: Vec<super::vocabulary::Company>,
+    pub vocabulary_company: Option<String>,
+    pub vocabulary_error: Option<String>,
+    pub vocabulary_expanded: bool,
+    pub recording: bool,
+    pub recover_available: bool,
+    pub recovery: Option<RecoveryMessage>,
     #[serde(flatten)]
     pub look: Look,
 }
@@ -433,6 +497,7 @@ impl Menu {
             return None;
         }
         self.open = false;
+        app.emit_to(MENU, EVENT_MENU, serde_json::json!({"closed": true})).ok();
         let front = self.front.take();
         let own = std::process::id() as i32;
         let give_back = if kind == Kind::Window { front.filter(|p| *p != own) } else { None };
@@ -481,6 +546,7 @@ mod tests {
             problem: Some(richos_voice::dictation::Problem::ModelMissing.tag()),
             key: "F1".into(),
             started_ms: None,
+            details: BarDetails::default(),
             look: Look { theme: "light".into(), font_scale: 110 },
         };
         let v = serde_json::to_value(&m).unwrap();
