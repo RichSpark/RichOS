@@ -3,7 +3,7 @@
   "use strict";
   const bridge = window.RichBridge;
   if (!bridge) return;
-  let result = null, show = false, saving = false, retrying = false, preferenceEdits = 0;
+  let result = null, show = false, saving = false, retrying = false, savedShow = null, successfulWrites = 0;
   const call = (name, args) => bridge.invoke(name, args || {});
   function accept(next) {
     if (!next || !Number.isSafeInteger(next.revision)) return;
@@ -69,13 +69,12 @@
   async function write(on) {
     if (saving) return;
     const previous = show;
-    preferenceEdits++;
     show = on;
     saving = true;
     paint(); // Synchronous cached reveal. No source read or counting work here.
-    try { await call("set_swearmeter_visible", { show: on }); }
+    try { await call("set_swearmeter_visible", { show: on }); savedShow = on; successfulWrites++; }
     catch (error) {
-      show = previous;
+      show = savedShow === null ? previous : savedShow;
       window.RichSettings.toast("SwearMeter display preference was not saved: " + String(error));
     } finally { saving = false; paint(); }
   }
@@ -90,12 +89,15 @@
   window.RichSwearMeter = { paintHome };
   window.RichSettings.registerSwearMeter({ paint, write, retry });
   (async function () {
-    const ticket = preferenceEdits;
+    const ticket = successfulWrites;
     try {
       // Subscribe first. A late initial read may not overwrite a newer notification.
       await bridge.listen("rich://swearmeter", event => accept(event.payload));
       const initial = await call("get_swearmeter");
-      if (ticket === preferenceEdits) show = initial.show === true;
+      if (ticket === successfulWrites) {
+        savedShow = initial.show === true;
+        if (!saving) show = savedShow;
+      }
       accept(initial.result);
     } catch (_) { paint(); }
   })();

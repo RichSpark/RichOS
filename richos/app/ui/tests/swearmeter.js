@@ -163,6 +163,18 @@ async function main() {
       }
     }
   });
+  await run.check("9 a late saved preference is restored after an early failed switch write", async () => {
+    await page.close();
+    // Earlier checks left the durable preference enabled.
+    page = await openApp(context, true);
+    await page.evaluate(() => { fixture.failSave = true; });
+    await page.click("#set-swearmeter");
+    await page.waitForFunction(() => !document.getElementById("set-swearmeter").disabled);
+    await page.evaluate(() => finishInitial());
+    await page.waitForFunction(() => document.getElementById("set-swearmeter").checked);
+    assertEqual(await rowText(page), "SwearMeter: 17", "durable preference wins after failed write");
+    assertEqual(page.errors, [], "no renderer errors");
+  });
   await context.close();
   await browser.close();
   return run.report();
