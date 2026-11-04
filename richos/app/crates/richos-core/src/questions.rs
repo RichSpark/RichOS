@@ -241,7 +241,14 @@ impl Store {
 
     /// One startup read of existing structured requests. No delivery prose is matched.
     pub fn swearmeter_projection(&self) -> Result<crate::swearmeter_questions::Projection> {
+        self.swearmeter_startup().map(|(_, projection)| projection)
+    }
+
+    /// Fold statistics in the same snapshot already needed for startup input ordering.
+    pub fn swearmeter_startup(&self) -> Result<(Option<u64>, crate::swearmeter_questions::Projection)> {
         self.transaction(false, |data| {
+            let order = data.questions.iter().filter_map(|q| q.order)
+                .chain(data.deliveries.iter().filter_map(|v| v.order)).max();
             let mut projection = crate::swearmeter_questions::Projection::empty();
             let mut represented = std::collections::HashSet::new();
             for (key, operation) in &data.operations {
@@ -262,7 +269,7 @@ impl Store {
                 let prefix = if delivery.set_id.is_some() { "question-answer" } else { "question-followup" };
                 projection.known_composites.insert(format!("{prefix}:{}", delivery.id));
             }
-            Ok(projection)
+            Ok((order, projection))
         })
     }
 

@@ -2939,6 +2939,7 @@ async function send(explicitText, opts) {
       "send_message",
       pressed ? { text, threadId: sentThreadId, pressed: true } : { text, threadId: sentThreadId, authoredBytes }
     );
+    if (authoredDrafts.get(sentThreadId)?.text === text) authoredDrafts.delete(sentThreadId);
     if (pressedTurnFailed()) return false;
   } catch (e) {
     // A terminal event already explains this attempt. If the command rejected without

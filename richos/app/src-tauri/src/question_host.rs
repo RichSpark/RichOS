@@ -1,14 +1,14 @@
 //! Question operations use the published view and the question store, never the turn mutex.
 use crate::AppState;
 use richos_core::{
-    questions::{AnswerRequest, AnswerResult, State, Store},
+    questions::{AnswerOrigin, AnswerRequest, AnswerResult, State, Store},
     read_view::SpineView,
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub fn store(state: &AppState) -> Store {
-    Store::new(state.data_dir.join("engine-state"))
+    Store::new(state.data_dir.join("engine-state")).with_swearmeter(state.swearmeter.cards())
 }
 pub fn payload(state: &AppState, thread: &str) -> Result<Value, String> {
     let view = state.reader.snapshot();
@@ -70,21 +70,22 @@ pub fn answer(
                     "This conversation was deleted",
                     true,
                 )?;
-                return store.answer(&q.entity_id, thread, request, method, surface);
+                return store.answer_from(&q.entity_id, thread, request, method, surface, (None, AnswerOrigin::Direct));
             }
             return Err(error.to_string());
         }
     };
     // His click takes its place in the conversation's input order now, not when the
     // delivery worker later reaches the spine, so a Stop he presses after it covers it.
-    let mut result = store.answer_in_order(
+    let mut result = store.answer_from(
         binding.entity_id().as_str(),
         thread,
         request,
         method,
         surface,
-        state.control.take_input_order(),
+        (state.control.take_input_order(), AnswerOrigin::Direct),
     )?;
+    state.swearmeter.publish_current();
     if let Some(q) = &result.question {
         result.question = store.waiting_for_turn(
             binding.entity_id().as_str(),
@@ -257,6 +258,8 @@ pub fn start(app: AppHandle) {
                     if witness_pending {
                         witness_ready.try_send(()).unwrap_or(());
                     }
+                } else {
+                    state.swearmeter.unavailable();
                 }
                 deliver.try_send(()).unwrap_or(());
                 work_ready.try_send(()).unwrap_or(());

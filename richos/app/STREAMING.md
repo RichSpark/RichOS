@@ -863,3 +863,16 @@ rv-20261009T162841Z-69294215-70e6 finding 2).
 Request a feature (CEO 2026-10-11, round 24) uses the same event for an idea: `post` is `"idea"`
 (a discussion in RichOS's GitHub Discussions, under Ideas) or `"bug"` (an issue) and the window
 draws the card and Rich's words for that kind. A delivery's `number` is then the discussion's.
+
+
+### SwearMeter numeric updates
+
+`rich://swearmeter` (`swearmeter::EVENT_SWEARMETER`) publishes the locally maintained
+installation total after durable human acceptance. Its payload is `count`,
+`detector_version`, `unknown_card_inputs`, `unknown_message_inputs`,
+`incomplete_history`, `available` and monotonic `revision`. It contains no message
+text, matched terms or source identities. The initial `get_swearmeter` snapshot uses
+the same revision sequence; clients reject older results. Hidden displays continue
+receiving updates. `set_swearmeter_visible` persists only display preference and
+never rebuilds a total. An explicit `retry_swearmeter` may reread unavailable card
+history. Conversation and intake coverage gaps remain qualified until recovery.

@@ -236,6 +236,7 @@ impl PhoneBridge {
         } else {
             write_phone_words(&state.control, &thread, entity, text, channel, client_id, voice_note)?
         };
+        state.swearmeter.publish(&self.app);
         let intake_id = record.id();
 
         crate::dispatch_incoming_messages(&self.app, &thread)?;

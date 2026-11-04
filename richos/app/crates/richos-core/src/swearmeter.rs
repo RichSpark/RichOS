@@ -5,6 +5,7 @@ use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 /// Increment when tokenization or dictionary membership changes. Totals are rebuilt
 /// from the existing input histories at startup, never when display is enabled.
 pub const DETECTOR_VERSION: u32 = 1;
+pub const EVENT_SWEARMETER: &str = "rich://swearmeter";
 
 /// Explicit English dictionary. A compound is one word even when multiple parts
 /// match. These are vocabulary entries, not quotations from anyone's messages.
@@ -68,6 +69,7 @@ pub struct Snapshot {
     pub detector_version: u32,
     pub count: u64,
     pub unknown_card_inputs: u64,
+    pub unknown_message_inputs: u64,
     pub incomplete_history: bool,
     pub available: bool,
     pub revision: u64,

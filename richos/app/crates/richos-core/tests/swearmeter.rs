@@ -146,3 +146,84 @@ fn attachment_authorship_survives_a_durable_queue_and_a_restart() {
     ledger.record_prompt_received(&binding, &folded, Source::Text).unwrap();
     assert_eq!(ledger.swearmeter().count(), 3);
 }
+
+#[test]
+fn queued_words_count_before_delivery_and_never_double_during_the_drain() {
+    use richos_core::{cognition::MockLeaseFactory, steering::TurnControl, read_view::SpineView};
+    let f = Fixture::new();
+    let mut spine = support::spine(Ledger::open(f.root.join("ledger")).unwrap());
+    let entity = EntityId::parse("femcboost").unwrap();
+    let thread = spine.create_thread("Queued", &entity).unwrap();
+    spine.switch_thread(&thread).unwrap();
+    spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["Ready", "Received"])));
+    let control = TurnControl::open(f.root.join("intake")).unwrap();
+    spine.set_turn_control(control.clone());
+    let reader = spine.reader();
+    control.submit_from_desk(&thread, Some(entity), "shit").unwrap();
+    let (view, pending, unknown, complete) = control.swearmeter_inputs(&reader);
+    assert_eq!((view.ledger().swearmeter().count(), pending, unknown, complete), (0, 1, 0, true));
+    drop(view);
+    let reopened = TurnControl::open(f.root.join("intake")).unwrap();
+    assert_eq!(reopened.swearmeter_inputs(&reader).1, 1);
+    drop(reopened);
+    spine.poll_intake().unwrap();
+    let (view, pending, unknown, complete) = control.swearmeter_inputs(&reader);
+    assert_eq!((view.ledger().swearmeter().count(), pending, unknown, complete), (1, 0, 0, true));
+    drop(view);
+    // The same phone client key may be retried before or after the original drains.
+    control.submit_from_channel_as(&thread, None, "damn", "phone", Some("retry")).unwrap();
+    control.submit_from_channel_as(&thread, None, "damn", "phone", Some("retry")).unwrap();
+    assert_eq!(control.swearmeter_inputs(&reader).1, 1);
+    spine.poll_intake().unwrap();
+    control.submit_from_channel_as(&thread, None, "damn", "phone", Some("retry")).unwrap();
+    let (view, pending, _, _) = control.swearmeter_inputs(&reader);
+    assert_eq!(view.ledger().swearmeter().count() + pending, 2);
+}
+
+#[test]
+fn display_preference_persists_and_a_failed_write_rolls_it_back() {
+    use richos_core::config::ConfigStore;
+    let f = Fixture::new();
+    let path = f.root.join("config.json");
+    let mut config = ConfigStore::open(&path).unwrap();
+    assert!(!config.show_swearmeter());
+    config.set_show_swearmeter(true).unwrap();
+    assert!(ConfigStore::open(&path).unwrap().show_swearmeter());
+    config.set_show_swearmeter(false).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(config.set_show_swearmeter(true).is_err());
+    assert!(!config.show_swearmeter());
+}
+
+#[test]
+fn a_crash_between_a_card_save_and_cache_update_recovers_from_the_request() {
+    let f = Fixture::new();
+    let questions = f.ask("front_desk");
+    let request = AnswerRequest { question_id: questions[0].id.clone(), client_id: "saved-before-crash".into(),
+        option_ids: vec![], text: "shit".into(), expected_revision: None };
+    // A detached writer performs the durable transaction without a runtime callback.
+    Store::new(&f.root).answer_from("fixture", "thread", request.clone(), "phone_typed", "phone", (Some(1), AnswerOrigin::Direct)).unwrap();
+    assert_eq!(f.cards.lock().unwrap().count, 0);
+    let recovered = Store::new(&f.root).swearmeter_projection().unwrap();
+    assert_eq!(recovered.count, 1);
+    *f.cards.lock().unwrap() = recovered;
+    f.store.answer_from("fixture", "thread", request, "phone_typed", "phone", (Some(2), AnswerOrigin::Direct)).unwrap();
+    assert_eq!(f.cards.lock().unwrap().count, 1);
+}
+
+#[test]
+fn failed_durable_acceptance_adds_nothing_and_stopping_an_accepted_turn_subtracts_nothing() {
+    let f = Fixture::new();
+    let path = f.root.join("ledger");
+    let mut ledger = Ledger::open(&path).unwrap();
+    let thread = ledger.create_thread("Stopped", &EntityId::parse("fixture").unwrap()).unwrap();
+    let binding = ledger.thread_binding(&thread).unwrap();
+    let turn = ledger.record_prompt_received(&binding, "damn", Source::Text).unwrap();
+    ledger.stop_turn(&turn, 1).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 1);
+    let mut unrelated = Ledger::open(f.root.join("other-ledger")).unwrap();
+    assert!(unrelated.record_prompt_received(&binding, "shit", Source::Text).is_err());
+    assert_eq!(unrelated.swearmeter().count(), 0);
+    assert_eq!(ledger.swearmeter().count(), 1);
+}

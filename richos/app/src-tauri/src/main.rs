@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod question_host;
+mod swearmeter_host;
 mod peer_messages;
 mod activation;
 mod lifecycle;
@@ -725,6 +726,7 @@ impl EngineLeaseFactory {
 /// The durable Rich, guarded for cross-invocation access. `Spine` is `Send` (its
 /// compute lease is `Box<dyn Cognition + Send>`), so `Mutex<Spine>` is valid Tauri state.
 struct AppState {
+    swearmeter: swearmeter_host::Service,
     quota: Arc<richos_core::quota::Service>,
 
     /// **The second compute lease and the actor that owns it** — the background-work spec
@@ -1492,11 +1494,11 @@ fn hold_the_spine<'a>(
 /// (`crates/richos-command/src/lib.rs`), so an hours-long turn does not hold one of them either.
 #[richos_command::command]
 fn send_message(
+    app: AppHandle,
     state: State<AppState>,
     // **THE PHONE, INJECTED RATHER THAN REACHED FOR.** It is managed unconditionally at boot
     // (`app.manage(phone_runtime)`) and is inert until a phone is paired, so this costs a Mac
-    // with no phone nothing at all and saves this function an `AppHandle` it has no other use
-    // for.
+    // with no phone nothing at all.
     phone: State<std::sync::Arc<phone::PhoneRuntime>>,
     text: String,
     thread_id: String,
@@ -1580,6 +1582,7 @@ fn send_message(
         match state.control.submit_from_desk_authored(&thread_id, destination.map(|binding| binding.entity_id().clone()), &text, Some(authored_bytes.unwrap_or(text.len())))
         {
             Ok(record) => {
+                state.swearmeter.publish(&app);
                 // THE PHONE, BEFORE THE LOCK. Inert when nothing is paired, so this costs a
                 // Mac with no phone one atomic read.
                 let announced = phone.announce_his_words(
@@ -3352,11 +3355,18 @@ fn main() {
             spine.set_turn_control(control.clone());
             // A card answer keeps the input order it was accepted with until it reaches the
             // ledger; never hand that order to a new input after a restart.
-            match richos_core::questions::Store::new(data_dir.join("engine-state")).highest_order() {
-                Ok(Some(order)) => control.advance_input_order(order),
-                Ok(None) => {}
-                Err(e) => eprintln!("[richos] saved answer order unreadable: {e}"),
-            }
+            let card_counts = match richos_core::questions::Store::new(data_dir.join("engine-state")).swearmeter_startup() {
+                Ok((order, projection)) => {
+                    if let Some(order) = order { control.advance_input_order(order); }
+                    projection
+                }
+                Err(e) => {
+                    eprintln!("[richos] saved answer history unreadable: {e}");
+                    let mut projection = richos_core::swearmeter_questions::Projection::empty();
+                    projection.available = false;
+                    projection
+                }
+            };
 
             // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
             //
@@ -3552,6 +3562,7 @@ fn main() {
 
             spine.detach_conversation_io();
             app.manage(AppState {
+                swearmeter: swearmeter_host::Service::new(app.handle().clone(), spine.reader(), control.clone(), card_counts),
                 quota: quota.clone(),
 
                 work,
@@ -3993,6 +4004,9 @@ fn main() {
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,
+            swearmeter_host::get_swearmeter,
+            swearmeter_host::set_swearmeter_visible,
+            swearmeter_host::retry_swearmeter,
             get_resources_view,
             set_resources_view,
             // --- improved Rich and Stu instructions reach every user (CEO 2026-10-22) — appended ---
@@ -8328,7 +8342,7 @@ struct SteerReport {
 /// controller is queue-not-interrupt by construction (§3.1) — and the UI says which of
 /// those two things happened rather than letting the CEO assume the other.
 #[richos_command::command]
-fn steer_message(state: State<AppState>, text: String) -> Result<SteerReport, String> {
+fn steer_message(app: AppHandle, state: State<AppState>, text: String) -> Result<SteerReport, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err("nothing to add".into());
@@ -8337,6 +8351,7 @@ fn steer_message(state: State<AppState>, text: String) -> Result<SteerReport, St
     let thread=view.active_thread().ok_or_else(||richos_core::steering::SteeringError::NoActiveTurn.to_string())?;
     match state.control.for_thread(thread).steer(trimmed).map_err(|e| e.to_string())? {
         IntakeRecord::Steer { id, thread_id, steering_turn_id, at, .. } => {
+            state.swearmeter.publish(&app);
             Ok(SteerReport { intake_id: id, thread_id, steering_turn_id, at })
         }
         other => Err(format!("unexpected intake record: {other:?}")),

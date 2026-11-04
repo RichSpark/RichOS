@@ -1552,3 +1552,10 @@ body.home-open {
   font-style: italic;
   color: #c2a35c;
 }
+
+#home-swearmeter { max-width: var(--home-col, 230px); }
+#home-swearmeter[hidden], #set-swearmeter-result[hidden], #set-swearmeter-retry[hidden] { display: none; }
+#home-swearmeter .swearmeter-number { font: 20px/1.2 var(--serif); color: var(--t1); }
+#home-swearmeter .swearmeter-detail { margin: 0; font: 12px/1.4 var(--sans); color: var(--t2); }
+#home-swearmeter .swearmeter-detail:empty { display: none; }
+.popover-hint.swearmeter-result { color: var(--t1); }

@@ -31,6 +31,7 @@ window.RichSettings = (function () {
   // site below tolerates null, because the opening screen has no shell behind it yet.
   var durable = null; // { saveTheme(pref), saveScale(pct) }
   var techy = null; // { read(), write(on) }
+  var swearmeter = null;
   var oxford = null; // { read(), write(on) }: the Oxford comma in what Claude writes (CEO, 2026-10-19)
   var bug = null; // { open() } — what "Bust a bug" actually opens, when that exists
   var updates = null; // { render(container), onOpen() } — the update surface fills its own row
@@ -233,6 +234,28 @@ window.RichSettings = (function () {
       'Oxford comma AKA serial comma is what some style guides place before "and" and "or". ' +
       "RichOS recommends to keep that nuisance off.";
     return hint;
+  }
+
+  function buildSwearMeter() {
+    var block = elem("div", "", { id: "set-swearmeter-block" });
+    var row = elem("div", "set-row");
+    var label = elem("label", "set-name", { for: "set-swearmeter" });
+    label.textContent = "Show SwearMeter";
+    var input = elem("input", "set-switch", { type: "checkbox", id: "set-swearmeter", "aria-describedby": "swearmeter-hint" });
+    row.appendChild(label);
+    row.appendChild(input);
+    block.appendChild(row);
+    var result = elem("p", "popover-hint swearmeter-result", { id: "set-swearmeter-result", role: "status", "aria-live": "polite" });
+    block.appendChild(result);
+    var retry = elem("button", "dict-btn", { type: "button", id: "set-swearmeter-retry" });
+    retry.textContent = "Retry SwearMeter";
+    retry.addEventListener("click", function () { swearmeter.retry(); });
+    block.appendChild(retry);
+    var hint = elem("p", "popover-hint", { id: "swearmeter-hint" });
+    hint.textContent = "Counts matching words locally in your submitted text, voice transcripts and typed card answers, including quoted text. Counting continues while hidden.";
+    block.appendChild(hint);
+    input.addEventListener("change", function () { swearmeter.write(input.checked); });
+    return block;
   }
 
   function buildTechyRow() {
@@ -518,6 +541,7 @@ window.RichSettings = (function () {
       look.push(buildOxfordRow());
       look.push(buildOxfordHint());
     }
+    if (swearmeter) { look.push(divider()); look.push(buildSwearMeter()); }
     if (techy) {
       // Technical view: ONE switch (it was in both panels), the Preferences hint under it, and
       // Claude Code quota under that, shown only while the view is on (`paint`).
@@ -752,6 +776,7 @@ window.RichSettings = (function () {
       var oxLabel = menuEl.querySelector("#set-oxford-label");
       if (oxLabel) oxLabel.textContent = oxfordLabel(ox.checked);
     }
+    if (swearmeter) swearmeter.paint();
     var quotaRow = menuEl.querySelector("#set-quota-open");
     if (quotaRow) { quotaRow.hidden = !(techy && techy.read()); if (quota.paint) quota.paint(); }
     if (accounts && accounts.paint && menuEl.querySelector("#set-accounts-open")) accounts.paint();
@@ -1123,6 +1148,11 @@ window.RichSettings = (function () {
     /** THE OXFORD COMMA (round 33): `host.read()` is whether he keeps it, `host.write(on)` saves
      *  his choice. Registering is what makes the row exist, so a page with no shell behind it
      *  (the opening screen) carries no switch it cannot save. */
+    registerSwearMeter: function (host) {
+      swearmeter = host;
+      rebuild();
+    },
+
     registerOxford: function (host) {
       oxford = host || null;
       rebuild();

@@ -58,6 +58,7 @@ use crate::entity::EntityId;
 use crate::skip::{SkipDialect, SkipKind, SkippedRecord};
 use crate::util::now_millis;
 use serde::{Deserialize, Serialize};
+use crate::read_view::SpineView;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -290,10 +291,32 @@ impl IntakeHealth {
 /// a malformed line skipped-and-REPORTED rather than fatal) and deliberately NOT the same
 /// file: the ledger is evidence of what happened, and an intake record is a request that
 /// has not happened yet.
+#[derive(Clone)]
+struct PendingWordCount { count: u64, unknown: bool, client: Option<(String, String)> }
+impl PendingWordCount {
+    fn from_record(record: &IntakeRecord) -> Option<(u64, Self)> {
+        let (id, text, bytes, client) = match record {
+            IntakeRecord::Desk { id, text, authored_bytes, .. } => (*id, text, *authored_bytes, None),
+            IntakeRecord::Channel { id, text, authored_bytes, source, thread_id, client_id, .. }
+                if source.is_none_or(|s| matches!(s, crate::ledger::Source::Text | crate::ledger::Source::Jam)) =>
+                (*id, text, *authored_bytes, client_id.as_ref().map(|c| (thread_id.clone(), c.clone()))),
+            IntakeRecord::Steer { id, text, .. } => (*id, text, Some(text.len()), None),
+            _ => return None,
+        };
+        let authored = match bytes {
+            Some(bytes) => text.get(..bytes),
+            None if crate::swearmeter_ledger::ambiguous_legacy_attachment(text) => None,
+            None => Some(text.as_str()),
+        };
+        Some((id, Self { count: authored.map(crate::swearmeter::count).unwrap_or(0), unknown: authored.is_none(), client }))
+    }
+}
+
 pub struct IntakeLog {
     path: PathBuf,
     /// Records written and not yet drained, oldest first.
     pending: Vec<IntakeRecord>,
+    swearmeter: std::collections::HashMap<u64, PendingWordCount>,
     next_id: u64,
     /// Lines currently in the file, so a long-lived log can be compacted once it is fully
     /// drained rather than growing for the life of the install.
@@ -456,7 +479,7 @@ impl IntakeLog {
         let next_id = highest.saturating_add(1);
         records.retain(|r| r.id() > drained_through);
         let log =
-            IntakeLog { path, pending: records, next_id, lines, skipped, records_read, records_applied, stops };
+            IntakeLog { path, swearmeter: records.iter().filter_map(PendingWordCount::from_record).collect(), pending: records, next_id, lines, skipped, records_read, records_applied, stops };
         log.report_skipped();
         Ok(log)
     }
@@ -617,6 +640,8 @@ impl IntakeLog {
         // cache is not disk.
         f.sync_all()?;
         self.lines += 1;
+        if let Some((id, count)) = PendingWordCount::from_record(rec) { self.swearmeter.insert(id, count); }
+        if let IntakeRecord::Drained { through } = rec { self.swearmeter.retain(|id, _| id > through); }
         Ok(())
     }
 
@@ -1352,6 +1377,30 @@ impl TurnControl {
     pub fn stop_claim_for(&self, turn_id: &str) -> Option<StopClaim> {
         self.inner.conversations.lock().unwrap().values().filter_map(|s|s.stop.as_ref())
             .find(|claim|claim.turn_id==turn_id).cloned()
+    }
+
+    /// Numeric pending-input overlay. Hold intake while taking the published ledger
+    /// snapshot so an acknowledgment cannot create a gap between the two sources.
+    /// Only the short pending queue is visited. Stored message history is never scanned.
+    pub fn swearmeter_inputs(&self, reader: &crate::read_view::SpineReader) -> (std::sync::Arc<crate::read_view::ReadView>, u64, u64, bool) {
+        let guard = self.inner.intake.lock().unwrap();
+        let view = reader.snapshot();
+        let projection = view.ledger().swearmeter();
+        let mut count = 0;
+        let mut unknown = 0;
+        let mut clients = std::collections::HashSet::new();
+        if let Some(log) = guard.as_ref() {
+            for (id, pending) in &log.swearmeter {
+                if projection.has_intake(*id) { continue; }
+                if let Some((thread, client)) = &pending.client {
+                    if projection.has_client(thread, client) || !clients.insert((thread, client)) { continue; }
+                }
+                count += pending.count;
+                unknown += u64::from(pending.unknown);
+            }
+        }
+        let complete = guard.as_ref().is_some_and(|log| log.health().is_clean());
+        (view, count, unknown, complete)
     }
 
     /// Undrained intake records, oldest first.

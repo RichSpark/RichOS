@@ -85,6 +85,7 @@ const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html", "cleaner.htm
 const ROLES = {
   "cleaner.html":{role:"ui",why:"RichCleaner capture and personal library windows"},
   "cleaner.js":{role:"ui",why:"RichCleaner owner-driven capture and retrieval"},
+  "swearmeter.js": { role: "ui", why: "maintained local word count, optional settings/home display and coverage/retry text" },
   "cleaner-settings.js":{role:"ui",why:"RichCleaner settings and Inbox-first preference"},
   "cleaner.css":{role:"style",why:"RichCleaner capture, search and details"},
   "index.html": { role: "ui", why: "the shell Tauri loads" },

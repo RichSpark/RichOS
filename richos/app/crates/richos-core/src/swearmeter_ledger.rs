@@ -10,6 +10,7 @@ pub struct Projection {
     entries: HashMap<String, Entry>,
     intakes: HashMap<u64, String>,
     aliases: HashMap<String, String>,
+    clients: HashSet<(String, String)>,
     count: u64,
     unknown_inputs: u64,
     revision: u64,
@@ -21,6 +22,8 @@ pub fn is_composite(id: &str) -> bool {
 }
 
 impl Projection {
+    pub fn has_intake(&self, id: u64) -> bool { self.intakes.contains_key(&id) }
+    pub fn has_client(&self, thread: &str, id: &str) -> bool { self.clients.contains(&(thread.into(), id.into())) }
     pub fn count(&self) -> u64 { self.count }
     pub fn unknown_inputs(&self) -> u64 { self.unknown_inputs }
     pub fn revision(&self) -> u64 { self.revision }
@@ -35,7 +38,7 @@ impl Projection {
 
     pub(crate) fn observe(&mut self, event: &Event) {
         match event {
-            Event::PromptReceived { turn_id, text, source, intake_id, pressed, authored_bytes, .. } => {
+            Event::PromptReceived { turn_id, text, source, intake_id, pressed, authored_bytes, thread_id, client_id, .. } => {
                 self.revision += 1;
                 let key = self.root(turn_id);
                 if self.entries.contains_key(&key) { return; }
@@ -57,6 +60,7 @@ impl Projection {
                 let count = if eligible { authored.map(swearmeter::count).unwrap_or(0) } else { 0 };
                 if eligible {
                     if let Some(id) = intake_id { self.intakes.insert(*id, key.clone()); }
+                    if let Some(id) = client_id { self.clients.insert((thread_id.clone(), id.clone())); }
                 }
                 if is_composite(&key) && authored_bytes.is_none() { self.composites.insert(key.clone()); }
                 self.count += count;
@@ -97,9 +101,9 @@ impl Projection {
 // Older records did not retain the producer's text boundary. An exact attachment
 // descriptor shape is ambiguous without it. Do not count its generated words or
 // silently strip a possible quotation: qualify the whole old input as unknown.
-fn ambiguous_legacy_attachment(text: &str) -> bool {
+pub(crate) fn ambiguous_legacy_attachment(text: &str) -> bool {
     text.lines().any(|line| (line.starts_with("Attached on this Mac (")
-        || line.starts_with("Attached from the phone (")) && line.ends_with("):"))
+        || line.starts_with("Attached from the phone (") || line.starts_with("Folders on this Mac (")) && line.ends_with("):"))
 }
 
 #[cfg(test)]
@@ -179,4 +183,19 @@ mod tests {
         assert_eq!(p.count(), 3);
         assert_eq!(p.unknown_inputs(), 1);
     }
+    #[test]
+    fn a_refused_writer_does_not_fold_an_unwritten_input() {
+        use crate::{ledger::Ledger, entity::EntityId};
+        let path = std::env::temp_dir().join(format!("swearmeter-write-{}", uuid::Uuid::new_v4()));
+        let mut ledger = Ledger::open(&path).unwrap();
+        let thread = ledger.create_thread("Fixture", &EntityId::parse("fixture").unwrap()).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let mut reader = ledger.read_copy();
+        assert!(reader.record_prompt_received(&binding, "shit", Source::Text).is_err());
+        assert_eq!(reader.swearmeter().count(), 0);
+        assert_eq!(Ledger::open(&path).unwrap().swearmeter().count(), 0);
+        drop(ledger);
+        std::fs::remove_file(path).unwrap();
+    }
+
 }
