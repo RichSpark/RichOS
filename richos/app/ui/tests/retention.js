@@ -232,6 +232,9 @@ async function main() {
       said.includes("The records are still there; their output is not."),
       "and it said which half went — Tier A is never evicted at any setting: " + said
     );
+    // Clicking the radio can scroll the taller Settings panel. Capture the same
+    // full panel after the store's answer, rather than that incidental scroll.
+    await page.$eval("#set-menu", (menu) => { menu.scrollTop = 0; });
     await shot(page, SHOTS + "/7-2-02-a-delete-that-says-what-it-deleted");
 
     // A second, LOOSER change must not claim a removal it did not make — and must not
