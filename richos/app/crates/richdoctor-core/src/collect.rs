@@ -672,6 +672,7 @@ fn richscribe(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     item.coverage = coverage;
     item.observed_at = picked.iter().filter_map(|x| x.0).max();
     item.label = "the RichScribe log".into();
+    if missing != Status::Absent { item.note = missing_note(missing, "Some RichScribe log files"); }
     item.summary = format!("{} RichScribe log line(s){}.", picked.len(), if coverage == Coverage::InWindow { " in the incident window" } else { ", the most recent" });
     let text: Vec<String> = picked.into_iter().map(|x| x.1).collect();
     finish(item, &text.join("\n"), ctx, truncated)

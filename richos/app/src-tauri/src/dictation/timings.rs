@@ -29,7 +29,7 @@ impl Timings {
     fn entry(&self, stage: &str, elapsed_ms: u64, since_finish_ms: Option<u64>, detail: Value) -> Value {
         json!({"schema":1,"pid":std::process::id(),"seq":self.seq,
             "version":env!("CARGO_PKG_VERSION"),"source":crate::engine::source_commit(),"profile":if cfg!(debug_assertions) {"debug"} else {"release"},
-            "model":self.model,"preview":self.preview,"stage":stage,
+            "selected_model":self.model,"preview_enabled":self.preview,"stage":stage,
             "elapsed_ms":elapsed_ms,"since_finish_ms":since_finish_ms,"detail":detail})
     }
     pub fn event(&self, stage: &'static str, detail: Value) {
@@ -83,14 +83,38 @@ impl Drop for Timings {
 mod tests {
     use super::*;
     #[test]
+    fn richdoctor_collects_the_produced_timing_record_without_losing_its_spans() {
+        use richdoctor_core::{collect::{collect, Category, Scope, Window}, scrub::Context, evidence::Status};
+        let home = std::env::temp_dir().join(format!("dictation-timing-collection-{}", std::process::id()));
+        let data = home.join("Library/Application Support/com.richos.app");
+        std::fs::create_dir_all(&data).unwrap();
+        let mut t = Timings::new(7, "large-v3-turbo-q5_0", true);
+        let at = 1_798_784_000_000;
+        let entry = t.entry("recognition_completed", 4010, Some(420), json!({"model":"small.en","recognition_ms":300}));
+        std::fs::write(data.join("dictation.log"), format!("{} dictation timing {entry}\n", richdoctor_core::util::utc_stamp(at))).unwrap();
+        let scope = Scope { home: home.clone(), window: Window::around(at), claude_bin: None, diagnostics: true };
+        let collected = collect(Category::Richscribe, &scope, &Context::default(), 0);
+        assert_eq!(collected[0].status, Status::Collected);
+        let raw = collected[0].text.split_once("dictation timing ").unwrap().1;
+        let record: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(record["selected_model"], "large-v3-turbo-q5_0");
+        assert_eq!(record["detail"]["model"], "small.en", "fallback must not masquerade as the selected model");
+        assert_eq!(record["since_finish_ms"], 420);
+        assert_eq!(record["detail"]["recognition_ms"], 300);
+        assert_eq!(record["preview_enabled"], true);
+        t.complete = true;
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
     fn stage_records_preserve_distinct_monotonic_spans_and_omit_user_content() {
         let mut t = Timings::new(7, "untrusted model text", true);
         let v = t.entry("preview_stopped", 4010, Some(420), json!({}));
         assert_eq!(v["elapsed_ms"], 4010);
         assert_eq!(v["since_finish_ms"], 420);
-        assert_eq!(v["model"], "other");
+        assert_eq!(v["selected_model"], "other");
         assert_eq!(v["seq"], 7);
-        assert_eq!(v["preview"], true);
+        assert_eq!(v["preview_enabled"], true);
         assert!(v.to_string().len() < 400);
         assert!(!v.to_string().contains("untrusted"));
         t.complete = true;

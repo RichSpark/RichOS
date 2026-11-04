@@ -1674,7 +1674,7 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
     })?;
     let samples = recording.into_samples();
     let bound = decode_bound(samples.len());
-    if let Some(t) = timings { t.event("recognition_started", serde_json::json!({})); }
+    if let Some(t) = timings { t.event("recognition_started", serde_json::json!({"model":id})); }
     let started = Instant::now();
     let transcript = {
         let scratch = Scratch::new(data_dir).map_err(|e| {
@@ -1692,7 +1692,7 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
         return Err(Problem::CouldNotWrite);
     }
     let latency = started.elapsed().as_millis();
-    if let Some(t) = timings { t.event("recognition_completed", serde_json::json!({"recognition_ms":latency})); }
+    if let Some(t) = timings { t.event("recognition_completed", serde_json::json!({"model":id,"recognition_ms":latency})); }
     let words = match judge_transcript(&transcript.0) {
         Ok(w) => w,
         Err(p) => {
