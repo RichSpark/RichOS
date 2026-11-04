@@ -1,6 +1,39 @@
 //! Numeric projection of top-level durable ledger events, never generated turns.
 use crate::{ledger::{Event, Source}, swearmeter};
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, sync::Arc};
+use crate::ledger::Turn;
+
+/// Disposable numeric state, bound to the exact source by the checkpoint envelope.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Frozen {
+    pub events: u64,
+    counts: Vec<u64>,
+    intakes: Vec<u64>,
+    aliases: HashMap<String, String>,
+    clients: Vec<(String, String)>,
+    composites: HashSet<String>,
+    orphans: HashMap<String, (u64, bool)>,
+    count: u64,
+    unknown_inputs: u64,
+}
+impl Frozen {
+    pub fn valid(&self) -> bool {
+        let count = self.counts.iter().map(|v| v >> 1).chain(self.orphans.values().map(|v| v.0)).try_fold(0u64, u64::checked_add);
+        let unknown: u64 = self.counts.iter().map(|v| v & 1).sum::<u64>() + self.orphans.values().filter(|v| v.1).count() as u64;
+        count == Some(self.count) && unknown == self.unknown_inputs
+            && self.counts.len() as u64 <= self.events
+            && self.intakes.windows(2).all(|p| p[0] < p[1])
+            && self.clients.windows(2).all(|p| p[0] < p[1])
+            && self.aliases.keys().all(|id| {
+                let mut key = id;
+                for _ in 0..=self.aliases.len() {
+                    match self.aliases.get(key) { Some(parent) => key = parent, None => return true }
+                }
+                false
+            })
+    }
+}
+
 
 #[derive(Clone, Default)]
 struct Entry { count: u64, unknown: bool }
@@ -15,6 +48,9 @@ pub struct Projection {
     unknown_inputs: u64,
     revision: u64,
     composites: HashSet<String>,
+    frozen: Option<Arc<Frozen>>,
+    retired: HashSet<String>,
+    known_roots: HashSet<String>,
 }
 
 pub fn is_composite(id: &str) -> bool {
@@ -22,12 +58,55 @@ pub fn is_composite(id: &str) -> bool {
 }
 
 impl Projection {
-    pub fn has_intake(&self, id: u64) -> bool { self.intakes.contains_key(&id) }
-    pub fn has_client(&self, thread: &str, id: &str) -> bool { self.clients.contains(&(thread.into(), id.into())) }
+    pub fn has_intake(&self, id: u64) -> bool { self.intakes.contains_key(&id) || self.frozen.as_ref().is_some_and(|f| f.intakes.binary_search(&id).is_ok()) }
+    pub fn has_client(&self, thread: &str, id: &str) -> bool { self.clients.contains(&(thread.into(), id.into())) || self.frozen.as_ref().is_some_and(|f| f.clients.binary_search_by(|(t, c)| (t.as_str(), c.as_str()).cmp(&(thread, id))).is_ok()) }
+    pub fn checkpoint_reused(&self) -> bool { self.frozen.is_some() }
     pub fn count(&self) -> u64 { self.count }
     pub fn unknown_inputs(&self) -> u64 { self.unknown_inputs }
     pub fn revision(&self) -> u64 { self.revision }
     pub fn composites(&self) -> &HashSet<String> { &self.composites }
+
+    pub fn from_frozen(frozen: Frozen) -> Self {
+        Self { count: frozen.count, unknown_inputs: frozen.unknown_inputs,
+            aliases: frozen.aliases.clone(), composites: frozen.composites.clone(),
+            frozen: Some(Arc::new(frozen)), ..Self::default() }
+    }
+
+    pub fn freeze(&self, turns: &[Turn], events: u64) -> Frozen {
+        let mut counts = Vec::with_capacity(turns.len());
+        let ids: HashSet<&str> = turns.iter().map(|t| t.id.as_str()).collect();
+        for turn in turns {
+            let packed = if let Some(entry) = self.entries.get(&turn.id) {
+                (entry.count << 1) | u64::from(entry.unknown)
+            } else if self.retired.contains(&turn.id) { 0 }
+            else { turn.swearmeter_checkpoint_index.and_then(|index| self.frozen.as_ref().and_then(|f| f.counts.get(index))).copied().unwrap_or(0) };
+            counts.push(packed);
+        }
+        let mut intakes = self.frozen.as_ref().map(|f| f.intakes.clone()).unwrap_or_default();
+        intakes.extend(self.intakes.keys().copied());
+        intakes.sort_unstable(); intakes.dedup();
+        let mut clients = self.frozen.as_ref().map(|f| f.clients.clone()).unwrap_or_default();
+        clients.extend(self.clients.iter().cloned());
+        clients.sort_unstable(); clients.dedup();
+        let mut orphans = self.frozen.as_ref().map(|f| f.orphans.clone()).unwrap_or_default();
+        orphans.retain(|id, _| !self.retired.contains(id));
+        for (id, entry) in &self.entries {
+            if !ids.contains(id.as_str()) { orphans.insert(id.clone(), (entry.count, entry.unknown)); }
+        }
+        Frozen { events, counts, intakes, clients, orphans, count: self.count,
+            unknown_inputs: self.unknown_inputs, aliases: self.aliases.clone(), composites: self.composites.clone() }
+    }
+
+    fn old_entry(&self, id: &str, turns: &[Turn]) -> Option<Entry> {
+        if self.retired.contains(id) { return None; }
+        let frozen = self.frozen.as_ref()?;
+        if let Some((count, unknown)) = frozen.orphans.get(id) {
+            return Some(Entry { count: *count, unknown: *unknown });
+        }
+        let index = turns.iter().find(|t| t.id == id)?.swearmeter_checkpoint_index?;
+        let packed = frozen.counts[index];
+        Some(Entry { count: packed >> 1, unknown: packed & 1 != 0 })
+    }
 
     fn root(&self, id: &str) -> String {
         let mut root = id;
@@ -36,12 +115,15 @@ impl Projection {
         root.to_string()
     }
 
-    pub(crate) fn observe(&mut self, event: &Event) {
+    #[cfg(test)]
+    pub(crate) fn observe(&mut self, event: &Event) { self.observe_in(event, &[]); }
+
+    pub(crate) fn observe_in(&mut self, event: &Event, turns: &[Turn]) {
         match event {
             Event::PromptReceived { turn_id, text, source, intake_id, pressed, authored_bytes, thread_id, client_id, .. } => {
                 self.revision += 1;
                 let key = self.root(turn_id);
-                if self.entries.contains_key(&key) { return; }
+                if self.entries.contains_key(&key) || self.known_roots.contains(&key) { return; }
                 let eligible = matches!(source, Source::Text | Source::Jam)
                     && !pressed && !is_composite(&key);
                 if eligible {
@@ -50,6 +132,10 @@ impl Projection {
                         self.aliases.insert(key, existing);
                         return;
                     }
+                }
+                if eligible && intake_id.is_some_and(|id| self.frozen.as_ref().is_some_and(|f| f.intakes.binary_search(&id).is_ok())) {
+                    self.known_roots.insert(key);
+                    return;
                 }
                 let authored = match authored_bytes {
                     Some(bytes) => text.get(..*bytes),
@@ -70,22 +156,27 @@ impl Projection {
             Event::TurnReplayed { turn_id, by_turn_id, .. }
             | Event::TurnSuperseded { turn_id, by_turn_id, .. } => {
                 self.revision += 1;
-                self.link(turn_id, by_turn_id);
+                self.link(turn_id, by_turn_id, turns);
             }
             _ => {}
         }
     }
 
-    fn link(&mut self, original: &str, continuation: &str) {
+    fn link(&mut self, original: &str, continuation: &str, turns: &[Turn]) {
         let parent = self.root(original);
         let child = self.root(continuation);
         if parent == child { return; }
+        let parent_old = self.old_entry(&parent, turns);
+        let parent_known = self.entries.contains_key(&parent) || parent_old.is_some();
+        if parent_old.is_some() { self.known_roots.insert(parent.clone()); }
+        let child_old = self.old_entry(&child, turns);
         let legacy = self.composites.contains(&parent) || self.composites.contains(&child)
             || (!self.entries.contains_key(&parent) && is_composite(&parent));
-        if let Some(mut duplicate) = self.entries.remove(&child) {
+        if let Some(mut duplicate) = self.entries.remove(&child).or(child_old) {
+            if self.frozen.is_some() { self.retired.insert(child.clone()); }
             self.count -= duplicate.count;
             self.unknown_inputs -= u64::from(duplicate.unknown);
-            if !self.entries.contains_key(&parent) {
+            if !parent_known {
                 if is_composite(&parent) { duplicate.count = 0; duplicate.unknown = false; }
                 self.count += duplicate.count;
                 self.unknown_inputs += u64::from(duplicate.unknown);

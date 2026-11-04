@@ -2728,7 +2728,21 @@ fn main() {
                 window_configs.len()
             );
             let ledger_path = data_dir.join("conversation-ledger.jsonl");
-            let ledger = Ledger::open(&ledger_path).expect("open ledger");
+            let checkpoint_path = data_dir.join("swearmeter-cache");
+            let cards_path = data_dir.join("engine-state/questions/store.json");
+            let checkpoint = richos_core::swearmeter_checkpoint::Checkpoint::load(&checkpoint_path, &ledger_path, &cards_path);
+            let cached_card_counts = checkpoint.as_ref().map(|cache| Arc::new(cache.cards.clone()));
+            let cached_ledger_source = checkpoint.as_ref().map(|cache| cache.ledger_source.clone());
+            // The existing mandatory card-history read can run beside ledger replay.
+            // Its file generation is checked again at the original input-order boundary.
+            let card_counts_load = {
+                let root = data_dir.join("engine-state");
+                let cached = cached_card_counts.clone();
+                std::thread::Builder::new().name("richos-card-history".into()).spawn(move || {
+                    richos_core::questions::Store::new(root).swearmeter_startup_cached(cached.as_deref())
+                }).ok()
+            };
+            let ledger = Ledger::open_cached(&ledger_path, checkpoint.map(|cache| (cache.ledger_source, cache.ledger))).expect("open ledger");
 
             // WHAT DID NOT LOAD, ON THE BOOT LINE, BEFORE ANYTHING ELSE USES THE LEDGER.
             //
@@ -3355,18 +3369,32 @@ fn main() {
             spine.set_turn_control(control.clone());
             // A card answer keeps the input order it was accepted with until it reaches the
             // ledger; never hand that order to a new input after a restart.
-            let card_counts = match richos_core::questions::Store::new(data_dir.join("engine-state")).swearmeter_startup() {
-                Ok((order, projection)) => {
+            let card_store = richos_core::questions::Store::new(data_dir.join("engine-state"));
+            let card_startup = match card_counts_load {
+                Some(reader) => reader.join().unwrap_or_else(|_| Err("Card history reader stopped unexpectedly".into()))
+                    .and_then(|snapshot| card_store.swearmeter_refresh_startup(snapshot)),
+                None => card_store.swearmeter_startup_cached(cached_card_counts.as_deref()),
+            };
+            let (card_counts, card_source) = match card_startup {
+                Ok((order, projection, source)) => {
                     if let Some(order) = order { control.advance_input_order(order); }
-                    projection
+                    (projection, source)
                 }
                 Err(e) => {
                     eprintln!("[richos] saved answer history unreadable: {e}");
+                    if let Ok(Some(order)) = card_store.highest_order() { control.advance_input_order(order); }
                     let mut projection = richos_core::swearmeter_questions::Projection::empty();
                     projection.available = false;
-                    projection
+                    (projection, None)
                 }
             };
+            if card_counts.available && (cached_ledger_source.as_ref() != spine.ledger().swearmeter_source_stamp()
+                || cached_card_counts.as_ref().map(|cache| &cache.source) != Some(&card_source)) {
+                let cards = richos_core::swearmeter_checkpoint::CachedCards { source: card_source, summary: card_counts.summary() };
+                if let Err(error) = richos_core::swearmeter_checkpoint::Checkpoint::save(&checkpoint_path, &ledger_path, &cards_path, spine.ledger(), cards) {
+                    eprintln!("[richos] numeric checkpoint could not be saved: {error}");
+                }
+            }
 
             // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
             //
@@ -4192,6 +4220,7 @@ fn main() {
                     if let Some(sweeper) = richos_core::app_cleanup::Sweeper::for_engine(&engine, &state.data_dir) {
                         sweeper.run(richos_core::app_cleanup::Moment::Quit).ok();
                     }
+                    swearmeter_host::save_on_exit(&state);
                     if let Err(e) = state.launch.lock().unwrap().note_clean_exit() {
                         eprintln!("[richos] launch record: could not mark a clean exit: {e}");
                     }

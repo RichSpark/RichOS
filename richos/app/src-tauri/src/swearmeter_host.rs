@@ -73,3 +73,19 @@ pub fn retry_swearmeter(app: AppHandle, state: State<crate::AppState>) -> Result
     drop(app.emit(EVENT_SWEARMETER, &result));
     Ok(result)
 }
+
+
+/// No per-message checkpoint writes. An interrupted shutdown leaves a safe cache
+/// miss; ordinary startup rebuilds from the two existing histories in that case.
+pub fn save_on_exit(state: &crate::AppState) {
+    let Ok(spine) = state.spine.try_lock() else { return; };
+    let store = richos_core::questions::Store::new(state.data_dir.join("engine-state"));
+    let Ok((_, cards, source)) = store.swearmeter_startup_cached(None) else { return; };
+    if !cards.available { return; }
+    let cards = richos_core::swearmeter_checkpoint::CachedCards { source, summary: cards.summary() };
+    if let Err(error) = richos_core::swearmeter_checkpoint::Checkpoint::save(
+        &state.data_dir.join("swearmeter-cache"), &state.data_dir.join("conversation-ledger.jsonl"),
+        &state.data_dir.join("engine-state/questions/store.json"), spine.ledger(), cards) {
+        eprintln!("[richos] numeric checkpoint was not saved: {error}");
+    }
+}

@@ -227,3 +227,150 @@ fn failed_durable_acceptance_adds_nothing_and_stopping_an_accepted_turn_subtract
     assert_eq!(unrelated.swearmeter().count(), 0);
     assert_eq!(ledger.swearmeter().count(), 1);
 }
+
+
+fn save_checkpoint(f: &Fixture, ledger: &Ledger) -> PathBuf {
+    use richos_core::swearmeter_checkpoint::{CachedCards, Checkpoint};
+    let (_, cards, source) = f.store.swearmeter_startup_cached(None).unwrap();
+    let path = f.root.join("swearmeter-cache");
+    Checkpoint::save(&path, &f.root.join("ledger"), &f.root.join("questions/store.json"), ledger,
+        CachedCards { source, summary: cards.summary() }).unwrap();
+    path
+}
+
+#[test]
+fn a_bound_checkpoint_keeps_old_and_new_inputs_and_lineage_exact() {
+    use richos_core::swearmeter_checkpoint::Checkpoint;
+    let f = Fixture::new();
+    let path = f.root.join("ledger");
+    let mut ledger = Ledger::open(&path).unwrap();
+    let thread = ledger.create_thread("Cached", &EntityId::parse("fixture").unwrap()).unwrap();
+    let binding = ledger.thread_binding(&thread).unwrap();
+    let first = ledger.record_prompt_received_from_intake(&binding, "shit", Source::Text, 1).unwrap();
+    let second = ledger.record_prompt_received(&binding, "fuck fuck", Source::Text).unwrap();
+    let questions = f.ask("front_desk");
+    f.answer(&questions[0], "direct", "damn", AnswerOrigin::Direct);
+    f.answer(&questions[1], "legacy", "shit", AnswerOrigin::Unknown);
+    let cache_path = save_checkpoint(&f, &ledger);
+    drop(ledger);
+    let cache = Checkpoint::load(&cache_path, &path, &f.root.join("questions/store.json")).unwrap();
+    let (order, cards, _) = f.store.swearmeter_startup_cached(Some(&cache.cards)).unwrap();
+    assert_eq!(order, f.store.highest_order().unwrap());
+    assert_eq!((cards.count, cards.unknown_inputs), (1, 1));
+    *f.cards.lock().unwrap() = cards;
+    // The restored summary has no historical seen-key set. The transaction itself
+    // identifies retries, so a retry cannot add to the restored total.
+    f.answer(&questions[0], "direct", "damn", AnswerOrigin::Direct);
+    assert_eq!(f.cards.lock().unwrap().count, 1);
+    let mut ledger = Ledger::open_cached(&path, Some((cache.ledger_source, cache.ledger))).unwrap();
+    assert!(ledger.swearmeter().checkpoint_reused());
+    assert_eq!(ledger.swearmeter().count(), 3);
+    ledger.record_prompt_received_from_intake(&binding, "shit", Source::Text, 1).unwrap();
+    ledger.replay_turn(&binding, &first).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 3);
+    ledger.mark_turn_superseded(&first, &second).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 1);
+    assert!(ledger.freeze_swearmeter().valid());
+    let cache_path = save_checkpoint(&f, &ledger);
+    drop(ledger);
+    let cache = Checkpoint::load(&cache_path, &path, &f.root.join("questions/store.json")).unwrap();
+    let mut ledger = Ledger::open_cached(&path, Some((cache.ledger_source, cache.ledger))).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 1);
+    ledger.record_prompt_received(&binding, "shit", Source::Text).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 2);
+    f.answer(&questions[0], "another-send", "damn", AnswerOrigin::Direct);
+    assert_eq!(f.cards.lock().unwrap().count, 2);
+}
+
+#[test]
+fn cache_misses_rebuild_after_corruption_either_source_change_or_file_replacement() {
+    use richos_core::swearmeter_checkpoint::Checkpoint;
+    let f = Fixture::new();
+    let path = f.root.join("ledger");
+    let cards = f.root.join("questions/store.json");
+    let mut ledger = Ledger::open(&path).unwrap();
+    let thread = ledger.create_thread("Cached", &EntityId::parse("fixture").unwrap()).unwrap();
+    let binding = ledger.thread_binding(&thread).unwrap();
+    ledger.record_prompt_received(&binding, "shit", Source::Text).unwrap();
+    let questions = f.ask("front_desk");
+    let cache_path = save_checkpoint(&f, &ledger);
+    assert!(Checkpoint::load(&cache_path, &path, &cards).is_some());
+    std::fs::write(&cache_path, b"damaged cache").unwrap();
+    assert!(Checkpoint::load(&cache_path, &path, &cards).is_none());
+    save_checkpoint(&f, &ledger);
+    f.answer(&questions[0], "after-checkpoint", "damn", AnswerOrigin::Direct);
+    assert!(Checkpoint::load(&cache_path, &path, &cards).is_none());
+    assert_eq!(f.store.swearmeter_projection().unwrap().count, 1);
+    save_checkpoint(&f, &ledger);
+    ledger.record_prompt_received(&binding, "fuck", Source::Text).unwrap();
+    assert!(Checkpoint::load(&cache_path, &path, &cards).is_none());
+    assert_eq!(Ledger::open(&path).unwrap().swearmeter().count(), 2);
+    save_checkpoint(&f, &ledger);
+    // Same bytes, same modification time and same pathname, different file generation.
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let replacement = f.root.join("replacement");
+    std::fs::copy(&path, &replacement).unwrap();
+    std::fs::File::open(&replacement).unwrap().set_modified(modified).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    assert!(Checkpoint::load(&cache_path, &path, &cards).is_none());
+    assert_eq!(Ledger::open(&path).unwrap().swearmeter().count(), 2);
+}
+
+#[test]
+fn a_stale_checkpoint_cannot_hide_a_crash_after_acceptance_or_a_detector_change() {
+    use richos_core::swearmeter_checkpoint::Checkpoint;
+    use sha2::{Digest, Sha256};
+    let f = Fixture::new();
+    let path = f.root.join("ledger");
+    let cards = f.root.join("questions/store.json");
+    let mut ledger = Ledger::open(&path).unwrap();
+    let thread = ledger.create_thread("Cached", &EntityId::parse("fixture").unwrap()).unwrap();
+    let binding = ledger.thread_binding(&thread).unwrap();
+    ledger.record_prompt_received(&binding, "shit", Source::Text).unwrap();
+    let cache_path = save_checkpoint(&f, &ledger);
+    let cache = Checkpoint::load(&cache_path, &path, &cards).unwrap();
+    ledger.record_prompt_received(&binding, "fuck", Source::Text).unwrap();
+    drop(ledger);
+    // Even a cache loaded just before the new durable write is revalidated by open.
+    let ledger = Ledger::open_cached(&path, Some((cache.ledger_source, cache.ledger))).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 2);
+    save_checkpoint(&f, &ledger);
+    let bytes = std::fs::read(&cache_path).unwrap();
+    let mut payload: serde_json::Value = serde_json::from_slice(&bytes[32..]).unwrap();
+    payload["version"] = serde_json::json!(999);
+    let payload = serde_json::to_vec(&payload).unwrap();
+    let mut changed = Sha256::digest(&payload).to_vec();
+    changed.extend(&payload);
+    std::fs::write(&cache_path, changed).unwrap();
+    assert!(Checkpoint::load(&cache_path, &path, &cards).is_none());
+    assert_eq!(Ledger::open(&path).unwrap().swearmeter().count(), 2);
+}
+
+#[test]
+fn an_earlier_card_snapshot_is_refreshed_if_acceptance_changed_its_generation() {
+    let f = Fixture::new();
+    let questions = f.ask("front_desk");
+    let startup = f.store.swearmeter_startup_cached(None).unwrap();
+    assert_eq!(startup.1.count, 0);
+    f.answer(&questions[0], "accepted-during-startup", "shit", AnswerOrigin::Direct);
+    let refreshed = f.store.swearmeter_refresh_startup(startup).unwrap();
+    assert_eq!(refreshed.1.count, 1);
+    assert_eq!(refreshed.0, f.store.highest_order().unwrap());
+}
+
+#[test]
+fn duplicate_or_unreadable_operation_inputs_are_unavailable_instead_of_complete_zero() {
+    let f = Fixture::new();
+    let questions = f.ask("front_desk");
+    f.answer(&questions[0], "direct", "shit", AnswerOrigin::Direct);
+    let path = f.root.join("questions/store.json");
+    let mut data: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let operation = data["operations"].as_object().unwrap().values().next().unwrap().clone();
+    data["operations"] = serde_json::json!({"bad": {"request":"unreadable", "result":{}, "origin":"direct"}});
+    std::fs::write(&path, data.to_string()).unwrap();
+    assert!(!f.store.swearmeter_projection().unwrap().available);
+    let single = serde_json::json!({"questions":[], "operations":{}}).to_string();
+    let duplicated = single.replace("\"operations\":{}", &format!("\"operations\":{{\"same\":{operation},\"same\":{operation}}}"));
+    std::fs::write(&path, duplicated).unwrap();
+    assert!(!f.store.swearmeter_projection().unwrap().available);
+}

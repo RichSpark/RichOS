@@ -2,7 +2,7 @@
 use serde::Serialize;
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
-/// Increment when tokenization or dictionary membership changes. Totals are rebuilt
+/// Increment when tokenization, dictionary membership or input-attribution rules change. Totals are rebuilt
 /// from the existing input histories at startup, never when display is enabled.
 pub const DETECTOR_VERSION: u32 = 1;
 pub const EVENT_SWEARMETER: &str = "rich://swearmeter";

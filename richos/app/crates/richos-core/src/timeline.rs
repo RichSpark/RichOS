@@ -2400,6 +2400,7 @@ mod tests {
     fn turn() -> Turn {
         // A completed CEO turn, streamed in two runs around one tool call at seq 1.
         Turn {
+            swearmeter_checkpoint_index: None,
             id: "turn_1".into(),
             thread_id: "thr".into(),
             entity_id: Some(entity()),

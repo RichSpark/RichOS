@@ -227,6 +227,8 @@ impl AnswerResult {
         json!({"outcome":self.outcome,"question":self.question.as_ref().map(Question::public_value)})
     }
 }
+pub type SwearMeterStartup = (Option<u64>, crate::swearmeter_questions::Projection, Option<crate::swearmeter_checkpoint::SourceStamp>);
+
 impl Store {
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
@@ -246,31 +248,60 @@ impl Store {
 
     /// Fold statistics in the same snapshot already needed for startup input ordering.
     pub fn swearmeter_startup(&self) -> Result<(Option<u64>, crate::swearmeter_questions::Projection)> {
-        self.transaction(false, |data| {
-            let order = data.questions.iter().filter_map(|q| q.order)
-                .chain(data.deliveries.iter().filter_map(|v| v.order)).max();
-            let mut projection = crate::swearmeter_questions::Projection::empty();
-            let mut represented = std::collections::HashSet::new();
-            for (key, operation) in &data.operations {
-                match serde_json::from_str::<AnswerRequest>(&operation.request) {
-                    Ok(request) => {
-                        represented.insert(request.question_id);
-                        projection.record(key, operation.origin, &request.text);
-                    }
-                    Err(_) => projection.available = false,
-                }
+        self.swearmeter_startup_cached(None).map(|(order, projection, _)| (order, projection))
+    }
+
+    pub fn swearmeter_startup_cached(&self, cached: Option<&crate::swearmeter_checkpoint::CachedCards>) -> Result<SwearMeterStartup> {
+        std::fs::create_dir_all(&self.directory).map_err(|e| e.to_string())?;
+        let (bytes, source) = match crate::swearmeter_checkpoint::read_source(&self.directory.join("store.json")) {
+            Ok(input) => input,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if cached.is_some_and(|cache| cache.source.is_some()) { return Err("Question history is no longer available".into()); }
+                return Ok((None, crate::swearmeter_questions::Projection::empty(), None));
             }
-            for question in &data.questions {
-                if question.answer.as_ref().is_some_and(|a| !a.text.is_empty()) && !represented.contains(&question.id) {
-                    projection.unknown_inputs += 1;
-                }
+            Err(error) => return Err(error.to_string()),
+        };
+        if let Some(cached) = cached.filter(|cache| cache.source == source) {
+            // The bound summary already accounts for operations. Only the ordering
+            // fields needed by ordinary startup remain to be read.
+            #[derive(Deserialize)]
+            struct Ordered { order: Option<u64> }
+            #[derive(Deserialize)]
+            struct Orders {
+                questions: Vec<Ordered>,
+                #[serde(default)] deliveries: Vec<Ordered>,
             }
-            for delivery in &data.deliveries {
-                let prefix = if delivery.set_id.is_some() { "question-answer" } else { "question-followup" };
-                projection.known_composites.insert(format!("{prefix}:{}", delivery.id));
+            let orders: Orders = serde_json::from_slice(&bytes).map_err(|e| format!("Question history could not be read: {e}"))?;
+            let order = orders.questions.iter().chain(&orders.deliveries).filter_map(|item| item.order).max();
+            return Ok((order, crate::swearmeter_questions::Projection::from_summary(&cached.summary), source));
+        }
+        #[derive(Deserialize)]
+        struct Inputs {
+            questions: Vec<Question>,
+            #[serde(default)] deliveries: Vec<Delivery>,
+            #[serde(default)] operations: crate::swearmeter_questions::OperationInputs,
+        }
+        let data: Inputs = serde_json::from_slice(&bytes).map_err(|e| format!("Question history could not be read: {e}"))?;
+        let order = data.questions.iter().filter_map(|q| q.order).chain(data.deliveries.iter().filter_map(|d| d.order)).max();
+        let mut projection = data.operations.projection;
+        for question in &data.questions {
+            if question.answer.as_ref().is_some_and(|a| !a.text.is_empty()) && !data.operations.represented.contains(&question.id) {
+                projection.unknown_inputs += 1;
             }
-            Ok((order, projection))
-        })
+        }
+        for delivery in &data.deliveries {
+            let prefix = if delivery.set_id.is_some() { "question-answer" } else { "question-followup" };
+            projection.known_composites.insert(format!("{prefix}:{}", delivery.id));
+        }
+        Ok((order, projection, source))
+    }
+
+    /// A background startup read is usable at the original ordering boundary only
+    /// while its exact source generation is still current. Refresh once on change.
+    pub fn swearmeter_refresh_startup(&self, snapshot: SwearMeterStartup) -> Result<SwearMeterStartup> {
+        if crate::swearmeter_checkpoint::SourceStamp::at(&self.directory.join("store.json")).ok() == Some(snapshot.2.clone()) {
+            Ok(snapshot)
+        } else { self.swearmeter_startup_cached(None) }
     }
 
     fn transaction<T>(&self, write: bool, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
@@ -515,7 +546,7 @@ impl Store {
                             && q.thread_id == thread
                     })
                     .cloned();
-                return Ok((result, true, op.origin));
+                return Ok((result, false, op.origin));
             }
             let q = d
                 .questions
