@@ -7,7 +7,7 @@ use std::{path::Path, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::
 
 pub enum Update {
     Words { text: String, sampled_at: Instant, decode_ms: u64 },
-    Paused,
+    Paused { reason: &'static str },
     Unavailable,
     Quiet,
 }
@@ -54,18 +54,19 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         };
         if !VoiceEvidence::measure(&samples).carried_speech() { send(Update::Quiet); continue; }
         if stop.load(Ordering::Acquire) { return; }
-        let result = Scratch::new(data_dir).map_err(|_| ()).and_then(|scratch|
+        let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch|
             recognizer.transcribe_bounded_until(&samples, scratch.path(), Duration::from_millis(1800), stop)
-                .map_err(|_| ()));
+                .map_err(|_| "decoder_failed"));
         if stop.load(Ordering::Acquire) { return; }
         match result {
             Ok((text, decode_ms)) if sampled_at.elapsed() <= Duration::from_secs(2) => {
                 match judge_transcript(&text) {
                     Ok(text) => send(Update::Words { text: recent_text(&text), sampled_at, decode_ms }),
-                    Err(_) => { send(Update::Paused); return; }
+                    Err(_) => { send(Update::Paused { reason: "transcript_rejected" }); return; }
                 }
             }
-            _ => { send(Update::Paused); return; }
+            Ok(_) => { send(Update::Paused { reason: "stale_result" }); return; }
+            Err(reason) => { send(Update::Paused { reason }); return; }
         }
         // A slow startup/tick never causes a burst of catch-up decodes.
         if due < Instant::now() { due = Instant::now() + Duration::from_secs(2); }
@@ -144,7 +145,7 @@ mod tests {
                         "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms,
                         "characters":text.chars().count(), "words":text.split_whitespace().count()}),
                     Update::Quiet => serde_json::json!({"kind":"quiet","at_ms":began.elapsed().as_millis()}),
-                    Update::Paused => serde_json::json!({"kind":"paused","at_ms":began.elapsed().as_millis()}),
+                    Update::Paused { reason } => serde_json::json!({"kind":"paused","reason":reason,"at_ms":began.elapsed().as_millis()}),
                     Update::Unavailable => serde_json::json!({"kind":"unavailable","at_ms":began.elapsed().as_millis()}),
                 };
                 updates.lock().unwrap().push(entry);

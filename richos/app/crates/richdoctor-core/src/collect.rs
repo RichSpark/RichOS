@@ -649,21 +649,32 @@ fn configuration(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
 fn richscribe(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     let root = scope.data_root();
     let source = "RichScribe log";
-    let r = match read_source(&root, &root.join("dictation.log"), scope, budget, true) {
-        Ok(r) => r,
-        Err(s) => return unread(Category::Richscribe, source, s),
-    };
-    let lines: Vec<(Option<u64>, String)> = r.text.lines().filter(|l| !l.trim().is_empty()).map(|l| (l.split_whitespace().next().and_then(crate::util::parse_utc_stamp), l.chars().take(400).collect())).collect();
+    let mut reads = Vec::new();
+    let mut missing = Status::Absent;
+    // Read the older file first; ordinary rotation is bounded to one backup.
+    for name in ["dictation.log.1", "dictation.log"] {
+        match read_source(&root, &root.join(name), scope, budget, true) {
+            Ok(r) => reads.push(r),
+            Err(Status::Absent) => {},
+            Err(s) => missing = s,
+        }
+    }
+    if reads.is_empty() { return unread(Category::Richscribe, source, missing); }
+    let truncated = reads.iter().any(|r| r.truncated) || missing != Status::Absent;
+    let bytes = reads.iter().map(|r| r.bytes).sum();
+    let lines: Vec<(Option<u64>, String)> = reads.iter().flat_map(|r| r.text.lines())
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| (l.split_whitespace().next().and_then(crate::util::parse_utc_stamp), l.chars().take(1024).collect())).collect();
     let (picked, coverage) = pick(&lines, |x| x.0, &scope.window, 20);
     let picked: Vec<(Option<u64>, String)> = picked.into_iter().rev().take(200).rev().collect();
     let mut item = Item::new(Category::Richscribe, source).expect("random source");
-    item.input_bytes = r.bytes;
+    item.input_bytes = bytes;
     item.coverage = coverage;
     item.observed_at = picked.iter().filter_map(|x| x.0).max();
     item.label = "the RichScribe log".into();
     item.summary = format!("{} RichScribe log line(s){}.", picked.len(), if coverage == Coverage::InWindow { " in the incident window" } else { ", the most recent" });
     let text: Vec<String> = picked.into_iter().map(|x| x.1).collect();
-    finish(item, &text.join("\n"), ctx, r.truncated)
+    finish(item, &text.join("\n"), ctx, truncated)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -842,6 +853,27 @@ mod tests {
         assert!(!item.text.contains("SecretCo") && !item.text.contains("Jane"));
         write(&path, "{\"schema_version\":1,");
         assert_eq!(collect(Category::Configuration, &scope(&h.0, Window::unknown(T)), &Context::default(), 0)[0].status, Status::Unreadable);
+    }
+
+    #[test]
+    fn richscribe_preserves_timing_details_across_rotation_without_loading_speech() {
+        let h = home();
+        let root = h.0.join("Library/Application Support/com.richos.app");
+        let stamp = crate::util::utc_stamp(T);
+        let timing = serde_json::json!({"schema":1,"pid":12,"seq":7,"version":"1.2.0", "stage":"finish_received",
+            "elapsed_ms":30000,"since_finish_ms":0,"detail":{"updates":14,"max_sampled_window_ms":1720},
+            "padding":"x".repeat(430)});
+        write(&root.join("dictation.log.1"), &format!("{stamp} dictation timing {timing}\n"));
+        write(&root.join("dictation.log"), &format!("{stamp} dictation timing {{\"stage\":\"preview_stopped\",\"since_finish_ms\":420}}\n"));
+        let item = &collect(Category::Richscribe, &scope(&h.0, Window::around(T)), &Context::default(), 0)[0];
+        assert_eq!(item.status, Status::Collected);
+        assert_eq!(item.text.lines().count(), 2);
+        let first = item.text.lines().next().unwrap().split_once("dictation timing ").unwrap().1;
+        let parsed: serde_json::Value = serde_json::from_str(first).unwrap();
+        assert_eq!(parsed["stage"], "finish_received");
+        assert_eq!(parsed["detail"]["max_sampled_window_ms"], 1720);
+        assert!(item.text.contains("preview_stopped"));
+        assert!(item.text.contains("420"));
     }
 
     #[test]
