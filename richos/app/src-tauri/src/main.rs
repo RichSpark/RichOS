@@ -4015,6 +4015,12 @@ fn main() {
             #[cfg(target_os = "macos")]
             dictation_app::dictation_status,
             #[cfg(target_os = "macos")]
+            dictation_app::dictation_vocabulary,
+            #[cfg(target_os = "macos")]
+            dictation_app::dictation_set_vocabulary,
+            #[cfg(target_os = "macos")]
+            dictation_app::dictation_set_preview,
+            #[cfg(target_os = "macos")]
             dictation_app::dictation_set_on,
             #[cfg(target_os = "macos")]
             dictation_app::dictation_set_key,
@@ -4527,6 +4533,34 @@ struct AppVoice {
 
 #[cfg(target_os = "macos")]
 impl dictation_app::VoiceMode for AppVoice {
+    fn preview_available(&self) -> bool {
+        richos_voice::stt::model_verified(richos_voice::dictation::FASTER).is_ok()
+    }
+    fn vocabulary_companies(&self) -> Vec<dictation::vocabulary::Company> {
+        let Some(state) = self.app.try_state::<AppState>() else { return Vec::new() };
+        state.reader.snapshot().entity_registry().entities().iter()
+            .map(|e| dictation::vocabulary::Company { id: e.id.to_string(), name: e.display_name.clone() }).collect()
+    }
+
+    fn vocabulary(&self) -> Option<dictation::vocabulary::Publication> {
+        self.app.try_state::<Arc<dictation_app::Host>>().map(|host| host.vocabulary_publication())
+    }
+
+    fn check_vocabulary(&self, rules: Vec<richos_voice::dictation_vocabulary::Rule>) -> Result<(), String> {
+        dictation::vocabulary::checked_on_main(&self.app, rules).map(|_| ())
+    }
+
+    fn select_vocabulary(&self, company: Option<String>) {
+        if let Some(host) = self.app.try_state::<Arc<dictation_app::Host>>() {
+            if host.change_vocabulary(company, None).is_err() {
+                // The prior valid choice remains authoritative. Publish its state
+                // again; never let a menu claim a setting that was not saved.
+                let mut publication = host.vocabulary_publication();
+                publication.error = Some("Your choice wasn't saved. The previous vocabulary still applies.".into());
+                host.link.tell(&dictation::ipc::AppMessage::Vocabulary { seq: 0, publication });
+            }
+        }
+    }
     fn end_for_dictation(&self) -> bool {
         let Some(handle) = self.app.try_state::<VoiceHandle>() else { return false };
         // The gate FIRST: dropping the controller drains its recognizer, and whatever it still
@@ -5873,7 +5907,8 @@ fn provider_auth_status(state: State<AppState>) -> richos_core::provider_auth::A
     view
 }
 #[richos_command::command]
-fn provider_auth_start(state: State<AppState>) -> richos_core::provider_auth::AuthView {
+fn provider_auth_start(app: AppHandle, state: State<AppState>) -> richos_core::provider_auth::AuthView {
+    clear_dictation_drafts(&app);
     state.quota.set_connecting(true);
     let bin = resolve_claude_bin();
     let view = state.provider_auth.lock().unwrap().start(&bin);
@@ -5981,8 +6016,9 @@ fn claude_account_add(state: State<AppState>, label: String, current_label: Opti
 
 /// Sign an added account in again (its row's "Sign in").
 #[richos_command::command]
-fn claude_account_sign_in(state: State<AppState>, id: String) -> Result<richos_core::provider_auth::AuthView, String> {
+fn claude_account_sign_in(app: AppHandle, state: State<AppState>, id: String) -> Result<richos_core::provider_auth::AuthView, String> {
     let folder = state.quota.accounts.folder(&id).ok_or("Account 1 signs in from the main sign-in.")?;
+    clear_dictation_drafts(&app);
     let bin = resolve_claude_bin();
     let mut auth = richos_core::provider_auth::ProviderAuth::for_folder(folder);
     let view = auth.start(&bin);
@@ -6041,7 +6077,8 @@ fn claude_account_sign_in_poll(state: State<AppState>) -> Option<(String, richos
 /// sign-in that is running for `id` is stopped, the folder signed out and the account removed.
 /// An adding that never finished leaves no row in Recent changes (`Accounts::remove`).
 #[richos_command::command]
-fn claude_account_discard(state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
+fn claude_account_discard(app: AppHandle, state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
+    clear_dictation_drafts(&app);
     {
         let mut slot = state.account_auth.lock().unwrap();
         if slot.as_ref().is_some_and(|(running, _)| *running == id) {
@@ -6073,7 +6110,8 @@ fn claude_account_nudge_answer(state: State<AppState>, answer: String) -> Result
 /// **Remove** an added account: its folder signed out with the stock `claude auth logout`,
 /// then deleted. Account 1 is the user's own Claude Code sign-in and is never removed here.
 #[richos_command::command]
-fn claude_account_remove(state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
+fn claude_account_remove(app: AppHandle, state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
+    clear_dictation_drafts(&app);
     if let Some(folder) = state.quota.accounts.folder(&id) {
         richos_core::provider_auth::logout_in(&resolve_claude_bin(), &folder);
     }
@@ -6083,7 +6121,8 @@ fn claude_account_remove(state: State<AppState>, id: String) -> Result<richos_co
 /// **Use first** (the CEO 2026-10-06, feedback item 8): he picks the account that drains first.
 /// Saved, so it survives a relaunch; the switch at 99% of its week works from it as from any.
 #[richos_command::command]
-fn claude_account_use_first(state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
+fn claude_account_use_first(app: AppHandle, state: State<AppState>, id: String) -> Result<richos_core::quota::View, String> {
+    clear_dictation_drafts(&app);
     state.quota.use_account_first(&id).map_err(|e| e.to_string())
 }
 
@@ -6091,6 +6130,13 @@ fn claude_account_use_first(state: State<AppState>, id: String) -> Result<richos
 #[richos_command::command]
 fn set_claude_at_threshold(state: State<AppState>, value: richos_core::claude_accounts::AtThreshold) -> Result<richos_core::quota::View, String> {
     state.quota.set_at_threshold(value).map_err(|e| e.to_string())
+}
+
+/// An explicit account change ends the current dictation operation and its
+/// memory-only drafts. The tool checks the owning data profile before clearing.
+fn clear_dictation_drafts(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Some(host) = app.try_state::<Arc<dictation_app::Host>>() { host.clear_drafts(); }
 }
 
 /// What this machine is missing, and what the sheet should say about it.
@@ -6602,6 +6648,9 @@ fn register_entity(
     })?;
     registry_spine.set_entity_registry(next);
     drop(registry_spine);
+
+    #[cfg(target_os = "macos")]
+    if let Some(host) = app.try_state::<Arc<dictation_app::Host>>() { host.publish_vocabulary(); }
 
     // PROPERTY 4/5: the first company he adds becomes the one in force, unless the
     // environment already decided or he has already answered. Both of those are statements

@@ -1703,6 +1703,8 @@ function openNewCompanyForm() {
   entityAddNameEl.focus();
 }
 
+window.addEventListener("richos:add-company", openNewCompanyForm);
+
 function closeNewChatMenu(refocus) {
   if (newChatMenuEl.hidden) return;
   const hadFocus = newChatMenuEl.contains(document.activeElement);

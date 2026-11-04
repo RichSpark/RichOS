@@ -100,6 +100,14 @@ pub trait VoiceMode: Send + Sync {
     /// The tool changed `dictation.json` from its menu: whatever the window shows of it is
     /// re-read.
     fn settings_changed(&self) {}
+    fn vocabulary_companies(&self) -> Vec<crate::dictation::vocabulary::Company> { Vec::new() }
+    fn vocabulary(&self) -> Option<crate::dictation::vocabulary::Publication> { None }
+    fn check_vocabulary(&self, rules: Vec<richos_voice::dictation_vocabulary::Rule>) -> Result<(), String> {
+        richos_voice::dictation_vocabulary::Rules::checked(&rules, |_| None)
+            .map(|_| ()).map_err(|e| crate::dictation::vocabulary::invalid_message(e).to_string())
+    }
+    fn select_vocabulary(&self, _company: Option<String>) {}
+    fn preview_available(&self) -> bool { false }
 }
 
 /// What a message from the tool does in the app.
@@ -109,16 +117,28 @@ pub fn on_tool_message(message: &ToolMessage, voice: &dyn VoiceMode, link: &Link
             if voice.end_for_dictation() {
                 eprintln!("[richos] voice: ended because dictation started listening");
             }
+            if let Some(publication) = voice.vocabulary() {
+                link.publish_vocabulary(*seq, publication);
+            }
             // Answered only now, with voice mode's microphone and turn gate closed, so the
             // tool opens its microphone after and never beside it (finding 2); the answer names
             // the handover and this copy, so it stands for no other (third review, finding 1).
             let bundle = std::env::current_exe().map(|e| bundle_of(&e).display().to_string()).unwrap_or_default();
             link.send(&AppMessage::VoiceYielded { seq: *seq, bundle });
         }
-        ToolMessage::State { .. } => link.observe(message.clone()),
+        ToolMessage::State { .. } => {
+            let previous = link.tool_data_dir();
+            link.observe(message.clone());
+            if link.tool_data_dir() != previous {
+                if let Some(publication) = voice.vocabulary() { link.publish_vocabulary(0, publication); }
+            }
+        }
         ToolMessage::Key { .. } | ToolMessage::Cleaner { .. } => {}
         ToolMessage::ComeForward { sheet } => voice.come_forward(*sheet),
         ToolMessage::SettingsChanged => voice.settings_changed(),
+        ToolMessage::SelectVocabulary { data_dir, company } => {
+            if voice.vocabulary().is_some_and(|v| v.data_dir == *data_dir) { voice.select_vocabulary(company.clone()); }
+        }
     }
     link.tell_listener(Some(message));
 }
@@ -145,6 +165,18 @@ pub struct Link {
 }
 
 impl Link {
+    fn tool_data_dir(&self) -> Option<PathBuf> {
+        match &*self.last.lock().unwrap_or_else(|p| p.into_inner()) {
+            Some(ToolMessage::State { data_dir, .. }) if !data_dir.is_empty() => Some(data_dir.into()),
+            _ => None,
+        }
+    }
+
+    fn publish_vocabulary(&self, seq: u64, publication: crate::dictation::vocabulary::Publication) {
+        if self.tool_data_dir().as_deref() == Some(Path::new(&publication.data_dir)) {
+            self.send(&AppMessage::Vocabulary { seq, publication });
+        }
+    }
     fn observe(&self, state: ToolMessage) {
         *self.last.lock().unwrap_or_else(|p| p.into_inner()) = Some(state);
         self.changed.notify_all();
@@ -348,6 +380,102 @@ pub struct Host {
 }
 
 impl Host {
+    pub fn vocabulary_publication(&self) -> crate::dictation::vocabulary::Publication {
+        use crate::dictation::vocabulary::{Publication, Saved};
+        let companies = self.voice.vocabulary_companies();
+        let mut publication = Publication { data_dir: self.data_dir.display().to_string(), companies,
+                                            active: None, error: None };
+        match self.settings().and_then(|s| Saved::read(&s.vocabulary)) {
+            Ok(saved) => {
+                if let Some(snapshot) = saved.snapshot(&publication.companies) {
+                    // The local spelling service is consulted on explicit Save,
+                    // never on the critical microphone handover. Loading checks
+                    // structure/protected fixtures without another service call.
+                    match richos_voice::dictation_vocabulary::Rules::checked(&snapshot.rules, |_| Some(false)) {
+                        Ok(_) => publication.active = Some(snapshot),
+                        Err(error) => publication.error = Some(crate::dictation::vocabulary::invalid_message(error).into()),
+                    }
+                } else if saved.selected_company.is_some() {
+                    publication.error = Some("This vocabulary isn't available. Your words will be written without spelling changes.".into());
+                }
+            }
+            Err(_) => publication.error = Some("This vocabulary couldn't be read. Your words will be written without spelling changes.".into()),
+        }
+        publication
+    }
+
+    pub fn publish_vocabulary(&self) {
+        self.link.publish_vocabulary(0, self.vocabulary_publication());
+    }
+
+    pub fn clear_drafts(&self) {
+        if self.link.tool_data_dir().as_deref() == Some(self.data_dir.as_path()) {
+            self.link.tell(&AppMessage::ClearDrafts { data_dir: self.data_dir.display().to_string() });
+        }
+    }
+
+    pub fn vocabulary_view(&self) -> Result<crate::dictation::vocabulary::View, String> {
+        let settings = self.settings()?;
+        let publication = self.vocabulary_publication();
+        self.link.publish_vocabulary(0, publication.clone());
+        Ok(crate::dictation::vocabulary::View {
+            companies: publication.companies,
+            selected_company: publication.active.as_ref().map(|s| s.company.id.clone()),
+            rules: publication.active.map(|s| s.rules).unwrap_or_default(),
+            error: publication.error,
+            preview_enabled: settings.live_preview,
+            preview_available: self.voice.preview_available(),
+        })
+    }
+
+    pub fn change_vocabulary(&self, company: Option<String>, rules: Option<Vec<richos_voice::dictation_vocabulary::Rule>>)
+        -> Result<crate::dictation::vocabulary::View, String> {
+        use crate::dictation::vocabulary::Saved;
+        if self.owned_elsewhere() || self.link.tool_data_dir().is_some_and(|dir| dir != self.data_dir) {
+            return Err("Change this setting in the other open copy of RichOS that is running RichScribe.".into());
+        }
+        if self.link.connected() && self.link.tool_data_dir().is_none() {
+            return Err("Restart RichOS to update RichScribe before changing its vocabulary.".into());
+        }
+        let companies = self.voice.vocabulary_companies();
+        if company.as_ref().is_some_and(|id| !companies.iter().any(|c| &c.id == id)) {
+            return Err("That company is no longer available. Choose a company again.".into());
+        }
+        if rules.is_some() && company.is_none() {
+            return Err("Choose a company before saving its spelling rules.".into());
+        }
+        if let Some(rules) = &rules { self.voice.check_vocabulary(rules.clone())?; }
+        let writer = self.writing.lock().unwrap_or_else(|p| p.into_inner());
+        let result = store::try_update(&self.data_dir, |settings| {
+            let mut saved = Saved::read(&settings.vocabulary)?;
+            if rules.is_some() && saved.selected_company != company {
+                return Err("The vocabulary company changed. Choose it again before saving.".into());
+            }
+            saved.selected_company = company.clone();
+            if let (Some(id), Some(rules)) = (company, rules) {
+                saved.by_company.insert(id, rules);
+            }
+            settings.vocabulary = serde_json::to_value(saved).map_err(|e| e.to_string())?;
+            Ok(())
+        });
+        drop(writer);
+        result.map_err(|_| "Your change wasn't saved. The previous rules still apply.".to_string())?;
+        self.link.tell(&AppMessage::SettingsChanged);
+        self.voice.settings_changed();
+        self.vocabulary_view()
+    }
+
+    pub fn set_preview(&self, on: bool) -> Result<crate::dictation::vocabulary::View, String> {
+        if self.owned_elsewhere() || self.link.tool_data_dir().is_some_and(|dir| dir != self.data_dir) {
+            return Err("Change this setting in the other open copy of RichOS that is running RichScribe.".into());
+        }
+        if self.link.connected() && self.link.tool_data_dir().is_none() {
+            return Err("Restart RichOS to update RichScribe before changing its settings.".into());
+        }
+        self.update(|s| s.live_preview = on)?;
+        self.link.tell(&AppMessage::SettingsChanged);
+        self.vocabulary_view()
+    }
     /// The tool is this app's child and runs only while RichOS runs (the CEO, 2026-10-08: no
     /// start at login in this release).
     pub fn new(link: Arc<Link>, data_dir: PathBuf, version: String, voice: Arc<dyn VoiceMode>) -> Arc<Host> {
@@ -515,6 +643,7 @@ impl Host {
             match self.link.connect(hello.clone(), self.voice.clone()) {
                 Ok(()) => {
                     eprintln!("[richos] dictation: connected to the tool");
+                    self.publish_vocabulary();
                     break;
                 }
                 Err(_) if started.elapsed() < CONNECT_WITHIN => std::thread::sleep(Duration::from_millis(100)),
@@ -882,6 +1011,23 @@ pub fn dictation_status(app: tauri::AppHandle) -> Result<View, String> {
     host(&app)?.view()
 }
 
+#[richos_command::command]
+pub fn dictation_vocabulary(app: tauri::AppHandle) -> Result<crate::dictation::vocabulary::View, String> {
+    host(&app)?.vocabulary_view()
+}
+
+#[richos_command::command]
+pub fn dictation_set_vocabulary(app: tauri::AppHandle, company: Option<String>,
+                               rules: Option<Vec<richos_voice::dictation_vocabulary::Rule>>)
+    -> Result<crate::dictation::vocabulary::View, String> {
+    host(&app)?.change_vocabulary(company, rules)
+}
+
+#[richos_command::command]
+pub fn dictation_set_preview(app: tauri::AppHandle, on: bool) -> Result<crate::dictation::vocabulary::View, String> {
+    host(&app)?.set_preview(on)
+}
+
 /// The switch.
 #[richos_command::command]
 pub fn dictation_set_on(app: tauri::AppHandle, on: bool) -> Result<View, String> {
@@ -956,6 +1102,68 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
+    #[test]
+    fn vocabulary_never_crosses_the_key_owners_data_profile() {
+        use std::io::Read;
+        let (writer, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let link = Link::default();
+        *link.writer.lock().unwrap() = Some(writer);
+        let publication = crate::dictation::vocabulary::Publication {
+            data_dir: "/test/profile-a".into(), companies: Vec::new(), active: None, error: None,
+        };
+        let mut observed = state(false);
+        let mut buffer = [0; 1024];
+        for owner in ["", "/test/profile-b"] {
+            if let ToolMessage::State { data_dir, .. } = &mut observed { *data_dir = owner.into(); }
+            link.observe(observed.clone());
+            link.publish_vocabulary(3, publication.clone());
+            assert_eq!(peer.read(&mut buffer).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        }
+        if let ToolMessage::State { data_dir, .. } = &mut observed { *data_dir = publication.data_dir.clone(); }
+        link.observe(observed);
+        link.publish_vocabulary(3, publication.clone());
+        let n = peer.read(&mut buffer).unwrap();
+        assert_eq!(serde_json::from_slice::<AppMessage>(&buffer[..n]).unwrap(), AppMessage::Vocabulary { seq: 3, publication });
+    }
+
+    #[test]
+    fn vocabulary_writes_require_an_explicit_registered_company_and_keep_other_companies() {
+        use crate::dictation::vocabulary::Company;
+        use richos_voice::dictation_vocabulary::Rule;
+        struct Companies;
+        impl VoiceMode for Companies {
+            fn end_for_dictation(&self) -> bool { false }
+            fn vocabulary_companies(&self) -> Vec<Company> {
+                vec![Company { id: "a".into(), name: "Company A".into() },
+                     Company { id: "b".into(), name: "Company B".into() }]
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("richos-vocabulary-api-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = Host::new(Arc::new(Link::default()), dir.clone(), "test".into(), Arc::new(Companies));
+        assert!(host.vocabulary_view().unwrap().selected_company.is_none());
+        let rule = |spelling: &str| Rule { spelling: spelling.into(), heard_as: "rich scribe".into() };
+        assert!(host.change_vocabulary(None, Some(vec![rule("A")])).is_err());
+        assert!(host.change_vocabulary(Some("unknown".into()), None).is_err());
+        assert_eq!(host.change_vocabulary(Some("a".into()), None).unwrap().selected_company.as_deref(), Some("a"));
+        host.change_vocabulary(Some("a".into()), Some(vec![rule("A")])).unwrap();
+        let frozen = host.vocabulary_publication().active.unwrap();
+        assert!(host.change_vocabulary(Some("b".into()), Some(vec![rule("B")])).is_err());
+        host.change_vocabulary(Some("b".into()), None).unwrap();
+        host.change_vocabulary(Some("b".into()), Some(vec![rule("B")])).unwrap();
+        assert_eq!(frozen.rules[0].spelling, "A");
+        assert_eq!(host.change_vocabulary(Some("a".into()), None).unwrap().rules[0].spelling, "A");
+        host.change_vocabulary(None, None).unwrap();
+        assert!(host.vocabulary_publication().active.is_none());
+        host.update(|s| s.vocabulary = serde_json::json!({"byCompany": "broken"})).unwrap();
+        assert!(host.vocabulary_view().unwrap().error.is_some());
+        assert!(!host.set_preview(false).unwrap().preview_enabled,
+                "corrupt vocabulary must not stop an unrelated preview preference");
+        assert_eq!(host.settings().unwrap().vocabulary, serde_json::json!({"byCompany": "broken"}));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A voice mode with one session's gate and a counter of turns sent.
     struct FakeVoice {
         on: AtomicBool,
@@ -1022,7 +1230,7 @@ mod tests {
     }
 
     fn state(listening: bool) -> ToolMessage {
-        ToolMessage::State { owner: "x".into(), on: true, listening, writing: false, problem: None, key_tap: true, secure_input: false, secure_app: None, key: 1, model: "large-v3-turbo-q5_0".into() }
+        ToolMessage::State { data_dir: String::new(), owner: "x".into(), on: true, listening, writing: false, problem: None, key_tap: true, secure_input: false, secure_app: None, key: 1, model: "large-v3-turbo-q5_0".into() }
     }
 
     /// INVARIANT: a state message is only recorded; it never ends voice mode.
@@ -1071,7 +1279,7 @@ mod tests {
             }
         }));
         let off = ToolMessage::State {
-            owner: "/other/RichOS.app".into(),
+            data_dir: String::new(), owner: "/other/RichOS.app".into(),
             on: false,
             listening: false,
             writing: false,
@@ -1173,7 +1381,7 @@ mod tests {
         let r = rig("off-follows");
         r.host.update(|s| s.on = true).unwrap();
         let off = ToolMessage::State {
-            owner: "/other/RichOS.app".into(),
+            data_dir: String::new(), owner: "/other/RichOS.app".into(),
             on: false,
             listening: false,
             writing: false,
@@ -1297,7 +1505,7 @@ mod tests {
             serde_json::json!({"ready": false, "on": false, "key": 1, "accuracy": "accurate", "mic": "unknown", "ax": "unknown",
                 "owner": "none", "keyTap": false, "secure": null})
         );
-        let on = store::Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: false, feature_thread: None, feature_message: None, feature_key: None };
+        let on = store::Settings { on: true, key: 5, model: "small.en".into(), mic_asked: true, ax_asked: true, offered: false, feature_thread: None, feature_message: None, feature_key: None, ..Default::default() };
         let v = view_of(&Facts {
             ready: true,
             settings: &on,
@@ -1426,7 +1634,7 @@ mod tests {
     fn a_copy_that_does_not_own_the_key_changes_the_owners_settings() {
         let r = rig("elsewhere");
         r.host.update(|s| s.on = true).unwrap();
-        let other = |key: u8, model: &str| ToolMessage::State { owner: "/other/RichOS.app".into(), on: true, listening: false, writing: false, problem: None, key_tap: true, secure_input: false, secure_app: None, key, model: model.into() };
+        let other = |key: u8, model: &str| ToolMessage::State { data_dir: String::new(), owner: "/other/RichOS.app".into(), on: true, listening: false, writing: false, problem: None, key_tap: true, secure_input: false, secure_app: None, key, model: model.into() };
         r.host.link.observe(other(1, "large-v3-turbo-q5_0"));
         let v = r.host.set_key(7).unwrap();
         assert_eq!((v.owner, v.key), ("other", 1), "the tool has not applied it yet: the view shows the tool's key");
@@ -1452,7 +1660,7 @@ mod tests {
     #[test]
     fn key_capture_goes_through_the_tap() {
         let r = rig("capture");
-        let state = |tap: bool| ToolMessage::State { owner: "x".into(), on: true, listening: false, writing: false, problem: None, key_tap: tap, secure_input: false, secure_app: None, key: 1, model: String::new() };
+        let state = |tap: bool| ToolMessage::State { data_dir: String::new(), owner: "x".into(), on: true, listening: false, writing: false, problem: None, key_tap: tap, secure_input: false, secure_app: None, key: 1, model: String::new() };
         r.host.link.observe(state(false));
         assert!(!r.host.capture(true), "no tap: the window's keys answer");
         r.host.link.observe(state(true));

@@ -193,6 +193,188 @@
     $("dict-close").addEventListener("click", () => close());
   }
 
+  let vocabulary = null, vocabularyBusy = false, vocabularyError = null, vocabularyForm = null;
+  let vocabularyPicker = false, moreOptions = false, vocabularySaved = false, vocabularyEpoch = 0;
+  const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>';
+  const downChevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  const arrow = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg>';
+  const plus = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+
+  async function readVocabulary() {
+    if (sheet.hidden || vocabularyBusy) return;
+    const epoch = ++vocabularyEpoch;
+    try {
+      const next = await bridge.invoke("dictation_vocabulary", {});
+      if (epoch !== vocabularyEpoch) return;
+      vocabulary = next;
+      vocabularyError = null;
+      if (vocabularyForm && vocabularyForm.company !== next.selectedCompany) {
+        vocabularyForm.error = "The selected company changed. Choose the company again before saving this spelling.";
+      }
+    } catch (_error) {
+      if (epoch === vocabularyEpoch) vocabularyError = "This vocabulary couldn't be read. Your words will be written without spelling changes.";
+    }
+    paint();
+  }
+
+  function spellingPreview(form) {
+    const spelling = form.spelling.trim(), trigger = (form.heardAs.trim() || spelling).toLowerCase();
+    if (!spelling) return '<p class="voc-preview-t">Enter the correct spelling to see what changes.</p>';
+    const sentence = trigger.charAt(0).toUpperCase() + trigger.slice(1);
+    return `<p class="voc-preview-t">Replaces ‘${esc(trigger)}’ with ‘${esc(spelling)}’. Matches whole words, including at the start of a sentence.</p>
+      <p class="voc-ex"><span class="voc-ex-from">“${esc(sentence)} is ready.”</span>${arrow}<span class="voc-ex-to">“<mark>${esc(spelling)}</mark> is ready.”</span></p>`;
+  }
+
+  function spellingFormHtml() {
+    const form = vocabularyForm;
+    return `<div class="voc-form" role="group" aria-labelledby="voc-form-t"><p class="voc-form-t" id="voc-form-t">${form.index === null ? "Add spelling" : "Edit spelling"}</p>
+      <div class="voc-fields"><label class="voc-field"><span class="voc-label">Correct spelling</span><input class="voc-input" id="voc-spell" autocomplete="off" spellcheck="false" value="${esc(form.spelling)}" aria-describedby="voc-help" ${vocabularyBusy ? "disabled" : ""}></label>
+      <label class="voc-field"><span class="voc-label">Heard as<span class="voc-optional">Optional</span></span><input class="voc-input" id="voc-heard" autocomplete="off" spellcheck="false" value="${esc(form.heardAs)}" placeholder="${esc(form.spelling.toLowerCase())}" aria-describedby="voc-help" ${vocabularyBusy ? "disabled" : ""}></label></div>
+      <p class="voc-help" id="voc-help">This fixes the spelling when RichScribe hears these words. It does not teach pronunciation. You can add another mishearing later.</p>
+      <div class="voc-preview" id="voc-preview">${spellingPreview(form)}</div>
+      ${form.error ? `<p class="voc-err" id="voc-error" role="alert">${ICON.info}<span>${esc(form.error)}</span></p>` : ""}
+      <div class="voc-form-acts"><button class="dict-btn" type="button" data-act="voc-cancel" ${vocabularyBusy ? "disabled" : ""}>Cancel</button><button class="dict-btn voc-save" id="voc-save" type="button" data-act="voc-save" ${vocabularyBusy || form.company !== vocabulary.selectedCompany ? "disabled" : ""}>${form.retry ? "Save again" : "Save"}</button></div></div>`;
+  }
+
+  function vocabularyHtml() {
+    let html = `<section class="dict-sec" id="dict-vocabulary"><div class="dict-sec-h"><h4 class="dict-sec-t">Vocabulary</h4>${vocabularySaved ? '<span class="dict-saved" role="status">Saved.</span>' : ""}</div><p class="voc-lede">Fix the spelling of names you use often. Choose a company to keep its spelling rules separate.</p>`;
+    if (!vocabulary) return html + `<p class="voc-state" role="status">${esc(vocabularyError || "Loading…")}</p></section>`;
+    const companies = vocabulary.companies || [], selected = vocabulary.selectedCompany;
+    const company = companies.find(c => c.id === selected);
+    if (!companies.length) {
+      html += `<div class="voc-empty">${ICON.info}<p class="voc-empty-t">Add a company in RichOS to save its vocabulary.</p><button class="dict-btn" type="button" data-act="voc-add-company">Add company</button></div>`;
+      if (vocabularyForm) html += spellingFormHtml();
+    } else {
+      html += `<div class="voc-pick"><span class="voc-pick-l" id="voc-company-label">Company</span><div class="voc-pop"><button class="voc-select" type="button" id="voc-company" aria-labelledby="voc-company-label voc-company-name" aria-haspopup="listbox" aria-expanded="${vocabularyPicker}" aria-controls="voc-companies" data-act="voc-picker" ${vocabularyBusy || vocabularyForm ? "disabled" : ""}><span id="voc-company-name">${esc(company ? company.name : "None")}</span>${downChevron}</button>`;
+      if (vocabularyPicker) {
+        html += '<div class="voc-list" id="voc-companies" role="listbox" aria-labelledby="voc-company-label">';
+        [{id:"",name:"None"}, ...companies].forEach(c => {
+          const chosen = (selected || "") === c.id;
+          html += `<button class="voc-opt" type="button" role="option" aria-selected="${chosen}" data-act="voc-company" data-company="${esc(c.id)}">${chosen ? ICON.check : '<span class="voc-nock"></span>'}${esc(c.name)}</button>`;
+        });
+        html += '</div>';
+      }
+      html += '</div></div>';
+      if (vocabularyError || vocabulary.error) html += `<div class="voc-warn" role="alert">${ICON.info}<p>${esc(vocabularyError || vocabulary.error)}</p></div>`;
+      if (!company) {
+        html += '<p class="voc-state">No vocabulary selected.</p>';
+        if (vocabularyForm) html += spellingFormHtml();
+      }
+      else {
+        const rules = vocabulary.rules || [];
+        if (rules.length) {
+          html += `<div class="voc-table" role="table" aria-label="Spelling rules for ${esc(company.name)}"><div class="voc-tr voc-th" role="row"><span role="columnheader">Correct spelling</span><span role="columnheader">Heard as</span><span role="columnheader" aria-label="Actions"></span></div>`;
+          rules.forEach((rule, index) => {
+            if (vocabularyForm && vocabularyForm.index === index) {
+              html += `<div role="row"><div role="cell" class="voc-edit-cell">${spellingFormHtml()}</div></div>`;
+              return;
+            }
+            html += `<div class="voc-tr" role="row"><span class="voc-spell" role="cell">${esc(rule.spelling)}</span><span class="voc-heard" role="cell">${esc(rule.heardAs || rule.spelling.toLowerCase())}</span><span class="voc-acts" role="cell"><button class="dict-btn dict-btn-quiet" type="button" data-act="voc-edit" data-index="${index}" aria-label="Edit ${esc(rule.spelling)}" ${vocabularyBusy || vocabularyForm ? "disabled" : ""}>Edit</button><button class="dict-btn dict-btn-quiet" type="button" data-act="voc-remove" data-index="${index}" aria-label="Remove ${esc(rule.spelling)}" ${vocabularyBusy || vocabularyForm ? "disabled" : ""}>Remove</button></span></div>`;
+          });
+          html += '</div>';
+        } else html += '<p class="voc-state">No spelling rules yet.</p>';
+        if (vocabularyForm && vocabularyForm.index === null) html += spellingFormHtml();
+        else if (!vocabularyForm) html += `<button class="dict-btn voc-add" type="button" data-act="voc-add" ${vocabularyBusy ? "disabled" : ""}>${plus}Add spelling</button>`;
+      }
+    }
+    html += '</section>';
+    const available = !!vocabulary.previewAvailable;
+    html += `<section class="dict-sec"><button class="mo-toggle" type="button" data-act="voc-more" aria-expanded="${moreOptions}" aria-controls="dict-more-body">${chevron}More options<span class="mo-sum">Live preview ${!available ? "unavailable" : vocabulary.previewEnabled ? "on" : "off"}</span></button>`;
+    if (moreOptions) html += `<div class="mo-body" id="dict-more-body"><div class="mo-row"><span class="mo-row-main"><span class="mo-row-t">Live preview</span><span class="mo-row-s">${available ? "See recent words while you speak. The final text may differ." : "Live preview isn't available on this Mac. RichScribe still works."}</span></span><button class="dict-switch" type="button" role="switch" data-act="voc-preview" aria-label="Live preview" aria-checked="${available && vocabulary.previewEnabled}" aria-disabled="${!available}" ${!available || vocabularyBusy ? "disabled" : ""}></button></div><p class="mo-note">${ICON.info}<span>Your recent draft stays in memory for up to 30 minutes while RichOS is open. It isn't saved after you quit.</span></p></div>`;
+    return html + '</section>';
+  }
+
+  async function saveVocabulary(company, rules) {
+    if (vocabularyBusy) return;
+    vocabularyBusy = true; vocabularyError = null; vocabularyEpoch++;
+    if (vocabularyForm) vocabularyForm.error = null;
+    paint();
+    try {
+      vocabulary = await bridge.invoke("dictation_set_vocabulary", { company: company || null, rules });
+      vocabularyForm = null;
+      vocabularyPicker = false;
+      vocabularySaved = true;
+      setTimeout(() => { vocabularySaved = false; paint(); }, 1600);
+    } catch (error) {
+      const message = typeof error === "string" ? error : error && error.message;
+      if (vocabularyForm) {
+        vocabularyForm.error = message || "Your change wasn't saved. The previous rules still apply.";
+        vocabularyForm.retry = vocabularyForm.error === "Your change wasn't saved. The previous rules still apply.";
+      }
+      else vocabularyError = message || "Your change wasn't saved. The previous rules still apply.";
+    } finally { vocabularyBusy = false; paint(); }
+  }
+
+  async function vocabularyAction(button) {
+    if (vocabularyBusy && button.dataset.act !== "voc-more") return;
+    switch (button.dataset.act) {
+      case "voc-picker": vocabularyPicker = !vocabularyPicker; paint(); if (vocabularyPicker) col.querySelector('.voc-opt[aria-selected="true"]').focus(); break;
+      case "voc-company": await saveVocabulary(button.dataset.company || null, null); $("voc-company").focus({preventScroll:true}); break;
+      case "voc-add":
+      case "voc-edit": {
+        const index = button.dataset.act === "voc-edit" ? Number(button.dataset.index) : null;
+        const rule = index === null ? {spelling:"",heardAs:""} : vocabulary.rules[index];
+        vocabularyForm = {company:vocabulary.selectedCompany,index,spelling:rule.spelling,heardAs:rule.heardAs || "",error:null};
+        vocabularyPicker = false; paint(); $("voc-spell").focus({preventScroll:true}); break;
+      }
+      case "voc-cancel": {
+        vocabularyForm = null; paint();
+        const next = $("voc-company") || col.querySelector('[data-act="voc-add-company"]');
+        if (next) next.focus({preventScroll:true});
+        break;
+      }
+      case "voc-save": {
+        const form = vocabularyForm;
+        if (!form || form.company !== vocabulary.selectedCompany) return;
+        if (!form.spelling.trim()) { form.error = "Enter the correct spelling."; paint(); $("voc-spell").focus({preventScroll:true}); break; }
+        const rules = (vocabulary.rules || []).slice(), rule = {spelling:form.spelling.trim(),heardAs:form.heardAs.trim()};
+        if (form.index === null) rules.push(rule); else rules[form.index] = rule;
+        await saveVocabulary(form.company, rules);
+        if (!vocabularyForm) col.querySelector('[data-act="voc-add"]').focus({preventScroll:true});
+        break;
+      }
+      case "voc-remove": await saveVocabulary(vocabulary.selectedCompany, vocabulary.rules.filter((_rule,index) => index !== Number(button.dataset.index))); break;
+      case "voc-more": moreOptions = !moreOptions; paint(); break;
+      case "voc-preview": {
+        vocabularyBusy = true; vocabularyEpoch++; paint();
+        try { vocabulary = await bridge.invoke("dictation_set_preview", {on:!vocabulary.previewEnabled}); }
+        catch (_error) { vocabularyError = "Your change wasn't saved. The previous rules still apply."; }
+        finally { vocabularyBusy = false; paint(); }
+        break;
+      }
+      case "voc-add-company": close(); window.dispatchEvent(new CustomEvent("richos:add-company")); break;
+    }
+  }
+
+  sheet.addEventListener("input", event => {
+    if (!vocabularyForm || !["voc-spell","voc-heard"].includes(event.target.id)) return;
+    vocabularyForm.spelling = $("voc-spell").value;
+    vocabularyForm.heardAs = $("voc-heard").value;
+    vocabularyForm.error = null;
+    vocabularyForm.retry = false;
+    const error = $("voc-error"); if (error) error.remove();
+    $("voc-preview").innerHTML = spellingPreview(vocabularyForm);
+    const save = $("voc-save"); if (save) save.textContent = "Save";
+    col.dataset.painted = sheetHtml();
+  });
+  sheet.addEventListener("keydown", event => {
+    if (event.key === "Enter" && ["voc-spell", "voc-heard"].includes(event.target.id)) {
+      event.preventDefault(); event.stopPropagation();
+      const save = $("voc-save"); if (save && !save.disabled) vocabularyAction(save);
+      return;
+    }
+    if (!vocabularyPicker) return;
+    const options = Array.from(col.querySelectorAll(".voc-opt"));
+    const at = options.indexOf(document.activeElement);
+    if (event.key === "Escape") {
+      event.preventDefault(); event.stopPropagation(); vocabularyPicker = false; paint(); $("voc-company").focus({preventScroll:true});
+    } else if (["ArrowDown","ArrowUp","Home","End"].includes(event.key)) {
+      event.preventDefault(); event.stopPropagation();
+      const next = event.key === "Home" ? 0 : event.key === "End" ? options.length-1 : (at + (event.key === "ArrowUp" ? -1 : 1) + options.length) % options.length;
+      options[next].focus();
+    }
+  });
+
   function permState(v, pane) {
     if (v === "allowed") return `<span class="dict-perm-ok">${ICON.check}Allowed</span>`;
     if (v === "asking") return `<span class="dict-perm-wait"><span class="dict-ring" aria-hidden="true"></span>macOS is asking you</span>`;
@@ -253,6 +435,7 @@
         <button class="dict-opt" type="button" role="radio" data-act="accuracy" data-v="accurate" aria-checked="${view.accuracy !== "fast"}"><span class="dict-radio"></span><span><span class="dict-opt-t">More accurate</span><span class="dict-opt-s">Gets names and jargon right more often. Your words appear a second or two after you stop.</span></span></button>
         <button class="dict-opt" type="button" role="radio" data-act="accuracy" data-v="fast" aria-checked="${view.accuracy === "fast"}"><span class="dict-radio"></span><span><span class="dict-opt-t">Faster</span><span class="dict-opt-s">Your words appear in about half a second. Names are misheard a little more often.</span></span></button>
       </div></section>`;
+    html += vocabularyHtml();
     return html;
   }
   function paintSheet() {
@@ -260,13 +443,17 @@
     const html = sheetHtml();
     if (html !== col.dataset.painted) {
       const active = document.activeElement && col.contains(document.activeElement) ? document.activeElement : null;
+      const selection = active && typeof active.selectionStart === "number" ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
       const back = active ? (active.id || (active.dataset.act + ":" + (active.dataset.k || active.dataset.v || active.dataset.pane || ""))) : null;
       col.innerHTML = html;
       col.dataset.painted = html;
       if (back) {
         const [act, val] = back.split(":");
         const again = $(back) || col.querySelector(`[data-act="${act}"]${val ? `[data-k="${val}"],[data-act="${act}"][data-v="${val}"],[data-act="${act}"][data-pane="${val}"]` : ""}`);
-        if (again) again.focus();
+        if (again) {
+          again.focus({preventScroll:true});
+          if (selection && again.setSelectionRange) again.setSelectionRange(...selection);
+        }
       }
     }
     tryBox.dataset.ph = works() ? `Click here, tap ${keyName()} and say something.`
@@ -448,7 +635,7 @@
   if (bridge.listen) {
     // The tool's menu bar menu (slice 3) writes `on` and the accuracy itself, and its Fix it and
     // Dictation settings… ask for this sheet: read again, or open it.
-    bridge.listen("dictation-settings-changed", () => read());
+    bridge.listen("dictation-settings-changed", () => { read(); readVocabulary(); });
     // A sheet request is kept by the app until a page takes it (third review, finding 4): this
     // page takes it on the event, and as it boots, so a request made while no page existed
     // (RichOS kept running by its work with the window closed) still opens the sheet.
@@ -466,6 +653,7 @@
     if (event.target === sheet) { close(); return; }
     const b = event.target.closest("[data-act]");
     if (!b || !sheet.contains(b)) return;
+    if (b.dataset.act.startsWith("voc-")) { await vocabularyAction(b); return; }
     switch (b.dataset.act) {
       case "toggle-on": {
         // Said at once, so a second press reads the switch it sees rather than the one in flight.
@@ -496,7 +684,7 @@
   });
   sheet.addEventListener("keydown", event => {
     if (event.key !== "Tab") return;
-    const controls = [...sheet.querySelectorAll("button, [contenteditable]")].filter(n => !n.disabled && n.getClientRects().length);
+    const controls = [...sheet.querySelectorAll("button, input, textarea, select, [contenteditable], [tabindex='0']")].filter(n => !n.disabled && n.getClientRects().length);
     if (!controls.length) return;
     if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
     else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
@@ -528,6 +716,7 @@
     paint();
     if (!breathing) { breathing = true; requestAnimationFrame(breathe); }
     $("dict-close").focus();
+    readVocabulary();
     read().then(() => {
       // On but never asked (a flow that ended with RichOS): it is on, so asking goes on.
       if (view && view.on && !flow && (view.mic === "unknown" || (view.mic === "allowed" && view.ax === "unknown"))) proceed();
@@ -536,6 +725,7 @@
   function close() {
     if (capture) stopCapture();
     sheet.hidden = true;
+    vocabularyEpoch++; vocabularyPicker = false;
     feedback = null;
     if (!axWait && !micWait) { settle(); announceSetUp(); }
     queueMicrotask(() => { const btn = document.getElementById("set-btn"); if (btn) btn.focus(); });
