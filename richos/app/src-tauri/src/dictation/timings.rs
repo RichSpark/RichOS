@@ -15,13 +15,14 @@ pub struct Timings {
     max_decode_ms: u64,
     max_window_ms: u64,
     complete: bool,
+    cpu_at_start: (Option<u64>, Option<u64>),
 }
 
 impl Timings {
     pub fn new(seq: u64, model: &str, preview: bool) -> Self {
         let model = match model { "small.en" => "small.en", "large-v3-turbo-q5_0" => "large-v3-turbo-q5_0", _ => "other" };
         let value = Self { seq, model, preview, began: Instant::now(), stopped: None,
-            updates: 0, first_ms: None, max_decode_ms: 0, max_window_ms: 0, complete: false };
+            updates: 0, first_ms: None, max_decode_ms: 0, max_window_ms: 0, complete: false, cpu_at_start: cpu_usage() };
         value.event("capture_ready", json!({}));
         value
     }
@@ -50,9 +51,26 @@ impl Timings {
             "max_decode_ms":self.max_decode_ms,"max_sampled_window_ms":self.max_window_ms}));
     }
     pub fn finished(&mut self, outcome: &'static str) {
-        self.event("operation_completed", json!({"outcome":outcome}));
+        let current = cpu_usage();
+        self.event("operation_completed", json!({"outcome":outcome,
+            "process_cpu_us":current.0.zip(self.cpu_at_start.0).map(|(end, start)| end.saturating_sub(start)),
+            "child_cpu_us":current.1.zip(self.cpu_at_start.1).map(|(end, start)| end.saturating_sub(start))}));
         self.complete = true;
     }
+}
+
+// Cumulative process counters sampled only at capture and completion, never an
+// idle poller. The delta includes all work by this tool and its reaped children
+// during the operation; it is not a machine-wide CPU or GPU measurement.
+fn cpu_usage() -> (Option<u64>, Option<u64>) {
+    let read = |who| {
+        // SAFETY: getrusage writes the numeric rusage output and retains no pointer.
+        let mut value: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(who, &mut value) } != 0 { return None; }
+        let micros = |time: libc::timeval| time.tv_sec as u64 * 1_000_000 + time.tv_usec as u64;
+        Some(micros(value.ru_utime) + micros(value.ru_stime))
+    };
+    (read(libc::RUSAGE_SELF), read(libc::RUSAGE_CHILDREN))
 }
 
 impl Drop for Timings {
