@@ -120,7 +120,7 @@ impl Projection {
 
     pub(crate) fn observe_in(&mut self, event: &Event, turns: &[Turn]) {
         match event {
-            Event::PromptReceived { turn_id, text, source, intake_id, pressed, authored_bytes, thread_id, client_id, .. } => {
+            Event::PromptReceived { turn_id, text, source, intake_id, pressed, authored_bytes, authored_ranges, thread_id, client_id, .. } => {
                 self.revision += 1;
                 let key = self.root(turn_id);
                 if self.entries.contains_key(&key) || self.known_roots.contains(&key) { return; }
@@ -137,18 +137,20 @@ impl Projection {
                     self.known_roots.insert(key);
                     return;
                 }
-                let authored = match authored_bytes {
-                    Some(bytes) => text.get(..*bytes),
-                    None if ambiguous_legacy_attachment(text) => None,
-                    None => Some(text.as_str()),
-                };
+                let authored = if !eligible { Some(0) }
+                    else if let Some(ranges) = authored_ranges { swearmeter::count_ranges(text, ranges) }
+                    else { match authored_bytes {
+                        Some(bytes) => text.get(..*bytes).map(swearmeter::count),
+                        None if ambiguous_legacy_attachment(text) => None,
+                        None => Some(swearmeter::count(text)),
+                    }};
                 let unknown = eligible && authored.is_none();
-                let count = if eligible { authored.map(swearmeter::count).unwrap_or(0) } else { 0 };
+                let count = if eligible { authored.unwrap_or(0) } else { 0 };
                 if eligible {
                     if let Some(id) = intake_id { self.intakes.insert(*id, key.clone()); }
                     if let Some(id) = client_id { self.clients.insert((thread_id.clone(), id.clone())); }
                 }
-                if is_composite(&key) && authored_bytes.is_none() { self.composites.insert(key.clone()); }
+                if is_composite(&key) && authored_bytes.is_none() && authored_ranges.is_none() { self.composites.insert(key.clone()); }
                 self.count += count;
                 self.unknown_inputs += u64::from(unknown);
                 self.entries.insert(key, Entry { count, unknown });

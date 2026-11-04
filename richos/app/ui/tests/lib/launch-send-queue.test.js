@@ -39,6 +39,7 @@ function makeShell() {
   const c = vm.createContext({ console, TextEncoder, TextDecoder });
   c.window = c;
   vm.runInContext(fs.readFileSync(path.join(root, "timeline.js"), "utf8"), c);
+  vm.runInContext(fs.readFileSync(path.join(root, "authored-input.js"), "utf8"), c);
   vm.runInContext(
     launchState.concat(sendLineState).join("\n") +
       `
@@ -91,7 +92,7 @@ function makeShell() {
   `,
     c
   );
-  for (const name of ["draftAuthorshipKey", "authoredDraftBytes", "stashThreadViewState", "restoreThreadViewState", "loadTimeline", "send", "openThread"]) {
+  for (const name of ["draftAuthorshipKey", "authoredDraftCapture", "stashThreadViewState", "restoreThreadViewState", "loadTimeline", "send", "openThread"]) {
     vm.runInContext(source(name), c);
   }
   return { run: (code) => vm.runInContext(code, c) };

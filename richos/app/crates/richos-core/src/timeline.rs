@@ -2432,6 +2432,7 @@ mod tests {
             voice_note: false,
             pressed: false,
             authored_bytes: None,
+            authored_ranges: None,
         }
     }
 

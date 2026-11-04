@@ -434,6 +434,8 @@ pub enum Event {
         /// Missing on legacy records; zero denotes known generated-only text.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authored_bytes: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authored_ranges: Option<crate::swearmeter::Ranges>,
     },
     TurnStarted { turn_id: String, session_id: String, at: u64 },
     /// A streamed partial reply chunk — persisted incrementally so a half-written
@@ -695,6 +697,8 @@ pub struct Turn {
     pub pressed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authored_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_ranges: Option<crate::swearmeter::Ranges>,
 }
 
 impl Turn {
@@ -1149,6 +1153,7 @@ impl Ledger {
                 voice_note,
                 pressed,
                 authored_bytes,
+                authored_ranges,
             } => {
                 self.observe_revision(binding_revision);
                 self.turns.push(Turn {
@@ -1181,6 +1186,7 @@ impl Ledger {
                     voice_note,
                     pressed,
                     authored_bytes,
+                    authored_ranges,
                 });
             }
             Event::TurnStarted { turn_id, session_id, at } => {
@@ -1308,6 +1314,7 @@ impl Ledger {
                     voice_note: false,
                     pressed: false,
                     authored_bytes: Some(0),
+                    authored_ranges: None,
                 });
             }
             Event::HandoffSummaryUpdated { thread_id, summary, .. } => {
@@ -1328,6 +1335,7 @@ impl Ledger {
                         intake_id: original.intake_id, rich_audible: original.rich_audible,
                         channel: original.channel, client_id: None,
                         voice_note: original.voice_note, pressed: original.pressed, authored_bytes: original.authored_bytes,
+                        authored_ranges: original.authored_ranges.clone(),
                     });
                     // A continuation replaces this request's place in acceptance order.
                     // Appending it after later requests reverses corrections on another restart.
@@ -1853,7 +1861,7 @@ impl Ledger {
     /// Preserve desktop capture/button provenance and the shared input order in one write.
     pub(crate) fn record_prompt_received_desktop(&mut self, binding: &ThreadBinding, text: &str,
         source: Source, intake_id: Option<u64>, rich_audible: Option<bool>,
-        provenance: (bool, Option<&str>, Option<usize>),
+        provenance: (bool, Option<&str>, crate::swearmeter::Authorship),
     ) -> Result<String, LedgerError> {
         self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible,
             provenance.1, None, false, provenance.0, provenance.2)
@@ -1895,7 +1903,7 @@ impl Ledger {
         client_id: Option<&str>,
         voice_note: bool,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, Some(intake_id), None, channel, client_id, voice_note, false, Some(text.len()))
+        self.record_prompt_received_inner(binding, text, source, Some(intake_id), None, channel, client_id, voice_note, false, crate::swearmeter::Authorship::all(text))
     }
 
     /// Preserve the producer's user-text boundary in the same durable prompt write.
@@ -1904,6 +1912,14 @@ impl Ledger {
         &mut self, binding: &ThreadBinding, text: &str, source: Source, intake_id: u64,
         channel: Option<&str>, client_id: Option<&str>, capture: (bool, Option<usize>),
     ) -> Result<String, LedgerError> {
+        self.record_prompt_received_from_client_provenance(binding, text, source, intake_id, channel, client_id,
+            (capture.0, crate::swearmeter::Authorship::prefix(capture.1)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_prompt_received_from_client_provenance(&mut self, binding: &ThreadBinding, text: &str,
+        source: Source, intake_id: u64, channel: Option<&str>, client_id: Option<&str>,
+        capture: (bool, crate::swearmeter::Authorship)) -> Result<String, LedgerError> {
         self.record_prompt_received_inner(binding, text, source, Some(intake_id), None,
             channel, client_id, capture.0, false, capture.1)
     }
@@ -1916,7 +1932,7 @@ impl Ledger {
         text: &str,
         source: Source,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, None, None, None, None, false, true, Some(0))
+        self.record_prompt_received_inner(binding, text, source, None, None, None, None, false, true, crate::swearmeter::Authorship::prefix(Some(0)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1930,7 +1946,7 @@ impl Ledger {
         channel: Option<&str>,
         client_id: Option<&str>,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, channel, client_id, false, false, Some(text.len()))
+        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, channel, client_id, false, false, crate::swearmeter::Authorship::all(text))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1945,7 +1961,7 @@ impl Ledger {
         client_id: Option<&str>,
         voice_note: bool,
         pressed: bool,
-        authored_bytes: Option<usize>,
+        authorship: crate::swearmeter::Authorship,
     ) -> Result<String, LedgerError> {
         self.verify_binding(binding)?;
         let turn_id = new_id("turn");
@@ -1964,7 +1980,8 @@ impl Ledger {
                 client_id: client_id.map(str::to_string),
                 voice_note,
                 pressed,
-                authored_bytes,
+                authored_bytes: authorship.bytes,
+                authored_ranges: authorship.ranges,
             },
             true, // fsync — never lose the CEO's input
         )?;
@@ -1987,7 +2004,7 @@ impl Ledger {
         if self.turn(&turn_id).is_some(){return Ok(turn_id);}
         self.append(Event::PromptReceived {turn_id:turn_id.clone(),thread_id:binding.thread_id().into(),
             text:delivery.text.clone(),source:Source::Text,at:now_millis(),entity_id:Some(binding.entity_id().clone()),
-            binding_revision:binding.binding_revision(),intake_id,rich_audible:None,channel:None,client_id:None,voice_note:false,pressed:false,authored_bytes:Some(0)},true)?;
+            binding_revision:binding.binding_revision(),intake_id,rich_audible:None,channel:None,client_id:None,voice_note:false,pressed:false,authored_bytes:Some(0),authored_ranges:None},true)?;
         Ok(turn_id)
     }
 
@@ -2616,6 +2633,7 @@ mod tests {
             voice_note: false,
             pressed: false,
             authored_bytes: None,
+            authored_ranges: None,
         };
         // IN FLIGHT: unknown, never `now() - started_at` (UX §6.3's twelve-hour trap).
         assert_eq!(turn.active_ms(), None);

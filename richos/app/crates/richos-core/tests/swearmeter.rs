@@ -374,3 +374,38 @@ fn duplicate_or_unreadable_operation_inputs_are_unavailable_instead_of_complete_
     std::fs::write(&path, duplicated).unwrap();
     assert!(!f.store.swearmeter_projection().unwrap().available);
 }
+
+#[test]
+fn edited_attachment_authorship_survives_intake_ledger_checkpoint_and_replay() {
+    use richos_core::{cognition::MockLeaseFactory, steering::TurnControl, swearmeter::Authorship, read_view::SpineView};
+    use richos_core::swearmeter_checkpoint::Checkpoint;
+    let f = Fixture::new();
+    let path = f.root.join("ledger");
+    let mut spine = support::spine(Ledger::open(&path).unwrap());
+    let entity = EntityId::parse("femcboost").unwrap();
+    let thread = spine.create_thread("Edited attachments", &entity).unwrap();
+    spine.switch_thread(&thread).unwrap();
+    spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["Ready", "Received"])));
+    let control = TurnControl::open(f.root.join("intake")).unwrap();
+    spine.set_turn_control(control.clone());
+    let reader = spine.reader();
+    let body = "shit\n\nAttached on this Mac (1 file, saved by RichOS):\n/fixture/wtf.png\n\nand damn";
+    let last = body.rfind("and damn").unwrap();
+    control.submit_from_desk_provenance(&thread, Some(entity), body, Authorship { bytes: None, ranges: Some(vec![(0,4),(last,body.len())]) }).unwrap();
+    assert_eq!(control.swearmeter_inputs(&reader).1, 2);
+    spine.poll_intake().unwrap();
+    let view = reader.snapshot();
+    assert_eq!(view.ledger().swearmeter().count(), 2);
+    let turn = view.ledger().turns().iter().find(|t| t.user_text == body).unwrap().id.clone();
+    drop(view);
+    save_checkpoint(&f, spine.ledger());
+    drop(spine);
+    let cache = Checkpoint::load(&f.root.join("swearmeter-cache"), &path, &f.root.join("questions/store.json")).unwrap();
+    let mut ledger = Ledger::open_cached(&path, Some((cache.ledger_source, cache.ledger))).unwrap();
+    assert!(ledger.swearmeter().checkpoint_reused());
+    let binding = ledger.thread_binding(&thread).unwrap();
+    ledger.replay_turn(&binding, &turn).unwrap();
+    assert_eq!(ledger.swearmeter().count(), 2);
+    drop(ledger);
+    assert_eq!(Ledger::open(&path).unwrap().swearmeter().count(), 2);
+}

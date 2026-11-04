@@ -1901,8 +1901,12 @@ impl Spine {
     /// operator install, before the first turn, so the host can tell a phone assignment from
     /// one given at the desk without the walk handing it in. Never turned on anywhere else.
     pub fn submit_prompt_to_authored(&mut self, thread_id: &str, text: &str, authored_bytes: usize) -> Result<String, SpineError> {
+        self.submit_prompt_to_provenance(thread_id, text, crate::swearmeter::Authorship::prefix(Some(authored_bytes)))
+    }
+
+    pub fn submit_prompt_to_provenance(&mut self, thread_id: &str, text: &str, authorship: crate::swearmeter::Authorship) -> Result<String, SpineError> {
         if self.active_thread() != Some(thread_id) { self.activate(thread_id)?; }
-        self.submit_prompt_inner(text, Source::Text, None, false, Some(authored_bytes))
+        self.submit_prompt_inner(text, Source::Text, None, false, Some(authorship))
     }
 
     pub fn keep_intake_channel(&mut self, keep: bool) {
@@ -1951,14 +1955,14 @@ impl Spine {
         source: Source,
         rich_audible: Option<bool>,
         pressed: bool,
-        authored_bytes: Option<usize>,
+        authorship: Option<crate::swearmeter::Authorship>,
     ) -> Result<String, SpineError> {
         let binding = self.ensure_active_thread()?;
         let intake_id = self.control.take_input_order();
         let turn_id = if pressed {
             self.accept_pressed_prompt(&binding, text, intake_id)?
         } else {
-            self.accept_prompt(&binding, text, source, (rich_audible, authored_bytes), intake_id, DESK_CHANNEL)?
+            self.accept_prompt(&binding, text, source, (rich_audible, Some(authorship.unwrap_or_else(|| crate::swearmeter::Authorship::all(text)))), intake_id, DESK_CHANNEL)?
         };
 
         self.deliver(&turn_id, &binding, text, true)?;
@@ -1972,10 +1976,10 @@ impl Spine {
     /// channel is never written on a product install.
     fn record_prompt(
         &mut self, binding: &ThreadBinding, text: &str, source: Source,
-        capture: (Option<bool>, Option<usize>), intake_id: Option<u64>, channel: &str,
+        capture: (Option<bool>, Option<crate::swearmeter::Authorship>), intake_id: Option<u64>, channel: &str,
     ) -> Result<String, SpineError> {
-        let authored = capture.1.or_else(|| match intake_id {
-            Some(id) => self.control.authored_bytes(id), None => Some(text.len()),
+        let authored = capture.1.unwrap_or_else(|| match intake_id {
+            Some(id) => self.control.authorship(id).unwrap_or_default(), None => crate::swearmeter::Authorship::all(text),
         });
         let kept = self.keep_intake_channel.then_some(channel);
         Ok(self.ledger.record_prompt_received_desktop(binding, text, source, intake_id,
@@ -1987,7 +1991,7 @@ impl Spine {
         binding: &ThreadBinding,
         text: &str,
         source: Source,
-        capture: (Option<bool>, Option<usize>),
+        capture: (Option<bool>, Option<crate::swearmeter::Authorship>),
         intake_id: Option<u64>,
         channel: &str,
     ) -> Result<String, SpineError> {
@@ -2034,7 +2038,7 @@ impl Spine {
     /// durable write and the same queued status, recorded `pressed`, and none of the three
     /// correction seams, which read only what he said.
     fn accept_pressed_prompt(&mut self, binding: &ThreadBinding, text: &str, intake_id: Option<u64>) -> Result<String, SpineError> {
-        let turn_id = self.ledger.record_prompt_received_desktop(binding, text, Source::Text, intake_id, None, (true, None, Some(0)))?;
+        let turn_id = self.ledger.record_prompt_received_desktop(binding, text, Source::Text, intake_id, None, (true, None, crate::swearmeter::Authorship::prefix(Some(0))))?;
         self.emit_live(self.turn_status_event(binding, &turn_id, TurnStatus::Queued, None));
         self.emit_live(self.thread_summary_event(binding, &turn_id, ThreadStatus::Queued));
         Ok(turn_id)
@@ -2957,7 +2961,7 @@ impl Spine {
                     self.deliver(&turn_id, &binding, &text, true)?;
                     if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
                 }
-                IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, source, authored_bytes, .. } => {
+                IntakeRecord::Channel { id, thread_id, text, channel, client_id, voice_note, source, authored_bytes, authored_ranges, .. } => {
                     if self.ledger.turn_for_intake(id).is_some() || client_id.as_ref().is_some_and(|key|
                         self.ledger.thread_turns(&thread_id).is_ok_and(|turns| turns.iter().any(|turn| turn.client_id.as_ref() == Some(key)))) {
                         if !deferred_stop {self.control.mark_drained(id).map_err(|e| SpineError::Steering(e.to_string()))?;}
@@ -2966,7 +2970,7 @@ impl Spine {
                     let binding = self.fence_binding(&thread_id)?;
                     let source = source.unwrap_or(Source::Text);
                     let kept = (self.keep_intake_channel || source == Source::Agent).then_some(channel.as_str());
-                    let turn_id = self.ledger.record_prompt_received_from_client_authored(&binding, &text, source, id, kept, client_id.as_deref(), (voice_note, authored_bytes))?;
+                    let turn_id = self.ledger.record_prompt_received_from_client_provenance(&binding, &text, source, id, kept, client_id.as_deref(), (voice_note, crate::swearmeter::Authorship { bytes: authored_bytes, ranges: authored_ranges }))?;
                     self.input_channels.insert(turn_id.clone(), channel);
                     self.emit_live(self.turn_status_event(&binding, &turn_id, TurnStatus::Queued, None));
                     self.emit_live(self.ceo_message_event(&binding, &turn_id));

@@ -142,6 +142,8 @@ pub enum IntakeRecord {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authored_bytes: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authored_ranges: Option<crate::swearmeter::Ranges>,
         at: u64,
         /// WHICH MOUTH — `"phone"` today. A field rather than a variant, so a second
         /// channel is a new value here and not a new record type every older build then
@@ -205,6 +207,8 @@ pub enum IntakeRecord {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authored_bytes: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authored_ranges: Option<crate::swearmeter::Ranges>,
         at: u64,
     },
     /// §9.3 step 1: "Persist a stop request."
@@ -284,6 +288,28 @@ impl IntakeHealth {
     }
 }
 
+#[derive(Clone)]
+struct PendingWordCount { count: u64, unknown: bool, client: Option<(String, String)> }
+impl PendingWordCount {
+    fn from_record(record: &IntakeRecord) -> Option<(u64, Self)> {
+        let (id, text, bytes, ranges, client) = match record {
+            IntakeRecord::Desk { id, text, authored_bytes, authored_ranges, .. } => (*id, text, *authored_bytes, authored_ranges.as_deref(), None),
+            IntakeRecord::Channel { id, text, authored_bytes, authored_ranges, source, thread_id, client_id, .. }
+                if source.is_none_or(|s| matches!(s, crate::ledger::Source::Text | crate::ledger::Source::Jam)) =>
+                (*id, text, *authored_bytes, authored_ranges.as_deref(), client_id.as_ref().map(|c| (thread_id.clone(), c.clone()))),
+            IntakeRecord::Steer { id, text, .. } => (*id, text, Some(text.len()), None, None),
+            _ => return None,
+        };
+        let count = if let Some(ranges) = ranges { crate::swearmeter::count_ranges(text, ranges) }
+            else { match bytes {
+                Some(bytes) => text.get(..bytes).map(crate::swearmeter::count),
+                None if crate::swearmeter_ledger::ambiguous_legacy_attachment(text) => None,
+                None => Some(crate::swearmeter::count(text)),
+            }};
+        Some((id, Self { count: count.unwrap_or(0), unknown: count.is_none(), client }))
+    }
+}
+
 /// The append-only intake file: the CEO's words and the CEO's stop, durable before
 /// anything acts on them.
 ///
@@ -291,27 +317,6 @@ impl IntakeHealth {
 /// a malformed line skipped-and-REPORTED rather than fatal) and deliberately NOT the same
 /// file: the ledger is evidence of what happened, and an intake record is a request that
 /// has not happened yet.
-#[derive(Clone)]
-struct PendingWordCount { count: u64, unknown: bool, client: Option<(String, String)> }
-impl PendingWordCount {
-    fn from_record(record: &IntakeRecord) -> Option<(u64, Self)> {
-        let (id, text, bytes, client) = match record {
-            IntakeRecord::Desk { id, text, authored_bytes, .. } => (*id, text, *authored_bytes, None),
-            IntakeRecord::Channel { id, text, authored_bytes, source, thread_id, client_id, .. }
-                if source.is_none_or(|s| matches!(s, crate::ledger::Source::Text | crate::ledger::Source::Jam)) =>
-                (*id, text, *authored_bytes, client_id.as_ref().map(|c| (thread_id.clone(), c.clone()))),
-            IntakeRecord::Steer { id, text, .. } => (*id, text, Some(text.len()), None),
-            _ => return None,
-        };
-        let authored = match bytes {
-            Some(bytes) => text.get(..bytes),
-            None if crate::swearmeter_ledger::ambiguous_legacy_attachment(text) => None,
-            None => Some(text.as_str()),
-        };
-        Some((id, Self { count: authored.map(crate::swearmeter::count).unwrap_or(0), unknown: authored.is_none(), client }))
-    }
-}
-
 pub struct IntakeLog {
     path: PathBuf,
     /// Records written and not yet drained, oldest first.
@@ -692,6 +697,7 @@ impl IntakeLog {
             entity_id,
             text: text.to_string(),
             authored_bytes,
+            authored_ranges: None,
             at: now_millis(),
             channel: channel.to_string(),
             client_id: client_id.map(str::to_string),
@@ -721,12 +727,18 @@ impl IntakeLog {
 
     pub fn desk_message_authored(&mut self, thread_id: &str, entity_id: Option<EntityId>,
         text: &str, authored_bytes: Option<usize>) -> Result<IntakeRecord, SteeringError> {
+        self.desk_message_provenance(thread_id, entity_id, text, crate::swearmeter::Authorship::prefix(authored_bytes))
+    }
+
+    pub fn desk_message_provenance(&mut self, thread_id: &str, entity_id: Option<EntityId>,
+        text: &str, authorship: crate::swearmeter::Authorship) -> Result<IntakeRecord, SteeringError> {
         let rec = IntakeRecord::Desk {
             id: self.next_id,
             thread_id: thread_id.to_string(),
             entity_id,
             text: text.to_string(),
-            authored_bytes,
+            authored_bytes: authorship.bytes,
+            authored_ranges: authorship.ranges,
             at: now_millis(),
         };
         self.write(&rec)?;
@@ -1220,7 +1232,7 @@ impl TurnControl {
     pub fn submit_agent_message(&self, thread_id: &str, entity_id: Option<EntityId>, text: &str, sender: &str, message_id: &str) -> Result<IntakeRecord, SteeringError> {
         let mut guard = self.inner.intake.lock().unwrap();
         let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
-        let rec = IntakeRecord::Channel { id: log.next_id, thread_id: thread_id.into(), entity_id, text: text.into(), at: now_millis(), channel: sender.into(), client_id: Some(message_id.into()), voice_note: false, authored_bytes: Some(0), source: Some(crate::ledger::Source::Agent) };
+        let rec = IntakeRecord::Channel { id: log.next_id, thread_id: thread_id.into(), entity_id, text: text.into(), at: now_millis(), channel: sender.into(), client_id: Some(message_id.into()), voice_note: false, authored_bytes: Some(0), authored_ranges: None, source: Some(crate::ledger::Source::Agent) };
         log.write(&rec)?;
         log.next_id += 1;
         log.pending.push(rec.clone());
@@ -1285,9 +1297,14 @@ impl TurnControl {
     /// The user-text boundary is kept with the existing intake write, not in a side log.
     pub fn submit_from_desk_authored(&self, thread_id: &str, entity_id: Option<EntityId>,
         text: &str, authored_bytes: Option<usize>) -> Result<IntakeRecord, SteeringError> {
+        self.submit_from_desk_provenance(thread_id, entity_id, text, crate::swearmeter::Authorship::prefix(authored_bytes))
+    }
+
+    pub fn submit_from_desk_provenance(&self, thread_id: &str, entity_id: Option<EntityId>, text: &str,
+        authorship: crate::swearmeter::Authorship) -> Result<IntakeRecord, SteeringError> {
         let mut guard = self.inner.intake.lock().unwrap();
         let log = guard.as_mut().ok_or(SteeringError::NoDurableIntake)?;
-        log.desk_message_authored(thread_id, entity_id, text, authored_bytes)
+        log.desk_message_provenance(thread_id, entity_id, text, authorship)
     }
 
     pub fn submit_authored_from_channel(&self, thread_id: &str, entity_id: Option<EntityId>,
@@ -1298,11 +1315,12 @@ impl TurnControl {
         log.channel_message_authored(thread_id, entity_id, text, channel, client_id, (false, Some(authored_bytes)))
     }
 
-    pub(crate) fn authored_bytes(&self, id: u64) -> Option<usize> {
+    pub(crate) fn authorship(&self, id: u64) -> Option<crate::swearmeter::Authorship> {
         let guard = self.inner.intake.lock().ok()?;
         match guard.as_ref()?.pending.iter().find(|record| record.id() == id)? {
-            IntakeRecord::Desk { authored_bytes, .. } | IntakeRecord::Channel { authored_bytes, .. } => *authored_bytes,
-            IntakeRecord::Steer { text, .. } => Some(text.len()),
+            IntakeRecord::Desk { authored_bytes, authored_ranges, .. } | IntakeRecord::Channel { authored_bytes, authored_ranges, .. } =>
+                Some(crate::swearmeter::Authorship { bytes: *authored_bytes, ranges: authored_ranges.clone() }),
+            IntakeRecord::Steer { text, .. } => Some(crate::swearmeter::Authorship::all(text)),
             _ => None,
         }
     }

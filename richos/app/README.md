@@ -2171,7 +2171,8 @@ The complete English dictionary and synthetic examples live in `swearmeter.rs`.
 
 Original question requests carry host-set origin metadata in their existing atomic
 operation write. Generated card labels, delivery composites, model paraphrases and
-attachment descriptions add no human occurrences. Unknown older input is qualified as
+attachment descriptions add no human occurrences. Numeric authorship ranges survive
+attachment-draft edits and retries without duplicating the text. Unknown older input is qualified as
 partial history. Unavailable input never appears as a complete zero. Result events
 contain numeric aggregates and coverage flags, with revisions to reject stale reads.
 There is no added model call, network request, excerpt log or audio capture.

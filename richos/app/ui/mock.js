@@ -3377,7 +3377,9 @@
           found.forEach((f) => mockAttach.staged.delete(args.draftId + "/" + f.id));
           folders.forEach((f) => mockAttach.folders.delete(args.draftId + "/" + f.id));
           const blocks = [];
-          const words = String(args.text || "").trim();
+          const rawText = String(args.text || "");
+          const words = rawText.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+          const capture = window.RichAuthored.forSend({ text: rawText, ranges: window.RichAuthored.ranges(rawText, args.authorship || { authoredBytes: window.RichAuthored.length(rawText) }) }, words);
           if (words) blocks.push(words);
           if (found.length) {
             const count = found.length === 1 ? "1 file" : found.length + " files";
@@ -3392,6 +3394,7 @@
           }
           return {
             text: blocks.join("\n\n"),
+            ...capture,
             files: found.map(({ draftId: _d, ...f }) => f).concat(folders),
             missing: [],
           };

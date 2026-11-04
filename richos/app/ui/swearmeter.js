@@ -19,7 +19,7 @@
     if (!result || !result.available) return "The recorded result could not be read. Retry in settings.";
     const lines = [];
     if (result.unknown_card_inputs) lines.push("Partial history: some older card answers could not be attributed (" + result.unknown_card_inputs.toLocaleString() + " records).");
-    if (result.unknown_message_inputs) lines.push("Partial history: some older message text could not be attributed (" + result.unknown_message_inputs.toLocaleString() + " inputs).");
+    if (result.unknown_message_inputs) lines.push("Partial history: some message text could not be attributed (" + result.unknown_message_inputs.toLocaleString() + " inputs).");
     if (result.incomplete_history) lines.push("Partial history: some recorded inputs could not be read or recovered.");
     return lines.join(" ");
   }

@@ -314,28 +314,31 @@ let sendBlockedReason = null; // §21: non-null means send is refused, with this
 let idlePlaceholder = "Talk to Rich…";
 const expandedEntities = new Set(); // entity ids whose "Show more" has been used
 const drafts = new Map(); // threadId -> unsent composer text (§3.1)
-// Provenance only for app-composed attachment bodies restored as drafts. The text
-// is the existing draft's string; only its prefix length is added to parked data.
+// The existing draft text plus numeric authorship around generated attachment context.
 const authoredDrafts = new Map();
-const utf8Length = (text) => new TextEncoder().encode(text).length;
+const utf8Length = (text) => window.RichAuthored.length(text);
+let draftBeforeInput = null;
 function draftAuthorshipKey() {
   return draftEntityId ? ENTITY_DRAFT_PREFIX + draftEntityId : activeThreadId;
 }
-function authoredDraftBytes(key, text) {
-  const saved = authoredDrafts.get(key);
-  if (!saved || saved.text.trim() !== text) return utf8Length(text);
-  const leading = saved.text.slice(0, saved.text.length - saved.text.trimStart().length);
-  return Math.max(0, saved.bytes - utf8Length(leading));
+function authoredDraftCapture(key, text) {
+  return window.RichAuthored.forSend(authoredDrafts.get(key), text);
+}
+function rememberAuthoredDraft(key, text, capture) {
+  authoredDrafts.set(key, { text, ranges: window.RichAuthored.ranges(text, capture) });
 }
 function editDraftAuthorship() {
-  const key = draftAuthorshipKey();
-  const saved = authoredDrafts.get(key);
+  const key = draftAuthorshipKey(), before = draftBeforeInput;
+  draftBeforeInput = null;
+  let saved = authoredDrafts.get(key);
   if (!saved) return;
-  const suffix = new TextDecoder().decode(new TextEncoder().encode(saved.text).subarray(saved.bytes));
-  const text = inputEl.value;
-  if (suffix && text.trimEnd().endsWith(suffix)) {
-    authoredDrafts.set(key, { text, bytes: utf8Length(text.trimEnd()) - utf8Length(suffix) });
-  } else authoredDrafts.delete(key);
+  if (before && before.key === key && before.text !== saved.text) saved = { text: before.text, ranges: [[0, utf8Length(before.text)]] };
+  const hint = before && before.key === key && before.text === saved.text ? {
+    start: utf8Length(before.text.slice(0, before.start)), end: utf8Length(before.text.slice(0, before.end))
+  } : null;
+  const next = window.RichAuthored.edit(saved, inputEl.value, hint);
+  if (window.RichAuthored.capture(next.text, next.ranges).authoredBytes === utf8Length(next.text)) authoredDrafts.delete(key);
+  else authoredDrafts.set(key, next);
 }
 
 const scrollTops = new Map(); // threadId -> conversation scrollTop (§3.1)
@@ -409,8 +412,12 @@ function loadParkedViewState() {
     for (const [key, bytes] of Object.entries(savedDrafts.__authoredPrefixBytes || {})) {
       const text = savedDrafts[key];
       if (typeof text === "string" && Number.isInteger(bytes) && bytes >= 0 && bytes <= utf8Length(text)) {
-        authoredDrafts.set(key, { text, bytes });
+        rememberAuthoredDraft(key, text, { authoredBytes: bytes });
       }
+    }
+    for (const [key, ranges] of Object.entries(savedDrafts.__authoredRanges || {})) {
+      const text = savedDrafts[key];
+      if (typeof text === "string") authoredDrafts.set(key, { text, ranges: window.RichAuthored.normalized(text, ranges) });
     }
   }
   const savedScroll = readJsonLocal(KEY_SCROLL);
@@ -437,9 +444,9 @@ function parkViewStateNow() {
   if ((mainView === "conversation" || mainView === "opening") && activeThreadId) put(activeThreadId, inputEl.value);
   else if (mainView === "entity" && viewEntityId) put(ENTITY_DRAFT_PREFIX + viewEntityId, inputEl.value);
   for (const [key, text] of drafts) if (!(key in out)) put(key, text);
-  const prefixes = {};
-  for (const [key, saved] of authoredDrafts) if (out[key] === saved.text) prefixes[key] = saved.bytes;
-  if (Object.keys(prefixes).length) out.__authoredPrefixBytes = prefixes;
+  const authoredRanges = {};
+  for (const [key, saved] of authoredDrafts) if (out[key] === saved.text) authoredRanges[key] = saved.ranges;
+  if (Object.keys(authoredRanges).length) out.__authoredRanges = authoredRanges;
   writeJsonLocal(KEY_DRAFTS, out);
 
   const tops = {};
@@ -2081,6 +2088,9 @@ messagesEl.addEventListener("focusout", () => queueMicrotask(resumeQuestionPaint
 document.addEventListener("richos-questions-changed", resumeQuestionPaint);
 function releaseQuestionPointer() { pointerQuestion = null; resumeQuestionPaint(); }
 inputEl.addEventListener("focus", releaseQuestionPointer);
+inputEl.addEventListener("beforeinput", () => {
+  draftBeforeInput = { key: draftAuthorshipKey(), text: inputEl.value, start: inputEl.selectionStart, end: inputEl.selectionEnd };
+});
 inputEl.addEventListener("input", releaseQuestionPointer);
 
 
@@ -2617,11 +2627,12 @@ function visiblePendingSend() {
     (request.model === timelineModel || request.threadId && request.threadId === activeThreadId));
 }
 
-function restoreUnsentText(text, threadId) {
+function restoreUnsentText(text, threadId, capture) {
   const current = threadId === activeThreadId;
   const draft = current ? inputEl.value : drafts.get(threadId) || "";
-  const restored = draft.trim() && draft !== text ? text + "\n\n" + draft : text;
-  if (threadId) drafts.set(threadId, restored);
+  const captured = window.RichAuthored.join(text, capture || { authoredBytes: utf8Length(text) }, draft, authoredDraftCapture(threadId, draft));
+  const restored = captured.text;
+  if (threadId) { drafts.set(threadId, restored); authoredDrafts.set(threadId, captured); }
   if (current) {
     inputEl.value = restored;
     autoGrow();
@@ -2645,7 +2656,7 @@ let foldingAttachments = false;
 /// `null` when they could not be, having said why on the tray's line. A file the desk no longer
 /// holds is taken off the tray by name and NOTHING is committed (the Rust side moves all or
 /// none), so no message ever leaves with part of its files.
-async function foldAttachments(text, threadId, files) {
+async function foldAttachments(text, threadId, files, capture) {
   foldingAttachments = true;
   try {
     const answer = await Bridge.invoke("commit_attachments", {
@@ -2653,13 +2664,17 @@ async function foldAttachments(text, threadId, files) {
       draftId: files.draftId,
       text,
       attachments: files.attachments,
+      authorship: capture,
     });
     if (answer && Array.isArray(answer.missing) && answer.missing.length) {
       window.RichAttachments.forget(files.key, answer.missing);
       return null;
     }
     window.RichAttachments.sent(files.key);
-    return answer.text;
+    const known = window.RichAuthored.ranges(answer.text, answer);
+    const returnedCapture = window.RichAuthored.capture(answer.text, known);
+    rememberAuthoredDraft(threadId, answer.text, returnedCapture);
+    return { text: answer.text, capture: returnedCapture };
   } catch (e) {
     window.RichAttachments.note(
       typeof e === "string" && e.trim()
@@ -2694,7 +2709,7 @@ async function send(explicitText, opts) {
   // Start/Resume sends its own acceptance without silently submitting or deleting a draft.
   const preserveDraft = typeof explicitText === "string";
   let text = preserveDraft ? explicitText.trim() : inputEl.value.trim();
-  const authoredBytes = preserveDraft ? utf8Length(text) : authoredDraftBytes(draftAuthorshipKey(), text);
+  let capture = preserveDraft ? { authoredBytes: utf8Length(text) } : authoredDraftCapture(draftAuthorshipKey(), text);
   // FILES HE DROPPED OR PASTED (CEO §86). Never on a Start/Resume send, which is not his
   // composer's content.
   const files = preserveDraft || !window.RichAttachments ? null : window.RichAttachments.forSend();
@@ -2733,17 +2748,17 @@ async function send(explicitText, opts) {
   // files wait for the thread to exist; that case is below.
   if (files && !draftEntityId) {
     const foldThread = activeThreadId;
-    const folded = await foldAttachments(text, foldThread, files);
+    const folded = await foldAttachments(text, foldThread, files, capture);
     if (folded === null) return;
-    authoredDrafts.set(foldThread, { text: folded, bytes: authoredBytes });
+    capture = folded.capture;
     if (activeThreadId !== foldThread || (mainView !== "conversation" && mainView !== "opening")) {
       // He moved in the milliseconds the files took. They are filed under the thread he sent
       // from, so the message stays with it, as its draft, ready to send.
-      drafts.set(foldThread, folded);
+      drafts.set(foldThread, folded.text);
       parkViewStateNow();
       return;
     }
-    text = folded;
+    text = folded.text;
   }
   const keptDraft = preserveDraft ? inputEl.value : "";
   if (!preserveDraft) inputEl.value = "";
@@ -2853,7 +2868,7 @@ async function send(explicitText, opts) {
       return;
     }
     if (files) {
-      const folded = await foldAttachments(text, newId, files);
+      const folded = await foldAttachments(text, newId, files, capture);
       if (folded === null) {
         // THE SAME WITHDRAWAL AS A THREAD THAT COULD NOT START: nothing was sent, so nothing
         // may look sent. His words go back in the box and his files stay on the composer
@@ -2869,8 +2884,8 @@ async function send(explicitText, opts) {
         autoGrow();
         return;
       }
-      text = folded;
-      authoredDrafts.set(newId, { text: folded, bytes: authoredBytes });
+      text = folded.text;
+      capture = folded.capture;
     }
     drafts.delete(ENTITY_DRAFT_PREFIX + entityId);
     if (preserveDraft && keptDraft) drafts.set(newId, keptDraft);
@@ -2937,7 +2952,7 @@ async function send(explicitText, opts) {
   try {
     await Bridge.invoke(
       "send_message",
-      pressed ? { text, threadId: sentThreadId, pressed: true } : { text, threadId: sentThreadId, authoredBytes }
+      pressed ? { text, threadId: sentThreadId, pressed: true } : { text, threadId: sentThreadId, authorship: capture }
     );
     if (authoredDrafts.get(sentThreadId)?.text === text) authoredDrafts.delete(sentThreadId);
     if (pressedTurnFailed()) return false;
@@ -2983,7 +2998,7 @@ async function send(explicitText, opts) {
       }
       return false;
     }
-    restoreUnsentText(text, sentThreadId);
+    restoreUnsentText(text, sentThreadId, capture);
     if (timelineModel !== sentModel) return;
 
     // WHAT THIS USED TO DO, AND WHY IT WAS THE WORST STATE IN THE APP. It said

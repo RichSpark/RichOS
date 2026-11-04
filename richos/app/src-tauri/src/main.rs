@@ -1507,9 +1507,10 @@ fn send_message(
     // blocking road below, never the intake log, whose whole purpose is HIS words reaching
     // his phone before the spine is free.
     pressed: Option<bool>,
-    authored_bytes: Option<usize>,
+    authorship: Option<richos_core::swearmeter::Authorship>,
 ) -> Result<Vec<Message>, String> {
     let pressed = pressed == Some(true);
+    let authorship = authorship.unwrap_or_else(|| richos_core::swearmeter::Authorship::all(&text));
     // ===================================================================================
     // HOW LONG HE WAITED BEFORE HIS TURN EVEN STARTED — and why this line exists
     // ===================================================================================
@@ -1579,7 +1580,7 @@ fn send_message(
     // old road, and the only thing lost is the wait.
     let destination = state.reader.snapshot().ledger().thread_binding(&thread_id).ok();
     let his_words_are_on_the_log = if !pressed && destination.is_some() && desk_input_can_be_logged(&state.control, &thread_id) {
-        match state.control.submit_from_desk_authored(&thread_id, destination.map(|binding| binding.entity_id().clone()), &text, Some(authored_bytes.unwrap_or(text.len())))
+        match state.control.submit_from_desk_provenance(&thread_id, destination.map(|binding| binding.entity_id().clone()), &text, authorship.clone())
         {
             Ok(record) => {
                 state.swearmeter.publish(&app);
@@ -1703,7 +1704,7 @@ fn send_message(
             .map_err(|e| refused_send("the spine refused the prompt", e.to_string()))?;
     } else {
         spine
-            .submit_prompt_to_authored(&thread_id, &text, authored_bytes.unwrap_or(text.len()))
+            .submit_prompt_to_provenance(&thread_id, &text, authorship)
             .map_err(|e| refused_send("the spine refused the prompt", e.to_string()))?;
     }
     drop(spine);
