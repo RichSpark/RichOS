@@ -170,6 +170,82 @@ async function main() {
     await menu.close();
   });
 
+  await run.check("preview shows two hundred recent characters, grows naturally and keeps its controls", async () => {
+    const notes = [];
+    for (const width of [900,1440]) for (const fontScale of [100,150]) for (const theme of ["dark","light"]) {
+      const page = await open(browser,BAR,theme,true,{viewport:{width,height:700},screen:{width,height:900}});
+      await page.evaluate(w=>Object.defineProperty(window.screen,"availWidth",{value:w}),width);
+      await say(page,"dictation-bar",bar("listening",{theme,fontScale,destination:"Mail",vocabulary:"Example Company"}));
+      await page.evaluate(()=>document.fonts.ready.then(()=>true));
+      const baseline = await page.evaluate(()=> {
+        window.__previewRow=document.querySelector(".dhx-row");
+        window.__previewMeter=document.querySelector(".dh-meter");
+        window.__previewClock=document.getElementById("dhTime");
+        return window.RichDictationBar.layout();
+      });
+      const inspect = ()=>page.evaluate(()=> {
+        const el=document.querySelector(".dhx-words"), box=el.getBoundingClientRect();
+        const node=el.firstChild, value=node.textContent, range=document.createRange();
+        range.setStart(node,value.lastIndexOf(" ")+1); range.setEnd(node,value.length);
+        const last=range.getBoundingClientRect();
+        range.setStart(node,0); range.setEnd(node,value.indexOf(" ")<0?value.length:value.indexOf(" "));
+        const first=range.getBoundingClientRect();
+        const calls=window.__calls.filter(c=>c[0]==="dictation_bar_laid_out");
+        return {lines:Math.round(box.height/parseFloat(getComputedStyle(el).lineHeight)),
+          height:box.height, lineHeight:parseFloat(getComputedStyle(el).lineHeight),
+          firstHidden:first.bottom<=box.top+1,
+          lastVisible:last.top>=box.top-1&&last.bottom<=box.bottom+1&&last.right<=box.right+1,
+          noHorizontalOverflow:el.scrollWidth<=el.clientWidth+1,
+          report:calls[calls.length-1][1],
+          controlsKept:window.__previewRow===document.querySelector(".dhx-row")&&
+            window.__previewMeter===document.querySelector(".dh-meter")&&window.__previewClock===document.getElementById("dhTime")};
+      });
+      const passage="Please send the revised forecast to the board before tomorrow’s meeting. Include our cash position, customer renewals and the hiring plan, then ask finance to confirm the figures before we approve the budget.";
+      const recent="…"+Array.from(passage).slice(-199).join("");
+      const words=recent.split(" "), seen=new Set(), heights=[];
+      for (let n=1;n<=words.length;n++) {
+        await say(page,"dictation-live-preview",{seq:7,text:words.slice(0,n).join(" ")});
+        const current=await inspect();
+        assert(current.lines>=1&&current.lines<=5,"the preview has at most five text lines");
+        assert(current.height<=5*current.lineHeight+1,"the text area cannot grow past its cap");
+        assert(current.controlsKept,"updates retain the live meter, clock and controls");
+        assert(current.lastVisible,"the newest word is readable");
+        assert(current.noHorizontalOverflow,"words wrap inside the preview");
+        assert(current.report.w<=width,"the bar fits its desktop");
+        if (!seen.has(current.lines)) {
+          seen.add(current.lines); heights.push(current.report.h);
+          await page.setViewportSize({width:current.report.w,height:current.report.h});
+          assertEqual(await page.evaluate(()=>window.RichDictationBar.layout()),current.report,
+            "native resizing converges without constraining the next line");
+        }
+      }
+      assert(seen.has(1)&&seen.has(2)&&seen.has(3),"ordinary prose expands naturally as it arrives");
+      assert(heights[0]<heights[1]&&heights[1]<heights[2],"the native window grows with the text");
+      assertEqual(await text(page,".dhx-words"),recent,"all 200 characters reach the renderer");
+      assert(await page.locator(".dhx-words").evaluate(el=>el.scrollHeight<=el.clientHeight+1),
+        "all 200 ordinary-prose characters are visible, exceeding FluidVoice’s default 150");
+      assertEqual(Array.from(recent).length,200);
+      for (const action of ["finish","cancel"]) {
+        assert(await page.locator('[data-bar-act="'+action+'"]').evaluate(el=> {
+          const r=el.getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;
+        }),action+" remains inside the native window");
+      }
+      await say(page,"dictation-live-preview",{seq:7,text:"W".repeat(300)+" approved"});
+      const token=await inspect();
+      assert(token.lines<=5&&token.noHorizontalOverflow&&token.lastVisible,"a long token keeps the cap and latest word");
+      await say(page,"dictation-live-preview",{seq:7,text:"Approved."});
+      const short=await inspect();
+      assertEqual(short.lines,1,"a shorter provisional result shrinks again");
+      assert(short.report.h<heights[2]&&short.controlsKept,"shrinking keeps the controls alive");
+      await say(page,"dictation-live-preview",{seq:7,text:""});
+      assertEqual(await page.evaluate(()=>window.RichDictationBar.layout()),baseline,"no words reserve no preview space");
+      assertEqual(page.__errors,[]);
+      notes.push(width+"px / "+fontScale+"% / "+theme+": "+heights.join(" → "));
+      await page.close();
+    }
+    return notes.join("; ");
+  });
+
   await run.check("preview stays provisional and quiet for VoiceOver; Finish and Cancel reach the owning recording", async () => {
     const page = await open(browser, BAR);
     await say(page, "dictation-bar", bar("listening", {destination:"Mail",vocabulary:"Example Company",preview:"Please send the forecast"}));
