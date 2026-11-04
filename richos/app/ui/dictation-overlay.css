@@ -425,7 +425,7 @@ body {
 .dhx-row > .dh-orb { margin-right: 0; }
 .dhx-top { display: flex; align-items: baseline; gap: 12px; padding: .8125rem 1.375rem 0 1.25rem; min-width: 0; max-width: 46rem; }
 .dhx-tag { flex-shrink: 0; font-size: .875rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--gold-text); }
-.dhx-words { font-size: 1.125rem; line-height: 1.4; max-height: 4.2em; color: var(--ink); overflow: hidden; white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.dhx-words { font-size: 1.125rem; line-height: 1.4; max-height: 7em; color: var(--ink); overflow: hidden; white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 .dhx-words .is-new { color: var(--ink); text-decoration: underline; text-decoration-color: var(--gold); text-decoration-thickness: 2px; text-underline-offset: 4px; }
 .dhx-paused { display: inline-flex; align-items: center; gap: 8px; font-size: 1rem; color: var(--ink-soft); }
 .dhx-paused svg { width: 16px; height: 16px; color: var(--ink-soft); }

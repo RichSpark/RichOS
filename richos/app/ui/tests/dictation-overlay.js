@@ -170,7 +170,7 @@ async function main() {
     await menu.close();
   });
 
-  await run.check("preview grows through one, two and three lines, keeps the newest words and sizes the native window", async () => {
+  await run.check("preview shows two hundred recent characters, grows naturally and keeps its controls", async () => {
     const notes = [];
     for (const width of [900,1440]) for (const fontScale of [100,150]) for (const theme of ["dark","light"]) {
       const page = await open(browser,BAR,theme,true,{viewport:{width,height:700},screen:{width,height:900}});
@@ -200,12 +200,14 @@ async function main() {
           controlsKept:window.__previewRow===document.querySelector(".dhx-row")&&
             window.__previewMeter===document.querySelector(".dh-meter")&&window.__previewClock===document.getElementById("dhTime")};
       });
-      const words=["obsolete",...Array(30).fill("forecast"),"approved"], seen=new Set(), heights=[];
+      const passage="Please send the revised forecast to the board before tomorrow’s meeting. Include our cash position, customer renewals and the hiring plan, then ask finance to confirm the figures before we approve the budget.";
+      const recent="…"+Array.from(passage).slice(-199).join("");
+      const words=recent.split(" "), seen=new Set(), heights=[];
       for (let n=1;n<=words.length;n++) {
         await say(page,"dictation-live-preview",{seq:7,text:words.slice(0,n).join(" ")});
         const current=await inspect();
-        assert(current.lines>=1&&current.lines<=3,"the preview has at most three text lines");
-        assert(current.height<=3*current.lineHeight+1,"the text area cannot grow past its cap");
+        assert(current.lines>=1&&current.lines<=5,"the preview has at most five text lines");
+        assert(current.height<=5*current.lineHeight+1,"the text area cannot grow past its cap");
         assert(current.controlsKept,"updates retain the live meter, clock and controls");
         assert(current.lastVisible,"the newest word is readable");
         assert(current.noHorizontalOverflow,"words wrap inside the preview");
@@ -217,9 +219,12 @@ async function main() {
             "native resizing converges without constraining the next line");
         }
       }
-      assertEqual([...seen],[1,2,3],"speech expands naturally through all three sizes");
+      assert(seen.has(1)&&seen.has(2)&&seen.has(3),"ordinary prose expands naturally as it arrives");
       assert(heights[0]<heights[1]&&heights[1]<heights[2],"the native window grows with the text");
-      assert((await inspect()).firstHidden,"older words give way to the newest three lines");
+      assertEqual(await text(page,".dhx-words"),recent,"all 200 characters reach the renderer");
+      assert(await page.locator(".dhx-words").evaluate(el=>el.scrollHeight<=el.clientHeight+1),
+        "all 200 ordinary-prose characters are visible, exceeding FluidVoice’s default 150");
+      assertEqual(Array.from(recent).length,200);
       for (const action of ["finish","cancel"]) {
         assert(await page.locator('[data-bar-act="'+action+'"]').evaluate(el=> {
           const r=el.getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;
@@ -227,7 +232,7 @@ async function main() {
       }
       await say(page,"dictation-live-preview",{seq:7,text:"W".repeat(300)+" approved"});
       const token=await inspect();
-      assert(token.lines<=3&&token.noHorizontalOverflow&&token.lastVisible,"a long token keeps the cap and latest word");
+      assert(token.lines<=5&&token.noHorizontalOverflow&&token.lastVisible,"a long token keeps the cap and latest word");
       await say(page,"dictation-live-preview",{seq:7,text:"Approved."});
       const short=await inspect();
       assertEqual(short.lines,1,"a shorter provisional result shrinks again");

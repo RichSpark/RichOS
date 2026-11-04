@@ -12,14 +12,14 @@ pub enum Update {
     Quiet,
 }
 
-// Enough recent words for the three-line display, still only the latest
-// provisional window rather than an accumulating transcript.
-const PREVIEW_WORD_LIMIT: usize = 32;
+// One fixed recent-text allowance; no accumulating provisional transcript.
+const PREVIEW_CHARACTER_LIMIT: usize = 200;
 
-pub fn recent_words(text: &str) -> String {
-    let words: Vec<_> = text.split_whitespace().collect();
-    let tail = words[words.len().saturating_sub(PREVIEW_WORD_LIMIT)..].join(" ");
-    if words.len() > PREVIEW_WORD_LIMIT { format!("…{tail}") } else { tail }
+pub fn recent_text(text: &str) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= PREVIEW_CHARACTER_LIMIT { return text; }
+    let start = text.char_indices().rev().nth(PREVIEW_CHARACTER_LIMIT - 2).unwrap().0;
+    format!("…{}", &text[start..])
 }
 
 /// Owned by the ordinary dictation's writing-worker lifecycle. `park_timeout`
@@ -61,7 +61,7 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         match result {
             Ok((text, decode_ms)) if sampled_at.elapsed() <= Duration::from_secs(2) => {
                 match judge_transcript(&text) {
-                    Ok(text) => send(Update::Words { text: recent_words(&text), sampled_at, decode_ms }),
+                    Ok(text) => send(Update::Words { text: recent_text(&text), sampled_at, decode_ms }),
                     Err(_) => { send(Update::Paused); return; }
                 }
             }
@@ -77,15 +77,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preview_keeps_only_recent_words_and_does_not_present_them_as_final_text() {
-        assert_eq!(recent_words("one two"), "one two");
-        assert_eq!(recent_words("one two three four five six seven eight nine ten eleven twelve"),
-                   "one two three four five six seven eight nine ten eleven twelve");
-        let full = (1..=32).map(|n| format!("word{n}")).collect::<Vec<_>>().join(" ");
-        assert_eq!(recent_words(&full), full);
-        assert_eq!(recent_words(&format!("discarded {full}")), format!("…{full}"));
-        assert_eq!(recent_words("  one\n\ttwo  "), "one two");
-        assert_eq!(recent_words(""), "");
+    fn preview_keeps_two_hundred_recent_characters_without_changing_final_text() {
+        assert_eq!(recent_text("  one\n\ttwo  "), "one two");
+        assert_eq!(recent_text(""), "");
+        let full = "a".repeat(200);
+        assert_eq!(recent_text(&full), full);
+        let long = format!("discarded {} approved", "é".repeat(200));
+        let preview = recent_text(&long);
+        assert_eq!(preview.chars().count(), 200);
+        assert!(preview.starts_with('…'));
+        assert!(preview.ends_with(" approved"));
+        assert!(!preview.contains("discarded"));
+        assert!(long.starts_with("discarded"), "the final transcript is untouched");
     }
 
     #[test]
@@ -136,9 +139,10 @@ mod tests {
             let (recording, flag, updates, data) = (recording.clone(), stop.clone(), updates.clone(), data.clone());
             std::thread::spawn(move || run(recording, &data, &flag, |update| {
                 let entry = match update {
-                    Update::Words { sampled_at, decode_ms, .. } => serde_json::json!({
+                    Update::Words { text, sampled_at, decode_ms } => serde_json::json!({
                         "kind":"words", "at_ms":began.elapsed().as_millis(),
-                        "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms}),
+                        "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms,
+                        "characters":text.chars().count(), "words":text.split_whitespace().count()}),
                     Update::Quiet => serde_json::json!({"kind":"quiet","at_ms":began.elapsed().as_millis()}),
                     Update::Paused => serde_json::json!({"kind":"paused","at_ms":began.elapsed().as_millis()}),
                     Update::Unavailable => serde_json::json!({"kind":"unavailable","at_ms":began.elapsed().as_millis()}),
