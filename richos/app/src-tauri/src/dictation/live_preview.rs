@@ -86,4 +86,94 @@ mod tests {
         run(Arc::new(Mutex::new(None)), Path::new("/not-used"), &stopped,
             |_| panic!("a canceled preview must not publish"));
     }
+
+    /// Explicit file-only hardware measurement, using the production capture,
+    /// preview, scratch and decoder paths. Reports measurements rather than
+    /// treating this synthetic workload as a native UI or physical-mic gate.
+    #[test]
+    #[ignore = "Requires explicit RICHOS_PREVIEW_PROBE_WAV, _DATA, _OUT, _RUNTIME_BIN and _ENABLED"]
+    fn measure_file_preview() {
+        use richos_voice::{capture, dictation::{decode_bound, MORE_ACCURATE}, wav};
+        let required = |key: &str| std::env::var(key).unwrap_or_else(|_| panic!("set {key} explicitly"));
+        let path = std::path::PathBuf::from(required("RICHOS_PREVIEW_PROBE_WAV"));
+        let data = std::path::PathBuf::from(required("RICHOS_PREVIEW_PROBE_DATA"));
+        let output = std::path::PathBuf::from(required("RICHOS_PREVIEW_PROBE_OUT"));
+        let runtime = std::path::PathBuf::from(required("RICHOS_PREVIEW_PROBE_RUNTIME_BIN"));
+        let enabled = match required("RICHOS_PREVIEW_PROBE_ENABLED").as_str() {
+            "1" => true, "0" => false, _ => panic!("_ENABLED must be 0 or 1"),
+        };
+        richos_voice::stt::set_delivered_runtime_bin(Some(runtime));
+        richos_voice::stt::model_verified(FASTER).unwrap();
+        richos_voice::stt::model_verified(MORE_ACCURATE).unwrap();
+        let pcm = wav::read_pcm16(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!((pcm.sample_rate, pcm.channels), (16000, 1));
+        let expected = pcm.samples.len() / 256 * 256;
+        assert!(expected > 0);
+        std::fs::create_dir_all(&data).unwrap();
+        let recording = Arc::new(Mutex::new(Some(Recording::new())));
+        let captured = recording.clone();
+        let died = Arc::new(AtomicBool::new(false));
+        let input_died = died.clone();
+        let (done, finished) = std::sync::mpsc::channel();
+        let began = Instant::now();
+        let capture = capture::start(&capture::AudioSource::Wav(path), move |frame| {
+            let mut held = captured.lock().unwrap();
+            let recording = held.as_mut().unwrap();
+            if recording.push(frame) { input_died.store(true, Ordering::Release); }
+            if recording.samples().len() == expected { done.send(()).ok(); }
+        }).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let updates = Arc::new(Mutex::new(Vec::new()));
+        let worker = enabled.then(|| {
+            let (recording, flag, updates, data) = (recording.clone(), stop.clone(), updates.clone(), data.clone());
+            std::thread::spawn(move || run(recording, &data, &flag, |update| {
+                let entry = match update {
+                    Update::Words { sampled_at, decode_ms, .. } => serde_json::json!({
+                        "kind":"words", "at_ms":began.elapsed().as_millis(),
+                        "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms}),
+                    Update::Quiet => serde_json::json!({"kind":"quiet","at_ms":began.elapsed().as_millis()}),
+                    Update::Paused => serde_json::json!({"kind":"paused","at_ms":began.elapsed().as_millis()}),
+                    Update::Unavailable => serde_json::json!({"kind":"unavailable","at_ms":began.elapsed().as_millis()}),
+                };
+                updates.lock().unwrap().push(entry);
+            }))
+        });
+        // Hang guard only. Correctness is the complete captured sample prefix,
+        // not whether the fixture finished within a performance assertion.
+        finished.recv_timeout(Duration::from_secs_f64(pcm.duration_secs() as f64 + 30.)).unwrap();
+        let stopped = Instant::now();
+        drop(capture);
+        stop.store(true, Ordering::Release);
+        if let Some(worker) = worker { worker.thread().unpark(); worker.join().unwrap(); }
+        let stop_ms = stopped.elapsed().as_millis();
+        let samples = recording.lock().unwrap().take().unwrap().into_samples();
+        assert!(samples[..expected] == pcm.samples[..expected], "preview must not lose or alter captured speech");
+        let peak_bytes = |who| {
+            // SAFETY: rusage contains numeric fields and is a valid writable out parameter.
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            unsafe { libc::getrusage(who, &mut usage); }
+            usage.ru_maxrss
+        };
+        let preview_peak = peak_bytes(libc::RUSAGE_CHILDREN);
+        let decode = Instant::now();
+        let scratch = Scratch::new(&data).unwrap();
+        let final_stop = AtomicBool::new(false);
+        let (text, decoder_ms) = Recognizer::for_model(MORE_ACCURATE).unwrap()
+            .transcribe_bounded_until(&samples, scratch.path(), decode_bound(samples.len()), &final_stop).unwrap();
+        drop(scratch);
+        let final_ms = decode.elapsed().as_millis();
+        let scratch_empty = std::fs::read_dir(data.join("dictation-scratch")).unwrap().next().is_none();
+        let report = serde_json::json!({"preview":enabled,"expected_samples":expected,
+            "captured_samples":samples.len(),"unchanged_prefix":true,"stop_join_ms":stop_ms,
+            "input_died":died.load(Ordering::Acquire),
+            "final_decode_ms":final_ms,"decoder_ms":decoder_ms,"final_text":text,
+            "updates":*updates.lock().unwrap(),"self_peak_bytes":peak_bytes(libc::RUSAGE_SELF),
+            "preview_child_peak_bytes":preview_peak,"all_child_peak_bytes":peak_bytes(libc::RUSAGE_CHILDREN),
+            "scratch_empty":scratch_empty,
+            "limitations":"Pinned models checked before capture. File injection; no cold-cache, UI delivery, physical microphone, normal RichOS workload or Intel verdict"});
+        std::fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        assert!(scratch_empty, "preview and final decoder scratch must be removed after reaping");
+        assert!(!died.load(Ordering::Acquire), "fixture must remain a live input throughout its pauses");
+    }
+
 }
