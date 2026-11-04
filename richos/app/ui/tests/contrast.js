@@ -1254,6 +1254,9 @@ const SURFACES = [
         return !!d && !d.hidden && d.textContent.trim() !== "";
       });
       await p.locator("#update-detail").scrollIntoViewIfNeeded();
+      // The sticky foot band covers the bottom of this scrollport. Reach the end as a user
+      // scrolling the panel does, so the disclosed reason sits above that band.
+      await p.evaluate(() => { const menu = document.getElementById("set-menu"); menu.scrollTop = menu.scrollHeight; });
       await pageSettled(p);
     },
   },
