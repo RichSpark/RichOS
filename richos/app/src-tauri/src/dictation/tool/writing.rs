@@ -32,6 +32,12 @@ impl Assistance {
         self.ready=(self.mode==Mode::Cleanup || self.instruction.is_some()).then_some(now);
         earlier
     }
+    fn fail(&mut self, failure:Failure, now:Instant)->Value {
+        self.stage="error";self.failure=Some(failure);self.proposal=None;
+        json!({"id":self.id,"mode":self.mode,"stage":"failed","reason":failure,
+            "elapsed_ms":now.saturating_duration_since(self.began).as_millis(),
+            "ready_to_failure_ms":self.ready.map(|ready|now.saturating_duration_since(ready).as_millis())})
+    }
     fn request_expired(&self, now:Instant)->bool {
         self.ready.is_some_and(|ready|now.saturating_duration_since(ready)>=writing::DEADLINE)
     }
@@ -89,7 +95,7 @@ impl Tool {
     pub(super) fn cancel_assistance(&mut self) {
         if let Some(a)=self.assistance.take() {
             self.hub.send_to(a.client,&ToolMessage::Writing {id:a.id.clone(),action:"cancel".into(),payload:json!({})});
-            timing(&self.version,json!({"id":a.id,"stage":"canceled","elapsed_ms":a.began.elapsed().as_millis()}));
+            timing(&self.version,json!({"id":a.id,"stage":if a.stage=="done" {"closed"} else {"canceled"},"elapsed_ms":a.began.elapsed().as_millis()}));
         }
         if let Some(tap)=&self.tap {tap.writing_escape(false);}
     }
@@ -174,7 +180,7 @@ impl Tool {
             }
             "failure"=>{
                 let failure=serde_json::from_value(payload["reason"].clone()).unwrap_or(Failure::Unavailable);
-                timing(&self.version,json!({"id":id,"stage":"failed","reason":failure,"ready_to_result_ms":payload["readyToResultMs"].as_u64()}));
+                timing(&self.version,json!({"id":id,"stage":"provider_failed","reason":failure,"ready_to_result_ms":payload["readyToResultMs"].as_u64()}));
                 self.writing_failure(failure);
             }
             _=>{}
@@ -206,7 +212,7 @@ impl Tool {
         }
     }
     fn writing_failure(&mut self,failure:Failure) {
-        if let Some(a)=self.assistance.as_mut() {a.stage="error";a.failure=Some(failure);a.proposal=None;}
+        if let Some(a)=self.assistance.as_mut() {timing(&self.version,a.fail(failure,Instant::now()));}
         self.show_writing();
     }
     pub(super) fn writing_action(&mut self,act:&str,id:Option<&str>) {
@@ -309,12 +315,19 @@ mod tests {
         std::fs::create_dir_all(&data).unwrap();
         let at=1_798_784_000_000;
         let record=timing_record("1.2.9-dev.fixture",json!({"id":"owned-operation","stage":"proposal_received","ready_to_proposal_received_ms":721}));
-        std::fs::write(data.join("dictation.log"),format!("{} writing timing {record}\n",richdoctor_core::util::utc_stamp(at))).unwrap();
+        let now=Instant::now();let mut a=operation(now);a.ready=Some(now);
+        let failed=timing_record("1.2.9-dev.fixture",a.fail(Failure::Timeout,now+Duration::from_secs(11)));
+        assert_eq!(a.original,"Do not commit £36,000 before Friday.","Failure never clears the source");
+        assert_eq!(a.stage,"error");
+        std::fs::write(data.join("dictation.log"),format!("{stamp} writing timing {record}\n{stamp} writing timing {failed}\n",stamp=richdoctor_core::util::utc_stamp(at))).unwrap();
         let scope=Scope {home:home.clone(),window:Window::around(at),claude_bin:None,diagnostics:true};
         let collected=collect(Category::Richscribe,&scope,&Context::default(),0);
         assert_eq!(collected[0].status,Status::Collected);
-        let raw=collected[0].text.split_once("writing timing ").unwrap().1;
-        let parsed:Value=serde_json::from_str(raw).unwrap();
+        let records:Vec<Value>=collected[0].text.lines().map(|line|serde_json::from_str(line.split_once("writing timing ").unwrap().1).unwrap()).collect();
+        let parsed=&records[0];
+        assert_eq!(records[1]["reason"],"timeout");
+        assert_eq!(records[1]["ready_to_failure_ms"],11_000,"Controlled input time, not a wall-clock latency verdict");
+        assert!(!records[1].to_string().contains("£36,000"));
         assert_eq!(parsed["ready_to_proposal_received_ms"],721);
         assert_eq!(parsed["version"],"1.2.9-dev.fixture");
         assert!(parsed.get("original").is_none() && parsed.get("instruction").is_none() && parsed.get("proposal").is_none());

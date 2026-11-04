@@ -31,7 +31,10 @@ pub struct WritingConsent { pub account: String, pub destination: String }
 // Unlike a dictionary, an invalid grant has no user-authored content to retain.
 fn optional_consent<'de,D:serde::Deserializer<'de>>(input:D)->Result<Option<WritingConsent>,D::Error> {
     let value=serde_json::Value::deserialize(input)?;
-    Ok(serde_json::from_value(value).ok())
+    let absent=value.is_null();
+    let consent=serde_json::from_value(value);
+    if !absent && consent.is_err() {super::log::line("writing permission unreadable; external writing access is off");}
+    Ok(consent.ok())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
