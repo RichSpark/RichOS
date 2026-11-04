@@ -20,8 +20,9 @@ pub enum Failure { Empty, Instruction, TooLong, Canceled, Timeout, Quota, Offlin
 /// Numeric endpoints only. Full text remains in the calling operation's memory.
 pub struct Revision {
     pub text: String,
-    pub startup_ms: u64,
-    pub response_ms: u64,
+    pub spawn_ms: u64,
+    pub init_frame_ms: Option<u64>,
+    pub init_to_result_ms: Option<u64>,
     pub ready_to_result_ms: u64,
 }
 
@@ -44,12 +45,13 @@ pub fn revise(bin:&Path, profile:&EngineProfile, request:Request<'_>, canceled:&
     if Instant::now()>=deadline {return Err(Failure::Timeout)}
     let mut live=Provider::new(bin,profile,"app/writing.md","writing").private_text().start()
         .map_err(|_|Failure::Unavailable)?;
-    let startup_ms=began.elapsed().as_millis() as u64;
-    let response=Instant::now();
+    let spawn_ms=began.elapsed().as_millis() as u64;
     let request=json!({"type":"user","message":{"role":"user","content":
         json!({"action":mode,"original":original,"instruction":instruction}).to_string()}}).to_string();
     let result=live.exchange(request,deadline,||canceled.load(Ordering::Acquire),answer);
-    let response_ms=response.elapsed().as_millis() as u64;
+    let received=Instant::now();
+    let init_frame_ms=live.initialized_at.map(|at|at.saturating_duration_since(began).as_millis() as u64);
+    let init_to_result_ms=live.initialized_at.map(|at|received.saturating_duration_since(at).as_millis() as u64);
     // Include the inherited owned-child cleanup in the visible deadline.
     drop(live);
     if canceled.load(Ordering::Acquire) {return Err(Failure::Canceled)}
@@ -58,7 +60,7 @@ pub fn revise(bin:&Path, profile:&EngineProfile, request:Request<'_>, canceled:&
         "writing-quota"=>Failure::Quota,"writing-offline"=>Failure::Offline,
         "writing-invalid"=>Failure::Invalid,_=>Failure::Unavailable,
     })?;
-    Ok(Revision {text,startup_ms,response_ms,ready_to_result_ms:began.elapsed().as_millis() as u64})
+    Ok(Revision {text,spawn_ms,init_frame_ms,init_to_result_ms,ready_to_result_ms:began.elapsed().as_millis() as u64})
 }
 
 fn answer(frame:&Value)->Result<String,String> {
@@ -101,6 +103,7 @@ assert os.environ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']=='1'
 assert os.environ.get('CLAUDE_CODE_ENABLE_TELEMETRY') is None
 assert os.environ.get('DISABLE_TELEMETRY')=='1'
 open('argv.json','w').write(json.dumps(sys.argv))
+print(json.dumps({'type':'system','subtype':'init','tools':[]}),flush=True)
 for line in sys.stdin:
     payload=json.loads(json.loads(line)['message']['content'])
     open('asked.json','w').write(json.dumps(payload))
@@ -115,7 +118,22 @@ for line in sys.stdin:
         let args:Vec<String>=serde_json::from_str(&std::fs::read_to_string(profile.state.join("writing/argv.json")).unwrap()).unwrap();
         assert!(!args.iter().any(|a|a.contains("£36,000")),"User content never enters process arguments");
         assert_eq!(args[args.iter().position(|a|a=="--system-prompt").unwrap()+1],std::fs::read_to_string(profile.engine.join("app/writing.md")).unwrap());
-        assert!(result.startup_ms<=result.ready_to_result_ms && result.response_ms<=result.ready_to_result_ms);
+        assert!(result.spawn_ms<=result.ready_to_result_ms);
+        assert!(result.init_frame_ms.is_some_and(|n|n<=result.ready_to_result_ms));
+        assert!(result.init_to_result_ms.is_some_and(|n|n<=result.ready_to_result_ms));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_provider_initialization_is_unknown_not_an_invented_startup_time() {
+        let (root,bin,profile,_)=fixture(r#"
+for line in sys.stdin:
+    print(json.dumps({'type':'assistant','message':{'model':'claude-haiku-5-5','content':[{'type':'text','text':'Keep the refusal.'}]}}),flush=True)
+    print(json.dumps({'type':'result','is_error':False,'result':'Keep the refusal.'}),flush=True)
+"#);
+        let result=revise(&bin,&profile,Request {mode:Mode::Cleanup,original:"Keep the refusal.",instruction:""},&AtomicBool::new(false),DEADLINE).unwrap();
+        assert_eq!(result.init_frame_ms,None);
+        assert_eq!(result.init_to_result_ms,None);
         std::fs::remove_dir_all(root).unwrap();
     }
 

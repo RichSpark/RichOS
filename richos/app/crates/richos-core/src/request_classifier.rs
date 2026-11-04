@@ -21,6 +21,7 @@ pub(crate) struct Live {
     /// Whether this launch may use tools (only [`Provider::writing`] gives it any).
     tools: bool,
     private_text: bool,
+    pub(crate) initialized_at: Option<Instant>,
 }
 impl Drop for Live {
     fn drop(&mut self) {
@@ -226,7 +227,7 @@ impl Provider {
             }
         });
         Ok(Live {child,input:Some(input),frames,readers:vec![writer,reader],
-            model:(self.model==HAIKU).then(||self.model.clone()),tools:!self.tools.is_empty(),private_text:self.private_text})
+            model:(self.model==HAIKU).then(||self.model.clone()),tools:!self.tools.is_empty(),private_text:self.private_text,initialized_at:None})
     }
 
 }
@@ -250,6 +251,9 @@ impl Live {
             if self.private_text && crate::native::usage_limit_signal(&frame).is_some() {return Err("writing-quota".into())}
             if !self.tools && frame["type"]=="system" && frame["subtype"]=="init" && frame["tools"].as_array().is_some_and(|tools|!tools.is_empty()) {
                 return Err("Classifier unexpectedly has tools".into())
+            }
+            if self.private_text && frame["type"]=="system" && frame["subtype"]=="init" {
+                self.initialized_at.get_or_insert_with(Instant::now);
             }
             if frame["type"]=="assistant" {
                 if self.model.as_ref().is_some_and(|model|frame["message"]["model"]!=model.as_str()) || !self.tools && frame["message"]["content"].as_array()

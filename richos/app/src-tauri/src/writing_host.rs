@@ -166,8 +166,8 @@ fn start(app:&AppHandle,host:Arc<Host>,id:&str,payload:&Value) {
             .is_some_and(|op|op.permits(&worker_id,&binding(&worker_app),allowed(&worker_app,&op.binding)));
         if !valid {return}
         match result {
-            Ok(result)=>tell(&worker_app,&worker_id,"proposal",json!({"text":result.text,"startupMs":result.startup_ms,
-                "responseMs":result.response_ms,"readyToResultMs":result.ready_to_result_ms})),
+            Ok(result)=>tell(&worker_app,&worker_id,"proposal",json!({"text":result.text,"spawnMs":result.spawn_ms,
+                "initFrameMs":result.init_frame_ms,"initToResultMs":result.init_to_result_ms,"readyToResultMs":result.ready_to_result_ms})),
             Err(reason)=>tell(&worker_app,&worker_id,"failure",json!({"reason":reason,"readyToResultMs":began.elapsed().as_millis() as u64})),
         }
     });

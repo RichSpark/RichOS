@@ -173,8 +173,8 @@ impl Tool {
                 let Some(text)=payload["text"].as_str().filter(|s|!s.trim().is_empty() && s.chars().count()<=writing::MAX_CHARACTERS && !s.contains('\0')) else{self.writing_failure(Failure::Invalid);return};
                 let a=self.assistance.as_mut().unwrap();
                 if a.request_expired(Instant::now()) {self.writing_failure(Failure::Timeout);return}
-                timing(&self.version,json!({"id":id,"stage":"proposal_received","startup_ms":payload["startupMs"].as_u64(),
-                    "response_ms":payload["responseMs"].as_u64(),"provider_ready_to_result_ms":payload["readyToResultMs"].as_u64(),"invocation_to_proposal_ms":a.began.elapsed().as_millis(),
+                timing(&self.version,json!({"id":id,"stage":"proposal_received","provider_spawn_ms":payload["spawnMs"].as_u64(),
+                    "provider_init_frame_ms":payload["initFrameMs"].as_u64(),"init_to_result_ms":payload["initToResultMs"].as_u64(),"provider_ready_to_result_ms":payload["readyToResultMs"].as_u64(),"invocation_to_proposal_ms":a.began.elapsed().as_millis(),
                     "ready_to_proposal_received_ms":a.ready.map(|t|t.elapsed().as_millis())}));
                 a.proposal=Some(text.to_string());a.stage="proposal";self.show_writing();
             }
