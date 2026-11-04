@@ -13126,7 +13126,6 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
   font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0.1em;
-  text-transform: uppercase;
   color: var(--trim-text);
   padding: 14px 12px 6px;
 }
