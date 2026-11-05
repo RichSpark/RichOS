@@ -4242,6 +4242,14 @@ composerZoneEl.addEventListener("focusin", (e) => {
   const t = composerTipTarget(e);
   if (t && t.matches(":focus-visible")) showComposerTip(t);
 });
+// Replacing a hovered chip can lose its entire exit-event path. The next
+// movement has a live target even then. Do not cut short a fade already begun
+// by the normal mouseout handler.
+document.addEventListener("mousemove", (e) => {
+  if (e.target instanceof Node && composerZoneEl.contains(e.target)) return;
+  window.clearTimeout(composerTipTimer);
+  if (composerTipFor) hideComposerTip();
+});
 composerZoneEl.addEventListener("focusout", hideComposerTip);
 composerZoneEl.addEventListener("pointerdown", hideComposerTip);
 // A press from the keyboard too: what it did may have changed the words (Talk to Rich).
