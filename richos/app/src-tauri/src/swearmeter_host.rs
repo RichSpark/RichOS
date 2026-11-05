@@ -62,12 +62,12 @@ impl Service {
 #[derive(serde::Serialize)]
 pub struct View { show: bool, result: Snapshot }
 
-#[tauri::command]
+#[richos_command::command]
 pub fn get_swearmeter(state: State<crate::AppState>) -> View {
     View { show: state.config.lock().unwrap().show_swearmeter(), result: state.swearmeter.snapshot() }
 }
 
-#[tauri::command]
+#[richos_command::command]
 pub fn set_swearmeter_visible(state: State<crate::AppState>, show: bool) -> Result<(), String> {
     state.config.lock().unwrap().set_show_swearmeter(show).map_err(|e| e.to_string())
 }

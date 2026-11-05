@@ -7023,7 +7023,8 @@ mod send_wait_tests {
         // his row cannot be built until his words are in the ledger behind it. So the window
         // takes `submit_from_desk` for EVERY typed sentence now. Same order, same reason, wider
         // door.
-        let durable = concat!("state.control.submit_from_", "desk(");
+        // The same durable road now preserves the producer's authorship metadata.
+        let durable = concat!("state.control.submit_from_", "desk_provenance(");
         // The one door to the spine since 2026-09-19 (`take_the_spine`) — the needle follows
         // the spelling, because the ORDER is the property and a needle that stopped matching
         // would pass this test over a send that had started blocking first.
