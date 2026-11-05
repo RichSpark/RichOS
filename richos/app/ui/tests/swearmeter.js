@@ -3,7 +3,7 @@
 // Runs the real renderer and settings shell in headless WebKit. All data is synthetic.
 "use strict";
 const path = require("path");
-const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled, captureSettled, publishShot } = require("./lib/harness");
+const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled } = require("./lib/harness");
 const APP = "file://" + path.join(UI_DIR, "index.html");
 async function openApp(context, initialDelay = false) {
   const page = await context.newPage();
@@ -136,11 +136,6 @@ async function main() {
       });
       assert(geometry.width > 100 && geometry.checkbox > 0, "settings row is laid out");
       assert(geometry.textWidth <= geometry.available + 1, "result must wrap within settings column");
-      if (process.env.RICHOS_SWEARMETER_EVIDENCE_DIR) {
-        const fs = require("fs");
-        fs.mkdirSync(process.env.RICHOS_SWEARMETER_EVIDENCE_DIR, { recursive: true });
-        publishShot(await captureSettled(page), path.join(process.env.RICHOS_SWEARMETER_EVIDENCE_DIR, "settings-" + theme + ".png"));
-      }
     }
   });
   await run.check("8 home places the maintained result below the positive statistics", async () => {
@@ -156,12 +151,6 @@ async function main() {
     assert(layout.previousBottom <= layout.y, "result follows positive statistics vertically");
     assert(layout.text.includes("1,234") && layout.text.includes("Partial history"), "home shows current qualified result");
     assert(layout.scroll <= layout.width + 1, "home explanation wraps");
-    if (process.env.RICHOS_SWEARMETER_EVIDENCE_DIR) {
-      for (const theme of ["light", "dark"]) {
-        await page.evaluate(theme => RichTheme.setTheme(theme), theme);
-        publishShot(await captureSettled(page), path.join(process.env.RICHOS_SWEARMETER_EVIDENCE_DIR, "home-" + theme + ".png"));
-      }
-    }
   });
   await run.check("9 a late saved preference is restored after an early failed switch write", async () => {
     await page.close();
