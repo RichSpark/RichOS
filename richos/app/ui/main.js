@@ -10591,7 +10591,8 @@ init();
 
 // Feature windows return to the existing Settings and report surfaces.
 Bridge.listen("rich://cleaner-settings", ({payload}) => {
-  if(payload.surface === "cleaner") window.RichCleaner?.open();
+  if(payload.surface === "accounts") window.RichAccounts?.open();
+  else if(payload.surface === "cleaner") window.RichCleaner?.open();
   else if(payload.surface === "scribe") window.RichDictation?.open();
   else if(payload.surface === "bug" || payload.surface === "idea") {
     window.RichSettings.openMenu();

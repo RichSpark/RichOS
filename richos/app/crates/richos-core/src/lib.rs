@@ -303,6 +303,7 @@ mod dictation_ready_tests {
 pub mod routing;
 mod request_classifier;
 mod thread_title;
+pub mod writing;
 
 /// Shared live host resource observations for the desktop and its agents.
 pub mod system_resources;

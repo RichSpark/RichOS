@@ -35,6 +35,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Manager;
+mod writing;
 
 /// How long the tool waits for every connected app to answer `will-listen` with
 /// `voice-yielded` before it opens the microphone (review finding 2). An app answers from its
@@ -217,6 +218,7 @@ pub fn preview_problem(tag: Option<&str>) -> Option<Problem> {
 
 /// Everything the control loop hears.
 enum Control {
+    WritingReply { client:u64,id:String,action:String,payload:serde_json::Value },
     LivePreview { seq: u64, update: super::live_preview::Update },
     Vocabulary { seq: u64, client: u64, publication: super::vocabulary::Publication },
     Tap(TapEvent),
@@ -427,6 +429,7 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
                 // A voice-yielded is tied to the connection that sent it, by the id the Hub
                 // gave that connection (fourth review, finding 1); its bundle is for the log.
                 let control = match m {
+                    AppMessage::Writing {id,action,payload}=>Control::WritingReply {client,id,action,payload},
                     AppMessage::Vocabulary { seq, publication } => Control::Vocabulary { seq, client, publication },
                     AppMessage::VoiceYielded { seq, bundle } => Control::Yielded { seq, client, bundle },
                     m => Control::App(m),
@@ -554,6 +557,9 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
 }
 
 struct Tool {
+    assistance: Option<writing::Assistance>,
+    cleanup_anchor: Option<insert::Anchor>,
+    writing_client: Option<u64>,
     timings: Option<super::timings::Timings>,
     live_preview: Option<Writing>,
     live_words: Option<String>,
@@ -625,6 +631,9 @@ impl Tool {
         preview: Option<Problem>,
     ) -> Tool {
         Tool {
+            assistance: None,
+            cleanup_anchor: None,
+            writing_client: None,
             timings: None,
             live_preview: None,
             live_words: None,
@@ -685,6 +694,9 @@ impl Tool {
     }
 
     fn publish(&mut self) {
+        if self.instruction_recording() {
+            if let Phase::Problem(problem)=self.session.phase() {self.instruction_done(None,Err(problem));}
+        }
         if !matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing) { self.end_navigation(); }
         if !matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing) { self.end_navigation(); }
         if let Phase::Problem(problem)=self.session.phase(){if let Some((id,_))=self.cleaner_target.take(){self.session.reset();self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":problem.tag()})});}}
@@ -727,6 +739,7 @@ impl Tool {
             _ => None,
         };
         let details = bar::BarDetails {
+            instruction: self.instruction_recording(),
             blocked_keys: self.secure.is_some(),
             blocked_by: self.secure.clone().flatten(),
             destination: (!self.destination_name.is_empty()).then(|| self.destination_name.clone()),
@@ -758,6 +771,8 @@ impl Tool {
         let draft = self.drafts.recovery(draft_now()).cloned();
         let recording = matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing);
         MenuMessage {
+            cleanup_available: !recording && self.drafts.cleanup_subject(draft_now()).is_some(),
+            writing: self.writing_view(),
             seq,
             on: self.settings.on,
             key: format!("F{}", self.settings.key()),
@@ -821,13 +836,15 @@ impl Tool {
         }
         loop {
             self.drafts.expire(draft_now());
+            self.writing_expire();
             if self.recovery_open && matches!(self.recovery_status, None | Some("copy-failed"))
                 && self.drafts.recovery(draft_now()).is_none() {
                 self.recovery_status = Some("expired");
                 let message = self.menu_message(0);
                 self.menu.redraw(&self.app, |seq| MenuMessage { seq, ..message });
             }
-            let control = if let Some(delay) = self.drafts.until_expiry(draft_now()) {
+            let delay=self.drafts.until_expiry(draft_now()).into_iter().chain(self.writing_timeout()).min();
+            let control = if let Some(delay) = delay {
                 match rx.recv_timeout(delay.min(SECURE_POLL)) {
                     Ok(control) => control,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Control::DraftExpiry,
@@ -837,6 +854,8 @@ impl Tool {
                 match rx.recv() { Ok(control) => control, Err(_) => break }
             };
             match control {
+                Control::WritingReply {client,id,action,payload}=>self.writing_reply(client,id,action,payload),
+                Control::App(AppMessage::Writing {..})=>{}, // connection identity is retained above
                 Control::LivePreview { seq, update } => {
                     if seq != self.capture_seq || !matches!(self.session.phase(), Phase::Listening { .. }) { continue; }
                     match update {
@@ -871,6 +890,7 @@ impl Tool {
                 Control::Vocabulary { seq, client, publication } => {
                     // Only the owning data profile supplies company identities.
                     if std::path::Path::new(&publication.data_dir) != self.data_dir { continue; }
+                    if self.writing_client.is_none_or(|id|!self.hub.connected(id)) {self.writing_client=Some(client);}
                     if seq != 0 && !self.handover.as_ref().is_some_and(|h| h.seq == seq && h.told.contains(&client)) { continue; }
                     let company_deleted = self.recording_vocabulary.as_ref().is_some_and(|recorded|
                         !publication.companies.iter().any(|c| c.id == recorded.company.id));
@@ -880,7 +900,7 @@ impl Tool {
                             self.vocabulary_revoked.store(true, Ordering::Release);
                         }
                     }
-                    if seq != 0 {
+                    if seq != 0 && !self.instruction_recording() {
                         self.recording_vocabulary = publication.active.clone();
                         self.vocabulary_revoked.store(false, Ordering::Release);
                         if matches!(self.session.phase(), Phase::Listening { .. }) { self.show_bar(BarView::Listening); }
@@ -897,6 +917,7 @@ impl Tool {
                 Control::App(AppMessage::Vocabulary { .. }) => {} // carries its connection id above
                 Control::App(AppMessage::ClearDrafts { data_dir }) => {
                     if std::path::Path::new(&data_dir) == self.data_dir {
+                        self.cancel_assistance();self.cleanup_anchor=None;
                         self.cancel_recording();
                         self.drafts.clear();
                         self.close_menu();
@@ -904,6 +925,10 @@ impl Tool {
                     }
                 }
                 Control::Tap(TapEvent::Toggle) | Control::App(AppMessage::Finish) => self.toggle(matches!(control, Control::App(_))),
+                Control::Tap(TapEvent::WritingEscape)=>{
+                    if self.instruction_recording() {self.cancel_recording();}
+                    self.cancel_assistance();self.close_menu();self.publish();
+                }
                 Control::CleanerReady{id,result}=>{
                     if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
                     let Some((active,expected))=self.cleaner_target.as_ref() else{continue};if active!=&id{continue}
@@ -956,6 +981,10 @@ impl Tool {
                         w.stop_and_join();
                     }
                     self.end_navigation();
+                    if self.instruction_recording() {
+                        self.instruction_done(result.instruction.take(),result.outcome);continue;
+                    }
+                    self.cleanup_anchor=result.anchor.take();
                     if let (Some(draft), Some(delivery)) = (result.draft.take(), result.delivery) {
                         let copied = if delivery == insert::Delivery::Check
                             && self.drafts.protects_unresolved(draft_now()) {
@@ -1146,6 +1175,7 @@ impl Tool {
     /// decoder killed and reaped) and joined, so its scratch folder drops its files before the
     /// process ends (finding 1).
     fn end(&mut self) -> i32 {
+        self.cancel_assistance();self.cleanup_anchor=None;
         if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
 
         self.capture = None;
@@ -1171,6 +1201,7 @@ impl Tool {
                     "finish" if matches!(self.session.phase(), Phase::Listening { .. }) => self.toggle(true),
                     "cancel" if matches!(self.session.phase(), Phase::Listening { .. }) => {
                         self.cancel_recording();
+                        self.cancel_assistance();
                         self.publish();
                     }
                     "recover" => { self.menu_act("recover", None); }
@@ -1224,6 +1255,7 @@ impl Tool {
             UiEvent::ItemClicked { item } => {
                 log::line("menu bar item pressed");
                 if self.menu.is_open() {
+                    self.cancel_assistance();
                     self.close_menu();
                 } else if self.menu_closed_at.is_some_and(|t| t.elapsed() < REOPEN_GUARD) {
                     // The click that took the keyboard from the menu: it stays closed.
@@ -1236,6 +1268,7 @@ impl Tool {
             UiEvent::MenuLaidOut { seq, w, h } => {
                 if let Some(f) = self.menu.laid_out(&self.app, seq, (w, h), self.kind) {
                     log::line(&format!("menu shown at {:.0},{:.0} {:.0}x{:.0}", f.x, f.y, f.w, f.h));
+                    self.writing_laid_out();
                 }
             }
             UiEvent::Menu { act, value } => return self.menu_act(&act, value.as_deref()),
@@ -1255,6 +1288,9 @@ impl Tool {
 
     fn menu_act(&mut self, act: &str, value: Option<&str>) -> Option<i32> {
         match act {
+            "clean-up"=>self.begin_assistance(richos_core::writing::Mode::Cleanup),
+            "rewrite"=>self.begin_assistance(richos_core::writing::Mode::Rewrite),
+            action if action.starts_with("writing-")=>self.writing_action(action,value),
             "vocabulary-expand" | "vocabulary-collapse" => {
                 self.vocabulary_expanded = act == "vocabulary-expand";
                 let message = self.menu_message(0);
@@ -1287,6 +1323,7 @@ impl Tool {
                 self.menu.redraw(&self.app, |seq| MenuMessage { seq, ..message });
             }
             "recovery-clear" if self.recovery_open => {
+                self.cancel_assistance();self.cleanup_anchor=None;
                 self.drafts.clear();
                 self.close_menu();
                 self.notice = None;
@@ -1300,9 +1337,10 @@ impl Tool {
                 }
             }
             "close" => {
-                if self.menu.is_open() {
-                    self.close_menu();
-                }
+                // A proposal is an explicit operation, ended by its identified
+                // Cancel/Escape action. Native blur can belong to our own hide
+                // before Replace, or the user checking/editing the destination.
+                if self.assistance.is_none() && self.menu.is_open() {self.close_menu();}
             }
             "mode" => {
                 let model = value.and_then(model_for_choice)?;
@@ -1364,6 +1402,10 @@ impl Tool {
     }
 
     fn toggle(&mut self, from_app: bool) {
+        if !from_app && self.assistance.is_some() && !matches!(self.session.phase(),Phase::Listening {..}) {
+            if self.instruction_recording() {self.cancel_recording();}
+            self.cancel_assistance();self.close_menu();self.session.reset();
+        }
         // `finish` from the app writes a dictation that is listening and does nothing otherwise.
         if from_app && !matches!(self.session.phase(), Phase::Listening { .. }) {
             self.publish();
@@ -1395,6 +1437,7 @@ impl Tool {
         if let Some(id)=id{self.hub.broadcast(&ToolMessage::Cleaner{id,action:"canceled".into(),payload:serde_json::json!({})});}
     }
     fn listen(&mut self) {
+        if !self.instruction_recording() {self.cancel_assistance();self.cleanup_anchor=None;}
         self.capture_seq+=1;
         self.close_menu();
         self.show_bar(BarView::Hidden);
@@ -1415,7 +1458,7 @@ impl Tool {
             if self.pointer_observer.is_none() { log::line("destination pointer observer unavailable; unreadable-field navigation protection is unverified"); }
         }
         self.vocabulary_revoked = Arc::new(AtomicBool::new(false));
-        self.recording_vocabulary = self.vocabulary.as_ref().and_then(|v| v.active.clone());
+        self.recording_vocabulary = if self.instruction_recording() {None} else {self.vocabulary.as_ref().and_then(|v| v.active.clone())};
         self.focused = insert::focused_window_rect();
         // The accuracy for THIS dictation is the one chosen when it begins (finding 6).
         self.recording_model = self.settings.model.clone();
@@ -1473,7 +1516,7 @@ impl Tool {
             Ok(c) => {
                 self.timings = Some(super::timings::Timings::new(self.capture_seq, &self.recording_model,
                     self.settings.live_preview && self.cleaner_target.is_none(), &self.version));
-                self.drafts.recording_started(draft_now());
+                if !self.instruction_recording() {self.drafts.recording_started(draft_now());}
                 log::line(&format!("listening ({})", c.source_label));
                 self.capture = Some(c);
                 if self.settings.live_preview && self.cleaner_target.is_none() {
@@ -1509,6 +1552,7 @@ impl Tool {
     }
 
     fn stop(&mut self, duration_ms: u64) {
+        let instruction=self.instruction_recording();
         let mut timings = self.timings.take();
         if let Some(t) = &mut timings { t.stop(); }
         // Dropping the capture closes the microphone.
@@ -1536,7 +1580,7 @@ impl Tool {
         let flag = stop.clone();
         match std::thread::Builder::new().name("dictation-write".into()).spawn(move || {
             let mut timings = timings;
-            let text = TextContext { timings: timings.as_ref(), cleaner: target.as_deref().map(|id|(id,hub.as_ref())),
+            let text = TextContext { instruction, timings: timings.as_ref(), cleaner: target.as_deref().map(|id|(id,hub.as_ref())),
                                      vocabulary: vocabulary.as_ref(), vocabulary_revoked: &vocabulary_revoked,
                                      destination: destination.as_ref(), navigated: &navigated };
             let result = write(recording, duration_ms, &model, &data_dir, &app, &flag, text);
@@ -1604,6 +1648,7 @@ fn v_code_on_main(app: &tauri::AppHandle) -> u16 {
 /// One dictation, from the recording to the words in place, and where they landed on screen
 /// when Accessibility says. Never logs the words.
 struct TextContext<'a> {
+    instruction: bool,
     timings: Option<&'a super::timings::Timings>,
     cleaner: Option<(&'a str, &'a Hub)>,
     vocabulary: Option<&'a super::vocabulary::Snapshot>,
@@ -1613,6 +1658,8 @@ struct TextContext<'a> {
 }
 
 struct WriteResult {
+    instruction: Option<String>,
+    anchor: Option<insert::Anchor>,
     outcome: Result<(), Problem>,
     words: Option<Rect>,
     draft: Option<Draft>,
@@ -1621,7 +1668,7 @@ struct WriteResult {
 
 fn write(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool, text: TextContext<'_>) -> WriteResult {
     write_words(recording, duration_ms, chosen, data_dir, app, stop, text).unwrap_or_else(|problem|
-        WriteResult { outcome: Err(problem), words: None, draft: None, delivery: None })
+        WriteResult { instruction: None, anchor: None, outcome: Err(problem), words: None, draft: None, delivery: None })
 }
 
 /// Looks for the engine's decoder again when none is delivered, THEN picks the model: the pick's
@@ -1700,10 +1747,16 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
             return Err(then.unwrap_or(p));
         }
     };
+    if text.instruction {
+        if text.destination.is_some_and(|d|d.permission(false)==richos_voice::dictation::DeliveryPermission::DiscardSecure) {
+            return Err(Problem::NoTextBox);
+        }
+        return Ok(WriteResult {instruction:Some(words),anchor:None,outcome:then.map_or(Ok(()),Err),words:None,draft:None,delivery:None});
+    }
     if let Some((id,hub))=text.cleaner {
         if stop.load(Ordering::Acquire){return Err(Problem::CouldNotWrite)}
         if hub.broadcast(&ToolMessage::Cleaner{id:id.into(),action:"transcript".into(),payload:serde_json::json!({"note":words})})==0{return Err(Problem::CouldNotWrite)}
-        return Ok(WriteResult { outcome: then.map_or(Ok(()), Err), words: None, draft: None, delivery: None });
+        return Ok(WriteResult { instruction: None, anchor: None, outcome: then.map_or(Ok(()), Err), words: None, draft: None, delivery: None });
     }
     let original = words;
     let words = if !text.vocabulary_revoked.load(Ordering::Acquire) {
@@ -1723,7 +1776,7 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
     if !keytap::accessibility_allowed() || text.destination.is_none() {
         let copied = insert::copy_only(&words).is_ok();
         log::line(&format!("dictation: model {id}, {secs:.2} s, {latency} ms: automatic delivery unavailable, copied={copied}"));
-        return Ok(WriteResult { outcome: Err(Problem::NoAccessibility), words: None,
+        return Ok(WriteResult { instruction: None, anchor: None, outcome: Err(Problem::NoAccessibility), words: None,
             draft: Some(draft), delivery: Some(insert::Delivery::NotAdded { copied, destination_changed: false }) });
     }
     let inserted = match insert::insert(&words, v_code_on_main(app), text.destination.expect("checked destination"), text.navigated, stop) {
@@ -1731,26 +1784,29 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
         Err(_) if stop.load(Ordering::Acquire) => return Err(Problem::CouldNotWrite),
         Err(_) => {
             log::line("the words could not be put in place; the recognized draft is held for recovery");
-            return Ok(WriteResult { outcome: Err(Problem::CouldNotWrite), words: None, draft: Some(draft),
+            return Ok(WriteResult { instruction: None, anchor: None, outcome: Err(Problem::CouldNotWrite), words: None, draft: Some(draft),
                 delivery: Some(insert::Delivery::NotAdded { copied: false, destination_changed: false }) });
         }
     };
     if let Some(t) = timings { t.event("delivery_completed", serde_json::json!({"outcome":inserted.delivery.tag()})); }
     if inserted.delivery == insert::Delivery::DiscardedSecure {
         log::line("destination is secure; no paste, copy or retained draft");
-        return Ok(WriteResult { outcome: Err(Problem::NoTextBox), words: None, draft: None, delivery: Some(inserted.delivery) });
+        return Ok(WriteResult { instruction: None, anchor: None, outcome: Err(Problem::NoTextBox), words: None, draft: None, delivery: Some(inserted.delivery) });
     }
     log::line(&format!(
         "dictation: model {id}, {secs:.2} s of audio, written in {latency} ms, {}{}; {}; delivery={}",
         if inserted.how == Insert::Paste { "pasted" } else { "copied (no text box)" },
         if inserted.spaced { ", spacing read" } else { "" }, inserted.seen, inserted.delivery.tag(),
     ));
+    let anchor=matches!(inserted.delivery,insert::Delivery::Added|insert::Delivery::Sent)
+        .then(||inserted.landed.as_ref().and_then(|(start,actual)|text.destination
+            .and_then(|destination|insert::Anchor::inserted(destination,*start,actual.clone())))).flatten();
     if let Some((start, actual)) = inserted.landed {
         draft.range = Some((start, actual.encode_utf16().count() as isize));
         draft.text = actual;
     }
     draft.completed_ms = now_ms();
-    Ok(WriteResult { outcome: then.map_or(Ok(()), Err), words: inserted.rect,
+    Ok(WriteResult { instruction: None, anchor, outcome: then.map_or(Ok(()), Err), words: inserted.rect,
                     draft: Some(draft), delivery: Some(inserted.delivery) })
 }
 

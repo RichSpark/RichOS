@@ -124,7 +124,7 @@ async function main() {
     assertEqual(await page.getAttribute('[data-act="accuracy"][data-v="accurate"]', "aria-checked"), "true");
     assertEqual(await page.getAttribute("#dict-try", "data-ph"), "Turn RichScribe on to try it here.");
     assert(await page.locator("#dict-try-note").isHidden(), "the try note waits for dictation to work");
-    assertEqual(await text(page, ".dict-priv"), "Your voice stays on this Mac. Nothing you say is sent anywhere.");
+    assertEqual(await text(page, ".dict-priv"), "Your voice is transcribed on this Mac. Requested writing assistance sends your text and transcribed editing instruction to Claude only after you allow it.");
     await page.close();
     // Line 2 for every copy (the CEO, 2026-10-08: dictation runs only while RichOS runs), on or
     // off, and for a copy whose key another copy holds.
@@ -451,7 +451,7 @@ async function main() {
     await page.close();
   });
 
-  await run.check("More options contains one preview switch and gives no download or engine choice when unavailable", async () => {
+  await run.check("More options contains preview and optional writing permission, with no download or engine choice", async () => {
     const page=await open("light",ALLOWED);
     await sheet(page);
     await page.locator('[data-act="voc-more"]').click();
@@ -466,8 +466,18 @@ async function main() {
     await page.evaluate(()=>window.__RICHOS_MOCK__.dictationVocabularySet({previewAvailable:false}));
     await page.waitForFunction(()=>document.querySelector('[data-act="voc-preview"]').disabled);
     assert((await text(page,'#dict-more-body')).includes("Live preview isn't available on this Mac. RichScribe still works."));
-    assertEqual(await page.locator('#dict-more-body button').count(),1,"one switch, no model or download setup");
+    assertEqual(await page.locator('#dict-more-body button').count(),2,"preview and writing permission, no model or download setup");
+    const writing=page.getByRole('switch',{name:'Allow writing assistance with Claude',exact:true});
+    assertEqual(await writing.getAttribute('aria-checked'),'false');
+    assert(await writing.isDisabled(),"first consent belongs to the explicit action, not a settings shortcut");
     await page.close();
+    const permitted=await open("light",ALLOWED,{preset:{writingAllowed:true}});
+    await sheet(permitted);
+    await permitted.locator('[data-act="voc-more"]').click();
+    await permitted.getByRole('switch',{name:'Allow writing assistance with Claude',exact:true}).click();
+    await permitted.waitForFunction(()=>document.querySelector('[data-act="writing-allowed"]').getAttribute('aria-checked')==='false');
+    assert((await calls(permitted)).includes('dictation_writing_allowed:false'),"permission can be revoked without changing local dictation");
+    await permitted.close();
   });
 
   await run.check("Accuracy: Faster is chosen and saved, and says so", async () => {

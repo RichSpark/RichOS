@@ -167,7 +167,7 @@ window.RichDictationBar = (function () {
         (msg.vocabulary ? '<span class="dhx-dot" aria-hidden="true">·</span><span>Vocabulary: ' + esc(msg.vocabulary) + '</span>' : "") + '</span>' : "";
       html = '<div class="dh dhx is-listen" id="dhEl">' + warning +
         '<div class="dhx-row"><span class="dh-orb">' + IC.mic + '</span><span class="dh-meter" aria-hidden="true">' +
-        new Array(10).join("<i></i>") + '</span><span class="dh-label" role="status" aria-live="polite">Listening</span>' +
+        new Array(10).join("<i></i>") + '</span><span class="dh-label" role="status" aria-live="polite">' + (msg.instruction ? 'Tell me how to change it' : 'Listening') + '</span>' +
         '<span class="dh-time" id="dhTime">0:00</span>' + destination +
         (msg.blockedKeys ? "" : '<span class="dh-hint">Tap ' + kcap(k) + ' to finish</span>') +
         '<span class="dhx-acts"><button class="dov-btn" type="button" data-bar-act="finish">Finish</button><button class="dov-btn is-quiet" type="button" data-bar-act="cancel">Cancel</button></span></div></div>';

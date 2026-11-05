@@ -54,6 +54,9 @@ const NEW_NAME = "RichScribe";
 /// followed by more name, `/`, `:`, `@`) makes it an identifier; a sentence's closing period does not.
 const OLD_NAME = /(^|[^A-Za-z0-9_\-./:@])dictations?(?![A-Za-z0-9_\-/:@]|\.[A-Za-z0-9])/i;
 const EXEMPT = /richscribe-exempt:\s*\S/;
+// Round 54 names the spoken passage in this exact action. Other old names on
+// the same line remain findings; this is not a feature-label exemption.
+const ACTION = /richscribe-action:\s*\S/;
 
 const JS_LOG_LINE = /\bconsole\.(log|warn|error|info|debug)\s*\(/;
 const MATCH_ARM = /\bErr\(\s*\w+\s*\)\s*=>/;
@@ -75,6 +78,7 @@ function jsHits(src, name, exempted) {
     const own = lines[lit.line - 1] || "";
     if (JS_LOG_LINE.test(own)) continue;
     if (EXEMPT.test(own)) { exempted.push(name + ":" + lit.line); continue; }
+    if (ACTION.test(own) && !OLD_NAME.test(lit.text.replaceAll("Clean up last dictation", ""))) continue;
     out.push(name + ":" + lit.line + "  " + snippet(lit.text));
   }
   return out;
@@ -141,6 +145,9 @@ async function main() {
     const jsSeen = jsHits(js, "planted.js", ex);
     assertEqual(jsSeen.length, 2, "positive control: the JS reader saw " + JSON.stringify(jsSeen));
     assertEqual(ex.length, 1, "positive control: the declared exemption was not honored");
+    const action = 'const a = "Clean up last dictation"; // richscribe-action: approved passage action\n';
+    assertEqual(jsHits(action, "action.js", []).length, 0, "the approved action describes a passage");
+    assertEqual(jsHits(action.replace("dictation\"", "dictation, turn Dictation on\""), "action.js", []).length, 1, "the action marker cannot hide a retired feature label");
     const htmlSeen = htmlHits('<title>RichOS ' + low + '</title><div role="menu" aria-label="' + old + '"></div><p>Dictate here</p>', "planted.html");
     assertEqual(htmlSeen.length, 2, "positive control: the HTML reader saw " + JSON.stringify(htmlSeen));
     const rs =
