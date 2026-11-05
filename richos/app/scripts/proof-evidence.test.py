@@ -2268,6 +2268,38 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         (hooks / "guard.py").write_text("print('x')\n")
         self.assertNotEqual(base, evidence.recipe_identity(self.root, recipe, {}), "an unignored directory is input")
 
+    def test_richdoctor_generated_files_beside_a_declared_input_are_not_that_input(self):
+        # 2026-11-05: RichDoctor's build wrote its git-ignored gen/, ui/fonts/ and ui/tokens.css
+        # while no-foreign-app-data (inputs include richos/app/crates) ran; a pass became invalid.
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, env=env)
+        app = self.root / "richos/app"
+        crate = app / "crates/richdoctor"
+        (crate / "ui").mkdir(parents=True)
+        (app / ".gitignore").write_text("crates/richdoctor/ui/fonts/\ncrates/richdoctor/ui/tokens.css\n"
+                                        "crates/richdoctor/gen/\n")
+        (crate / "lib.rs").write_text("fn main() {}\n")
+        (crate / "ui" / "index.html").write_text("<p>x</p>\n")
+        self.qualification("fixture input contract", paths=["richos/app/crates"])
+        recipe = {"paths": ["richos/app/crates"], "tools": [], "environment": [], "external": [],
+                  "qualification": "qualification.json"}
+        base = evidence.recipe_identity(self.root, recipe, {})
+        (crate / "gen").mkdir()
+        (crate / "gen" / "a.rs").write_text("generated")
+        (crate / "ui" / "fonts").mkdir()
+        (crate / "ui" / "fonts" / "f.woff2").write_text("font")
+        (crate / "ui" / "tokens.css").write_text(":root{}")
+        self.assertEqual(base, evidence.recipe_identity(self.root, recipe, {}), "generated files appeared")
+        (crate / "ui" / "tokens.css").write_text(":root{--a:1}")
+        (crate / "gen" / "a.rs").write_text("regenerated")
+        self.assertEqual(base, evidence.recipe_identity(self.root, recipe, {}), "generated files changed")
+        for path in (crate / "lib.rs", crate / "ui" / "index.html"):
+            with self.subTest(path=path.name):
+                original = path.read_text()
+                path.write_text(original + " changed")
+                self.assertNotEqual(base, evidence.recipe_identity(self.root, recipe, {}))
+                path.write_text(original)
+
     def test_test_output_written_beside_a_declared_input_is_not_that_input(self):
         # 2026-09-29: the push of c7491c34 was refused on no-foreign-app-data `invalid`,
         # "changed: richos/app/ui/tests/.shots/...": its inputs include richos/app/ui and the UI

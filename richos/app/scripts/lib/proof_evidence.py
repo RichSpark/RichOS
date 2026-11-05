@@ -102,17 +102,24 @@ DECLARED_OUTPUT_DIRECTORIES = (
     # is the live plugin's audit state, written by sessions as well as tests, and never an input
     # of a check: ci-shard.sh now fails, by name, a unit that writes it (STATE-WRITTEN).
     "richos/engine/.claude/state",
+    # RichDoctor's build writes these generated files into its crate (2026-11-05: the fourth
+    # `no-foreign-app-data` invalid in a row, "RichDoctor generated ignored gen/fonts/tokens
+    # files during the run", all three assertions passed). `richos/app/.gitignore` ignores all
+    # three; `tokens.css` is a file, so declared_output accepts a regular file as well.
+    "richos/app/crates/richdoctor/gen",
+    "richos/app/crates/richdoctor/ui/fonts",
+    "richos/app/crates/richdoctor/ui/tokens.css",
 )
 
 
 def declared_output(path):
-    """True for a DECLARED_OUTPUT_DIRECTORIES directory that git ignores and tracks nothing in."""
+    """True for a DECLARED_OUTPUT_DIRECTORIES directory or file that git ignores and tracks nothing in."""
     path = Path(path)
     location = str(path.absolute())
     if not any(location.endswith(os.sep + rel.replace("/", os.sep)) for rel in DECLARED_OUTPUT_DIRECTORIES):
         return False
     try:
-        if path.is_symlink() or not path.is_dir():
+        if path.is_symlink() or not (path.is_dir() or path.is_file()):
             return False
     except OSError:
         return False
