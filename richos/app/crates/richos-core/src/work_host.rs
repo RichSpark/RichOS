@@ -4371,6 +4371,10 @@ mod tests {
         stu.automatic_turn_cut(crate::util::now_millis()+3_600_000);
         until("Stu was neither moved nor the failure reported",||!stu.reached("account_moved").is_empty()||stu.rich_told());
         until("Stu's inbox was not emptied",||!crate::session_tools::undelivered(&stu.scope(),"stu").unwrap());
+        // The inbox can empty before the recovery thread records its zero wait. Join that
+        // recovery before inspecting its clock, as for the refused continuation below.
+        until("the automatic turn's recovery did not finish",
+            ||stu.backend().inner.lock().unwrap().automatic_recoveries==0);
 
         assert_eq!(stu.accounts("account_moved"),std::slice::from_ref(&home.id),"not moved to Home, once");
         assert!(stu.reached("turn_usage_limit").is_empty(),"moved Stu was told a second time");
