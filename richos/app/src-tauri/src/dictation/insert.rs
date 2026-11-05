@@ -223,7 +223,7 @@ impl Anchor {
             range_text(field,self.range.location,self.range.length).as_deref()!=Some(&self.original) {
             return Ok(Replacement::CopyOnly)
         }
-        let result=insert_checked(proposal.trim_end_matches(['\r','\n']),v_code,&self.destination,
+        let result=insert_checked(proposal,v_code,&self.destination,
             &std::sync::atomic::AtomicBool::new(false),stop,false,Some(self))?;
         Ok(match result.delivery {Delivery::Added=>{
             let (start,text)=result.landed.unwrap_or((self.range.location,proposal.to_string()));
@@ -789,6 +789,13 @@ pub fn insert(words: &str, v_code: u16, destination: &Destination,
     insert_checked(words,v_code,destination,navigated,stop,true,None)
 }
 
+fn text_for_paste(words:&str, around:Option<(Option<char>,Option<char>)>, replacing:bool)->String {
+    match (replacing,around) {
+        (false,Some((before,after)))=>spaced(words,before,after),
+        _=>words.to_string(),
+    }
+}
+
 fn insert_checked(words:&str, v_code:u16, destination:&Destination,
     navigated:&std::sync::atomic::AtomicBool, stop:&std::sync::atomic::AtomicBool,
     copy_on_failure:bool, anchor:Option<&Anchor>)->Result<Inserted,String> {
@@ -807,10 +814,9 @@ fn insert_checked(words:&str, v_code:u16, destination:&Destination,
     if anchor.is_some_and(|a|!a.source_selected()) {return Ok(empty(Delivery::NotAdded {copied:false,destination_changed:true}))}
     let f = focus();
     let how = insert_plan(f.focused_element, f.window_focused, f.finder_in_front, f.focused_role.as_deref());
-    let text = match (how, f.around) {
-        (Insert::Paste, Some((before, after))) => spaced(words, before, after),
-        _ => words.to_string(),
-    };
+    // Exact selected text is replaced verbatim. Caret spacing belongs only to
+    // ordinary dictation, never to a paragraph or a selection inside quotes.
+    let text=text_for_paste(words,if how==Insert::Paste {f.around}else{None},anchor.is_some());
     if how == Insert::CopyOnly {
         let copied = copy_on_failure && write_words(pb, &text).is_some();
         return Ok(empty(Delivery::NotAdded { copied, destination_changed: false }));
@@ -884,7 +890,7 @@ fn insert_checked(words:&str, v_code:u16, destination:&Destination,
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
-    Ok(Inserted { how, spaced: f.around.is_some(), seen: f.seen, landed, rect, delivery })
+    Ok(Inserted { how, spaced: anchor.is_none() && f.around.is_some(), seen: f.seen, landed, rect, delivery })
 }
 
 /// Copy `words` to the clipboard and nothing else: the case where the words are ready and
@@ -914,6 +920,17 @@ pub fn front_is_finder()->bool {frontmost_pid().and_then(bundle_of).as_deref()==
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exact_replacement_preserves_paragraphs_and_opening_punctuation() {
+        for (text,before,after) in [
+            ("Please review the forecast.\n",Some('\n'),Some('T')),
+            ("revised",Some('"'),Some('"')),
+            ("revised",Some('('),Some(')')),
+        ] {assert_eq!(super::text_for_paste(text,Some((before,after)),true),text);}
+        assert_eq!(super::text_for_paste("spoken words",Some((Some('x'),Some('y'))),false)," spoken words ",
+            "Ordinary caret insertion keeps its existing spacing");
+    }
+
     #[test]
     fn browser_replacement_requires_a_known_prose_origin() {
         for url in ["https://mail.google.com/mail/u/0/","https://docs.google.com/document/d/draft","https://app.slack.com/client/workspace"] {

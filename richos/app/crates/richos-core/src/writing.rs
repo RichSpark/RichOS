@@ -60,7 +60,19 @@ pub fn revise(bin:&Path, profile:&EngineProfile, request:Request<'_>, canceled:&
         "writing-quota"=>Failure::Quota,"writing-offline"=>Failure::Offline,
         "writing-invalid"=>Failure::Invalid,_=>Failure::Unavailable,
     })?;
+    let text=revision_text(original,&text)?;
     Ok(Revision {text,spawn_ms,init_frame_ms,init_to_result_ms,ready_to_result_ms:began.elapsed().as_millis() as u64})
+}
+
+fn revision_text(original:&str, proposal:&str)->Result<String,Failure> {
+    let breaks=['\r','\n','\u{2028}','\u{2029}'];
+    // A selected paragraph can include its separator. Keep that exact suffix
+    // in the visible proposal and Copy as well as in native replacement.
+    let end=original.trim_end_matches(breaks).len();
+    let mut text=proposal.trim_end_matches(breaks).to_string();
+    text.push_str(&original[end..]);
+    if text.chars().count()>MAX_CHARACTERS {return Err(Failure::Invalid)}
+    Ok(text)
 }
 
 fn answer(frame:&Value)->Result<String,String> {
@@ -74,7 +86,7 @@ fn answer(frame:&Value)->Result<String,String> {
     }
     let text=frame["result"].as_str().ok_or("writing-invalid")?;
     if text.trim().is_empty() || text.chars().count()>MAX_CHARACTERS || text.contains('\0') {return Err("writing-invalid".into())}
-    Ok(text.trim_end_matches(['\r','\n']).to_string())
+    Ok(text.to_string())
 }
 
 #[cfg(test)]
@@ -87,8 +99,20 @@ mod tests {
         assert_eq!(validate(Mode::Rewrite,"draft",""),Err(Failure::Instruction));
         assert_eq!(validate(Mode::Cleanup,&"a".repeat(MAX_CHARACTERS),""),Ok(()));
         assert_eq!(validate(Mode::Rewrite,&"a".repeat(MAX_CHARACTERS),"edit"),Err(Failure::TooLong));
-        assert_eq!(answer(&json!({"result":"Proposal\n\n"})).unwrap(),"Proposal");
+        assert_eq!(answer(&json!({"result":"Proposal\n\n"})).unwrap(),"Proposal\n\n");
         assert!(answer(&json!({"result":""})).is_err());
+    }
+
+    #[test]
+    fn revisions_keep_selected_paragraph_endings_without_adding_new_ones() {
+        for (original,proposal,wanted) in [
+            ("Review the forecast.\n","Please review it.\n","Please review it.\n"),
+            ("Review it.\r\n\r\n","Please review it.","Please review it.\r\n\r\n"),
+            ("Review it.\u{2029}","Please review it.\n","Please review it.\u{2029}"),
+            ("Review it.","Please review it.\n\n","Please review it."),
+        ] {assert_eq!(revision_text(original,proposal).unwrap(),wanted);}
+        assert_eq!(revision_text("Original.\n",&"x".repeat(MAX_CHARACTERS)),Err(Failure::Invalid),
+            "Restoring a selected separator cannot exceed the output bound");
     }
 
     #[test]
@@ -107,14 +131,14 @@ print(json.dumps({'type':'system','subtype':'init','tools':[]}),flush=True)
 for line in sys.stdin:
     payload=json.loads(json.loads(line)['message']['content'])
     open('asked.json','w').write(json.dumps(payload))
-    result='Please review the £36,000 forecast by Monday.'
+    result='Please review the £36,000 forecast by Monday.\n'
     print(json.dumps({'type':'assistant','message':{'model':'claude-haiku-5-5','content':[{'type':'text','text':result}]}}),flush=True)
     print(json.dumps({'type':'result','is_error':False,'result':result}),flush=True)
 "#);
-        let result=revise(&bin,&profile,Request {mode:Mode::Rewrite,original:"Review £36,000 by Monday.",instruction:"Make this more polite."},&AtomicBool::new(false),DEADLINE).unwrap();
-        assert_eq!(result.text,"Please review the £36,000 forecast by Monday.");
+        let result=revise(&bin,&profile,Request {mode:Mode::Rewrite,original:"Review £36,000 by Monday.\n",instruction:"Make this more polite."},&AtomicBool::new(false),DEADLINE).unwrap();
+        assert_eq!(result.text,"Please review the £36,000 forecast by Monday.\n");
         let asked:Value=serde_json::from_str(&std::fs::read_to_string(profile.state.join("writing/asked.json")).unwrap()).unwrap();
-        assert_eq!(asked,json!({"action":"rewrite","original":"Review £36,000 by Monday.","instruction":"Make this more polite."}));
+        assert_eq!(asked,json!({"action":"rewrite","original":"Review £36,000 by Monday.\n","instruction":"Make this more polite."}));
         let args:Vec<String>=serde_json::from_str(&std::fs::read_to_string(profile.state.join("writing/argv.json")).unwrap()).unwrap();
         assert!(!args.iter().any(|a|a.contains("£36,000")),"User content never enters process arguments");
         assert_eq!(args[args.iter().position(|a|a=="--system-prompt").unwrap()+1],std::fs::read_to_string(profile.engine.join("app/writing.md")).unwrap());
