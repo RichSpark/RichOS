@@ -24,6 +24,7 @@ pub const SOCKET_NAME: &str = "dictation.sock";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum AppMessage {
+    Writing { id:String, action:String, payload:serde_json::Value },
     ClearDrafts { data_dir: String },
     Vocabulary { seq: u64, publication: super::vocabulary::Publication },
     /// Request-scoped file capture. Never interpreted as ordinary Finish.
@@ -74,6 +75,7 @@ pub enum AppMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ToolMessage {
+    Writing { id:String, action:String, payload:serde_json::Value },
     SelectVocabulary { data_dir: String, company: Option<String> },
     Cleaner { id:String, action:String, payload:serde_json::Value },
     /// Where dictation is. `owner` is the bundle of the copy whose tool holds the key, so an app
@@ -259,6 +261,24 @@ pub struct Hub {
 }
 
 impl Hub {
+    /// Text assistance goes to one existing owning-profile connection, never
+    /// every copy of the app. Replies retain that connection's identity.
+    pub fn send_to(&self, id:u64, message:&ToolMessage)->bool {
+        let Ok(mut clients)=self.clients.lock() else{return false};
+        let Some(index)=clients.iter().position(|client|client.id==id) else{return false};
+        let stream=&mut clients[index].stream;
+        // Chosen text is larger than the existing state messages. A wedged app
+        // must not block the tool's key/control loop. Partial frames close this
+        // connection, so a later request cannot append to damaged JSON.
+        let sent=stream.set_write_timeout(Some(std::time::Duration::from_millis(250))).is_ok() && send(stream,message).is_ok();
+        if sent {stream.set_write_timeout(None).ok();}
+        else {stream.shutdown(std::net::Shutdown::Both).ok();clients.remove(index);}
+        sent
+    }
+
+    pub fn connected(&self, id:u64)->bool {
+        self.clients.lock().is_ok_and(|clients|clients.iter().any(|client|client.id==id))
+    }
     /// Say `message` to every app; an app that has gone is dropped. Returns how many heard it,
     /// so a caller can tell "an app is connected" from "nobody is".
     pub fn broadcast(&self, message: &ToolMessage) -> usize {
@@ -333,6 +353,22 @@ pub fn serve(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn writing_text_reaches_only_the_selected_connection() {
+        use std::io::Read;
+        let hub=Hub::default();
+        let (sender,mut recipient)=UnixStream::pair().unwrap();
+        let selected=hub.add(sender);
+        let (other,mut untouched)=UnixStream::pair().unwrap();
+        hub.add(other);
+        let message=ToolMessage::Writing {id:"one-operation".into(),action:"request".into(),payload:serde_json::json!({"original":"Only the chosen text"})};
+        assert!(hub.send_to(selected,&message));
+        recipient.set_nonblocking(true).unwrap();untouched.set_nonblocking(true).unwrap();
+        let mut bytes=[0u8;1024];let n=recipient.read(&mut bytes).unwrap();
+        assert_eq!(serde_json::from_slice::<ToolMessage>(&bytes[..n]).unwrap(),message);
+        assert_eq!(untouched.read(&mut bytes).unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
+        assert!(!hub.send_to(999,&message));
+    }
     use super::*;
 
     fn dir(name: &str) -> PathBuf {
@@ -423,6 +459,17 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
         eprintln!("instant re-claims refused: {instant_refused} of 2000; refused for the whole bound: {bounded_refused}");
         assert_eq!(bounded_refused, 0);
+    }
+
+    #[test]
+    fn a_wedged_text_peer_is_disconnected_instead_of_blocking_the_key_owner() {
+        use std::os::fd::AsRawFd;
+        let hub=Hub::default();let (writer,_unread)=UnixStream::pair().unwrap();
+        let bytes:libc::c_int=1024;
+        assert_eq!(unsafe {libc::setsockopt(writer.as_raw_fd(),libc::SOL_SOCKET,libc::SO_SNDBUF,&bytes as *const _ as *const libc::c_void,std::mem::size_of_val(&bytes) as libc::socklen_t)},0);
+        let id=hub.add(writer);
+        assert!(!hub.send_to(id,&ToolMessage::Writing {id:"owned".into(),action:"request".into(),payload:serde_json::json!({"original":"x".repeat(48_000)})}));
+        assert!(!hub.connected(id),"A partial failed frame is never reused");
     }
 
     /// INVARIANT: the folder is 0700 when made, and refused when it is a link, a file, or open to

@@ -5,6 +5,14 @@ orchestrators. Its purpose is to obtain the required evidence without repeatedly
 spending the user's time on unchanged passing work. It supplements the existing
 proof selector, runner, resource controls and receipt verifier.
 
+## Diagnostic evidence is part of implementation
+
+New or changed features must supply useful bounded local diagnostics and identify
+how Bust a bug or RichDoctor can collect them. Follow
+[built-in diagnostics](built-in-diagnostics.md): record the actual stages and
+outcomes without speech/content logging and verify the producer and collection
+path. A passing test suite does not replace real-world performance evidence.
+
 ## 1. Before launching any verification
 
 Inspect the existing run directory, progress, summary, logs and receipts. Record:

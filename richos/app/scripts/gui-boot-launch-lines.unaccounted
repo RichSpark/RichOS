@@ -114,3 +114,6 @@
 [richos] yt-dlp: installed nightly {}{}
 [richos] yt-dlp: nightly {} is the newest
 [richos] yt-dlp: no HOME, so no tools folder; not checking
+
+# Exceptional account-change save failure. A healthy boot must still fail if it prints this.
+[richos] writing permission could not be saved after the account change

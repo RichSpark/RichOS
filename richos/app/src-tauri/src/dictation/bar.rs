@@ -241,6 +241,8 @@ pub struct DeliveryMessage {
 #[serde(rename_all = "camelCase")]
 pub struct BarDetails {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub instruction: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub blocked_keys: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_by: Option<String>,
@@ -410,6 +412,8 @@ pub fn land(app: &AppHandle) {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MenuMessage {
+    pub cleanup_available: bool,
+    pub writing: Option<serde_json::Value>,
     pub seq: u64,
     pub on: bool,
     pub key: String,
@@ -433,6 +437,7 @@ pub struct MenuMessage {
 /// The menu's state between a click and its close.
 #[derive(Default)]
 pub struct Menu {
+    centered: bool,
     seq: u64,
     item: Option<Rect>,
     open: bool,
@@ -452,6 +457,7 @@ impl Menu {
         self.open = true;
         self.front = appkit::frontmost_pid();
         let m = message(self.seq);
+        self.centered=m.writing.is_some();
         if let Err(e) = app.emit_to(MENU, EVENT_MENU, &m) {
             log::line(&format!("the menu could not be drawn: {e}"));
         }
@@ -463,7 +469,9 @@ impl Menu {
             return;
         }
         self.seq += 1;
-        app.emit_to(MENU, EVENT_MENU, &message(self.seq)).ok();
+        let message=message(self.seq);
+        self.centered=message.writing.is_some();
+        app.emit_to(MENU, EVENT_MENU, &message).ok();
     }
 
     /// The page laid the menu out: hang it under the item and give it the keyboard.
@@ -474,7 +482,10 @@ impl Menu {
         let item = self.item?;
         let screens = screens(app);
         let (_, visible) = *screens.iter().find(|(f, _)| f.contains(item.center())).or(screens.first())?;
-        let frame = menu_frame(item, visible, (w, h));
+        let frame = if self.centered {
+            let w=w.min(visible.w);let h=h.min(visible.h);
+            Rect {x:visible.x+(visible.w-w)/2.,y:(visible.y+visible.h-h-48.).max(visible.y),w,h}
+        } else {menu_frame(item, visible, (w, h))};
         on_main(app, MENU, move |win| {
             win.set_frame(frame);
             if kind == Kind::Window {

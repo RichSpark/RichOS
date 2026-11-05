@@ -122,6 +122,34 @@ PASS=0; FAIL=0
 ok()  { printf '  PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  FAIL  %s\n         %s\n' "$1" "${2:-}"; FAIL=$((FAIL + 1)); }
 
+# Execute the actual allocation expressions with trailing/nontrailing slashes
+# and spaces. Bare BSD mktemp ignores TMPDIR on macOS; no bulk file is created.
+# Ten seconds is only a hang guard; path containment determines correctness.
+if python3 - "$SCRIPT" "$TMP" <<'PYSTORAGE'
+import os, pathlib, re, shutil, subprocess, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+allocations = re.findall(r'^\s*((rd_zip|rd_payload|zip_path|path_policy_dir)=.*mktemp.*)$', source, re.M)
+assert {name for _, name in allocations} == {'rd_zip', 'rd_payload', 'zip_path', 'path_policy_dir'}
+for suffix in ['', '/']:
+    scratch = pathlib.Path(sys.argv[2]) / 'explicit task scratch'
+    scratch.mkdir(exist_ok=True)
+    for assignment, name in allocations:
+        env = {**os.environ, 'TMPDIR': str(scratch) + suffix, 'app_bundle': '/Applications/Fixture.app'}
+        script = 'set -euo pipefail\n' + assignment.strip() + '\nprintf "%s\n" "$' + name + '"\n'
+        value = subprocess.check_output(['bash', '-c', script], env=env, text=True, timeout=10).strip()
+        path = pathlib.Path(value)
+        created = path if name == 'path_policy_dir' else path.parent
+        try:
+            assert path.resolve().is_relative_to(scratch.resolve()), (name, value, str(scratch))
+            assert created.is_dir(), (name, value)
+        finally:
+            shutil.rmtree(created)
+print('all production packaging allocators honor the explicit task TMPDIR')
+PYSTORAGE
+then ok 'P1 all packaging temporary work stays in explicit TMPDIR, with spaces and either slash form'
+else bad 'P1 packaging ignored the task TMPDIR'
+fi
+
 # --- run the script, capture output and code ------------------------------
 #
 # EVERY CASE RUNS WITH THE OPERATOR'S OWN SIGNING VARIABLES REMOVED, and that is

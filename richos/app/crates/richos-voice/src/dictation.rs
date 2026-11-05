@@ -606,6 +606,11 @@ impl Drafts {
     pub fn recovery_lifetime(&self, now: Duration) -> Option<Duration> {
         self.held.as_ref().map(|h| h.expires.saturating_sub(now))
     }
+    pub fn cleanup_lifetime(&self, now:Duration)->Option<Duration> {
+        if !self.cleanup_eligible {return None}
+        self.current.as_ref().or_else(||self.held.as_ref().filter(|h|!h.unresolved))
+            .map(|item|item.expires.saturating_sub(now))
+    }
     pub fn recording_started(&mut self, now: Duration) {
         self.expire(now);
         self.current = None;
@@ -658,6 +663,17 @@ impl Drafts {
     pub fn copied_recovery(&mut self) {
         self.held = None;
         self.clipboard_only = false;
+    }
+
+    /// Update only the current delivered subject. A protected unresolved draft
+    /// keeps its text and original lifetime when a later proposal is accepted.
+    pub fn revised(&mut self, text:String, range:Option<(isize,isize)>, now:Duration) {
+        self.expire(now);
+        if !self.cleanup_eligible {return}
+        if let Some(item)=self.current.as_mut().or_else(||self.held.as_mut().filter(|h|!h.unresolved)) {
+            item.draft.text=text;
+            item.draft.range=range;
+        }
     }
 
     pub fn clear(&mut self) {
@@ -715,6 +731,27 @@ mod tests {
     fn draft(text: &str) -> Draft {
         Draft { original: text.into(), text: text.into(), destination: "Mail".into(),
                 company: Some("company-a".into()), completed_ms: 42, range: Some((5, text.len() as isize)) }
+    }
+
+    #[test]
+    fn accepted_revision_preserves_unresolved_recovery_and_original_expiry() {
+        let mut drafts=Drafts::default();
+        drafts.complete(draft("first unresolved"),true,true,Duration::ZERO);
+        let delivered=Duration::from_secs(10);
+        drafts.recording_started(delivered);
+        drafts.complete(draft("later delivered"),false,false,delivered);
+        let accepted=Duration::from_secs(100);
+        drafts.revised("Accepted revision".into(),Some((5,17)),accepted);
+        assert_eq!(drafts.recovery(accepted).unwrap().text,"first unresolved");
+        let current=drafts.cleanup_subject(accepted).unwrap();
+        assert_eq!(current.original,"later delivered");
+        assert_eq!(current.text,"Accepted revision");
+        assert_eq!(current.range,Some((5,17)));
+        assert_eq!(drafts.cleanup_lifetime(accepted),Some(delivered+DRAFT_LIFETIME-accepted));
+        let expiry=delivered+DRAFT_LIFETIME;
+        drafts.revised("Must not return".into(),None,expiry);
+        assert!(drafts.cleanup_subject(expiry).is_none());
+        assert!(drafts.recovery(expiry).is_none());
     }
 
     #[test]

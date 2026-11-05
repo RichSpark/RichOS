@@ -4,7 +4,11 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::os::unix::fs::OpenOptionsExt;
+
+pub const MAX_BYTES: u64 = 1024 * 1024;
+static WRITER: Mutex<()> = Mutex::new(());
 
 pub const FILE_NAME: &str = "dictation.log";
 
@@ -26,14 +30,40 @@ pub fn line(message: &str) {
 }
 
 fn append(path: &Path, stamp: &str, message: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        writeln!(f, "{stamp} {message}").ok();
+    let _writer = WRITER.lock().unwrap_or_else(|p| p.into_inner());
+    let metadata = std::fs::symlink_metadata(path);
+    if metadata.as_ref().is_ok_and(|m| !m.is_file()) { return; }
+    if metadata.as_ref().is_ok_and(|m| m.len() >= MAX_BYTES) {
+        let rotated = path.with_file_name("dictation.log.1");
+        if std::fs::rename(path, rotated).is_err() { return; }
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(path) {
+        let end = message.char_indices().nth(2048).map_or(message.len(), |(i, _)| i);
+        let suffix = if end < message.len() { " [truncated]" } else { "" };
+        writeln!(f, "{stamp} {}{suffix}", &message[..end]).ok();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotation_retains_the_previous_bounded_log_and_restricts_new_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dictation-log-rotation-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE_NAME);
+        std::fs::write(&path, vec![b'x'; MAX_BYTES as usize]).unwrap();
+        append(&path, "stamp", "current");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "stamp current\n");
+        assert_eq!(std::fs::metadata(dir.join("dictation.log.1")).unwrap().len(), MAX_BYTES);
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::write(&path, vec![b'y'; MAX_BYTES as usize]).unwrap();
+        append(&path, "stamp", "next");
+        assert_eq!(std::fs::read(dir.join("dictation.log.1")).unwrap()[0], b'y');
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// INVARIANT: one line per call, stamped, appended: an earlier line is never overwritten.
     #[test]

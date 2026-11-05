@@ -1750,6 +1750,7 @@
   const vocabularyRules = {};
   let vocabularyCompany = null;
   let vocabularyPreview = false;
+  let writingAllowed = !!preset.writingAllowed;
   const vocabularyFixture = Object.assign({previewAvailable:true,error:null,failNextSave:null}, preset.dictationVocabulary || {});
   function vocabularyView() {
     return {companies:entityChoiceOf().options.map(c => ({id:c.id,name:c.display_name})),
@@ -3712,6 +3713,12 @@
           if (args.rules) vocabularyRules[company] = structuredClone(args.rules);
           return vocabularyView();
         }
+        case "dictation_writing_allowed":
+          if (typeof args.on === "boolean") {
+            dictationCalls.push({cmd,on:args.on});
+            writingAllowed = args.on;
+          }
+          return {allowed:writingAllowed};
         case "dictation_set_preview":
           dictationCalls.push({cmd,on:!!args.on});
           vocabularyPreview = !!args.on;

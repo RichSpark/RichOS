@@ -177,6 +177,8 @@ mod git_name_host;
 mod dictation;
 #[cfg(target_os = "macos")]
 mod dictation_app;
+#[cfg(target_os = "macos")]
+mod writing_host;
 
 /// The live UI sink: forwards each spine turn event to the webview as a Tauri event.
 /// This is the ONLY place spine events become UI events — clean output is guaranteed by
@@ -3652,7 +3654,7 @@ fn main() {
             question_host::start(app.handle().clone());
             rich_files_host::start(app.handle().clone());
             #[cfg(target_os = "macos")]
-            {cleaner_host::start(app.handle())?;cleaner_service::register(app.handle())?;}
+            {app.manage(Arc::new(writing_host::Host::default()));cleaner_host::start(app.handle())?;cleaner_service::register(app.handle())?;}
             git_name_host::start(app.handle().clone());
             peer_messages::start(app.handle().clone())?;
             // Readiness starts before the window's setup/navigation reads, with the
@@ -3685,7 +3687,8 @@ fn main() {
                 let window = app.handle().clone();
                 link.set_listener(Box::new(move |message| {
                     #[cfg(target_os = "macos")]
-            cleaner_host::on_message(&window,message);
+            {writing_host::on_message(&window,message);cleaner_host::on_message(&window,message);}
+                    if matches!(message,Some(dictation::ipc::ToolMessage::Writing {..})){return;}
                     if matches!(message,Some(dictation::ipc::ToolMessage::Cleaner{..})){return;}
                     if let Err(e) = window.emit(dictation_app::EVENT, dictation_app::event_payload(message)) {
                         eprintln!("[richos] dictation: the window could not be told: {e}");
@@ -4048,6 +4051,8 @@ fn main() {
             your_instructions_save,
             // --- a file Rich puts in front of the user (§138, item 12) — appended ---
             #[cfg(target_os = "macos")]
+            writing_host::dictation_writing_allowed,
+            #[cfg(target_os = "macos")]
             cleaner_host::cleaner_status,
             #[cfg(target_os = "macos")]
             cleaner_host::cleaner_open_main,
@@ -4162,6 +4167,8 @@ fn main() {
                 }
             }
             if let tauri::RunEvent::Exit = event {
+                #[cfg(target_os = "macos")]
+                if let Some(writing)=handle.try_state::<Arc<writing_host::Host>>() {writing.stop();}
                 if let Some(resources) = handle.try_state::<ResourceMonitor>() {
                     let monitor = resources.0.lock().unwrap_or_else(|e|e.into_inner()).take();
                     drop(monitor);
@@ -6085,6 +6092,8 @@ fn set_claude_at_threshold(state: State<AppState>, value: richos_core::claude_ac
 /// An explicit account change ends the current dictation operation and its
 /// memory-only drafts. The tool checks the owning data profile before clearing.
 fn clear_dictation_drafts(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {if writing_host::dictation_writing_allowed(app.clone(),Some(false)).is_err() {eprintln!("[richos] writing permission could not be saved after the account change");}}
     #[cfg(target_os = "macos")]
     if let Some(host) = app.try_state::<Arc<dictation_app::Host>>() { host.clear_drafts(); }
 }
