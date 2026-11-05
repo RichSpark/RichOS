@@ -541,6 +541,52 @@ async function main() {
     return `rebuilt to ${JSON.stringify(s.text)}, tooltip on the new chip`;
   });
 
+  for (const theme of ["dark", "light"]) {
+    await run.check(`8d. ${theme}: leaving the box dismisses the tooltip after its hovered status chip is rebuilt`, async () => {
+      const page = await openApp(browser, { theme });
+      await page.hover("#drill-chip-zone .drill-chip");
+      await page.waitForFunction(() => {
+        const tip = document.getElementById("composer-tip");
+        return tip.classList.contains("is-on") && getComputedStyle(tip).opacity === "1";
+      });
+      const replaced = await page.evaluate(() => {
+        const old = document.querySelector("#drill-chip-zone .drill-chip");
+        window.__RICHOS_MOCK__.simulateDrillChip("acme");
+        const chip = document.querySelector("#drill-chip-zone .drill-chip");
+        return !old.isConnected && old !== chip && chip.getAttribute("aria-describedby") === "composer-tip";
+      });
+      assert(replaced, "the fixture must replace the hovered chip and transfer its tooltip");
+      await page.mouse.move(5, 5);
+      const dismissed = await page.evaluate(() => {
+        const tip = document.getElementById("composer-tip");
+        const chip = document.querySelector("#drill-chip-zone .drill-chip");
+        return !tip.classList.contains("is-on") && chip.getAttribute("aria-describedby") === null;
+      });
+      assert(dismissed, "the rebuilt chip kept its tooltip and description after the pointer left the box");
+      await page.waitForFunction(() => document.getElementById("composer-tip").hidden);
+      // A normal exit and its following movement must not dismiss twice and
+      // turn the existing fade into an immediate disappearance.
+      await page.hover("#attach-add");
+      await page.waitForFunction(() => {
+        const tip = document.getElementById("composer-tip");
+        return tip.classList.contains("is-on") && getComputedStyle(tip).opacity === "1";
+      });
+      const normalExit = await page.evaluate(() => {
+        const tip = document.getElementById("composer-tip");
+        const fades = parseFloat(getComputedStyle(tip).transitionDuration) > 0;
+        document.getElementById("attach-add").dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }));
+        document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+        return { hidden: tip.hidden, on: tip.classList.contains("is-on"), fades };
+      });
+      assert(!normalExit.on, "normal mouseout must begin dismissal");
+      assertEqual(normalExit.hidden, !normalExit.fades, "the following movement must preserve the normal fade or reduced-motion dismissal");
+      await page.waitForFunction(() => document.getElementById("composer-tip").hidden);
+      assert(page.__errors.length === 0, "page errors: " + page.__errors.join(" | "));
+      await page.close();
+      return "rebuilt chip dismisses on exit; normal fade and accessibility cleanup preserved";
+    });
+  }
+
   await run.check("8b. Talk to Rich's tooltip says what pressing it will do, and a press puts the tooltip away", async () => {
     const page = await openApp(browser, { theme: "dark" });
     await page.hover("#talk-toggle");
