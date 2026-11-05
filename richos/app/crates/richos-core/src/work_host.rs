@@ -4425,6 +4425,10 @@ mod tests {
         stu.automatic_turn_cut(crate::util::now_millis()+3_600_000);
         until("the refused continuation was neither reported nor sent again",
             ||stu.rich_told()||stu.reached("account_moved").len()>1);
+        // The run loop can report the continuation before the recovery thread records its
+        // zero wait. Join that recovery before inspecting its clock, not just its message.
+        until("the automatic turn's recovery did not finish",
+            ||stu.backend().inner.lock().unwrap().automatic_recoveries==0);
 
         assert_eq!(stu.accounts("account_moved"),std::slice::from_ref(&home.id),
             "the continuation was held and sent again after its own refusal: {:?}",stu.reached("account_moved"));
