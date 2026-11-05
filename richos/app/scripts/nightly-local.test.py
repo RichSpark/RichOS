@@ -2859,6 +2859,17 @@ while True: time.sleep(.02)
         suite.write_text("two\n")
         git("commit", "-q", "-am", "fix the suite only")
         checker_only = git("rev-parse", "HEAD")
+        # This exact fixture repair changes the shared prebuilder and its tests too.
+        # Keep literal paths independent of the production allowlist.
+        for name in ("gui-boot-launch-lines.unaccounted", "lib/gui-launch.sh",
+                     "prepare-companion.py", "gui-launch-env.test.sh",
+                     "companion-macos.test.sh", "run-tests.test.sh"):
+            path = repo / "richos/app/scripts" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture repair\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "fix the companion fixture and its proof admission")
+        harness_only = git("rev-parse", "HEAD")
         product.write_text("two\n")
         git("commit", "-q", "-am", "and the product")
         with_product = git("rev-parse", "HEAD")
@@ -2880,7 +2891,17 @@ while True: time.sleep(.02)
 
         self.assertEqual(r.require_gui_proof(info, proof_at(checker_only))["gui-boot_commit"],
                          checker_only)
-        for refused in (with_product, unrelated, checker_only[:12]):
+        self.assertEqual(r.require_gui_proof(info, proof_at(harness_only))["gui-boot_commit"],
+                         harness_only)
+        # The tooltip fix must still prevent an old candidate borrowing a newer UI's proof.
+        git("checkout", "-q", "--detach", harness_only)
+        ui = repo / "richos/app/ui/main.js"
+        ui.parent.mkdir(parents=True, exist_ok=True)
+        ui.write_text("new tooltip behavior\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "change shipped UI")
+        with_ui = git("rev-parse", "HEAD")
+        for refused in (with_product, with_ui, unrelated, checker_only[:12]):
             with self.subTest(gui_commit=refused):
                 with self.assertRaisesRegex(ValueError, "gui-boot source"):
                     r.require_gui_proof(info, proof_at(refused))

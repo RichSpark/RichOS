@@ -16,6 +16,7 @@ hardened runtime is checked for `com.apple.security.device.audio-input`).
 
   prepare-companion.py            build if needed, link, print {"bundle": {"externalBin": [...]}}
   prepare-companion.py --check    print the source key and whether a build is cached; build nothing
+  prepare-companion.py --binary   build if needed and print its path without changing checkout links
 """
 import fcntl
 import hashlib
@@ -133,7 +134,10 @@ if __name__ == "__main__":
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / "prepare.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        prepare(directory, triple)
+        binary = prepare(directory, triple)
+    if sys.argv[1:] == ["--binary"]:
+        print(binary)
+        raise SystemExit(0)
     link(APP / "src-tauri/companion-helper", directory, root)
     # A relative source link keeps build-machine paths out of the executable (as the connect
     # helper's does); the bytes stay on the machine's cache volume.

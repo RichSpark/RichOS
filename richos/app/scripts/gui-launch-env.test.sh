@@ -19,7 +19,7 @@
 #   E3  Foundation, inside the boot, answers the machine's home and not the real one
 #   E4  the process gui_boot started is gone when it returns
 #
-# run-tests: inputs richos/app/scripts/gui-launch-env.test.sh richos/app/scripts/lib/gui-launch.sh richos/app/scripts/lib/home-probe.sh
+# run-tests: inputs richos/app/scripts/gui-boot.test.sh richos/app/scripts/gui-launch-env.test.sh richos/app/scripts/lib/gui-launch.sh richos/app/scripts/lib/home-probe.sh
 # run-tests: covers richos/app/scripts/lib/gui-launch.sh richos/app/scripts/lib/home-probe.sh
 # run-tests: no-host-screen: the "app" is lib/home-probe.sh, a shell stand-in that records its environment and exits; nothing is drawn
 set -uo pipefail
@@ -118,6 +118,58 @@ if [ "$STILL" -eq 0 ] && [ -s "$GUI_LAUNCHED_PIDS" ]; then
 else
   bad "E4 the process gui_boot started is gone when it returns" "$STILL still running"
 fi
+
+
+# The complete-machine fixture must carry the same sidecar as the shipped bundle.
+# These are executable stand-ins: only the identity probe runs, never an app or capture.
+PREBUILT="$TMP/prebuilt"; ENGINE="$TMP/fixture-engine"
+mkdir -p "$PREBUILT" "$ENGINE/loro/bin" "$ENGINE/runtime"
+printf '{}\n' > "$ENGINE/runtime/delivery.json"
+: > "$ENGINE/loro/bin/loro-context.mjs"; : > "$ENGINE/loro/bin/loro-write.mjs"
+cat > "$PREBUILT/richos-tauri" <<'IDENTITY'
+#!/bin/sh
+[ "$1" = --richos-internal-update-identity ] || exit 64
+printf '{"identifier":"com.richos.app","version":"1.3.0"}\n'
+IDENTITY
+printf '#!/bin/sh\nexit 0\n' > "$PREBUILT/gui_boot_machine"
+printf '#!/bin/sh\n# capture companion stand-in, never launched\nexit 0\n' > "$PREBUILT/richos-companion"
+chmod 755 "$PREBUILT"/*
+export RICHOS_GUI_PREBUILT="$PREBUILT"
+if gui_prebuilt_check; then ok "E5 the prebuilt transport accepts every fixture executable"
+else bad "E5 the prebuilt transport accepts every fixture executable"; fi
+mv "$PREBUILT/richos-companion" "$TMP/companion.saved"
+if gui_prebuilt_check > "$TMP/missing-companion.log" 2>&1; then
+  bad "E6 a missing capture companion refuses the prebuilt payload"
+else
+  if grep -q 'richos-companion' "$TMP/missing-companion.log"; then
+    ok "E6 a missing capture companion refuses the prebuilt payload by name"
+  else bad "E6 a missing capture companion refuses the prebuilt payload by name"; fi
+fi
+mv "$TMP/companion.saved" "$PREBUILT/richos-companion"
+GUI_APP_DIR="$DIR/.."; GUI_ENGINE_DIR="$ENGINE"; GUI_BINARY="$PREBUILT/richos-tauri"
+printf 'pinned model stand-in, never opened\n' > "$TMP/model.bin"
+export RICHOS_GUI_SPEECH_MODELS="$TMP/model.bin"
+if gui_machine "$TMP/complete-machine" > "$TMP/machine.log" 2>&1 \
+  && cmp -s "$PREBUILT/richos-companion" "$TMP/complete-machine/Applications/RichOS.app/Contents/MacOS/richos-companion" \
+  && [ -x "$TMP/complete-machine/Applications/RichOS.app/Contents/MacOS/richos-companion" ]; then
+  ok "E7 the complete-machine app carries the executable companion beside the shell"
+else bad "E7 the complete-machine app carries the executable companion beside the shell" "$(tail -5 "$TMP/machine.log")"; fi
+
+# Execute gui-boot's real accounting cases without its product-launch section.
+# This runs even when the author gate defers the screen suites to a guest.
+if python3 - "$DIR/gui-boot.test.sh" "$TMP/accounting.sh" <<'PYTHON'
+from pathlib import Path
+import sys
+src = Path(sys.argv[1]).read_text()
+functions = src[src.index("DECL_ERRORS=0\n"):src.index("# S1 — the prefix")]
+cases = src[src.index("healthy_log() {"):src.index('GUI_APP_DIR="$APP_DIR"')]
+Path(sys.argv[2]).write_text('set -uo pipefail\nTMP="$1"; PASS=0; FAIL=0\nok() { printf \'  PASS  %s\\n\' "$1"; PASS=$((PASS+1)); }\nbad() { printf \'  FAIL  %s: %s\\n\' "$1" "${2:-}"; FAIL=$((FAIL+1)); }\n' + functions + cases + '\n[ "$FAIL" -eq 0 ]\n')
+PYTHON
+then
+  if bash "$TMP/accounting.sh" "$TMP" > "$TMP/accounting.log" 2>&1; then
+    ok "E8 the boot checker accepts healthy meeting startup and rejects missing or failed seams"
+  else bad "E8 the boot accounting cases pass without a product launch" "$(cat "$TMP/accounting.log")"; fi
+else bad "E8 the boot accounting cases could be extracted"; fi
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

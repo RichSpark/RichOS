@@ -101,5 +101,17 @@ else
   bad "C5 build the bundle's companion" "$(tail -5 "$SCRATCH/prep-build.err" | tr '\n' ' ')"
 fi
 
+# C6 — fixture callers get the same source-keyed executable without replacing
+# the packaging link in the checkout.
+LINK="$ROOT/richos/app/src-tauri/companion-helper"
+LINK_BEFORE="$(python3 -c 'import os,sys; s=os.lstat(sys.argv[1]); print(s.st_ino,s.st_ctime_ns)' "$LINK" 2>/dev/null)"
+if DIRECT="$(python3 "$PREP" --binary 2>"$SCRATCH/prep-direct.err")" \
+   && [ -x "$DIRECT" ] && [ "$(basename "$(dirname "$DIRECT")")" = "$KEY" ] \
+   && [ "$LINK_BEFORE" = "$(python3 -c 'import os,sys; s=os.lstat(sys.argv[1]); print(s.st_ino,s.st_ctime_ns)' "$LINK" 2>/dev/null)" ]; then
+  ok "C6 --binary returns the cached executable without replacing the packaging link"
+else
+  bad "C6 --binary returns the cached executable without replacing the packaging link" "${DIRECT:-no path} $(tail -3 "$SCRATCH/prep-direct.err")"
+fi
+
 echo "companion-macos: $PASS passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]
