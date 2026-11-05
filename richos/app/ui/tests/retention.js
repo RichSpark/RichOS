@@ -39,7 +39,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { leaveHome, loadPlaywright, shot, createRun, assert, assertEqual, SEED_THEME, UI_DIR } = require("./lib/harness");
+const { leaveHome, loadPlaywright, shot, createRun, assert, assertEqual, awaitSettled, flushFrames, SEED_THEME, UI_DIR } = require("./lib/harness");
 
 const APP = "file://" + path.join(UI_DIR, "index.html");
 const CORE = path.resolve(UI_DIR, "..", "crates", "richos-core", "src");
@@ -98,7 +98,10 @@ async function openApp(browser) {
 async function openSettings(page) {
   await page.click("#set-btn");
   await page.waitForSelector("#set-menu", { state: "visible" });
-  await page.waitForTimeout(120);
+  // The entry moves the panel for 200ms. Click controls only at their final geometry,
+  // otherwise browser auto-scroll during the rise can persist into the screenshot.
+  await awaitSettled(page);
+  await flushFrames(page);
 }
 
 async function closeSettings(page) {
