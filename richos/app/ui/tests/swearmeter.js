@@ -110,7 +110,7 @@ async function main() {
     await page.locator("#set-swearmeter").focus();
     await page.keyboard.press("Space");
     assertEqual(await rowText(page), "", "settings hides number and qualifier");
-    assertEqual(await page.locator("#home-swearmeter").textContent(), "", "home hides number and qualifier");
+    assertEqual(await page.locator("#home-swearmeter").count(), 0, "hidden home display adds no empty signal node");
     assertEqual(page.errors, [], "no renderer errors");
   });
   await run.check("6 a late initial snapshot cannot undo an event or a more recent display choice", async () => {

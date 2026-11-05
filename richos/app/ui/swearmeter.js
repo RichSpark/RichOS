@@ -27,6 +27,9 @@
     const signals = document.getElementById("home-signals");
     if (!signals) return;
     let node = document.getElementById("home-swearmeter");
+    // Hidden display contributes no signal node or layout position. Accounting
+    // remains in result, independent of whether this optional view exists.
+    if (!show) { if (node) node.remove(); return; }
     if (!node) {
       node = document.createElement("section");
       node.id = "home-swearmeter";
