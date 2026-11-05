@@ -2,6 +2,16 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.0-nightly.20261105.90
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.0-nightly.20261105.90)
+
+- Added meeting notes: when another app such as Zoom or Microsoft Teams starts using your microphone or a meeting on your connected Google or Microsoft calendar is a minute away, RichOS offers Take Notes at the top right of your screen; nothing is recorded until you press it, the recording of both sides stops by itself when the call ends and Rich then posts the summary, decisions, your actions, other people's commitments and open questions in the conversation you had open, with the transcript in the Output panel
+- Added Start meeting notes and Pause meeting prompts to Settings: record a conversation in person until you press Stop or stop RichOS offering notes until you press Resume
+- Added asking Rich about past meetings: in a company's conversations he can read that company's meeting notes and transcripts
+- Added documents to Search: name one folder of Markdown notes in RichOS's settings file and Search finds them on your Mac by what they are about with Super Finder or word for word with Require quoted text; Open original opens the file and Rich can search the same folder for you
+- Fixed the SwearMeter count in Settings being partly hidden under the bottom of the menu when you turned on Show SwearMeter
+
 ## 1.2.9-nightly.20261105.89
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.9-nightly.20261105.89)
