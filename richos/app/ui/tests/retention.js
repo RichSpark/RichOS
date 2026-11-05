@@ -235,6 +235,9 @@ async function main() {
       said.includes("The records are still there; their output is not."),
       "and it said which half went — Tier A is never evicted at any setting: " + said
     );
+    // Clicking the radio can scroll the taller Settings panel. Capture the same
+    // full panel after the store's answer, rather than that incidental scroll.
+    await page.$eval("#set-menu", (menu) => { menu.scrollTop = 0; });
     const visible = await page.locator("#retention-hint").evaluate(node => {
       const text = node.getBoundingClientRect(), menu = node.closest(".setmenu");
       const panel = menu.getBoundingClientRect(), foot = menu.querySelector(".sm-foot").getBoundingClientRect();

@@ -416,10 +416,28 @@ test('assertLocalTokenLocation accepts the OS keychain, refuses a token file out
 // data they fetch defaults into it."
 // -------------------------------------------------------------------------------------------------
 
+// A checkout can live outside the real home (for example on an external SSD), where
+// the home guard refuses first. Check that real refusal, then enclose the checkout
+// in a controlled home to exercise the independent product boundary by its own error.
+// These tests are synchronous; restore the shared os function before any other test.
+function assertProductTokenBoundary(filePath) {
+  const target = { backend: 'file', filePath };
+  assert.throws(() => assertLocalTokenLocation(target));
+  const realHome = os.homedir;
+  try {
+    os.homedir = () => path.dirname(REPO_ROOT);
+    const sibling = path.join(os.homedir(), '.richos-test-token.json');
+    assert.equal(assertLocalTokenLocation({ backend: 'file', filePath: sibling }), true);
+    assert.throws(() => assertLocalTokenLocation(target), /inside the RichOS product repo/);
+  } finally {
+    os.homedir = realHome;
+  }
+}
+
 test('privacy: the token rule and the HARVEST rule are the same rule (one coherent boundary)', () => {
   const inRepo = path.join(REPO_ROOT, 'wiki', 'raw', 'meetings');
   // The credential has always been refused a repo path...
-  assert.throws(() => assertLocalTokenLocation({ backend: 'file', filePath: inRepo }), /inside the RichOS product repo/);
+  assertProductTokenBoundary(inRepo);
   // ...and now so is everything that credential fetches.
   assert.throws(() => assertEvidenceOutsideProductRepo(inRepo, REPO_ROOT), /inside the RichOS product repo/);
 });
@@ -430,7 +448,7 @@ test('privacy: grouped product protects outer docs and .richos as well as produc
   assert.ok(fs.existsSync(path.join(REPO_ROOT, 'richos', 'tools', 'richos-service', 'package.json')));
   for (const relative of ['docs/recordings', '.richos/tokens', 'richos/app/private']) {
     const target = path.join(REPO_ROOT, relative);
-    assert.throws(() => assertLocalTokenLocation({ backend: 'file', filePath: target }), /inside the RichOS product repo/);
+    assertProductTokenBoundary(target);
     assert.throws(() => assertEvidenceOutsideProductRepo(target, REPO_ROOT), /inside the RichOS product repo/);
   }
 });
@@ -447,7 +465,7 @@ test('privacy: filesystem-equivalent letter casing cannot bypass the product bou
       assert.throws(() => assertEvidenceOutsideProductRepo(path.join(product, 'docs', 'new-recordings'), alternate), /inside the RichOS product repo/);
       const repoAlias = path.join(path.dirname(REPO_ROOT), path.basename(REPO_ROOT).toUpperCase());
       if (fs.existsSync(repoAlias) && fs.realpathSync.native(repoAlias) === fs.realpathSync.native(REPO_ROOT)) {
-        assert.throws(() => assertLocalTokenLocation({ backend: 'file', filePath: path.join(repoAlias, 'docs', 'tokens.json') }), /inside the RichOS product repo/);
+        assertProductTokenBoundary(path.join(repoAlias, 'docs', 'tokens.json'));
       }
     } else {
       // On a case-sensitive volume these spellings denote different directories.
@@ -460,7 +478,7 @@ test('privacy: filesystem-equivalent letter casing cannot bypass the product bou
 });
 
 test('privacy: symlinked checkout aliases cannot receive evidence or tokens', () => {
-  const tmp = fs.mkdtempSync(path.join(os.homedir(), '.richos-privacy-test-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'richos-privacy-test-'));
   const saved = { ...process.env };
   try {
     const alias = path.join(tmp, 'checkout');
@@ -470,7 +488,7 @@ test('privacy: symlinked checkout aliases cannot receive evidence or tokens', ()
     process.env.RICHOS_WORKSPACE_ZONE = target;
     assert.throws(() => dropZone(), /inside the RichOS product repo/);
     assert.throws(() => workspaceZone(), /inside the RichOS product repo/);
-    assert.throws(() => assertLocalTokenLocation({ backend: 'file', filePath: target }), /inside the RichOS product repo/);
+    assertProductTokenBoundary(target);
     assert.throws(() => assertEvidenceOutsideProductRepo(path.join(REPO_ROOT, 'docs', 'new-private-directory'), alias), /inside the RichOS product repo/);
   } finally {
     process.env = saved;
@@ -940,6 +958,26 @@ test('toSourceItem normalizes an event → SourceItem (actors, times, provenance
   assert.equal(item.actors.attendees.length, 3);
   assert.equal(item.temporal.occurredAt, Date.parse('2025-08-12T15:00:00Z'));
   assert.deepEqual(validateSourceItem(item), []);
+});
+
+test('toSourceItem keeps the Google Meet link from the conference data (rv-20261014T105556Z #3)', () => {
+  // The meeting-notes prompt reads the call app from the link; Google puts a Meet link only in
+  // `hangoutLink` and `conferenceData`, never in the description or location.
+  const a = new GoogleCalendarAdapter({ accountId: 'fixture-account', client: null, now });
+  const item = a.toSourceItem({
+    ...EVENT_ORG, description: '', location: undefined,
+    hangoutLink: 'https://meet.google.com/abc-defg-hij',
+    conferenceData: { entryPoints: [
+      { entryPointType: 'video', uri: 'https://meet.google.com/abc-defg-hij' },
+      { entryPointType: 'phone', uri: 'tel:+1-555-0100' },
+    ] },
+  });
+  assert.deepEqual(item.content.structured.meetingLinks, ['https://meet.google.com/abc-defg-hij']);
+  // A conference elsewhere (a Zoom add-on) is kept from its entry point alone.
+  const zoom = a.toSourceItem({ ...EVENT_ORG, conferenceData: { entryPoints: [{ entryPointType: 'video', uri: 'https://us02web.zoom.us/j/123' }] } });
+  assert.deepEqual(zoom.content.structured.meetingLinks, ['https://us02web.zoom.us/j/123']);
+  // POSITIVE CONTROL: no conference, no links.
+  assert.deepEqual(a.toSourceItem(EVENT_ORG).content.structured.meetingLinks, []);
 });
 
 test('toSourceItem marks a cancelled event as a supersede signal (temporal memory, not delete)', () => {
@@ -5236,6 +5274,23 @@ test('a withdrawn event supersedes rather than deletes, in both of Graph\'s two 
 
   // POSITIVE CONTROL: an ordinary event supersedes nothing.
   assert.equal(a.toSourceItem(MS_EVENT_ORG).temporal.supersedes, null);
+});
+
+test('toSourceItem keeps the HTML invite\'s link targets as meetingLinks (rv-20261014T105556Z #3)', () => {
+  // A Teams invite's join link is only an HTML link target: the stripped text says "Join the
+  // meeting now" and the location "Microsoft Teams Meeting", neither of which names the link.
+  const item = msCalendar().toSourceItem({
+    ...MS_EVENT_ORG, location: { displayName: 'Microsoft Teams Meeting' },
+    body: { contentType: 'html', content: '<p><a href="https://teams.microsoft.com/l/meetup-join/fixture?a=1&amp;b=2">Join the meeting now</a>'
+      + ' <a href=\'https://teams.microsoft.com/l/meetup-join/fixture?a=1&amp;b=2\'>again</a> <a href="mailto:x@acme.com">mail</a></p>' },
+  });
+  assert.equal(item.content.text, 'Join the meeting now again mail', 'the stored text is unchanged');
+  assert.deepEqual(item.content.structured.meetingLinks, ['https://teams.microsoft.com/l/meetup-join/fixture?a=1&b=2']);
+  // POSITIVE CONTROL: no links in the body, none kept; a plain-text body keeps its URL in the text.
+  assert.deepEqual(msCalendar().toSourceItem(MS_EVENT_ORG).content.structured.meetingLinks, []);
+  const plain = msCalendar().toSourceItem({ ...MS_EVENT_ORG, body: { contentType: 'text', content: 'Join: https://zoom.us/j/1' } });
+  assert.deepEqual(plain.content.structured.meetingLinks, []);
+  assert.match(plain.content.text, /zoom\.us\/j\/1/);
 });
 
 test('eventBodyText prefers the body, falls back to bodyPreview, and survives neither', () => {

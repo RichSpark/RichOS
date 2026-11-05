@@ -97,6 +97,12 @@ pub mod machinery;
 /// yt-dlp on the user's Mac, installed into the app's tools folder and kept at the newest
 /// `nightly` release (media-tools plan slice 2).
 pub mod media_tools;
+// Meeting notes (Granola PRD V4): the one prompt/capture state, pure, clock injected.
+pub mod meeting;
+// Meeting notes after the recording: the one brief per transcript (prompt, check, atomic write,
+// attempts, Rich's words). The AI call itself is the shell's, as Bust a bug's is.
+pub mod meeting_notes;
+pub mod meeting_calendar;
 pub mod machine_settings;
 pub mod native;
 /// The output record: every file a thread produced, written by witnesses (Output side panel
@@ -240,6 +246,7 @@ pub mod app_workers;
 pub mod assignment;
 pub mod assignment_tools;
 pub mod status_tools;
+pub mod search_tools;
 pub mod session_tools;
 pub mod work_host;
 /// `agent_tasks` — the task book: which of the provider's own background tasks is which and how

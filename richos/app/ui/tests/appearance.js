@@ -1242,7 +1242,7 @@ async function main() {
       [
         "Theme", "Text size", "Oxford comma: OFF", "Technical view", "Claude Code quota", "Keep the stored output", "Show SwearMeter",
         "Your instructions", "Rich's model", "How much should Rich interrupt you?", "Use Rich from your phone", "Terminal setup",
-        "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Claude accounts",
+        "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Start meeting notes", "Claude accounts",
         "Connected folders (repositories)", "Your name in Git", "Memory folder", "Updates",
         "Your name", "Splash screen", "Bust a bug!", "Request a feature",
       ],
@@ -1546,8 +1546,8 @@ async function main() {
     // list is compared by NAME, so a swap of one file for another cannot pass as "still five".
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "cleaner.css", "speckle.css", "splash.css", "home.css", "instructions-update.css", "terminal-and-git.css", "dictation-overlay.css"],
-      "the shell links a different set of stylesheets from the nine this check was measured against"
+      ["fonts/fonts.css", "style.css", "cleaner.css", "speckle.css", "splash.css", "home.css", "instructions-update.css", "terminal-and-git.css", "dictation-overlay.css", "meeting-panel.css"],
+      "the shipped windows have a different set of stylesheets from the ten this check was measured against"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a
     // brace-counting walk and the property regex must see the same declarations, or the walk

@@ -402,6 +402,7 @@ export class MicrosoftCalendarAdapter {
           lastModifiedDateTime: raw.lastModifiedDateTime || null,
           createdDateTime: raw.createdDateTime || null,
           bodyContentType: raw.body && raw.body.contentType ? String(raw.body.contentType) : null,
+          meetingLinks: bodyLinkTargets(raw),
         },
         // Graph does not inline attachments in a calendarView response and this adapter never asks
         // for them: §4.1 says attachments are refs, fetched lazily and never bulk-hoarded.
@@ -508,6 +509,21 @@ export function eventBodyText(raw) {
     return /html/i.test(String(body.contentType || '')) ? stripHtml(content) : content;
   }
   return typeof raw.bodyPreview === 'string' ? raw.bodyPreview : '';
+}
+
+/**
+ * The web link targets of an HTML invite, in order, once each. Stripping the tags drops them, and an
+ * Outlook or Teams invite carries its join link only as one ("Join the meeting now"), so they are
+ * kept here for the meeting-notes prompt, which reads the call app from the link (richos-core
+ * `meeting_calendar.rs`). A plain-text body keeps its URLs in `content.text` already.
+ */
+export function bodyLinkTargets(raw) {
+  const body = raw && raw.body && typeof raw.body === 'object' ? raw.body : null;
+  if (!body || typeof body.content !== 'string' || !/html/i.test(String(body.contentType || ''))) return [];
+  const links = [...body.content.matchAll(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)]
+    .map((m) => (m[1] ?? m[2]).trim().replace(/&amp;/gi, '&'))
+    .filter((u) => /^https?:\/\//i.test(u));
+  return [...new Set(links)];
 }
 
 /** Tags out, entities decoded, whitespace tidied. Script and style CONTENT is dropped, not unwrapped. */

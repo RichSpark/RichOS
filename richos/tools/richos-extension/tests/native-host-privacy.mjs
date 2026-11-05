@@ -44,12 +44,14 @@ export function removablePaths(paths) {
  * Access is not something a user is asked to give). `dirs` maps a name to a directory; a directory
  * already off a removable volume comes back as it is, and one on a removable volume is copied under
  * `into` (without node_modules and .git) and the copy's path comes back. `into` must itself be off a
- * removable volume or this throws: staging onto the volume would move nothing.
+ * removable volume unless every supplied host subject already has its grant. The caller's
+ * configured scratch location is preserved; an unknown grant still refuses before Chrome.
  */
-export function stageOffRemovable({ dirs, into }) {
+export function stageOffRemovable({ dirs, into, subjects = [], home = os.homedir() }) {
   fs.mkdirSync(into, { recursive: true });
   if (removablePaths([into]).length) {
-    throw new Error(`cannot stage off a removable volume into ${real(into)}: it is on one too (set TMPDIR to a folder on the internal disk)`);
+    const refusal = subjects.length ? removableVolumeRefusal({ paths: [into], subjects, home }) : 'no host subjects supplied';
+    if (refusal) throw new Error(`cannot stage onto a removable volume at ${real(into)}: ${refusal}`);
   }
   const staged = {};
   for (const [name, dir] of Object.entries(dirs)) {
@@ -58,6 +60,17 @@ export function stageOffRemovable({ dirs, into }) {
     fs.cpSync(dir, copy, { recursive: true, filter: (source) => !/(^|\/)(node_modules|\.git)$/.test(source) });
     staged[name] = copy;
   }
+  return staged;
+}
+
+/** Preserve the service's relative imports into the extension, voice and loro sources. */
+export function stageNativeProduct({ service, extension, into, subjects, home }) {
+  const product = path.resolve(service, '../..');
+  // The privacy guard computes the repository five levels above lib/workspace.
+  // Preserve its richos/ parent so sibling test recordings stay outside that boundary.
+  const staged = stageOffRemovable({ dirs: { service, extension }, into: path.join(into, 'richos/tools'), subjects, home });
+  stageOffRemovable({ dirs: { voice: path.join(product, 'engine/voice'), loro: path.join(product, 'engine/loro') },
+    into: path.join(into, 'richos/engine'), subjects, home });
   return staged;
 }
 

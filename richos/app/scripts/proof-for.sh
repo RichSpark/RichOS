@@ -346,6 +346,22 @@ while IFS= read -r s; do [ -n "$s" ] && UI_SUITES_STR="$UI_SUITES_STR$s "; done 
 
 RECON="$WORK/recon"; : > "$RECON"
 TAB="$(printf '\t')"
+# Preserve the existing include_str! matching, but scan each test once. A vendored tree can
+# add thousands of changed paths; rescanning every integration test for each one dominates
+# selection even though none of those files is included by a test.
+RUST_INCLUDES="$WORK/rust-includes"; : > "$RUST_INCLUDES"
+for t in "$APP"/crates/*/tests/*.rs; do
+  [ -f "$t" ] || continue
+  c="${t%/tests/*}"; c="${c##*/}"
+  target="${t##*/}"; target="${target%.rs}"
+  grep -E 'include_str!\("(\.\./)+' "$t" 2>/dev/null \
+    | sed -E 's/.*include_str!\("(\.\.\/)+([^"]*)".*/\2/' \
+    | while IFS= read -r included; do
+        printf '%s\t%s\t%s\n' "$included" "$c" "$target"
+      done >> "$RUST_INCLUDES"
+done
+LC_ALL=C sort -u "$RUST_INCLUDES" > "$RUST_INCLUDES.u"
+mv "$RUST_INCLUDES.u" "$RUST_INCLUDES"
 while IFS="$TAB" read -r s paths; do
   [ -n "$s" ] || continue
   case "$UI_SUITES_STR" in
@@ -644,15 +660,11 @@ while IFS= read -r p; do
     "$APP_REL"/crates/*|"$APP_REL"/src-tauri/*) ;;
     "$APP_REL"/*)
       rel="${p#"$APP_REL"/}"
-      for t in "$APP"/crates/*/tests/*.rs; do
-        [ -f "$t" ] || continue
-        if grep -E 'include_str!\("(\.\./)+' "$t" 2>/dev/null \
-             | sed -E 's/.*include_str!\("(\.\.\/)+([^"]*)".*/\2/' | grep -qxF -- "$rel"; then
-          c="$(basename "$(dirname "$(dirname "$t")")")"
-          printf '%s\t%s\t--test %s\n' "$c" "integration" "$(basename "$t" .rs)" >> "$WORK/rust"
-          MATCHED=1; note "text-scanned by $(basename "$t") (include_str!)"
-        fi
-      done ;;
+      while IFS="$TAB" read -r included c target; do
+        [ "$included" = "$rel" ] || continue
+        printf '%s\t%s\t--test %s\n' "$c" "integration" "$target" >> "$WORK/rust"
+        MATCHED=1; note "text-scanned by $target.rs (include_str!)"
+      done < "$RUST_INCLUDES" ;;
   esac
 
   # ---- Rust ----

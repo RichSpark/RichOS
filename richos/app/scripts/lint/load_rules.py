@@ -32,7 +32,7 @@ import json
 import re
 from pathlib import Path
 
-from common import APP, Refusal
+from common import APP, THIRD_PARTY, Refusal
 
 IDS = ("wall-clock-verdict", "short-deadline", "sleep-then-assert", "host-sample",
        "env-mutation-unguarded")
@@ -56,7 +56,7 @@ def number(text):
 
 def language_of(path):
     """None when the path is not test code this rule covers."""
-    if not path.startswith((APP, "richos/engine/")):
+    if not path.startswith((APP, "richos/engine/")) or path.startswith(THIRD_PARTY):
         return None
     p = Path(path)
     if "fixtures" in p.parts or "fixture" in p.parts or "node_modules" in p.parts:

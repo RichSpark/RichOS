@@ -792,6 +792,60 @@ const SURFACES = [
     },
   },
   {
+    name: "meeting-notes-processing",
+    what: "meeting prompts paused and the visible notice while meeting notes are prepared",
+    preset: { meetingNotes: { paused: true, processing: "preparing" } },
+    drive: async (p) => {
+      await p.click('.nav-thread[data-thread-id="hiring"]');
+      await atHiringThread(p);
+      await p.waitForSelector("#mn-paused-chip:not([hidden])");
+      await p.waitForSelector("#mn-status:not([hidden])");
+      await pageSettled(p);
+    },
+  },
+  {
+    name: "search-documents",
+    what: "the Documents section (search PRD v3.1, round 26): a meaning match selected, its passage open and Open original showing",
+    drive: async (p) => {
+      await p.keyboard.press("Meta+k");
+      await p.waitForSelector("#search-overlay:not([hidden])");
+      await p.fill("#search-input", "the app felt slow on first open");
+      await p.waitForSelector("#search-results .srch-doc");
+      // Down to the first document, the way he gets there: the keyboard.
+      for (let i = 0; i < 40; i++) {
+        if (await p.evaluate(() => !!document.querySelector("#search-results .srch-doc.is-active"))) break;
+        await p.keyboard.press("ArrowDown");
+      }
+      await p.waitForSelector("#search-results .srch-doc.is-active .srch-open-btn", { state: "visible" });
+      await overlaySettled(p, "#search-overlay");
+    },
+  },
+  {
+    name: "search-unavailable",
+    what: "Super Finder checked while meaning search is unavailable: the truthful fallback line and text matches",
+    preset: { documentSearch: "unavailable" },
+    drive: async (p) => {
+      await p.keyboard.press("Meta+k");
+      await p.waitForSelector("#search-overlay:not([hidden])");
+      await p.fill("#search-input", "refund");
+      await p.waitForFunction(() => (document.getElementById("srch-status-text") || {}).textContent === "Super Finder unavailable; showing text matches"
+        && !!document.querySelector("#search-results .srch-doc"));
+      await overlaySettled(p, "#search-overlay");
+    },
+  },
+  {
+    name: "search-no-folder",
+    what: "no search folder configured: the Documents note and the hollow status",
+    preset: { documentSearch: "none" },
+    drive: async (p) => {
+      await p.keyboard.press("Meta+k");
+      await p.waitForSelector("#search-overlay:not([hidden])");
+      await p.fill("#search-input", "refund");
+      await p.waitForSelector("#search-results .srch-note");
+      await overlaySettled(p, "#search-overlay");
+    },
+  },
+  {
     name: "inspector",
     what: "the worker inspector open over an expanded transcript",
     drive: async (p) => {
@@ -1199,6 +1253,10 @@ const SURFACES = [
         const d = document.getElementById("update-detail");
         return !!d && !d.hidden && d.textContent.trim() !== "";
       });
+      await p.locator("#update-detail").scrollIntoViewIfNeeded();
+      // The sticky foot band covers the bottom of this scrollport. Reach the end as a user
+      // scrolling the panel does, so the disclosed reason sits above that band.
+      await p.evaluate(() => { const menu = document.getElementById("set-menu"); menu.scrollTop = menu.scrollHeight; });
       await pageSettled(p);
     },
   },

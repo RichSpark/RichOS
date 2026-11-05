@@ -1,0 +1,95 @@
+mod reexports_from_qdrant_crates {
+    pub use crate::segment::common::operation_error::{OperationError, OperationResult};
+    pub use crate::segment::data_types::facets::{FacetHit, FacetResponse, FacetValue, FacetValueHit};
+    pub use crate::segment::data_types::fully_qualified_point::FullyQualifiedPoint;
+    pub use crate::segment::data_types::index::{
+        BoolIndexParams, DatetimeIndexParams, FloatIndexParams, GeoIndexParams, IntegerIndexParams,
+        KeywordIndexParams, Language, SnowballLanguage, SnowballParams, StopwordsSet,
+        TextIndexParams, TokenizerType, UuidIndexParams,
+    };
+    pub use crate::segment::data_types::load_profile::LoadProfile;
+    pub use crate::segment::data_types::modifier::Modifier;
+    pub use crate::segment::data_types::order_by::{
+        Direction, OrderBy, OrderByInterface, OrderValue, StartFrom,
+    };
+    pub use crate::segment::data_types::vectors::{
+        DEFAULT_VECTOR_NAME, NamedQuery, TypedMultiDenseVector,
+    };
+    pub use crate::segment::index::payload_config::{PAYLOAD_INDEX_CONFIG_FILE, PayloadConfig};
+    pub use crate::segment::index::query_optimization::rescore_formula::parsed_formula::DecayKind;
+    pub use crate::segment::json_path::JsonPath;
+    pub use crate::segment::segment::SEGMENT_STATE_FILE;
+    pub use crate::segment::segment_constructor::get_payload_index_path;
+    pub use crate::segment::types::{
+        AcornSearchParams, AnyVariants, BinaryQuantizationConfig, BinaryQuantizationEncoding,
+        BinaryQuantizationQueryEncoding, CompressionRatio, Condition, DateTimeWrapper, Distance,
+        ExtendedPointId as PointId, FieldCondition, Filter, GeoBoundingBox, GeoLineString,
+        GeoPoint, GeoPolygon, GeoRadius, HasIdCondition, HasVectorCondition,
+        HnswConfig as HnswIndexConfig, IdfCorpusParams, IdfParams, IdfScope, IsEmptyCondition,
+        IsNullCondition, Match, MatchAny, MatchExcept, MatchPhrase, MatchPrefix, MatchText,
+        MatchTextAny, MatchValue, MinShould, MultiVectorComparator, MultiVectorConfig, Nested,
+        NestedCondition, Payload, PayloadFieldSchema, PayloadIndexInfo, PayloadSchemaParams,
+        PayloadSchemaType, PayloadSelector, PayloadSelectorExclude, PayloadSelectorInclude,
+        ProductQuantizationConfig, QuantizationConfig, QuantizationSearchParams, Range,
+        RangeInterface, ScalarQuantizationConfig, ScalarType, ScoredPoint, SearchParams,
+        SegmentConfig, SegmentState, Slice, SliceCondition, SparseVectorDataConfig, ValueVariants,
+        ValuesCount, VectorDataConfig, VectorStorageDatatype, WithPayloadInterface, WithVector,
+    };
+    pub use crate::segment::vector_storage::query::{
+        ContextPair, ContextQuery, DiscoverQuery, FeedbackItem,
+        NaiveFeedbackCoefficients as NaiveFeedbackStrategy,
+        NaiveFeedbackQuery as FeedbackNaiveQuery, RecoQuery as RecommendQuery,
+    };
+    pub use crate::shard::operations::payload_ops::{DeletePayloadOp, PayloadOps, SetPayloadOp};
+    pub use crate::shard::operations::point_ops::{
+        ConditionalInsertOperationInternal as ConditionalInsertOperation, PointIdsList,
+        PointInsertOperationsInternal as PointInsertOperations, PointOperations,
+        PointSyncOperation, UpdateMode,
+    };
+    pub use crate::shard::operations::vector_name_ops::{
+        CreateVectorName, DeleteVectorName, DenseVectorConfig, SparseVectorConfig,
+        VectorNameConfig, VectorNameOperations,
+    };
+    pub use crate::shard::operations::vector_ops::{UpdateVectorsOp, VectorOperations};
+    pub use crate::shard::operations::{
+        CollectionUpdateOperations as UpdateOperation, CreateIndex, FieldIndexOperations,
+    };
+    pub use crate::shard::query::formula::{ExpressionInternal as Expression, FormulaInternal as Formula};
+    pub use crate::shard::query::query_enum::QueryEnum;
+    pub use crate::shard::query::{
+        FusionInternal as Fusion, MmrInternal as Mmr, SampleInternal as Sample, ScoringQuery,
+    };
+    pub use crate::shard::retrieve::record_internal::RecordInternal as Record;
+    pub use crate::sparse::common::sparse_vector::SparseVector;
+}
+pub use reexports_from_qdrant_crates::*;
+
+/// TODO: We need to do something these duplicates of Vector/Point structures
+mod todo_to_clean_up {
+    pub use crate::segment::data_types::vectors::{VectorInternal, VectorStructInternal};
+    pub use crate::shard::operations::point_ops::{
+        PointStructPersisted, VectorPersisted, VectorStructPersisted,
+    };
+    pub use crate::shard::operations::vector_ops::PointVectorsPersisted;
+}
+pub use todo_to_clean_up::*;
+
+pub mod internal {
+    pub use crate::shard::files::{clear_data, move_data};
+    pub use crate::shard::snapshots::snapshot_manifest::SnapshotManifest;
+}
+
+/// Re-export WAL configuration for advanced/embedded use cases.
+///
+/// Set it on [`crate::EdgeConfig`] via
+/// [`crate::EdgeConfigBuilder::wal_options`] (or by assigning the
+/// `wal_options` field directly) when the default 32 MiB segment capacity
+/// is too large — e.g. embedded/mobile deployments.
+pub use crate::wal::WalOptions;
+
+/// Re-export from external crates used by Qdrant.
+pub mod external {
+    pub use ordered_float;
+    pub use serde_json;
+    pub use uuid;
+}

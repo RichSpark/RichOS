@@ -13165,19 +13165,19 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/machine_storage.py",
-          "sha256": "f87442f68e065d272663f7c18cde6691f03c7b0d82aee34d63d20975b307f3b5",
+          "sha256": "d48c105e95b3fdbde3faa57a1dfe050498492b61dc69d56a6a22d2385c07b256",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         },
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "944ece1c61c41f58b4b9781889c571f050f4f54a9ed303d579124833eb536cfe",
+          "sha256": "51413dece9a707a8f209a71c358957874d4c189815f07051d3ec260580871160",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         },
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "944ece1c61c41f58b4b9781889c571f050f4f54a9ed303d579124833eb536cfe",
+          "sha256": "51413dece9a707a8f209a71c358957874d4c189815f07051d3ec260580871160",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -13279,19 +13279,19 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/machine_storage.py",
-          "sha256": "f87442f68e065d272663f7c18cde6691f03c7b0d82aee34d63d20975b307f3b5",
+          "sha256": "d48c105e95b3fdbde3faa57a1dfe050498492b61dc69d56a6a22d2385c07b256",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         },
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "944ece1c61c41f58b4b9781889c571f050f4f54a9ed303d579124833eb536cfe",
+          "sha256": "51413dece9a707a8f209a71c358957874d4c189815f07051d3ec260580871160",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         },
         {
           "root": "repository",
           "path": "richos/engine/scripts/lib/machine_settings.py",
-          "sha256": "944ece1c61c41f58b4b9781889c571f050f4f54a9ed303d579124833eb536cfe",
+          "sha256": "51413dece9a707a8f209a71c358957874d4c189815f07051d3ec260580871160",
           "evidence": "Fixed source for the standalone Rust developer tool and its Cargo/cache transport; only generation/check or Cargo summary RPC is invoked."
         }
       ]
@@ -15403,15 +15403,9 @@
         },
         {
           "root": "repository",
-          "path": "richos/app/scripts/run-tests.sh",
-          "sha256": "4a558a7d5a4ade72138d48aa8f2d27f8bce9911c669f13f91c9533efef8d27be",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/engine/scripts/ci-shard.sh",
-          "sha256": "1ec3e1e5392155266b2a96202f7bf6b4ace328a4401ccc41aa7ce99aee2b6867",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+          "path": "richos/app/scripts/nightly-local.py",
+          "sha256": "2566971f4e92f9294fe24ac5f2cd3cf8beb5f5b3779771df3052da2e71a3e731",
+          "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
           "root": "repository",
@@ -15423,18 +15417,6 @@
           "root": "repository",
           "path": "richos/engine/scripts/lib/ci-receipts.py",
           "sha256": "df136c1f95c415d9399526cc2c583275a1e86d8662088d156e95a847287b1973",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/engine/scripts/lib/engine_pass.py",
-          "sha256": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
-          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
-        },
-        {
-          "root": "repository",
-          "path": "richos/engine/scripts/lib/cpu_guard.py",
-          "sha256": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15451,14 +15433,38 @@
         },
         {
           "root": "repository",
-          "path": "richos/mobile/native-ios/bin/rios",
-          "sha256": "30ec0c68a4bf5aa41e1678d51238534b9801c370b3803f90ee9442483b049636",
+          "path": "richos/mobile/native-ios/Release/simulator-tests.sh",
+          "sha256": "f30c320722096a5aab894c8a09dfbee059b655e1335ececebace5c8c560871db",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
           "root": "repository",
-          "path": "richos/mobile/native-ios/Release/simulator-tests.sh",
-          "sha256": "f30c320722096a5aab894c8a09dfbee059b655e1335ececebace5c8c560871db",
+          "path": "richos/app/scripts/run-tests.sh",
+          "sha256": "4a558a7d5a4ade72138d48aa8f2d27f8bce9911c669f13f91c9533efef8d27be",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/ci-shard.sh",
+          "sha256": "1ec3e1e5392155266b2a96202f7bf6b4ace328a4401ccc41aa7ce99aee2b6867",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/engine_pass.py",
+          "sha256": "2e3f0b9af618bd5b5a726ca370474ac20ac99277e26f0256b29e88bd6c83005c",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/engine/scripts/lib/cpu_guard.py",
+          "sha256": "a2ffcb1538ddd47a523a74a7fff453e7911c798c0b585f77ac2b303a600759a0",
+          "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
+        },
+        {
+          "root": "repository",
+          "path": "richos/mobile/native-ios/bin/rios",
+          "sha256": "30ec0c68a4bf5aa41e1678d51238534b9801c370b3803f90ee9442483b049636",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15524,7 +15530,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "c5e7933b4d93a61959cb871ba557e18b4be287ee7af4d65cd7fac2c2fbdc7775",
+          "sha256": "2566971f4e92f9294fe24ac5f2cd3cf8beb5f5b3779771df3052da2e71a3e731",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -16927,7 +16933,7 @@
     },
     "scripts/lib/machine_settings.py": {
       "source": "scripts/lib/machine_settings.py",
-      "sha256": "944ece1c61c41f58b4b9781889c571f050f4f54a9ed303d579124833eb536cfe",
+      "sha256": "51413dece9a707a8f209a71c358957874d4c189815f07051d3ec260580871160",
       "evidence": "Literal private settings and root validation; fixture callers supply isolated HOME/selector or direct fixture environments. No shell/file evaluation, no process ownership or cleanup authority. Renewed 2026-10-13: restore the existing RICHOS_NATIVE_ANDROID_CACHE key and derive RANDROID_CACHE when absent, preserving explicit current-name precedence and resolved snapshots. Fixture-supplied selectors and environments remain the input boundary; no new process or file reader. 2026-10-28: the engine's own stores (land locks and records, the workspace registry fallback, the second-review ledger) resolve their home through machine_settings.claude_home(), which reads the environment RICHOS_CLAUDE_HOME, else CLAUDE_CONFIG_DIR, else HOME/.claude; Claude Code's own sessions/ and projects/ still follow CLAUDE_CONFIG_DIR. Renewed 2026-10-29: limit() reads whole-number machine limits (TESTVM_MEMORY_FLOOR_MB) from the environment, else limits.env beside .env under the same HOME (or the absolute RICHOS_LIMITS_FILE), else the caller's stated default; .env parsing and KEYS are unchanged. Fixture callers supply HOME or RICHOS_LIMITS_FILE, the same boundary as RICHOS_ENV_FILE; no process.",
       "keys": [],
       "edges": []
@@ -18745,7 +18751,7 @@
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
         "scripts/lib/publication-boundary-cache.test.py": "26e050d865dcc217075d8882f3b0b969c65124b038d9606bab945416b56a7d34",
-        "scripts/lib/machine_settings.py": "944ece1c61c41f58b4b9781889c571f050f4f54a9ed303d579124833eb536cfe"
+        "scripts/lib/machine_settings.py": "51413dece9a707a8f209a71c358957874d4c189815f07051d3ec260580871160"
       },
       "evidence": "Only the two publication guard registrations are queried on plugin and seated surfaces. Probe and installer source are assertion data. Seated observation compares every raw line containing a named guard prefix plus every parsed dispatcher command across all events; this covers the helper direct grep and dispatcher-key lookup without approximating its verdict. The dispatcher manifest is bound as an additional input. Probe is inspected as source only: named registration grep and, where present, rootless-block source assertions. Only unrelated literal BR_EXPECTED rows may differ; all other probe bytes are preserved.",
       "seated_text_needles": [

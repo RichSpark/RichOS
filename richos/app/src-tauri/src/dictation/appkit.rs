@@ -120,6 +120,20 @@ impl Win {
         }
     }
 
+    /// Where the window is now (top-left points): after the person dragged it, this is the truth.
+    pub fn frame(self) -> Rect {
+        // SAFETY: a live NSWindow, on the main thread; `frame` is a documented getter.
+        let r: NSRect = unsafe { msg_send![self.0, frame] };
+        from_cocoa(r.cocoa(), primary_height())
+    }
+
+    /// Whether the window is on screen now.
+    pub fn is_visible(self) -> bool {
+        // SAFETY: a live NSWindow, on the main thread; `isVisible` is a documented getter.
+        let b: Bool = unsafe { msg_send![self.0, isVisible] };
+        b.as_bool()
+    }
+
     /// Above every app, on every Space, over full-screen apps, never in the window cycle.
     pub fn float_everywhere(self) {
         // SAFETY: as above; documented NSWindow setters.

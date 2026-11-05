@@ -2044,6 +2044,7 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             "CODEX_COORDINATION_ROOT":profile.codex_root, "RICHOS_CHANNEL_ENGINE":profile.engine,"RICHOS_CHANNEL_PYTHON":profile.runtime.python,
             "PYTHONDONTWRITEBYTECODE":"1"});
     }
+    search_server(&mut config, executable, role, crate::search_tools::endpoint_file());
     // **The continuity tools read THEIR OWN scope file, not the hook's** — the two differ in
     // one flag and in when it opens (`prepare_work_turn`'s note, and the measurement that
     // forced it). `continuity_tools_scope` is `None` only on a lease with no bridge, where
@@ -2067,6 +2068,21 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             "args":args, "env":{"PYTHONDONTWRITEBYTECODE":"1"}});
     }
     config
+}
+
+/// Add `richos_search` to a CONVERSATION lease's servers when the app serves document search,
+/// and to no other lease. Separate from [`mcp_config`] so a test can name the endpoint without
+/// the process-wide one.
+fn search_server(config: &mut Value, executable: &Path, role: LeaseRole, endpoint: Option<&Path>) {
+    if role != LeaseRole::Conversation {
+        return;
+    }
+    if let Some(endpoint) = endpoint {
+        config["mcpServers"][crate::search_tools::SERVER_NAME] = json!({
+            "type": "stdio", "command": executable,
+            "args": ["--search-mcp", endpoint]
+        });
+    }
 }
 
 /// Resume from the existing scoped engine binding and the native transcript it witnessed.
@@ -5957,7 +5973,7 @@ while True:
             codex_root: root.join("codex-coordination"),
             user: Default::default(),
 
-            claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default(),
+            claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
     }
 
@@ -6354,6 +6370,23 @@ exec /bin/sleep 1000
     /// sentence as a measurement. It is written as an exact set on purpose: a test that
     /// asserted only `richos_work`'s absence would go on passing if a fifth server appeared
     /// beside it, and "no orchestration tools" is a claim about everything on the lease.
+    /// **Rich's document search goes to his conversation and nowhere else** (search PRD v3.1:
+    /// *"Other company or worker bindings receive no archive access."*), and only once the app
+    /// serves it: no endpoint, no server entry.
+    #[test]
+    fn the_search_tool_is_offered_to_the_conversation_only_and_only_with_an_endpoint() {
+        let executable = Path::new("/Applications/RichOS.app/Contents/MacOS/RichOS");
+        let endpoint = Path::new("/fixture/search-endpoint.json");
+        let mut chat = json!({"mcpServers": {}});
+        search_server(&mut chat, executable, LeaseRole::Conversation, None);
+        assert!(chat["mcpServers"].get(crate::search_tools::SERVER_NAME).is_none());
+        search_server(&mut chat, executable, LeaseRole::Conversation, Some(endpoint));
+        assert_eq!(chat["mcpServers"][crate::search_tools::SERVER_NAME]["args"], json!(["--search-mcp", endpoint]));
+        let mut work = json!({"mcpServers": {}});
+        search_server(&mut work, executable, LeaseRole::Work, Some(endpoint));
+        assert!(work["mcpServers"].get(crate::search_tools::SERVER_NAME).is_none(), "a worker got the CEO's archive");
+    }
+
     #[test]
     fn rich_has_the_register_and_full_evidence_while_stu_has_execution() {
         let root = fixture_root().join(format!("mcp-inventory-{}", uuid::Uuid::new_v4()));
@@ -9247,7 +9280,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(), user: Default::default(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                codex_root:root.join("codex-coordination"), work_scope:None, claude_account: None, token_sink: None, speech_model: None, lease_models: Default::default(), machine_settings: Default::default()
+                codex_root:root.join("codex-coordination"), work_scope:None, claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, lease_models: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

@@ -150,6 +150,9 @@ mod mobile_mac_server;
 /// than a URL opener: the how-to screens need five fixed destinations, so the command takes the
 /// address as a key into a table rather than as data to act on.
 mod opener;
+// DOCUMENT SEARCH (search PRD v3.1): the palette's Documents section, Super Finder, Open
+// original and the socket Rich's search tool reaches it through.
+mod doc_search;
 /// **A file Rich puts in front of the user** (§138, item 12): the cards' items, open and Show in
 /// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
 mod rich_files_host;
@@ -177,6 +180,10 @@ mod git_name_host;
 mod dictation;
 #[cfg(target_os = "macos")]
 mod dictation_app;
+// Meeting notes (Granola PRD V4): the watcher, the floating panel and the capture, around
+// `richos_core::meeting`'s one prompt/capture state. macOS only, like `dictation` (its windows).
+#[cfg(target_os = "macos")]
+mod meetings;
 #[cfg(target_os = "macos")]
 mod writing_host;
 
@@ -505,6 +512,15 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
 ///
 /// That is the same shape as the `lease_ready` snapshot fixed earlier the same day: an answer
 /// cached before the thing it describes existed. `run_setup` writes both cells.
+/// The corpus meeting notes are kept in: the corpus install's root, else `~/RichOS/corpus` (the
+/// service's own default). One rule for capture (`meetings.rs`) and for Rich's read access.
+fn meetings_corpus_root(install: Option<&richos_core::loro::LoroInstall>) -> PathBuf {
+    match install {
+        Some(install) => install.root().path().to_path_buf(),
+        None => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join("RichOS/corpus"),
+    }
+}
+
 struct EngineLeaseFactory {
     quota: Arc<richos_core::quota::Service>,
     claude_bin: Arc<Mutex<PathBuf>>,
@@ -537,6 +553,11 @@ struct EngineLeaseFactory {
     /// `spawn_chat` because a lease is spawned mid-turn, from inside the spine's mutex, and
     /// reading global state there is what this file keeps off the hot path on purpose.
     explicit_engine: bool,
+    /// **The corpus install, for the company meeting folder Rich may read** (Granola PRD V4,
+    /// "Notes and history through Rich"): the SAME cell as `AppState::loro_install`, read in
+    /// `spawn_chat` under the spine's mutex, the order `provision_memory` already takes them in
+    /// (spine, then this). Given to the CONVERSATION lease only.
+    loro_install: Arc<Mutex<Option<richos_core::loro::LoroInstall>>>,
 }
 
 impl LeaseFactory for EngineLeaseFactory {
@@ -709,6 +730,16 @@ impl EngineLeaseFactory {
         profile.install_quota_gate(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
         profile.install_git_name_wait(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
 
+        // This company's meeting notes (Granola PRD V4): the folder is made here when the corpus
+        // exists, so a meeting recorded later in this lease is already readable.
+        let corpus = meetings_corpus_root(self.loro_install.lock().unwrap().as_ref());
+        if let (Some(binding), true) = (binding, corpus.is_dir()) {
+            let zone = richos_core::meeting_notes::meeting_zone(&corpus, Some(binding.entity_id().as_str()));
+            if let Err(e) = std::fs::create_dir_all(&zone) {
+                eprintln!("[richos] meeting notes: {} could not be made for Rich to read: {e}", zone.display());
+            }
+        }
+        profile.meetings_corpus = Some(corpus);
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
@@ -823,6 +854,11 @@ struct AppState {
     /// that locked the spine would fire only after the work it meant to interrupt had
     /// already ended. This is the same `Arc` the spine holds, reached without the lock.
     control: TurnControl,
+    /// DOCUMENT SEARCH (`doc_search.rs`): the one search service for the palette and Rich's
+    /// tool, started at launch; text search answers as soon as the folder is read.
+    search: richos_search::SearchService,
+    /// The socket Rich's `richos_search` tool reaches the service through; closed at exit.
+    search_socket: Option<richos_core::search_tools::SearchSocket>,
     /// THE LORO CORRECTION DESK (open-items 3.5). Its writer comes from the SAME
     /// `LoroInstall` the read half was built from (`memory::wire_company_memory`), so the
     /// record the CEO is shown and the record his confirmation writes to cannot be two
@@ -905,7 +941,10 @@ struct AppState {
     ///
     /// `None` on every install with no corpus, which is an ordinary state and not an error:
     /// the home screen then keeps drawing the demonstration, with its banner up.
-    loro_install: Mutex<Option<richos_core::loro::LoroInstall>>,
+    ///
+    /// An `Arc` since the meeting folder grant (Granola PRD V4): the lease factory reads the
+    /// corpus root through the same cell when it scopes Rich to a company's meeting folder.
+    loro_install: Arc<Mutex<Option<richos_core::loro::LoroInstall>>>,
     /// The same `Arc` the spine holds. Kept here so provisioning can re-run
     /// `wire_company_memory` with the provenance sink the correction desk reads from — a
     /// second `SliceProvenance` would mean the desk could not propose against a slice the
@@ -2301,6 +2340,18 @@ fn main() {
     // conversation lease; this is what it answers "what is running", "what is waiting for
     // me" and "what finished" with instead, and it reads the record on disk without calling
     // the back end or changing anything.
+    // RICH'S DOCUMENT SEARCH (`richos-core`'s `search_tools.rs`): the same shape as the status
+    // read below. It holds no index and no model; it carries each call to the running app's
+    // search socket and returns the app's answer.
+    if first.as_deref() == Some(std::ffi::OsStr::new("--search-mcp")) {
+        let result = args.next().ok_or_else(|| "Missing search endpoint".to_string())
+            .and_then(|endpoint| richos_core::search_tools::run_stdio(Path::new(&endpoint)).map_err(|e| e.to_string()));
+        if let Err(error) = result {
+            eprintln!("Search tool server: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if first.as_deref() == Some(std::ffi::OsStr::new("--status-mcp")) {
         let result = args.next().ok_or_else(|| "Missing status scope".to_string())
             // **The screen reader goes with it** — the CEO's ruling §56. This arm IS the app's
@@ -3087,7 +3138,7 @@ fn main() {
             let memory_status = wired.status;
             // AND THE RESOLUTION, kept whole. `home_field_data` compiles the home screen's
             // picture out of this and must not lock the spine to reach it.
-            let loro_install = wired.install;
+            let loro_install = Arc::new(Mutex::new(wired.install));
 
             // Attach the compute lease. A boot with no Claude auth, no `claude` binary, or a
             // binary that rejects our flags does NOT silently degrade: no lease is attached
@@ -3241,6 +3292,7 @@ fn main() {
                 engine_dir: Arc::clone(&engine_cell),
                 data_dir: data_dir.clone(),
                 explicit_engine,
+                loro_install: Arc::clone(&loro_install),
             };
             spine.set_lease_factory(Box::new(lease_factory()));
             // **THE WORK HOST — the background-work spec §2.1's second lease, and a SECOND
@@ -3399,6 +3451,17 @@ fn main() {
                     eprintln!("[richos] numeric checkpoint could not be saved: {error}");
                 }
             }
+
+            // DOCUMENT SEARCH, started before the first lease so every conversation lease is
+            // offered Rich's search tool. Reading the folder and building the meaning index run
+            // on the service's own utility-priority thread; a running turn makes indexing step
+            // aside briefly before each passage (information, not a scheduler).
+            let search = {
+                let busy_control = control.clone();
+                let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+                doc_search::start(&home, std::sync::Arc::new(move || busy_control.has_active_turns()))
+            };
+            let search_socket = doc_search::serve_tool(&search, &data_dir);
 
             // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
             //
@@ -3623,12 +3686,14 @@ fn main() {
                 entity_source: Mutex::new(boot.source),
                 nav: Mutex::new(nav_store),
                 control,
+                search,
+                search_socket,
                 correction: Mutex::new(correction),
                 spoken,
                 feedback,
                 launch: Mutex::new(launch_store),
                 memory: Mutex::new(memory_status),
-                loro_install: Mutex::new(loro_install),
+                loro_install: Arc::clone(&loro_install),
                 loro_provenance,
                 // KEPT, not re-derived. `provision_memory` opens the correction desk's log
                 // beside the ledger, and it must be the SAME directory this boot used —
@@ -3675,6 +3740,10 @@ fn main() {
             // one by itself once it can go, from this launch on.
             app.manage(bug_report::BugReports::for_app(&attachments_home, &app.package_info().version.to_string()));
             bug_report::spawn_retry(app.handle().clone());
+            // MEETING NOTES (Granola PRD V4): the microphone watcher, the prompt and the capture.
+            // After AppState exists: a meeting's company is read from the active conversation.
+            #[cfg(target_os = "macos")]
+            meetings::start(app.handle());
             // DICTATION (plan slice 1): when dictation.json says on, the tool starts as this
             // app's child, on a thread of its own so first paint never waits for it.
             #[cfg(target_os = "macos")]
@@ -4030,6 +4099,18 @@ fn main() {
             // --- "Let Codex review your team's work" (round 20.2, ruling §114) — appended ---
             codex_reviews_status,
             codex_reviews_set,
+            // --- document search (search PRD v3.1, 2026-10-13) — appended, never reordered ---
+            search_documents,
+            search_documents_status,
+            open_search_document,
+            // --- Meeting notes (Granola PRD V4) — appended ---
+            meetings::meeting_panel_state,
+            meetings::meeting_panel_laid_out,
+            meetings::meeting_panel_drag,
+            meetings::meeting_answer,
+            meetings::meeting_start_or_stop,
+            meetings::meeting_set_paused,
+            meetings::meeting_state,
             // --- the user's own team on the home screen (product hunt 2026-10-15, finding 7)
             // — appended ---
             home_team,
@@ -4156,17 +4237,28 @@ fn main() {
             // `applicationShouldHandleReopen` through tao and wry
             // (`tauri-runtime-wry-2.11.4/src/lib.rs:4391-4394`).
             if let tauri::RunEvent::Reopen { has_visible_windows, .. } = &event {
-                if !has_visible_windows {
-                    // **OFF THE EVENT-LOOP CALLBACK, deliberately.** Building a window is a
-                    // runtime message, and issuing one from inside the callback the runtime
-                    // is currently dispatching is the shape that deadlocks; a spawned thread
-                    // is the path Tauri documents for window creation from anywhere. The
-                    // Dock click has already happened, so nothing is waiting on this return.
-                    let handle = handle.clone();
-                    std::thread::spawn(move || reopen_window(&handle));
-                }
+                // **OFF THE EVENT-LOOP CALLBACK, deliberately.** Building a window is a
+                // runtime message, and issuing one from inside the callback the runtime
+                // is currently dispatching is the shape that deadlocks; a spawned thread
+                // is the path Tauri documents for window creation from anywhere. The
+                // Dock click has already happened, so nothing is waiting on this return.
+                // A visible meeting panel (a prompt, the voice bar) is a visible window to
+                // macOS too: with the conversation window closed or hidden, the click
+                // brings the conversation back all the same.
+                let visible = *has_visible_windows;
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let shown = conversation_window(&handle).is_some_and(|w| w.is_visible().unwrap_or(false));
+                    if !visible || !shown {
+                        reopen_window(&handle);
+                    }
+                });
             }
             if let tauri::RunEvent::Exit = event {
+                // A meeting being recorded is finished and kept FIRST, before the quit's own
+                // two-second bound below starts: its files and its notes are his data
+                // (handover review rv-20261013T145354Z-da4ac5cf-c86a #1).
+                meetings::quit(handle);
                 #[cfg(target_os = "macos")]
                 if let Some(writing)=handle.try_state::<Arc<writing_host::Host>>() {writing.stop();}
                 if let Some(resources) = handle.try_state::<ResourceMonitor>() {
@@ -4190,6 +4282,10 @@ fn main() {
                     // every lease's supervisor after them (reap gap 1.3(c)).
                     let quit_bound = std::time::Instant::now() + std::time::Duration::from_secs(2);
                     state.quota.shutdown();
+                    if let Some(socket) = &state.search_socket {
+                        socket.close();
+                    }
+                    state.search.shutdown();
                     let _ = state.control.request_stop_all();
                     state.control.shutdown_leases();
                     // **The WORK lease is stopped BY NAME, because nothing else reaches it**
@@ -6802,6 +6898,26 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
 
     hits.truncate(limit);
     hits
+}
+
+/// One page of the palette's Documents section (`doc_search.rs`). Navigation hits stay with
+/// `search_nav`, unchanged by either checkbox.
+#[richos_command::command]
+fn search_documents(state: State<AppState>, request: richos_search::SearchRequest) -> richos_search::SearchResponse {
+    doc_search::search(&state.search, request)
+}
+
+/// Ready, indexing or unavailable, and where the index is kept, for the status line.
+#[richos_command::command]
+fn search_documents_status(state: State<AppState>) -> richos_search::Status {
+    doc_search::status(&state.search)
+}
+
+/// **Open original**: a source ID from the renderer, resolved and revalidated by the host, and
+/// only then a canonical path handed to `/usr/bin/open` (`doc_search::open`).
+#[richos_command::command]
+fn open_search_document(state: State<AppState>, source_id: String) -> Result<(), String> {
+    doc_search::open(&state.search, &source_id)
 }
 
 // ---- durable navigation view state (nav.rs) -------------------------------------------
@@ -10054,15 +10170,23 @@ fn ask_before_quitting(app: AppHandle) {
     });
 }
 
+/// **The conversation window**, by the label the app's config gives it, never whichever window
+/// happens to exist first: the meeting panel is a window too, built once and kept hidden between
+/// prompts, and with the conversation window closed a Dock click showed that panel and never
+/// rebuilt the conversation (rv-20261014T102219Z-327302f1-92f6, `fixtures/reopen_panel.py`).
+fn conversation_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    app.config().app.windows.first().and_then(|config| app.get_webview_window(&config.label))
+}
+
 /// **The way back into a window** — the Dock icon (§2.4), and the quit question's own
 /// precondition.
 ///
-/// A window that is merely hidden is shown; otherwise one is built from the same config the
-/// boot path builds from, with the geometry he left it at. It is a `SecondWindow` launch:
-/// nothing begins, no opening screen, no count (`launch.rs:149-151`) — this is a window
-/// coming back on a run that never stopped, which is exactly what that kind is for.
+/// The conversation window ([`conversation_window`]) when it is merely hidden is shown;
+/// otherwise one is built from the same config the boot path builds from, with the geometry he
+/// left it at. It is a `SecondWindow` launch: nothing begins, no opening screen, no count
+/// (`launch.rs:149-151`) — this is a window coming back on a run that never stopped, which is exactly what that kind is for.
 fn reopen_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = conversation_window(app) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -10338,6 +10462,28 @@ mod onboarding_decline_tests;
 
 #[cfg(test)]
 mod turn_boundary_tests;
+
+#[cfg(test)]
+mod reopen_tests {
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::WebviewWindowBuilder;
+
+    #[test]
+    fn a_dock_click_finds_the_conversation_window_and_never_the_meeting_panel() {
+        let mut context = mock_context(noop_assets());
+        // The app's own config declares one window, with the default label ("main").
+        context.config_mut().app.windows = vec![tauri::utils::config::WindowConfig::default()];
+        let app = mock_builder().build(context).expect("the mock app builds");
+        // The conversation window closed; the meeting panel kept, hidden.
+        WebviewWindowBuilder::new(&app, "meeting-panel", Default::default()).visible(false).build().expect("the panel builds");
+        assert!(
+            super::conversation_window(app.handle()).is_none(),
+            "the hidden meeting panel was taken for the conversation window, so it is shown and the conversation is never rebuilt"
+        );
+        WebviewWindowBuilder::new(&app, "main", Default::default()).build().expect("the conversation window builds");
+        assert_eq!(super::conversation_window(app.handle()).map(|w| w.label().to_string()).as_deref(), Some("main"));
+    }
+}
 
 struct ResourceMonitor(Mutex<Option<richos_core::system_resources::Monitor>>);
 

@@ -5,7 +5,7 @@ import subprocess
 import threading
 import time
 import tomllib
-from common import APP, Refusal, finish_group, tracked
+from common import APP, THIRD_PARTY, Refusal, finish_group, tracked
 
 # WAITING FOR CARGO'S LOCK IS QUEUEING, NEVER CLIPPY'S WORK (audit R12,
 # docs/verification/2026-09-29-load-sensitive-checks-audit.md). Cargo prints this line on
@@ -29,7 +29,7 @@ def lint_rules(root):
     """Record actual lint IDs, levels and package inheritance, not just counts."""
     rules = {"toolchain-default-diagnostics": "blocking-count-ceiling"}
     for path in tracked(root):
-        if not path.startswith(APP) or Path(path).name != "Cargo.toml":
+        if not path.startswith(APP) or path.startswith(THIRD_PARTY) or Path(path).name != "Cargo.toml":
             continue
         data = tomllib.loads((root / path).read_text())
         tables = {"package": data.get("lints", {}), "workspace": data.get("workspace", {}).get("lints", {})}

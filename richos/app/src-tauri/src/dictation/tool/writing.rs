@@ -216,7 +216,7 @@ impl Tool {
         self.show_writing();
     }
     pub(super) fn writing_action(&mut self,act:&str,id:Option<&str>) {
-        if !self.assistance.as_ref().is_some_and(|a|Some(a.id.as_str())==id) {return}
+        if self.assistance.as_ref().is_none_or(|a|Some(a.id.as_str())!=id) {return}
         match act {
             "writing-cancel"=>{
                 if self.instruction_recording() {self.cancel_recording();}

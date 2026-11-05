@@ -312,6 +312,11 @@ impl delivery::Relay for Https {
 /// [`WRITE_DEADLINE`]; the child is killed when it outlasts it (CEO §54: whatever this app
 /// starts, it ends).
 fn ask_rich(app: &AppHandle, bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str) -> Result<String, String> {
+    ask_rich_within(app, bin, folder, cwd, input, WRITE_DEADLINE)
+}
+
+/// Meeting notes share the verified Rich plugin and account handling with bug reports.
+pub(crate) fn ask_rich_within(app: &AppHandle, bin: &Path, folder: Option<&Path>, cwd: &Path, input: &str, deadline: Duration) -> Result<String, String> {
     let plugin = app.state::<crate::AppState>().engine_dir.lock().unwrap().join("app");
     richos_core::skills::verify_present(&plugin)
         .map_err(|(path, why)| format!("Rich's instructions are unavailable at {}: {why}", path.display()))?;
@@ -346,7 +351,7 @@ fn ask_rich(app: &AppHandle, bin: &Path, folder: Option<&Path>, cwd: &Path, inpu
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() < WRITE_DEADLINE => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) if started.elapsed() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
                 best_effort("stopping it", child.kill());
                 best_effort("reaping it", child.wait());
@@ -361,7 +366,7 @@ fn ask_rich(app: &AppHandle, bin: &Path, folder: Option<&Path>, cwd: &Path, inpu
     bug::result_text(&out)
 }
 
-fn claude_for(state: &crate::AppState) -> (PathBuf, Option<PathBuf>) {
+pub(crate) fn claude_for(state: &crate::AppState) -> (PathBuf, Option<PathBuf>) {
     let bin = state.claude_bin.lock().map(|b| b.clone()).unwrap_or_else(|_| richos_core::native::resolve_claude_bin());
     (bin, state.quota.lease_account().folder)
 }
