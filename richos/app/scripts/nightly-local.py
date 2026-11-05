@@ -186,6 +186,14 @@ ROOT = Path(__file__).resolve().parents[3]
 REPO = "RichSpark/RichOS"
 SCRIPTS = Path("richos/app/scripts")
 GUI_BOOT_SUITE = SCRIPTS / "gui-boot.test.sh"
+# These scripts build/transport/check the synthetic GUI fixture. Their sources are
+# not compiled into the release app. Product, companion source and packaging changes
+# remain outside this exception: an old candidate cannot borrow their verdict.
+GUI_PROOF_HARNESS = frozenset(str(SCRIPTS / name) for name in (
+    "gui-boot.test.sh", "gui-boot-launch-lines.unaccounted",
+    "lib/gui-launch.sh", "prepare-companion.py",
+    "gui-launch-env.test.sh", "companion-macos.test.sh", "run-tests.test.sh",
+))
 
 # THE ONLY DECLARED HOST GAP OF THIS BUILD. `run-tests.sh` discovers every *.test.sh beside
 # it from disk and runs each with no arguments; a suite that answers "this host cannot
@@ -3001,17 +3009,15 @@ class Runner:
         if (info.get("screen_suites_required") and fields.get("gui-boot_commit") not in accepted
                 and not self.only_the_checker_changed(fields.get("gui-boot_commit", ""), accepted)):
             raise ValueError("--gui-proof gui-boot source is not this candidate's source or build "
-                             f"commit, nor a descendant of one that changes only {GUI_BOOT_SUITE}")
+                             "commit, nor a descendant of one that changes only the GUI proof harness")
         return fields
 
     def only_the_checker_changed(self, sha, accepted):
-        """True when `sha` descends from one of `accepted` and changed nothing but the suite.
+        """Require candidate ancestry and unchanged product inputs for a fixture retake.
 
-        gui-boot boots a debug binary compiled from the commit it ran at. A commit that adds
-        only a fix to `gui-boot.test.sh` itself compiles the candidate's product source
-        unchanged, so its verdict is about this candidate; without this, a wrong self-test
-        could be fixed only by rebuilding a candidate that had passed everything else
-        (nightly 58, 2026-10-15). Any other changed file, or no ancestry, is refused.
+        A fix to the synthetic bundle or its accounting need not rebuild a signed
+        candidate. Only the enumerated harness files may differ. A shipped source,
+        manifest, resource or packaging change is refused, including a UI-only fix.
         """
         if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
             return False
@@ -3031,7 +3037,7 @@ class Runner:
                 continue
             changed = git("diff", "--name-only", base, sha)
             if changed is not None and changed.returncode == 0 \
-                    and set(changed.stdout.split()) <= {str(GUI_BOOT_SUITE)}:
+                    and set(changed.stdout.split()) <= GUI_PROOF_HARNESS:
                 return True
         return False
 

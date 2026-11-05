@@ -102,9 +102,9 @@
 #
 # IN A TEST-VM GUEST the same cases run unchanged. `run-tests.sh` under RICHOS_GUI_HOST hands
 # this file to `testvm/run-suite.sh`, which builds richos-tauri and the gui_boot_machine
-# example on the host (the guest has no cargo and no checkout) and runs this suite in the
-# guest with RICHOS_GUI_PREBUILT naming them: PREBUILT MODE in lib/gui-launch.sh. The only
-# difference is where the two executables were built; every case below still runs.
+# example and the capture companion on the host (the guest has no cargo and no checkout),
+# then runs this suite in the guest with RICHOS_GUI_PREBUILT naming all three executables:
+# PREBUILT MODE in lib/gui-launch.sh. Every case below still runs.
 #
 # =========================================================================================
 # C1-C5, AND WHY THE SUITE NOW CHECKS ITS OWN HARNESS BEFORE IT CHECKS THE PRODUCT
@@ -395,6 +395,32 @@ declare_rules() {
   resolved 'first-run setup' \
     '^\[richos\] first-run setup: nothing missing\.$' \
     'Claude Code and the engine are both installed where setup.rs looks (main.rs:1147, 57cd903)'
+
+  # Meeting notes starts during setup. Require the packaged sibling, rather than
+  # accepting the missing-companion diagnostic as an optional feature.
+  resolved 'meeting companion' \
+    '^\[richos\] meeting notes: companion /.+/Contents/MacOS/richos-companion$' \
+    'the capture companion beside the app executable (meetings.rs::start)'
+  routine '^\[richos\] meeting notes: the panel window is built$' \
+    'the hidden meeting panel was constructed'
+  routine '^\[richos\] meeting notes: the panel laid out [0-9]+ x [0-9]+( \(hidden\))?$' \
+    'the panel reports its measured layout'
+  routine '^\[richos\] meeting notes: microphone (in use|released): .+ \(pid [0-9]+\)$' \
+    'the companion observed a microphone owner transition'
+  routine '^\[richos\] meeting notes: the watcher ended; starting it again$' \
+    'a watcher completed and is restarted; watcher errors remain unaccounted'
+  refused 'meeting companion missing' \
+    '[richos] meeting notes: no capture companion beside this app; meeting prompts are off' \
+    'A shipped app must carry its capture companion.'
+  refused 'meeting watcher failed' \
+    '[richos] meeting notes: the watcher could not run: it exited with exit status: 1' \
+    'A companion that cannot watch is not a healthy meeting startup.'
+  refused 'meeting notes folder failed' \
+    '[richos] meeting notes: /m/meeting-notes could not be made for Rich to read: permission denied' \
+    'A failed notes folder cannot be certified by the healthy meeting startup rules.'
+  refused 'meeting panel failed' \
+    '[richos] meeting notes: the panel window could not be built: unavailable' \
+    'A panel construction failure must remain visible.'
 
   # -- lines that are facts about the launch, not about configuration ---------------------
   # `start` is the ORDINAL or `-`, and the dash is not an edge case: `start_ordinal()` is
@@ -928,6 +954,7 @@ healthy_log() {
 [richos] engine directory: /m/.claude/richos-engine (via engine install pointer, engine 1.2.0 as this build pins)
 [richos] compute connection: starts with the first cancellable request over /m/.local/bin/claude
 [richos] first-run setup: nothing missing.
+[richos] meeting notes: companion /m/Applications/RichOS.app/Contents/MacOS/richos-companion
 [richos] no RICHOS_SERVICE_BIN — spoken corrections will be recorded and asked, and confirming one will report that there is no vocabulary to write to
 [richos] boot complete — every line above is what this launch resolved
 LOG
@@ -939,6 +966,29 @@ if OUT="$(gui_account "$TMP/healthy.log" 2>&1)"; then
   ok "A0 the hand-written healthy log is accepted (the fixture the next four vary)"
 else
   bad "A0 the hand-written healthy log is accepted" "$(printf '%s' "$OUT" | tr '\n' ' ')"
+fi
+
+# The synchronous companion line is required. Optional healthy watcher/panel
+# output may race the boot-complete line, but cannot turn a failure into routine noise.
+{ healthy_log
+  printf '%s\n' \
+    '[richos] meeting notes: the panel window is built' \
+    '[richos] meeting notes: the panel laid out 420 x 200 (hidden)' \
+    '[richos] meeting notes: microphone in use: Zoom (pid 42)' \
+    '[richos] meeting notes: microphone released: Zoom (pid 42)' \
+    '[richos] meeting notes: the watcher ended; starting it again'
+} > "$TMP/meeting-healthy.log"
+if OUT="$(gui_account "$TMP/meeting-healthy.log" 2>&1)"; then
+  ok "A0a healthy meeting companion, watcher and panel lines are accounted for"
+else
+  bad "A0a healthy meeting startup lines are accounted for" "$OUT"
+fi
+healthy_log | grep -v '^\[richos\] meeting notes: companion ' > "$TMP/meeting-missing.log"
+OUT="$(gui_account "$TMP/meeting-missing.log" 2>&1)"; CODE=$?
+if [ "$CODE" -ne 0 ] && printf '%s' "$OUT" | grep -q 'NOT RESOLVED  meeting companion'; then
+  ok "A0b a missing meeting companion success line fails its own proof"
+else
+  bad "A0b a missing meeting companion line fails" "exit $CODE: $OUT"
 fi
 
 # A1 — the fourth instance, simulated. A new seam that cannot find its configuration prints
