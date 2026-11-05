@@ -554,6 +554,7 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
 }
 
 struct Tool {
+    timings: Option<super::timings::Timings>,
     live_preview: Option<Writing>,
     live_words: Option<String>,
     live_preview_paused: bool,
@@ -624,6 +625,7 @@ impl Tool {
         preview: Option<Problem>,
     ) -> Tool {
         Tool {
+            timings: None,
             live_preview: None,
             live_words: None,
             live_preview_paused: false,
@@ -840,19 +842,23 @@ impl Tool {
                     match update {
                         super::live_preview::Update::Words { text, sampled_at, decode_ms } => {
                             if sampled_at.elapsed() > Duration::from_secs(3) {
+                                if let Some(t) = &self.timings { t.event("preview_paused", serde_json::json!({"reason":"control_delivery_stale"})); }
                                 self.stop_live_preview();
                                 self.live_preview_paused = true;
                             } else {
+                                if let Some(t) = &mut self.timings { t.preview(decode_ms, sampled_at.elapsed().as_millis() as u64); }
                                 self.live_words = Some(text);
                                 log::line(&format!("preview decoded in {decode_ms} ms; recent window age {} ms", sampled_at.elapsed().as_millis()));
                             }
                         }
-                        super::live_preview::Update::Paused => {
+                        super::live_preview::Update::Paused { reason } => {
+                            if let Some(t) = &self.timings { t.event("preview_paused", serde_json::json!({"reason":reason})); }
                             self.stop_live_preview();
                             self.live_preview_paused = true;
                             log::line("preview paused for this recording; capture and final recognition continue");
                         }
                         super::live_preview::Update::Unavailable => {
+                            if let Some(t) = &self.timings { t.event("preview_unavailable", serde_json::json!({"reason":"model_unavailable"})); }
                             self.stop_live_preview();
                             self.live_words = None;
                             self.live_preview_paused = false;
@@ -1465,6 +1471,8 @@ impl Tool {
             }
         }) {
             Ok(c) => {
+                self.timings = Some(super::timings::Timings::new(self.capture_seq, &self.recording_model,
+                    self.settings.live_preview && self.cleaner_target.is_none(), &self.version));
                 self.drafts.recording_started(draft_now());
                 log::line(&format!("listening ({})", c.source_label));
                 self.capture = Some(c);
@@ -1480,11 +1488,14 @@ impl Tool {
                                 |update| { sender.send(Control::LivePreview { seq: capture_seq, update }).ok(); });
                         }));
                         if result.is_err() && !flag.load(Ordering::Acquire) {
-                            sender.send(Control::LivePreview { seq: capture_seq, update: super::live_preview::Update::Paused }).ok();
+                            sender.send(Control::LivePreview { seq: capture_seq, update: super::live_preview::Update::Paused { reason: "worker_panicked" } }).ok();
                         }
                     }) {
                         Ok(join) => self.live_preview = Some(Writing { stop, join }),
-                        Err(_) => self.live_preview_paused = true,
+                        Err(_) => {
+                            self.live_preview_paused = true;
+                            if let Some(t) = &self.timings { t.event("preview_paused", serde_json::json!({"reason":"worker_unavailable"})); }
+                        },
                     }
                 }
                 if let Some((id,_))=&self.cleaner_target{self.hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"listening".into(),payload:serde_json::json!({"key":self.settings.key()})});}
@@ -1498,9 +1509,12 @@ impl Tool {
     }
 
     fn stop(&mut self, duration_ms: u64) {
+        let mut timings = self.timings.take();
+        if let Some(t) = &mut timings { t.stop(); }
         // Dropping the capture closes the microphone.
         self.capture = None;
         self.stop_live_preview();
+        if let Some(t) = &timings { t.event("preview_stopped", serde_json::json!({})); }
         // A key menu panel may still own the keyboard after a vocabulary or
         // accuracy choice. Hide it before final decode and the single paste.
         self.close_menu();
@@ -1521,10 +1535,14 @@ impl Tool {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         match std::thread::Builder::new().name("dictation-write".into()).spawn(move || {
-            let text = TextContext { cleaner: target.as_deref().map(|id|(id,hub.as_ref())),
+            let mut timings = timings;
+            let text = TextContext { timings: timings.as_ref(), cleaner: target.as_deref().map(|id|(id,hub.as_ref())),
                                      vocabulary: vocabulary.as_ref(), vocabulary_revoked: &vocabulary_revoked,
                                      destination: destination.as_ref(), navigated: &navigated };
             let result = write(recording, duration_ms, &model, &data_dir, &app, &flag, text);
+            if let Some(t) = &mut timings {
+                t.finished(result.delivery.as_ref().map(|d| d.tag()).unwrap_or_else(|| match result.outcome { Ok(()) => "completed", Err(p) => p.tag() }));
+            }
             tx.send(Control::Written { seq:capture_seq, result }).ok();
         }) {
             Ok(join) => self.writing = Some(Writing { stop, join }),
@@ -1546,6 +1564,7 @@ impl Tool {
     }
 
     fn cancel_recording(&mut self) {
+        self.timings.take();
         self.capture_seq += 1;
         self.capture = None;
         self.stop_live_preview();
@@ -1585,6 +1604,7 @@ fn v_code_on_main(app: &tauri::AppHandle) -> u16 {
 /// One dictation, from the recording to the words in place, and where they landed on screen
 /// when Accessibility says. Never logs the words.
 struct TextContext<'a> {
+    timings: Option<&'a super::timings::Timings>,
     cleaner: Option<(&'a str, &'a Hub)>,
     vocabulary: Option<&'a super::vocabulary::Snapshot>,
     vocabulary_revoked: &'a AtomicBool,
@@ -1620,6 +1640,7 @@ fn pick_after_engine_lookup(
 
 /// The words in place: `Ok` with the problem to say afterwards (if any) and what was pasted where.
 fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &std::path::Path, app: &tauri::AppHandle, stop: &AtomicBool, text: TextContext<'_>) -> Result<WriteResult, Problem> {
+    let timings = text.timings;
     let secs = recording.secs();
     let then = match judge_recording(duration_ms, &recording) {
         Stopped::Refuse(p) => {
@@ -1653,6 +1674,7 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
     })?;
     let samples = recording.into_samples();
     let bound = decode_bound(samples.len());
+    if let Some(t) = timings { t.event("recognition_started", serde_json::json!({"model":id})); }
     let started = Instant::now();
     let transcript = {
         let scratch = Scratch::new(data_dir).map_err(|e| {
@@ -1670,6 +1692,7 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
         return Err(Problem::CouldNotWrite);
     }
     let latency = started.elapsed().as_millis();
+    if let Some(t) = timings { t.event("recognition_completed", serde_json::json!({"model":id,"recognition_ms":latency})); }
     let words = match judge_transcript(&transcript.0) {
         Ok(w) => w,
         Err(p) => {
@@ -1712,6 +1735,7 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
                 delivery: Some(insert::Delivery::NotAdded { copied: false, destination_changed: false }) });
         }
     };
+    if let Some(t) = timings { t.event("delivery_completed", serde_json::json!({"outcome":inserted.delivery.tag()})); }
     if inserted.delivery == insert::Delivery::DiscardedSecure {
         log::line("destination is secure; no paste, copy or retained draft");
         return Ok(WriteResult { outcome: Err(Problem::NoTextBox), words: None, draft: None, delivery: Some(inserted.delivery) });

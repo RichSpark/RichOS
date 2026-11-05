@@ -1447,7 +1447,7 @@ else
   if [ "$sign_mode" = "developer-id" ]; then
     codesign --force --sign "$wanted" --options runtime --timestamp "$rd_app" || { warn "RichDoctor could not be signed."; exit 1; }
     if [ "${RICHOS_NOTARIZE:-}" = "1" ]; then
-      rd_zip="$(mktemp -d)/RichDoctor.zip"
+      rd_zip="$(mktemp -d "${TMPDIR:?}/richdoctor-notary.XXXXXX")/RichDoctor.zip"
       /usr/bin/ditto -c -k --keepParent "$rd_app" "$rd_zip" || exit 1
       rd_submit="$(xcrun notarytool submit "$rd_zip" "${notary_args[@]}" --wait --output-format json 2>&1 || true)"
       rm -rf "$(dirname "$rd_zip")"
@@ -1473,7 +1473,7 @@ else
     warn "RichDoctor's Info.plist is not what it must be: identifier '$rd_id', version '$rd_version', macOS floor '$rd_floor', menu bar only '$rd_ui'."
     exit 1
   fi
-  rd_payload="$(mktemp -d)/RichDoctor"
+  rd_payload="$(mktemp -d "${TMPDIR:?}/richdoctor-payload.XXXXXX")/RichDoctor"
   mkdir -p "$rd_payload"
   python3 "$here/lib/updater_tar.py" build "$rd_app" "$rd_payload/RichDoctor.app.tar.gz" || exit 1
   python3 "$here/lib/updater_tar.py" verify "$rd_payload/RichDoctor.app.tar.gz" || exit 1
@@ -1557,7 +1557,7 @@ say ""
 say "checking the bundle for build-machine paths..."
 # Reuse the existing pinned-upstream policy boundary for both bundled runtimes.
 # Examples are accepted only in their exact reviewed file bytes, never by user name.
-path_policy_dir="$(mktemp -d "${TMPDIR:?}richcleaner-package.XXXXXX")" || exit 5
+path_policy_dir="$(mktemp -d "${TMPDIR:?}/richcleaner-package.XXXXXX")" || exit 5
 if ! python3 - "$here/runtime-sources.json" "$app_bundle/Contents/Resources/RichCleaner/manifest.json" "$path_policy_dir/policy.json" <<'PYPATHPOLICY'
 import json,pathlib,sys
 rows=[]
@@ -1745,7 +1745,7 @@ if [ "$sign_mode" = "developer-id" ]; then
     # notarytool takes an archive, not a bundle directory. ditto --keepParent is the
     # form Apple documents; `zip -r` loses symlinks inside frameworks and produces a
     # submission that is rejected for reasons that read like a signing problem.
-    zip_path="$(mktemp -d)/$(basename "$app_bundle" .app).zip"
+    zip_path="$(mktemp -d "${TMPDIR:?}/richos-notary.XXXXXX")/$(basename "$app_bundle" .app).zip"
     say ""
     say "submitting to Apple's notary service via $notary_desc (this waits; minutes, sometimes longer)..."
     if ! /usr/bin/ditto -c -k --keepParent "$app_bundle" "$zip_path"; then
