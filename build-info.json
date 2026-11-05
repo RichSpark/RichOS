@@ -1,11 +1,11 @@
 {
   "build": true,
-  "version": "1.2.8-nightly.20261102.88",
-  "tag": "v1.2.8-nightly.20261102.88",
-  "candidate_ref": "refs/candidates/88",
-  "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
-  "created_at": "2026-11-02T20:45:01.200831+00:00",
-  "run_id": "20261102T201147Z-2c3f8f1e",
+  "version": "1.2.9-nightly.20261105.89",
+  "tag": "v1.2.9-nightly.20261105.89",
+  "candidate_ref": "refs/candidates/89",
+  "source_commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
+  "created_at": "2026-11-05T08:18:47.408539+00:00",
+  "run_id": "20261105T073837Z-7001d14c",
   "run_attempt": "1",
   "channel": "nightly",
   "platform": "darwin-aarch64",
@@ -14,9 +14,9 @@
   "no_host_screen": true,
   "script_suites": {
     "jobs": 3,
-    "seconds": 1289,
-    "run_id": "20261102T201147Z-2c3f8f1e",
-    "commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
+    "seconds": 1421,
+    "run_id": "20261105T073837Z-7001d14c",
+    "commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
     "build": "desktop",
     "not_in_this_build": [
       {
@@ -106,8 +106,8 @@
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "fea154bc70e9ef84889d288f11efb58b3b91e053c002f876268f6d2d0dd47a61",
-        "reason": "inputs unchanged since run 20261101T062444Z-14c0fc25 (sha256 fea154bc70e9ef84889d288f11efb58b3b91e053c002f876268f6d2d0dd47a61)"
+        "inputs_sha256": "2e63b4ae42f5ab7f5323b47ec4188f103f3d214909b54937026fda57d5923410",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 2e63b4ae42f5ab7f5323b47ec4188f103f3d214909b54937026fda57d5923410)"
       },
       {
         "name": "autocheck-sidecars.test.sh",
@@ -119,11 +119,10 @@
       },
       {
         "name": "autocheck.test.sh",
-        "state": "skipped",
-        "seconds": 0,
+        "state": "passed",
+        "seconds": 520,
         "where": "host",
-        "inputs_sha256": "e57bf982d13397b4a137d9d331eeddb1bda69f9288b5d4e8414d4d478b562560",
-        "reason": "inputs unchanged since run 20261102T122140Z-a7b5daa3 (sha256 e57bf982d13397b4a137d9d331eeddb1bda69f9288b5d4e8414d4d478b562560)"
+        "inputs_sha256": "bf3ee1b53d4fb408ca921c275e11ddf5694cd8fdfd0d5632ddf62c8369630bf3"
       },
       {
         "name": "battery-check.test.sh",
@@ -146,8 +145,8 @@
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "029a41e7144e52e57c17b45bc1f0a9fffb3935f58f89883c706f507294389c37",
-        "reason": "inputs unchanged since run 20261101T062444Z-14c0fc25 (sha256 029a41e7144e52e57c17b45bc1f0a9fffb3935f58f89883c706f507294389c37)"
+        "inputs_sha256": "291b77ea23c87d2f978b167ad0a4a9195a30b2244ab76b7607ac081865af6cc1",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 291b77ea23c87d2f978b167ad0a4a9195a30b2244ab76b7607ac081865af6cc1)"
       },
       {
         "name": "cargo-cache-env.test.sh",
@@ -170,22 +169,22 @@
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "5e55059a96f5cc7223be7d600935c6d56d8b86c79a4c2abd50f9858f64e73b79",
-        "reason": "inputs unchanged since run 20261102T122140Z-a7b5daa3 (sha256 5e55059a96f5cc7223be7d600935c6d56d8b86c79a4c2abd50f9858f64e73b79)"
+        "inputs_sha256": "d523b956face84dfb549c5f83095d2b348f202fde80b1911334839e2976effc5",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 d523b956face84dfb549c5f83095d2b348f202fde80b1911334839e2976effc5)"
       },
       {
         "name": "claude-quota.test.sh",
         "state": "passed",
-        "seconds": 61,
+        "seconds": 522,
         "where": "host",
-        "inputs_sha256": "7f96378156f1b5b55c6bb2eff996c79a13252c8c51a13fe74ff5f433cc76dac6"
+        "inputs_sha256": "439eb63ada75e8b06c49c4c32fa21b4715e71543ff2c469a83c76948888b2fac"
       },
       {
         "name": "cleaner-host.test.sh",
         "state": "passed",
-        "seconds": 180,
+        "seconds": 604,
         "where": "host",
-        "inputs_sha256": "3e25743f686c3afcc84dee175bc72f2052e63b8f21ec0040bdfeec078d6a949f"
+        "inputs_sha256": "bf493f9510eb640dfb70f1613ce7b28eecd547eb2b0b10143e3c7d2c038ee9d8"
       },
       {
         "name": "cleaner-resources.test.sh",
@@ -197,10 +196,11 @@
       },
       {
         "name": "cleaner.test.sh",
-        "state": "passed",
-        "seconds": 103,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "0a7d1155eec0f6bbae36e49b6f0158b81bbde57fbd08225f24e5eeaff7f74792"
+        "inputs_sha256": "69e4b0e0d53da597675d7070f91f24dad9a01c258488b2341726e5213118e143",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 69e4b0e0d53da597675d7070f91f24dad9a01c258488b2341726e5213118e143)"
       },
       {
         "name": "connect-helper.test.sh",
@@ -212,10 +212,11 @@
       },
       {
         "name": "context-menu-probe.test.sh",
-        "state": "passed",
-        "seconds": 86,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "173620f5629118e388025889135071eccc208f86346784713968e8a2b3253acd"
+        "inputs_sha256": "da4e54f4f18c837a3a63061e4179bd2bfbb486cd58bc479c38b7ac0ea34c5666",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 da4e54f4f18c837a3a63061e4179bd2bfbb486cd58bc479c38b7ac0ea34c5666)"
       },
       {
         "name": "dependency-license-inventory.test.sh",
@@ -238,15 +239,16 @@
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "11b51d8293163dbab57dfaf1e95d8054f5fc136b056f0d20ed13771266a10535",
-        "reason": "inputs unchanged since run 20261101T062444Z-14c0fc25 (sha256 11b51d8293163dbab57dfaf1e95d8054f5fc136b056f0d20ed13771266a10535)"
+        "inputs_sha256": "ca9746d94684dea98e55116ae9cf0bcb78f752eb4ed0118ad49816ba96e81c2a",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 ca9746d94684dea98e55116ae9cf0bcb78f752eb4ed0118ad49816ba96e81c2a)"
       },
       {
         "name": "dictation-walk-helpers.test.sh",
-        "state": "passed",
-        "seconds": 80,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "82d715604e83b8dc01fe84ea671ef05dbde22738962e1a431be821a9c5422d88"
+        "inputs_sha256": "f88bc2e7f12b8edc1efa12fca061096c01e512267cc219fad873479844ffdb89",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 f88bc2e7f12b8edc1efa12fca061096c01e512267cc219fad873479844ffdb89)"
       },
       {
         "name": "episode-counter.test.sh",
@@ -259,9 +261,9 @@
       {
         "name": "example-setup.test.sh",
         "state": "passed",
-        "seconds": 60,
+        "seconds": 28,
         "where": "host",
-        "inputs_sha256": "66e0fa9eafeb75603163b147abfdde6d9969e663639e9ffcf0cb2fd5189c1e0f"
+        "inputs_sha256": "752e1f90fe80125360ba78c2195148c32a1939944c78833b7d17506ecf4887f9"
       },
       {
         "name": "extension-alerts.test.sh",
@@ -353,9 +355,9 @@
       {
         "name": "frontend-payload.test.sh",
         "state": "passed",
-        "seconds": 1,
+        "seconds": 31,
         "where": "host",
-        "inputs_sha256": "6fcaaaf5c4b815d45928932582671085ede7e6fdafc53d11e7fdce7ad0ce34e0"
+        "inputs_sha256": "a795e81feaee4d9d6181e6991ecca1c4c0ddbdf3a157a88e2725e9d73ceecda1"
       },
       {
         "name": "github-home.test.sh",
@@ -368,9 +370,9 @@
       {
         "name": "gui-boot-launch-lines.test.sh",
         "state": "passed",
-        "seconds": 31,
+        "seconds": 11,
         "where": "host",
-        "inputs_sha256": "2d07483afa000b0bd9bc9af34ec52e07a23e4dfdb790f7ca1e31d0be1c54b5e7"
+        "inputs_sha256": "39f014456f64db7d377c94e218e9c12c2541ae1c1cda908a9c912073aca917b3"
       },
       {
         "name": "gui-boot.test.sh",
@@ -405,48 +407,47 @@
       },
       {
         "name": "launch-send-queue.test.sh",
-        "state": "skipped",
-        "seconds": 0,
+        "state": "passed",
+        "seconds": 50,
         "where": "host",
-        "inputs_sha256": "3b47d1d6b7c51d032d232af3f89e55f2731665c783124363a2d9076eac702d79",
-        "reason": "inputs unchanged since run 20261102T030331Z-8359fe9f (sha256 3b47d1d6b7c51d032d232af3f89e55f2731665c783124363a2d9076eac702d79)"
+        "inputs_sha256": "3a8d2bbd262d8e8ae8ed479f023f1c93626b9bdf8cad6aacab1dec2f59189e2b"
       },
       {
         "name": "lint-regressions.test.sh",
-        "state": "skipped",
-        "seconds": 0,
+        "state": "passed",
+        "seconds": 38,
         "where": "host",
-        "inputs_sha256": "6c043f13660b7cfa94e22e12b3afa2e8b439856a6046c8f06ae794db0eae5394",
-        "reason": "inputs unchanged since run 20261102T122140Z-a7b5daa3 (sha256 6c043f13660b7cfa94e22e12b3afa2e8b439856a6046c8f06ae794db0eae5394)"
+        "inputs_sha256": "0cc34111e7e2595d4006351921c71b1aa6fcedf48ba5a9c9ce394591721d1abb"
       },
       {
         "name": "lint.test.sh",
         "state": "passed",
-        "seconds": 175,
+        "seconds": 217,
         "where": "host",
-        "inputs_sha256": "0bceb7ec212a05f3a11253dd43e703723b3231aeb1cde7cc2b1ce2066a7c1ce8"
+        "inputs_sha256": "054a01eda313ef4937138e2114fd7efc0730281f12d1f7dc9239a76b6e9b1efa"
       },
       {
         "name": "make-engine-asset.test.sh",
         "state": "passed",
-        "seconds": 315,
+        "seconds": 395,
         "where": "host",
-        "inputs_sha256": "deb1a5b066e13f4233bb4cbd81763ba9152e62f4c946c9bf832593cd3e61b6ee"
+        "inputs_sha256": "b2a34efc0ae6c8df77b62f96001d476bc29a447e8f9b58151e0bdf5899b7b673"
       },
       {
         "name": "make-release.test.sh",
-        "state": "passed",
-        "seconds": 110,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "29b632bd46a5a9a955b9b30e85f888bebbece82b338c7530d42da5857a4f21cd"
+        "inputs_sha256": "ccd2f4ca3e5c24e18d94f49d59103134628e811d16c39e1a4eab237e16e83a4c",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 ccd2f4ca3e5c24e18d94f49d59103134628e811d16c39e1a4eab237e16e83a4c)"
       },
       {
         "name": "merge-check-scope.test.sh",
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "caabb30cff47554dcd4088bbe43b4deaae9b2d28065f4942820127d95762698e",
-        "reason": "inputs unchanged since run 20261102T030331Z-8359fe9f (sha256 caabb30cff47554dcd4088bbe43b4deaae9b2d28065f4942820127d95762698e)"
+        "inputs_sha256": "2e2d4f03fe9582930d5258dff2930b59b099600ed6fdc2781ff982c90e57f97f",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 2e2d4f03fe9582930d5258dff2930b59b099600ed6fdc2781ff982c90e57f97f)"
       },
       {
         "name": "microphone-sentence.test.sh",
@@ -475,9 +476,9 @@
       {
         "name": "mobile-mac.test.sh",
         "state": "passed",
-        "seconds": 120,
+        "seconds": 441,
         "where": "host",
-        "inputs_sha256": "1b168924e09a256e18afff49614c239fde42eb9164f860949ebafd70e1cc17f7"
+        "inputs_sha256": "8d00adec4b6f20fdc5d75c4eba0514f94c29c7cb0fd8dadfd76f6c74b3bcfc3c"
       },
       {
         "name": "mobile-ship-gate.test.sh",
@@ -489,11 +490,10 @@
       },
       {
         "name": "native-conformance.test.sh",
-        "state": "skipped",
-        "seconds": 0,
+        "state": "passed",
+        "seconds": 187,
         "where": "host",
-        "inputs_sha256": "c02f06758e6293fe48f997a3f552b09adc4421bc5136e056323d3307449857bd",
-        "reason": "inputs unchanged since run 20261101T062444Z-14c0fc25 (sha256 c02f06758e6293fe48f997a3f552b09adc4421bc5136e056323d3307449857bd)"
+        "inputs_sha256": "545eadb170b6ecf9cf08a13aa139a5a2f31afef81e079f08f14249c3818eb197"
       },
       {
         "name": "nightly-engine.test.sh",
@@ -516,51 +516,53 @@
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "3b25e24f98d9d288982a8470d840c2757a4ef3e76486753836bda0c4bb6f073c",
-        "reason": "inputs unchanged since run 20261102T122140Z-a7b5daa3 (sha256 3b25e24f98d9d288982a8470d840c2757a4ef3e76486753836bda0c4bb6f073c)"
+        "inputs_sha256": "394bcbf4fc98109dcdac5aa4bd04cfecf5b2c5186e0615b812a13707644f00a4",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 394bcbf4fc98109dcdac5aa4bd04cfecf5b2c5186e0615b812a13707644f00a4)"
       },
       {
         "name": "nightly.test.sh",
-        "state": "passed",
-        "seconds": 244,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "3a4ba4d3a9bc02ebb504fde0ccbf8ddbec8162802ef5917187934bb4f32b1314"
+        "inputs_sha256": "57dab6ec3bd7779ef3144cabb661541d15ab0c5ab7d2ffa527cc91cada2aac1e",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 57dab6ec3bd7779ef3144cabb661541d15ab0c5ab7d2ffa527cc91cada2aac1e)"
       },
       {
         "name": "no-compile-time-paths.test.sh",
         "state": "passed",
-        "seconds": 95,
+        "seconds": 19,
         "where": "host",
-        "inputs_sha256": "b9b24e4c5a38400831443ff98bf4bcf2f4603c1af4f243576db09463c87253c9"
+        "inputs_sha256": "c23f3b21dd89c45492b1e04080aaaaafd8823f3aa4324164332a7f2e113d9436"
       },
       {
         "name": "no-foreign-app-data.test.sh",
         "state": "passed",
-        "seconds": 3,
+        "seconds": 18,
         "where": "host",
-        "inputs_sha256": "35d8cbd4b59be8ae3e2d9d5ec8ba29354c56b4d203fffa8d4c51ae3f38a65da4"
+        "inputs_sha256": "8721d72bd1a6a33fc797950e73c097c37fea27b3d06227acd9b1b4ec0fe1fa85"
       },
       {
         "name": "not-run-verdict.test.sh",
         "state": "passed",
-        "seconds": 13,
+        "seconds": 4,
         "where": "host",
-        "inputs_sha256": "58cc9aed608cdb23ddb37f87c4eee8d48e7c3f24c2a14b3d42d44fe171ca271d"
+        "inputs_sha256": "d9f68e6d81e551fabd34a0c2f81b781c59e28fc8eaf8dec7403d13721a53007f"
       },
       {
         "name": "output-files-probe.test.sh",
-        "state": "passed",
-        "seconds": 5,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "810a00c5c0da0fddbb2b8ea0221b95dccbba7482eacbc3f52a98a2534dccbadf"
+        "inputs_sha256": "8d75d67a842ef5dc3331fe55a98e94585f0b1f43464f64a9dd74a533b9d15e95",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 8d75d67a842ef5dc3331fe55a98e94585f0b1f43464f64a9dd74a533b9d15e95)"
       },
       {
         "name": "output-lock.test.sh",
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "ea824646d29d5e2018731b54afff6972cec93ddd29f82a0c581e72bc9ec55e1d",
-        "reason": "inputs unchanged since run 20261102T122140Z-a7b5daa3 (sha256 ea824646d29d5e2018731b54afff6972cec93ddd29f82a0c581e72bc9ec55e1d)"
+        "inputs_sha256": "7ebc26b511d94cdcc4e293023ab3bee259acc045dd8b3bd46dfcb47025a3218d",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 7ebc26b511d94cdcc4e293023ab3bee259acc045dd8b3bd46dfcb47025a3218d)"
       },
       {
         "name": "output-walk.test.sh",
@@ -573,23 +575,24 @@
       {
         "name": "oxford-comma.test.sh",
         "state": "passed",
-        "seconds": 5,
+        "seconds": 4,
         "where": "host",
-        "inputs_sha256": "5a9f5e01d541e0c748ecc1c912128be88727d4ffd20a6d9f2f86291941c36d28"
+        "inputs_sha256": "6889edb2acd2d9032d2800028751938a449098829f2d820eb178a6d6556138a8"
       },
       {
         "name": "package-app.test.sh",
-        "state": "passed",
-        "seconds": 30,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "e74f99bc5970ec8bb9e239bd840f964330092a0ffd90c85b521abf05fb701102"
+        "inputs_sha256": "5983b401facd913a41635117dcb357f1a03277eab27f5c6fc524808b168b2c87",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 5983b401facd913a41635117dcb357f1a03277eab27f5c6fc524808b168b2c87)"
       },
       {
         "name": "phone-apps-independent.test.sh",
         "state": "passed",
-        "seconds": 53,
+        "seconds": 21,
         "where": "host",
-        "inputs_sha256": "2e4ba8fa6d9b008536ae7467f9e472967ffbe1559ae44166a8daedbbc8968c54"
+        "inputs_sha256": "a2dcc661210002a19e89d3e5ca8cb212834b600a32124e3c295a8fff74a393a8"
       },
       {
         "name": "phone-speed-watch.test.sh",
@@ -609,49 +612,54 @@
       },
       {
         "name": "probe-engine-runtime.test.sh",
-        "state": "skipped",
-        "seconds": 0,
+        "state": "passed",
+        "seconds": 21,
         "where": "host",
-        "inputs_sha256": "18d64864d6f939b67cafbe937bc1d3454688a1c0447fd2b28c2941707a87602b",
-        "reason": "inputs unchanged since run 20261102T122140Z-a7b5daa3 (sha256 18d64864d6f939b67cafbe937bc1d3454688a1c0447fd2b28c2941707a87602b)"
+        "inputs_sha256": "f30753f07d3f0440f17844462086d04626ce21346bd30e1284f085d1ff51f1e8"
       },
       {
         "name": "proof-evidence.test.sh",
-        "state": "skipped",
-        "seconds": 0,
+        "state": "passed",
+        "seconds": 215,
         "where": "host",
-        "inputs_sha256": "1fe63cb9b8b49ad4d464c5f62b177a2da28e37509950aaf291849642b1cd6c73",
-        "reason": "inputs unchanged since run 20261102T122140Z-a7b5daa3 (sha256 1fe63cb9b8b49ad4d464c5f62b177a2da28e37509950aaf291849642b1cd6c73)"
+        "inputs_sha256": "5c60e29f4719ee147c578a977454f933e6f91a48ccf09c985b40bcec75fe59dd"
       },
       {
         "name": "proof-for.test.sh",
         "state": "passed",
-        "seconds": 369,
+        "seconds": 377,
         "where": "host",
-        "inputs_sha256": "aa672a6c0e975d7b3d5a17eb1c71cfcf462e8ef06ac7e97358e641e4c40acc22"
+        "inputs_sha256": "84e25105c6bd1178881cec3e28e9831907313234623eca9eca4276baafb07da1"
       },
       {
         "name": "proof-qualification.test.sh",
         "state": "passed",
-        "seconds": 350,
+        "seconds": 60,
         "where": "host",
-        "inputs_sha256": "8e86cb463f6bda917b5c6a06b83a4b1d61e98d91311e1683acf896d892c5f2fd"
+        "inputs_sha256": "21cbc4bc55f1cac78e4d560c6d44fb6f154e862734a9ea9f281a4dcb3afc421a"
       },
       {
         "name": "proof-run.test.sh",
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "e6beaaf070a38acd4dcef9a8b921c9cf19e05b27a6b28fc0b9e15ce17ce5abee",
-        "reason": "inputs unchanged since run 20261102T030331Z-8359fe9f (sha256 e6beaaf070a38acd4dcef9a8b921c9cf19e05b27a6b28fc0b9e15ce17ce5abee)"
+        "inputs_sha256": "f37006b0cbf8ae0e45f38b756224b32e56d492c163b0050d583b7ba860613129",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 f37006b0cbf8ae0e45f38b756224b32e56d492c163b0050d583b7ba860613129)"
+      },
+      {
+        "name": "qa-regressions.test.sh",
+        "state": "passed",
+        "seconds": 164,
+        "where": "host",
+        "inputs_sha256": "30e52c5cd504c45b807baa771b74e2193d5c4327cd34102e26440f798f932da0"
       },
       {
         "name": "qa.test.sh",
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "233eaab39658caa1a33b39e33aea5fbdd0e2dae57cf3e718e7316ba47f0f7c03",
-        "reason": "inputs unchanged since run 20261101T062444Z-14c0fc25 (sha256 233eaab39658caa1a33b39e33aea5fbdd0e2dae57cf3e718e7316ba47f0f7c03)"
+        "inputs_sha256": "81f5561c962072f6931cd52501b3bb6715e3ffe9c2b7224c6670ae42f5a099a0",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 81f5561c962072f6931cd52501b3bb6715e3ffe9c2b7224c6670ae42f5a099a0)"
       },
       {
         "name": "qualification-pins.test.sh",
@@ -664,23 +672,23 @@
       {
         "name": "questions.test.sh",
         "state": "passed",
-        "seconds": 355,
+        "seconds": 18,
         "where": "host",
-        "inputs_sha256": "811617c76f66cbca819a0b864e84f0a1ef19f6ccea66594bba79bb1862011216"
+        "inputs_sha256": "67b50a0dcf9f7981261da4862356f6932438884f12247c747d625fcb2a58b309"
       },
       {
         "name": "quiet-browser.test.sh",
         "state": "passed",
-        "seconds": 42,
+        "seconds": 8,
         "where": "host",
-        "inputs_sha256": "7ba3138dcd1e5c209375121e1f693aafc830569748e8feb10cd41858e318201a"
+        "inputs_sha256": "5e0ffb22eab7c03f4914d9bb523124909d6d110d38052893f6e57a31b9a9ade6"
       },
       {
         "name": "quota-account-in-use.test.sh",
         "state": "passed",
-        "seconds": 34,
+        "seconds": 25,
         "where": "host",
-        "inputs_sha256": "9c27cb8f7491b0de87b9466a84081f50f83b4c9a8b320e63eaa6c0ec6563c834"
+        "inputs_sha256": "089e1392d6aec7118ecd1d8ef406240c558246f0ed9fae36512d7b753f493cea"
       },
       {
         "name": "rebuild-survival.test.sh",
@@ -693,9 +701,9 @@
       {
         "name": "replay.test.sh",
         "state": "passed",
-        "seconds": 237,
+        "seconds": 36,
         "where": "host",
-        "inputs_sha256": "42019489afa7d632d8d2e5dcdca153be5fb50e1be0218d64a90d983f994ff0e2"
+        "inputs_sha256": "32ee1c1863490fe2715fc21788b9642d9670be848baccfd6f1a107007d22191d"
       },
       {
         "name": "review-walk-gate.test.sh",
@@ -707,17 +715,19 @@
       },
       {
         "name": "richdoctor.test.sh",
-        "state": "passed",
-        "seconds": 74,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "9ceaa04b7b4245532d2c975df9651f88f49c9a02fa9bf6c2a9e10e3ae66025d4"
+        "inputs_sha256": "baa9187d5e510f238939840457c790ba4e975d4931c635ac46756c51c625798c",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 baa9187d5e510f238939840457c790ba4e975d4931c635ac46756c51c625798c)"
       },
       {
         "name": "run-tests.test.sh",
-        "state": "passed",
-        "seconds": 226,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "f4e1de1e614d23c127f65acd3e239dddc732c3daea4a3cef7a5b85c622e15bee"
+        "inputs_sha256": "47af2da6f39ec5498f26e1098360f29d80691eb96ebf6dfd70eef2f5a5c798f9",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 47af2da6f39ec5498f26e1098360f29d80691eb96ebf6dfd70eef2f5a5c798f9)"
       },
       {
         "name": "runtime-supply.test.sh",
@@ -752,19 +762,26 @@
         "reason": "inputs unchanged since run 20261102T030331Z-8359fe9f (sha256 5c59f43a43d60e567e9dc01224e7835bd97c9ad51f668d83c24936d171bce54f)"
       },
       {
+        "name": "swearmeter.test.sh",
+        "state": "passed",
+        "seconds": 21,
+        "where": "host",
+        "inputs_sha256": "bf73fa768fbff2d6f2886119251f5882f15008db0882ac01e6011d48efc23f95"
+      },
+      {
         "name": "system-resources.test.sh",
         "state": "skipped",
         "seconds": 0,
         "where": "host",
-        "inputs_sha256": "101d8ae655f53622288213ae893949a7273f66803a9906296fff6d70546b3055",
-        "reason": "inputs unchanged since run 20261101T062444Z-14c0fc25 (sha256 101d8ae655f53622288213ae893949a7273f66803a9906296fff6d70546b3055)"
+        "inputs_sha256": "0ba3c7b13fa5b4ef4840a7aa6fae1773138f984fa8791a4eeed2591b17e295ee",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 0ba3c7b13fa5b4ef4840a7aa6fae1773138f984fa8791a4eeed2591b17e295ee)"
       },
       {
         "name": "terminal-quota.test.sh",
         "state": "passed",
-        "seconds": 174,
+        "seconds": 12,
         "where": "host",
-        "inputs_sha256": "f5df0d840206403d7f5387cf1ab1e729b979e0eae7f2bcbd70d84a9a1e9655dd"
+        "inputs_sha256": "9f4797345f3923c6a734ed0936c16d3a9b31aa3483e7c8ca2e7392be0f778e58"
       },
       {
         "name": "test-results.test.sh",
@@ -785,23 +802,23 @@
       {
         "name": "turn-boundary-mutations.test.sh",
         "state": "passed",
-        "seconds": 16,
+        "seconds": 4,
         "where": "host",
-        "inputs_sha256": "f01b90d210c03125097710482fba2f3e54706c094fe5d1ef357e8e28f4137af7"
+        "inputs_sha256": "7fd1c4d0ea314a2db0f29ded1f6b0545556e5f77150d6bac9ee431622c426ded"
       },
       {
         "name": "ui-ledger.test.sh",
         "state": "passed",
-        "seconds": 17,
+        "seconds": 19,
         "where": "host",
-        "inputs_sha256": "bc06f9b8fe097be3a2f611ed39ac566617829982a5524ee3aa0a5b2704ed5b89"
+        "inputs_sha256": "c03e46ba16846021fbc9f3c8610c45f4c50881b4e3ed91a5505644c20c63843a"
       },
       {
         "name": "ui-suite-defects.test.sh",
         "state": "passed",
-        "seconds": 25,
+        "seconds": 24,
         "where": "host",
-        "inputs_sha256": "9d8eb1bc120b7e880763d9f5284f388d3ee784b37515fb7644f834ae29b5a763"
+        "inputs_sha256": "13b808d4ad5f48ba3ef75d509b84aef2d075afdcd9f2327467984b374c4aafcc"
       },
       {
         "name": "updater-setup-a3.test.sh",
@@ -813,10 +830,11 @@
       },
       {
         "name": "updater-setup.test.sh",
-        "state": "passed",
-        "seconds": 45,
+        "state": "skipped",
+        "seconds": 0,
         "where": "host",
-        "inputs_sha256": "a24288e50b4d20ffffe62f5b4a4ed296f04b5ae3c1404e4bcd57f26c97eef732"
+        "inputs_sha256": "26d7111457a7ab6dac978fe0a494cc2d70a3eae99c473c10c6b5596e63c20e27",
+        "reason": "inputs unchanged since run 20261105T035737Z-25311098 (sha256 26d7111457a7ab6dac978fe0a494cc2d70a3eae99c473c10c6b5596e63c20e27)"
       },
       {
         "name": "verify-runtime.test.sh",
@@ -829,16 +847,16 @@
       {
         "name": "voice-component.test.sh",
         "state": "passed",
-        "seconds": 49,
+        "seconds": 55,
         "where": "host",
-        "inputs_sha256": "9df117253c3cbb8c3b9a21beb9c236f1908e895eab543e49becbef5d0628e616"
+        "inputs_sha256": "5f1f9b924ab058d927c9a5a329dd0dff7df8001a303286580a597cfd59421121"
       },
       {
         "name": "work-walk.test.sh",
         "state": "passed",
-        "seconds": 51,
+        "seconds": 48,
         "where": "host",
-        "inputs_sha256": "a669a7140d2907b933afbb11dea030c3eec4ecdef3a50bbeeb7ef0a738639336"
+        "inputs_sha256": "dc3d6ca515da748deec2563ced956e49c8e9dc47e83ae596ed34d5f4ed76d2ad"
       },
       {
         "name": "workspace-scope.test.sh",
@@ -852,76 +870,79 @@
   },
   "gate_evidence": {
     "gates/updater-tests": {
-      "status": "passed",
-      "record": "/Users/alex/.richos-nightly/gate-evidence/20261102T201147Z-2c3f8f1e/gates-updater-tests.json",
-      "record_sha256": "274b6e7d269ea3d26d31f2a106849d246447ae7dfb61fd215ac061934fa65666",
-      "run_id": "20261102T201147Z-2c3f8f1e",
+      "status": "reused",
+      "record": "/Users/alex/.richos-nightly/gate-evidence/20261105T073601Z-76b5786c/gates-updater-tests.json",
+      "record_sha256": "0a7bdcbbce5c41ef7badf1288abba61aae8154080fdd749fdbc303952aa386a0",
+      "run_id": "20261105T073601Z-76b5786c",
       "identity": {
-        "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
-        "inputs_sha256": "14c9c09fb62457da930e7b3a8e122e1ae5301375a7148e835996ca4ced06391b"
+        "source_commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
+        "inputs_sha256": "baeb84aa8ef4167e8205c73061a4e917f7c0e30dc5e226a580601651eb47ecc6"
       }
     },
     "gates/privacy-sweep": {
-      "status": "passed",
-      "record": "/Users/alex/.richos-nightly/gate-evidence/20261102T201147Z-2c3f8f1e/gates-privacy-sweep.json",
-      "record_sha256": "f31cc824522723ad02cf8ff9c0a5031f8a05dee8c40eef12d0b579d532ff4274",
-      "run_id": "20261102T201147Z-2c3f8f1e",
+      "status": "reused",
+      "record": "/Users/alex/.richos-nightly/gate-evidence/20261105T073601Z-76b5786c/gates-privacy-sweep.json",
+      "record_sha256": "739cd6da2fc39d2cd8526dcdb4db51765e61e1a68db83822c4737e65a4c932d4",
+      "run_id": "20261105T073601Z-76b5786c",
       "identity": {
-        "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
-        "inputs_sha256": "14c9c09fb62457da930e7b3a8e122e1ae5301375a7148e835996ca4ced06391b"
+        "source_commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
+        "inputs_sha256": "baeb84aa8ef4167e8205c73061a4e917f7c0e30dc5e226a580601651eb47ecc6"
       }
     },
     "gates/core-tests": {
       "status": "passed",
-      "record": "/Users/alex/.richos-nightly/gate-evidence/20261102T201147Z-2c3f8f1e/gates-core-tests.json",
-      "record_sha256": "ba4cef4c70d6847a315d09f160d321565e2edaa43088f517a1a8032ae5e5c782",
-      "run_id": "20261102T201147Z-2c3f8f1e",
+      "record": "/Users/alex/.richos-nightly/gate-evidence/20261105T073837Z-7001d14c/gates-core-tests.json",
+      "record_sha256": "482a9fed766a6637edbf6afbbcc35c694cfe149ec838a152e488acf059144fc3",
+      "run_id": "20261105T073837Z-7001d14c",
       "identity": {
-        "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
-        "inputs_sha256": "14c9c09fb62457da930e7b3a8e122e1ae5301375a7148e835996ca4ced06391b"
+        "source_commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
+        "inputs_sha256": "baeb84aa8ef4167e8205c73061a4e917f7c0e30dc5e226a580601651eb47ecc6"
       }
     },
     "gates/script-suites": {
       "status": "passed",
-      "record": "/Users/alex/.richos-nightly/gate-evidence/20261102T201147Z-2c3f8f1e/gates-script-suites.json",
-      "record_sha256": "02c8c83239d265c9f2ac57174873d46aaa64204cca04ffac5bed8d02d7d4c1e7",
-      "run_id": "20261102T201147Z-2c3f8f1e",
+      "record": "/Users/alex/.richos-nightly/gate-evidence/20261105T073837Z-7001d14c/gates-script-suites.json",
+      "record_sha256": "876cc7054a1287d71a2362dafc41e240efc9f1f2504a203f8ec6b790fc17b59e",
+      "run_id": "20261105T073837Z-7001d14c",
       "identity": {
-        "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
-        "inputs_sha256": "14c9c09fb62457da930e7b3a8e122e1ae5301375a7148e835996ca4ced06391b"
+        "source_commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
+        "inputs_sha256": "baeb84aa8ef4167e8205c73061a4e917f7c0e30dc5e226a580601651eb47ecc6"
       }
     },
     "gates/lint-tauri": {
       "status": "passed",
-      "record": "/Users/alex/.richos-nightly/gate-evidence/20261102T201147Z-2c3f8f1e/gates-lint-tauri.json",
-      "record_sha256": "5a59ae564315cf3f39d22459166805703cc7c81832dcc2d3088995eb77af41c8",
-      "run_id": "20261102T201147Z-2c3f8f1e",
+      "record": "/Users/alex/.richos-nightly/gate-evidence/20261105T073837Z-7001d14c/gates-lint-tauri.json",
+      "record_sha256": "7938346e9a4f5eb668af79294340827864e72fa9516b654d8f599f9e2986a2d4",
+      "run_id": "20261105T073837Z-7001d14c",
       "identity": {
-        "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
-        "inputs_sha256": "14c9c09fb62457da930e7b3a8e122e1ae5301375a7148e835996ca4ced06391b"
+        "source_commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
+        "inputs_sha256": "baeb84aa8ef4167e8205c73061a4e917f7c0e30dc5e226a580601651eb47ecc6"
       }
     },
     "gates/workspace-mutants": {
       "status": "passed",
-      "record": "/Users/alex/.richos-nightly/gate-evidence/20261102T201147Z-2c3f8f1e/gates-workspace-mutants.json",
-      "record_sha256": "b9643a28e86f02948a867c074ed0ef81e10f5da4258b2b3e18c05b489710039d",
-      "run_id": "20261102T201147Z-2c3f8f1e",
+      "record": "/Users/alex/.richos-nightly/gate-evidence/20261105T073837Z-7001d14c/gates-workspace-mutants.json",
+      "record_sha256": "fa905635a255dda4bced2efc88fa569f35d3695dd7d8cc0d4b279fcd0df04c72",
+      "run_id": "20261105T073837Z-7001d14c",
       "identity": {
-        "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
-        "inputs_sha256": "14c9c09fb62457da930e7b3a8e122e1ae5301375a7148e835996ca4ced06391b"
+        "source_commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
+        "inputs_sha256": "baeb84aa8ef4167e8205c73061a4e917f7c0e30dc5e226a580601651eb47ecc6"
       }
     },
     "gates/ui-suite": {
       "status": "passed",
-      "record": "/Users/alex/.richos-nightly/gate-evidence/20261102T201147Z-2c3f8f1e/gates-ui-suite.json",
-      "record_sha256": "3dd8a2ac65908ac26e30ed31886b2e2063eb6e3b00cf3b4636afc81a42f2ad1f",
-      "run_id": "20261102T201147Z-2c3f8f1e",
+      "record": "/Users/alex/.richos-nightly/gate-evidence/20261105T073837Z-7001d14c/gates-ui-suite.json",
+      "record_sha256": "385eb3ab8b7b791c4d2c81246b32accad29cb34b3b9b976b940554afb6305301",
+      "run_id": "20261105T073837Z-7001d14c",
       "identity": {
-        "source_commit": "0de3069494cbfad0ac56122fbfdf1a58967121df",
-        "inputs_sha256": "14c9c09fb62457da930e7b3a8e122e1ae5301375a7148e835996ca4ced06391b"
+        "source_commit": "e16a234c05a1b91d8d9651cf314723d5995ba65f",
+        "inputs_sha256": "baeb84aa8ef4167e8205c73061a4e917f7c0e30dc5e226a580601651eb47ecc6"
       }
     }
   },
-  "checks_skipped": [],
-  "build_commit": "ee734de1d3be41a90256ae1133180d6617b1491e"
+  "checks_skipped": [
+    "gates/privacy-sweep",
+    "gates/updater-tests"
+  ],
+  "build_commit": "6f571c36de091982005b79a29f51c08df9d83f7e"
 }

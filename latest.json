@@ -1,11 +1,11 @@
 {
-  "version": "1.2.8-nightly.20261102.88",
-  "notes": "Nightly 1.2.8-nightly.20261102.88",
-  "pub_date": "2026-11-02T20:51:52Z",
+  "version": "1.2.9-nightly.20261105.89",
+  "notes": "Nightly 1.2.9-nightly.20261105.89",
+  "pub_date": "2026-11-05T08:28:08Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRSy9TakprWWtoTDh0MHpoR1N2ckdYczJsM2h5SGtPaUU0SXV5TmJrNXBVTFVqZXdWQ3c5a2xEeUpRNWVEMEQ0emR1SlhNNGdIdlhDM3ZKL0hOME9hMitIRmRpU05Dd0FVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjUyNjk2CWZpbGU6UmljaE9TLmFwcC50YXIuZ3oKZ2FLUXFkN3RtTWdqRUUzNEo5RjhOL3JwazNnV3JwaFZleGYwcDhDdzYzZ01sMGNjejNCOHhtL09mcFE4NkdRQWFreFdJMGxaeStDaS9ZNWNKZFl6RFE9PQo=",
-      "url": "https://github.com/RichSpark/RichOS/releases/download/v1.2.8-nightly.20261102.88/RichOS.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRSy9TakprWWtoTCttMmVUUkpqZENub2R2MWQ0aWNyM3BGNUoxVllEYzV1TkcvZ0xSSUpFSmkzaythVHBjNHBrSDdZQlF4UHlZeUw3NEFobU1OY1daNUpBSTU0b3ZlSEE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODY3MjM2CWZpbGU6UmljaE9TLmFwcC50YXIuZ3oKU3ZCaE1vTHZkWWUxb2twMEswdEtUdG9VaUpraFFGeXcrZ0c2Rm1KUjN1T1YzVTdIa3V3d0VGSTdqa29MZ1Bqb1JDd055dTN1eFV1WHROdDM4akpYRFE9PQo=",
+      "url": "https://github.com/RichSpark/RichOS/releases/download/v1.2.9-nightly.20261105.89/RichOS.app.tar.gz"
     }
   }
 }
