@@ -75,6 +75,7 @@
     show = on;
     saving = true;
     paint(); // Synchronous cached reveal. No source read or counting work here.
+    if (on) document.getElementById("set-swearmeter-result")?.scrollIntoView({ block: "nearest" });
     try { await call("set_swearmeter_visible", { show: on }); savedShow = on; successfulWrites++; }
     catch (error) {
       show = savedShow === null ? previous : savedShow;

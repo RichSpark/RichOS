@@ -232,6 +232,12 @@ async function main() {
       said.includes("The records are still there; their output is not."),
       "and it said which half went — Tier A is never evicted at any setting: " + said
     );
+    const visible = await page.locator("#retention-hint").evaluate(node => {
+      const text = node.getBoundingClientRect(), menu = node.closest(".setmenu");
+      const panel = menu.getBoundingClientRect(), foot = menu.querySelector(".sm-foot").getBoundingClientRect();
+      return text.height > 0 && text.top >= Math.max(0, panel.top) && text.bottom <= Math.min(innerHeight, foot.top) + 1;
+    });
+    assert(visible, "the removal feedback must be visible above the fixed settings foot band");
     await shot(page, SHOTS + "/7-2-02-a-delete-that-says-what-it-deleted");
 
     // A second, LOOSER change must not claim a removal it did not make — and must not

@@ -541,7 +541,6 @@ window.RichSettings = (function () {
       look.push(buildOxfordRow());
       look.push(buildOxfordHint());
     }
-    if (swearmeter) { look.push(divider()); look.push(buildSwearMeter()); }
     if (techy) {
       // Technical view: ONE switch (it was in both panels), the Preferences hint under it, and
       // Claude Code quota under that, shown only while the view is on (`paint`).
@@ -556,6 +555,8 @@ window.RichSettings = (function () {
       look.push(divider());
       look.push(retention);
     }
+    // Keep existing storage choices and their removal feedback in their original positions.
+    if (swearmeter) { look.push(divider()); look.push(buildSwearMeter()); }
     addColumn(cols, "set-group-look", "How it looks", look);
 
     // ---- COLUMN 2: working with Rich ------------------------------------------------------

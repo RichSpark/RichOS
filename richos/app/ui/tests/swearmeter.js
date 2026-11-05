@@ -45,6 +45,11 @@ async function openApp(context, initialDelay = false) {
   return page;
 }
 const rowText = page => page.locator("#set-swearmeter-result").textContent();
+const resultVisible = page => page.locator("#set-swearmeter-result").evaluate(node => {
+  const result = node.getBoundingClientRect(), menu = node.closest(".setmenu");
+  const panel = menu.getBoundingClientRect(), foot = menu.querySelector(".sm-foot").getBoundingClientRect();
+  return result.height > 0 && result.top >= Math.max(0, panel.top) && result.bottom <= Math.min(innerHeight, foot.top) + 1;
+});
 async function main() {
   const run = createRun("SwearMeter maintained display");
   const { webkit } = loadPlaywright();
@@ -62,6 +67,7 @@ async function main() {
         calls: [...window.calls], thread: activeThreadId, settingsOpen: document.getElementById("set-btn").getAttribute("aria-expanded") };
     });
     assertEqual(reveal.text, "SwearMeter: 17", "cached result on switch event");
+    assert(await resultVisible(page), "cached result is visible within the scrolled settings column");
     assertEqual(reveal.calls, ["set_swearmeter_visible"], "only save display preference");
     // Record elapsed time as evidence; correctness is the cached text in this event.
     // Host load must not turn a timing target into a flaky assertion.
@@ -85,7 +91,10 @@ async function main() {
     assert(home.last, "SwearMeter must sit after positive signals");
   });
   await run.check("3 partial zero remains qualified and unavailable never looks like zero", async () => {
+    await page.click("#set-swearmeter");
     await page.evaluate(() => deliverSwearMeter({ ...fixture.result, count: 0, unknown_card_inputs: 2, unknown_message_inputs: 1, revision: 4 }));
+    await page.click("#set-swearmeter");
+    assert(await resultVisible(page), "the revealed partial subtotal and qualification are visible above the foot band");
     const partial = await rowText(page);
     assert(partial.includes("SwearMeter: 0") && partial.includes("Partial history") && partial.includes("2 records"), "qualified zero");
     assert((await page.locator("#home-swearmeter").textContent()).includes("Partial history"), "home carries coverage too");
@@ -126,17 +135,24 @@ async function main() {
   });
   await run.check("7 results remain readable in light and dark settings", async () => {
     await page.evaluate(() => deliverSwearMeter({ ...fixture.result, count: 1234, unknown_card_inputs: 3, revision: 41 }));
-    for (const theme of ["light", "dark"]) {
-      await page.evaluate(theme => RichTheme.setTheme(theme), theme);
-      const geometry = await page.locator("#set-swearmeter-block").evaluate(node => {
-        const box = node.getBoundingClientRect();
-        const result = node.querySelector("#set-swearmeter-result");
-        return { width: box.width, textWidth: result.scrollWidth, available: result.clientWidth,
-          color: getComputedStyle(result).color, checkbox: node.querySelector("input").getBoundingClientRect().width };
-      });
-      assert(geometry.width > 100 && geometry.checkbox > 0, "settings row is laid out");
-      assert(geometry.textWidth <= geometry.available + 1, "result must wrap within settings column");
+    for (const viewport of [{ width: 1440, height: 1000 }, { width: 1024, height: 700 }]) {
+      await page.setViewportSize(viewport);
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(theme => RichTheme.setTheme(theme), theme);
+        await page.click("#set-swearmeter");
+        await page.click("#set-swearmeter");
+        assert(await resultVisible(page), "the cached partial result is visible at " + viewport.width + "x" + viewport.height + " in " + theme);
+        const geometry = await page.locator("#set-swearmeter-block").evaluate(node => {
+          const box = node.getBoundingClientRect();
+          const result = node.querySelector("#set-swearmeter-result");
+          return { width: box.width, textWidth: result.scrollWidth, available: result.clientWidth,
+            color: getComputedStyle(result).color, checkbox: node.querySelector("input").getBoundingClientRect().width };
+        });
+        assert(geometry.width > 100 && geometry.checkbox > 0, "settings row is laid out");
+        assert(geometry.textWidth <= geometry.available + 1, "result must wrap within settings column");
+      }
     }
+    await page.setViewportSize({ width: 1440, height: 1000 });
   });
   await run.check("8 home places the maintained result below the positive statistics", async () => {
     await page.evaluate(() => { RichSettings.close(); RichHome.show(); });
