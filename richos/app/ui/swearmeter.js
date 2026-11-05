@@ -75,7 +75,16 @@
     show = on;
     saving = true;
     paint(); // Synchronous cached reveal. No source read or counting work here.
-    if (on) document.getElementById("set-swearmeter-result")?.scrollIntoView({ block: "nearest" });
+    if (on) {
+      const row = document.getElementById("set-swearmeter-result");
+      row?.scrollIntoView({ block: "nearest" });
+      const menu = row?.closest(".setmenu"), foot = menu?.querySelector(".sm-foot");
+      // The sticky foot covers part of the scrollport that nearest scrolling counts as visible.
+      if (menu && foot) {
+        const covered = row.getBoundingClientRect().bottom - foot.getBoundingClientRect().top;
+        if (covered > 0) menu.scrollTop += Math.ceil(covered);
+      }
+    }
     try { await call("set_swearmeter_visible", { show: on }); savedShow = on; successfulWrites++; }
     catch (error) {
       show = savedShow === null ? previous : savedShow;

@@ -3,7 +3,7 @@
 // Runs the real renderer and settings shell in headless WebKit. All data is synthetic.
 "use strict";
 const path = require("path");
-const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled } = require("./lib/harness");
+const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled, awaitSettled, flushFrames } = require("./lib/harness");
 const APP = "file://" + path.join(UI_DIR, "index.html");
 async function openApp(context, initialDelay = false) {
   const page = await context.newPage();
@@ -42,6 +42,8 @@ async function openApp(context, initialDelay = false) {
   await page.evaluate(() => openThread("general"));
   await page.click("#set-btn");
   await page.waitForSelector("#set-swearmeter");
+  await awaitSettled(page);
+  await flushFrames(page);
   return page;
 }
 const rowText = page => page.locator("#set-swearmeter-result").textContent();
@@ -179,6 +181,37 @@ async function main() {
     await page.waitForFunction(() => document.getElementById("set-swearmeter").checked);
     assertEqual(await rowText(page), "SwearMeter: 17", "durable preference wins after failed write");
     assertEqual(page.errors, [], "no renderer errors");
+  });
+  await run.check("10 a pointer reveal at the footer exposes the complete count and partial-history qualification", async () => {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }, { width: 1024, height: 700 }]) {
+      for (const colorScheme of ["light", "dark"]) for (const partial of [false, true]) {
+        const edgeContext = await browser.newContext({ viewport, colorScheme });
+        try {
+          const edge = await openApp(edgeContext);
+          await edge.evaluate(partial => {
+            deliverSwearMeter({ ...fixture.result, unknown_card_inputs: partial ? 2 : 0, unknown_message_inputs: partial ? 1 : 0, revision: 60 });
+            window.calls.length = 0;
+          }, partial);
+          const target = await edge.locator("#set-swearmeter").evaluate(input => {
+            const menu = input.closest(".setmenu"), foot = menu.querySelector(".sm-foot");
+            // Expose the switch just above the sticky band, as a person's scroll can do.
+            // A locator click would auto-scroll it toward the middle and miss this case.
+            menu.scrollTop += input.getBoundingClientRect().bottom - (foot.getBoundingClientRect().top - 4);
+            const box = input.getBoundingClientRect(), panel = menu.getBoundingClientRect();
+            return { x: box.x + box.width / 2, y: box.y + box.height / 2, top: box.top,
+              bottom: box.bottom, panelTop: panel.top, footTop: foot.getBoundingClientRect().top };
+          });
+          assert(target.top >= target.panelTop && target.bottom <= target.footTop, "the pointer target itself must be exposed");
+          await edge.mouse.click(target.x, target.y);
+          assert(await edge.locator("#set-swearmeter").isChecked(), "the pointer enabled the display");
+          assert(await resultVisible(edge), "the entire cached result is above the foot at " + JSON.stringify({ viewport, colorScheme, partial }));
+          assert((await rowText(edge)).includes("SwearMeter: 17"), "the maintained count is revealed");
+          assertEqual((await rowText(edge)).includes("Partial history"), partial, "coverage is visible with its subtotal");
+          assertEqual(await edge.evaluate(() => window.calls), ["set_swearmeter_visible"], "pointer reveal only saves display preference");
+          assertEqual(edge.errors, [], "no renderer errors near the footer");
+        } finally { await edgeContext.close(); }
+      }
+    }
   });
   await context.close();
   await browser.close();
