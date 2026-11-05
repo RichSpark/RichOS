@@ -622,8 +622,14 @@ fi
 # L. A SHELL MODULE WITH NO TEST IS NOT COVERED BY ITS OWN EMPTY FILTER (hunt 2026-09-29,
 #    part 2, section 14). `--bin richos-tauri events::` matches zero tests and exits 0.
 # -----------------------------------------------------------------------------------------
-run_pf "$WORK/l1.out" --paths richos/app/src-tauri/src/events.rs; L1_RC=$RC
-if [ "$L1_RC" -eq 1 ] && grep -q 'UNCOVERED' "$WORK/l1.out" && ! grep -q 'richos-tauri events::' "$WORK/l1.out"; then
+# events.rs now has a real acceptance test. Probe an intentionally unknown module,
+# whose Cargo filter would still run zero tests, rather than assuming a product module
+# can never gain coverage. H2 above remains the real tested-module positive control.
+L1_MODULE="a_proof_for_untested_shell_probe_$$"
+L1_PATH="richos/app/src-tauri/src/$L1_MODULE.rs"
+run_pf "$WORK/l1.out" --paths "$L1_PATH"; L1_RC=$RC
+if [ "$L1_RC" -eq 1 ] && grep -q 'UNCOVERED' "$WORK/l1.out" \
+   && grep -qF "$L1_PATH" "$WORK/l1.out" && ! grep -qF "richos-tauri $L1_MODULE::" "$WORK/l1.out"; then
   ok "L1 a shell module with no test is UNCOVERED, not covered by an empty filter"
 else
   bad "L1 an untested shell module is UNCOVERED" "exit $L1_RC: $(tr '\n' ' ' < "$WORK/l1.out")"

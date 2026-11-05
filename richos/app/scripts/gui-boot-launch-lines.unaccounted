@@ -74,7 +74,7 @@
 [richos] quit: the second review's watcher(s) {} ended.
 [richos] quit: {} lease(s) ended their tool commands; {} stopped at the bound.
 [richos] resources unavailable: {}
-[richos] saved answer order unreadable: {}
+[richos] saved answer history unreadable: {}
 [richos] second review: not watching yet, the engine is not verified ({})
 [richos] second review: the app's review-watch could not start ({})
 [richos] spoken reply: {}
@@ -117,3 +117,4 @@
 
 # Exceptional account-change save failure. A healthy boot must still fail if it prints this.
 [richos] writing permission could not be saved after the account change
+[richos] numeric checkpoint could not be saved: {}
