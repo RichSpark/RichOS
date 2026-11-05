@@ -2,6 +2,32 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.2.9
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.9)
+
+- Added writing help to RichScribe's menu in the menu bar: Clean up last dictation tidies what you just said and Rewrite selected text changes text you selected the way you tell it out loud; Claude shows the original beside its revision and nothing changes until you press Replace or Copy; RichOS asks before your text first goes to Claude
+- Added Vocabulary to Settings, RichScribe: choose a company and save how its names are spelled and RichScribe types them that way; you can also switch the company from RichScribe's menu
+- Added Recover last draft to RichScribe's menu, which keeps what you last dictated for 30 minutes while RichOS is open so you can copy it again
+- Added Live preview to Settings, RichScribe, More options: turn it on to see your most recent words while you speak
+- Added SwearMeter: turn on Show SwearMeter in Settings to see in the home screen's left column how many swear words are in what you have typed or said to Rich and in your question card answers, counted on your Mac
+- Changed RichScribe to type only into the app and window where you started: if you have moved somewhere else, your words are copied and kept in Recover last draft instead; it never types into a password field
+- Changed the RichScribe bar while you speak to show which app your words go to and which vocabulary is in use, with Finish and Cancel buttons and a warning when another app keeps your key from reaching RichScribe; afterward it says where your words went
+- Fixed changing your RichScribe key stopping work Rich still had running in the background in other conversations of the same company
+- Fixed a Bust a bug report or Request a feature idea being able to reach GitHub twice when it went out but RichOS never heard back
+- Fixed a Claude account added right after removing another being able to take on the removed account's usage, which could pause your team's work
+- Fixed a conversation's Output panel failing to list its files or take new ones after RichOS was interrupted while noting a file there
+- Fixed the Token spend screen leaving out some requests when RichOS stopped while saving its totals
+- Fixed a rule saved to Your instructions being lost when another change to them was saved at the same moment
+- Fixed Ask Rich again on a file that is no longer on your Mac showing a message in your name that you never typed
+- Fixed RichDoctor not hiding a name in a report when it was capitalized differently and the text nearby had letters such as the Turkish İ
+- Fixed RichDoctor waiting forever while looking into your problem when Claude stopped taking in what it sent
+- [technical] Added timing details for each RichScribe recording to its log, without your words; RichDoctor's reports now include them along with the previous log file
+- [technical] Changed the checks on your team's commands and writes to catch Apple's developer-tools placeholder even when it is reached through a link, to refuse a write when the check for listed names cannot run and to stop correcting spelling inside text in code
+- [technical] Fixed rare cases where your team's work could be lost or skipped: a teammate's work removed during cleanup when its record was incomplete or it saved new changes while stopping, a worker treated as finished before its last result arrived, a prepared teammate set aside before it started or a review of an earlier job counted for a later one
+- [technical] Fixed Rich's check that his push is not failing on GitHub judging a later commit than the one he pushed or ignoring a push that reported an error after it went through
+- [technical] Fixed a teammate's ordinary command being refused when it only printed, searched for or quoted a shell's -c option or a visible-browser option, for example in a commit message
+
 ## 1.2.8
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.8)
