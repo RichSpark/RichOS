@@ -8958,7 +8958,7 @@
     },
     "mega-lander/tests/workspaces.mutation.sh": {
       "source": "mega-lander/tests/workspaces.mutation.sh",
-      "sha256": "e0a02f80ab1bd5d34f3401efa744b41fc6f82c2bf981d20d6420a9157a729b67",
+      "sha256": "403942f2afeceede86e9b43fb28ced42dbdbf390af4f68995b0a50f04ea6390b",
       "evidence": "Reviewed all finite old/new mutation operands: local workspace predicates, records, Git queries and fixed helper calls. No mutant introduces a dynamic configuration reader or executable. Focused inner suite keeps the same fixture boundaries; copied configuration presence remains a harness input.",
       "keys": [],
       "literal_keys": {
@@ -15404,7 +15404,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "6db92f5e1a16c99dbe3d3a68aadfa1abd0edce684487235ae1afd3fe04412801",
+          "sha256": "2566971f4e92f9294fe24ac5f2cd3cf8beb5f5b3779771df3052da2e71a3e731",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15530,7 +15530,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "6db92f5e1a16c99dbe3d3a68aadfa1abd0edce684487235ae1afd3fe04412801",
+          "sha256": "2566971f4e92f9294fe24ac5f2cd3cf8beb5f5b3779771df3052da2e71a3e731",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {

@@ -3056,6 +3056,8 @@ class Runner:
     LOG_LINE = re.compile(r"^\[\d{4}-\d\d-\d\dT[\d:.]+Z\] (.*)$")
     GATE_VERDICT = re.compile(r"^ {0,2}(PASSED|FAILED|STOPPED|SKIPPED) (gates/[a-z-]+)\b")
 
+    GATE_REUSED = re.compile(r"^ {0,2}REUSED (gates/[a-z-]+): actual pass in \S+ \((/[^()]+\.json)\); ")
+
     DEPENDENCIES_LINE = re.compile(r"Installed dependencies: ([0-9a-f]{64})")
 
     def installed_dependencies_digest(self):
@@ -3170,6 +3172,20 @@ class Runner:
         verdicts = {}
         for match in filter(None, map(self.GATE_VERDICT.match, outer)):
             verdicts.setdefault(match[2], set()).add(match[1])
+        # A gate the build reused from an earlier actual pass wrote REUSED, not PASSED. It
+        # counts only as the build itself accepted it: an intact record of a pass, in this
+        # state directory's evidence store, of the commit this run built.
+        library = str(Path(__file__).resolve().parent / "lib")
+        if library not in sys.path:
+            sys.path.insert(0, library)
+        from nightly_gate_evidence import GateEvidence
+        store = GateEvidence(self.state / "gate-evidence", run_id, lambda: None, lambda _: None)
+        for match in filter(None, map(self.GATE_REUSED.match, outer)):
+            name, record_path = match[1], Path(match[2])
+            found = (store.proven_pass(name, record_path)
+                     if record_path.parent.parent == store.root else None)
+            if found and (found["identity"] or {}).get("source_commit") == source:
+                verdicts.setdefault(name, set()).add("PASSED")
         bad = sorted(f"{gate} {verdict}" for gate, seen in verdicts.items()
                      for verdict in seen - {"PASSED"})
         if bad:

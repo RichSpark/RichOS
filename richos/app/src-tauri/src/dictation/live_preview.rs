@@ -7,15 +7,19 @@ use std::{path::Path, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::
 
 pub enum Update {
     Words { text: String, sampled_at: Instant, decode_ms: u64 },
-    Paused,
+    Paused { reason: &'static str },
     Unavailable,
     Quiet,
 }
 
-pub fn recent_words(text: &str) -> String {
-    let words: Vec<_> = text.split_whitespace().collect();
-    let tail = words[words.len().saturating_sub(10)..].join(" ");
-    if words.len() > 10 { format!("…{tail}") } else { tail }
+// One fixed recent-text allowance; no accumulating provisional transcript.
+const PREVIEW_CHARACTER_LIMIT: usize = 200;
+
+pub fn recent_text(text: &str) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= PREVIEW_CHARACTER_LIMIT { return text; }
+    let start = text.char_indices().rev().nth(PREVIEW_CHARACTER_LIMIT - 2).unwrap().0;
+    format!("…{}", &text[start..])
 }
 
 /// Owned by the ordinary dictation's writing-worker lifecycle. `park_timeout`
@@ -50,18 +54,26 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         };
         if !VoiceEvidence::measure(&samples).carried_speech() { send(Update::Quiet); continue; }
         if stop.load(Ordering::Acquire) { return; }
-        let result = Scratch::new(data_dir).map_err(|_| ()).and_then(|scratch|
+        let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch|
             recognizer.transcribe_bounded_until(&samples, scratch.path(), Duration::from_millis(1800), stop)
-                .map_err(|_| ()));
+                .map_err(|error| match error {
+                    // Exact errors constructed by our bounded decoder, not a
+                    // guess from arbitrary decoder stderr or elapsed time.
+                    richos_voice::stt::SttError::Io(message) if message == "decoder deadline" => "decoder_deadline",
+                    richos_voice::stt::SttError::Io(message) if message == "decoder stopped by its owner" => "decoder_stopped",
+                    richos_voice::stt::SttError::Io(message) if message == "decoder output limit" => "decoder_output_limit",
+                    _ => "decoder_failed",
+                }));
         if stop.load(Ordering::Acquire) { return; }
         match result {
             Ok((text, decode_ms)) if sampled_at.elapsed() <= Duration::from_secs(2) => {
                 match judge_transcript(&text) {
-                    Ok(text) => send(Update::Words { text: recent_words(&text), sampled_at, decode_ms }),
-                    Err(_) => { send(Update::Paused); return; }
+                    Ok(text) => send(Update::Words { text: recent_text(&text), sampled_at, decode_ms }),
+                    Err(_) => { send(Update::Paused { reason: "transcript_rejected" }); return; }
                 }
             }
-            _ => { send(Update::Paused); return; }
+            Ok(_) => { send(Update::Paused { reason: "stale_result" }); return; }
+            Err(reason) => { send(Update::Paused { reason }); return; }
         }
         // A slow startup/tick never causes a burst of catch-up decodes.
         if due < Instant::now() { due = Instant::now() + Duration::from_secs(2); }
@@ -73,11 +85,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preview_keeps_only_recent_words_and_does_not_present_them_as_final_text() {
-        assert_eq!(recent_words("one two"), "one two");
-        assert_eq!(recent_words("one two three four five six seven eight nine ten eleven twelve"),
-                   "…three four five six seven eight nine ten eleven twelve");
-        assert_eq!(recent_words(""), "");
+    fn preview_keeps_two_hundred_recent_characters_without_changing_final_text() {
+        assert_eq!(recent_text("  one\n\ttwo  "), "one two");
+        assert_eq!(recent_text(""), "");
+        let full = "a".repeat(200);
+        assert_eq!(recent_text(&full), full);
+        let long = format!("discarded {} approved", "é".repeat(200));
+        let preview = recent_text(&long);
+        assert_eq!(preview.chars().count(), 200);
+        assert!(preview.starts_with('…'));
+        assert!(preview.ends_with(" approved"));
+        assert!(!preview.contains("discarded"));
+        assert!(long.starts_with("discarded"), "the final transcript is untouched");
     }
 
     #[test]
@@ -128,11 +147,12 @@ mod tests {
             let (recording, flag, updates, data) = (recording.clone(), stop.clone(), updates.clone(), data.clone());
             std::thread::spawn(move || run(recording, &data, &flag, |update| {
                 let entry = match update {
-                    Update::Words { sampled_at, decode_ms, .. } => serde_json::json!({
+                    Update::Words { text, sampled_at, decode_ms } => serde_json::json!({
                         "kind":"words", "at_ms":began.elapsed().as_millis(),
-                        "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms}),
+                        "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms,
+                        "characters":text.chars().count(), "words":text.split_whitespace().count()}),
                     Update::Quiet => serde_json::json!({"kind":"quiet","at_ms":began.elapsed().as_millis()}),
-                    Update::Paused => serde_json::json!({"kind":"paused","at_ms":began.elapsed().as_millis()}),
+                    Update::Paused { reason } => serde_json::json!({"kind":"paused","reason":reason,"at_ms":began.elapsed().as_millis()}),
                     Update::Unavailable => serde_json::json!({"kind":"unavailable","at_ms":began.elapsed().as_millis()}),
                 };
                 updates.lock().unwrap().push(entry);

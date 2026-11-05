@@ -22,6 +22,7 @@ window.RichDictationMenu = (function () {
   var expiryTimer = 0;
   var recovering = false;
   var expanded = false;
+  var writing = null;
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -60,10 +61,30 @@ window.RichDictationMenu = (function () {
     if (msg.closed) {
       m.replaceChildren();
       recovering = false;
+      writing = null;
       return size();
     }
     if (window.RichTheme && msg.theme) window.RichTheme.sync({ theme: msg.theme, font_scale: msg.fontScale });
     seq = msg.seq || 0;
+    writing = msg.writing || null;
+    if (writing) {
+      recovering = false;
+      m.className = "rpanel writing-panel";
+      m.setAttribute("role", "dialog");
+      m.setAttribute("aria-label", writing.mode === "cleanup" ? "Clean up last dictation" : "Rewrite selected text"); // richscribe-action: approved action names the last spoken passage, not the feature.
+      m.innerHTML = writingHtml(writing);
+      if (writing.expiresMs != null) {
+        var currentWriting = writing.id;
+        expiryTimer = setTimeout(function () {
+          if (!writing || writing.id !== currentWriting) return;
+          writing = {id:currentWriting,stage:"done",status:"expired"};
+          m.innerHTML = writingHtml(writing);
+          report();
+        }, Math.max(0, writing.expiresMs - Date.now()));
+      }
+      report();
+      return size();
+    }
     recovering = !!msg.recovery;
     expanded = !!msg.vocabularyExpanded;
     m.className = recovering ? "rpanel recovery-panel" : "sbmenu";
@@ -109,6 +130,9 @@ window.RichDictationMenu = (function () {
       item("mode", "Faster", "fast", msg.choice === "fast", true) +
       '<div class="sb-hr" role="separator"></div>' +
       vocabulary + '<div class="sb-hr" role="separator"></div>' + recover +
+      (msg.recording ? "" : '<div class="sb-hr" role="separator"></div>' +
+        (msg.cleanupAvailable ? item("clean-up", "Clean up last dictation") : '<button class="sb-item is-unavail" type="button" role="menuitem" aria-disabled="true"><span class="sb-check"></span>Clean up last dictation<span class="sb-aside">Nothing to clean up</span></button>') + // richscribe-action: approved action names the last spoken passage.
+        (msg.on ? item("rewrite", "Rewrite selected text") : '<button class="sb-item is-unavail" type="button" role="menuitem" aria-disabled="true" data-act="rewrite"><span class="sb-check"></span>Rewrite selected text<span class="sb-aside">Turn RichScribe on</span></button>')) +
       '<div class="sb-hr" role="separator"></div>' +
       item("settings", "RichScribe settings…") +
       item("onoff", msg.on ? "Turn RichScribe off" : "Turn RichScribe on") +
@@ -136,10 +160,55 @@ window.RichDictationMenu = (function () {
     return html + '</div><div class="rp-acts">' + (text != null ? '<button class="dov-btn is-quiet" type="button" data-act="recovery-clear">Clear</button>' : '') + '<span class="rp-spacer"></span><button class="dov-btn is-quiet" type="button" data-act="close">Close</button>' + (text != null ? '<button class="dov-btn" type="button" data-act="recovery-copy">Copy</button>' : '') + '</div>';
   }
 
+  function writingHtml(w) {
+    var title = w.mode === "cleanup" ? "Clean up last dictation" : "Rewrite selected text"; // richscribe-action: approved action names the last spoken passage.
+    function button(action, label, quiet) {
+      return '<button type="button" class="dov-btn' + (quiet ? ' is-quiet' : '') + '" data-act="writing-' + action + '" data-v="' + esc(w.id) + '">' + label + '</button>';
+    }
+    var cancel = button("cancel", "Cancel " + kcap("esc"), true);
+    var body = "", actions = cancel;
+    if (w.stage === "consent") {
+      title = "Writing assistance";
+      body = '<p class="rp-copy">Your text and editing instruction are sent to Claude using your current account. Your voice stays on this Mac. This uses your Claude subscription limits.</p>' +
+        '<p class="rp-copy">' + button("privacy", "Anthropic's privacy policy", true) + '<br><span class="rp-address">www.anthropic.com/legal/privacy</span></p>';
+      actions = button("cancel", "Not now", true) + button("consent", "Continue", false);
+    } else if (w.stage === "proposal") {
+      body = '<div class="rp-sec"><p class="rp-lab" id="writing-original-label">Original</p><p class="rp-text wp-original" tabindex="0" aria-labelledby="writing-original-label">' + esc(w.original) + '</p></div>' +
+        '<div class="rp-sec"><p class="rp-lab" id="writing-revision-label">Revision</p><p class="rp-text wp-revision" tabindex="0" aria-labelledby="writing-revision-label">' + esc(w.proposal) + '</p></div>';
+      body += w.canReplace ? '<p class="rp-copy">Your original stays in ' + esc(w.destination || "the destination app") + ' until you choose Replace.</p>' :
+        '<p class="rp-warn" role="status">I can\'t safely replace that text here. Copy the revision instead.</p>';
+      if (w.status === "copy-failed") body += '<p class="rp-status is-bad" role="alert">Couldn\'t copy. Try again.</p>';
+      actions += w.canReplace ? button("replace", "Replace", false) : button("copy", "Copy", false);
+    } else if (w.stage === "error") {
+      var messages = {
+        "empty":w.mode === "cleanup" ? "No recent draft to clean up." : "Select the text you want to change, then try again.",
+        "instruction":"I couldn't capture your editing instruction. Try again.",
+        "too-long":"That text is too long for writing assistance. Select a shorter passage.",
+        "quota":"Your Claude limit has been reached.",
+        "offline":"Writing assistance needs an internet connection.",
+        "unavailable":"Claude isn't available on this account."
+      };
+      body = '<p class="rp-copy" role="alert">' + esc(messages[w.failure] || "I couldn't prepare a revision.") + '</p><p class="rp-copy">Your original text hasn\'t changed.</p>';
+      if (w.failure === "quota" || w.failure === "unavailable") actions += button("accounts", "Claude accounts", true);
+      if (w.failure !== "empty" && w.failure !== "too-long") actions += button("retry", "Try again", false);
+    } else if (w.stage === "done") {
+      var done = {"replaced":"Replaced. Use ⌘Z to undo.","copied":"Copied.","check":"Check the destination app. If needed, use ⌘Z to undo.","expired":"This writing request has expired."};
+      body = '<p class="rp-copy" role="status">' + esc(done[w.status] || "Your original text hasn't changed.") + '</p>';
+      actions = button("cancel", "Close", true);
+    } else {
+      title = w.stage === "checking" ? "Preparing writing assistance…" : w.mode === "cleanup" ? "Cleaning up…" : "Rewriting…";
+      body = '<p class="rp-copy" role="status">Your original text stays unchanged while I prepare a revision.</p>';
+    }
+    return '<div class="rp-head"><span class="rp-ic">' + IC.draft + '</span><div><h2 class="rp-title">' + title + '</h2>' +
+      (w.destination ? '<p class="rp-meta">In ' + esc(w.destination) + '</p>' : '') + '</div></div>' +
+      '<div class="rp-body">' + body + '</div><div class="rp-acts"><span class="rp-spacer"></span>' + actions + '</div>';
+  }
+
   function size() {
     // Recovery must grow from the menu's previous small native viewport.
     var width = window.screen.availWidth || window.screen.width || 1024;
     document.documentElement.style.setProperty("--dictation-screen-width", width + "px");
+    document.documentElement.style.setProperty("--dictation-screen-height", (window.screen.availHeight || window.screen.height || 768) + "px");
     var m = document.getElementById("sbMenu");
     var r = m.getBoundingClientRect();
     return { seq: seq, w: Math.ceil(r.width + PAD_X * 2), h: Math.ceil(r.height + PAD_BOTTOM) };
@@ -149,14 +218,14 @@ window.RichDictationMenu = (function () {
     invoke("dictation_menu_laid_out", size());
     var first = Array.prototype.find.call(document.querySelectorAll("[data-act]"), function (b) {
       return b.dataset.act === act && b.dataset.v === value;
-    }) || document.querySelector(recovering ? ".rp-text, .rp-acts button" : ".sb-item");
+    }) || document.querySelector(writing ? ".wp-original, .rp-acts button" : recovering ? ".rp-text, .rp-acts button" : ".sb-item");
     if (first) first.focus({ preventScroll: true });
   }
 
   document.addEventListener("click", function (e) {
     var b = e.target.closest && e.target.closest("[data-act]");
     if (!b || b.getAttribute("aria-disabled") === "true") return;
-    if (b.dataset.act === "recovery-copy") b.disabled = true;
+    if (["recovery-copy", "writing-replace", "writing-copy", "writing-consent"].indexOf(b.dataset.act) >= 0) b.disabled = true;
     invoke("dictation_menu_act", { act: b.dataset.act, value: b.dataset.v || null });
   });
   document.addEventListener("keydown", function (e) {
@@ -164,13 +233,13 @@ window.RichDictationMenu = (function () {
     var at = items.indexOf(document.activeElement);
     if (e.key === "Escape") {
       e.preventDefault();
-      invoke("dictation_menu_act", { act: "close", value: null });
-    } else if (!recovering && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+      invoke("dictation_menu_act", { act: writing ? "writing-cancel" : "close", value: writing ? writing.id : null });
+    } else if (!recovering && !writing && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       if (e.key === "ArrowRight" || expanded) {
         e.preventDefault();
         invoke("dictation_menu_act", {act:e.key === "ArrowRight" ? "vocabulary-expand" : "vocabulary-collapse",value:null});
       }
-    } else if (!recovering && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    } else if (!recovering && !writing && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       var next = e.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
       if (items[next]) items[next].focus();

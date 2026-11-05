@@ -718,6 +718,53 @@ async function main() {
     return out.join(" | ") + " | 1100px: the panel closed, the chip is painted on top, the live region said it, focus in the composer";
   });
 
+  await run.check("13. restored attachment drafts preserve human edits and deliberate pasted lookalikes", async () => {
+    const page = await openApp(browser);
+    await page.evaluate(() => {
+      window.capturedSubmissions = [];
+      const invoke = RichBridge.invoke.bind(RichBridge);
+      RichBridge.invoke = async (name, args, ...options) => {
+        if (name === "send_message") {
+          capturedSubmissions.push(structuredClone(args));
+          throw Error("Synthetic acceptance refusal");
+        }
+        return invoke(name, args, ...options);
+      };
+    });
+    await paste(page, [{ name: "wtf.png", type: "image/png", bytes: PNG }]);
+    await readyChips(page, 1);
+    await page.fill("#input", "\u0085".repeat(80) + "shit");
+    await page.evaluate(() => send());
+    const first = await page.evaluate(() => ({ packet: capturedSubmissions[0], draft: document.getElementById("input").value }));
+    assert(first.packet.text.startsWith("shit\n\nAttached on this Mac"), "native-style trim must precede the generated block");
+    assertEqual(first.packet.authorship.authoredBytes, 4, "the producer's actual prefix after Unicode trim");
+    assertEqual(first.draft, first.packet.text, "the refused send is restored intact");
+    await page.locator("#input").focus();
+    await page.evaluate(() => { const input = document.getElementById("input"); input.setSelectionRange(input.value.length, input.value.length); });
+    await page.keyboard.insertText("\n\nand damn");
+    await page.evaluate(() => send());
+    const edited = await page.evaluate(() => {
+      const packet = capturedSubmissions[1];
+      const bytes = new TextEncoder().encode(packet.text);
+      const owned = RichAuthored.ranges(packet.text, packet.authorship).map(([a, b]) => new TextDecoder().decode(bytes.subarray(a, b)));
+      const parked = JSON.parse(localStorage.getItem(KEY_DRAFTS));
+      return { packet, owned, parked: parked.__authoredRanges[activeThreadId], draft: document.getElementById("input").value };
+    });
+    assertEqual(edited.owned, ["shit", "\n\nand damn"], "human additions count without turning the generated path into input");
+    assertEqual(edited.parked, edited.packet.authorship.authoredRanges, "ranges persist atomically with the existing draft");
+    assertEqual(edited.draft, edited.packet.text, "repeated refusal preserves the edited message");
+    // Pasting the whole visible body is a real human submission, even if its
+    // value is identical. beforeinput's replacement range records that intent.
+    await page.locator("#input").focus();
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.insertText(edited.draft);
+    await page.evaluate(() => send());
+    const pasted = await page.evaluate(() => capturedSubmissions[2]);
+    assertEqual(pasted.authorship.authoredBytes, Buffer.byteLength(pasted.text), "deliberate pasted headers and filenames are wholly human text");
+    assertEqual(page.__errors, [], "no page errors");
+    await page.close();
+  });
+
   const failed = run.report();
   await browser.close();
   process.exitCode = failed ? 1 : 0;

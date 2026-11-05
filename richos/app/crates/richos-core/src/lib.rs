@@ -142,6 +142,11 @@ pub mod skip;
 pub mod spend;
 pub mod spine;
 pub mod spoken;
+/// Always-maintained local lexical statistics; display is a separate preference.
+pub mod swearmeter;
+pub mod swearmeter_checkpoint;
+pub mod swearmeter_ledger;
+pub mod swearmeter_questions;
 pub mod staging;
 pub mod steering;
 pub mod stream;
@@ -310,6 +315,7 @@ mod dictation_ready_tests {
 pub mod routing;
 mod request_classifier;
 mod thread_title;
+pub mod writing;
 
 /// Shared live host resource observations for the desktop and its agents.
 pub mod system_resources;

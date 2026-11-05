@@ -1410,6 +1410,7 @@ window.RichHome = (function () {
       sig.appendChild(l);
       signals.appendChild(sig);
     });
+    if (window.RichSwearMeter) window.RichSwearMeter.paintHome();
     reserveDoorTop();
     // The picture hushes itself around these blocks; their size just changed.
     if (state.field === "live") {

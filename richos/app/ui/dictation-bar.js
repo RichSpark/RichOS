@@ -167,7 +167,7 @@ window.RichDictationBar = (function () {
         (msg.vocabulary ? '<span class="dhx-dot" aria-hidden="true">·</span><span>Vocabulary: ' + esc(msg.vocabulary) + '</span>' : "") + '</span>' : "";
       html = '<div class="dh dhx is-listen" id="dhEl">' + warning +
         '<div class="dhx-row"><span class="dh-orb">' + IC.mic + '</span><span class="dh-meter" aria-hidden="true">' +
-        new Array(10).join("<i></i>") + '</span><span class="dh-label" role="status" aria-live="polite">Listening</span>' +
+        new Array(10).join("<i></i>") + '</span><span class="dh-label" role="status" aria-live="polite">' + (msg.instruction ? 'Tell me how to change it' : 'Listening') + '</span>' +
         '<span class="dh-time" id="dhTime">0:00</span>' + destination +
         (msg.blockedKeys ? "" : '<span class="dh-hint">Tap ' + kcap(k) + ' to finish</span>') +
         '<span class="dhx-acts"><button class="dov-btn" type="button" data-bar-act="finish">Finish</button><button class="dov-btn is-quiet" type="button" data-bar-act="cancel">Cancel</button></span></div></div>';
@@ -226,6 +226,10 @@ window.RichDictationBar = (function () {
     document.documentElement.style.setProperty("--dictation-screen-width", width + "px");
     var pill = document.querySelector("#dhud > *");
     if (!pill) return null;
+    // At three lines keep the newest words visible, including after a desktop
+    // width change. Hidden overflow has no scrollbar or transcript history UI.
+    var words = pill.querySelector(".dhx-words");
+    if (words) words.scrollTop = words.scrollHeight;
     var out = {
       seq: D.seq,
       w: Math.ceil(pill.offsetWidth + PAD_X * 2),

@@ -167,8 +167,15 @@ pub struct Delivery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u64>,
 }
+/// Set by the host, never from model arguments or the shared `typed` method.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerOrigin { Direct, Conversation, #[serde(other)] Unknown }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Operation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<AnswerOrigin>,
     request: String,
     result: AnswerResult,
 }
@@ -213,18 +220,90 @@ struct Data {
 #[derive(Clone)]
 pub struct Store {
     directory: PathBuf,
+    swearmeter: Option<std::sync::Arc<std::sync::Mutex<crate::swearmeter_questions::Projection>>>,
 }
 impl AnswerResult {
     pub fn public_value(&self) -> Value {
         json!({"outcome":self.outcome,"question":self.question.as_ref().map(Question::public_value)})
     }
 }
+pub type SwearMeterStartup = (Option<u64>, crate::swearmeter_questions::Projection, Option<crate::swearmeter_checkpoint::SourceStamp>);
+
 impl Store {
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
             directory: root.as_ref().join("questions"),
+            swearmeter: None,
         }
     }
+    pub fn with_swearmeter(mut self, projection: std::sync::Arc<std::sync::Mutex<crate::swearmeter_questions::Projection>>) -> Self {
+        self.swearmeter = Some(projection);
+        self
+    }
+
+    /// One startup read of existing structured requests. No delivery prose is matched.
+    pub fn swearmeter_projection(&self) -> Result<crate::swearmeter_questions::Projection> {
+        self.swearmeter_startup().map(|(_, projection)| projection)
+    }
+
+    /// Fold statistics in the same snapshot already needed for startup input ordering.
+    pub fn swearmeter_startup(&self) -> Result<(Option<u64>, crate::swearmeter_questions::Projection)> {
+        self.swearmeter_startup_cached(None).map(|(order, projection, _)| (order, projection))
+    }
+
+    pub fn swearmeter_startup_cached(&self, cached: Option<&crate::swearmeter_checkpoint::CachedCards>) -> Result<SwearMeterStartup> {
+        std::fs::create_dir_all(&self.directory).map_err(|e| e.to_string())?;
+        let (bytes, source) = match crate::swearmeter_checkpoint::read_source(&self.directory.join("store.json")) {
+            Ok(input) => input,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if cached.is_some_and(|cache| cache.source.is_some()) { return Err("Question history is no longer available".into()); }
+                return Ok((None, crate::swearmeter_questions::Projection::empty(), None));
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if let Some(cached) = cached.filter(|cache| cache.source == source) {
+            // The bound summary already accounts for operations. Only the ordering
+            // fields needed by ordinary startup remain to be read.
+            #[derive(Deserialize)]
+            struct Ordered { order: Option<u64> }
+            #[derive(Deserialize)]
+            struct Orders {
+                questions: Vec<Ordered>,
+                #[serde(default)] deliveries: Vec<Ordered>,
+            }
+            let orders: Orders = serde_json::from_slice(&bytes).map_err(|e| format!("Question history could not be read: {e}"))?;
+            let order = orders.questions.iter().chain(&orders.deliveries).filter_map(|item| item.order).max();
+            return Ok((order, crate::swearmeter_questions::Projection::from_summary(&cached.summary), source));
+        }
+        #[derive(Deserialize)]
+        struct Inputs {
+            questions: Vec<Question>,
+            #[serde(default)] deliveries: Vec<Delivery>,
+            #[serde(default)] operations: crate::swearmeter_questions::OperationInputs,
+        }
+        let data: Inputs = serde_json::from_slice(&bytes).map_err(|e| format!("Question history could not be read: {e}"))?;
+        let order = data.questions.iter().filter_map(|q| q.order).chain(data.deliveries.iter().filter_map(|d| d.order)).max();
+        let mut projection = data.operations.projection;
+        for question in &data.questions {
+            if question.answer.as_ref().is_some_and(|a| !a.text.is_empty()) && !data.operations.represented.contains(&question.id) {
+                projection.unknown_inputs += 1;
+            }
+        }
+        for delivery in &data.deliveries {
+            let prefix = if delivery.set_id.is_some() { "question-answer" } else { "question-followup" };
+            projection.known_composites.insert(format!("{prefix}:{}", delivery.id));
+        }
+        Ok((order, projection, source))
+    }
+
+    /// A background startup read is usable at the original ordering boundary only
+    /// while its exact source generation is still current. Refresh once on change.
+    pub fn swearmeter_refresh_startup(&self, snapshot: SwearMeterStartup) -> Result<SwearMeterStartup> {
+        if crate::swearmeter_checkpoint::SourceStamp::at(&self.directory.join("store.json")).ok() == Some(snapshot.2.clone()) {
+            Ok(snapshot)
+        } else { self.swearmeter_startup_cached(None) }
+    }
+
     fn transaction<T>(&self, write: bool, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
         std::fs::create_dir_all(&self.directory).map_err(|e| e.to_string())?;
         let lock = OpenOptions::new()
@@ -253,14 +332,11 @@ impl Store {
             None
         };
         let result = f(&mut data)?;
-        if write
-            && before.as_deref()
-                != Some(
-                    serde_json::to_vec(&data)
-                        .map_err(|e| e.to_string())?
-                        .as_slice(),
-                )
-        {
+        if write {
+            // Reuse the canonical bytes already needed for the no-op comparison.
+            // Extra provenance fields must not add unbuffered per-field file writes.
+            let after = serde_json::to_vec(&data).map_err(|e| e.to_string())?;
+            if before.as_deref() == Some(after.as_slice()) { return Ok(result); }
             let temp = self.directory.join(format!("{}.new", id()));
             let saved = (|| -> Result<()> {
                 let mut file = OpenOptions::new()
@@ -268,7 +344,7 @@ impl Store {
                     .write(true)
                     .open(&temp)
                     .map_err(|e| e.to_string())?;
-                serde_json::to_writer(&mut file, &data).map_err(|e| e.to_string())?;
+                file.write_all(&after).map_err(|e| e.to_string())?;
                 file.write_all(b"\n").map_err(|e| e.to_string())?;
                 file.sync_all().map_err(|e| e.to_string())?;
                 std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
@@ -417,6 +493,15 @@ impl Store {
         surface: &str,
         order: Option<u64>,
     ) -> Result<AnswerResult> {
+        self.answer_from(entity, thread, request, method, surface, (order, AnswerOrigin::Unknown))
+    }
+
+    /// The origin parameter belongs to the trusted caller and is not in AnswerRequest.
+    pub fn answer_from(
+        &self, entity: &str, thread: &str, request: AnswerRequest, method: &str,
+        surface: &str, acceptance: (Option<u64>, AnswerOrigin),
+    ) -> Result<AnswerResult> {
+        let (order, origin) = acceptance;
         if request.client_id.is_empty() || request.client_id.len() > 128 {
             return Err("An answer needs a stable submission id.".into());
         }
@@ -436,12 +521,13 @@ impl Store {
         }
         let fingerprint = serde_json::to_string(&request).map_err(|e| e.to_string())?;
         let key = format!("{entity}:{thread}:{}", request.client_id);
-        self.transaction(true, |d| {
+        let saved_key = key.clone();
+        let submitted_text = request.text.clone();
+        let (result, retained, saved_origin) = self.transaction(true, |d| {
             if d.deleted.contains(&thread.to_string()) {
-                return Ok(AnswerResult {
-                    outcome: "conversation_deleted".into(),
-                    question: None,
-                });
+                return Ok((AnswerResult {
+                    outcome: "conversation_deleted".into(), question: None,
+                }, false, None));
             }
             if let Some(op) = d.operations.get(&key) {
                 if op.request != fingerprint {
@@ -457,7 +543,7 @@ impl Store {
                             && q.thread_id == thread
                     })
                     .cloned();
-                return Ok(result);
+                return Ok((result, false, op.origin));
             }
             let q = d
                 .questions
@@ -560,12 +646,19 @@ impl Store {
             d.operations.insert(
                 key,
                 Operation {
+                    origin: Some(origin),
                     request: fingerprint,
                     result: result.clone(),
                 },
             );
-            Ok(result)
-        })
+            Ok((result, true, Some(origin)))
+        })?;
+        if retained {
+            if let Some(projection) = &self.swearmeter {
+                crate::swearmeter_questions::lock(projection).record(&saved_key, saved_origin, &submitted_text);
+            }
+        }
+        Ok(result)
     }
     /// Project a saved front-desk answer waiting for the current reply boundary.
     pub fn waiting_for_turn(

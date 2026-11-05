@@ -170,6 +170,82 @@ async function main() {
     await menu.close();
   });
 
+  await run.check("preview shows two hundred recent characters, grows naturally and keeps its controls", async () => {
+    const notes = [];
+    for (const width of [900,1440]) for (const fontScale of [100,150]) for (const theme of ["dark","light"]) {
+      const page = await open(browser,BAR,theme,true,{viewport:{width,height:700},screen:{width,height:900}});
+      await page.evaluate(w=>Object.defineProperty(window.screen,"availWidth",{value:w}),width);
+      await say(page,"dictation-bar",bar("listening",{theme,fontScale,destination:"Mail",vocabulary:"Example Company"}));
+      await page.evaluate(()=>document.fonts.ready.then(()=>true));
+      const baseline = await page.evaluate(()=> {
+        window.__previewRow=document.querySelector(".dhx-row");
+        window.__previewMeter=document.querySelector(".dh-meter");
+        window.__previewClock=document.getElementById("dhTime");
+        return window.RichDictationBar.layout();
+      });
+      const inspect = ()=>page.evaluate(()=> {
+        const el=document.querySelector(".dhx-words"), box=el.getBoundingClientRect();
+        const node=el.firstChild, value=node.textContent, range=document.createRange();
+        range.setStart(node,value.lastIndexOf(" ")+1); range.setEnd(node,value.length);
+        const last=range.getBoundingClientRect();
+        range.setStart(node,0); range.setEnd(node,value.indexOf(" ")<0?value.length:value.indexOf(" "));
+        const first=range.getBoundingClientRect();
+        const calls=window.__calls.filter(c=>c[0]==="dictation_bar_laid_out");
+        return {lines:Math.round(box.height/parseFloat(getComputedStyle(el).lineHeight)),
+          height:box.height, lineHeight:parseFloat(getComputedStyle(el).lineHeight),
+          firstHidden:first.bottom<=box.top+1,
+          lastVisible:last.top>=box.top-1&&last.bottom<=box.bottom+1&&last.right<=box.right+1,
+          noHorizontalOverflow:el.scrollWidth<=el.clientWidth+1,
+          report:calls[calls.length-1][1],
+          controlsKept:window.__previewRow===document.querySelector(".dhx-row")&&
+            window.__previewMeter===document.querySelector(".dh-meter")&&window.__previewClock===document.getElementById("dhTime")};
+      });
+      const passage="Please send the revised forecast to the board before tomorrow’s meeting. Include our cash position, customer renewals and the hiring plan, then ask finance to confirm the figures before we approve the budget.";
+      const recent="…"+Array.from(passage).slice(-199).join("");
+      const words=recent.split(" "), seen=new Set(), heights=[];
+      for (let n=1;n<=words.length;n++) {
+        await say(page,"dictation-live-preview",{seq:7,text:words.slice(0,n).join(" ")});
+        const current=await inspect();
+        assert(current.lines>=1&&current.lines<=5,"the preview has at most five text lines");
+        assert(current.height<=5*current.lineHeight+1,"the text area cannot grow past its cap");
+        assert(current.controlsKept,"updates retain the live meter, clock and controls");
+        assert(current.lastVisible,"the newest word is readable");
+        assert(current.noHorizontalOverflow,"words wrap inside the preview");
+        assert(current.report.w<=width,"the bar fits its desktop");
+        if (!seen.has(current.lines)) {
+          seen.add(current.lines); heights.push(current.report.h);
+          await page.setViewportSize({width:current.report.w,height:current.report.h});
+          assertEqual(await page.evaluate(()=>window.RichDictationBar.layout()),current.report,
+            "native resizing converges without constraining the next line");
+        }
+      }
+      assert(seen.has(1)&&seen.has(2)&&seen.has(3),"ordinary prose expands naturally as it arrives");
+      assert(heights[0]<heights[1]&&heights[1]<heights[2],"the native window grows with the text");
+      assertEqual(await text(page,".dhx-words"),recent,"all 200 characters reach the renderer");
+      assert(await page.locator(".dhx-words").evaluate(el=>el.scrollHeight<=el.clientHeight+1),
+        "all 200 ordinary-prose characters are visible, exceeding FluidVoice’s default 150");
+      assertEqual(Array.from(recent).length,200);
+      for (const action of ["finish","cancel"]) {
+        assert(await page.locator('[data-bar-act="'+action+'"]').evaluate(el=> {
+          const r=el.getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;
+        }),action+" remains inside the native window");
+      }
+      await say(page,"dictation-live-preview",{seq:7,text:"W".repeat(300)+" approved"});
+      const token=await inspect();
+      assert(token.lines<=5&&token.noHorizontalOverflow&&token.lastVisible,"a long token keeps the cap and latest word");
+      await say(page,"dictation-live-preview",{seq:7,text:"Approved."});
+      const short=await inspect();
+      assertEqual(short.lines,1,"a shorter provisional result shrinks again");
+      assert(short.report.h<heights[2]&&short.controlsKept,"shrinking keeps the controls alive");
+      await say(page,"dictation-live-preview",{seq:7,text:""});
+      assertEqual(await page.evaluate(()=>window.RichDictationBar.layout()),baseline,"no words reserve no preview space");
+      assertEqual(page.__errors,[]);
+      notes.push(width+"px / "+fontScale+"% / "+theme+": "+heights.join(" → "));
+      await page.close();
+    }
+    return notes.join("; ");
+  });
+
   await run.check("preview stays provisional and quiet for VoiceOver; Finish and Cancel reach the owning recording", async () => {
     const page = await open(browser, BAR);
     await say(page, "dictation-bar", bar("listening", {destination:"Mail",vocabulary:"Example Company",preview:"Please send the forecast"}));
@@ -379,6 +455,74 @@ async function main() {
     return "16 dots, then the light on the words' rectangle; reduced motion: the light alone";
   });
 
+  await run.check("writing consent is explicit and proposals preserve exact text with safe Copy and Cancel wiring", async () => {
+    const page = await open(browser, MENU, "dark", true, {viewport:{width:900,height:760},screen:{width:900,height:760}});
+    const source = '<script>window.__unexpected = true</script> Keep £36,000, not £35,000. No delivery before Friday.';
+    const revision = 'Keep £36,000, not £35,000. No delivery before Friday.';
+    const payload = (stage, extra) => ({seq:80,on:true,theme:"dark",fontScale:100,writing:{id:"writing-owned",mode:"cleanup",stage,original:source,proposal:revision,destination:"Mail",expiresMs:Date.now()+120000,...extra}});
+    await say(page,"dictation-menu",payload("consent"));
+    assert((await text(page,".rp-body")).includes("Your text and editing instruction are sent to Claude"),"consent names text processing");
+    assertEqual(await page.locator('[data-act="writing-consent"]').innerText(),"Continue","deliberate consent");
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").length),0,"rendering consent submits nothing");
+    await page.locator('[data-act="writing-consent"]').click();
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").pop()[1]),{act:"writing-consent",value:"writing-owned"},"consent retains operation identity");
+    await say(page,"dictation-menu",payload("proposal",{canReplace:true}));
+    assertEqual(await page.locator('.wp-original').innerText(),source,"original preserved as literal text");
+    assertEqual(await page.locator('.wp-revision').innerText(),revision,"revision preserved");
+    assertEqual(await page.evaluate(()=>!!window.__unexpected),false,"source instructions never execute");
+    await page.locator('[data-act="writing-replace"]').click();
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").pop()[1]),{act:"writing-replace",value:"writing-owned"},"explicit replacement carries identity");
+    assert(await page.locator('[data-act="writing-replace"]').isDisabled(),"duplicate replacement is disabled while awaiting a result");
+    await say(page,"dictation-menu",payload("proposal",{canReplace:false}));
+    assertEqual(await page.locator('[data-act="writing-replace"]').count(),0,"unknown target has no replacement control");
+    assert((await text(page,'.rp-warn')).includes("Copy the revision instead"),"limitation appears before action");
+    await page.locator('[data-act="writing-copy"]').click();
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").pop()[1]),{act:"writing-copy",value:"writing-owned"},"Copy does not call a paste or send command");
+    await say(page,"dictation-menu",payload("proposal",{canReplace:false,status:"copy-failed"}));
+    assert((await text(page,'.rp-status')).includes("Couldn't copy"),"copy failure remains visible");
+    await page.keyboard.press("Escape");
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").pop()[1]),{act:"writing-cancel",value:"writing-owned"},"Escape cancels this writing operation");
+    await say(page,"dictation-menu",{closed:true});
+    assertEqual(await page.locator('#sbMenu').innerText(),"","closing removes owned text from the DOM");
+    assertEqual(page.__errors,[],"no page errors");
+    await page.close();
+  });
+
+  await run.check("writing failure states keep the original and long comparisons keep controls reachable at enlarged text", async () => {
+    for (const theme of ["light","dark"]) {
+      const page=await open(browser,MENU,theme,true,{viewport:{width:680,height:740},screen:{width:680,height:740}});
+      const make=(stage,extra)=>({seq:90,on:true,theme,fontScale:150,writing:{id:"writing-long",mode:"rewrite",stage,destination:"TextEdit",expiresMs:Date.now()+120000,...extra}});
+      for (const failure of ["quota","offline","timeout","unavailable","instruction","too-long","empty"]) {
+        await say(page,"dictation-menu",make("error",{failure}));
+        assert((await text(page,'.rp-body')).includes("Your original text hasn't changed"),failure+" preserves original");
+        assertEqual(await page.locator('[data-act="writing-replace"]').count(),0,failure+" offers no write");
+        assert(await page.locator('[data-act="writing-cancel"]').isEnabled(),failure+" has a way back to the original app");
+        const retry=page.locator('[data-act="writing-retry"]');
+        assertEqual(await retry.count(),["empty","too-long"].includes(failure)?0:1,failure+" offers only a meaningful explicit retry");
+        if(await retry.count()) assert(await retry.isEnabled(),failure+" retry is usable");
+        const accounts=page.locator('[data-act="writing-accounts"]');
+        assertEqual(await accounts.count(),["quota","unavailable"].includes(failure)?1:0,failure+" offers account guidance only when relevant");
+        if(await accounts.count()) assert(await accounts.isEnabled(),failure+" account guidance is usable");
+      }
+      const original="Business paragraph. ".repeat(550)+"ORIGINAL END";
+      const proposal="Revised paragraph. ".repeat(550)+"REVISION END";
+      await say(page,"dictation-menu",make("proposal",{original,proposal,canReplace:true}));
+      assertEqual(await page.locator('.wp-original').innerText(),original,"complete long source remains available");
+      assertEqual(await page.locator('.wp-revision').innerText(),proposal,"complete long proposal remains available");
+      const panel=await page.locator('#sbMenu').boundingBox(),button=await page.locator('[data-act="writing-replace"]').boundingBox();
+      assert(panel && button && button.y>=panel.y && button.y+button.height<=panel.y+panel.height,"controls remain inside the visible panel");
+      await say(page,"dictation-menu",make("done",{status:"replaced"}));
+      assert((await text(page,'.rp-body')).includes("Use ⌘Z to undo"),"accepted revision explains native undo");
+      assertEqual(await page.locator('.wp-original,.wp-revision').count(),0,"completion removes comparison text");
+      await page.close();
+    }
+    const page=await open(browser,BAR);
+    await say(page,"dictation-bar",bar("listening",{instruction:true,startedMs:Date.now()}));
+    assertEqual(await text(page,'.dh-label'),"Tell me how to change it","instruction recording is distinct from ordinary dictation");
+    assertEqual(await page.locator('[data-bar-act="finish"],[data-bar-act="cancel"]').count(),2,"Finish and Cancel remain available");
+    await page.close();
+  });
+
   await run.check("the menu, word for word, every row reaching the tool, Escape and the arrows", async () => {
     const page = await open(browser, MENU);
     const menu = (extra) => Object.assign({ seq: 3, on: true, key: "F1", choice: "accurate", paused: false, secureApp: null, theme: "dark", fontScale: 100 }, extra || {});
@@ -386,7 +530,7 @@ async function main() {
     assertEqual(await text(page, ".sb-head"), "RichScribe On", "the heading");
     assertEqual(await text(page, ".sb-say"), "Tap F1 to start and again to stop.", "the line under it");
     const rows = await page.locator(".sb-item").allInnerTexts();
-    assertEqual(rows.map(r => r.replace(/\s+/g," ").trim()), ["More accurate", "Faster", "Vocabulary: None ›", "Recover last draft No recent draft", "RichScribe settings…", "Turn RichScribe off", "Open RichOS"], "the approved rows");
+    assertEqual(rows.map(r => r.replace(/\s+/g," ").trim()), ["More accurate", "Faster", "Vocabulary: None ›", "Recover last draft No recent draft", "Clean up last dictation Nothing to clean up", "Rewrite selected text", "RichScribe settings…", "Turn RichScribe off", "Open RichOS"], "the approved rows");
     assertEqual(await page.locator('.sb-item[aria-checked="true"]').innerText(), "More accurate", "the tick");
     await say(page, "dictation-menu", menu({ choice: "fast" }));
     assertEqual(await page.locator('.sb-item[aria-checked="true"]').innerText(), "Faster", "the tick follows the model");
@@ -398,6 +542,11 @@ async function main() {
     await say(page, "dictation-menu", menu({ on: false }));
     assertEqual(await text(page, ".sb-head"), "RichScribe Off", "off");
     assertEqual(await text(page, ".sb-say"), "Turn it on to type with your voice.", "off's line");
+    assertEqual(await page.getAttribute('[data-act="rewrite"]','aria-disabled'),'true',"Off cannot start an instruction microphone capture");
+    // Deliver an attempted click despite aria-disabled to prove the handler
+    // refuses it. Playwright's normal click waits for an enabled control.
+    await page.locator('[data-act="rewrite"]').dispatchEvent("click");
+    assertEqual(await page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_menu_act").length),0,"the disabled voice action sends nothing");
     await say(page, "dictation-menu", menu());
     const size = await page.evaluate(() => window.__calls.filter((c) => c[0] === "dictation_menu_laid_out").pop()[1]);
     const box = await page.locator("#sbMenu").boundingBox();

@@ -522,6 +522,9 @@ struct StoredConfig {
     /// never has it, whatever this says.
     #[serde(default)]
     oxford_comma: bool,
+    /// Display only. Local counting is always active.
+    #[serde(default)]
+    show_swearmeter: bool,
     /// How the Mac resources square is drawn. An absent value reads as Ink,
     /// including on installations from before the square existed.
     ///
@@ -580,6 +583,7 @@ impl Default for StoredConfig {
             rich_model: ModelChoice::default(),
             stu_model: ModelChoice::default(),
             oxford_comma: false,
+            show_swearmeter: false,
             resources_view: None,
             cleaner_on: false,
             cleaner_inbox_first: false,
@@ -1102,6 +1106,13 @@ impl ConfigStore {
             return Ok(());
         }
         self.config.oxford_comma = keep;
+        self.persist()
+    }
+
+    pub fn show_swearmeter(&self) -> bool { self.config.show_swearmeter }
+
+    pub fn set_show_swearmeter(&mut self, show: bool) -> io::Result<()> {
+        self.config.show_swearmeter = show;
         self.persist()
     }
 

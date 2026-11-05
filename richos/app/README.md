@@ -226,6 +226,7 @@ richos/app/
     tests/terminal_session_tests.rs native session continuity and overlapping-input regressions.
     tests/rotation_tests.rs account-resume, native model-control and quota-notice tests.
     tests/questions.rs       durable question sets, revisions, delivery, engine witnesses and the app-run ask gate
+    tests/swearmeter.rs      local lexical counts, durable replay, card-request provenance and bound checkpoint recovery
     tests/instructions_update_tests.rs a new version's improved rich.md/stu.md reach the user:
                               an unchanged copy updated silently, a changed one asked about once
                               (OK writes the update, No is not asked again for that version), a
@@ -2173,3 +2174,33 @@ without opening a window, run the app executable with `--system-resources <absol
 engine-state directory>`. `--resources-mcp` serves only the read tool over stdio.
 The bounded `system_resources_probe` core example exercises this same sampler and
 reports measured CPU, memory and cached-read cost.
+
+
+## SwearMeter
+
+SwearMeter always counts matching words locally in recorded human messages, final voice
+transcripts and directly typed card answers. **Show SwearMeter** controls display only
+and starts off hidden. Enabling it reveals the maintained result in settings and below
+the home statistics. A hyphenated or apostrophe word contributes at most one occurrence.
+The complete English dictionary and synthetic examples live in `swearmeter.rs`.
+
+Original question requests carry host-set origin metadata in their existing atomic
+operation write. Generated card labels, delivery composites, model paraphrases and
+attachment descriptions add no human occurrences. Numeric authorship ranges survive
+attachment-draft edits and retries without duplicating the text. Unknown older input is qualified as
+partial history. Unavailable input never appears as a complete zero. Result events
+contain numeric aggregates and coverage flags, with revisions to reject stale reads.
+There is no added model call, network request, excerpt log or audio capture.
+
+The disposable `swearmeter-cache` in the installation's data directory contains numeric
+accounting and source identities only. It binds both histories, file generations,
+coverage and detector version, with a checksum. Missing, damaged or stale checkpoints
+rebuild from the existing source files during normal startup. Checkpoints are saved at
+backfill and clean-exit boundaries, never per matched word or on the display switch.
+The existing startup card read runs beside ledger replay and its generation is checked
+again before advancing the existing input-order counter. Voice dispatch is unchanged.
+
+Increment the detector version for changes to dictionary, tokenizer or attribution
+rules. Rebuild the recorded scope under that one version and explain any resulting
+historical total change in the release notes. `scripts/swearmeter.test.sh` exercises the
+accounting and display with synthetic local fixtures and headless WebKit.

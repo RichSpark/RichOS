@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HARNESS = path.join(HERE, 'native-transport-e2e.mjs');
@@ -97,54 +97,70 @@ try {
     assert.ok(text && /permission unknown/.test(text), String(text));
   });
 
-  // ------------------------------------------------ staging off the removable volume
-  // A checkout on the SSD (the nightly's state folder can be there) is copied under an internal
-  // scratch root, so Chrome and the host read nothing on the volume and no permission is needed.
-  let stageOffRemovable = () => { throw new Error('stageOffRemovable is missing from native-host-privacy.mjs'); };
-  try { ({ stageOffRemovable } = await import('./native-host-privacy.mjs')); } catch { /* the checks below name it */ }
+  // ------------------------------------------------ staging into configured scratch
+  const { stageOffRemovable, stageNativeProduct } = await import('./native-host-privacy.mjs');
   const checkout = path.join(scratch, 'tools');
   for (const [dir, file] of [['richos-service/host', 'native-host.js'], ['richos-extension', 'manifest.json'],
     ['richos-service/node_modules/dep', 'index.js'], ['richos-extension/.git', 'HEAD']]) {
     fs.mkdirSync(path.join(checkout, dir), { recursive: true });
     fs.writeFileSync(path.join(checkout, dir, file), `fixture ${file}\n`);
   }
-  let internal = '';
-  try { internal = spawnSync('/usr/bin/getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout.trim(); } catch { /* none */ }
-  if (internal && fs.existsSync(internal)) {
-    const into = fs.mkdtempSync(path.join(internal, 'native-host-privacy-stage-'));
-    try {
-      const dirs = { service: path.join(checkout, 'richos-service'), extension: path.join(checkout, 'richos-extension') };
-      check('stage: a checkout on the removable volume would be refused (positive control)', () => {
-        const text = removableVolumeRefusal({ paths: Object.values(dirs), subjects: [nodeReal], home: path.join(scratch, 'absent') });
-        assert.ok(text && /removable volume/.test(text), String(text));
-      });
-      let staged;
-      check('stage: the host and the extension are copied off the removable volume', () => {
-        staged = stageOffRemovable({ dirs, into: path.join(into, 'staged') });
-        assert.deepEqual(Object.keys(staged).sort(), ['extension', 'service']);
-        for (const copy of Object.values(staged)) assert.ok(!fs.realpathSync(copy).startsWith('/Volumes/'), copy);
-        assert.equal(fs.readFileSync(path.join(staged.service, 'host', 'native-host.js'), 'utf8'), 'fixture native-host.js\n');
-        assert.equal(fs.readFileSync(path.join(staged.extension, 'manifest.json'), 'utf8'), 'fixture manifest.json\n');
-      });
-      check('stage: node_modules and .git are left behind', () => {
-        assert.equal(fs.existsSync(path.join(staged.service, 'node_modules')), false);
-        assert.equal(fs.existsSync(path.join(staged.extension, '.git')), false);
-      });
-      check('stage: after staging nothing asks for a permission (no TCC read, no refusal)', () => {
-        assert.equal(removableVolumeRefusal({ paths: [...Object.values(staged), into], subjects: [nodeReal], home: path.join(scratch, 'absent') }), null);
-      });
-      check('stage: a directory already off the removable volume is used as it is', () => {
-        assert.deepEqual(stageOffRemovable({ dirs: { extension: staged.extension }, into: path.join(into, 'again') }), { extension: staged.extension });
-      });
-      check('stage: staging onto the removable volume is refused, not pretended', () => {
-        assert.throws(() => stageOffRemovable({ dirs, into: path.join(scratch, 'still-removable') }), /removable volume/);
-      });
-    } finally {
-      fs.rmSync(into, { recursive: true, force: true });
+  const into = path.join(scratch, 'stage');
+  const dirs = { service: path.join(checkout, 'richos-service'), extension: path.join(checkout, 'richos-extension') };
+  const permission = { subjects: [nodeReal], home: granted };
+  check('stage: a checkout on the removable volume without a grant is refused (positive control)', () => {
+    assert.ok(removableVolumeRefusal({ paths: Object.values(dirs), subjects: [nodeReal], home }));
+  });
+  let staged;
+  check('stage: the host and extension are copied into the configured permitted scratch root', () => {
+    staged = stageOffRemovable({ dirs, into, ...permission });
+    assert.deepEqual(Object.keys(staged).sort(), ['extension', 'service']);
+    for (const copy of Object.values(staged)) assert.ok(copy.startsWith(into + path.sep), copy);
+    assert.equal(fs.readFileSync(path.join(staged.service, 'host', 'native-host.js'), 'utf8'), 'fixture native-host.js\n');
+    assert.equal(fs.readFileSync(path.join(staged.extension, 'manifest.json'), 'utf8'), 'fixture manifest.json\n');
+  });
+  check('stage: node_modules and .git are left behind', () => {
+    assert.equal(fs.existsSync(path.join(staged.service, 'node_modules')), false);
+    assert.equal(fs.existsSync(path.join(staged.extension, '.git')), false);
+  });
+  check('stage: copied paths remain subject to the removable-volume grant', () => {
+    assert.equal(removableVolumeRefusal({ paths: [...Object.values(staged), into], ...permission }), null);
+    assert.ok(removableVolumeRefusal({ paths: [...Object.values(staged), into], subjects: [nodeReal], home }));
+  });
+  check('stage: a source already off the removable volume is used as it is', () => {
+    assert.deepEqual(stageOffRemovable({ dirs: { source: '/usr/bin' }, into: path.join(scratch, 'again'), ...permission }), { source: '/usr/bin' });
+  });
+  check('stage: an external destination without granted host subjects is refused', () => {
+    assert.throws(() => stageOffRemovable({ dirs, into: path.join(scratch, 'unapproved') }), /removable volume/);
+    assert.throws(() => stageOffRemovable({ dirs, into: path.join(scratch, 'denied'), subjects: [nodeReal], home }), /Removable Volumes permission not allowed/);
+  });
+  check('stage: the copied service resolves its voice, loro and extension imports without the source tree', () => {
+    for (const dir of ['tools/richos-service/lib/workspace', 'tools/richos-extension/sync', 'engine/voice/provisioning', 'engine/loro/lib']) {
+      fs.mkdirSync(path.join(scratch, dir), { recursive: true });
     }
-  } else {
-    check('stage: an internal scratch root exists', () => { throw new Error('getconf DARWIN_USER_TEMP_DIR named no folder'); });
-  }
+    for (const dir of ['tools/richos-service', 'tools/richos-extension', 'engine/voice', 'engine/loro']) {
+      fs.writeFileSync(path.join(scratch, dir, 'package.json'), '{"type":"module"}');
+    }
+    fs.writeFileSync(path.join(scratch, 'engine/voice/provisioning/model-catalog.js'), 'export const pin = 1;');
+    fs.writeFileSync(path.join(scratch, 'engine/loro/lib/privacy.js'), 'export const privacy = 1;');
+    fs.writeFileSync(path.join(scratch, 'tools/richos-extension/sync/reconcile.js'), 'export const decide = 1;');
+    fs.copyFileSync(path.resolve(HERE, '../../richos-service/lib/workspace/privacy.js'), path.join(dirs.service, 'lib/workspace/privacy.js'));
+    fs.writeFileSync(path.join(dirs.service, 'lib/fixture.js'), "import { pin } from '../../../engine/voice/provisioning/model-catalog.js';\n" +
+      "import { privacy } from '../../../engine/loro/lib/privacy.js';\nimport { decide } from '../../richos-extension/sync/reconcile.js';\nexport const ready = pin + privacy + decide;");
+    const copy = stageNativeProduct({ ...dirs, into: path.join(scratch, 'product'), ...permission });
+    fs.rmSync(path.join(scratch, 'engine'), { recursive: true });
+    fs.rmSync(checkout, { recursive: true });
+    const source = `import { ready } from ${JSON.stringify(pathToFileURL(path.join(copy.service, 'lib/fixture.js')).href)};
+      import { PRODUCT_REPO, assertEvidenceOutsideProductRepo } from ${JSON.stringify(pathToFileURL(path.join(copy.service, 'lib/workspace/privacy.js')).href)};
+      if (ready !== 3) throw new Error('wrong staged imports');
+      assertEvidenceOutsideProductRepo(${JSON.stringify(path.join(scratch, 'outside-zone'))});
+      let refused = false;
+      try { assertEvidenceOutsideProductRepo(PRODUCT_REPO + '/recordings'); } catch (error) { refused = /privacy invariant/.test(error.message); }
+      if (!refused) throw new Error('staged product accepted a recording inside its checkout');`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], { cwd: '/', encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  });
+
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }

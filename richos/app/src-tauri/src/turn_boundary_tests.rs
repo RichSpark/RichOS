@@ -205,9 +205,10 @@ fn the_boundary_wakes_peer_input_without_dispatching_the_record() {
 
 /// The calls that run one of his turns. A shell line that makes one must be followed by a
 /// boundary door before the next function begins.
-const RUNS_HIS_TURNS: [&str; 6] = [
+const RUNS_HIS_TURNS: [&str; 7] = [
     ".submit_prompt(",
     ".submit_prompt_to(",
+    ".submit_prompt_to_provenance(",
     ".submit_prompt_spoken(",
     ".poll_intake(",
     ".reconcile_intake(",

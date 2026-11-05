@@ -186,7 +186,7 @@
           <p class="dict-how-h">Not the same as talking to me</p>
           <p class="dict-how-p is-soft">The round button beside my message box sends what you say to me. RichScribe only types. You read it, fix it if you like and send it yourself.</p>
         </div>
-        <div class="dict-how-sec dict-priv">${ICON.lock}<p class="dict-how-p"><b>Your voice stays on this Mac.</b> Nothing you say is sent anywhere.</p></div>
+        <div class="dict-how-sec dict-priv">${ICON.lock}<p class="dict-how-p"><b>Your voice is transcribed on this Mac.</b> Requested writing assistance sends your text and transcribed editing instruction to Claude only after you allow it.</p></div>
       </div></div></section>`;
     document.body.appendChild(sheet);
     col = $("dict-col"); tryBox = $("dict-try"); tryNote = $("dict-try-note");
@@ -195,18 +195,22 @@
 
   let vocabulary = null, vocabularyBusy = false, vocabularyError = null, vocabularyForm = null;
   let vocabularyPicker = false, moreOptions = false, vocabularySaved = false, vocabularyEpoch = 0;
+  let writingAllowed = false, writingBusy = false;
   const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>';
   const downChevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
   const arrow = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg>';
   const plus = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
 
   async function readVocabulary() {
-    if (sheet.hidden || vocabularyBusy) return;
+    if (sheet.hidden || vocabularyBusy || writingBusy) return;
     const epoch = ++vocabularyEpoch;
     try {
-      const next = await bridge.invoke("dictation_vocabulary", {});
+      const replies = await Promise.allSettled([bridge.invoke("dictation_vocabulary", {}), bridge.invoke("dictation_writing_allowed", {on:null})]);
       if (epoch !== vocabularyEpoch) return;
+      if (replies[0].status !== "fulfilled") throw replies[0].reason;
+      const next = replies[0].value;
       vocabulary = next;
+      writingAllowed = replies[1].status === "fulfilled" && !!(replies[1].value && replies[1].value.allowed);
       vocabularyError = null;
       if (vocabularyForm && vocabularyForm.company !== next.selectedCompany) {
         vocabularyForm.error = "The selected company changed. Choose the company again before saving this spelling.";
@@ -280,7 +284,7 @@
     html += '</section>';
     const available = !!vocabulary.previewAvailable;
     html += `<section class="dict-sec"><button class="mo-toggle" type="button" data-act="voc-more" aria-expanded="${moreOptions}" aria-controls="dict-more-body">${chevron}More options<span class="mo-sum">Live preview ${!available ? "unavailable" : vocabulary.previewEnabled ? "on" : "off"}</span></button>`;
-    if (moreOptions) html += `<div class="mo-body" id="dict-more-body"><div class="mo-row"><span class="mo-row-main"><span class="mo-row-t">Live preview</span><span class="mo-row-s">${available ? "See recent words while you speak. The final text may differ." : "Live preview isn't available on this Mac. RichScribe still works."}</span></span><button class="dict-switch" type="button" role="switch" data-act="voc-preview" aria-label="Live preview" aria-checked="${available && vocabulary.previewEnabled}" aria-disabled="${!available}" ${!available || vocabularyBusy ? "disabled" : ""}></button></div><p class="mo-note">${ICON.info}<span>Your recent draft stays in memory for up to 30 minutes while RichOS is open. It isn't saved after you quit.</span></p></div>`;
+    if (moreOptions) html += `<div class="mo-body" id="dict-more-body"><div class="mo-row"><span class="mo-row-main"><span class="mo-row-t">Live preview</span><span class="mo-row-s">${available ? "See recent words while you speak. The final text may differ." : "Live preview isn't available on this Mac. RichScribe still works."}</span></span><button class="dict-switch" type="button" role="switch" data-act="voc-preview" aria-label="Live preview" aria-checked="${available && vocabulary.previewEnabled}" aria-disabled="${!available}" ${!available || vocabularyBusy ? "disabled" : ""}></button></div><div class="mo-row"><span class="mo-row-main"><span class="mo-row-t">Allow writing assistance with Claude</span><span class="mo-row-s">When you choose Clean up or Rewrite, your text and instruction are sent to Claude using your current account. Your voice stays on this Mac. This uses your Claude subscription limits. Permission is requested the first time you choose either action.</span></span><button class="dict-switch" type="button" role="switch" data-act="writing-allowed" aria-label="Allow writing assistance with Claude" aria-checked="${writingAllowed}" ${writingBusy || !writingAllowed ? "disabled" : ""}></button></div><p class="mo-note">${ICON.info}<span>Your recent draft stays in memory for up to 30 minutes while RichOS is open. It isn't saved after you quit.</span></p></div>`;
     return html + '</section>';
   }
 
@@ -335,6 +339,14 @@
       }
       case "voc-remove": await saveVocabulary(vocabulary.selectedCompany, vocabulary.rules.filter((_rule,index) => index !== Number(button.dataset.index))); break;
       case "voc-more": moreOptions = !moreOptions; paint(); break;
+      case "writing-allowed": {
+        if (!writingAllowed || writingBusy) return;
+        writingBusy = true; vocabularyEpoch++; paint();
+        try { const next = await bridge.invoke("dictation_writing_allowed", {on:false}); writingAllowed = !!next.allowed; }
+        catch (_error) { vocabularyError = "Your change wasn't saved. Try again."; }
+        finally { writingBusy = false; paint(); }
+        break;
+      }
       case "voc-preview": {
         vocabularyBusy = true; vocabularyEpoch++; paint();
         try { vocabulary = await bridge.invoke("dictation_set_preview", {on:!vocabulary.previewEnabled}); }
@@ -653,7 +665,7 @@
     if (event.target === sheet) { close(); return; }
     const b = event.target.closest("[data-act]");
     if (!b || !sheet.contains(b)) return;
-    if (b.dataset.act.startsWith("voc-")) { await vocabularyAction(b); return; }
+    if (b.dataset.act.startsWith("voc-") || b.dataset.act === "writing-allowed") { await vocabularyAction(b); return; }
     switch (b.dataset.act) {
       case "toggle-on": {
         // Said at once, so a second press reads the switch it sees rather than the one in flight.

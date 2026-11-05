@@ -20,7 +20,7 @@
 #   O9  a caller holding the bundle output (make-release.sh app) does not block its own
 #       package-app.sh
 #
-# run-tests: inputs richos/app/scripts/output-lock.test.sh richos/app/scripts/lib/output-lock.sh richos/app/scripts/make-engine-asset.sh richos/app/scripts/verify-engine-asset-members.sh richos/app/scripts/package-app.sh richos/app/scripts/make-release.sh richos/app/scripts/lib/cargo-target.sh LICENSE richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh
+# run-tests: inputs richos/app/scripts/output-lock.test.sh richos/app/scripts/lib/output-lock.sh richos/app/scripts/make-engine-asset.sh richos/app/scripts/verify-engine-asset-members.sh richos/app/scripts/lib/service-imports.mjs richos/app/scripts/package-app.sh richos/app/scripts/make-release.sh richos/app/scripts/lib/cargo-target.sh LICENSE richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh
 # run-tests: covers richos/app/scripts/lib/output-lock.sh
 set -uo pipefail
 
@@ -134,12 +134,27 @@ F="$WORK/engine-fixture"
 mkdir -p "$F/richos/app/scripts/lib" "$F/docs/legal" "$F/richos/engine/scripts/hooks"
 cp "$DIR/make-engine-asset.sh" "$DIR/verify-engine-asset-members.sh" "$F/richos/app/scripts/"
 cp "$DIR/lib/no_host_paths.py" "$F/richos/app/scripts/lib/"
+cp "$DIR/lib/service-imports.mjs" "$F/richos/app/scripts/lib/"
 cp "$DIR/runtime-sources.json" "$F/richos/app/scripts/"
 [ -f "$LOCK_LIB" ] && cp "$LOCK_LIB" "$F/richos/app/scripts/lib/"
 cp "$ROOT/LICENSE" "$F/LICENSE"
 printf 'notices for the fixture\n' > "$F/docs/legal/THIRD-PARTY-NOTICES.md"
 printf '1.0.0\n' > "$F/richos/engine/VERSION"
 printf '#!/usr/bin/env bash\ntrue\n' > "$F/richos/engine/scripts/hooks/guard-demo.sh"
+# The archive verifies its installed meeting service before returning. Keep that
+# dependency graph present while O7 exercises the real output-lock release path.
+mkdir -p "$F/richos/tools/richos-service/bin" "$F/richos/tools/richos-service/lib" \
+    "$F/richos/tools/richos-extension/sync" "$F/richos/engine/voice/provisioning" "$F/richos/engine/loro/lib"
+for product in tools/richos-service tools/richos-extension engine/voice engine/loro; do
+    printf '{"type":"module"}\n' > "$F/richos/$product/package.json"
+done
+printf 'export const pin = 1;\n' > "$F/richos/engine/voice/provisioning/model-catalog.js"
+printf 'export const privacy = 1;\n' > "$F/richos/engine/loro/lib/privacy.js"
+printf 'export const decide = 1;\n' > "$F/richos/tools/richos-extension/sync/reconcile.js"
+printf "import { pin } from '../../../engine/voice/provisioning/model-catalog.js';\nimport { privacy } from '../../../engine/loro/lib/privacy.js';\nimport { decide } from '../../richos-extension/sync/reconcile.js';\nexport const ready = pin + privacy + decide;\n" \
+    > "$F/richos/tools/richos-service/lib/pipeline.js"
+printf "import { ready } from '../lib/pipeline.js';\nif (process.argv[2] !== 'tiers') process.exit(2);\nconsole.log('quantized', ready);\n" \
+    > "$F/richos/tools/richos-service/bin/richos-service.js"
 env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -c init.defaultBranch=main init -q "$F" >/dev/null 2>&1
 env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$F" add -A >/dev/null 2>&1
 env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$F" -c user.name=fixture \

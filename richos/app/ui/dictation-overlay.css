@@ -425,7 +425,7 @@ body {
 .dhx-row > .dh-orb { margin-right: 0; }
 .dhx-top { display: flex; align-items: baseline; gap: 12px; padding: .8125rem 1.375rem 0 1.25rem; min-width: 0; max-width: 46rem; }
 .dhx-tag { flex-shrink: 0; font-size: .875rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--gold-text); }
-.dhx-words { font-size: 1.125rem; line-height: 1.4; color: var(--ink); overflow: hidden; text-overflow: clip; white-space: nowrap; min-width: 0; }
+.dhx-words { font-size: 1.125rem; line-height: 1.4; max-height: 7em; color: var(--ink); overflow: hidden; white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 .dhx-words .is-new { color: var(--ink); text-decoration: underline; text-decoration-color: var(--gold); text-decoration-thickness: 2px; text-underline-offset: 4px; }
 .dhx-paused { display: inline-flex; align-items: center; gap: 8px; font-size: 1rem; color: var(--ink-soft); }
 .dhx-paused svg { width: 16px; height: 16px; color: var(--ink-soft); }
@@ -491,4 +491,12 @@ body {
 .dh.dhx { display: flex; width: max-content; flex-direction: column; align-items: stretch; height: auto; min-height: 3.625rem; gap: 0; padding: 0; border-radius: 1.8125rem; max-width: calc(var(--dictation-screen-width, 1024px) - 80px); }
 .dhx-row { flex-wrap: wrap; height: auto; min-height: 3.625rem; padding-top: .3rem; padding-bottom: .3rem; }
 #sbMenu.recovery-panel { margin: 8px; position: relative; width: min(30rem, calc(var(--dictation-screen-width, 1024px) - 16px)); }
+#sbMenu.writing-panel { margin: 8px; position: relative; width: min(40rem, calc(var(--dictation-screen-width, 1024px) - 16px)); max-height: calc(var(--dictation-screen-height, 768px) - 96px); display: flex; flex-direction: column; }
+.writing-panel .rp-body { overflow: auto; min-height: 0; }
+.writing-panel .rp-text { max-height: 12rem; }
+.rp-copy { margin: 0; font-size: 1rem; color: var(--ink); line-height: 1.55; }
+.rp-lab { margin: 0 0 6px; font-size: 1rem; color: var(--ink-soft); font-weight: 600; }
+.rp-warn { margin: 0; padding: 10px 12px; border: 1px solid var(--line-control); border-radius: 12px; color: var(--ink); font-size: 1rem; line-height: 1.5; }
+.rp-address { color: var(--ink-soft); font-size: 1rem; overflow-wrap: anywhere; }
+#sbMenu.sbmenu { max-height: calc(var(--dictation-screen-height, 768px) - 52px); overflow: auto; }
 @media (prefers-reduced-motion: reduce) { .dhm-linger, .rpanel { animation: none; } }

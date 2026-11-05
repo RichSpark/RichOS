@@ -74,7 +74,7 @@
 [richos] quit: the second review's watcher(s) {} ended.
 [richos] quit: {} lease(s) ended their tool commands; {} stopped at the bound.
 [richos] resources unavailable: {}
-[richos] saved answer order unreadable: {}
+[richos] saved answer history unreadable: {}
 [richos] second review: not watching yet, the engine is not verified ({})
 [richos] second review: the app's review-watch could not start ({})
 [richos] spoken reply: {}
@@ -114,3 +114,10 @@
 [richos] yt-dlp: installed nightly {}{}
 [richos] yt-dlp: nightly {} is the newest
 [richos] yt-dlp: no HOME, so no tools folder; not checking
+
+# Exceptional account-change save failure. A healthy boot must still fail if it prints this.
+[richos] writing permission could not be saved after the account change
+[richos] numeric checkpoint could not be saved: {}
+
+# Exceptional failure to create the company meeting-notes folder before a lease starts.
+[richos] meeting notes: {} could not be made for Rich to read: {}

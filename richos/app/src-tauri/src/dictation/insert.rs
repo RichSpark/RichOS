@@ -29,6 +29,7 @@ extern "C" {
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
     fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
     fn AXUIElementCopyAttributeValue(element: AXUIElementRef, attribute: CFTypeRef, value: *mut CFTypeRef) -> i32;
+    fn AXUIElementSetAttributeValue(element: AXUIElementRef, attribute: CFTypeRef, value: CFTypeRef) -> i32;
     fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
     fn AXValueGetValue(value: CFTypeRef, kind: u32, out: *mut c_void) -> bool;
     fn AXValueCreate(kind: u32, value: *const c_void) -> CFTypeRef;
@@ -42,6 +43,7 @@ extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(cf: CFTypeRef);
+    fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
     fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> bool;
     fn CFDataGetBytePtr(data: CFTypeRef) -> *const u8;
 }
@@ -99,6 +101,7 @@ impl ClipboardRestore {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct AxRange {
     location: isize,
     length: isize,
@@ -106,6 +109,12 @@ struct AxRange {
 
 /// An owned AX or CF reference, released on drop.
 struct Owned(CFTypeRef);
+impl Clone for Owned {
+    fn clone(&self)->Self {
+        // SAFETY: this instance owns a live +1 reference, retained independently.
+        Self(unsafe { CFRetain(self.0) })
+    }
+}
 impl Drop for Owned {
     fn drop(&mut self) {
         if !self.0.is_null() {
@@ -118,12 +127,129 @@ impl Drop for Owned {
 /// Only native identities and a display name, never field contents. AX elements
 /// are immutable reference-counted proxies; the writer owns their references and uses
 /// Accessibility's thread-safe messaging APIs, without AppKit window access.
+#[derive(Clone)]
 pub struct Destination {
     pub pid: Option<i32>,
     pub name: String,
     window: Option<Owned>,
     field: Option<Owned>,
     pub secure: bool,
+}
+
+/// One exact source range. This never reads the clipboard or the whole document
+/// as editing context. AX references retain identity while a proposal is open.
+pub struct Anchor {
+    destination: Destination,
+    range: AxRange,
+    selection: AxRange,
+    pub original: String,
+}
+
+// SAFETY: the owned immutable AX references have the same transfer contract as Destination.
+unsafe impl Send for Anchor {}
+
+pub enum Replacement { Replaced { text:String, anchor:Option<Anchor> }, Check, CopyOnly }
+
+impl Anchor {
+    pub fn selected()->Option<Self> {
+        let destination=Destination::capture();
+        if destination.secure {return None}
+        let field=destination.field.as_ref()?;
+        let range=selected_range(field)?;
+        if range.length<=0 {return None}
+        let original=range_text(field,range.location,range.length)?;
+        if original.trim().is_empty() {return None}
+        Some(Self {destination,range,selection:range,original})
+    }
+
+    pub fn inserted(destination:&Destination, start:isize, original:String)->Option<Self> {
+        let field=destination.field.as_ref()?;
+        let range=AxRange {location:start,length:original.encode_utf16().count() as isize};
+        if range_text(field,range.location,range.length).as_deref()!=Some(&original) {return None}
+        Some(Self {destination:destination.clone(),range,selection:selected_range(field)?,original})
+    }
+
+    /// Freeze the caret/selection when help is requested, not when the earlier
+    /// dictation finished. Subsequent user edits or navigation invalidate it.
+    pub fn requested(&self)->Option<Self> {
+        let field=self.destination.field.as_ref()?;
+        if self.destination.permission(false)!=DeliveryPermission::Paste ||
+            range_text(field,self.range.location,self.range.length).as_deref()!=Some(&self.original) {return None}
+        Some(Self {destination:self.destination.clone(),range:self.range,
+            selection:selected_range(field)?,original:self.original.clone()})
+    }
+
+    pub fn destination_name(&self)->&str {&self.destination.name}
+    pub fn source_range(&self)->(isize,isize) {(self.range.location,self.range.length)}
+
+    pub fn can_replace(&self, proposal:&str)->bool {
+        let Some(field)=self.destination.field.as_ref() else{return false};
+        // Prose applications with native edit/undo behavior. Other fields can
+        // still use the revision through explicit Copy. Browser/Slack behavior
+        // remains subject to the real per-app release matrix.
+        let prose=self.destination.pid.and_then(bundle_of).is_some_and(|id| {
+            if matches!(id.as_str(),"com.apple.TextEdit"|"com.apple.mail"|"com.tinyspeck.slackmacgap") {return true}
+            if !matches!(id.as_str(),"com.apple.Safari"|"com.google.Chrome") {return false}
+            // Read only target metadata, never page text. Unknown browser
+            // execution semantics, including terminals, remain explicit Copy.
+            let mut element=Some(field.clone());
+            for _ in 0..12 {
+                let Some(current)=element else {break};
+                if ["AXURL","AXDocument"].iter().filter_map(|key|string_attribute(current.0,key))
+                    .any(|url|prose_browser_url(&url)) {return true}
+                element=attribute(current.0,"AXParent");
+            }
+            false
+        });
+        let role=string_attribute(field.0,"AXRole");
+        prose && role.as_deref()==Some("AXTextArea") && !proposal.contains('\0') &&
+            self.destination.permission(false)==DeliveryPermission::Paste &&
+            selected_range(field)==Some(self.selection) &&
+            range_text(field,self.range.location,self.range.length).as_deref()==Some(&self.original)
+    }
+
+    pub fn replace(&self, proposal:&str, v_code:u16, stop:&std::sync::atomic::AtomicBool)->Result<Replacement,String> {
+        if !self.can_replace(proposal) {return Ok(Replacement::CopyOnly)}
+        let field=self.destination.field.as_ref().ok_or("The original field is unavailable")?;
+        let value=Owned(unsafe { AXValueCreate(AX_VALUE_CF_RANGE,&self.range as *const _ as *const c_void) });
+        if value.0.is_null() {return Ok(Replacement::CopyOnly)}
+        let attribute=CFString::from_static_string("AXSelectedTextRange");
+        // Selecting a range is not a document edit. Only the existing serialized
+        // paste below changes text, so the edit is one ordinary Undo operation.
+        if unsafe {AXUIElementSetAttributeValue(field.0,attribute.as_concrete_TypeRef() as CFTypeRef,value.0)}!=0 {
+            return Ok(Replacement::CopyOnly)
+        }
+        if self.destination.permission(false)!=DeliveryPermission::Paste || selected_range(field)!=Some(self.range) ||
+            range_text(field,self.range.location,self.range.length).as_deref()!=Some(&self.original) {
+            return Ok(Replacement::CopyOnly)
+        }
+        let result=insert_checked(proposal,v_code,&self.destination,
+            &std::sync::atomic::AtomicBool::new(false),stop,false,Some(self))?;
+        Ok(match result.delivery {Delivery::Added=>{
+            let (start,text)=result.landed.unwrap_or((self.range.location,proposal.to_string()));
+            let anchor=Self::inserted(&self.destination,start,text.clone());
+            Replacement::Replaced {text,anchor}
+        },
+            Delivery::Sent|Delivery::Check=>Replacement::Check,_=>Replacement::CopyOnly})
+    }
+
+    fn source_selected(&self)->bool {
+        self.destination.field.as_ref().is_some_and(|field|selected_range(field)==Some(self.range) &&
+            range_text(field,self.range.location,self.range.length).as_deref()==Some(&self.original))
+    }
+}
+
+fn prose_browser_url(value:&str)->bool {
+    tauri::Url::parse(value).is_ok_and(|url|url.scheme()=="https" && url.port_or_known_default()==Some(443) &&
+        matches!(url.host_str(),Some("mail.google.com"|"docs.google.com"|"app.slack.com")))
+}
+
+fn selected_range(field:&Owned)->Option<AxRange> {
+    let value=attribute(field.0,"AXSelectedTextRange")?;
+    let mut range=AxRange {location:0,length:0};
+    if !unsafe {AXValueGetValue(value.0,AX_VALUE_CF_RANGE,&mut range as *mut _ as *mut c_void)} ||
+        range.location<0 || range.length<0 {return None}
+    Some(range)
 }
 
 // SAFETY: ownership transfers retained immutable AX proxy references. No mutable
@@ -660,6 +786,19 @@ pub struct Inserted {
 /// "not added" after a paste was already sent.
 pub fn insert(words: &str, v_code: u16, destination: &Destination,
               navigated: &std::sync::atomic::AtomicBool, stop: &std::sync::atomic::AtomicBool) -> Result<Inserted, String> {
+    insert_checked(words,v_code,destination,navigated,stop,true,None)
+}
+
+fn text_for_paste(words:&str, around:Option<(Option<char>,Option<char>)>, replacing:bool)->String {
+    match (replacing,around) {
+        (false,Some((before,after)))=>spaced(words,before,after),
+        _=>words.to_string(),
+    }
+}
+
+fn insert_checked(words:&str, v_code:u16, destination:&Destination,
+    navigated:&std::sync::atomic::AtomicBool, stop:&std::sync::atomic::AtomicBool,
+    copy_on_failure:bool, anchor:Option<&Anchor>)->Result<Inserted,String> {
     use std::sync::atomic::Ordering;
     let mut pending = PENDING_RESTORE.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(previous) = pending.take() { previous.finish(false); }
@@ -669,17 +808,17 @@ pub fn insert(words: &str, v_code: u16, destination: &Destination,
     if permission == DeliveryPermission::DiscardSecure { return Ok(empty(Delivery::DiscardedSecure)); }
     let pb = general().ok_or("no general pasteboard")?;
     if permission == DeliveryPermission::Recover {
-        let copied = write_words(pb, words).is_some();
+        let copied = copy_on_failure && write_words(pb, words).is_some();
         return Ok(empty(Delivery::NotAdded { copied, destination_changed: true }));
     }
+    if anchor.is_some_and(|a|!a.source_selected()) {return Ok(empty(Delivery::NotAdded {copied:false,destination_changed:true}))}
     let f = focus();
     let how = insert_plan(f.focused_element, f.window_focused, f.finder_in_front, f.focused_role.as_deref());
-    let text = match (how, f.around) {
-        (Insert::Paste, Some((before, after))) => spaced(words, before, after),
-        _ => words.to_string(),
-    };
+    // Exact selected text is replaced verbatim. Caret spacing belongs only to
+    // ordinary dictation, never to a paragraph or a selection inside quotes.
+    let text=text_for_paste(words,if how==Insert::Paste {f.around}else{None},anchor.is_some());
     if how == Insert::CopyOnly {
-        let copied = write_words(pb, &text).is_some();
+        let copied = copy_on_failure && write_words(pb, &text).is_some();
         return Ok(empty(Delivery::NotAdded { copied, destination_changed: false }));
     }
     let can_verify = f.selection_start.zip(destination.field.as_ref())
@@ -715,8 +854,13 @@ pub fn insert(words: &str, v_code: u16, destination: &Destination,
         return if stop.load(Ordering::Acquire) { Err("dictation canceled".into()) }
                else { Ok(empty(Delivery::DiscardedSecure)) };
     }
-    if permission == DeliveryPermission::Recover {
+    if permission == DeliveryPermission::Recover || anchor.is_some_and(|a|!a.source_selected()) {
         // No paste happened. The just-written words are the deliberate auto-copy.
+        if !copy_on_failure {
+            if change_count(pb)==written {write_items(pb,saved.items());}
+            drop(restore_tx); restore.join().ok();
+            return Ok(empty(Delivery::NotAdded {copied:false,destination_changed:true}))
+        }
         drop(restore_tx); restore.join().ok();
         return Ok(empty(Delivery::NotAdded { copied: true, destination_changed: true }));
     }
@@ -746,7 +890,7 @@ pub fn insert(words: &str, v_code: u16, destination: &Destination,
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
-    Ok(Inserted { how, spaced: f.around.is_some(), seen: f.seen, landed, rect, delivery })
+    Ok(Inserted { how, spaced: anchor.is_none() && f.around.is_some(), seen: f.seen, landed, rect, delivery })
 }
 
 /// Copy `words` to the clipboard and nothing else: the case where the words are ready and
@@ -776,6 +920,26 @@ pub fn front_is_finder()->bool {frontmost_pid().and_then(bundle_of).as_deref()==
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exact_replacement_preserves_paragraphs_and_opening_punctuation() {
+        for (text,before,after) in [
+            ("Please review the forecast.\n",Some('\n'),Some('T')),
+            ("revised",Some('"'),Some('"')),
+            ("revised",Some('('),Some(')')),
+        ] {assert_eq!(super::text_for_paste(text,Some((before,after)),true),text);}
+        assert_eq!(super::text_for_paste("spoken words",Some((Some('x'),Some('y'))),false)," spoken words ",
+            "Ordinary caret insertion keeps its existing spacing");
+    }
+
+    #[test]
+    fn browser_replacement_requires_a_known_prose_origin() {
+        for url in ["https://mail.google.com/mail/u/0/","https://docs.google.com/document/d/draft","https://app.slack.com/client/workspace"] {
+            assert!(super::prose_browser_url(url));
+        }
+        for url in ["https://mail.google.com.evil.example/","https://docs.google.com:8443/","http://mail.google.com/","file:///draft.html","https://example.com/terminal"] {
+            assert!(!super::prose_browser_url(url));
+        }
+    }
     use super::*;
 
     /// INVARIANT (walk-411cc5b8669f): the paste keystroke is what a keyboard sends, Command down

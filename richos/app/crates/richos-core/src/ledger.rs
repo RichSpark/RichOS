@@ -430,6 +430,12 @@ pub enum Event {
         /// existed; an older build ignores the key.
         #[serde(default, skip_serializing_if = "is_false")]
         pressed: bool,
+        /// Byte length of the human-written prefix, before app attachment descriptions.
+        /// Missing on legacy records; zero denotes known generated-only text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authored_bytes: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authored_ranges: Option<crate::swearmeter::Ranges>,
     },
     TurnStarted { turn_id: String, session_id: String, at: u64 },
     /// A streamed partial reply chunk — persisted incrementally so a half-written
@@ -584,6 +590,9 @@ impl Thread {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Turn {
+    /// Stable numeric slot in a disposable checkpoint, never serialized or displayed.
+    #[serde(skip)]
+    pub swearmeter_checkpoint_index: Option<usize>,
     pub id: String,
     pub thread_id: String,
     /// The entity this turn was accepted under. `None` only for turns written before
@@ -686,6 +695,10 @@ pub struct Turn {
     /// `Event::PromptReceived::pressed`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub pressed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_ranges: Option<crate::swearmeter::Ranges>,
 }
 
 impl Turn {
@@ -836,6 +849,10 @@ impl HistoryHealth {
 type ReadObserver = std::sync::Arc<dyn Fn(&Event) + Send + Sync>;
 
 pub struct Ledger {
+    swearmeter: crate::swearmeter_ledger::Projection,
+    swearmeter_source: Option<crate::swearmeter_checkpoint::SourceStamp>,
+    swearmeter_events: u64,
+    swearmeter_replay_skip: u64,
     path: PathBuf,
     file: Option<File>,
     read_observer: Option<ReadObserver>,
@@ -871,6 +888,10 @@ impl Ledger {
     pub(crate) fn read_copy(&self) -> Self {
         Self {
             path: self.path.clone(), file: None, read_observer: None,
+            swearmeter: self.swearmeter.clone(),
+            swearmeter_source: self.swearmeter_source.clone(),
+            swearmeter_events: self.swearmeter_events,
+            swearmeter_replay_skip: 0,
             threads: self.threads.clone(), turns: self.turns.clone(), actions: self.actions.clone(),
             handoff_summaries: self.handoff_summaries.clone(),
             scope_violations: self.scope_violations.clone(), skipped: self.skipped.clone(),
@@ -885,17 +906,26 @@ impl Ledger {
 
     pub(crate) fn apply_read_event(&mut self, event: Event) {
         let reconcile = matches!(event, Event::ThreadEntityBound { .. });
-        self.apply(event);
-        if reconcile { self.reconcile_scope(); }
+        self.fold(event);
+        if reconcile { self.reconcile_scope(false); }
     }
 
     /// Open (creating if needed) and replay the on-disk log into the projection.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, LedgerError> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, LedgerError> { Self::open_cached(path, None) }
+
+    pub fn open_cached(path: impl AsRef<Path>, cache: Option<(crate::swearmeter_checkpoint::SourceStamp, crate::swearmeter_ledger::Frozen)>) -> Result<Self, LedgerError> {
         let path = path.as_ref().to_path_buf();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
+        let expected = cache.as_ref().map(|(source, _)| source.clone());
+        let cache = cache.filter(|(source, frozen)| frozen.valid() && crate::swearmeter_checkpoint::SourceStamp::at(&path).ok() == Some(Some(source.clone())));
+        let replay_skip = cache.as_ref().map_or(0, |(_, frozen)| frozen.events);
         let mut ledger = Ledger {
+            swearmeter: cache.map(|(_, frozen)| crate::swearmeter_ledger::Projection::from_frozen(frozen)).unwrap_or_default(),
+            swearmeter_source: None,
+            swearmeter_events: 0,
+            swearmeter_replay_skip: replay_skip,
             path: path.clone(),
             file: Some(OpenOptions::new().create(true).append(true).read(true).open(&path)?),
             read_observer: None,
@@ -910,10 +940,13 @@ impl Ledger {
             next_revision: 1,
         };
         ledger.replay()?;
+        if replay_skip != 0 && (ledger.swearmeter_events != replay_skip || ledger.swearmeter_source != expected) {
+            return Self::open_cached(&path, None);
+        }
         // Scope reconciliation runs AFTER the whole log is folded, so the verdict never
         // depends on event ORDER (a thread's adoption event can legally arrive after the
         // turns it covers). Every turn is checked against its thread's final home entity.
-        ledger.reconcile_scope();
+        ledger.reconcile_scope(replay_skip != 0);
         Ok(ledger)
     }
 
@@ -947,6 +980,7 @@ impl Ledger {
     /// must not be reported as one — it propagates, as it always did.
     fn replay(&mut self) -> Result<(), LedgerError> {
         let mut reader = BufReader::new(File::open(&self.path)?);
+        let before = crate::swearmeter_checkpoint::SourceStamp::from_metadata(&reader.get_ref().metadata()?).ok();
         let mut raw: Vec<u8> = Vec::new();
         let mut line_no = 0usize;
         loop {
@@ -983,7 +1017,11 @@ impl Ledger {
             match serde_json::from_str::<Event>(line) {
                 Ok(event) => {
                     self.records_applied += 1;
-                    self.apply(event);
+                    if self.swearmeter_replay_skip > 0 {
+                        self.swearmeter_replay_skip -= 1;
+                        self.swearmeter_events += 1;
+                        self.apply(event);
+                    } else { self.fold(event); }
                 }
                 Err(_) => {
                     let record = Self::classify_skip(line_no, line);
@@ -1000,6 +1038,8 @@ impl Ledger {
                 }
             }
         }
+        let after = crate::swearmeter_checkpoint::SourceStamp::from_metadata(&reader.get_ref().metadata()?).ok();
+        self.swearmeter_source = (before == after).then_some(after).flatten();
         self.report_skipped();
         Ok(())
     }
@@ -1058,6 +1098,18 @@ impl Ledger {
         );
     }
 
+    /// The maintained count is independent of whether the home display is enabled.
+    pub fn swearmeter(&self) -> &crate::swearmeter_ledger::Projection { &self.swearmeter }
+
+    pub fn swearmeter_source_stamp(&self) -> Option<&crate::swearmeter_checkpoint::SourceStamp> { self.swearmeter_source.as_ref() }
+    pub fn freeze_swearmeter(&self) -> crate::swearmeter_ledger::Frozen { self.swearmeter.freeze(&self.turns, self.swearmeter_events) }
+
+    fn fold(&mut self, event: Event) {
+        self.swearmeter_events += 1;
+        self.swearmeter.observe_in(&event, &self.turns);
+        self.apply(event);
+    }
+
     /// Fold one event into the in-memory projection. Pure; no I/O.
     /// (`Self::push_text_run` does the text-run splitting.)
     fn apply(&mut self, event: Event) {
@@ -1100,9 +1152,12 @@ impl Ledger {
                 client_id,
                 voice_note,
                 pressed,
+                authored_bytes,
+                authored_ranges,
             } => {
                 self.observe_revision(binding_revision);
                 self.turns.push(Turn {
+                    swearmeter_checkpoint_index: None,
                     id: turn_id,
                     thread_id,
                     entity_id,
@@ -1130,6 +1185,8 @@ impl Ledger {
                     client_id,
                     voice_note,
                     pressed,
+                    authored_bytes,
+                    authored_ranges,
                 });
             }
             Event::TurnStarted { turn_id, session_id, at } => {
@@ -1220,6 +1277,7 @@ impl Ledger {
                 // no started/delta/completed cycle, unlike a live-streamed CEO-turn reply
                 // (the app already holds the full text when it raises this).
                 self.turns.push(Turn {
+                    swearmeter_checkpoint_index: None,
                     id: turn_id,
                     thread_id,
                     entity_id,
@@ -1255,6 +1313,8 @@ impl Ledger {
                     client_id: None,
                     voice_note: false,
                     pressed: false,
+                    authored_bytes: Some(0),
+                    authored_ranges: None,
                 });
             }
             Event::HandoffSummaryUpdated { thread_id, summary, .. } => {
@@ -1274,7 +1334,8 @@ impl Ledger {
                         entity_id: original.entity_id, binding_revision: original.binding_revision,
                         intake_id: original.intake_id, rich_audible: original.rich_audible,
                         channel: original.channel, client_id: None,
-                        voice_note: original.voice_note, pressed: original.pressed,
+                        voice_note: original.voice_note, pressed: original.pressed, authored_bytes: original.authored_bytes,
+                        authored_ranges: original.authored_ranges.clone(),
                     });
                     // A continuation replaces this request's place in acceptance order.
                     // Appending it after later requests reverses corrections on another restart.
@@ -1364,7 +1425,7 @@ impl Ledger {
     ///
     /// Quarantine excludes, it never deletes — the bytes remain on disk as evidence and
     /// the violation is reported through [`Ledger::scope_violations`].
-    fn reconcile_scope(&mut self) {
+    fn reconcile_scope(&mut self, checkpoint_indices: bool) {
         self.scope_violations.clear();
         let homes: Vec<(String, Option<EntityId>, bool)> = self
             .threads
@@ -1372,7 +1433,8 @@ impl Ledger {
             .map(|t| (t.id.clone(), t.entity_id().cloned(), t.is_bound()))
             .collect();
         let mut violations = Vec::new();
-        for turn in self.turns.iter_mut() {
+        for (index, turn) in self.turns.iter_mut().enumerate() {
+            if checkpoint_indices { turn.swearmeter_checkpoint_index = Some(index); }
             let home = homes.iter().find(|(id, _, _)| id == &turn.thread_id);
             let (thread_entity, thread_exists) = match home {
                 Some((_, e, _)) => (e.clone(), true),
@@ -1593,7 +1655,8 @@ impl Ledger {
         if sync {
             file.sync_data()?;
         }
-        self.apply(event.clone());
+        self.swearmeter_source = file.metadata().ok().and_then(|metadata| crate::swearmeter_checkpoint::SourceStamp::from_metadata(&metadata).ok());
+        self.fold(event.clone());
         if let Some(observer) = &self.read_observer {
             observer(&event);
         }
@@ -1737,7 +1800,7 @@ impl Ledger {
         )?;
         // The adoption changes a thread's home, which changes the verdict for every turn
         // in it — re-run the guard rather than leaving stale quarantine flags behind.
-        self.reconcile_scope();
+        self.reconcile_scope(false);
         Ok(ThreadBinding::new(person_id, entity_id.clone(), thread_id, binding_revision))
     }
 
@@ -1797,9 +1860,11 @@ impl Ledger {
 
     /// Preserve desktop capture/button provenance and the shared input order in one write.
     pub(crate) fn record_prompt_received_desktop(&mut self, binding: &ThreadBinding, text: &str,
-        source: Source, intake_id: Option<u64>, rich_audible: Option<bool>, pressed: bool,
+        source: Source, intake_id: Option<u64>, rich_audible: Option<bool>,
+        provenance: (bool, Option<&str>, crate::swearmeter::Authorship),
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, None, None, false, pressed)
+        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible,
+            provenance.1, None, false, provenance.0, provenance.2)
     }
 
     /// **The same record, with the mouth his words came through** (operator back-end spec r3
@@ -1838,7 +1903,25 @@ impl Ledger {
         client_id: Option<&str>,
         voice_note: bool,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, Some(intake_id), None, channel, client_id, voice_note, false)
+        self.record_prompt_received_inner(binding, text, source, Some(intake_id), None, channel, client_id, voice_note, false, crate::swearmeter::Authorship::all(text))
+    }
+
+    /// Preserve the producer's user-text boundary in the same durable prompt write.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_prompt_received_from_client_authored(
+        &mut self, binding: &ThreadBinding, text: &str, source: Source, intake_id: u64,
+        channel: Option<&str>, client_id: Option<&str>, capture: (bool, Option<usize>),
+    ) -> Result<String, LedgerError> {
+        self.record_prompt_received_from_client_provenance(binding, text, source, intake_id, channel, client_id,
+            (capture.0, crate::swearmeter::Authorship::prefix(capture.1)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_prompt_received_from_client_provenance(&mut self, binding: &ThreadBinding, text: &str,
+        source: Source, intake_id: u64, channel: Option<&str>, client_id: Option<&str>,
+        capture: (bool, crate::swearmeter::Authorship)) -> Result<String, LedgerError> {
+        self.record_prompt_received_inner(binding, text, source, Some(intake_id), None,
+            channel, client_id, capture.0, false, capture.1)
     }
 
     /// **Words the app sends Rich because he pressed a button** ("Start the questions"),
@@ -1849,7 +1932,7 @@ impl Ledger {
         text: &str,
         source: Source,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, None, None, None, None, false, true)
+        self.record_prompt_received_inner(binding, text, source, None, None, None, None, false, true, crate::swearmeter::Authorship::prefix(Some(0)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1863,7 +1946,7 @@ impl Ledger {
         channel: Option<&str>,
         client_id: Option<&str>,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, channel, client_id, false, false)
+        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, channel, client_id, false, false, crate::swearmeter::Authorship::all(text))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1878,6 +1961,7 @@ impl Ledger {
         client_id: Option<&str>,
         voice_note: bool,
         pressed: bool,
+        authorship: crate::swearmeter::Authorship,
     ) -> Result<String, LedgerError> {
         self.verify_binding(binding)?;
         let turn_id = new_id("turn");
@@ -1896,6 +1980,8 @@ impl Ledger {
                 client_id: client_id.map(str::to_string),
                 voice_note,
                 pressed,
+                authored_bytes: authorship.bytes,
+                authored_ranges: authorship.ranges,
             },
             true, // fsync — never lose the CEO's input
         )?;
@@ -1918,7 +2004,7 @@ impl Ledger {
         if self.turn(&turn_id).is_some(){return Ok(turn_id);}
         self.append(Event::PromptReceived {turn_id:turn_id.clone(),thread_id:binding.thread_id().into(),
             text:delivery.text.clone(),source:Source::Text,at:now_millis(),entity_id:Some(binding.entity_id().clone()),
-            binding_revision:binding.binding_revision(),intake_id,rich_audible:None,channel:None,client_id:None,voice_note:false,pressed:false},true)?;
+            binding_revision:binding.binding_revision(),intake_id,rich_audible:None,channel:None,client_id:None,voice_note:false,pressed:false,authored_bytes:Some(0),authored_ranges:None},true)?;
         Ok(turn_id)
     }
 
@@ -2518,6 +2604,7 @@ mod tests {
     #[test]
     fn a_turns_active_span_is_measured_and_refuses_to_be_invented() {
         let mut turn = Turn {
+            swearmeter_checkpoint_index: None,
             id: "t".into(),
             thread_id: "thr".into(),
             entity_id: None,
@@ -2545,6 +2632,8 @@ mod tests {
             client_id: None,
             voice_note: false,
             pressed: false,
+            authored_bytes: None,
+            authored_ranges: None,
         };
         // IN FLIGHT: unknown, never `now() - started_at` (UX §6.3's twelve-hour trap).
         assert_eq!(turn.active_ms(), None);
