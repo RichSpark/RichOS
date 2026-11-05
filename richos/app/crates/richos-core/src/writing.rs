@@ -65,11 +65,13 @@ pub fn revise(bin:&Path, profile:&EngineProfile, request:Request<'_>, canceled:&
 }
 
 fn revision_text(original:&str, proposal:&str)->Result<String,Failure> {
-    let breaks=['\r','\n','\u{2028}','\u{2029}'];
-    // A selected paragraph can include its separator. Keep that exact suffix
-    // in the visible proposal and Copy as well as in native replacement.
-    let end=original.trim_end_matches(breaks).len();
-    let mut text=proposal.trim_end_matches(breaks).to_string();
+    // Original edge whitespace belongs to the surrounding document: both a
+    // selected paragraph's separator and spaces added by ordinary dictation.
+    // Carry it once into the visible proposal, Copy and exact replacement.
+    let start=original.len()-original.trim_start().len();
+    let end=original.trim_end().len();
+    let mut text=original[..start].to_string();
+    text.push_str(proposal.trim());
     text.push_str(&original[end..]);
     if text.chars().count()>MAX_CHARACTERS {return Err(Failure::Invalid)}
     Ok(text)
@@ -104,12 +106,15 @@ mod tests {
     }
 
     #[test]
-    fn revisions_keep_selected_paragraph_endings_without_adding_new_ones() {
+    fn revisions_keep_original_boundary_whitespace_without_duplication() {
         for (original,proposal,wanted) in [
             ("Review the forecast.\n","Please review it.\n","Please review it.\n"),
             ("Review it.\r\n\r\n","Please review it.","Please review it.\r\n\r\n"),
             ("Review it.\u{2029}","Please review it.\n","Please review it.\u{2029}"),
             ("Review it.","Please review it.\n\n","Please review it."),
+            (" So we need the forecast.","So we need the forecast."," So we need the forecast."),
+            ("So we need the forecast. ","So we need the forecast.","So we need the forecast. "),
+            (" \tReview it. \r\n","  Please review it. \n"," \tPlease review it. \r\n"),
         ] {assert_eq!(revision_text(original,proposal).unwrap(),wanted);}
         assert_eq!(revision_text("Original.\n",&"x".repeat(MAX_CHARACTERS)),Err(Failure::Invalid),
             "Restoring a selected separator cannot exceed the output bound");
@@ -135,10 +140,10 @@ for line in sys.stdin:
     print(json.dumps({'type':'assistant','message':{'model':'claude-haiku-5-5','content':[{'type':'text','text':result}]}}),flush=True)
     print(json.dumps({'type':'result','is_error':False,'result':result}),flush=True)
 "#);
-        let result=revise(&bin,&profile,Request {mode:Mode::Rewrite,original:"Review £36,000 by Monday.\n",instruction:"Make this more polite."},&AtomicBool::new(false),DEADLINE).unwrap();
-        assert_eq!(result.text,"Please review the £36,000 forecast by Monday.\n");
+        let result=revise(&bin,&profile,Request {mode:Mode::Rewrite,original:" Review £36,000 by Monday.\n",instruction:"Make this more polite."},&AtomicBool::new(false),DEADLINE).unwrap();
+        assert_eq!(result.text," Please review the £36,000 forecast by Monday.\n");
         let asked:Value=serde_json::from_str(&std::fs::read_to_string(profile.state.join("writing/asked.json")).unwrap()).unwrap();
-        assert_eq!(asked,json!({"action":"rewrite","original":"Review £36,000 by Monday.\n","instruction":"Make this more polite."}));
+        assert_eq!(asked,json!({"action":"rewrite","original":" Review £36,000 by Monday.\n","instruction":"Make this more polite."}));
         let args:Vec<String>=serde_json::from_str(&std::fs::read_to_string(profile.state.join("writing/argv.json")).unwrap()).unwrap();
         assert!(!args.iter().any(|a|a.contains("£36,000")),"User content never enters process arguments");
         assert_eq!(args[args.iter().position(|a|a=="--system-prompt").unwrap()+1],std::fs::read_to_string(profile.engine.join("app/writing.md")).unwrap());
