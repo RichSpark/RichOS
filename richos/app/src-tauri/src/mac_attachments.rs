@@ -158,6 +158,8 @@ pub struct Committed {
     pub text: Option<String>,
     pub files: Vec<AttachedView>,
     pub missing: Vec<String>,
+    #[serde(flatten)]
+    pub authorship: richos_core::swearmeter::Authorship,
 }
 
 /// The picker could not be shown or did not answer. Nothing was attached and nothing changed.
@@ -381,7 +383,13 @@ impl MacAttachments {
     /// then they move into the conversation's folder and the words Rich reads are built. Every
     /// named folder must still be the folder it was (the same real path) and still be there; it is
     /// named to Rich under the files, by its path. Anything missing means NOTHING is committed.
+    #[cfg(test)]
     pub fn commit(&self, thread: &str, draft: &str, text: &str, wanted: &[Wanted]) -> Result<Committed, String> {
+        self.commit_authored(thread, draft, text, wanted, richos_core::swearmeter::Authorship::all(text))
+    }
+
+    pub fn commit_authored(&self, thread: &str, draft: &str, text: &str, wanted: &[Wanted],
+        authorship: richos_core::swearmeter::Authorship) -> Result<Committed, String> {
         if thread.is_empty() || !attachments::valid_id(draft) || wanted.is_empty() || wanted.len() > attachments::MAX_FILES_PER_MESSAGE {
             return Err(NOT_SAVED.into());
         }
@@ -411,7 +419,7 @@ impl MacAttachments {
             }
         };
         if !missing.is_empty() {
-            return Ok(Committed { text: None, files: Vec::new(), missing });
+            return Ok(Committed { text: None, files: Vec::new(), missing, authorship: Default::default() });
         }
         let stored = if staged.is_empty() {
             Vec::new()
@@ -447,7 +455,8 @@ impl MacAttachments {
             held.remove(&(draft.to_string(), f.view.id.clone()));
             files.push(f.view);
         }
-        Ok(Committed { text: Some(described), files, missing: Vec::new() })
+        let authorship = authorship.trimmed(text).unwrap_or_else(|| richos_core::swearmeter::Authorship::prefix(Some(described.len().saturating_add(1))));
+        Ok(Committed { text: Some(described), files, missing: Vec::new(), authorship })
     }
 }
 
@@ -713,8 +722,10 @@ pub fn commit_attachments(
     draft_id: String,
     text: String,
     attachments: Vec<Wanted>,
+    authorship: Option<richos_core::swearmeter::Authorship>,
 ) -> Result<Committed, String> {
-    state.commit(&thread_id, &draft_id, &text, &attachments)
+    let authorship = authorship.unwrap_or_else(|| richos_core::swearmeter::Authorship::all(&text));
+    state.commit_authored(&thread_id, &draft_id, &text, &attachments, authorship)
 }
 
 #[cfg(test)]
@@ -825,6 +836,29 @@ mod tests {
     }
 
     #[test]
+    fn swearmeter_capture_uses_native_trim_and_keeps_edited_draft_ranges() {
+        use richos_core::swearmeter::{Authorship, count, count_ranges};
+        let data = Scratch::new("swearmeter");
+        let mac = MacAttachments::open(&data.0);
+        let file = mac.attach_bytes("draft-word", "word-file", "wtf.png", "image/png", PNG).unwrap();
+        let own = format!("{}Attached on this Mac (1 file, saved by RichOS):\n/quoted/wtf.png\nshit", "\u{85}".repeat(80));
+        let done = mac.commit_authored("thr_word", "draft-word", &own,
+            &[Wanted { id: file.id, sha256: file.sha256 }], Authorship::all(&own)).unwrap();
+        let body = done.text.unwrap();
+        let bytes = done.authorship.bytes.unwrap();
+        assert_eq!(bytes, own.trim().len());
+        assert_eq!(count(&body[..bytes]), 2, "the deliberately pasted header and filename are human text");
+        assert!(count(&body) > 2, "the real attachment filename is outside that boundary");
+        let edited = format!("{body}\n\nand damn");
+        let captured = Authorship { bytes: None, ranges: Some(vec![(0, bytes), (body.len() + 2, edited.len())]) };
+        let next = mac.attach_bytes("draft-next", "next-file", "wtf.png", "image/png", PNG).unwrap();
+        let done = mac.commit_authored("thr_word", "draft-next", &edited,
+            &[Wanted { id: next.id, sha256: next.sha256 }], captured).unwrap();
+        let body = done.text.unwrap();
+        assert_eq!(count_ranges(&body, done.authorship.ranges.as_deref().unwrap()), Some(3));
+    }
+
+    #[test]
     fn refusals_are_sentences_and_nothing_refused_is_staged() {
         let data = Scratch::new("data");
         let desktop = Scratch::new("desktop");
@@ -871,7 +905,7 @@ mod tests {
         assert!(mac.discard("draft-2", "b").unwrap());
         let wanted = vec![Wanted { id: a.id.clone(), sha256: a.sha256.clone() }, Wanted { id: b.id, sha256: b.sha256 }];
         let answer = mac.commit("thr_1", "draft-2", "hi", &wanted).unwrap();
-        assert_eq!(answer, Committed { text: None, files: Vec::new(), missing: vec!["b".into()] });
+        assert_eq!(answer, Committed { text: None, files: Vec::new(), missing: vec!["b".into()], authorship: Default::default() });
         // The file that was still there was NOT moved: a partial send is never made.
         assert!(!data.0.join("attachments").join("thr_1").exists());
         let again = mac.commit("thr_1", "draft-2", "", &wanted[..1]).unwrap();
@@ -950,7 +984,7 @@ mod tests {
         std::fs::remove_dir_all(&notes).unwrap();
         let wanted = vec![Wanted { id: f.id.clone(), sha256: f.sha256.clone() }, Wanted { id: c.id.clone(), sha256: c.sha256.clone() }];
         let answer = mac.commit("thr_g", "draft-i", "hi", &wanted).unwrap();
-        assert_eq!(answer, Committed { text: None, files: Vec::new(), missing: vec!["c".into()] });
+        assert_eq!(answer, Committed { text: None, files: Vec::new(), missing: vec!["c".into()], authorship: Default::default() });
         assert!(!data.0.join("attachments").join("thr_g").join("draft-i").exists(), "a partial send was made");
     }
 

@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod question_host;
+mod swearmeter_host;
 mod peer_messages;
 mod activation;
 mod lifecycle;
@@ -727,6 +728,7 @@ impl EngineLeaseFactory {
 /// The durable Rich, guarded for cross-invocation access. `Spine` is `Send` (its
 /// compute lease is `Box<dyn Cognition + Send>`), so `Mutex<Spine>` is valid Tauri state.
 struct AppState {
+    swearmeter: swearmeter_host::Service,
     quota: Arc<richos_core::quota::Service>,
 
     /// **The second compute lease and the actor that owns it** — the background-work spec
@@ -1494,11 +1496,11 @@ fn hold_the_spine<'a>(
 /// (`crates/richos-command/src/lib.rs`), so an hours-long turn does not hold one of them either.
 #[richos_command::command]
 fn send_message(
+    app: AppHandle,
     state: State<AppState>,
     // **THE PHONE, INJECTED RATHER THAN REACHED FOR.** It is managed unconditionally at boot
     // (`app.manage(phone_runtime)`) and is inert until a phone is paired, so this costs a Mac
-    // with no phone nothing at all and saves this function an `AppHandle` it has no other use
-    // for.
+    // with no phone nothing at all.
     phone: State<std::sync::Arc<phone::PhoneRuntime>>,
     text: String,
     thread_id: String,
@@ -1507,8 +1509,10 @@ fn send_message(
     // blocking road below, never the intake log, whose whole purpose is HIS words reaching
     // his phone before the spine is free.
     pressed: Option<bool>,
+    authorship: Option<richos_core::swearmeter::Authorship>,
 ) -> Result<Vec<Message>, String> {
     let pressed = pressed == Some(true);
+    let authorship = authorship.unwrap_or_else(|| richos_core::swearmeter::Authorship::all(&text));
     // ===================================================================================
     // HOW LONG HE WAITED BEFORE HIS TURN EVEN STARTED — and why this line exists
     // ===================================================================================
@@ -1578,9 +1582,10 @@ fn send_message(
     // old road, and the only thing lost is the wait.
     let destination = state.reader.snapshot().ledger().thread_binding(&thread_id).ok();
     let his_words_are_on_the_log = if !pressed && destination.is_some() && desk_input_can_be_logged(&state.control, &thread_id) {
-        match state.control.submit_from_desk(&thread_id, destination.map(|binding| binding.entity_id().clone()), &text)
+        match state.control.submit_from_desk_provenance(&thread_id, destination.map(|binding| binding.entity_id().clone()), &text, authorship.clone())
         {
             Ok(record) => {
+                state.swearmeter.publish(&app);
                 // THE PHONE, BEFORE THE LOCK. Inert when nothing is paired, so this costs a
                 // Mac with no phone one atomic read.
                 let announced = phone.announce_his_words(
@@ -1701,7 +1706,7 @@ fn send_message(
             .map_err(|e| refused_send("the spine refused the prompt", e.to_string()))?;
     } else {
         spine
-            .submit_prompt_to(&thread_id, &text, Source::Text)
+            .submit_prompt_to_provenance(&thread_id, &text, authorship)
             .map_err(|e| refused_send("the spine refused the prompt", e.to_string()))?;
     }
     drop(spine);
@@ -2726,7 +2731,21 @@ fn main() {
                 window_configs.len()
             );
             let ledger_path = data_dir.join("conversation-ledger.jsonl");
-            let ledger = Ledger::open(&ledger_path).expect("open ledger");
+            let checkpoint_path = data_dir.join("swearmeter-cache");
+            let cards_path = data_dir.join("engine-state/questions/store.json");
+            let checkpoint = richos_core::swearmeter_checkpoint::Checkpoint::load(&checkpoint_path, &ledger_path, &cards_path);
+            let cached_card_counts = checkpoint.as_ref().map(|cache| Arc::new(cache.cards.clone()));
+            let cached_ledger_source = checkpoint.as_ref().map(|cache| cache.ledger_source.clone());
+            // The existing mandatory card-history read can run beside ledger replay.
+            // Its file generation is checked again at the original input-order boundary.
+            let card_counts_load = {
+                let root = data_dir.join("engine-state");
+                let cached = cached_card_counts.clone();
+                std::thread::Builder::new().name("richos-card-history".into()).spawn(move || {
+                    richos_core::questions::Store::new(root).swearmeter_startup_cached(cached.as_deref())
+                }).ok()
+            };
+            let ledger = Ledger::open_cached(&ledger_path, checkpoint.map(|cache| (cache.ledger_source, cache.ledger))).expect("open ledger");
 
             // WHAT DID NOT LOAD, ON THE BOOT LINE, BEFORE ANYTHING ELSE USES THE LEDGER.
             //
@@ -3353,10 +3372,32 @@ fn main() {
             spine.set_turn_control(control.clone());
             // A card answer keeps the input order it was accepted with until it reaches the
             // ledger; never hand that order to a new input after a restart.
-            match richos_core::questions::Store::new(data_dir.join("engine-state")).highest_order() {
-                Ok(Some(order)) => control.advance_input_order(order),
-                Ok(None) => {}
-                Err(e) => eprintln!("[richos] saved answer order unreadable: {e}"),
+            let card_store = richos_core::questions::Store::new(data_dir.join("engine-state"));
+            let card_startup = match card_counts_load {
+                Some(reader) => reader.join().unwrap_or_else(|_| Err("Card history reader stopped unexpectedly".into()))
+                    .and_then(|snapshot| card_store.swearmeter_refresh_startup(snapshot)),
+                None => card_store.swearmeter_startup_cached(cached_card_counts.as_deref()),
+            };
+            let (card_counts, card_source) = match card_startup {
+                Ok((order, projection, source)) => {
+                    if let Some(order) = order { control.advance_input_order(order); }
+                    (projection, source)
+                }
+                Err(e) => {
+                    eprintln!("[richos] saved answer history unreadable: {e}");
+                    if let Ok(Some(order)) = card_store.highest_order() { control.advance_input_order(order); }
+                    let mut projection = richos_core::swearmeter_questions::Projection::empty();
+                    projection.available = false;
+                    (projection, None)
+                }
+            };
+            let card_source_seen = card_source.is_some();
+            if card_counts.available && (cached_ledger_source.as_ref() != spine.ledger().swearmeter_source_stamp()
+                || cached_card_counts.as_ref().map(|cache| &cache.source) != Some(&card_source)) {
+                let cards = richos_core::swearmeter_checkpoint::CachedCards { source: card_source, summary: card_counts.summary() };
+                if let Err(error) = richos_core::swearmeter_checkpoint::Checkpoint::save(&checkpoint_path, &ledger_path, &cards_path, spine.ledger(), cards) {
+                    eprintln!("[richos] numeric checkpoint could not be saved: {error}");
+                }
             }
 
             // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
@@ -3553,6 +3594,7 @@ fn main() {
 
             spine.detach_conversation_io();
             app.manage(AppState {
+                swearmeter: swearmeter_host::Service::new(app.handle().clone(), spine.reader(), control.clone(), card_counts, card_source_seen),
                 quota: quota.clone(),
 
                 work,
@@ -3995,6 +4037,9 @@ fn main() {
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,
+            swearmeter_host::get_swearmeter,
+            swearmeter_host::set_swearmeter_visible,
+            swearmeter_host::retry_swearmeter,
             get_resources_view,
             set_resources_view,
             // --- improved Rich and Stu instructions reach every user (CEO 2026-10-22) — appended ---
@@ -4184,6 +4229,7 @@ fn main() {
                     if let Some(sweeper) = richos_core::app_cleanup::Sweeper::for_engine(&engine, &state.data_dir) {
                         sweeper.run(richos_core::app_cleanup::Moment::Quit).ok();
                     }
+                    swearmeter_host::save_on_exit(&state);
                     if let Err(e) = state.launch.lock().unwrap().note_clean_exit() {
                         eprintln!("[richos] launch record: could not mark a clean exit: {e}");
                     }
@@ -6977,7 +7023,8 @@ mod send_wait_tests {
         // his row cannot be built until his words are in the ledger behind it. So the window
         // takes `submit_from_desk` for EVERY typed sentence now. Same order, same reason, wider
         // door.
-        let durable = concat!("state.control.submit_from_", "desk(");
+        // The same durable road now preserves the producer's authorship metadata.
+        let durable = concat!("state.control.submit_from_", "desk_provenance(");
         // The one door to the spine since 2026-09-19 (`take_the_spine`) — the needle follows
         // the spelling, because the ORDER is the property and a needle that stopped matching
         // would pass this test over a send that had started blocking first.
@@ -8336,7 +8383,7 @@ struct SteerReport {
 /// controller is queue-not-interrupt by construction (§3.1) — and the UI says which of
 /// those two things happened rather than letting the CEO assume the other.
 #[richos_command::command]
-fn steer_message(state: State<AppState>, text: String) -> Result<SteerReport, String> {
+fn steer_message(app: AppHandle, state: State<AppState>, text: String) -> Result<SteerReport, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err("nothing to add".into());
@@ -8345,6 +8392,7 @@ fn steer_message(state: State<AppState>, text: String) -> Result<SteerReport, St
     let thread=view.active_thread().ok_or_else(||richos_core::steering::SteeringError::NoActiveTurn.to_string())?;
     match state.control.for_thread(thread).steer(trimmed).map_err(|e| e.to_string())? {
         IntakeRecord::Steer { id, thread_id, steering_turn_id, at, .. } => {
+            state.swearmeter.publish(&app);
             Ok(SteerReport { intake_id: id, thread_id, steering_turn_id, at })
         }
         other => Err(format!("unexpected intake record: {other:?}")),

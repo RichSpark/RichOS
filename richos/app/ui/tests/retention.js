@@ -39,7 +39,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { leaveHome, loadPlaywright, shot, createRun, assert, assertEqual, SEED_THEME, UI_DIR } = require("./lib/harness");
+const { leaveHome, loadPlaywright, shot, createRun, assert, assertEqual, awaitSettled, flushFrames, SEED_THEME, UI_DIR } = require("./lib/harness");
 
 const APP = "file://" + path.join(UI_DIR, "index.html");
 const CORE = path.resolve(UI_DIR, "..", "crates", "richos-core", "src");
@@ -98,7 +98,10 @@ async function openApp(browser) {
 async function openSettings(page) {
   await page.click("#set-btn");
   await page.waitForSelector("#set-menu", { state: "visible" });
-  await page.waitForTimeout(120);
+  // The entry moves the panel for 200ms. Click controls only at their final geometry,
+  // otherwise browser auto-scroll during the rise can persist into the screenshot.
+  await awaitSettled(page);
+  await flushFrames(page);
 }
 
 async function closeSettings(page) {
@@ -232,6 +235,12 @@ async function main() {
       said.includes("The records are still there; their output is not."),
       "and it said which half went — Tier A is never evicted at any setting: " + said
     );
+    const visible = await page.locator("#retention-hint").evaluate(node => {
+      const text = node.getBoundingClientRect(), menu = node.closest(".setmenu");
+      const panel = menu.getBoundingClientRect(), foot = menu.querySelector(".sm-foot").getBoundingClientRect();
+      return text.height > 0 && text.top >= Math.max(0, panel.top) && text.bottom <= Math.min(innerHeight, foot.top) + 1;
+    });
+    assert(visible, "the removal feedback must be visible above the fixed settings foot band");
     await shot(page, SHOTS + "/7-2-02-a-delete-that-says-what-it-deleted");
 
     // A second, LOOSER change must not claim a removal it did not make — and must not

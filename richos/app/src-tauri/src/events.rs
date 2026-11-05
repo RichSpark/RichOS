@@ -33,7 +33,7 @@
 //! A webview subscribing to nothing new keeps working exactly as it does today.
 
 use richos_core::live::{LiveEvent, LiveObserver};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Forwards each additive §13 event to the webview under its own event name.
 ///
@@ -58,5 +58,47 @@ impl LiveObserver for TauriLiveEmitter {
                 event.event_name(), payload["threadId"], payload["turnId"]);
         }
         let _ = self.app.emit(event.event_name(), payload);
+        on_human_acceptance(event.event_name(), || {
+            if let Some(state) = self.app.try_state::<crate::AppState>() { state.swearmeter.publish_current(); }
+        });
+    }
+}
+
+// This callback runs after the published read view has folded durable acceptance.
+fn on_human_acceptance(name: &str, publish: impl FnOnce()) {
+    if name == "rich://ceo-message" { publish(); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use richos_core::{cognition::MockLeaseFactory, entity::{Entity, EntityId, EntityRegistry},
+        ledger::{Ledger, Source}, read_view::{SpineReader, SpineView}, spine::Spine};
+    use std::sync::{Arc, Mutex};
+    struct Witness { reader: SpineReader, counts: Arc<Mutex<Vec<u64>>> }
+    impl LiveObserver for Witness {
+        fn on_live_event(&self, event: &LiveEvent) {
+            on_human_acceptance(event.event_name(), || {
+                let view = self.reader.snapshot();
+                assert!(view.ledger().turns().last().unwrap().assistant_text.is_empty(), "count is visible before the reply");
+                self.counts.lock().unwrap().push(view.ledger().swearmeter().count());
+            });
+        }
+    }
+    #[test]
+    fn a_real_accepted_message_publishes_its_count_before_the_reply_without_reply_increments() {
+        let path = std::env::temp_dir().join(format!("swearmeter-event-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mut spine = Spine::new(Ledger::open(&path).unwrap());
+        spine.set_entity_registry(EntityRegistry::new(vec![Entity::new("fixture", "Fixture", &["/fixture"]).unwrap()]).unwrap());
+        spine.set_lease_factory(Box::new(MockLeaseFactory::new(vec!["Ready", "shit reply"])));
+        let thread = spine.create_thread("Fixture", &EntityId::parse("fixture").unwrap()).unwrap();
+        spine.switch_thread(&thread).unwrap();
+        let counts = Arc::new(Mutex::new(Vec::new()));
+        let reader = spine.reader();
+        spine.set_live_observer(Box::new(Witness { reader, counts: counts.clone() }));
+        spine.submit_prompt("damn", Source::Text).unwrap();
+        assert_eq!(*counts.lock().unwrap(), vec![1]);
+        drop(spine);
+        std::fs::remove_file(path).unwrap();
     }
 }

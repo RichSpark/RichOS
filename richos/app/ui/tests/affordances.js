@@ -568,7 +568,41 @@ async function questionState(browser, mode) {
 const SIGNED_OUT_QUOTA = { state: "unavailable", windows: [], checkedAt: null, retryAt: null,
   message: "This Claude account is not signed in on this Mac.", signedIn: false };
 
+async function openSwearMeterFailure(browser, mode) {
+  const page = await openApp(browser);
+  await page.waitForFunction(() => (window.__listeners["rich://swearmeter"] || []).length > 0);
+  await page.click("#set-btn");
+  await page.waitForSelector("#set-swearmeter");
+  if (mode === "preference") {
+    await page.evaluate(() => { window.__overrides.set_swearmeter_visible = {reject:true,value:"Fixture disk refused the preference"}; });
+    await page.click("#set-swearmeter");
+    await page.waitForFunction(() => document.getElementById("bug-toast").textContent.includes("SwearMeter display preference was not saved:"));
+    await page.waitForFunction(() => !document.getElementById("set-swearmeter").disabled);
+    return page;
+  }
+  await page.click("#set-swearmeter");
+  await page.waitForFunction(() => !document.getElementById("set-swearmeter").disabled);
+  await page.evaluate(() => __emit("rich://swearmeter", {
+    detector_version:1, count:0, unknown_card_inputs:0, unknown_message_inputs:0,
+    incomplete_history:false, available:false, revision:90,
+  }));
+  await page.waitForSelector("#set-swearmeter-retry", {state:"visible"});
+  if (mode === "home") {
+    await page.evaluate(() => { RichSettings.close(); RichHome.show(); });
+    await page.waitForSelector("#home-swearmeter", {state:"visible"});
+  } else {
+    await page.evaluate(() => { window.__overrides.retry_swearmeter = {reject:true,value:"Saved card inputs are still unavailable"}; });
+    await page.click("#set-swearmeter-retry");
+    await page.waitForFunction(() => document.getElementById("bug-toast").textContent.includes("SwearMeter is still unavailable:"));
+    await page.waitForFunction(() => !document.getElementById("set-swearmeter-retry").disabled);
+  }
+  return page;
+}
+
 const FIXTURES = {
+  "swearmeter-preference-refused": browser => openSwearMeterFailure(browser, "preference"),
+  "swearmeter-retry-refused": browser => openSwearMeterFailure(browser, "retry"),
+  "swearmeter-home-unavailable": browser => openSwearMeterFailure(browser, "home"),
   async "resources-keyboard"(browser) {
     const page = await openApp(browser);
     await page.keyboard.press("Tab");
@@ -1459,6 +1493,7 @@ const FIXTURES = {
 /// names is present and usable on the screen the sentence appears on. Said here rather than
 /// left as an unexplained asymmetry.
 const TEXT_RENDERING_FIXTURES = new Set([
+  "swearmeter-preference-refused", "swearmeter-retry-refused", "swearmeter-home-unavailable",
   "resources-keyboard",
   "question-edit", "question-saved", "question-retry", "question-deleted", "question-storage",
   "connect-setup", "connect-setup-unreadable", "connect-helper-missing", "connect-history-full",

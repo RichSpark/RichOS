@@ -229,7 +229,7 @@
     // `rich_model`/`stu_model` stand in for config.rs's §119 pair: absent reads as Opus.
     // `oxford_comma` stands in for config.rs's Oxford comma setting: absent reads as off (CEO, 2026-10-19).
     // `resources_view` stands in for config.rs's resources square view: absent reads as Ink (round 47).
-    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false, resources_view: "ink" };
+    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false, show_swearmeter: false, resources_view: "ink" };
     try {
       const raw = window.localStorage.getItem(MOCK_CONFIG_KEY);
       if (!raw) return fresh;
@@ -241,6 +241,7 @@
         rich_model: parsed.rich_model === "fable" ? "fable" : "opus",
         stu_model: parsed.stu_model === "fable" ? "fable" : "opus",
         oxford_comma: parsed.oxford_comma === true,
+        show_swearmeter: parsed.show_swearmeter === true,
         resources_view: parsed.resources_view === "readout" ? "readout" : "ink",
       };
     } catch (e) {
@@ -3377,7 +3378,9 @@
           found.forEach((f) => mockAttach.staged.delete(args.draftId + "/" + f.id));
           folders.forEach((f) => mockAttach.folders.delete(args.draftId + "/" + f.id));
           const blocks = [];
-          const words = String(args.text || "").trim();
+          const rawText = String(args.text || "");
+          const words = rawText.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+          const capture = window.RichAuthored.forSend({ text: rawText, ranges: window.RichAuthored.ranges(rawText, args.authorship || { authoredBytes: window.RichAuthored.length(rawText) }) }, words);
           if (words) blocks.push(words);
           if (found.length) {
             const count = found.length === 1 ? "1 file" : found.length + " files";
@@ -3392,6 +3395,7 @@
           }
           return {
             text: blocks.join("\n\n"),
+            ...capture,
             files: found.map(({ draftId: _d, ...f }) => f).concat(folders),
             missing: [],
           };
@@ -3533,6 +3537,14 @@
         // ON PURPOSE — the unset state is what almost every install actually has, and it
         // is the state the acceptance suite has to be able to reach without arranging
         // anything.
+        case "get_swearmeter":
+          return { show: mockConfig.show_swearmeter, result: { detector_version: 1, count: 0, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1 } };
+        case "set_swearmeter_visible":
+          mockConfig.show_swearmeter = args.show === true;
+          persistMockConfig();
+          return null;
+        case "retry_swearmeter":
+          return { detector_version: 1, count: 0, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1 };
         case "get_appearance":
           return { theme: mockConfig.theme, font_scale: mockConfig.font_scale, oxford_comma: mockConfig.oxford_comma };
         case "set_oxford_comma":
