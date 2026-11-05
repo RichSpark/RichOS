@@ -146,6 +146,16 @@ def build_walk(folders, guest, relaunch):
             self.env = {}
             self.remote = self.payload + '/search-walk.py'
 
+        def first_run(self):
+            # The first-run setup sheet can come up after the walk's first look at the screen
+            # (nightly 90: two runs, "Add this company" never appeared with "Set it up" and "Not now"
+            # on screen), and folders-walk.py answers it only if it is there at that first look.
+            try:
+                self.wait_for('Set it up', seconds=40)
+            except StepFailed:
+                pass
+            return super().first_run()
+
         # --- the palette ----------------------------------------------------------------
         def key(self, text):
             self.script('tell application "System Events" to ' + text)
