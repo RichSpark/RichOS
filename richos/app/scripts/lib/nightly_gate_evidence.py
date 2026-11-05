@@ -43,7 +43,28 @@ class GateEvidence:
         latest = self.latest(name, identity)
         if not latest or latest[1].get("status") != "passed":
             return None
-        path, record = latest
+        return self.intact(*latest)
+
+    def proven_pass(self, name, path):
+        """The record at `path` when it is an intact actual pass of `name`, else None.
+
+        What a later reader (`stable --from-nightly`) calls to check a `REUSED` line a build
+        wrote: the same integrity checks as `reusable`, with the identity left to the caller
+        because the line names the record, not the inputs.
+        """
+        path = Path(path)
+        try:
+            if evidence.file_digest(path) != path.with_suffix(".sha256").read_text().strip():
+                return None
+            record = json.loads(path.read_text())
+            if record["gate"] != name or record["schema"] != 1 or record.get("status") != "passed":
+                return None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        found = self.intact(path, record)
+        return found[1] if found else None
+
+    def intact(self, path, record):
         try:
             if evidence.file_digest(path.with_suffix(".log")) != record["log_sha256"]:
                 return None

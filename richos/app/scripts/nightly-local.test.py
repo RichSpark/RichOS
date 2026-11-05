@@ -1388,6 +1388,37 @@ while True: time.sleep(.02)
         with self.assertRaisesRegex(ValueError, "no pass recorded"):
             r.accept_passed_gates(self.RESUMED, "build")
 
+    def reused_in_the_run(self, gate, source_commit, evidence_run="20260928T180000Z-aaaaaaaa"):
+        """Rewrite `gate`'s verdict in the recorded run as the REUSED line a build writes,
+        naming a real evidence record of an actual pass on `source_commit`."""
+        library = str(Path(m.__file__).parent / "lib")
+        if library not in sys.path:
+            sys.path.insert(0, library)
+        from nightly_gate_evidence import GateEvidence
+        store = GateEvidence(self.root / "state" / "gate-evidence", evidence_run,
+                             lambda: None, lambda _: None)
+        store.record(gate, {"source_commit": source_commit, "inputs_sha256": "0" * 64}, "passed", "green")
+        record = store.selected[gate]
+        log = self.root / "state" / "logs" / f"{self.RESUMED}.log"
+        lines = log.read_text().splitlines(keepends=True)
+        reused = (f"[2026-09-28T19:01:11.429Z] REUSED {gate}: actual pass in {record['run_id']} "
+                  f"({record['record']}); source, dependencies and execution inputs match\n")
+        at = next(i for i, l in enumerate(lines) if f"PASSED {gate} in" in l)
+        lines[at] = reused
+        log.write_text("".join(lines))
+
+    def test_stable_counts_a_reused_gate_only_when_its_evidence_is_a_pass_on_the_same_source(self):
+        gate = "gates/updater-tests"
+        self.recorded_run(grade="build")
+        self.reused_in_the_run(gate, self.SOURCE)
+        r = self.runner()
+        self.assertEqual(r.accept_passed_gates(self.RESUMED, "stable")["source_commit"], self.SOURCE)
+        # Evidence of a pass on another commit does not count.
+        self.recorded_run(grade="build")
+        self.reused_in_the_run(gate, "0" * 40, "20260928T180100Z-bbbbbbbb")
+        with self.assertRaisesRegex(ValueError, "no pass recorded for gates/updater-tests"):
+            r.accept_passed_gates(self.RESUMED, "stable")
+
     NIGHTLY = "v1.2.0-nightly.20260928.28"
 
     def stable_runner(self, source_commit=None):
