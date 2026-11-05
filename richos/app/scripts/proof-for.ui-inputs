@@ -65,8 +65,8 @@
 #               reading a new place cannot land with nothing to select it.
 # ========================================================================================
 
-@shell   richos/app/ui/index.html richos/app/ui/main.js richos/app/ui/style.css richos/app/ui/attachments.js richos/app/ui/output-panel.js
-@home    richos/app/ui/home.js richos/app/ui/home.css richos/app/ui/home/field-engine.js richos/app/ui/home/field-ghost.js richos/app/ui/home/field-prep.js richos/app/ui/home/field-ref.js
+@shell   richos/app/ui/index.html richos/app/ui/main.js richos/app/ui/authored-input.js richos/app/ui/style.css richos/app/ui/attachments.js richos/app/ui/output-panel.js
+@home    richos/app/ui/home.js richos/app/ui/home.css richos/app/ui/swearmeter.js richos/app/ui/home/field-engine.js richos/app/ui/home/field-ghost.js richos/app/ui/home/field-prep.js richos/app/ui/home/field-ref.js
 @splash  richos/app/ui/splash.js richos/app/ui/splash-library.js richos/app/ui/splash.css richos/app/ui/theme-boot.js
 @phone   richos/app/ui/phone.js richos/app/ui/qr.js
 
