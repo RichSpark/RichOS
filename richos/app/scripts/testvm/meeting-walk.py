@@ -300,7 +300,7 @@ def build_walk(folders, guest):
             self.open_settings()
             starts = self.log_has('StartCapture')
             self.ax('click', '--id', 'mn-start', '--first')
-            ev['manual_start'] = self.wait_log('StartCapture', 40, more_than=starts - 1 if starts else 0) and self.log_has('StartCapture') > starts
+            ev['manual_start'] = self.wait_log('StartCapture', 40, more_than=starts)
             time.sleep(6)
             self.shot('settings-recording.png')
             stops = self.log_has('StopCapture')
