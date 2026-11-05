@@ -744,7 +744,7 @@ echo "the engine a suite provisions from" > "$GENG/VERSION"
 mkdir -p "$GENG/scripts/lib"
 cp "$DIR/../../engine/scripts/lib/machine_settings.py" \
    "$DIR/../../engine/scripts/lib/machine-settings.sh" "$GENG/scripts/lib/"
-for n in richos-tauri gui_boot_machine; do
+for n in richos-tauri gui_boot_machine richos-companion; do
   printf '#!/bin/sh\necho "stand-in %s, built on the host"\n' "$n" > "$GPRE/$n"
   chmod +x "$GPRE/$n"
 done

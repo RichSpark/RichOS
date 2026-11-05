@@ -118,6 +118,3 @@
 # Exceptional account-change save failure. A healthy boot must still fail if it prints this.
 [richos] writing permission could not be saved after the account change
 [richos] numeric checkpoint could not be saved: {}
-
-# Exceptional failure to create the company meeting-notes folder before a lease starts.
-[richos] meeting notes: {} could not be made for Rich to read: {}

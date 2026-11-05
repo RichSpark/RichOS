@@ -59,15 +59,16 @@ set -uo pipefail
 #
 # A test-VM guest is a clean macOS with no cargo and no checkout, on purpose (testvm/run.sh,
 # gui-proof-in-vm.sh), so a suite that `run-tests.sh` routes there under RICHOS_GUI_HOST
-# cannot build what it launches. This Mac builds both executables first (`gui_prebuild`,
+# cannot build what it launches. This Mac builds all three executables first (`gui_prebuild`,
 # called by testvm/run-suite.sh) and the guest run names the directory that holds them:
 #
 #   <dir>/richos-tauri       the binary the suite boots, built as the suite builds it
 #   <dir>/gui_boot_machine   the example `gui_machine` runs to provision the machine
+#   <dir>/richos-companion   the capture sidecar placed beside the app executable
 #
 # UNSET, NOTHING IN THIS FILE CHANGES: the suite builds from the checkout and `gui_machine`
 # runs the example through `cargo run`, exactly as before this mode existed.
-GUI_PREBUILT_NAMES="richos-tauri gui_boot_machine"
+GUI_PREBUILT_NAMES="richos-tauri gui_boot_machine richos-companion"
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/cargo-cache-env.sh"
 gui_prebuilt_mode() { [ -n "${RICHOS_GUI_PREBUILT:-}" ]; }
@@ -112,7 +113,7 @@ PY
 # ---------------------------------------------------------------------------------------
 # gui_prebuild <out-dir>
 #
-# THIS MAC's HALF OF PREBUILT MODE. Builds the two executables the way the suite and
+# THIS MAC's HALF OF PREBUILT MODE. Builds the executables the way the suite and
 # `gui_machine` build them today (the same crates, the same profile, and RICHOS_SOURCE_SHA
 # set to this checkout's HEAD so the boot names its commit) and copies them into <out-dir>
 # the moment each build ends.
@@ -123,12 +124,12 @@ PY
 # this checkout's commit (engine::source_commit compiles it in); one that does not is
 # refused here rather than booted in a guest as somebody else's code.
 #
-# Exit 0: both are in <out-dir>. Exit 1: a build failed, which is a verdict about the CODE.
+# Exit 0: all are in <out-dir>. Exit 1: a build failed, which is a verdict about the CODE.
 # Exit 2: nothing this Mac could vouch for came out of it (no checkout, no artifact, a copy
 # that is not this commit's).
 # ---------------------------------------------------------------------------------------
 gui_prebuild() {
-  local out="$1" app_dir="$GUI_APP_DIR" sha json exe
+  local out="$1" app_dir="$GUI_APP_DIR" sha json exe companion
   if ! sha="$(git -C "$app_dir" rev-parse HEAD 2>/dev/null)" || [ -z "$sha" ]; then
     echo "gui_prebuild: $app_dir is not inside a git checkout, so the binary could not name its commit." >&2
     return 2
@@ -172,8 +173,13 @@ gui_prebuild() {
     rm -f "$json"; return 2
   fi
   rm -f "$json"
-  chmod 755 "$out/richos-tauri" "$out/gui_boot_machine" || return 2
-  echo "prebuilt        : richos-tauri and gui_boot_machine at $sha, in $out"
+  if ! companion="$(python3 "$app_dir/scripts/prepare-companion.py" --binary)" \
+     || [ ! -x "$companion" ] || ! cp -p "$companion" "$out/richos-companion"; then
+    echo "gui_prebuild: the capture companion could not be prepared for the guest." >&2
+    return 1
+  fi
+  chmod 755 "$out/richos-tauri" "$out/gui_boot_machine" "$out/richos-companion" || return 2
+  echo "prebuilt        : richos-tauri, gui_boot_machine and richos-companion at $sha, in $out"
   return 0
 }
 
@@ -338,6 +344,20 @@ STUB
   ident="$(gui_identity "$GUI_BINARY")" || return 1
   identifier="${ident%% *}"; version="${ident##* }"
   gui_bundle "$home/Applications/RichOS.app" "$GUI_BINARY" "$identifier" "$version" || return 1
+  # The healthy app has the same capture sidecar as the shipped bundle. A
+  # prebuilt guest carries it from the host; a local fixture uses the same build.
+  local companion
+  if gui_prebuilt_mode; then
+    companion="$RICHOS_GUI_PREBUILT/richos-companion"
+  else
+    companion="$(python3 "$app_dir/scripts/prepare-companion.py" --binary)" || return 1
+  fi
+  if [ ! -f "$companion" ] || [ ! -x "$companion" ]; then
+    echo "gui_machine: no executable capture companion at $companion" >&2
+    return 1
+  fi
+  cp -p "$companion" "$home/Applications/RichOS.app/Contents/MacOS/richos-companion" || return 1
+  chmod 755 "$home/Applications/RichOS.app/Contents/MacOS/richos-companion" || return 1
   echo "bundle identity : $identifier $version (asked of the binary, not typed here)"
   echo "binary          : $home/Applications/RichOS.app/Contents/MacOS/richos-tauri"
   return 0
