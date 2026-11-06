@@ -123,7 +123,7 @@ class Fixtures(unittest.TestCase):
             self.assertEqual(send.call_count, 2)
 
     def item(self, work='job-two', state='ended'):
-        return W.Item(work, work, str(self.root), 'tip', 'base', state, started=0)
+        return W.Item(work, work, os.path.realpath(self.root), 'tip', 'base', state, started=0)
 
     def test_shared_tip_jobs_each_get_handover(self):
         item = self.item()
