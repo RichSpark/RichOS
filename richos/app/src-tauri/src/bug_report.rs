@@ -474,10 +474,7 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
         let picture = bugs.look.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let looked = picture.is_some() || !bug::screen_words(&screen.content).is_empty();
         let mut prompt = bug::writer_prompt_for(post, &answer, &screen, &bugs.version, scrubber.terms(), picture.is_some());
-        let report_topic = answer.to_ascii_lowercase();
-        let concerns_search = post == bug::Post::Bug
-            && (report_topic.contains("richfinder") || report_topic.contains("super finder"));
-        let timings = if concerns_search { crate::search_diagnostics::recent() } else { None };
+        let timings = if post == bug::Post::Bug { crate::search_diagnostics::recent() } else { None };
         if let Some(timings) = timings {
             prompt.push_str("\n\nRecent local RichFinder timing measurements (milliseconds):\n");
             prompt.push_str(&timings);
