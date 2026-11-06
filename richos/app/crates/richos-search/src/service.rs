@@ -415,6 +415,18 @@ impl SearchService {
         self.stopping()
     }
 
+    fn ready_for_background_passage(&self) -> bool {
+        if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
+            std::thread::sleep(BUSY_YIELD);
+        }
+        if self.stopping() { return false; }
+        // Let the current query finish before submitting more inference. Release
+        // the lock before embedding: a new query can always overtake a passage
+        // already in flight on the isolated helper.
+        drop(self.0.access.lock().unwrap());
+        !self.background_stopping()
+    }
+
     fn set_meaning(&self, status: MeaningStatus) {
         *self.0.meaning_status.write().unwrap() = status;
     }
@@ -622,10 +634,7 @@ impl SearchService {
             for &i in batch {
                 let doc = &corpus.docs[i];
                 for (p, passage) in doc.passages.iter().enumerate() {
-                    if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
-                        std::thread::sleep(BUSY_YIELD);
-                    }
-                    if self.background_stopping() {
+                    if !self.ready_for_background_passage() {
                         return Ok(None);
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
@@ -766,10 +775,7 @@ impl SearchService {
             meaning.index.delete(&stale)?;
             if let Some(doc) = doc {
                 for (passage, &id) in doc.passages.iter().zip(&fresh) {
-                    if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
-                        std::thread::sleep(BUSY_YIELD);
-                    }
-                    if self.background_stopping() {
+                    if !self.ready_for_background_passage() {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
