@@ -1,4 +1,4 @@
-//! DOCUMENT SEARCH IN THE SHELL — the palette's Documents section, Super Finder and Open
+//! DOCUMENT SEARCH IN THE SHELL — the palette's Documents section, RichFinder and Open
 //! original (search PRD v3.1, richos-hq `docs/prds/2026-10-13-qdrant-edge-semantic-search.md`;
 //! the CEO's chosen design is round 26).
 //!
@@ -415,7 +415,7 @@ fn cleaner_metadata_source(catalog: PathBuf, resources: Option<PathBuf>) -> Meta
 
 #[cfg(not(target_os = "macos"))]
 fn make_embedder() -> Result<Box<dyn Embedder>, String> {
-    Err("Super Finder's model is available on macOS only.".into())
+    Err("RichFinder's model is available on macOS only.".into())
 }
 
 /// The most results one palette request returns; the palette asks for twelve at a time as the
@@ -845,13 +845,13 @@ mod tests {
             ("2024/hedge-and-refunds.md", format!("# Hedge notes\n\n{plural}\n")),
         ]);
         let tool = ToolAnswer(service.clone());
-        // (what the row is, query, Super Finder, Require quoted text, file, text that must show)
+        // (what the row is, query, RichFinder, Require quoted text, file, text that must show)
         let quoted = "annual plan pricing support cost \"30 days\"";
         let rows: &[(&str, &str, bool, bool, &str, &str)] = &[
-            ("quoted, strict on, Super Finder off", quoted, false, true, "2024/pricing-meeting.md", "refunds within 30 days"),
-            ("quoted, strict on, Super Finder on", quoted, true, true, "2024/pricing-meeting.md", "refunds within 30 days"),
-            ("quoted, strict off, Super Finder off", quoted, false, false, "2024/pricing-meeting.md", "refunds within 30 days"),
-            ("quoted, strict off, Super Finder on", quoted, true, false, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("quoted, strict on, RichFinder off", quoted, false, true, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("quoted, strict on, RichFinder on", quoted, true, true, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("quoted, strict off, RichFinder off", quoted, false, false, "2024/pricing-meeting.md", "refunds within 30 days"),
+            ("quoted, strict off, RichFinder on", quoted, true, false, "2024/pricing-meeting.md", "refunds within 30 days"),
             ("quoted text in the heading above the passage", quoted, false, true, "2024/pricing-review.md", "the final decision for every new customer"),
             ("quoted text in the parent heading, strict on", quoted, false, true, "2024/pricing-decision.md", "the last word for each new account"),
             ("quoted text in the parent heading, strict off", quoted, false, false, "2024/pricing-decision.md", "the last word for each new account"),

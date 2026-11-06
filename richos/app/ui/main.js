@@ -8087,7 +8087,7 @@ window.RichSettings.registerMemory({
 
 // ---------------------------------------------------------------------------------------
 // Search (§3.4) — a command-palette overlay, grouped by entity, fully keyboard-driven, with
-// the Documents section, Super Finder and Require quoted text of the search PRD v3.1, built
+// the Documents section, RichFinder and Require quoted text of the search PRD v3.1, built
 // as the CEO's chosen design shows them (richos-hq `design/mockups/rounds/round-26/`).
 //
 // Two commands answer one query. `search_nav` matches companies, threads and messages and is
@@ -8139,7 +8139,7 @@ function openSearch() {
   searchState.open = true;
   searchState.gen += 1;
   searchInputEl.value = "";
-  // The PRD's initial state, every time the palette opens: Super Finder checked, Require
+  // The PRD's initial state, every time the palette opens: RichFinder checked, Require
   // quoted text unchecked. Kept as chosen while the palette stays open.
   searchSuperEl.checked = true;
   searchStrictEl.checked = false;
@@ -8251,17 +8251,17 @@ function paintSearchStatus() {
     text = "Text search · " + searchNumber(folder.files) + " files";
   } else if (meaning.state === "unavailable") {
     kind = "is-unavailable";
-    text = "Super Finder unavailable; showing text matches";
+    text = "RichFinder unavailable; showing text matches";
     title = meaning.reason;
   } else if (meaning.state === "indexing") {
     kind = "is-indexing";
-    text = "Super Finder indexing · " + searchNumber(meaning.files_done) + " of " + searchNumber(meaning.files_total) + " files";
+    text = "RichFinder indexing · " + searchNumber(meaning.files_done) + " of " + searchNumber(meaning.files_total) + " files";
     progress = meaning.passages_total ? meaning.passages_done / meaning.passages_total : 0;
   } else if (meaning.state === "starting") {
     kind = "is-indexing";
-    text = "Super Finder starting…";
+    text = "RichFinder starting…";
   } else {
-    text = "Super Finder ready · " + searchNumber(meaning.files) + " files";
+    text = "RichFinder ready · " + searchNumber(meaning.files) + " files";
   }
   searchStatusEl.className = "srch-status" + (kind ? " " + kind : "");
   searchStatusTextEl.textContent = text;
@@ -8274,7 +8274,7 @@ function searchModeLabel(resp) {
   const folder = searchState.status && searchState.status.folder;
   if (!resp || (folder && folder.state !== "ready")) return "";
   let m = resp.effective.super_finder ? "meaning and words" : "words only";
-  if (resp.requested.super_finder && !resp.effective.super_finder) m = "words only, Super Finder unavailable";
+  if (resp.requested.super_finder && !resp.effective.super_finder) m = "words only, RichFinder unavailable";
   if (resp.requested.strict) m += " · quoted text required";
   return m;
 }
@@ -8463,7 +8463,7 @@ function searchDocumentsNote(resp) {
     "No documents match.",
     resp.effective.super_finder
       ? "Try saying what it was about in other words."
-      : "Text search needs one of your words in the file. Check Super Finder to search by what it is about."
+      : "Text search needs one of your words in the file. Check RichFinder to search by what it is about."
   );
 }
 

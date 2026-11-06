@@ -42,6 +42,7 @@ window.RichSettings = (function () {
   var cleaner = null;
   var dictation = null; // { open(), paint() }, "Dictation" for everyone once it is there (round 19, dictation.js)
   var instructions = null; // { open(), paint(), onOpen() }, "Your instructions" (round 36 screen 1, your-instructions.js)
+  var searchFolders = null;
   var quota = null; // { open() }, desktop technical settings only
   var memory = null; // { open() } — where his memory is kept (audit-7 row 13)
   var phonePairing = null; // { open() } — "Use Rich from your phone" (plan §4.1)
@@ -569,6 +570,11 @@ window.RichSettings = (function () {
         instructions.open();
       }, "set-instructions-state"));
     }
+    if (searchFolders) {
+      rich.push(buildDisclosureRow("set-search-folders-open", "Search folders", function () {
+        searchFolders.open();
+      }, "set-search-folders-state"));
+    }
     var model = part("model");
     if (model) {
       if (rich.length) rich.push(divider());
@@ -791,6 +797,7 @@ window.RichSettings = (function () {
     if (dictation && dictation.paint && menuEl.querySelector("#set-dictation-open")) dictation.paint();
     if (cleaner && cleaner.paint) cleaner.paint();
     if (instructions && instructions.paint && menuEl.querySelector("#set-instructions-open")) instructions.paint();
+    if (searchFolders && searchFolders.paint && menuEl.querySelector("#set-search-folders-open")) searchFolders.paint();
     // The updates row is painted by its owner, because this file does not know what is in
     // it. Called on every paint so a rebuild (a forced-dark flip) never leaves an empty row.
     // The company row is REBUILT rather than repainted when its shape can change (chosen
@@ -872,6 +879,7 @@ window.RichSettings = (function () {
     // AND THE INSTRUCTIONS ROW'S LINE: the file may have been edited in another app while the menu
     // was shut, so it is read again as the menu opens (one `your_instructions_read`, a local file).
     if (instructions && instructions.onOpen) instructions.onOpen();
+    if (searchFolders && searchFolders.onOpen) searchFolders.onOpen();
     if (opts.focus) focusInside(opts.focus, opts.call);
   }
 
@@ -1196,6 +1204,7 @@ window.RichSettings = (function () {
      *  the row's plain line, `host.onOpen()` re-reads the file as the menu opens.
      *  `your-instructions.js` registers it when the shell is there. */
     registerInstructions: function (host) { instructions = host || null; rebuild(); },
+    registerSearchFolders: function (host) { searchFolders = host || null; rebuild(); },
     /** "Let Codex review your team's work" (round 20.2): `host.render(container)` fills the row's
      *  slot below Technical view, `host.onOpen()` reads Codex's state when the menu opens.
      *  `codex-reviews.js` registers it once the app answers `codex_reviews_status`, so a page with

@@ -47,22 +47,22 @@ function ratio(colors) {
 }
 
 async function main() {
-  const run = createRun("Search palette: Documents, Super Finder and Require quoted text");
+  const run = createRun("Search palette: Documents, RichFinder and Require quoted text");
   const browser = await loadPlaywright().webkit.launch();
   try {
     const page = await openApp(browser);
 
-    await run.check("the palette opens with Super Finder checked and Require quoted text unchecked", async () => {
+    await run.check("the palette opens with RichFinder checked and Require quoted text unchecked", async () => {
       const state = await page.evaluate(() => ({
         superFinder: document.getElementById("srch-super").checked,
         strict: document.getElementById("srch-strict").checked,
         hint: !document.getElementById("search-hint").hidden,
         status: document.getElementById("srch-status-text").textContent,
       }));
-      assertEqual(state.superFinder, true, "Super Finder");
+      assertEqual(state.superFinder, true, "RichFinder");
       assertEqual(state.strict, false, "Require quoted text");
       assert(state.hint, "the empty palette explains the two boxes");
-      assert(state.status.startsWith("Super Finder ready"), state.status);
+      assert(state.status.startsWith("RichFinder ready"), state.status);
     });
 
     await run.check("a document found only by meaning is marked so, with its passage and Open original", async () => {
@@ -79,7 +79,7 @@ async function main() {
       await page.waitForSelector("#search-results .srch-doc.is-active .srch-open-btn", { state: "visible" });
     });
 
-    await run.check("unchecking Super Finder keeps the query and reruns as text search; checking it brings the match back", async () => {
+    await run.check("unchecking RichFinder keeps the query and reruns as text search; checking it brings the match back", async () => {
       await page.click("label.srch-check:has(#srch-super)");
       await page.waitForFunction(() => document.getElementById("srch-status-text").textContent.startsWith("Text search"));
       await page.waitForFunction(() => !document.querySelector("#search-results .srch-doc"));
@@ -316,7 +316,7 @@ async function main() {
     });
 
     for (const [preset, line, mode] of [
-      ["unavailable", "Super Finder unavailable; showing text matches", "words only, Super Finder unavailable"],
+      ["unavailable", "RichFinder unavailable; showing text matches", "words only, RichFinder unavailable"],
       ["none", "No search folder configured", ""],
     ]) {
       await run.check("status '" + line + "' is said, readable in both themes", async () => {
@@ -366,6 +366,33 @@ async function main() {
         return out.join("; ");
       });
     }
+    await run.check("Folder map starts off, refuses locked folders and saves a chosen folder without restart", async () => {
+      const folders = await openApp(browser);
+      try {
+        await folders.keyboard.press("Escape");
+        await folders.click("#set-btn");
+        await folders.click("#set-search-folders-open");
+        await folders.waitForSelector(".rf-folders-page");
+        const off = folders.getByRole("radio", { name: "Off", exact: true });
+        await waitFor(folders, "the first-run mode is Off", () => document.querySelector('[name="rf-folder-mode"][value="off"]').checked);
+        await folders.getByRole("button", { name: "Expand Home" }).click();
+        const chosen = folders.getByRole("checkbox", { name: "Search Documents" });
+        await chosen.waitFor();
+        assert(await folders.getByRole("checkbox", { name: "Search Library" }).isDisabled(), "app data stays locked");
+        await chosen.click();
+        await waitFor(folders, "the app saved the folder choice", () => document.getElementById("rf-folder-choice-fixture-docs").checked);
+        await folders.getByRole("button", { name: "Reindex" }).click();
+        await folders.getByText("Reindex started.", { exact: true }).waitFor();
+        await chosen.click();
+        await waitFor(folders, "removing the last folder turns document search off", () => document.querySelector('[name="rf-folder-mode"][value="off"]').checked);
+        assert(await off.isChecked(), "the control reflects the saved Off mode");
+        await folders.keyboard.press("Escape");
+        await folders.waitForSelector(".rf-folders-scrim", { state: "hidden" });
+        assertEqual(folders.__errors.length, 0, folders.__errors.join("\n"));
+      } finally {
+        await folders.close();
+      }
+    });
   } finally {
     await browser.close();
   }

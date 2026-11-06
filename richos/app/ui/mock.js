@@ -312,9 +312,17 @@
   };
   const MOCK_STOP = new Set("a an the that this on in of to for and or with it is was felt first".split(" "));
   const mockOpenedDocuments = [];
+  const mockFolderRows = [
+    { id: "fixture-home", name: "Home", path: "/fixture/home", state: "eligible", reason: null },
+    { id: "fixture-docs", name: "Documents", path: "/fixture/home/Documents", state: "eligible", reason: null },
+    { id: "fixture-library", name: "Library", path: "/fixture/home/Library", state: "locked", reason: "App data" },
+  ];
+  const mockFolderPreferences = { mode: "off", chosen: [], company_limits: {} };
+  let mockFolderGeneration = 1;
 
   function mockDocStatus() {
-    const preset = (window.__RICHOS_MOCK_PRESET__ || {}).documentSearch || "ready";
+    const preset = mockFolderGeneration > 1 && mockFolderPreferences.mode === "off" ? "none"
+      : (window.__RICHOS_MOCK_PRESET__ || {}).documentSearch || "ready";
     const files = MOCK_DOCS.length;
     const passages = files;
     const folder = preset === "none" ? { state: "none" }
@@ -323,7 +331,7 @@
     const meaning = preset === "indexing" ? { state: "indexing", files_done: 20, files_total: files, passages_done: 20, passages_total: passages }
       : preset === "unavailable" ? { state: "unavailable", reason: "Apple's sentence embedding for 'en' is not available on this Mac." }
       : { state: "ready", files, passages };
-    return { folder, meaning, index_location: "/Users/someone/Library/Caches/RichOS/search", generation: 1 };
+    return { folder, meaning, index_location: "/Users/someone/Library/Caches/RichOS/search", generation: mockFolderGeneration };
   }
 
   function mockDocSearch(req) {
@@ -4178,12 +4186,33 @@
         // DOCUMENT SEARCH (search PRD v3.1, design round 26), shaped exactly like
         // `richos_search::service::SearchResponse` and `Status`. A small synthetic folder and
         // the same rules as the real service at a toy scale: the text list matches whole words
-        // (plurals allowed) and quoted spans; Super Finder adds documents found "by meaning"
+        // (plurals allowed) and quoted spans; RichFinder adds documents found "by meaning"
         // through a tiny subject table; Require quoted text needs every span. Nothing about
         // search quality is claimed here, only the shapes the palette draws.
         // `__RICHOS_MOCK_PRESET__.documentSearch` picks the folder state: "ready" (default),
         // "indexing", "unavailable", "none" or "error".
         case "cancel_search_documents": return null;
+        case "search_folder_preferences": return structuredClone(mockFolderPreferences);
+        case "search_folder_tree": return {
+          rows: !args.parent ? mockFolderRows.slice(0, 1) : args.parent === "fixture-home" ? mockFolderRows.slice(1) : [],
+          next_offset: null,
+        };
+        case "search_selected_folders": return mockFolderRows.filter(row => mockFolderPreferences.chosen.includes(row.path));
+        case "set_search_folder_mode": {
+          mockFolderPreferences.mode = args.mode;
+          mockFolderGeneration++;
+          return structuredClone(mockFolderPreferences);
+        }
+        case "set_search_folder_selected": {
+          const row = mockFolderRows.find(item => item.id === args.folderId);
+          if (!row || row.state !== "eligible") throw "That folder is unavailable.";
+          if (args.selected && !mockFolderPreferences.chosen.includes(row.path)) mockFolderPreferences.chosen.push(row.path);
+          if (!args.selected) mockFolderPreferences.chosen = mockFolderPreferences.chosen.filter(folder => folder !== row.path);
+          mockFolderPreferences.mode = mockFolderPreferences.chosen.length ? "chosen" : "off";
+          mockFolderGeneration++;
+          return structuredClone(mockFolderPreferences);
+        }
+        case "reindex_search_folders": mockFolderGeneration++; return mockDocStatus();
         case "search_documents_status": {
           return mockDocStatus();
         }
