@@ -26,6 +26,20 @@ pub trait Embedder: Send + Sync {
     /// One vector per text, in order. A text the model cannot represent is an error for the
     /// whole call; the caller decides whether that file is skipped.
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String>;
+
+    /// Prepare the model on the index worker. Implementations that start local
+    /// processes can retry until the search folder is revoked.
+    fn prepare(&self, _stop: &dyn Fn() -> bool) -> Result<(), String> { Ok(()) }
+
+    /// Background indexing may wait for an interrupted model to recover.
+    fn embed_for_index(&self, texts: &[&str], _stop: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>, String> {
+        self.embed(texts)
+    }
+
+    /// Interactive lookups can fall back to words while the model recovers.
+    fn embed_query(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
+        self.embed(texts)
+    }
 }
 
 /// Scale a vector to unit length (cosine similarity then equals the dot product). A zero

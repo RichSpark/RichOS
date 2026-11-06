@@ -1536,6 +1536,15 @@ PYCONFIG
 )" || exit 4
 build_args+=(--config "$cleaner_resource_config")
 
+search_resources="$(python3 "$here/build-search-resources.py")" || { warn "RichFinder's resources could not be built."; exit 4; }
+search_ranking="$(python3 "$here/build-search-resources.py" --ranking)" || { warn "RichFinder's relevance model could not be verified."; exit 4; }
+search_resource_config="$(python3 - "$search_resources" "$search_ranking" <<'PYSEARCHCONFIG'
+import json,sys
+print(json.dumps({"bundle":{"resources":{sys.argv[1]:"RichFinder/",sys.argv[2]:"RichFinder/Ranking/"}}}))
+PYSEARCHCONFIG
+)" || exit 4
+build_args+=(--config "$search_resource_config")
+
 if ! (cd "$src_tauri" && ${build_launch[@]+"${build_launch[@]}"} env RICHOS_SOURCE_SHA="$source_stamp" cargo "${build_args[@]}"); then
   warn ""
   warn "the build did not complete — nothing was packaged. The output above is the reason."
@@ -1555,6 +1564,11 @@ if [ -z "$app_bundle" ]; then
   warn "the builder exited 0 but no .app exists under $bundle_dir — refusing to"
   warn "report success for a bundle that is not there."
   exit 1
+fi
+search_bundle="$app_bundle/Contents/Resources/RichFinder"
+if [ ! -x "$search_bundle/llama-server" ] || [ ! -s "$search_bundle/bge-small-en-v1.5-q8_0.gguf" ]; then
+  warn "the packaged app is missing the RichFinder model or its helper."
+  exit 5
 fi
 
 # ---------------------------------------------------------------------------
@@ -1673,12 +1687,13 @@ fi
 # .app unsigned around a linker-signed executable, which `codesign --verify` refuses
 # (measured — see verify_bundle's adhoc arm). So the ad-hoc path signs deliberately
 # and says it is doing so. This is the act that incurs the cost printed above.
-# Sign every executable/loadable part of the bundled metadata runtime inside-out.
+# Sign every executable/loadable part of the bundled file and search runtimes inside-out.
 # Library validation remains enabled; Perl's XS modules use the same signing identity.
-python3 - "$app_bundle/Contents/Resources/RichCleaner" "$sign_mode" "${wanted:-}" <<'PYCLEANERSIGN'
+python3 - "$app_bundle/Contents/Resources" "$sign_mode" "${wanted:-}" <<'PYCLEANERSIGN'
 import pathlib,subprocess,sys
 root=pathlib.Path(sys.argv[1]);developer=sys.argv[2]=="developer-id"
-for path in sorted(root.rglob("*")):
+helpers=[path for name in ("RichCleaner","RichFinder") for path in (root/name).rglob("*")]
+for path in sorted(helpers):
     if not path.is_file() or path.is_symlink():
         continue
     kind=subprocess.check_output(["/usr/bin/file","-b",path],text=True)

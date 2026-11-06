@@ -8111,7 +8111,8 @@ const searchHintEl = el("search-hint");
 
 const SEARCH_PAGE = 12;
 const searchState = {
-  gen: 0,
+  // A reloaded webview starts with a ticket newer than the previous page.
+  gen: Math.floor(performance.timeOrigin * 1024),
   open: false,
   navHits: [],
   docs: [],
@@ -8161,7 +8162,8 @@ function openSearch() {
 function closeSearch() {
   searchOverlayEl.hidden = true;
   searchState.open = false;
-  searchState.gen += 1;
+  invalidateSearch();
+  clearTimeout(searchState.timer);
   if (searchState.more) {
     searchState.more.disconnect();
     searchState.more = null;
@@ -8615,7 +8617,7 @@ async function runSearch(animate) {
   const request = { query, super_finder: searchSuperEl.checked, strict: searchStrictEl.checked, offset: 0, limit: SEARCH_PAGE };
   const [nav, docs] = await Promise.all([
     Bridge.invoke("search_nav", { query, limit: 40 }).catch(() => []),
-    Bridge.invoke("search_documents", { request }).catch(() => null),
+    Bridge.invoke("search_documents", { request, generation: gen }).catch(() => null),
   ]);
   if (gen !== searchState.gen || !searchState.open) return;
   const before = animate ? searchSnapshot() : null;
@@ -8666,7 +8668,7 @@ function watchSearchTail() {
       };
       let next = null;
       try {
-        next = await Bridge.invoke("search_documents", { request });
+        next = await Bridge.invoke("search_documents", { request, generation: gen });
       } catch (_e) {
         next = null;
       }
@@ -8738,9 +8740,14 @@ async function activateSearchHit(index) {
   if (hit.thread_id) await openThread(hit.thread_id);
 }
 
+function invalidateSearch() {
+  const generation = ++searchState.gen;
+  void Bridge.invoke("cancel_search_documents", { generation }).catch(() => {});
+}
+
 searchInputEl.addEventListener("input", () => {
   clearTimeout(searchState.timer);
-  searchState.gen += 1;
+  invalidateSearch();
   searchState.timer = setTimeout(() => runSearch(false), 120);
 });
 

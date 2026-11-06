@@ -140,11 +140,15 @@ async function main() {
       await page.evaluate(() => {
         const invoke = window.RichBridge.invoke.bind(window.RichBridge);
         window.__asked = [];
+        window.__cancellations = [];
+        window.__searchTickets = {};
         window.__lateReturned = false;
         window.__releaseLate = new Promise((release) => { window.__letGo = release; });
         window.RichBridge.invoke = async (cmd, args) => {
+          if (cmd === "cancel_search_documents") window.__cancellations.push(args.generation);
           if (cmd !== "search_documents") return invoke(cmd, args);
           window.__asked.push(args.request.query);
+          window.__searchTickets[args.request.query] = args.generation;
           if (args.request.query !== "refund") return invoke(cmd, args);
           await window.__releaseLate;
           const reply = await invoke(cmd, args);
@@ -152,11 +156,17 @@ async function main() {
           return reply;
         };
       });
+      await page.fill("#search-input", "");
+      await page.waitForFunction(() => !document.querySelector("#search-results .srch-doc"));
       await page.fill("#search-input", "refund");
       await page.waitForFunction(() => window.__asked.includes("refund"));
       await page.fill("#search-input", "subscription pricing");
+      await page.waitForFunction(() => window.__asked.includes("subscription pricing"));
       await page.waitForFunction(() => [...document.querySelectorAll("#search-results .srch-doc .srch-title")]
         .some((t) => t.textContent.startsWith("Subscription pricing")));
+      const tickets = await page.evaluate(() => ({ cancelled: window.__cancellations, searches: window.__searchTickets }));
+      assert(tickets.cancelled.some((ticket) => ticket > tickets.searches.refund && ticket < tickets.searches["subscription pricing"]),
+        "typing sends a cancellation newer than the superseded request before submitting the next query");
       await page.evaluate(() => window.__letGo());
       await page.waitForFunction(() => window.__lateReturned);
       // Two frames, so the palette's own handler for that late reply has run and drawn.

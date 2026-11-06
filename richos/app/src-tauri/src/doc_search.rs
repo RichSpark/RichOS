@@ -19,7 +19,7 @@
 //!   accept a renderer-supplied path or command."*).
 use richos_search::corpus::MetadataSource;
 use richos_search::embed::Embedder;
-use richos_search::service::{Busy, Config, Grant, SearchRequest, SearchResponse, SearchService, Status, Tuning};
+use richos_search::service::{Busy, Config, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -61,14 +61,20 @@ impl ActiveSearch {
     }
 
     fn search(&self, request: &SearchRequest, revoked: bool) -> SearchResponse {
+        self.search_while_current(request, revoked, &|| false).unwrap()
+    }
+
+    fn search_while_current(&self, request: &SearchRequest, revoked: bool, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
         let mut response = if revoked {
-            self.service.search(&SearchRequest { query: String::new(), super_finder: false, offset: 0, ..request.clone() })
+            self.service.search_while_current(
+                &SearchRequest { query: String::new(), super_finder: false, offset: 0, ..request.clone() }, obsolete,
+            )?
         } else {
-            self.service.search(request)
+            self.service.search_while_current(request, obsolete)?
         };
         self.mark_status(&mut response.status);
         response.requested.super_finder = request.super_finder;
-        response
+        Some(response)
     }
 }
 
@@ -81,8 +87,10 @@ pub struct DocumentSearch {
     make_embedder: EmbedderFactory,
     busy: Option<Busy>,
     metadata: Option<MetadataSource>,
+    reranker: Option<Reranker>,
     retire: mpsc::Sender<RetiredService>,
     closed: std::sync::atomic::AtomicBool,
+    palette_generation: std::sync::atomic::AtomicU64,
 }
 
 impl DocumentSearch {
@@ -91,6 +99,7 @@ impl DocumentSearch {
         make_embedder: impl Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync + 'static,
         busy: Option<Busy>,
         metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
     ) -> Arc<Self> {
         let location: Locate = Arc::new(location);
         let make_embedder: EmbedderFactory = Arc::new(make_embedder);
@@ -107,15 +116,17 @@ impl DocumentSearch {
             }
         }).expect("the search cleanup thread could not start");
         let factory = make_embedder.clone();
-        let service = Self::build(initial.clone(), location.clone(), Box::new(move || factory()), busy.clone(), metadata.clone(), None);
+        let service = Self::build(initial.clone(), location.clone(), Box::new(move || factory()), busy.clone(), metadata.clone(), reranker.clone(), None);
         Arc::new(Self {
             active: Mutex::new(ActiveSearch { location: initial, service, base: 0 }),
             location,
             make_embedder,
             busy,
             metadata,
+            reranker,
             retire,
             closed: std::sync::atomic::AtomicBool::new(false),
+            palette_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -125,6 +136,7 @@ impl DocumentSearch {
         make_embedder: richos_search::service::MakeEmbedder,
         busy: Option<Busy>,
         metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
         retired: Option<mpsc::Receiver<()>>,
     ) -> SearchService {
         let config = Config {
@@ -135,7 +147,7 @@ impl DocumentSearch {
             tuning: Tuning::default(),
         };
         let authorized: Grant = Box::new(move || current() == *location);
-        SearchService::start_with_grant(config, metadata, Some(authorized), move || {
+        SearchService::start_with_grant(config, metadata, reranker, Some(authorized), move || {
             if let Some(retired) = retired {
                 retired.recv().expect("the previous search index did not close");
             }
@@ -164,7 +176,7 @@ impl DocumentSearch {
         // Text loads without waiting. The background worker only waits to open the
         // index, so even an A -> B -> A switch preserves exclusive index ownership.
         let factory = self.make_embedder.clone();
-        let service = Self::build(location.clone(), self.location.clone(), Box::new(move || factory()), self.busy.clone(), self.metadata.clone(), Some(retired));
+        let service = Self::build(location.clone(), self.location.clone(), Box::new(move || factory()), self.busy.clone(), self.metadata.clone(), self.reranker.clone(), Some(retired));
         *active = ActiveSearch { location, service, base: active.base + active.service.status().generation };
         active.clone()
     }
@@ -210,6 +222,7 @@ impl DocumentSearch {
 }
 
 pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -> Arc<DocumentSearch> {
+    crate::search_diagnostics::init(data_dir);
     let home = home.to_path_buf();
     #[cfg(target_os = "macos")]
     let metadata = {
@@ -217,13 +230,18 @@ pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -
         let resources = crate::cleaner_native::Native::bundled().ok().map(|native| native.directory);
         Some(cleaner_metadata_source(catalog, resources))
     };
+    #[cfg(target_os = "macos")]
+    let (make_embedder, reranker) = crate::search_rerank::models();
+    #[cfg(target_os = "macos")]
+    let reranker = Some(reranker);
     #[cfg(not(target_os = "macos"))]
-    let metadata: Option<MetadataSource> = { let _ = data_dir; None };
+    let (metadata, reranker) = { let _ = data_dir; (None, None) };
     DocumentSearch::new(
         move || Location::from_settings(&home, richos_core::machine_settings::Settings::current()),
         make_embedder,
         Some(busy),
         metadata,
+        reranker,
     )
 }
 
@@ -236,25 +254,22 @@ fn cleaner_metadata_source(catalog: PathBuf, resources: Option<PathBuf>) -> Meta
     MetadataSource {
         extensions: EXTENSIONS,
         watch: Arc::new(move || Catalog::watch_filed_context(&watched)),
-        read: Arc::new(move |path, meta| {
+        read: Arc::new(move |path, meta, cache| {
             let volume = meta.dev() & u32::MAX as u64;
             let record = Catalog::filed_context(&catalog, volume, meta.ino()).ok().flatten();
             if let Some(entry) = record.filter(|entry| {
-                entry.path == path
+                (entry.path == path || entry.path.canonicalize().ok().as_deref() == Some(path))
                     && entry.identity.size == meta.len()
                     && entry.identity.modified == format!("{}:{}", meta.mtime(), meta.mtime_nsec())
                     && entry.identity.changed == format!("{}:{}", meta.ctime(), meta.ctime_nsec())
             }) {
                 return Ok(Some(format!("{}\n\n{}", entry.note, entry.labels.join("\n"))));
             }
-            crate::cleaner_metadata::search_text(path, resources.as_deref()).map(Some)
+            crate::search_media_cache::read(path, meta, cache, || {
+                crate::cleaner_metadata::search_text(path, resources.as_deref())
+            }).map(Some)
         }),
     }
-}
-
-#[cfg(target_os = "macos")]
-fn make_embedder() -> Result<Box<dyn Embedder>, String> {
-    Ok(Box::new(richos_search::embed::AppleSentenceEmbedder::new("en")?))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -266,17 +281,37 @@ fn make_embedder() -> Result<Box<dyn Embedder>, String> {
 /// list scrolls (design round 26), never with page controls.
 pub const PAGE: usize = 12;
 
-pub fn search(service: &DocumentSearch, mut request: SearchRequest) -> SearchResponse {
+#[cfg(test)]
+pub fn search(service: &DocumentSearch, request: SearchRequest) -> SearchResponse {
+    search_palette(service, request, None).unwrap()
+}
+
+pub fn cancel_palette(service: &DocumentSearch, generation: u64) {
+    service.palette_generation.fetch_max(generation, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, generation: Option<u64>) -> Option<SearchResponse> {
+    let started = std::time::Instant::now();
+    if let Some(generation) = generation { cancel_palette(service, generation); }
+    let obsolete = || generation.is_some_and(|generation| {
+        service.palette_generation.load(std::sync::atomic::Ordering::Relaxed) > generation
+    });
+    if obsolete() {
+        crate::search_diagnostics::record(request.super_finder, None, started.elapsed(), &[]);
+        return None;
+    }
     request.limit = request.limit.clamp(1, PAGE);
-    service.read(|active, revoked| {
-        let mut response = active.search(&request, revoked);
+    let (response, stages) = richos_search::service::capture_query_stages(|| service.read(|active, revoked| {
+        let mut response = active.search_while_current(&request, revoked, &obsolete)?;
         for hit in &mut response.hits {
             // Source IDs inside the index are relative to its folder. A result from
             // an old grant must never open the same relative path in a new folder.
             hit.source_id = format!("{}:{}", active.base, hit.source_id);
         }
-        response
-    })
+        (!obsolete()).then_some(response)
+    }));
+    crate::search_diagnostics::record(request.super_finder, response.as_ref(), started.elapsed(), &stages);
+    response
 }
 
 pub fn status(service: &DocumentSearch) -> Status {
@@ -463,6 +498,7 @@ mod tests {
                     Err("Apple's sentence embedding for 'en' is not available on this Mac.".into())
                 }
             },
+            None,
             None,
             None,
         );
@@ -687,6 +723,7 @@ mod tests {
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
             None,
+            None,
         );
         let tool = ToolAnswer(service.clone());
         let request = SearchRequest { query: "refund".into(), super_finder: true, strict: false, offset: 0, limit: PAGE };
@@ -796,6 +833,7 @@ mod tests {
             },
             None,
             None,
+            None,
         );
         let prior = service.current();
         // load-bound: hang guard only. The worker must enter the controlled block.
@@ -857,6 +895,9 @@ mod tests {
         let cleaner = base.join("cleaner");
         for dir in [&included, &excluded, &cleaner] { std::fs::create_dir_all(dir).unwrap(); }
         let catalog = cleaner.join("library.sqlite");
+        let alias = base.join("alias");
+        std::os::unix::fs::symlink(&included, &alias).unwrap();
+        std::os::unix::fs::symlink(&excluded, included.join("outside-link")).unwrap();
         let identity = |path: &Path| {
             let meta = std::fs::metadata(path).unwrap();
             Identity { volume: meta.dev() & u32::MAX as u64, object: meta.ino(), size: meta.len(),
@@ -870,7 +911,7 @@ mod tests {
         };
         create_zip(&included.join("portable.zip"), "Refund approved for the cobalt lantern.");
         create_zip(&excluded.join("outside.zip"), "Ambiguous unauthorized sapphire fixture");
-        let catalog_only = included.join("local.zip");
+        let catalog_only = alias.join("local.zip");
         create_zip(&catalog_only, "");
         let mut entry = Entry::new(catalog_only.clone(), identity(&catalog_only), "Zirconium local note.".into()).unwrap();
         entry.labels = vec!["obsidian-tag".into()];
@@ -906,13 +947,14 @@ mod tests {
             assert_eq!(witnesses.len(), 5, "qualification must exercise both screenshots, audio, video and archive");
         }
         let adapter = cleaner_metadata_source(catalog.clone(), resources);
-        let folder = included.clone();
+        let folder = alias;
         let cache = base.join("cache");
         let service = DocumentSearch::new(
             move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()) },
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
             Some(adapter),
+            None,
         );
         let query = |query: &str, super_finder, strict| search(&service, SearchRequest {
             query: query.into(), super_finder, strict, offset: 0, limit: PAGE,

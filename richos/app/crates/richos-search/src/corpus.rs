@@ -26,7 +26,7 @@ pub const SKIPPED_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "
 /// conversation the archive's lower bound implies (30+ MB over 1,500+ files, about 20 KB each).
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
-pub type ReadMetadata = dyn Fn(&Path, &Metadata) -> Result<Option<String>, String> + Send + Sync;
+pub type ReadMetadata = dyn Fn(&Path, &Metadata, Option<&Path>) -> Result<Option<String>, String> + Send + Sync;
 
 /// The desktop supplies its format readers. Plain Markdown needs no adapter.
 #[derive(Clone)]
@@ -285,8 +285,9 @@ pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>,
     Ok((!stopped()).then_some(PendingCorpus { corpus, media }))
 }
 
-pub(crate) fn catalog_relative(root: &Path, path: &Path, source: &MetadataSource) -> Option<String> {
-    let tail = path.strip_prefix(root).ok()?;
+pub(crate) fn catalog_relative(root: &Path, configured: &Path, path: &Path, source: &MetadataSource) -> Option<String> {
+    // Only the selected root may be an alias. Descendants must still pass resolve_inside.
+    let tail = path.strip_prefix(root).or_else(|_| path.strip_prefix(configured)).ok()?;
     let names: Vec<_> = tail.components().map(|part| match part {
         Component::Normal(name) => name.to_str(),
         _ => None,
@@ -298,11 +299,11 @@ pub(crate) fn catalog_relative(root: &Path, path: &Path, source: &MetadataSource
     Some(names.join("/"))
 }
 
-pub(crate) fn read_metadata_document(root: &Path, rel: &str, source: &MetadataSource) -> Result<Option<Arc<Document>>, String> {
+pub(crate) fn read_metadata_document(root: &Path, rel: &str, source: &MetadataSource, cache: Option<&Path>) -> Result<Option<Arc<Document>>, String> {
     let path = resolve_inside(root, rel)?;
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     let version = FileVersion::of(&meta);
-    let Some(text) = (source.read)(&path, &meta)?.filter(|s| !s.trim().is_empty()) else { return Ok(None) };
+    let Some(text) = (source.read)(&path, &meta, cache)?.filter(|s| !s.trim().is_empty()) else { return Ok(None) };
     if resolve_inside(root, rel)? != path || std::fs::metadata(&path).ok().map(|m| FileVersion::of(&m)) != Some(version.clone()) {
         return Err("The file changed while its metadata was being read.".into());
     }
