@@ -52,6 +52,8 @@ const CALENDAR_SYNC_DEADLINE: Duration = Duration::from_secs(3 * 60);
 /// A meeting's transcription is bounded (whisper on Apple silicon measured 249 s for a 92-minute
 /// channel, `config.js`; two channels of an hour stay well inside this).
 const TRANSCRIBE_DEADLINE: Duration = Duration::from_secs(60 * 60);
+/// Keep the saved recording waiting for setup for a bounded time.
+const MODEL_WAIT: Duration = Duration::from_secs(5 * 60);
 /// One brief attempt (a bug report's is 90 s; an hour of transcript needs longer).
 const BRIEF_DEADLINE: Duration = Duration::from_secs(5 * 60);
 /// Between failed brief attempts (PRD V4: up to three attempts per session).
@@ -1196,6 +1198,38 @@ impl Meetings {
         }
     }
 
+    fn call_model(&self) -> Result<PathBuf, String> {
+        use std::sync::atomic::Ordering;
+        let resolving = || richos_voice::stt::resolve_model(CALL_MODEL);
+        if let Ok(model) = resolving() {
+            return Ok(model);
+        }
+        let downloading = || {
+            crate::setup_view::video_tools_downloading()
+                || self.app.try_state::<Arc<crate::voice_provision::ModelFetchState>>()
+                    .is_some_and(|state| state.in_flight.load(Ordering::SeqCst))
+        };
+        if downloading() {
+            self.set_processing(Some("waiting-model"));
+            let start = std::time::Instant::now();
+            while downloading() && start.elapsed() < MODEL_WAIT {
+                if let Ok(model) = resolving() {
+                    eprintln!("[richos] meeting notes: transcription model ready after {} ms", start.elapsed().as_millis());
+                    self.set_processing(Some("preparing"));
+                    return Ok(model);
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            let model = resolving();
+            eprintln!("[richos] meeting notes: transcription model wait ended after {} ms, available={}", start.elapsed().as_millis(), model.is_ok());
+            if let Ok(model) = model {
+                self.set_processing(Some("preparing"));
+                return Ok(model);
+            }
+        }
+        Err("the call transcription model is not installed yet".into())
+    }
+
     /// The pipeline (`richos-service run <session>`): the runtime's own node, ffmpeg and
     /// whisper-cli, the corpus and company of the meeting, bounded. Its output goes to
     /// `pipeline.log` in the session.
@@ -1218,8 +1252,7 @@ impl Meetings {
         }
         // The selected call model, named outright: setup fetches it into RichOS's own model
         // folder (`setup_view.rs`, both models), which the service's own search does not visit.
-        let model = richos_voice::stt::resolve_model(CALL_MODEL)
-            .map_err(|e| format!("the call transcription model is not installed yet ({e})"))?;
+        let model = self.call_model()?;
         command.env("RICHOS_WHISPER_MODEL", model);
         match &facts.entity {
             Some(e) => command.env("RICHOS_ACTIVE_COMPANY", e),

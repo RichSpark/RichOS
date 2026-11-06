@@ -94,6 +94,8 @@ async function main() {
     assertEqual(await text(page, "#mn-status"), "Preparing your meeting notes…");
     const after = await page.evaluate(() => document.getElementById("mn-status").previousElementSibling.id);
     assertEqual(after, "messages", "it follows the conversation's messages");
+    await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ processing: "waiting-model" }));
+    assertEqual(await text(page, "#mn-status"), "Recording saved. Finishing setup for your notes…");
     await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ processing: null }));
     await page.waitForSelector("#mn-status[hidden]", { state: "attached" });
     await page.close();

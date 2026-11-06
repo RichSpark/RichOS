@@ -17,7 +17,7 @@
 //   5. The recording indicator folds after five seconds and opens while pointed at.
 //   6. CONTRAST, computed in both themes over white and black grounds (the panel floats over any
 //      app): every text run and every indicator the round declared.
-//   7. Every line meant to be read is 16px or larger, except the declared 14px RichOS caps label.
+//   7. Every line meant to be read is 16px or larger, except the declared 14px RichBrief caps label.
 //
 // Run: node meeting-panel.js
 "use strict";
@@ -113,10 +113,13 @@ async function main() {
   const run = createRun("meeting notes' floating panel");
   const browser = await loadPlaywright().webkit.launch();
 
-  await run.check("every view, word for word against round 25.1", async () => {
+  await run.check("every view keeps round 25.1 actions and RichBrief branding", async () => {
     const page = await open(browser);
     await say(page, "meeting-panel", SCHEDULED);
-    assertEqual(await text(page, "#fl .fl-app"), "RICHOS", "the caps micro-label");
+    assertEqual(await text(page, "#fl .fl-app"), "RICHBRIEF", "the caps micro-label");
+    const icon = page.locator("#fl .fl-icon");
+    await icon.evaluate(img => img.decode());
+    assertEqual(await icon.evaluate(img => img.naturalWidth), 32, "the bundled RichBrief icon loads");
     assertEqual(await text(page, "#fl .fl-title"), "Acme pricing review", "the calendar title");
     assertEqual(await text(page, "#fl .fl-sub"), "Starts in 1 minute.", "the start line");
     assertEqual(await text(page, "#fl .fl-actions"), "Take Notes Not this one", "the two answers");
@@ -270,7 +273,7 @@ async function main() {
     });
   }
 
-  await run.check("every line meant to be read is 16px or larger (the 14px RichOS caps label is declared)", async () => {
+  await run.check("every line meant to be read is 16px or larger (the 14px RichBrief caps label is declared)", async () => {
     const page = await open(browser);
     const small = [];
     for (const view of [SCHEDULED, { view: "recording", startedAt: Date.now(), note: "Recording continues while setup finishes" }]) {

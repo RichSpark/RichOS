@@ -134,7 +134,13 @@
     const chip = document.getElementById("mn-paused-chip");
     if (chip) chip.hidden = !(st && st.available && st.paused);
     const status = document.getElementById("mn-status");
-    if (status) status.hidden = !(st && st.processing === "preparing");
+    if (status) {
+      const waiting = st?.processing === "waiting-model";
+      status.hidden = !waiting && st?.processing !== "preparing";
+      status.lastElementChild.textContent = waiting
+        ? "Recording saved. Finishing setup for your notes…"
+        : "Preparing your meeting notes…";
+    }
     // The row's time moves only while a recording runs.
     if (st && st.recording && !ticker) ticker = setInterval(paintRows, 1000);
     if (!(st && st.recording) && ticker) { clearInterval(ticker); ticker = null; }
