@@ -829,6 +829,25 @@ impl SearchService {
         }
     }
 
+    /// The roots in the current corpus. Listing them does not traverse a drive.
+    pub fn searchable_folders(&self) -> Vec<(String, PathBuf)> {
+        let corpus = self.0.corpus.read().unwrap();
+        let Some(snapshot) = corpus.as_ref() else { return Vec::new() };
+        let corpus = &snapshot.corpus;
+        if self.0.folders.is_none() && !corpus.root.as_os_str().is_empty() {
+            return vec![(corpus::source_id(&corpus.root.to_string_lossy()), corpus.root.clone())];
+        }
+        corpus.roots.iter().map(|(id, root)| (id.clone(), root.clone())).collect()
+    }
+
+    /// A request can narrow to IDs from this corpus only. Old or invented IDs
+    /// grant nothing, including when a folder setting changes mid-request.
+    pub fn limit_to_folder_ids(&self, ids: &[String]) -> corpus::FolderScope {
+        let ids: std::collections::HashSet<_> = ids.iter().map(String::as_str).collect();
+        corpus::FolderScope::normalized(self.searchable_folders().into_iter()
+            .filter_map(|(id, path)| ids.contains(id.as_str()).then_some(path)).collect())
+    }
+
     /// The meaning half, when it can answer: a model loaded and at least the reconciled part of
     /// an index open. While indexing, it answers from the files already complete.
     fn meaning_for_query(&self) -> Option<Arc<Meaning>> {

@@ -17,7 +17,7 @@
 //!   `/usr/bin/open`. It is not an entry in `opener.rs`'s fixed table and accepts no path, URL
 //!   or command from the renderer (*"It does not widen the existing fixed URL allowlist or
 //!   accept a renderer-supplied path or command."*).
-use richos_search::corpus::MetadataSource;
+use richos_search::corpus::{FolderScope, MetadataSource};
 use richos_search::embed::Embedder;
 use richos_core::config::{SearchFolderMode, SearchFolderPreferences};
 use richos_search::service::{Busy, Config, FolderSetConfig, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
@@ -127,16 +127,16 @@ impl ActiveSearch {
     }
 
     fn search(&self, request: &SearchRequest, revoked: bool) -> SearchResponse {
-        self.search_while_current(request, revoked, &|| false).unwrap()
+        self.search_while_current(request, revoked, None, &|| false).unwrap()
     }
 
-    fn search_while_current(&self, request: &SearchRequest, revoked: bool, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
+    fn search_while_current(&self, request: &SearchRequest, revoked: bool, scope: Option<&FolderScope>, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
         let mut response = if revoked {
             self.service.search_while_current(
                 &SearchRequest { query: String::new(), super_finder: false, offset: 0, ..request.clone() }, obsolete,
             )?
         } else {
-            self.service.search_while_current(request, obsolete)?
+            self.service.search_in_folders_while_current(request, scope, obsolete)?
         };
         self.mark_status(&mut response.status);
         response.requested.super_finder = request.super_finder;
@@ -424,14 +424,14 @@ pub const PAGE: usize = 12;
 
 #[cfg(test)]
 pub fn search(service: &DocumentSearch, request: SearchRequest) -> SearchResponse {
-    search_palette(service, request, None).unwrap()
+    search_palette(service, request, None, None).unwrap()
 }
 
 pub fn cancel_palette(service: &DocumentSearch, generation: u64) {
     service.palette_generation.fetch_max(generation, std::sync::atomic::Ordering::Relaxed);
 }
 
-pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, generation: Option<u64>) -> Option<SearchResponse> {
+pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, generation: Option<u64>, source_ids: Option<&[String]>) -> Option<SearchResponse> {
     let started = std::time::Instant::now();
     if let Some(generation) = generation { cancel_palette(service, generation); }
     let obsolete = || generation.is_some_and(|generation| {
@@ -443,7 +443,8 @@ pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, gene
     }
     request.limit = request.limit.clamp(1, PAGE);
     let (response, stages) = richos_search::service::capture_query_stages(|| service.read(|active, revoked| {
-        let mut response = active.search_while_current(&request, revoked, &obsolete)?;
+        let scope = source_ids.map(|ids| active.service.limit_to_folder_ids(ids));
+        let mut response = active.search_while_current(&request, revoked, scope.as_ref(), &obsolete)?;
         for hit in &mut response.hits {
             // Source IDs inside the index are relative to its folder. A result from
             // an old grant must never open the same relative path in a new folder.
@@ -453,6 +454,28 @@ pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, gene
     }));
     crate::search_diagnostics::record(request.super_finder, response.as_ref(), started.elapsed(), &stages);
     response
+}
+
+#[derive(serde::Serialize)]
+pub struct SearchSource {
+    id: String,
+    name: String,
+    path: String,
+}
+
+/// Palette options come from the active corpus. Settings can show other folders
+/// as candidates, but their IDs cannot add them to a search.
+pub fn search_sources(service: &DocumentSearch) -> Vec<SearchSource> {
+    service.read(|active, revoked| {
+        if revoked { return Vec::new(); }
+        let mut roots: Vec<_> = active.service.searchable_folders().into_iter().map(|(id, root)| {
+            let path = root.to_string_lossy().into_owned();
+            let name = root.file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+            SearchSource { id, name, path }
+        }).collect();
+        roots.sort_unstable_by(|a, b| (&a.name, &a.path).cmp(&(&b.name, &b.path)));
+        roots
+    })
 }
 
 pub fn status(service: &DocumentSearch) -> Status {
@@ -679,6 +702,43 @@ mod tests {
         service.apply_folder_preferences(SearchFolderPreferences::default());
         assert!(search(&service, request).hits.is_empty());
         assert!(service.resolve_for_open(refreshed_id).is_err());
+        service.shutdown();
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn palette_sources_only_narrow_the_current_folder_grant() {
+        let base = std::env::temp_dir().join(richos_core::util::new_id("search-sources"));
+        for name in ["archive", "notes", "private"] {
+            let folder = base.join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("evidence.md"), "# Document\n\nSilvercove is in this folder.").unwrap();
+        }
+        let base = base.canonicalize().unwrap();
+        let archive = base.join("archive");
+        let notes = base.join("notes");
+        let chosen = |chosen| SearchFolderPreferences { mode: SearchFolderMode::Chosen, chosen, ..SearchFolderPreferences::default() };
+        let controls = Arc::new(FolderControls::new(&base, &base.join("app-data"), Ok(Some(chosen(vec![archive, notes.clone()])))));
+        let source = controls.clone();
+        let service = DocumentSearch::new(
+            move || source.locate(Ok(richos_core::machine_settings::Settings::default())),
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None, None, None, Some(controls),
+        );
+        service.current().service.wait_idle();
+        let sources = search_sources(&service);
+        assert_eq!(sources.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["archive", "notes"]);
+        let archive_id = sources[0].id.clone();
+        let forged = richos_search::corpus::source_id(&base.join("private").to_string_lossy());
+        let request = SearchRequest { query: "silvercove".into(), super_finder: false, strict: false, offset: 0, limit: PAGE };
+        let find = |ids: Option<&[String]>| search_palette(&service, request.clone(), None, ids).unwrap();
+        assert_eq!(find(None).hits.len(), 2);
+        assert_eq!(find(Some(&[archive_id.clone(), forged])).hits.len(), 1);
+        assert!(find(Some(&[])).hits.is_empty());
+        service.apply_folder_preferences(chosen(vec![notes]));
+        service.current().service.wait_idle();
+        assert!(find(Some(&[archive_id])).hits.is_empty());
+        assert_eq!(find(None).hits.len(), 1);
         service.shutdown();
         std::fs::remove_dir_all(base).unwrap();
     }

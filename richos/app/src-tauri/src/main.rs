@@ -4109,6 +4109,7 @@ fn main() {
             // --- document search (search PRD v3.1, 2026-10-13) — appended, never reordered ---
             search_documents,
             search_documents_status,
+            search_document_sources,
             cancel_search_documents,
             open_search_document,
             // --- Meeting notes (Granola PRD V4) — appended ---
@@ -6917,8 +6918,8 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
 /// One page of the palette's Documents section (`doc_search.rs`). Navigation hits stay with
 /// `search_nav`, unchanged by either checkbox.
 #[richos_command::command]
-fn search_documents(state: State<AppState>, request: richos_search::SearchRequest, generation: Option<u64>) -> Option<richos_search::SearchResponse> {
-    doc_search::search_palette(&state.search, request, generation)
+fn search_documents(state: State<AppState>, request: richos_search::SearchRequest, generation: Option<u64>, source_ids: Option<Vec<String>>) -> Option<richos_search::SearchResponse> {
+    doc_search::search_palette(&state.search, request, generation, source_ids.as_deref())
 }
 
 #[richos_command::command]
@@ -6930,6 +6931,11 @@ fn cancel_search_documents(state: State<AppState>, generation: u64) {
 #[richos_command::command]
 fn search_documents_status(state: State<AppState>) -> richos_search::Status {
     doc_search::status(&state.search)
+}
+
+#[richos_command::command]
+fn search_document_sources(state: State<AppState>) -> Vec<doc_search::SearchSource> {
+    doc_search::search_sources(&state.search)
 }
 
 #[richos_command::command]

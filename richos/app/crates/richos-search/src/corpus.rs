@@ -308,7 +308,7 @@ impl FolderScope {
         (Self::normalized(roots), unavailable)
     }
 
-    fn normalized(mut roots: Vec<PathBuf>) -> Self {
+    pub(crate) fn normalized(mut roots: Vec<PathBuf>) -> Self {
         roots.sort_unstable();
         let mut distinct: Vec<PathBuf> = Vec::new();
         for root in roots {
