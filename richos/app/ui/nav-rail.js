@@ -93,28 +93,27 @@
   };
 
   /// A press on the rail goes where the item goes, so a sheet or palette open in the content area
-  /// steps aside first, each by its own close: a `control:` declaration's named button, the
-  /// palette's own close. The Bust a bug panel stays (it is beside the screen, not over it, and
-  /// holds a report), and so does Settings, which closes on any press outside itself. Returns
-  /// false while a first-run question owns the window: then the rail does nothing.
+  /// steps aside first, each by its own declared way out (`RichDismiss.dismiss`: the control a
+  /// `control:` declaration names, or the surface's own close for an `escape` one: the palette,
+  /// Corrections, Feedback). The Bust a bug panel stays (it is beside the screen, not over it,
+  /// and holds a report), and so does Settings, which closes on any press outside itself.
+  /// Returns null while a first-run question owns the window (the rail then does nothing), else
+  /// how many surfaces it closed.
   function clearForRail(item) {
     const D = window.RichDismiss;
-    if (D && D.question && D.question()) return false;
+    if (D && D.question && D.question()) return null;
     // Bust a bug reports the screen as it is, Settings opens over anything, and RichCleaner is
     // another window: none of them is a place, so nothing steps aside for them.
-    if (item === "bug" || item === "me" || item === "cleaner") return true;
+    if (item === "bug" || item === "me" || item === "cleaner") return 0;
+    let closed = 0;
     for (const o of document.querySelectorAll(".overlay:not([hidden])")) {
       if (item === "finder" && o.id === "search-overlay") continue;
       if (item === "scribe" && o.id === "dictation-sheet") continue;
-      const spec = o.getAttribute("data-dismiss") || "";
-      if (spec.indexOf("control:") === 0) {
-        const close = document.querySelector(spec.slice(8));
-        if (close) close.click();
-      } else if (o.id === "search-overlay" && window.RichSearch && window.RichSearch.close) {
-        window.RichSearch.close();
-      }
+      if (D && D.dismiss) D.dismiss(o);
+      else o.hidden = true;
+      closed++;
     }
-    return true;
+    return closed;
   }
 
   nav.addEventListener("click", (e) => {
@@ -122,9 +121,15 @@
     if (!b || !nav.contains(b)) return;
     hideTip();
     if (b.getAttribute("aria-disabled") === "true") return;
-    if (!clearForRail(b.dataset.item)) return;
+    const closed = clearForRail(b.dataset.item);
+    if (closed === null) return;
     const go = OPEN[b.dataset.item] || (pages.has(b.dataset.item) ? () => showPage(b.dataset.item) : null);
-    if (go) go();
+    if (!go) return;
+    // A closed surface may still hand focus back to its opener a moment later (the RichScribe
+    // sheet's close returns it to Settings in a microtask). The destination opens after that,
+    // so the keyboard lands where the press went.
+    if (closed) setTimeout(go, 0);
+    else go();
   });
 
   // ---- what is selected -------------------------------------------------------------------------

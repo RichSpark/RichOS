@@ -193,8 +193,15 @@ async function main() {
       await page.evaluate(() => window.RichHome.hide("nav-rail-test"));
       await page.waitForFunction(() => !window.RichHome.isOpen());
       await flushFrames(page);
+      // Corrections open (an Escape-declared overlay), RichFinder from the rail: Corrections
+      // closes by its own close and the palette opens in front with the keyboard, never under it.
+      await page.click("#nav-corrections");
+      await page.waitForSelector("#corrections-overlay", { state: "visible" });
       await page.click("#nr-finder");
       await page.waitForSelector("#search-overlay", { state: "visible" });
+      await page.waitForSelector("#corrections-overlay", { state: "hidden" });
+      await flushFrames(page);
+      assertEqual(await page.evaluate(() => document.activeElement.id), "search-input", "the palette has the keyboard after Corrections closed");
       await page.keyboard.press("Escape");
       await page.waitForSelector("#search-overlay", { state: "hidden" });
       await flushFrames(page);
@@ -234,10 +241,17 @@ async function main() {
         const img = h && h.querySelector("img.feature-icon");
         return !!img && /richscribe-128\.png$/.test(img.getAttribute("src")) && h.textContent.trim() === "RichScribe";
       }), "the RichScribe icon is in front of the sheet's title");
-      // Over the sheet the rail is still reachable: Chats closes it by its own Close.
-      await page.click("#nr-chats");
+      // Over the sheet the rail is still reachable: RichFinder closes it by its own Close and the
+      // palette keeps the keyboard after the sheet's close has handed focus back.
+      await page.click("#nr-finder");
       await page.waitForSelector("#dictation-sheet", { state: "hidden" });
-      assertEqual((await railFacts(page)).selected, ["chats"], "Chats again, the sheet closed");
+      await page.waitForSelector("#search-overlay", { state: "visible" });
+      await flushFrames(page);
+      assertEqual(await page.evaluate(() => document.activeElement.id), "search-input", "the palette keeps the keyboard after RichScribe closed");
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("#search-overlay", { state: "hidden" });
+      await flushFrames(page);
+      assertEqual((await railFacts(page)).selected, ["chats"], "Chats again, both closed");
       await page.evaluate(() => window.__RICHOS_MOCK__.dictationSet({ ax: "allowed", keyTap: true }));
       await page.evaluate(() => document.getElementById("nr-scribe").click());
       await page.waitForFunction(() => document.querySelector("#nr-scribe .nr-dot").hidden);

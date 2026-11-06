@@ -8156,7 +8156,7 @@ function openSearch() {
 }
 
 /// The navigation rail's RichFinder item opens the palette ⌘K opens (round 58).
-window.RichSearch = { open: () => openSearch(), close: () => { if (!searchOverlayEl.hidden) closeSearch(); } };
+window.RichSearch = { open: () => openSearch() };
 
 function closeSearch() {
   searchOverlayEl.hidden = true;
@@ -10670,7 +10670,14 @@ const POPUP_CLOSERS = {
 function dismissTopmostPopup() {
   const open = openPopups();
   if (!open.length) return false;
-  const top = open[0];
+  return dismissPopup(open[0]);
+}
+
+/// Close ONE named surface by its own declared way out: what Escape does to the topmost, done
+/// to a surface the caller names. The navigation rail uses it (round 58): a press on a rail
+/// place closes the sheet or palette in the content area by that surface's own close, whatever
+/// sits above it (the Bust a bug panel stays).
+function dismissPopup(top) {
   // A KEY PRESSED AT A PICTURE DOES NOT ANSWER WHAT IS BEHIND THE PICTURE, and this is where
   // that holds for every covering surface rather than for the two that thought to say so. It
   // returns TRUE — Escape has been ANSWERED, by being refused — for the same reason a
@@ -10718,6 +10725,7 @@ window.RichDismiss = {
   selector: POPUP_SELECTOR,
   open: openPopups,
   dismissTopmost: dismissTopmostPopup,
+  dismiss: (node) => dismissPopup(node),
   question: openQuestion,
 };
 
