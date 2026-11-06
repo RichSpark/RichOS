@@ -564,15 +564,16 @@ impl MemoryPool {
         }).collect()
     }
 
-    fn publish(&self, records: &MemoryRows<'_>, obsolete: &dyn Fn() -> bool) {
+    fn publish(&self, records: &MemoryRows<'_>, obsolete: &dyn Fn() -> bool) -> bool {
         let mut prior = self.snapshot.lock().unwrap();
-        if obsolete() { return; }
+        if obsolete() { return false; }
         let next = Self::documents(records, &prior);
         if next.len() == prior.len() && next.iter().zip(prior.iter()).all(|((a, x), (b, y))| a == b && Arc::ptr_eq(x, y)) {
-            return;
+            return false;
         }
         *prior = next;
         let _queued = self.refresh.try_send(());
+        true
     }
 }
 
@@ -605,12 +606,16 @@ pub fn search_company_memory(
             pool.index.request_stop();
             return None;
         }
-        pool.publish(&authorized, &obsolete);
+        let generation_before_refresh = pool.index.status().generation;
+        let changed = pool.publish(&authorized, &obsolete);
         request.offset = 0;
         request.limit = request.limit.clamp(1, PAGE);
         let mut response = pool.index.search_projection(&request, &obsolete, &|document| {
             authorized.get(&document.rel_path).is_some_and(|(revision, _)| revision == &document.hash)
         })?;
+        if changed && response.status.generation == generation_before_refresh {
+            response.status.folder = richos_search::service::FolderStatus::Loading;
+        }
         response.hits.retain_mut(|hit| {
             let Some((revision, record)) = authorized.get(&hit.rel_path) else { return false };
             if revision != &hit.revision { return false; }
