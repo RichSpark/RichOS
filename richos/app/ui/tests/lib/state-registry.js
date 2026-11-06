@@ -5790,6 +5790,8 @@ module.exports = [
   {"s":"Index kept in","c":"FRAGMENT","why":"The status line's tooltip, followed by the index folder's path (the PRD: say where the index is kept)."},
   {"s":"meaning and words","c":"INFORMATIONAL","why":"The Documents heading's mode words with Super Finder in effect (round 26)."},
   {"s":"words only, Super Finder unavailable","c":"INFORMATIONAL","why":"The Documents heading's mode words when Super Finder is checked but unavailable: the effective mode, said where the results are."},
+  {"s":"The relevance model returned no logits.","c":"NOT-RENDERED","why":"The relevance scorer keeps the existing result order if model output is invalid. The native diagnostic does not reach the window."},
+  {"s":"Unexpected relevance scores.","c":"NOT-RENDERED","why":"The relevance scorer keeps the existing result order if model output is invalid. The native diagnostic does not reach the window."},
   {"s":"· quoted text required","c":"FRAGMENT","why":"Appended to the Documents heading's mode words when Require quoted text is checked."},
   {"s":"meaning · words","c":"INFORMATIONAL","why":"A document row's why-tag when it was found both by meaning and by its words (round 26: meaning, words, meaning · words, exact)."},
   {"s":"No documents match.","c":"ACTIONABLE","control":"#search-input","fixture":"search-empty","why":"No document matched. The field he retypes into is the affordance, and it is focused; the line under it says how to retry. Replaces `Nothing matches that.`."},
