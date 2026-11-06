@@ -421,6 +421,32 @@ async function main() {
         await folders.close();
       }
     });
+    await run.check("A company limit narrows Rich without changing the global folder choice", async () => {
+      const page = await openApp(browser);
+      try {
+        await page.keyboard.press("Escape");
+        await page.click("#set-btn");
+        await page.click("#set-search-folders-open");
+        await page.getByRole("button", { name: "Expand Home" }).click();
+        const docs = page.getByRole("checkbox", { name: "Search Documents" });
+        const archive = page.getByRole("checkbox", { name: "Search Archive" });
+        await docs.check();
+        await archive.check();
+        const company = page.locator(".rf-company-row").filter({ hasText: "Northwind Traders" });
+        await company.getByRole("button", { name: "Edit folder limit for Northwind Traders" }).click();
+        const choice = company.getByRole("checkbox", { name: "Documents" });
+        assert(await choice.isChecked(), "Rich inherits the global choice until a limit is saved");
+        await choice.uncheck();
+        await company.getByText("1 folder", { exact: true }).waitFor();
+        assert(await docs.isChecked() && await archive.isChecked(), "the user's global settings stay selected");
+        await company.getByRole("button", { name: "Remove limit" }).click();
+        await company.getByText("All search folders", { exact: true }).waitFor();
+        assert(await choice.isChecked(), "removing the limit restores inheritance");
+        assertEqual(page.__errors.length, 0, page.__errors.join("\n"));
+      } finally {
+        await page.close();
+      }
+    });
   } finally {
     await browser.close();
   }

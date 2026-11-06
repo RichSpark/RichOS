@@ -37,6 +37,14 @@
 .rf-folder-name { overflow-wrap: anywhere; }
 .rf-folder-row-note, .rf-folders-footer p { color: var(--ink-soft); }
 .rf-folder-coverage { display: grid; align-content: start; gap: 12px; background: var(--card); }
+.rf-folder-sidebar { display: grid; align-content: start; gap: 14px; min-width: 0; }
+.rf-folder-company { display: grid; gap: 10px; padding: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.rf-folder-company h3, .rf-folder-company p { margin: 0; }
+.rf-company-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
+.rf-company-name { overflow-wrap: anywhere; }
+.rf-company-state { color: var(--ink-soft); }
+.rf-company-options { grid-column: 1 / -1; display: grid; gap: 4px; padding: 6px 0 10px; justify-items: start; }
+.rf-company-options label { display: flex; align-items: center; gap: 7px; min-height: 28px; }
 .rf-folder-coverage h3 { margin: 0; }
 .rf-folder-total { color: var(--gold-text); font-size: 1.55rem; }
 .rf-folder-unavailable { display: flex; align-items: center; gap: 8px; }

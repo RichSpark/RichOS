@@ -7,7 +7,8 @@
   const number = new Intl.NumberFormat();
   let preferences, status, savedRows = [], roots = [], epoch = 0, busy = false, timer;
   const branches = new Map();
-  let sheet, tree, coverage, feedback, reindex;
+  let sheet, tree, coverage, feedback, reindex, companyPane;
+  let companyRows = [], companySources = [], editingCompany = null;
 
   function element(tag, cls, text) {
     const node = document.createElement(tag);
@@ -36,6 +37,7 @@
     ++epoch;
     clearTimeout(timer);
     branches.clear();
+    editingCompany = null;
     sheet.hidden = true;
     if (back) window.RichSettings.open();
     else document.getElementById("set-btn")?.focus();
@@ -70,8 +72,12 @@
     const columns = element("div", "rf-folders-columns");
     tree = element("section", "rf-folder-tree");
     tree.setAttribute("aria-label", "Folders on this Mac");
-    coverage = element("aside", "rf-folder-coverage");
-    columns.append(tree, coverage);
+    const sidebar = element("aside", "rf-folder-sidebar");
+    coverage = element("section", "rf-folder-coverage");
+    companyPane = element("section", "rf-folder-company");
+    companyPane.hidden = true;
+    sidebar.append(coverage, companyPane);
+    columns.append(tree, sidebar);
     const footer = element("footer", "rf-folders-footer");
     feedback = element("p", "", "Changes apply to the next search. No restart needed.");
     feedback.setAttribute("role", "status");
@@ -143,6 +149,7 @@
     tree.appendChild(element("p", "rf-folder-tree-caption", caption + " Locked rows are never searched."));
     roots.forEach(row => renderRow(row, 0));
     paintCoverage();
+    paintCompanies();
     if (prior && document.getElementById(prior) !== document.activeElement) document.getElementById(prior)?.focus();
     paintRow();
   }
@@ -191,6 +198,86 @@
       element("p", "", "System folders, app data, dependencies and generated output stay excluded. Links are skipped."));
   }
 
+  function paintCompanies() {
+    companyPane.hidden = preferences?.mode === "off" || companyRows.length === 0
+      || (companySources.length === 0 && !companyRows.some((company) => company.source_ids !== null));
+    companyPane.replaceChildren();
+    if (companyPane.hidden) return;
+    companyPane.appendChild(element("h3", "", "Rich in each company"));
+    for (const company of companyRows) {
+      const id = company.company_id;
+      const expanded = id === editingCompany;
+      const allowed = new Set(company.source_ids ?? companySources.map((source) => source.id));
+      const count = companySources.filter((source) => allowed.has(source.id)).length;
+      const row = element("div", "rf-company-row");
+      const toggle = button(expanded ? "Done" : company.source_ids === null ? "Limit" : "Edit", "", () => {
+        editingCompany = expanded ? null : id;
+        paint();
+      });
+      toggle.id = "rf-company-toggle-" + id;
+      toggle.disabled = busy;
+      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.setAttribute("aria-label", (expanded ? "Done with " : "Edit folder limit for ") + company.name);
+      const state = company.source_ids === null ? "All search folders"
+        : count === 0 ? "No folders" : number.format(count) + (count === 1 ? " folder" : " folders");
+      row.append(element("strong", "rf-company-name", company.name), element("span", "rf-company-state", state), toggle);
+      if (expanded) {
+        const options = element("div", "rf-company-options");
+        options.setAttribute("role", "group");
+        options.setAttribute("aria-label", "Folders Rich can search in " + company.name);
+        for (const source of companySources) {
+          const choice = element("input");
+          choice.type = "checkbox";
+          choice.id = "rf-company-" + id + "-" + source.id;
+          choice.checked = allowed.has(source.id);
+          choice.disabled = busy;
+          const label = element("label");
+          label.title = source.path;
+          label.append(choice, element("span", "", source.name));
+          choice.addEventListener("change", () => {
+            const next = companySources.filter((item) => item.id === source.id ? choice.checked : allowed.has(item.id));
+            void saveCompany(id, next.map((item) => item.id));
+          });
+          options.appendChild(label);
+        }
+        if (company.source_ids !== null) {
+          const remove = button("Remove limit", "", () => saveCompany(id, null));
+          remove.id = "rf-company-clear-" + id;
+          remove.disabled = busy;
+          options.appendChild(remove);
+        }
+        row.appendChild(options);
+      }
+      companyPane.appendChild(row);
+    }
+    companyPane.appendChild(element("p", "", "A company limit only narrows your search folders."));
+  }
+
+  async function saveCompany(companyId, sourceIds) {
+    if (busy) return;
+    const token = epoch;
+    const focused = document.activeElement?.id;
+    busy = true;
+    paint();
+    try {
+      await invoke("set_search_company_folders", { companyId, sourceIds });
+      const next = await invoke("search_company_folders");
+      if (token !== epoch || sheet.hidden) return;
+      companyRows = next;
+      setFeedback("Saved. Applies to the next search, no restart.");
+    } catch (error) {
+      if (token === epoch) setFeedback(String(error));
+    } finally {
+      busy = false;
+      if (token === epoch) {
+        paint();
+        const replacement = focused && document.getElementById(focused);
+        (replacement || document.getElementById("rf-company-toggle-" + companyId))?.focus();
+        scheduleStatus(token);
+      }
+    }
+  }
+
   function scheduleStatus(token) {
     clearTimeout(timer);
     if (token !== epoch || sheet.hidden || preferences?.mode === "off" || status?.folder?.state === "none") return;
@@ -200,8 +287,15 @@
       try {
         const next = await invoke("search_documents_status");
         if (token !== epoch || sheet.hidden || busy) return;
+        const foldersBecameReady = status?.folder?.state !== "ready" && next.folder?.state === "ready";
         status = next;
         paintCoverage();
+        if (foldersBecameReady) {
+          const sources = await invoke("search_document_sources");
+          if (token !== epoch || sheet.hidden || busy) return;
+          companySources = sources;
+          paint();
+        }
         scheduleStatus(token);
       } catch (_error) { /* The visible controls can still load current status on demand. */ }
     }, 1200);
@@ -227,11 +321,16 @@
     paint();
     try {
       const next = await invoke(command, args);
-      const [nextStatus, selected] = await Promise.all([invoke("search_documents_status"), invoke("search_selected_folders")]);
+      const [nextStatus, selected, companies, sources] = await Promise.all([
+        invoke("search_documents_status"), invoke("search_selected_folders"),
+        invoke("search_company_folders"), invoke("search_document_sources")
+      ]);
       if (token !== epoch || sheet.hidden) return;
       preferences = next;
       status = nextStatus;
       savedRows = selected;
+      companyRows = companies;
+      companySources = sources;
       setFeedback("Saved. Applies to the next search, no restart.");
       window.dispatchEvent(new Event("richfinder:folders-changed"));
     } catch (error) {
@@ -268,15 +367,18 @@
     sheet.hidden = false;
     sheet.querySelector(".rf-folders-back").focus();
     try {
-      const [choice, current, page, selected] = await Promise.all([
+      const [choice, current, page, selected, companies, sources] = await Promise.all([
         invoke("search_folder_preferences"), invoke("search_documents_status"),
-        invoke("search_folder_tree"), invoke("search_selected_folders")
+        invoke("search_folder_tree"), invoke("search_selected_folders"),
+        invoke("search_company_folders"), invoke("search_document_sources")
       ]);
       if (token !== epoch || sheet.hidden) return;
       preferences = choice;
       status = current;
       roots = page.rows;
       savedRows = selected;
+      companyRows = companies;
+      companySources = sources;
       paint();
       scheduleStatus(token);
     } catch (error) { if (token === epoch) setFeedback(String(error)); }

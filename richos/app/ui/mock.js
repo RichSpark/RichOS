@@ -4209,6 +4209,18 @@
           next_offset: null,
         };
         case "search_selected_folders": return mockFolderRows.filter(row => mockFolderPreferences.chosen.includes(row.path));
+        case "search_company_folders": return entities.map(entity => {
+          const paths = mockFolderPreferences.company_limits[entity.id];
+          return { company_id: entity.id, name: entity.display_name,
+            source_ids: paths ? mockFolderRows.filter(row => paths.includes(row.path)).map(row => row.id) : null };
+        });
+        case "set_search_company_folders": {
+          if (!entities.some(entity => entity.id === args.companyId)) throw "That company is no longer available.";
+          if (args.sourceIds == null) delete mockFolderPreferences.company_limits[args.companyId];
+          else mockFolderPreferences.company_limits[args.companyId] = mockDocSources()
+            .filter(source => args.sourceIds.includes(source.id)).map(source => source.path);
+          return null;
+        }
         case "set_search_folder_mode": {
           mockFolderPreferences.mode = args.mode;
           mockFolderGeneration++;
@@ -4218,7 +4230,12 @@
           const row = mockFolderRows.find(item => item.id === args.folderId);
           if (!row || row.state !== "eligible") throw "That folder is unavailable.";
           if (args.selected && !mockFolderPreferences.chosen.includes(row.path)) mockFolderPreferences.chosen.push(row.path);
-          if (!args.selected) mockFolderPreferences.chosen = mockFolderPreferences.chosen.filter(folder => folder !== row.path);
+          if (!args.selected) {
+            mockFolderPreferences.chosen = mockFolderPreferences.chosen.filter(folder => folder !== row.path);
+            for (const [company, folders] of Object.entries(mockFolderPreferences.company_limits)) {
+              mockFolderPreferences.company_limits[company] = folders.filter(path => path !== row.path);
+            }
+          }
           mockFolderPreferences.mode = mockFolderPreferences.chosen.length ? "chosen" : "off";
           mockFolderGeneration++;
           return structuredClone(mockFolderPreferences);
