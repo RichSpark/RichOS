@@ -613,7 +613,7 @@ impl SearchService {
                     return updates;
                 }
                 let doc = if root.join(path).exists() {
-                    corpus::read_metadata_document(root, path, source)
+                    corpus::read_metadata_document(root, path, source, self.0.config.cache.as_deref().ok())
                 } else {
                     Ok(None)
                 };

@@ -253,7 +253,7 @@ fn cleaner_metadata_source(catalog: PathBuf, resources: Option<PathBuf>) -> Meta
     MetadataSource {
         extensions: EXTENSIONS,
         watch: Arc::new(move || Catalog::watch_filed_context(&watched)),
-        read: Arc::new(move |path, meta| {
+        read: Arc::new(move |path, meta, cache| {
             let volume = meta.dev() & u32::MAX as u64;
             let record = Catalog::filed_context(&catalog, volume, meta.ino()).ok().flatten();
             if let Some(entry) = record.filter(|entry| {
@@ -264,7 +264,9 @@ fn cleaner_metadata_source(catalog: PathBuf, resources: Option<PathBuf>) -> Meta
             }) {
                 return Ok(Some(format!("{}\n\n{}", entry.note, entry.labels.join("\n"))));
             }
-            crate::cleaner_metadata::search_text(path, resources.as_deref()).map(Some)
+            crate::search_media_cache::read(path, meta, cache, || {
+                crate::cleaner_metadata::search_text(path, resources.as_deref())
+            }).map(Some)
         }),
     }
 }
