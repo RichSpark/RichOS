@@ -1,7 +1,7 @@
-//! App-owned embedding model. The child accepts requests through one private
-//! Unix socket and runs only while a configured folder needs meaning search.
+//! App-owned embedding model. Each child uses a private Unix socket. The
+//! indexing child runs only for the duration of a bulk backfill.
 use richos_core::owned_process::OwnedChild;
-use richos_search::embed::Embedder;
+use richos_search::embed::{BulkIndexer, Embedder};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::os::unix::fs::DirBuilderExt;
@@ -67,6 +67,12 @@ struct Running {
     // Drop the process before removing its socket directory.
     _child: OwnedChild,
     directory: SocketDirectory,
+}
+
+#[derive(Clone, Copy)]
+enum Helper {
+    Query,
+    BulkIndex,
 }
 
 enum LookupError {
@@ -175,7 +181,7 @@ impl ModelProcess {
             if running.is_some() {
                 return Ok(());
             }
-            match Running::start(&self.resources, &stop) {
+            match Running::start(&self.resources, Helper::Query, &stop) {
                 Ok(runtime) => {
                     *running = Some(Arc::new(runtime));
                     return Ok(());
@@ -242,7 +248,7 @@ fn running_in_virtual_machine() -> bool {
 }
 
 impl Running {
-    fn start(resources: &Path, stop: &dyn Fn() -> bool) -> Result<Self, String> {
+    fn start(resources: &Path, helper: Helper, stop: &dyn Fn() -> bool) -> Result<Self, String> {
         if stop() {
             return Err("The local search model could not start.".into());
         }
@@ -250,10 +256,17 @@ impl Running {
         let server = resources.join("llama-server");
         let directory = SocketDirectory::create()?;
         let socket = directory.socket();
-        let mut command = Command::new(server);
-        // The context is split over two slots, retaining 512 tokens for each.
+        let (mut command, slots, context) = match helper {
+            // The shared fallback retains 512 tokens per slot.
+            Helper::Query => (Command::new(server), "2", "1024"),
+            Helper::BulkIndex => {
+                let mut command = Command::new("/usr/bin/nice");
+                command.args(["-n", "10"]).arg(server);
+                (command, "1", "512")
+            }
+        };
         command.env_clear().env("RICHFINDER_OWNER_SOCKET", &socket).arg("--model").arg(model).arg("--host").arg(&socket).args([
-            "--embedding", "--parallel", "2", "-c", "1024", "-b", "512", "-ub", "512",
+            "--embedding", "--parallel", slots, "-c", context, "-b", "512", "-ub", "512",
             "--threads", "2", "--threads-batch", "2", "--no-webui", "--no-slots", "--log-disable",
         ]);
         if running_in_virtual_machine() {
@@ -269,7 +282,11 @@ impl Running {
                 return Err("The local search model exited during startup.".into());
             }
             if request(&socket, "GET", "/health", None, REQUEST_BOUND).is_ok_and(|(status, _)| status == 200) {
-                eprintln!("[richos] document search model: ready in {} ms", start.elapsed().as_millis());
+                let elapsed = start.elapsed().as_millis();
+                match helper {
+                    Helper::Query => eprintln!("[richos] document search model: ready in {elapsed} ms"),
+                    Helper::BulkIndex => eprintln!("[richos] document search model: bulk index helper ready in {elapsed} ms"),
+                }
                 return Ok(Self { _child: child, directory });
             }
             std::thread::sleep(Duration::from_millis(15));
@@ -336,6 +353,34 @@ impl Embedder for ResidentEmbedder {
 
     fn embed_for_index(&self, texts: &[&str], stop: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>, String> {
         texts.iter().map(|text| self.index_one(text, stop)).collect()
+    }
+
+    fn bulk_indexer(&self) -> Option<Box<BulkIndexer<'_>>> {
+        let mut runtime = None;
+        let mut isolated = true;
+        Some(Box::new(move |text, stop| {
+            if stop() {
+                return Err("The search index was stopped.".into());
+            }
+            if isolated {
+                if runtime.is_none() {
+                    runtime = Running::start(&self.0.resources, Helper::BulkIndex, stop).ok();
+                }
+                if let Some(worker) = &runtime {
+                    match worker.one(&bounded_text(text), INDEX_REQUEST_BOUND) {
+                        Ok(vector) => return Ok(vector),
+                        Err(LookupError::Input(reason)) => return Err(reason),
+                        Err(LookupError::Retry(_)) => {}
+                    }
+                }
+                runtime = None;
+                isolated = false;
+                if !stop() {
+                    eprintln!("[richos] document search model: bulk index helper failed, using the shared helper");
+                }
+            }
+            self.index_one(text, stop)
+        }))
     }
 
     fn embed_query(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
@@ -477,6 +522,17 @@ mod tests {
         let bounded = model.index_one(&long, &|| false).unwrap();
         assert_eq!(bounded.len(), DIMENSION);
         assert!((score(&bounded, &bounded) - 1.0).abs() < 1e-4);
+        assert!(socket.exists());
+
+        let bulk = Running::start(&model.0.resources, Helper::BulkIndex, &|| false).unwrap();
+        let bulk_socket = bulk.directory.socket();
+        assert_ne!(bulk_socket, socket);
+        let indexed = bulk.one(&long, INDEX_REQUEST_BOUND).ok().expect("the bulk helper embeds long passages");
+        assert!(score(&bounded, &indexed) > 0.9999);
+        let queried = model.query_one("how do I get my money back").unwrap();
+        assert!(score(&vectors[0], &queried) > 0.9999);
+        drop(bulk);
+        assert!(!bulk_socket.exists());
         assert!(socket.exists());
 
         model.0.running.lock().unwrap().as_ref().unwrap()._child.fence().kill();
