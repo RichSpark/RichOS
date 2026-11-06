@@ -863,7 +863,11 @@ impl Meetings {
         );
         // Only the current recorder's indicator is its to take down; a stopped one's went at the stop.
         if current && matches!(self.inner.lock().unwrap().view, PanelView::Recording { .. } | PanelView::Starting) {
-            self.show(PanelView::Hidden);
+            if code == Some(0) {
+                self.show(PanelView::Hidden);
+            } else {
+                self.capture_failed("The recorder stopped unexpectedly.", finished.recording);
+            }
         }
         if code == Some(0) && finished.recording {
             self.recording_closed(finished);

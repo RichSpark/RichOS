@@ -134,10 +134,13 @@ async function main() {
     await say(page, "meeting-panel", { view: "recording", startedAt: Date.now() - 42_000, note: null });
     const rec = await text(page, "#fl .fl-rec");
     assert(/^Recording meeting 0:4[2-3] Stop$/.test(rec), "Recording meeting with its time: " + rec);
-    await say(page, "meeting-panel", { view: "problem", title: "Nothing was recorded.", sub: "The recorder did not start.",
+    await say(page, "meeting-panel", { view: "problem", title: "Only part of this meeting was recorded.", sub: "The recorder stopped unexpectedly.",
       actions: [{ label: "Try again", act: "retry", primary: true }, { label: "Not this one", act: "aside", primary: false }] });
-    assertEqual(await text(page, "#fl .fl-title"), "Nothing was recorded.", "a problem beside the call");
+    assertEqual(await text(page, "#fl .fl-title"), "Only part of this meeting was recorded.", "a problem beside the call");
+    assertEqual(await text(page, "#fl .fl-sub"), "The recorder stopped unexpectedly.", "an unexplained exit is visible");
     assertEqual(await text(page, "#fl .fl-actions"), "Try again Not this one", "its actions");
+    await page.locator("button", { hasText: "Try again" }).click();
+    assertEqual(JSON.stringify((await calls(page, "meeting_answer")).pop()), JSON.stringify({ answer: "retry" }), "capture retry");
     assertEqual(page.__errors.length, 0, page.__errors.join(" | "));
     await page.close();
     return "scheduled and unscheduled prompts, Starting…, Recording meeting 0:42, a problem";
