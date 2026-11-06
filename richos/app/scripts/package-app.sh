@@ -1537,9 +1537,10 @@ PYCONFIG
 build_args+=(--config "$cleaner_resource_config")
 
 search_resources="$(python3 "$here/build-search-resources.py")" || { warn "RichFinder's resources could not be built."; exit 4; }
-search_resource_config="$(python3 - "$search_resources" <<'PYSEARCHCONFIG'
+search_ranking="$(python3 "$here/build-search-resources.py" --ranking)" || { warn "RichFinder's relevance model could not be verified."; exit 4; }
+search_resource_config="$(python3 - "$search_resources" "$search_ranking" <<'PYSEARCHCONFIG'
 import json,sys
-print(json.dumps({"bundle":{"resources":{sys.argv[1]:"RichFinder/"}}}))
+print(json.dumps({"bundle":{"resources":{sys.argv[1]:"RichFinder/",sys.argv[2]:"RichFinder/Ranking/"}}}))
 PYSEARCHCONFIG
 )" || exit 4
 build_args+=(--config "$search_resource_config")

@@ -57,16 +57,19 @@ pub struct ResidentEmbedder {
     directory: SocketDirectory,
 }
 
+pub(crate) fn resources() -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("RICHOS_SEARCH_RESOURCES") {
+        return Ok(PathBuf::from(path));
+    }
+    let executable = std::env::current_exe().map_err(|_| "The search model resources are unavailable.")?;
+    Ok(executable.parent().and_then(Path::parent)
+        .ok_or("The search model resources are unavailable.")?.join("Resources/RichFinder"))
+}
+
 impl ResidentEmbedder {
     pub fn bundled() -> Result<Self, String> {
-        #[cfg(debug_assertions)]
-        if let Some(path) = std::env::var_os("RICHOS_SEARCH_RESOURCES") {
-            return Self::start(Path::new(&path));
-        }
-        let executable = std::env::current_exe().map_err(|_| "The search model resources are unavailable.")?;
-        let resources = executable.parent().and_then(Path::parent)
-            .ok_or("The search model resources are unavailable.")?.join("Resources/RichFinder");
-        Self::start(&resources)
+        Self::start(&resources()?)
     }
 
     fn start(resources: &Path) -> Result<Self, String> {
