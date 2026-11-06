@@ -70,6 +70,11 @@ fn run() -> Result<(), String> {
                 filed.projection.reason
             ));
         }
+        if filed.projection.mode == "embedded"
+            && !cleaner_metadata::search_text(&filed.path, Some(&native.directory))?.contains(&filed.note)
+        {
+            return Err(format!("The portable search reader did not recover the {ext} note"));
+        }
         if source.exists() {
             return Err("The filed Desktop source still exists".into());
         }

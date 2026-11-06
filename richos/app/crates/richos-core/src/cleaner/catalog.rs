@@ -1,9 +1,31 @@
 use super::{Entry, Phase, Result};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Mutex, OnceLock};
 pub struct Catalog {
     db: Connection,
+    path: PathBuf,
+}
+
+type Change = Vec<PathBuf>;
+type Listeners = BTreeMap<PathBuf, Vec<mpsc::Sender<Change>>>;
+static LISTENERS: OnceLock<Mutex<Listeners>> = OnceLock::new();
+
+fn notify(path: &Path, changed: Change) {
+    if changed.is_empty() {
+        return;
+    }
+    if let Some(listeners) = LISTENERS.get() {
+        let mut listeners = listeners.lock().unwrap();
+        if let Some(watchers) = listeners.get_mut(path) {
+            watchers.retain(|watcher| watcher.send(changed.clone()).is_ok());
+            if watchers.is_empty() {
+                listeners.remove(path);
+            }
+        }
+    }
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,7 +97,16 @@ impl Catalog {
             }
             tx.commit().map_err(|e|e.to_string())?;
         }
-        Ok(Self { db })
+        Ok(Self { db, path: path.to_owned() })
+    }
+
+    /// File changes from the local app writer. Card activity is independent of
+    /// file metadata and never sends a notification here.
+    pub fn watch_filed_context(path: &Path) -> mpsc::Receiver<Vec<PathBuf>> {
+        let (sender, receiver) = mpsc::channel();
+        LISTENERS.get_or_init(Mutex::default).lock().unwrap()
+            .entry(path.to_owned()).or_default().push(sender);
+        receiver
     }
     pub fn get(&self, id: &str) -> Result<Entry> {
         let text: String = self
@@ -97,8 +128,33 @@ impl Catalog {
             .map_err(|e| e.to_string())?;
         id.map(|id| self.get(&id)).transpose()
     }
+
+    /// Read the settled file record without creating or migrating the library.
+    /// A caller still has to check the live file and its own search grant.
+    pub fn filed_context(path: &Path, volume: u64, object: u64) -> Result<Option<Entry>> {
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(None);
+        }
+        let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(|e| e.to_string())?;
+        db.busy_timeout(std::time::Duration::from_millis(250)).map_err(|e| e.to_string())?;
+        let text: Option<String> = db.query_row(
+            "SELECT record FROM files WHERE volume=?1 AND object=?2 AND phase='\"filed\"'",
+            params![volume.to_string(), object.to_string()],
+            |row| row.get(0),
+        ).optional().map_err(|e| e.to_string())?;
+        text.map(|text| serde_json::from_str(&text).map_err(|e| e.to_string())).transpose()
+    }
     pub fn save(&mut self, e: &Entry) -> Result<()> {
         let tx = self.db.transaction().map_err(|e| e.to_string())?;
+        let observed = LISTENERS.get().is_some_and(|listeners| listeners.lock().unwrap().contains_key(&self.path));
+        let before: Option<Entry> = if observed {
+            let text: Option<String> = tx.query_row("SELECT record FROM files WHERE id=?1", [&e.id], |row| row.get(0))
+                .optional().map_err(|e| e.to_string())?;
+            text.map(|text| serde_json::from_str(&text).map_err(|e| e.to_string())).transpose()?
+        } else {
+            None
+        };
         let record = serde_json::to_string(e).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO files VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET volume=excluded.volume,object=excluded.object,phase=excluded.phase,updated=excluded.updated,record=excluded.record",params![e.id,e.identity.volume.to_string(),e.identity.object.to_string(),serde_json::to_string(&e.phase).map_err(|e|e.to_string())?,e.updated,record]).map_err(|e|e.to_string())?;
         tx.execute("DELETE FROM search WHERE id=?1", [&e.id])
@@ -113,7 +169,22 @@ impl Catalog {
             ],
         )
         .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+        if observed {
+            let old = before.as_ref().filter(|old| old.phase == Phase::Filed);
+            let new = (e.phase == Phase::Filed).then_some(e);
+            let same = match (old, new) {
+                (Some(a), Some(b)) => a.path == b.path && a.note == b.note && a.labels == b.labels && a.identity.unchanged(&b.identity),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same {
+                let mut paths: Vec<_> = old.into_iter().chain(new).map(|entry| entry.path.clone()).collect();
+                paths.dedup();
+                notify(&self.path, paths);
+            }
+        }
+        Ok(())
     }
     pub fn remove(&mut self, id: &str) -> Result<()> {
         let e = self.get(id)?;
@@ -125,7 +196,11 @@ impl Catalog {
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM files WHERE id=?1", [id])
             .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+        if e.phase == Phase::Filed {
+            notify(&self.path, vec![e.path]);
+        }
+        Ok(())
     }
     pub fn pending(&self) -> Result<Vec<Entry>> {
         let mut query = self

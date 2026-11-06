@@ -619,6 +619,7 @@ class World(object):
             return [], []
         problems = []
         pending = codex_state.setdefault("pending", [])
+        awaiting = codex_state.setdefault("awaiting_words", [])
         try:
             st = os.stat(to_rich)
         except OSError:
@@ -638,13 +639,33 @@ class World(object):
                 codex_state["offset"] = off + end
                 for header, body in split_entries(text):
                     got = self.codex_handover(header, body, to_rich, to_codex, now)
-                    if isinstance(got, str):
+                    if isinstance(got, NoWords):
+                        problems.append(got)
+                        awaiting.append({"header": header, "body": body, "at": now})
+                    elif isinstance(got, str):
                         problems.append(got)
                     elif got:
-                        pending[:] = [p for p in pending if p.get("work") != got["work"] or p.get("tip") == got["tip"]]
-                        if not any(p.get("tip") == got["tip"] and p.get("repo") == got["repo"] for p in pending):
-                            pending.append(got)
+                        self._add_pending(pending, got)
             codex_state["seen"] = st.st_size
+        # A READY held for missing original words is looked at again: once an entry naming its
+        # branch is in to-codex.md it starts, without Codex posting it again. Told only once.
+        # Entries not read yet may hold a newer READY for the same branch, so nothing is retried
+        # until the file is read to its end; and a retried older entry never displaces a newer tip.
+        unread = st is not None and st.st_size > (codex_state.get("offset") or 0)
+        still = []
+        for a in awaiting:
+            if now - float(a.get("at") or now) > KEEP_SECONDS:
+                continue
+            if unread:
+                still.append(a)
+                continue
+            got = self.codex_handover(a["header"], a["body"], to_rich, to_codex, now)
+            if isinstance(got, NoWords):
+                still.append(a)
+            elif isinstance(got, dict):
+                if not any(p.get("work") == got["work"] and p.get("tip") != got["tip"] for p in pending):
+                    self._add_pending(pending, got)
+        awaiting[:] = still
         items = []
         keep = []
         for p in pending:
@@ -659,6 +680,12 @@ class World(object):
                               title=p.get("title") or ""))
         pending[:] = keep
         return items, problems
+
+    @staticmethod
+    def _add_pending(pending, got):
+        pending[:] = [p for p in pending if p.get("work") != got["work"] or p.get("tip") == got["tip"]]
+        if not any(p.get("tip") == got["tip"] and p.get("repo") == got["repo"] for p in pending):
+            pending.append(got)
 
     def merge_base_for(self, repo, tip):
         itip, _why = self.integration_tip([], repo)
@@ -721,8 +748,8 @@ class World(object):
                     % (header[:90], branch, tip[:12] or "(none)", repo))
         words = codex_words(to_codex, to_rich, branch) if words is None else words
         if not words:
-            return ("Codex's handover %r: no entry in %s names %s or comes before Codex first named it, so there "
-                    "are no original words and no review of it started" % (header[:90], to_codex, branch))
+            return NoWords("Codex's handover %r: no entry in %s names %s or comes before Codex first named it, so "
+                           "there are no original words and no review of it started" % (header[:90], to_codex, branch))
         wdir = _p("codex-words")
         os.makedirs(wdir, exist_ok=True)
         stem = "%s-%s%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", branch), tip[:12], "-" + origin if origin else "")
@@ -921,6 +948,11 @@ class AppWorld(World):
                 raise ValueError("connected repository basename is ambiguous: " + name)
             result[name] = os.path.realpath(path)
         return result
+
+
+class NoWords(str):
+    """codex_handover's refusal for a READY with no original words yet: told once, and the READY
+    is looked at again each look until an entry naming its branch appears in to-codex.md."""
 
 
 def split_entries(text):

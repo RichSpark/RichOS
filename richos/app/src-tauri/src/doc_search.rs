@@ -17,8 +17,9 @@
 //!   `/usr/bin/open`. It is not an entry in `opener.rs`'s fixed table and accepts no path, URL
 //!   or command from the renderer (*"It does not widen the existing fixed URL allowlist or
 //!   accept a renderer-supplied path or command."*).
+use richos_search::corpus::MetadataSource;
 use richos_search::embed::Embedder;
-use richos_search::service::{Busy, Config, Grant, SearchRequest, SearchResponse, SearchService, Status, Tuning};
+use richos_search::service::{Busy, Config, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -79,6 +80,8 @@ pub struct DocumentSearch {
     location: Locate,
     make_embedder: EmbedderFactory,
     busy: Option<Busy>,
+    metadata: Option<MetadataSource>,
+    reranker: Option<Reranker>,
     retire: mpsc::Sender<RetiredService>,
     closed: std::sync::atomic::AtomicBool,
 }
@@ -88,6 +91,8 @@ impl DocumentSearch {
         location: impl Fn() -> Location + Send + Sync + 'static,
         make_embedder: impl Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync + 'static,
         busy: Option<Busy>,
+        metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
     ) -> Arc<Self> {
         let location: Locate = Arc::new(location);
         let make_embedder: EmbedderFactory = Arc::new(make_embedder);
@@ -104,12 +109,14 @@ impl DocumentSearch {
             }
         }).expect("the search cleanup thread could not start");
         let factory = make_embedder.clone();
-        let service = Self::build(initial.clone(), location.clone(), Box::new(move || factory()), busy.clone(), None);
+        let service = Self::build(initial.clone(), location.clone(), Box::new(move || factory()), busy.clone(), metadata.clone(), reranker.clone(), None);
         Arc::new(Self {
             active: Mutex::new(ActiveSearch { location: initial, service, base: 0 }),
             location,
             make_embedder,
             busy,
+            metadata,
+            reranker,
             retire,
             closed: std::sync::atomic::AtomicBool::new(false),
         })
@@ -120,6 +127,8 @@ impl DocumentSearch {
         current: Locate,
         make_embedder: richos_search::service::MakeEmbedder,
         busy: Option<Busy>,
+        metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
         retired: Option<mpsc::Receiver<()>>,
     ) -> SearchService {
         let config = Config {
@@ -130,7 +139,7 @@ impl DocumentSearch {
             tuning: Tuning::default(),
         };
         let authorized: Grant = Box::new(move || current() == *location);
-        SearchService::start_with_grant(config, Some(authorized), move || {
+        SearchService::start_with_grant(config, metadata, reranker, Some(authorized), move || {
             if let Some(retired) = retired {
                 retired.recv().expect("the previous search index did not close");
             }
@@ -159,7 +168,7 @@ impl DocumentSearch {
         // Text loads without waiting. The background worker only waits to open the
         // index, so even an A -> B -> A switch preserves exclusive index ownership.
         let factory = self.make_embedder.clone();
-        let service = Self::build(location.clone(), self.location.clone(), Box::new(move || factory()), self.busy.clone(), Some(retired));
+        let service = Self::build(location.clone(), self.location.clone(), Box::new(move || factory()), self.busy.clone(), self.metadata.clone(), self.reranker.clone(), Some(retired));
         *active = ActiveSearch { location, service, base: active.base + active.service.status().generation };
         active.clone()
     }
@@ -204,18 +213,52 @@ impl DocumentSearch {
     }
 }
 
-pub fn start(home: &Path, busy: richos_search::service::Busy) -> Arc<DocumentSearch> {
+pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -> Arc<DocumentSearch> {
     let home = home.to_path_buf();
+    #[cfg(target_os = "macos")]
+    let metadata = {
+        let catalog = data_dir.join("RichCleaner/library.sqlite");
+        let resources = crate::cleaner_native::Native::bundled().ok().map(|native| native.directory);
+        Some(cleaner_metadata_source(catalog, resources))
+    };
+    #[cfg(target_os = "macos")]
+    let (make_embedder, reranker) = crate::search_rerank::models();
+    #[cfg(target_os = "macos")]
+    let reranker = Some(reranker);
+    #[cfg(not(target_os = "macos"))]
+    let (metadata, reranker) = { let _ = data_dir; (None, None) };
     DocumentSearch::new(
         move || Location::from_settings(&home, richos_core::machine_settings::Settings::current()),
         make_embedder,
         Some(busy),
+        metadata,
+        reranker,
     )
 }
 
 #[cfg(target_os = "macos")]
-fn make_embedder() -> Result<Box<dyn Embedder>, String> {
-    Ok(Box::new(richos_search::embed::AppleSentenceEmbedder::new("en")?))
+fn cleaner_metadata_source(catalog: PathBuf, resources: Option<PathBuf>) -> MetadataSource {
+    use richos_core::cleaner::{Catalog, EXTENSIONS};
+    use std::os::unix::fs::MetadataExt;
+
+    let watched = catalog.clone();
+    MetadataSource {
+        extensions: EXTENSIONS,
+        watch: Arc::new(move || Catalog::watch_filed_context(&watched)),
+        read: Arc::new(move |path, meta| {
+            let volume = meta.dev() & u32::MAX as u64;
+            let record = Catalog::filed_context(&catalog, volume, meta.ino()).ok().flatten();
+            if let Some(entry) = record.filter(|entry| {
+                entry.path == path
+                    && entry.identity.size == meta.len()
+                    && entry.identity.modified == format!("{}:{}", meta.mtime(), meta.mtime_nsec())
+                    && entry.identity.changed == format!("{}:{}", meta.ctime(), meta.ctime_nsec())
+            }) {
+                return Ok(Some(format!("{}\n\n{}", entry.note, entry.labels.join("\n"))));
+            }
+            crate::cleaner_metadata::search_text(path, resources.as_deref()).map(Some)
+        }),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -424,6 +467,8 @@ mod tests {
                     Err("Apple's sentence embedding for 'en' is not available on this Mac.".into())
                 }
             },
+            None,
+            None,
             None,
         );
         service.current().service.wait_idle();
@@ -646,6 +691,8 @@ mod tests {
             move || Location::from_settings(&home, Settings::load(&home, &Default::default())),
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
+            None,
+            None,
         );
         let tool = ToolAnswer(service.clone());
         let request = SearchRequest { query: "refund".into(), super_finder: true, strict: false, offset: 0, limit: PAGE };
@@ -754,6 +801,8 @@ mod tests {
                 None => Ok(Box::new(ConceptEmbedder::stand_in())),
             },
             None,
+            None,
+            None,
         );
         let prior = service.current();
         // load-bound: hang guard only. The worker must enter the controlled block.
@@ -801,6 +850,118 @@ mod tests {
             assert_eq!(open(&service, forged), Err("That document is not in the search folder.".to_string()), "{forged}");
         }
         service.shutdown();
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn richcleaner_metadata_finds_scoped_originals_and_refreshes_catalog_notes() {
+        use richos_core::cleaner::{Catalog, Entry, Identity, Phase};
+        use std::os::unix::fs::MetadataExt;
+        let base = std::env::temp_dir().join(format!("richos-search-metadata-{}", std::process::id()));
+        let included = base.join("included");
+        let excluded = base.join("excluded");
+        let cleaner = base.join("cleaner");
+        for dir in [&included, &excluded, &cleaner] { std::fs::create_dir_all(dir).unwrap(); }
+        let catalog = cleaner.join("library.sqlite");
+        let identity = |path: &Path| {
+            let meta = std::fs::metadata(path).unwrap();
+            Identity { volume: meta.dev() & u32::MAX as u64, object: meta.ino(), size: meta.len(),
+                modified: format!("{}:{}", meta.mtime(), meta.mtime_nsec()),
+                changed: format!("{}:{}", meta.ctime(), meta.ctime_nsec()), bookmark: String::new() }
+        };
+        let create_zip = |path: &Path, comment: &str| {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+            zip.set_comment(comment).unwrap();
+            zip.finish().unwrap();
+        };
+        create_zip(&included.join("portable.zip"), "Refund approved for the cobalt lantern.");
+        create_zip(&excluded.join("outside.zip"), "Ambiguous unauthorized sapphire fixture");
+        let catalog_only = included.join("local.zip");
+        create_zip(&catalog_only, "");
+        let mut entry = Entry::new(catalog_only.clone(), identity(&catalog_only), "Zirconium local note.".into()).unwrap();
+        entry.labels = vec!["obsidian-tag".into()];
+        entry.phase = Phase::Filed;
+        let mut db = Catalog::open(&catalog).unwrap();
+        db.save(&entry).unwrap();
+
+        // The optional qualification copies real Desktop samples into this same
+        // fixture. The built-in regression runs with a synthetic ZIP by default.
+        let samples = std::env::var_os("RICHOS_SEARCH_METADATA_FIXTURES").map(PathBuf::from);
+        let resources = samples.as_ref().map(|_| crate::cleaner_native::Native::bundled().unwrap().directory);
+        let mut witnesses = Vec::new();
+        if let Some(samples) = samples {
+            let fixtures = [
+                ("screen-a.png", "Marmalade workshop schedule.", "amber-screenshot", true),
+                ("audio-a.mp3", "Juniper council recording.", "silver-audio", true),
+                ("video-a.mov", "Pinecrest street demonstration.", "orange-video", true),
+                ("video-a.mp4", "Pinecrest street demonstration.", "orange-video", true),
+                ("archive-a.zip", "Cascade workshop inventory.", "purple-archive", true),
+                ("screen-b.png", "Azimuth exterior rehearsal.", "outside-screenshot", false),
+            ];
+            for (name, note, label, allowed) in fixtures {
+                let source = samples.join(if allowed { "included" } else { "outside" }).join(name);
+                if !source.is_file() { continue; }
+                let path = if allowed { included.join(name) } else { excluded.join(name) };
+                std::fs::copy(&source, &path).unwrap();
+                let mut sample = Entry::new(path.clone(), identity(&path), note.into()).unwrap();
+                sample.labels = vec![label.into()];
+                let projected = crate::cleaner_metadata::write(&path, &sample, resources.as_deref().unwrap()).unwrap();
+                assert_eq!(projected.mode, "embedded", "{name}: {}", projected.reason);
+                witnesses.push((name, note.trim_end_matches('.'), label, allowed));
+            }
+            assert_eq!(witnesses.len(), 5, "qualification must exercise both screenshots, audio, video and archive");
+        }
+        let adapter = cleaner_metadata_source(catalog.clone(), resources);
+        let folder = included.clone();
+        let cache = base.join("cache");
+        let service = DocumentSearch::new(
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()) },
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None,
+            Some(adapter),
+            None,
+        );
+        let query = |query: &str, super_finder, strict| search(&service, SearchRequest {
+            query: query.into(), super_finder, strict, offset: 0, limit: PAGE,
+        });
+        service.current().service.wait_idle();
+        let portable = query("\"cobalt lantern\"", false, true);
+        assert_eq!(portable.hits.len(), 1);
+        assert!(portable.hits[0].passage.text.contains("Refund approved"));
+        assert_eq!(service.resolve_for_open(&portable.hits[0].source_id).unwrap(), included.join("portable.zip").canonicalize().unwrap());
+        assert!(query("money back", false, false).hits.is_empty());
+        assert_eq!(query("money back", true, false).hits[0].rel_path, "portable.zip");
+        assert!(query("\"unauthorized sapphire\"", true, true).hits.is_empty());
+        for (name, note, label, allowed) in witnesses {
+            let hits = query(&format!("\"{note}\""), true, true).hits;
+            assert_eq!(hits.len(), usize::from(allowed), "{name}");
+            if allowed {
+                assert_eq!(hits[0].rel_path, name);
+                assert!(hits[0].passage.text.contains(note));
+            }
+            if allowed && (name.ends_with(".png") || name.ends_with(".mov") || name.ends_with(".mp4")) {
+                assert_eq!(query(&format!("\"{label}\""), false, true).hits[0].rel_path, name);
+            }
+        }
+        assert_eq!(query("\"obsidian-tag\"", false, true).hits[0].rel_path, "local.zip");
+        let prior_scope = service.current().base;
+        entry.note = "Malachite replacement note.".into();
+        db.save(&entry).unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10); // load-bound: hang guard until the new note is searchable.
+        loop {
+            let hit = query("\"malachite replacement\"", false, true).hits.into_iter().next();
+            if let Some(hit) = hit {
+                assert_eq!(hit.rel_path, "local.zip");
+                assert_eq!(service.current().base, prior_scope, "catalog edits must not restart the grant");
+                assert!(query("\"zirconium local\"", false, true).hits.is_empty());
+                break;
+            }
+            assert!(std::time::Instant::now() < until, "the changed catalog entry was never published"); // load-bound: hang guard only.
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        service.shutdown();
+        drop(db);
         std::fs::remove_dir_all(base).unwrap();
     }
 
