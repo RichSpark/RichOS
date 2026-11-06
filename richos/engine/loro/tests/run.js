@@ -237,6 +237,27 @@ test('RichFinder: current memory retains citations and cannot cross a partition'
   assert.throws(() => loadSearchProjection({ corpusRoot: dir, grant: { ...grant, audience: 'worker' }, now: NOW }), /explicit Rich audience/);
 }));
 
+test('RichFinder: an unpartitioned repository needs a host-attested company owner', () => {
+  const fixture = path.join(REPO_ROOT, 'loro/memory/company.jsonl');
+  const original = fs.readFileSync(fixture);
+  fs.appendFileSync(fixture, JSON.stringify({
+    id: 'foreign-owner-claim', kind: 'decision', scope: 'org-shared', company: 'foreign', text: 'This row has no company grant.'
+  }) + '\n');
+  try {
+    const grant = { audience: 'rich', companyIds: ['acme'], includeCeo: false };
+    const run = (scope) => loadSearchProjection({ root: REPO_ROOT, grant: scope, now: NOW });
+    assert.deepEqual(run(grant).records, []);
+    assert.ok(run(grant).excludedSources.includes('legacy_memory'));
+    const authorized = run({ ...grant, repoOwner: 'acme' });
+    assert.ok(authorized.records.some(rec => rec.ref === 'mem:company:cited-pricing' && rec.company === 'acme'));
+    assert.ok(!authorized.records.some(rec => rec.ref === 'mem:company:foreign-owner-claim'));
+    assert.ok(!authorized.excludedSources.includes('legacy_memory'));
+    assert.deepEqual(run({ ...grant, repoOwner: 'foreign' }).records, []);
+  } finally {
+    fs.writeFileSync(fixture, original);
+  }
+});
+
 test('record: a validUntil in the past makes a record expired', () => {
   assert.equal(deriveStatus({ validUntil: '2025-04-30T00:00:00Z' }, NOW), 'expired');
 });
