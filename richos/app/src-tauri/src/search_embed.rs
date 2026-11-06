@@ -19,6 +19,7 @@ const CONTEXT: usize = 512;
 const MAX_REPLY: u64 = 256 * 1024;
 const REQUEST_BOUND: Duration = Duration::from_millis(500);
 const INDEX_REQUEST_BOUND: Duration = Duration::from_secs(8);
+const MODEL_ATTEMPTS: usize = 3;
 // A fresh test guest can exceed the old 15-second startup bound. The search
 // worker starts the helper while Markdown search remains available.
 const START_BOUND: Duration = Duration::from_secs(45);
@@ -56,7 +57,8 @@ pub struct ResidentEmbedder(Arc<ModelProcess>);
 
 struct ModelProcess {
     resources: PathBuf,
-    running: Mutex<Option<Running>>,
+    running: Mutex<Option<Arc<Running>>>,
+    foreground: Mutex<()>,
     repairing: AtomicBool,
     closed: AtomicBool,
 }
@@ -101,6 +103,7 @@ impl ResidentEmbedder {
         Ok(Self(Arc::new(ModelProcess {
             resources,
             running: Mutex::new(None),
+            foreground: Mutex::new(()),
             repairing: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         })))
@@ -108,45 +111,49 @@ impl ResidentEmbedder {
 
     fn index_one(&self, text: &str, stop: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
         let text = bounded_text(text);
-        loop {
-            self.0.prepare(stop)?;
-            let mut guard = self.0.running.lock().map_err(|_| "The local search model is unavailable.")?;
+        let mut failure = "The local search model is unavailable.".to_string();
+        for attempt in 0..MODEL_ATTEMPTS {
+            // An interactive request already in progress gets to finish before
+            // the index starts another passage. An in-flight passage occupies
+            // one slot and leaves the other available to the interactive path.
+            drop(self.0.foreground.lock().map_err(|_| "The local search model is unavailable.")?);
             if stop() {
-                return Err("The local search model is unavailable.".into());
+                return Err(failure);
             }
-            let Some(runtime) = guard.as_mut() else { continue };
-            // A cold CPU-only embedding can take much longer than a warm query.
-            // Give the background request one chance to complete before restarting.
+            self.0.prepare(stop)?;
+            let runtime = self.0.running.lock().map_err(|_| "The local search model is unavailable.")?.clone();
+            let Some(runtime) = runtime else { continue };
             match runtime.one(&text, INDEX_REQUEST_BOUND) {
                 Ok(vector) => return Ok(vector),
                 Err(LookupError::Input(reason)) => return Err(reason),
-                Err(LookupError::Retry(_)) => {}
+                Err(LookupError::Retry(reason)) => failure = reason,
             }
-            eprintln!("[richos] document search model: restarting after a failed background request");
-            drop(guard.take());
-            drop(guard);
-            retry_pause(stop);
+            self.0.retire(&runtime);
+            drop(runtime);
+            if attempt + 1 < MODEL_ATTEMPTS {
+                eprintln!("[richos] document search model: restarting after a failed background request");
+                retry_pause(stop);
+            }
         }
+        Err(failure)
     }
 
     fn query_one(&self, text: &str) -> Result<Vec<f32>, String> {
+        let _foreground = self.0.foreground.lock().map_err(|_| "The local search model is unavailable.")?;
         let text = bounded_text(text);
-        let mut guard = self.0.running.try_lock().map_err(|_| "The local search model is busy.")?;
-        if let Some(runtime) = guard.as_ref() {
-            match runtime.one(&text, REQUEST_BOUND) {
-                Ok(vector) => return Ok(vector),
-                Err(LookupError::Input(reason)) => return Err(reason),
-                Err(LookupError::Retry(reason)) => {
-                    let retired = guard.take();
-                    drop(guard);
-                    self.0.repair(retired);
-                    return Err(reason);
-                }
+        let runtime = self.0.running.try_lock().map_err(|_| "The local search model is busy.")?.clone();
+        let Some(runtime) = runtime else {
+            self.0.repair(None);
+            return Err("The local search model is busy.".into());
+        };
+        match runtime.one(&text, REQUEST_BOUND) {
+            Ok(vector) => Ok(vector),
+            Err(LookupError::Input(reason)) => Err(reason),
+            Err(LookupError::Retry(reason)) => {
+                self.0.repair(Some(runtime));
+                Err(reason)
             }
         }
-        drop(guard);
-        self.0.repair(None);
-        Err("The local search model is busy.".into())
     }
 }
 
@@ -159,9 +166,10 @@ impl Drop for ResidentEmbedder {
 impl ModelProcess {
     fn prepare(&self, stop: &dyn Fn() -> bool) -> Result<(), String> {
         let stop = || self.closed.load(Ordering::Acquire) || stop();
-        loop {
+        let mut failure = "The local search model is unavailable.".to_string();
+        for attempt in 0..MODEL_ATTEMPTS {
             if stop() {
-                return Err("The local search model is unavailable.".into());
+                return Err(failure);
             }
             let mut running = self.running.lock().map_err(|_| "The local search model is unavailable.")?;
             if running.is_some() {
@@ -169,24 +177,36 @@ impl ModelProcess {
             }
             match Running::start(&self.resources, &stop) {
                 Ok(runtime) => {
-                    *running = Some(runtime);
+                    *running = Some(Arc::new(runtime));
                     return Ok(());
                 }
-                Err(_) if stop() => return Err("The local search model is unavailable.".into()),
-                Err(reason) => eprintln!("[richos] document search model: retrying startup ({reason})"),
+                Err(reason) => failure = reason,
             }
             drop(running);
-            retry_pause(&stop);
+            if attempt + 1 < MODEL_ATTEMPTS && !stop() {
+                eprintln!("[richos] document search model: retrying startup ({failure})");
+                retry_pause(&stop);
+            }
+        }
+        Err(failure)
+    }
+
+    fn retire(&self, observed: &Arc<Running>) {
+        let Ok(mut current) = self.running.lock() else { return };
+        if current.as_ref().is_some_and(|runtime| Arc::ptr_eq(runtime, observed)) {
+            let _retired = current.take();
         }
     }
 
-    fn repair(self: &Arc<Self>, retired: Option<Running>) {
+    fn repair(self: &Arc<Self>, observed: Option<Arc<Running>>) {
         if self.repairing.swap(true, Ordering::AcqRel) {
             return;
         }
         let model = self.clone();
         if std::thread::Builder::new().name("richos-search-model-repair".into()).spawn(move || {
-            drop(retired);
+            if let Some(runtime) = observed {
+                model.retire(&runtime);
+            }
             let _result = model.prepare(&|| false);
             model.repairing.store(false, Ordering::Release);
         }).is_err() {
@@ -231,8 +251,9 @@ impl Running {
         let directory = SocketDirectory::create()?;
         let socket = directory.socket();
         let mut command = Command::new(server);
+        // The context is split over two slots, retaining 512 tokens for each.
         command.env_clear().env("RICHFINDER_OWNER_SOCKET", &socket).arg("--model").arg(model).arg("--host").arg(&socket).args([
-            "--embedding", "--parallel", "1", "-c", "512", "-b", "512", "-ub", "512",
+            "--embedding", "--parallel", "2", "-c", "1024", "-b", "512", "-ub", "512",
             "--threads", "2", "--threads-batch", "2", "--no-webui", "--no-slots", "--log-disable",
         ]);
         if running_in_virtual_machine() {
@@ -356,6 +377,7 @@ mod tests {
         let model = ResidentEmbedder(Arc::new(ModelProcess {
             resources: PathBuf::new(),
             running: Mutex::new(None),
+            foreground: Mutex::new(()),
             repairing: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         }));
@@ -369,6 +391,71 @@ mod tests {
             let result = receive.recv_timeout(Duration::from_secs(10));
             drop(guard);
             assert!(result.unwrap().is_err());
+        });
+    }
+
+    #[test]
+    fn an_index_request_in_flight_leaves_the_foreground_slot_available() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        let directory = SocketDirectory::create().unwrap();
+        let listener = UnixListener::bind(directory.socket()).unwrap();
+        let mut command = Command::new("/usr/bin/true");
+        OwnedChild::configure(&mut command);
+        let runtime = Running { _child: OwnedChild::new(command.spawn().unwrap()), directory };
+        let model = ResidentEmbedder(Arc::new(ModelProcess {
+            resources: PathBuf::new(),
+            running: Mutex::new(Some(Arc::new(runtime))),
+            foreground: Mutex::new(()),
+            repairing: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+        }));
+        let (entered, wait_for_index) = mpsc::channel();
+        let respond = |mut stream: UnixStream| {
+            let mut input = BufReader::new(&mut stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(input.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" { break; }
+                if let Some(value) = line.strip_prefix("Content-Length: ") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            input.read_exact(&mut vec![0; length]).unwrap();
+            let mut vector = vec![0.0; DIMENSION];
+            vector[0] = 1.0;
+            let body = json!({"data":[{"embedding":vector}]}).to_string();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+        };
+        std::thread::scope(|scope| {
+            let server = scope.spawn(move || {
+                let (background, _) = listener.accept().unwrap();
+                listener.set_nonblocking(true).unwrap();
+                entered.send(()).unwrap();
+                // Two simultaneous connections prove that indexing does not hold the query path.
+                let guard = Instant::now() + Duration::from_secs(5); // load-bound: hang guard for the second connection.
+                let foreground = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < guard, "the interactive request could not reach the model"); // load-bound: wait for the second connection.
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("could not accept the interactive request: {error}"),
+                    }
+                };
+                respond(foreground);
+                respond(background);
+            });
+            let indexing = scope.spawn(|| model.index_one("archive passage", &|| false));
+            // load-bound: hang guard for the server's acknowledgement of the first connection.
+            wait_for_index.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(model.query_one("current query").unwrap()[0], 1.0);
+            assert_eq!(indexing.join().unwrap().unwrap()[0], 1.0);
+            server.join().unwrap();
         });
     }
 
@@ -392,7 +479,7 @@ mod tests {
         assert!((score(&bounded, &bounded) - 1.0).abs() < 1e-4);
         assert!(socket.exists());
 
-        model.0.running.lock().unwrap().as_mut().unwrap()._child.kill().unwrap();
+        model.0.running.lock().unwrap().as_ref().unwrap()._child.fence().kill();
         let recovered = model.index_one("how do I get my money back", &|| false).unwrap();
         assert!(score(&vectors[0], &recovered) > 0.99);
         let replacement = model.0.running.lock().unwrap().as_ref().unwrap().directory.socket();
