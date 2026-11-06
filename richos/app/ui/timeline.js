@@ -1746,6 +1746,7 @@
   /// Edit is absent and reported as absent.
   function renderUserMessage(item, opts) {
     const art = elem("article", "tl-user");
+    art.dataset.messageId = item.id;
     art.appendChild(srOnly("You said"));
 
     const bubble = elem("div", "tl-user-bubble");
@@ -3438,6 +3439,14 @@
     return String(s).replace(/(["\\])/g, "\\$1");
   }
 
+  // A RichFinder result names one rendered message inside its verified turn.
+  // Require both identifiers so a removed message never jumps to another one.
+  function searchMessageAnchor(container, turnId, messageId) {
+    if (typeof turnId !== "string" || typeof messageId !== "string" || !turnId || !messageId) return null;
+    const turn = container.querySelector('.tl-turn[data-turn-id="' + cssEscape(turnId) + '"]');
+    return turn && turn.querySelector('[data-message-id="' + cssEscape(messageId) + '"]');
+  }
+
   // -------------------------------------------------------------------------------------
   window.RichTimeline = {
     PENDING_TURN,
@@ -3446,6 +3455,7 @@
     setQuestionsInFlight,
     setScreenWaits,
     hasLiveRow,
+    searchMessageAnchor,
     createModel,
     bind,
     accepts,
