@@ -956,11 +956,18 @@ impl SearchService {
     /// `None` when meaning search is not available or the model fails; the caller then keeps
     /// the passage's beginning.
     pub fn closest_in_meaning(&self, query: &str, texts: &[&str]) -> Option<usize> {
+        let _access = self.0.access.lock().unwrap();
+        if self.background_stopping() {
+            return None;
+        }
         let meaning = self.meaning_for_query()?;
         let mut all = Vec::with_capacity(texts.len() + 1);
         all.push(query.trim());
         all.extend_from_slice(texts);
         let vectors = meaning.embedder.embed_query(&all).ok()?;
+        if self.background_stopping() {
+            return None;
+        }
         let (q, rest) = vectors.split_first()?;
         let dot = |v: &Vec<f32>| v.iter().zip(q).map(|(a, b)| a * b).sum::<f32>();
         rest.iter().enumerate().max_by(|a, b| dot(a.1).total_cmp(&dot(b.1)).then(b.0.cmp(&a.0))).map(|(i, _)| i)
