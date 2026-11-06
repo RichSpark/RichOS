@@ -138,6 +138,64 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
 }
 
 #[test]
+fn transient_model_failure_recovers_after_a_bounded_attempt() {
+    use std::time::{Duration, Instant};
+
+    struct FailOnce {
+        fail_at_start: bool,
+        failed: Arc<AtomicBool>,
+        delegate: ConceptEmbedder,
+    }
+    impl Embedder for FailOnce {
+        fn identity(&self) -> String { self.delegate.identity() }
+        fn dimension(&self) -> usize { self.delegate.dimension() }
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> { self.delegate.embed(texts) }
+        fn prepare(&self, _: &dyn Fn() -> bool) -> Result<(), String> {
+            if self.fail_at_start && !self.failed.swap(true, Ordering::SeqCst) {
+                return Err("temporary startup failure".into());
+            }
+            Ok(())
+        }
+        fn embed_for_index(&self, texts: &[&str], _: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>, String> {
+            if !self.fail_at_start && !self.failed.swap(true, Ordering::SeqCst) {
+                return Err("temporary indexing failure".into());
+            }
+            self.embed(texts)
+        }
+    }
+
+    for (fixture, fail_at_start) in [("retry-startup", true), ("retry-passage", false)] {
+        let (folder, cache) = fixture_copy(fixture);
+        let failed = Arc::new(AtomicBool::new(false));
+        let witness = failed.clone();
+        let service = SearchService::start(Config {
+            root: Some(folder.clone()),
+            cache: Ok(cache),
+            make_embedder: Box::new(move || Ok(Box::new(FailOnce {
+                fail_at_start, failed: failed.clone(), delegate: ConceptEmbedder::stand_in(),
+            }))),
+            busy: None,
+            tuning: Tuning::default(),
+        });
+        service.wait_idle();
+        assert!(witness.load(Ordering::SeqCst));
+        assert!(!ask(&service, "refund", false, false).hits.is_empty());
+        let guard = Instant::now() + Duration::from_secs(30); // load-bound: hang guard for a delayed model retry.
+        loop {
+            if matches!(service.status().meaning, MeaningStatus::Ready { .. }) {
+                break;
+            }
+            assert!(Instant::now() < guard, "meaning search did not recover"); // load-bound: wait for the recovered index.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let meaning = ask(&service, "refund", true, false);
+        assert!(meaning.effective.super_finder && !meaning.hits.is_empty());
+        service.shutdown();
+        std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+    }
+}
+
+#[test]
 fn hybrid_word_only_results_show_the_matching_words() {
     struct Scores;
     impl Embedder for Scores {
