@@ -62,6 +62,7 @@ pub const MAX_PAGE: usize = 50;
 /// running.
 pub const BUSY_YIELD: std::time::Duration = std::time::Duration::from_millis(100);
 const MODEL_RETRY_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+const INDEX_WRITE_BATCH: usize = 32;
 
 pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -219,6 +220,32 @@ struct IndexWriter {
     meaning: Arc<Meaning>,
     manifest: Manifest,
     dir: PathBuf,
+}
+
+/// Coalesce small Edge writes without changing the durable publication unit.
+/// A stopped worker drops unwritten vectors and the manifest still says indexing.
+struct IndexWrites<'a> {
+    index: &'a VectorIndex,
+    pending: Vec<(u64, Vec<f32>)>,
+}
+
+impl<'a> IndexWrites<'a> {
+    fn new(index: &'a VectorIndex) -> Self {
+        Self { index, pending: Vec::with_capacity(INDEX_WRITE_BATCH) }
+    }
+
+    fn push(&mut self, id: u64, vector: Vec<f32>) -> Result<(), String> {
+        self.pending.push((id, vector));
+        if self.pending.len() == INDEX_WRITE_BATCH {
+            self.index.upsert(std::mem::replace(&mut self.pending, Vec::with_capacity(INDEX_WRITE_BATCH)))?;
+        }
+        Ok(())
+    }
+
+    fn flush(self) -> Result<(), String> {
+        self.index.upsert(self.pending)?;
+        self.index.flush()
+    }
 }
 
 struct MediaUpdate {
@@ -631,6 +658,7 @@ impl SearchService {
                 );
             }
             manifest.save(&dir)?;
+            let mut writes = IndexWrites::new(&meaning.index);
             for &i in batch {
                 let doc = &corpus.docs[i];
                 for (p, passage) in doc.passages.iter().enumerate() {
@@ -647,10 +675,10 @@ impl SearchService {
                     if self.background_stopping() {
                         return Ok(None);
                     }
-                    meaning.index.upsert(vec![(point_id(&doc.id, &doc.hash, p), vector)])?;
+                    writes.push(point_id(&doc.id, &doc.hash, p), vector)?;
                 }
             }
-            meaning.index.flush()?;
+            writes.flush()?;
             {
                 let mut points = meaning.points.write().unwrap();
                 for &i in batch {
@@ -774,6 +802,7 @@ impl SearchService {
             }
             meaning.index.delete(&stale)?;
             if let Some(doc) = doc {
+                let mut writes = IndexWrites::new(&meaning.index);
                 for (passage, &id) in doc.passages.iter().zip(&fresh) {
                     if !self.ready_for_background_passage() {
                         return Ok(());
@@ -788,9 +817,9 @@ impl SearchService {
                     if self.background_stopping() {
                         return Ok(());
                     }
-                    meaning.index.upsert(vec![(id, vector)])?;
+                    writes.push(id, vector)?;
                 }
-                meaning.index.flush()?;
+                writes.flush()?;
                 if let Some(entry) = manifest.sources.get_mut(&id) {
                     entry.state = SourceState::Complete;
                     entry.points = fresh.clone();
