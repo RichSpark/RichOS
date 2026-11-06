@@ -30,7 +30,6 @@ window.RichMeetingPanel = (function () {
   var PAD = { top: 6, right: 10, bottom: 40, left: 24 };   // room for the panel's shadow
   var state = { view: "hidden" };
   var aside = false, hoverTimer = null, foldTimer = null, clock = null;
-  var SVG_MARK = '<svg class="rail-logo" viewBox="0 0 744 744" aria-hidden="true"><use href="#lgmark"/></svg>';
 
   function invoke(cmd, args) {
     if (tauri && tauri.core) return tauri.core.invoke(cmd, args || {}).catch(function () {});
@@ -78,9 +77,9 @@ window.RichMeetingPanel = (function () {
     }).join("") + "</div>";
   }
   function card(title, sub, actions, life) {
-    panel("", '<div class="fl-body"><div class="fl-head">' + SVG_MARK + '<span class="fl-app">RichOS</span></div>' +
+    panel("", '<div class="fl-body"><div class="fl-head"><img class="fl-icon" src="assets/richbrief-32.png" width="16" height="16" alt=""><span class="fl-app">RichBrief</span></div>' +
       '<p class="fl-title">' + esc(title) + "</p>" + (sub ? '<p class="fl-sub">' + esc(sub) + "</p>" : "") + btns(actions) + "</div>" +
-      (life ? '<span class="fl-life" aria-hidden="true"><i></i></span>' : ""), "RichOS: " + title);
+      (life ? '<span class="fl-life" aria-hidden="true"><i></i></span>' : ""), "RichBrief: " + title);
   }
   function recPanel(starting, note) {
     panel("is-rec" + (starting ? " is-starting" : "") + (note && !starting ? " has-note" : ""),
@@ -89,7 +88,7 @@ window.RichMeetingPanel = (function () {
       (starting ? "" : '<span class="fl-rec-time" id="flTime">0:00</span>') +
       '<button type="button" class="desk-btn fl-stop" data-act="stop"><span class="fl-stop-word"><span>Stop</span></span><span class="fl-stop-sq" aria-hidden="true"></span></button></div>' +
       (note && !starting ? '<div class="fl-note-fold"><div><p class="fl-note">' + esc(note) + "</p></div></div>" : ""),
-      starting ? "RichOS: starting meeting notes" : "RichOS: recording meeting");
+      starting ? "RichBrief: starting meeting notes" : "RichBrief: recording meeting");
   }
 
   // ---- the recording's clock and fold ----
@@ -150,7 +149,7 @@ window.RichMeetingPanel = (function () {
       '<span class="fl-vb-grip" aria-hidden="true" title="Drag to move"><i></i><i></i><i></i></span>';
     fl.appendChild(vb);
     aside = true;
-    fl.setAttribute("aria-label", "RichOS meeting prompt, set aside");
+    fl.setAttribute("aria-label", "RichBrief meeting prompt, set aside");
     fl.classList.add("is-bar");
     fl.style.width = "8px";
     var main = vb.querySelector(".fl-vb-main");
@@ -169,7 +168,7 @@ window.RichMeetingPanel = (function () {
     aside = false;
     fl.classList.remove("is-bar");
     fl.style.width = "380px";
-    fl.setAttribute("aria-label", "RichOS meeting prompt");
+    fl.setAttribute("aria-label", "RichBrief meeting prompt");
     var vb = fl.querySelector(".fl-vb");
     setTimeout(function () { fl.classList.remove("is-folding"); fl.style.width = ""; fl.style.height = ""; if (vb) vb.remove(); report(); }, 600);
     report();
