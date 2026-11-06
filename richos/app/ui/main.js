@@ -8148,6 +8148,7 @@ function openSearch() {
   searchState.navHits = [];
   searchState.docs = [];
   searchState.sourceGen = null;
+  searchState.status = null;
   searchHintEl.hidden = false;
   searchCountEl.textContent = "";
   searchCountEl.classList.add("is-empty");
@@ -8201,7 +8202,10 @@ async function refreshSearchStatus() {
     status = null;
   }
   if (!searchState.open) return;
-  searchState.status = status;
+  if (status && (!searchState.status || status.generation >= searchState.status.generation)) {
+    searchState.status = status;
+  }
+  status = searchState.status;
   paintSearchStatus();
   // Each batch the index completes makes a newer generation, which can rank a newly searchable
   // document first. A list built from an older one is asked again from its first page, never
@@ -8618,6 +8622,13 @@ async function runSearch(animate) {
   searchState.navHits = nav || [];
   searchState.resp = docs;
   searchState.sourceGen = docs && docs.status ? docs.status.generation : null;
+  if (docs?.status && docs.status.generation > (searchState.status?.generation ?? -1)) {
+    searchState.status = docs.status;
+    paintSearchStatus();
+    if (docs.status.folder.state === "loading" || ["starting", "indexing"].includes(docs.status.meaning.state)) {
+      void refreshSearchStatus();
+    }
+  }
   searchState.docs = docs ? docs.hits.slice() : [];
   searchState.total = docs ? docs.total : 0;
   searchState.nextOffset = docs ? docs.offset + docs.hits.length + docs.dropped : 0;

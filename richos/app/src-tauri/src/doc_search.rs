@@ -19,27 +19,148 @@
 //!   accept a renderer-supplied path or command."*).
 use richos_search::embed::Embedder;
 use richos_search::service::{Config, SearchRequest, SearchResponse, SearchService, Status, Tuning};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Start document search for this launch. Never fails: an unset folder, an unusable folder,
-/// a missing model or unusable storage each become a status the palette shows, and text
-/// search does not depend on any of the last three.
-pub fn start(home: &Path, busy: richos_search::service::Busy) -> SearchService {
-    let settings = richos_core::machine_settings::Settings::current();
-    let (root, cache) = match &settings {
-        Ok(s) => (s.search_documents_root(), s.cache(home, "search")),
-        Err(e) => (None, Err(format!("RichOS's storage settings could not be read: {e}"))),
-    };
-    if let Err(e) = &settings {
-        eprintln!("[richos] document search: settings unreadable, no folder searched: {e}");
+#[derive(PartialEq, Eq)]
+struct Location {
+    root: Result<Option<PathBuf>, String>,
+    cache: Result<PathBuf, String>,
+}
+
+impl Location {
+    fn from_settings(home: &Path, settings: Result<richos_core::machine_settings::Settings, String>) -> Self {
+        match settings {
+            Ok(s) => Self { root: Ok(s.search_documents_root()), cache: s.cache(home, "search") },
+            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()) },
+        }
     }
-    SearchService::start(Config {
-        root,
-        cache,
-        make_embedder: Box::new(make_embedder),
-        busy: Some(busy),
-        tuning: Tuning::default(),
-    })
+}
+
+struct ActiveSearch {
+    location: Location,
+    service: SearchService,
+    /// Generations never go backwards when a new service starts at generation one.
+    base: u64,
+}
+
+impl ActiveSearch {
+    fn mark_status(&self, status: &mut Status) {
+        status.generation += self.base;
+        if self.location.root.is_err() {
+            let message = "Search folder settings could not be read.".to_string();
+            status.folder = richos_search::service::FolderStatus::Error { message: message.clone() };
+            status.meaning = richos_search::service::MeaningStatus::Unavailable { reason: message };
+        }
+    }
+
+    fn search(&self, request: &SearchRequest, revoked: bool) -> SearchResponse {
+        let mut response = if revoked {
+            self.service.search(&SearchRequest { query: String::new(), super_finder: false, offset: 0, ..request.clone() })
+        } else {
+            self.service.search(request)
+        };
+        self.mark_status(&mut response.status);
+        response.requested.super_finder = request.super_finder;
+        response
+    }
+}
+
+/// One live grant shared by the palette, Open original and Rich's existing socket.
+/// The machine settings file is read at those host boundaries, including just before
+/// returning hits or opening a file. No watcher or app restart is needed.
+pub struct DocumentSearch {
+    active: Mutex<ActiveSearch>,
+    location: Box<dyn Fn() -> Location + Send + Sync>,
+    build: Box<dyn Fn(&Location) -> SearchService + Send + Sync>,
+}
+
+impl DocumentSearch {
+    fn new(
+        location: impl Fn() -> Location + Send + Sync + 'static,
+        build: impl Fn(&Location) -> SearchService + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        let initial = location();
+        if initial.root.is_err() {
+            eprintln!("[richos] document search: settings unreadable, no folder searched");
+        }
+        let service = build(&initial);
+        Arc::new(Self {
+            active: Mutex::new(ActiveSearch { location: initial, service, base: 0 }),
+            location: Box::new(location),
+            build: Box::new(build),
+        })
+    }
+
+    /// Hold the same lock across the transition and reads. Finish the previous worker
+    /// before opening another index, including when the user switches back to a prior root.
+    fn refresh(&self, active: &mut ActiveSearch) -> bool {
+        let location = (self.location)();
+        if active.location == location {
+            return false;
+        }
+        active.service.shutdown();
+        active.base += active.service.status().generation;
+        // The setting may have changed again while the old worker stopped.
+        active.location = (self.location)();
+        let state = match &active.location.root {
+            Ok(Some(_)) => "changed",
+            Ok(None) => "cleared",
+            Err(_) => "unreadable",
+        };
+        eprintln!("[richos] document search: grant={state}; previous access revoked");
+        active.service = (self.build)(&active.location);
+        true
+    }
+
+    fn current(&self) -> MutexGuard<'_, ActiveSearch> {
+        let mut active = self.active.lock().unwrap();
+        self.refresh(&mut active);
+        active
+    }
+
+    fn read<T>(&self, read: impl Fn(&ActiveSearch, bool) -> T) -> T {
+        let mut active = self.current();
+        let result = read(&active, false);
+        if self.refresh(&mut active) {
+            // The old result may contain excerpts. Return an empty response from the
+            // new state rather than exposing it or reusing an old page offset.
+            return read(&active, true);
+        }
+        result
+    }
+
+    pub fn shutdown(&self) {
+        self.active.lock().unwrap().service.shutdown();
+    }
+
+    fn resolve_for_open(&self, source_id: &str) -> Result<PathBuf, String> {
+        let mut active = self.current();
+        let absent = || "That document is not in the search folder.".to_string();
+        let (base, id) = source_id.split_once(':').ok_or_else(absent)?;
+        if base.parse::<u64>().ok() != Some(active.base) {
+            return Err(absent());
+        }
+        let path = active.service.resolve_for_open(id)?;
+        if self.refresh(&mut active) {
+            return Err(absent());
+        }
+        Ok(path)
+    }
+}
+
+pub fn start(home: &Path, busy: richos_search::service::Busy) -> Arc<DocumentSearch> {
+    let home = home.to_path_buf();
+    DocumentSearch::new(
+        move || Location::from_settings(&home, richos_core::machine_settings::Settings::current()),
+        move |location| SearchService::start(Config {
+            root: location.root.clone().ok().flatten(),
+            cache: location.cache.clone(),
+            make_embedder: Box::new(make_embedder),
+            busy: Some(busy.clone()),
+            tuning: Tuning::default(),
+        }),
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -56,31 +177,48 @@ fn make_embedder() -> Result<Box<dyn Embedder>, String> {
 /// list scrolls (design round 26), never with page controls.
 pub const PAGE: usize = 12;
 
-pub fn search(service: &SearchService, mut request: SearchRequest) -> SearchResponse {
+pub fn search(service: &DocumentSearch, mut request: SearchRequest) -> SearchResponse {
     request.limit = request.limit.clamp(1, PAGE);
-    service.search(&request)
+    service.read(|active, revoked| {
+        let mut response = active.search(&request, revoked);
+        for hit in &mut response.hits {
+            // Source IDs inside the index are relative to its folder. A result from
+            // an old grant must never open the same relative path in a new folder.
+            hit.source_id = format!("{}:{}", active.base, hit.source_id);
+        }
+        response
+    })
 }
 
-pub fn status(service: &SearchService) -> Status {
-    service.status()
+pub fn status(service: &DocumentSearch) -> Status {
+    let active = service.current();
+    let mut status = active.service.status();
+    active.mark_status(&mut status);
+    status
 }
 
 /// Rich's tool's answer (`richos-core`'s `search_tools.rs`): the same service and the same
 /// modes as the palette, bounded excerpts, the source of each, the mode that actually ran, the
 /// status and the coverage.
-struct ToolAnswer(SearchService);
+struct ToolAnswer(Arc<DocumentSearch>);
 
 impl richos_core::search_tools::SearchAnswer for ToolAnswer {
     fn answer(&self, ask: &richos_core::search_tools::Ask) -> serde_json::Value {
+        self.0.read(|active, revoked| Self::answer_active(active, ask, revoked))
+    }
+}
+
+impl ToolAnswer {
+    fn answer_active(active: &ActiveSearch, ask: &richos_core::search_tools::Ask, revoked: bool) -> serde_json::Value {
         use richos_core::search_tools::MAX_EXCERPT_CHARS;
         use richos_search::excerpt;
-        let response = self.0.search(&SearchRequest {
+        let response = active.search(&SearchRequest {
             query: ask.query.clone(),
             super_finder: ask.super_finder,
             strict: ask.strict,
             offset: 0,
             limit: ask.limit,
-        });
+        }, revoked);
         let status = &response.status;
         let (files, skipped, links, folder) = match &status.folder {
             richos_search::service::FolderStatus::Ready { files, skipped, links_skipped, .. } => {
@@ -107,7 +245,7 @@ impl richos_core::search_tools::SearchAnswer for ToolAnswer {
                 let stretches = excerpt::stretches(text, MAX_EXCERPT_CHARS);
                 let pieces: Vec<String> = stretches.iter().map(|&r| excerpt::slice(text, r)).collect();
                 let refs: Vec<&str> = pieces.iter().map(String::as_str).collect();
-                self.0.closest_in_meaning(&ask.query, &refs).map(|i| stretches[i])
+                active.service.closest_in_meaning(&ask.query, &refs).map(|i| stretches[i])
             });
             excerpt::excerpt(text, focus, MAX_EXCERPT_CHARS)
         };
@@ -146,7 +284,7 @@ impl richos_core::search_tools::SearchAnswer for ToolAnswer {
 /// 0600 endpoint file the tool reads, and the endpoint registered so conversation leases offer
 /// the tool. `None` (and said on the log) when the socket cannot open; the palette is
 /// unaffected.
-pub fn serve_tool(service: &SearchService, data_dir: &Path) -> Option<richos_core::search_tools::SearchSocket> {
+pub fn serve_tool(service: &Arc<DocumentSearch>, data_dir: &Path) -> Option<richos_core::search_tools::SearchSocket> {
     use richos_core::search_tools as tools;
     let token = tools::new_token();
     let socket_path = tools::socket_path(data_dir);
@@ -168,12 +306,12 @@ pub fn serve_tool(service: &SearchService, data_dir: &Path) -> Option<richos_cor
     Some(socket)
 }
 
-pub fn open(service: &SearchService, source_id: &str) -> Result<(), String> {
+pub fn open(service: &DocumentSearch, source_id: &str) -> Result<(), String> {
     let path = service.resolve_for_open(source_id)?;
     open_with(&path, &mut |args: &[&std::ffi::OsStr]| {
         let out = std::process::Command::new("/usr/bin/open").args(args).output()?;
         if !out.status.success() {
-            eprintln!("[richos] document search: open {:?} refused: {}", args, String::from_utf8_lossy(&out.stderr).trim());
+            eprintln!("[richos] document search: system opener refused the file");
         }
         Ok(out.status.success())
     })
@@ -203,16 +341,14 @@ mod tests {
     use super::*;
     use richos_core::search_tools::{Ask, SearchAnswer, MAX_EXCERPT_CHARS};
     use richos_search::embed::ConceptEmbedder;
-    use richos_search::service::MakeEmbedder;
-    use std::path::PathBuf;
 
     /// The stand-in folder (ten files) plus `extra` more notes that all mention refunds.
-    fn standin(name: &str, with_model: bool, extra: usize) -> (SearchService, PathBuf) {
+    fn standin(name: &str, with_model: bool, extra: usize) -> (Arc<DocumentSearch>, PathBuf) {
         standin_with(name, with_model, extra, &[])
     }
 
     /// The same, with `files` (path inside the folder, contents) added before the service starts.
-    fn standin_with(name: &str, with_model: bool, extra: usize, files: &[(&str, String)]) -> (SearchService, PathBuf) {
+    fn standin_with(name: &str, with_model: bool, extra: usize, files: &[(&str, String)]) -> (Arc<DocumentSearch>, PathBuf) {
         let base = std::env::temp_dir().join(format!("richos-doc-search-{name}-{}", std::process::id()));
         if let Err(error) = std::fs::remove_dir_all(&base) {
             if error.kind() != std::io::ErrorKind::NotFound {
@@ -228,19 +364,24 @@ mod tests {
             std::fs::create_dir_all(folder.join(path).parent().unwrap()).unwrap();
             std::fs::write(folder.join(path), contents).unwrap();
         }
-        let make_embedder: MakeEmbedder = if with_model {
-            Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()) as Box<dyn Embedder>))
-        } else {
-            Box::new(|| Err("Apple's sentence embedding for 'en' is not available on this Mac.".into()))
-        };
-        let service = SearchService::start(Config {
-            root: Some(folder),
-            cache: Ok(base.join("cache")),
-            make_embedder,
-            busy: None,
-            tuning: Tuning::default(),
-        });
-        service.wait_idle();
+        let cache = base.join("cache");
+        let service = DocumentSearch::new(
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()) },
+            move |location| SearchService::start(Config {
+                root: location.root.clone().unwrap(),
+                cache: location.cache.clone(),
+                make_embedder: Box::new(move || {
+                    if with_model {
+                        Ok(Box::new(ConceptEmbedder::stand_in()))
+                    } else {
+                        Err("Apple's sentence embedding for 'en' is not available on this Mac.".into())
+                    }
+                }),
+                busy: None,
+                tuning: Tuning::default(),
+            }),
+        );
+        service.current().service.wait_idle();
         (service, base)
     }
 
@@ -437,6 +578,78 @@ mod tests {
         let asked_for_all = search(&service, request(100_000));
         assert!(asked_for_all.total > PAGE, "the folder must hold more than a page of matches: {}", asked_for_all.total);
         assert_eq!(asked_for_all.hits.len(), PAGE);
+        service.shutdown();
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn changing_or_clearing_the_folder_revokes_existing_results_without_relaunch() {
+        use richos_core::machine_settings::{self, Settings};
+        let base = std::env::temp_dir().join(format!("richos-live-search-grant-{}", std::process::id()));
+        let first = base.join("first");
+        let second = base.join("second");
+        for (folder, marker) in [(&first, "original"), (&second, "replacement")] {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(folder.join("note.md"), format!("# Sample\n\nA refund in the {marker} folder.\n")).unwrap();
+        }
+        let file = machine_settings::file(&base);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let set = |root: &Path| std::fs::write(&file, format!("RICHOS_SEARCH_DOCUMENTS_ROOT={}\n", root.display())).unwrap();
+        set(&first);
+        let home = base.clone();
+        let service = DocumentSearch::new(
+            move || Location::from_settings(&home, Settings::load(&home, &Default::default())),
+            |location| SearchService::start(Config {
+                root: location.root.clone().ok().flatten(),
+                cache: location.cache.clone(),
+                make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
+                busy: None,
+                tuning: Tuning::default(),
+            }),
+        );
+        let tool = ToolAnswer(service.clone());
+        let request = SearchRequest { query: "refund".into(), super_finder: true, strict: false, offset: 0, limit: PAGE };
+        service.current().service.wait_idle();
+        let old = search(&service, request.clone());
+        assert_eq!(old.hits.len(), 1);
+        assert!(old.hits[0].passage.text.contains("original"));
+        assert_eq!(service.resolve_for_open(&old.hits[0].source_id).unwrap(), first.canonicalize().unwrap().join("note.md"));
+
+        // The existing tool is the first host call after the edit. It must drop the
+        // previous archive even if the replacement is still indexing.
+        set(&second);
+        let answer = tool.answer(&ask("refund", true, false));
+        assert!(!answer.to_string().contains("original"));
+        service.current().service.wait_idle();
+        let new = search(&service, request.clone());
+        assert!(new.status.generation > old.status.generation);
+        assert_eq!(new.hits.len(), 1);
+        assert!(new.hits[0].passage.text.contains("replacement"));
+        assert!(service.resolve_for_open(&old.hits[0].source_id).is_err(), "same relative path must not retarget a stale ID");
+
+        // Open original must see revocation even if neither the tool nor the
+        // palette has queried since the edit.
+        std::fs::remove_file(&file).unwrap();
+        assert!(service.resolve_for_open(&new.hits[0].source_id).is_err());
+        let cleared = search(&service, request.clone());
+        assert!(cleared.hits.is_empty());
+        assert!(matches!(cleared.status.folder, richos_search::service::FolderStatus::None));
+        assert_eq!(tool.answer(&ask("refund", true, false))["results"], serde_json::json!([]));
+
+        // A change during a query must also prevent the old excerpts escaping.
+        set(&first);
+        service.current().service.wait_idle();
+        let in_flight = service.read(|active, revoked| {
+            let response = active.search(&request, revoked);
+            if !revoked {
+                assert!(!response.hits.is_empty());
+                std::fs::write(&file, "RICHOS_SEARCH_DOCUMENTS_ROOT=not-absolute\n").unwrap();
+            }
+            response
+        });
+        assert!(in_flight.hits.is_empty());
+        assert!(matches!(in_flight.status.folder, richos_search::service::FolderStatus::Error { .. }));
+        assert!(in_flight.requested.super_finder && !in_flight.effective.super_finder);
         service.shutdown();
         std::fs::remove_dir_all(base).unwrap();
     }
