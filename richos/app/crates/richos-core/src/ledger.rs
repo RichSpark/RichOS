@@ -2245,13 +2245,7 @@ impl Ledger {
         Ok(self
             .turns
             .iter()
-            .filter(|t| {
-                t.thread_id == thread_id
-                    // THE CROSS-ENTITY GUARD. Removing either clause makes
-                    // `no_event_from_one_entity_renders_in_another_entitys_thread` fail.
-                    && !t.quarantined
-                    && t.entity_id.as_ref().is_none_or(|e| e == binding.entity_id())
-            })
+            .filter(|t| Self::turn_in_scope(t, &binding))
             .collect())
     }
 
@@ -2260,6 +2254,19 @@ impl Ledger {
     pub fn thread_turns_scoped(&self, binding: &ThreadBinding) -> Result<Vec<&Turn>, LedgerError> {
         self.verify_binding(binding)?;
         self.thread_turns(binding.thread_id())
+    }
+
+    /// Resolve one indexed turn under the same authority as a full conversation read.
+    pub fn thread_turn_scoped(&self, binding: &ThreadBinding, turn_id: &str) -> Result<Option<&Turn>, LedgerError> {
+        self.verify_binding(binding)?;
+        Ok(self.turn(turn_id).filter(|turn| Self::turn_in_scope(turn, binding)))
+    }
+
+    fn turn_in_scope(turn: &Turn, binding: &ThreadBinding) -> bool {
+        // The cross-entity guard for both bulk ingestion and reopening a hit.
+        turn.thread_id == binding.thread_id()
+            && !turn.quarantined
+            && turn.entity_id.as_ref().is_none_or(|entity| entity == binding.entity_id())
     }
 
     pub fn actions(&self) -> &[Action] {

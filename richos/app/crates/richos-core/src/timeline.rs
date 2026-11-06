@@ -1038,10 +1038,19 @@ impl Timeline {
     /// the stable item ID can open the exact message and hidden prose cannot enter the
     /// index. Machinery and workers do not affect text IDs and are not read.
     pub fn committed_search_messages(ledger: &Ledger, binding: &ThreadBinding) -> Result<Vec<CommittedSearchMessage>, LedgerError> {
-        let turns = ledger.thread_turns_scoped(binding)?;
-        let messages = turns.into_iter()
-            .filter(|turn| !matches!(turn.state, TurnState::Received | TurnState::InFlight))
-            .flat_map(|turn| turn_items(turn, binding.entity_id(), binding.binding_revision()))
+        Ok(ledger.thread_turns_scoped(binding)?.into_iter()
+            .flat_map(|turn| Self::searchable_turn(turn, binding)).collect())
+    }
+
+    /// Recheck one indexed turn on a committed update or immediately before opening a hit.
+    pub fn committed_search_turn(ledger: &Ledger, binding: &ThreadBinding, turn_id: &str) -> Result<Vec<CommittedSearchMessage>, LedgerError> {
+        Ok(ledger.thread_turn_scoped(binding, turn_id)?.into_iter()
+            .flat_map(|turn| Self::searchable_turn(turn, binding)).collect())
+    }
+
+    fn searchable_turn(turn: &Turn, binding: &ThreadBinding) -> impl Iterator<Item = CommittedSearchMessage> {
+        (!matches!(turn.state, TurnState::Received | TurnState::InFlight)).then(||
+            turn_items(turn, binding.entity_id(), binding.binding_revision())).into_iter().flatten()
             .filter_map(|item| {
                 if !item.base().visibility.renders_in(ViewMode::Ceo) {
                     return None;
@@ -1058,8 +1067,7 @@ impl Timeline {
                 (!text.trim().is_empty()).then_some(CommittedSearchMessage {
                     message_id: base.id, turn_id: base.turn_id, role, text, at: base.created_at,
                 })
-            }).collect();
-        Ok(messages)
+            })
     }
 
     /// Build one thread's timeline from durable inputs.
@@ -2430,6 +2438,12 @@ mod tests {
         ledger.record_proactive_message(&binding, AttentionTier::Silent, "Silent notice").unwrap();
 
         let messages = Timeline::committed_search_messages(&ledger, &binding).unwrap();
+        assert_eq!(Timeline::committed_search_turn(&ledger, &binding, &visible).unwrap(), messages);
+        assert!(Timeline::committed_search_turn(&ledger, &binding, &pending).unwrap().is_empty());
+        assert!(Timeline::committed_search_turn(&ledger, &binding, &superseded).unwrap().is_empty());
+        let other_thread = ledger.create_thread("Other pricing discussion", &entity()).unwrap();
+        let other_binding = ledger.thread_binding(&other_thread).unwrap();
+        assert!(Timeline::committed_search_turn(&ledger, &other_binding, &visible).unwrap().is_empty());
         let actual: Vec<_> = messages.iter().map(|m| (m.role, m.text.trim())).collect();
         assert_eq!(actual, vec![
             (SearchMessageRole::User, "Visible prompt"),
@@ -2443,6 +2457,7 @@ mod tests {
         }
         let foreign = ThreadBinding::new(binding.person_id().clone(), EntityId::parse("foreign").unwrap(), &thread, binding.binding_revision());
         assert!(matches!(Timeline::committed_search_messages(&ledger, &foreign), Err(LedgerError::ScopeMismatch { .. })));
+        assert!(matches!(Timeline::committed_search_turn(&ledger, &foreign, &visible), Err(LedgerError::ScopeMismatch { .. })));
         std::fs::remove_file(file).unwrap();
     }
 
