@@ -676,7 +676,8 @@ async function main() {
       scrim: !document.getElementById("outpanel-scrim").hidden,
     }));
     assertEqual(r, { position: "fixed", scrim: true });
-    await p.mouse.click(40, 400);
+    // On the scrim, right of the navigation rail (which stays above it, round 58).
+    await p.mouse.click(120, 400);
     await p.waitForFunction(() => document.getElementById("outpanel").hidden);
     await p.context().close();
     return "fixed over the conversation with a scrim at 1000px; a click on the scrim closed it";

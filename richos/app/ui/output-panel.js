@@ -1226,14 +1226,17 @@
     lastRail: null,
   };
 
-  /// The rail's width as the layout will have it: 0 the moment the sidebar is told to go, not
-  /// when its slide ends, so the panel moves on the same curve as the rail instead of after it.
+  /// Everything left of the stage as the layout will have it: the navigation rail, which never
+  /// goes (round 58), and the sidebar, 0 the moment it is told to go, not when its slide ends, so
+  /// the panel moves on the same curve as the sidebar instead of after it.
   function pullRail() {
+    const nav = el("nav-rail");
+    const navWidth = nav ? nav.getBoundingClientRect().width : 0;
     const rail = el("rail");
-    if (!rail) return 0;
+    if (!rail) return navWidth;
     const away =
       document.body.classList.contains("rail-closed") || document.documentElement.getAttribute("data-sidebar") === "hidden";
-    return away ? 0 : rail.getBoundingClientRect().width;
+    return navWidth + (away ? 0 : rail.getBoundingClientRect().width);
   }
 
   function pullApp() {

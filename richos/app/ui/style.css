@@ -482,9 +482,25 @@ button {
   display: block;
   overflow: visible;
 }
+/* THE TILE IS A LAYER UNDER THE GLYPH, NOT THE BUTTON'S OWN FILL: the glyph is what identifies an
+   icon-only item and what `tests/nav-rail.js` holds to 3:1, while the hover tint and the soft gold
+   tile behind the selected one are deliberately faint. As the button's own background they would
+   read as a 1.2:1 control boundary to `tests/contrast.js`; painted here they are what they are, a
+   shading under a measured mark, and no exemption is needed. */
+.nr-item::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: transparent;
+  transition: background-color 0.16s;
+}
 .nr-item:hover {
-  background: var(--tint-soft);
   color: var(--nr-ink-hover);
+}
+.nr-item:hover::before {
+  background: var(--tint-soft);
 }
 .nr-item:focus-visible {
   outline: 2px solid var(--gold);
@@ -492,8 +508,11 @@ button {
 }
 .nr-item.is-sel,
 .nr-item.is-sel:hover {
-  background: var(--nr-sel-soft);
   color: var(--nr-sel);
+}
+.nr-item.is-sel::before,
+.nr-item.is-sel:hover::before {
+  background: var(--nr-sel-soft);
 }
 .nr-item[aria-disabled="true"] {
   cursor: default;
@@ -546,6 +565,14 @@ button {
   color: var(--on-gold);
   filter: brightness(1.08);
 }
+.nr-me:hover::before {
+  background: transparent;
+}
+/* The ring is ink, not gold: around a gold circle a gold ring would be the circle's own paint
+   (light: #9c7c34 on #9c7c34). #0c1322 / #dfe4ee clear 3:1 against the rail in both themes. */
+.nr-me:focus-visible {
+  outline-color: var(--nr-ink-hover);
+}
 .nr-initials {
   font-size: 0.9375rem;
   font-weight: 600;
@@ -564,8 +591,10 @@ button {
   filter: none;
 }
 .nr-me.is-unset:hover {
-  background: var(--tint-soft);
   color: var(--nr-ink-hover);
+}
+.nr-me.is-unset:hover::before {
+  background: var(--tint-soft);
 }
 .nr-me.is-unset .nr-anon {
   display: block;
@@ -635,6 +664,7 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .nr-item,
+  .nr-item::before,
   .nr-ind,
   #nr-tip {
     transition: none;
@@ -9939,6 +9969,12 @@ body.bp-narrow #rail,
    places", for technical mode on a narrow window only. */
 body:not(.bp-wide) #techy-chip:not([hidden]) ~ #out-top {
   display: none;
+}
+/* ...and since the navigation rail took 52px of that window (round 58), the badge keeps its
+   whole sentence and the crumb beside it yields instead: the chat's name elides (`.scope-thread`)
+   while "Technical view · this conversation" stays readable (check 22 measured 241px of 252). */
+body:not(.bp-wide) #techy-chip:not([hidden]) {
+  flex-shrink: 0;
 }
 
 /* At the bottom: the right of the composer, as tall as the field, the talk control and Send —

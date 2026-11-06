@@ -356,7 +356,7 @@ async function main() {
       await measure("glyph on hover", "#nr-cleaner");
       await page.mouse.move(700, 450);
       // Selected: the glyph against the soft gold tile it sits on, and the bar against the rail.
-      const tile = C.compositeOver(C.parseCssColor(await colorOf(page, "#nr-chats", "backgroundColor")), ground);
+      const tile = C.compositeOver(C.parseCssColor(await page.evaluate(() => getComputedStyle(document.getElementById("nr-chats"), "::before").backgroundColor)), ground);
       const sel = await measure("selected glyph (on its tile)", "#nr-chats", "color", tile);
       const drawnSel = await pixelsOf(page, await boxOf(page, "#nr-chats .nr-glyph"), sel, 6);
       assert(drawnSel >= 20, `the selected glyph is not drawn in gold (${drawnSel} px)`);
