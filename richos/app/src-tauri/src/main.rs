@@ -4175,6 +4175,9 @@ fn main() {
             search_folder_preferences,
             set_search_folder_mode,
             reindex_search_folders,
+            search_folder_tree,
+            search_selected_folders,
+            set_search_folder_selected,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -6937,10 +6940,20 @@ fn search_folder_preferences(state: State<AppState>) -> Result<richos_core::conf
 
 #[richos_command::command]
 fn set_search_folder_mode(state: State<AppState>, mode: richos_core::config::SearchFolderMode) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    update_search_folder_preferences(&state, |preferences| {
+        preferences.mode = mode;
+        Ok(())
+    })
+}
+
+fn update_search_folder_preferences(
+    state: &AppState,
+    change: impl FnOnce(&mut richos_core::config::SearchFolderPreferences) -> Result<(), String>,
+) -> Result<richos_core::config::SearchFolderPreferences, String> {
     let mut config = state.config.lock().unwrap();
     let saved = config.search_folders().map_err(|e| e.to_string())?;
     let mut preferences = state.search.current_folder_preferences(saved);
-    preferences.mode = mode;
+    change(&mut preferences)?;
     config.set_search_folders(&preferences).map_err(|e| e.to_string())?;
     state.search.apply_folder_preferences(preferences.clone());
     Ok(preferences)
@@ -6949,6 +6962,42 @@ fn set_search_folder_mode(state: State<AppState>, mode: richos_core::config::Sea
 #[richos_command::command]
 fn reindex_search_folders(state: State<AppState>) -> richos_search::Status {
     state.search.reindex_folders()
+}
+
+#[richos_command::command]
+fn search_folder_tree(state: State<AppState>, parent: Option<String>, offset: Option<usize>) -> Result<doc_search::FolderPage, String> {
+    state.search.folder_tree(parent.as_deref(), offset.unwrap_or(0))
+}
+
+#[richos_command::command]
+fn search_selected_folders(state: State<AppState>) -> Result<Vec<doc_search::FolderRow>, String> {
+    let saved = state.config.lock().unwrap().search_folders().map_err(|e| e.to_string())?;
+    let preferences = state.search.current_folder_preferences(saved);
+    state.search.selected_folder_rows(&preferences)
+}
+
+#[richos_command::command]
+fn set_search_folder_selected(state: State<AppState>, folder_id: String, selected: bool) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    use richos_core::config::SearchFolderMode;
+    let path = state.search.folder_path_for_selection(&folder_id, selected)?;
+    update_search_folder_preferences(&state, |preferences| {
+        if preferences.mode == SearchFolderMode::All {
+            return Err("Switch to Chosen folders to edit individual folders.".into());
+        }
+        if selected {
+            if !preferences.chosen.contains(&path) {
+                preferences.chosen.push(path);
+                preferences.chosen.sort_unstable();
+            }
+            preferences.mode = SearchFolderMode::Chosen;
+        } else {
+            preferences.chosen.retain(|folder| folder != &path);
+            if preferences.chosen.is_empty() {
+                preferences.mode = SearchFolderMode::Off;
+            }
+        }
+        Ok(())
+    })
 }
 
 /// **Open original**: a source ID from the renderer, resolved and revalidated by the host, and

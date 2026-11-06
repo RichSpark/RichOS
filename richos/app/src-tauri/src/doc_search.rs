@@ -25,6 +25,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod folder_map;
+pub use folder_map::{FolderPage, FolderRow};
+
 #[derive(PartialEq, Eq)]
 struct Location {
     root: Result<Option<PathBuf>, String>,
@@ -46,6 +49,7 @@ struct FolderControls {
     data_dir: PathBuf,
     choice: RwLock<FolderChoice>,
     reindex: AtomicU64,
+    map: folder_map::FolderMap,
 }
 
 impl FolderControls {
@@ -55,6 +59,7 @@ impl FolderControls {
             data_dir: data_dir.to_path_buf(),
             choice: RwLock::new(FolderChoice::from_preferences(home, data_dir, preferences)),
             reindex: AtomicU64::new(0),
+            map: folder_map::FolderMap::default(),
         }
     }
 
@@ -216,6 +221,36 @@ impl DocumentSearch {
             };
         }
         SearchFolderPreferences::default()
+    }
+
+    fn folder_map_context(&self) -> Result<(&FolderControls, Vec<PathBuf>), String> {
+        let controls = self.folder_controls.as_deref().ok_or("The search folder map is unavailable.")?;
+        let mut excluded = vec![controls.data_dir.clone()];
+        if let Ok(cache) = (self.location)().cache {
+            excluded.push(cache);
+        }
+        Ok((controls, excluded))
+    }
+
+    pub fn folder_tree(&self, parent: Option<&str>, offset: usize) -> Result<FolderPage, String> {
+        let (controls, excluded) = self.folder_map_context()?;
+        if let Some(parent) = parent {
+            controls.map.children(parent, offset, &excluded)
+        } else {
+            Ok(controls.map.roots(&controls.home, &excluded))
+        }
+    }
+
+    pub fn selected_folder_rows(&self, preferences: &SearchFolderPreferences) -> Result<Vec<FolderRow>, String> {
+        let (controls, excluded) = self.folder_map_context()?;
+        Ok(controls.map.saved_rows(&preferences.chosen, &excluded))
+    }
+
+    pub fn folder_path_for_selection(&self, id: &str, selected: bool) -> Result<PathBuf, String> {
+        let (controls, excluded) = self.folder_map_context()?;
+        // An unavailable saved folder can be removed. It cannot be added while
+        // its path cannot be verified.
+        if selected { controls.map.allowed_path(id, &excluded) } else { controls.map.path(id) }
     }
 
     /// Replace the current service without blocking on its old worker. The new
