@@ -27,10 +27,8 @@ use std::sync::{mpsc, Arc, Mutex};
 struct Location {
     root: Result<Option<PathBuf>, String>,
     cache: Result<PathBuf, String>,
-    cleaner_revision: CleanerRevision,
 }
 
-type CleanerRevision = [Option<(u64, i64, i64)>; 2];
 type Locate = Arc<dyn Fn() -> Location + Send + Sync>;
 type EmbedderFactory = Arc<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
 type RetiredService = (SearchService, mpsc::Sender<()>);
@@ -38,8 +36,8 @@ type RetiredService = (SearchService, mpsc::Sender<()>);
 impl Location {
     fn from_settings(home: &Path, settings: Result<richos_core::machine_settings::Settings, String>) -> Self {
         match settings {
-            Ok(s) => Self { root: Ok(s.search_documents_root()), cache: s.cache(home, "search"), cleaner_revision: [None; 2] },
-            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()), cleaner_revision: [None; 2] },
+            Ok(s) => Self { root: Ok(s.search_documents_root()), cache: s.cache(home, "search") },
+            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()) },
         }
     }
 }
@@ -214,21 +212,15 @@ impl DocumentSearch {
 pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -> Arc<DocumentSearch> {
     let home = home.to_path_buf();
     #[cfg(target_os = "macos")]
-    let (metadata, catalog) = {
-        let directory = data_dir.join("RichCleaner");
-        let catalog = directory.join("library.sqlite");
+    let metadata = {
+        let catalog = data_dir.join("RichCleaner/library.sqlite");
         let resources = crate::cleaner_native::Native::bundled().ok().map(|native| native.directory);
-        (Some(cleaner_metadata_source(catalog, resources)), directory)
+        Some(cleaner_metadata_source(catalog, resources))
     };
     #[cfg(not(target_os = "macos"))]
     let metadata: Option<MetadataSource> = { let _ = data_dir; None };
     DocumentSearch::new(
-        move || {
-            let location = Location::from_settings(&home, richos_core::machine_settings::Settings::current());
-            #[cfg(target_os = "macos")]
-            let location = Location { cleaner_revision: cleaner_revision(&catalog, &location), ..location };
-            location
-        },
+        move || Location::from_settings(&home, richos_core::machine_settings::Settings::current()),
         make_embedder,
         Some(busy),
         metadata,
@@ -236,22 +228,14 @@ pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -
 }
 
 #[cfg(target_os = "macos")]
-fn cleaner_revision(directory: &Path, location: &Location) -> CleanerRevision {
-    use std::os::unix::fs::MetadataExt;
-    if !matches!(location.root, Ok(Some(_))) {
-        return [None; 2];
-    }
-    ["library.sqlite", "library.sqlite-wal"].map(|name| std::fs::metadata(directory.join(name))
-        .ok().filter(|m| m.len() > 0).map(|m| (m.ino(), m.mtime(), m.mtime_nsec())))
-}
-
-#[cfg(target_os = "macos")]
 fn cleaner_metadata_source(catalog: PathBuf, resources: Option<PathBuf>) -> MetadataSource {
     use richos_core::cleaner::{Catalog, EXTENSIONS};
     use std::os::unix::fs::MetadataExt;
 
+    let watched = catalog.clone();
     MetadataSource {
         extensions: EXTENSIONS,
+        watch: Arc::new(move || Catalog::watch_filed_context(&watched)),
         read: Arc::new(move |path, meta| {
             let volume = meta.dev() & u32::MAX as u64;
             let record = Catalog::filed_context(&catalog, volume, meta.ino()).ok().flatten();
@@ -471,7 +455,7 @@ mod tests {
         }
         let cache = base.join("cache");
         let service = DocumentSearch::new(
-            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), cleaner_revision: [None; 2] },
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()) },
             move || {
                 if with_model {
                     Ok(Box::new(ConceptEmbedder::stand_in()))
@@ -925,10 +909,7 @@ mod tests {
         let folder = included.clone();
         let cache = base.join("cache");
         let service = DocumentSearch::new(
-            move || {
-                let location = Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), cleaner_revision: [None; 2] };
-                Location { cleaner_revision: cleaner_revision(&cleaner, &location), ..location }
-            },
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()) },
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
             Some(adapter),
@@ -956,11 +937,21 @@ mod tests {
             }
         }
         assert_eq!(query("\"obsidian-tag\"", false, true).hits[0].rel_path, "local.zip");
+        let prior_scope = service.current().base;
         entry.note = "Malachite replacement note.".into();
         db.save(&entry).unwrap();
-        service.current().service.wait_idle();
-        assert!(query("\"zirconium local\"", false, true).hits.is_empty());
-        assert_eq!(query("\"malachite replacement\"", false, true).hits[0].rel_path, "local.zip");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10); // load-bound: hang guard until the new note is searchable.
+        loop {
+            let hit = query("\"malachite replacement\"", false, true).hits.into_iter().next();
+            if let Some(hit) = hit {
+                assert_eq!(hit.rel_path, "local.zip");
+                assert_eq!(service.current().base, prior_scope, "catalog edits must not restart the grant");
+                assert!(query("\"zirconium local\"", false, true).hits.is_empty());
+                break;
+            }
+            assert!(std::time::Instant::now() < until, "the changed catalog entry was never published"); // load-bound: hang guard only.
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         service.shutdown();
         drop(db);
         std::fs::remove_dir_all(base).unwrap();

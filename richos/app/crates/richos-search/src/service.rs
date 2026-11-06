@@ -19,7 +19,7 @@
 //!   disk (still inside the folder, still a regular file, same content hash) and dropped if not;
 //!   opening a result checks the same again.
 use crate::chunk::CHUNKER_IDENTITY;
-use crate::corpus::{self, Corpus, FileVersion, MetadataSource};
+use crate::corpus::{self, Corpus, Document, FileVersion, MetadataSource};
 use crate::embed::Embedder;
 use crate::manifest::{point_id, Manifest, SourceEntry, SourceState};
 use crate::query::{self, ParsedQuery};
@@ -27,10 +27,10 @@ use crate::rank::{self, Ranked, SemanticHit, Why};
 use crate::vector::VectorIndex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
 use std::time::Instant;
 
 /// Retrieval settings the harness may vary; the app uses [`Tuning::default`].
@@ -194,8 +194,19 @@ pub struct SearchResponse {
 struct Meaning {
     index: VectorIndex,
     embedder: Box<dyn Embedder>,
-    /// Point id -> (document index in the corpus, passage number), complete sources only.
-    points: RwLock<HashMap<u64, (usize, usize)>>,
+    /// Use source identity and version, since a catalog edit can move a document's position.
+    points: RwLock<HashMap<u64, (Arc<Document>, usize)>>,
+}
+
+struct IndexWriter {
+    meaning: Arc<Meaning>,
+    manifest: Manifest,
+    dir: PathBuf,
+}
+
+struct MediaUpdate {
+    path: String,
+    doc: Result<Option<Arc<Document>>, String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -219,6 +230,20 @@ struct Inner {
     access: Mutex<()>,
     last: Mutex<Option<(CacheKey, Arc<Vec<Ranked>>)>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    initial: (Mutex<bool>, Condvar),
+}
+
+impl Inner {
+    fn initial_ready(&self) {
+        *self.initial.0.lock().unwrap() = true;
+        self.initial.1.notify_all();
+    }
+}
+
+struct InitialRead<'a>(&'a Inner);
+
+impl Drop for InitialRead<'_> {
+    fn drop(&mut self) { self.0.initial_ready(); }
 }
 
 #[derive(Clone)]
@@ -275,6 +300,7 @@ impl SearchService {
             access: Mutex::new(()),
             last: Mutex::new(None),
             worker: Mutex::new(None),
+            initial: (Mutex::new(false), Condvar::new()),
         }));
         service.spawn(false, before_index);
         service
@@ -286,6 +312,7 @@ impl SearchService {
             .name("richos-search".into())
             .spawn(move || {
                 lower_this_thread();
+                let _initial = InitialRead(&me.0);
                 me.run(rebuild, before_index);
             })
             .expect("the search thread could not start");
@@ -315,6 +342,7 @@ impl SearchService {
     pub fn reindex(&self) {
         self.shutdown();
         self.0.stop.store(false, Ordering::SeqCst);
+        *self.0.initial.0.lock().unwrap() = false;
         *self.0.corpus.write().unwrap() = None;
         *self.0.meaning_status.write().unwrap() = MeaningStatus::Starting;
         if self.0.config.root.is_some() {
@@ -324,14 +352,10 @@ impl SearchService {
         self.spawn(true, || {});
     }
 
-    /// Wait (for tests and the harness) until background work has finished.
+    /// Wait (for tests and the harness) until the initial corpus and index have been processed.
     pub fn wait_idle(&self) {
-        let mut worker = self.0.worker.lock().unwrap();
-        if let Some(handle) = worker.take() {
-            if handle.join().is_err() {
-                eprintln!("document search: the search thread ended in a panic");
-            }
-        }
+        let ready = self.0.initial.0.lock().unwrap();
+        let _ready = self.0.initial.1.wait_while(ready, |ready| !*ready).unwrap();
     }
 
     fn bump(&self) {
@@ -362,41 +386,87 @@ impl SearchService {
 
     fn run(&self, rebuild: bool, before_index: impl FnOnce()) {
         let Some(root) = self.0.config.root.clone() else { return };
-        match corpus::load_until_stopped(&root, self.0.metadata.as_ref(), || self.background_stopping()) {
-            Ok(Some(c)) => {
-                *self.0.folder.write().unwrap() = FolderStatus::Ready {
-                    files: c.docs.len(),
-                    passages: c.passage_count(),
-                    skipped: c.skipped.len(),
-                    links_skipped: c.links_skipped,
-                };
-                *self.0.corpus.write().unwrap() = Some(Arc::new(c));
-                self.bump();
-            }
+        let metadata = self.0.metadata.as_ref();
+        let changes = metadata.map(|source| (source.watch)());
+        let pending = match corpus::load_until_stopped(&root, metadata, || self.background_stopping()) {
+            Ok(Some(c)) => c,
             Ok(None) => return,
             Err(message) => {
                 *self.0.folder.write().unwrap() = FolderStatus::Error { message };
                 self.set_meaning(MeaningStatus::Unavailable { reason: "No search folder to index.".into() });
                 return;
             }
-        }
-        before_index();
-        if self.background_stopping() {
-            return;
-        }
-        if let Err(reason) = self.build_meaning(rebuild) {
-            *self.0.meaning.write().unwrap() = None;
-            self.set_meaning(MeaningStatus::Unavailable { reason });
-            self.bump();
+        };
+        let base = Arc::new(pending.corpus);
+        self.publish_corpus(base.clone());
+
+        let (mut writer, initial_media) = std::thread::scope(|scope| {
+            let reader = metadata.map(|source| {
+                let root = &base.root;
+                let paths = &pending.media;
+                scope.spawn(move || {
+                    lower_this_thread();
+                    self.read_media(root, paths, source)
+                })
+            });
+            before_index();
+            let pending_paths: HashSet<_> = pending.media.iter().map(String::as_str).collect();
+            let writer = if self.background_stopping() {
+                None
+            } else {
+                match self.build_meaning(rebuild, &base, &pending_paths) {
+                    Ok(writer) => writer,
+                    Err(reason) => {
+                        self.meaning_failed(reason);
+                        None
+                    }
+                }
+            };
+            let initial = reader.map(|reader| reader.join().expect("metadata reader panicked")).unwrap_or_default();
+            (writer, initial)
+        });
+        self.update_media_index(&mut writer, &initial_media);
+        self.0.initial_ready();
+        if let (Some(source), Some(changes)) = (metadata, changes) {
+            while !self.stopping() {
+                let paths = match changes.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(paths) => paths,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
+                let paths: BTreeSet<_> = paths.into_iter().chain(changes.try_iter().flatten())
+                    .filter_map(|path| corpus::catalog_relative(&base.root, &path, source)).collect();
+                if !paths.is_empty() {
+                    let updates = self.read_media(&base.root, &paths.into_iter().collect::<Vec<_>>(), source);
+                    self.update_media_index(&mut writer, &updates);
+                }
+            }
         }
     }
 
-    fn build_meaning(&self, rebuild: bool) -> Result<(), String> {
-        let corpus = self.0.corpus.read().unwrap().clone().ok_or("The folder was not read.")?;
+    fn publish_corpus(&self, corpus: Arc<Corpus>) {
+        let status = FolderStatus::Ready {
+            files: corpus.docs.len(),
+            passages: corpus.passage_count(),
+            skipped: corpus.skipped.len(),
+            links_skipped: corpus.links_skipped,
+        };
+        *self.0.corpus.write().unwrap() = Some(corpus);
+        *self.0.folder.write().unwrap() = status;
+        self.bump();
+    }
+
+    fn meaning_failed(&self, reason: String) {
+        *self.0.meaning.write().unwrap() = None;
+        self.set_meaning(MeaningStatus::Unavailable { reason });
+        self.bump();
+    }
+
+    fn build_meaning(&self, rebuild: bool, corpus: &Corpus, pending_media: &HashSet<&str>) -> Result<Option<IndexWriter>, String> {
         let cache = self.0.config.cache.clone()?;
         let embedder = (self.0.config.make_embedder)()?;
         if self.background_stopping() {
-            return Ok(());
+            return Ok(None);
         }
         let identity = format!("{}|{}", embedder.identity(), CHUNKER_IDENTITY);
         let dir = index_dir(&cache, &corpus.root, &identity);
@@ -409,14 +479,17 @@ impl SearchService {
         // Reconcile what the index holds with the folder as it is now.
         let by_id = corpus.by_id();
         let mut stale: Vec<u64> = Vec::new();
-        let mut keep: HashMap<u64, (usize, usize)> = HashMap::new();
+        let mut keep = HashMap::new();
         manifest.sources.retain(|id, entry| {
+            if pending_media.contains(entry.rel_path.as_str()) {
+                // Reuse the vectors once the portable or catalog note verifies.
+                return true;
+            }
             let current = by_id.get(id.as_str()).map(|&i| &corpus.docs[i]);
             match current {
                 Some(doc) if entry.state == SourceState::Complete && entry.hash == doc.hash && entry.points.len() == doc.passages.len() => {
-                    let i = by_id[id.as_str()];
                     for (p, point) in entry.points.iter().enumerate() {
-                        keep.insert(*point, (i, p));
+                        keep.insert(*point, (doc.clone(), p));
                     }
                     true
                 }
@@ -429,6 +502,7 @@ impl SearchService {
         meaning.index.delete(&stale)?;
         meaning.index.flush()?;
         manifest.save(&dir)?;
+        let mut passages_done = keep.len();
         *meaning.points.write().unwrap() = keep;
         *self.0.meaning.write().unwrap() = Some(meaning.clone());
 
@@ -436,7 +510,6 @@ impl SearchService {
         let files_total = corpus.docs.len();
         let passages_total = corpus.passage_count();
         let mut files_done = files_total - todo.len();
-        let mut passages_done: usize = manifest.sources.values().map(|e| e.points.len()).sum();
         self.bump();
         let report = |files_done: usize, passages_done: usize| {
             if files_done == files_total {
@@ -449,7 +522,7 @@ impl SearchService {
 
         for batch in todo.chunks(self.0.config.tuning.batch_files.max(1)) {
             if self.background_stopping() {
-                return Ok(());
+                return Ok(None);
             }
             // Mark the batch indexing, with the points it will write, before writing any.
             for &i in batch {
@@ -473,12 +546,12 @@ impl SearchService {
                         std::thread::sleep(BUSY_YIELD);
                     }
                     if self.background_stopping() {
-                        return Ok(());
+                        return Ok(None);
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
                     let vector = meaning.embedder.embed(&[&text])?.pop().ok_or("The embedding model returned nothing.")?;
                     if self.background_stopping() {
-                        return Ok(());
+                        return Ok(None);
                     }
                     meaning.index.upsert(vec![(point_id(&doc.id, &doc.hash, p), vector)])?;
                 }
@@ -491,7 +564,7 @@ impl SearchService {
                     if let Some(entry) = manifest.sources.get_mut(&doc.id) {
                         entry.state = SourceState::Complete;
                         for (p, point) in entry.points.iter().enumerate() {
-                            points.insert(*point, (i, p));
+                            points.insert(*point, (doc.clone(), p));
                         }
                     }
                     files_done += 1;
@@ -506,6 +579,134 @@ impl SearchService {
             meaning.index.optimize()?;
         }
         self.set_meaning(report(files_done, passages_done));
+        Ok(Some(IndexWriter { meaning, manifest, dir }))
+    }
+
+    fn read_media(&self, root: &Path, paths: &[String], source: &MetadataSource) -> Vec<MediaUpdate> {
+        let mut updates = Vec::new();
+        for batch in paths.chunks(8) {
+            let start = updates.len();
+            for path in batch {
+                if self.background_stopping() {
+                    return updates;
+                }
+                let doc = if root.join(path).exists() {
+                    corpus::read_metadata_document(root, path, source)
+                } else {
+                    Ok(None)
+                };
+                updates.push(MediaUpdate { path: path.clone(), doc });
+            }
+            let Some(snapshot) = self.0.corpus.read().unwrap().clone() else { break };
+            let mut next = (*snapshot).clone();
+            for update in &updates[start..] {
+                let position = next.docs.binary_search_by(|d| d.rel_path.cmp(&update.path));
+                next.skipped.retain(|s| s.rel_path != update.path);
+                match (&update.doc, position) {
+                    (Ok(Some(doc)), Ok(i)) => next.docs[i] = doc.clone(),
+                    (Ok(Some(doc)), Err(i)) => next.docs.insert(i, doc.clone()),
+                    (_, Ok(i)) => { next.docs.remove(i); }
+                    (_, Err(_)) => {}
+                }
+                if let Err(reason) = &update.doc {
+                    next.skipped.push(corpus::Skipped { rel_path: update.path.clone(), reason: reason.clone() });
+                }
+            }
+            if !self.stopping() {
+                self.publish_corpus(Arc::new(next));
+            }
+        }
+        updates
+    }
+
+    fn update_media_index(&self, writer: &mut Option<IndexWriter>, updates: &[MediaUpdate]) {
+        if updates.is_empty() || self.stopping() {
+            return;
+        }
+        if let Some(index) = writer {
+            if let Err(reason) = self.write_media(index, updates) {
+                *writer = None;
+                self.meaning_failed(reason);
+            }
+        }
+    }
+
+    fn write_media(&self, writer: &mut IndexWriter, updates: &[MediaUpdate]) -> Result<(), String> {
+        let IndexWriter { meaning, manifest, dir } = writer;
+        for update in updates {
+            if self.background_stopping() {
+                return Ok(());
+            }
+            let id = corpus::source_id(&update.path);
+            let doc = update.doc.as_ref().ok().and_then(Option::as_ref);
+            let old = manifest.sources.get(&id);
+            if let Some((doc, entry)) = doc.zip(old).filter(|(doc, entry)| {
+                entry.state == SourceState::Complete && entry.hash == doc.hash && entry.points.len() == doc.passages.len()
+            }) {
+                let mut points = meaning.points.write().unwrap();
+                for (i, &id) in entry.points.iter().enumerate() {
+                    points.insert(id, (doc.clone(), i));
+                }
+                continue;
+            }
+            if old.is_none() && doc.is_none() {
+                continue;
+            }
+            let stale = old.map(|entry| entry.points.clone()).unwrap_or_default();
+            let fresh: Vec<_> = doc.map(|doc| (0..doc.passages.len()).map(|i| point_id(&id, &doc.hash, i)).collect()).unwrap_or_default();
+            let mut pending = stale.clone();
+            pending.extend_from_slice(&fresh);
+            let locators = doc.map(|doc| doc.passages.iter().map(|p| (p.start, p.end, p.line)).collect()).unwrap_or_default();
+            manifest.sources.insert(id.clone(), SourceEntry {
+                rel_path: update.path.clone(),
+                hash: doc.map(|doc| doc.hash.clone()).unwrap_or_default(),
+                state: SourceState::Indexing,
+                points: pending,
+                locators,
+            });
+            manifest.save(dir)?;
+            {
+                let mut points = meaning.points.write().unwrap();
+                for id in &stale {
+                    points.remove(id);
+                }
+            }
+            meaning.index.delete(&stale)?;
+            if let Some(doc) = doc {
+                for (passage, &id) in doc.passages.iter().zip(&fresh) {
+                    if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
+                        std::thread::sleep(BUSY_YIELD);
+                    }
+                    if self.background_stopping() {
+                        return Ok(());
+                    }
+                    let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
+                    let vector = meaning.embedder.embed(&[&text])?.pop().ok_or("The embedding model returned nothing.")?;
+                    if self.background_stopping() {
+                        return Ok(());
+                    }
+                    meaning.index.upsert(vec![(id, vector)])?;
+                }
+                meaning.index.flush()?;
+                if let Some(entry) = manifest.sources.get_mut(&id) {
+                    entry.state = SourceState::Complete;
+                    entry.points = fresh.clone();
+                }
+                manifest.save(dir)?;
+                let mut points = meaning.points.write().unwrap();
+                for (i, id) in fresh.into_iter().enumerate() {
+                    points.insert(id, (doc.clone(), i));
+                }
+            } else {
+                meaning.index.flush()?;
+                manifest.sources.remove(&id);
+                manifest.save(dir)?;
+            }
+        }
+        if let Some(corpus) = self.0.corpus.read().unwrap().as_ref() {
+            self.set_meaning(MeaningStatus::Ready { files: corpus.docs.len(), passages: corpus.passage_count() });
+        }
+        self.bump();
         Ok(())
     }
 
@@ -575,7 +776,7 @@ impl SearchService {
             Some(r) => r,
             None => {
                 let lexical = rank::lexical(&corpus, &parsed, request.strict);
-                let semantic = meaning.as_ref().map(|m| semantic_hits(m, &request.query, &self.0.config.tuning));
+                let semantic = meaning.as_ref().map(|m| semantic_hits(m, &corpus, &request.query, &self.0.config.tuning));
                 let semantic = match semantic {
                     Some(Ok(hits)) => Some(hits),
                     Some(Err(_)) => {
@@ -693,7 +894,7 @@ pub fn embedding_text(title: &str, heading: &str, passage: &str) -> String {
     }
 }
 
-fn semantic_hits(meaning: &Meaning, query: &str, tuning: &Tuning) -> Result<Vec<SemanticHit>, String> {
+fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning) -> Result<Vec<SemanticHit>, String> {
     let vector = meaning.embedder.embed(&[query.trim()])?.pop().ok_or("no query vector")?;
     let nearest = meaning.index.nearest(vector, tuning.semantic_passages)?;
     let points = meaning.points.read().unwrap();
@@ -703,11 +904,15 @@ fn semantic_hits(meaning: &Meaning, query: &str, tuning: &Tuning) -> Result<Vec<
             continue;
         }
         // A point not in the map belongs to a file that is not complete; it is never returned.
-        let Some(&(doc, passage)) = points.get(&id) else { continue };
+        let Some((indexed, passage)) = points.get(&id) else { continue };
+        let Some(doc) = corpus.position(&indexed.rel_path) else { continue };
+        if corpus.docs[doc].hash != indexed.hash {
+            continue;
+        }
         if out.iter().any(|h| h.doc == doc) {
             continue;
         }
-        out.push(SemanticHit { doc, passage });
+        out.push(SemanticHit { doc, passage: *passage });
         if out.len() >= tuning.semantic_sources {
             break;
         }

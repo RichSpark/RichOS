@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::Metadata;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::UNIX_EPOCH;
 
 pub const SKIPPED_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "__pycache__", "vendor"];
@@ -33,6 +33,7 @@ pub type ReadMetadata = dyn Fn(&Path, &Metadata) -> Result<Option<String>, Strin
 pub struct MetadataSource {
     pub extensions: &'static [&'static str],
     pub read: Arc<ReadMetadata>,
+    pub watch: Arc<dyn Fn() -> mpsc::Receiver<Vec<PathBuf>> + Send + Sync>,
 }
 
 /// An inexpensive file version for metadata-only hits. Media can be large, so a
@@ -132,7 +133,7 @@ pub struct Corpus {
     /// Canonical folder path.
     pub root: PathBuf,
     /// Documents in path order.
-    pub docs: Vec<Document>,
+    pub docs: Vec<Arc<Document>>,
     pub skipped: Vec<Skipped>,
     /// Symbolic links met and not followed.
     pub links_skipped: usize,
@@ -145,10 +146,18 @@ impl Corpus {
     pub fn passage_count(&self) -> usize {
         self.docs.iter().map(|d| d.passages.len()).sum()
     }
+
+    pub(crate) fn position(&self, path: &str) -> Option<usize> {
+        self.docs.binary_search_by(|d| d.rel_path.as_str().cmp(path)).ok()
+    }
 }
 
 fn supported(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+}
+
+fn supports_metadata(source: &MetadataSource, path: &Path) -> bool {
+    path.extension().and_then(|v| v.to_str()).is_some_and(|ext| source.extensions.iter().any(|s| s.eq_ignore_ascii_case(ext)))
 }
 
 fn skipped_dir(name: &str) -> bool {
@@ -197,9 +206,7 @@ fn list(root: &Path, metadata: Option<&MetadataSource>, stopped: &impl Fn() -> b
                 if !skipped_dir(&name) {
                     stack.push(path);
                 }
-            } else if kind.is_file() && !name.starts_with('.') && (supported(&path) || metadata.is_some_and(|m| {
-                path.extension().and_then(|v| v.to_str()).is_some_and(|ext| m.extensions.iter().any(|s| s.eq_ignore_ascii_case(ext)))
-            })) {
+            } else if kind.is_file() && !name.starts_with('.') && (supported(&path) || metadata.is_some_and(|m| supports_metadata(m, &path))) {
                 if let Some(rel) = relative(root, &path) {
                     files.push((rel, path));
                 }
@@ -245,36 +252,53 @@ pub fn read_document(rel_path: &str, path: &Path) -> Result<Document, String> {
 /// no index (PRD: *"Text search must work independently of Edge availability and model
 /// startup."*).
 pub fn load(root: &Path) -> Result<Corpus, String> {
-    Ok(load_until_stopped(root, None, || false)?.expect("no cancellation requested"))
+    Ok(load_until_stopped(root, None, || false)?.expect("no cancellation requested").corpus)
+}
+
+pub(crate) struct PendingCorpus {
+    pub corpus: Corpus,
+    pub media: Vec<String>,
 }
 
 /// Cancellation discards the partial corpus. Check before opening each directory and file.
-pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>, stopped: impl Fn() -> bool) -> Result<Option<Corpus>, String> {
+pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>, stopped: impl Fn() -> bool) -> Result<Option<PendingCorpus>, String> {
     if stopped() {
         return Ok(None);
     }
     let root = validate_root(root)?;
     let Some(DirectoryEntries { files, links_skipped }) = list(&root, metadata, &stopped)? else { return Ok(None) };
     let mut corpus = Corpus { root, docs: Vec::with_capacity(files.len()), skipped: Vec::new(), links_skipped };
+    let mut media = Vec::new();
     for (rel, path) in files {
         if stopped() {
             return Ok(None);
         }
-        let result = if supported(&path) {
-            read_document(&rel, &path).map(Some)
-        } else {
-            read_metadata_document(&corpus.root, &rel, metadata.expect("media listed without metadata source"))
-        };
-        match result {
-            Ok(Some(doc)) => corpus.docs.push(doc),
-            Ok(None) => {}
+        if !supported(&path) {
+            media.push(rel);
+            continue;
+        }
+        match read_document(&rel, &path) {
+            Ok(doc) => corpus.docs.push(Arc::new(doc)),
             Err(reason) => corpus.skipped.push(Skipped { rel_path: rel, reason }),
         }
     }
-    Ok((!stopped()).then_some(corpus))
+    Ok((!stopped()).then_some(PendingCorpus { corpus, media }))
 }
 
-fn read_metadata_document(root: &Path, rel: &str, source: &MetadataSource) -> Result<Option<Document>, String> {
+pub(crate) fn catalog_relative(root: &Path, path: &Path, source: &MetadataSource) -> Option<String> {
+    let tail = path.strip_prefix(root).ok()?;
+    let names: Vec<_> = tail.components().map(|part| match part {
+        Component::Normal(name) => name.to_str(),
+        _ => None,
+    }).collect::<Option<_>>()?;
+    let (leaf, parents) = names.split_last()?;
+    if leaf.starts_with('.') || parents.iter().any(|name| skipped_dir(name)) || !supports_metadata(source, path) {
+        return None;
+    }
+    Some(names.join("/"))
+}
+
+pub(crate) fn read_metadata_document(root: &Path, rel: &str, source: &MetadataSource) -> Result<Option<Arc<Document>>, String> {
     let path = resolve_inside(root, rel)?;
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     let version = FileVersion::of(&meta);
@@ -290,7 +314,7 @@ fn read_metadata_document(root: &Path, rel: &str, source: &MetadataSource) -> Re
     let hash = content_hash(text.as_bytes());
     let mut doc = Document::from_text(rel, text, modified_ms(&meta), meta.len(), hash);
     doc.metadata_version = Some(version);
-    Ok(Some(doc))
+    Ok(Some(Arc::new(doc)))
 }
 
 /// Resolve a document's file for opening or revalidation: the path is rebuilt from the

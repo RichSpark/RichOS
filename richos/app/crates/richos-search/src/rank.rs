@@ -266,7 +266,7 @@ mod tests {
     }
 
     fn corpus(docs: Vec<Document>) -> Corpus {
-        Corpus { docs, ..Corpus::default() }
+        Corpus { docs: docs.into_iter().map(std::sync::Arc::new).collect(), ..Corpus::default() }
     }
 
     fn order(c: &Corpus, ranked: &[Ranked]) -> Vec<String> {
