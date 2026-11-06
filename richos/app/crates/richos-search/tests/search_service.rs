@@ -1,6 +1,7 @@
 //! The search service end to end over the synthetic stand-in folder (`tests/fixtures/standin`),
 //! with the stand-in embedder so no model is needed: the four checkbox combinations, the
 //! truthful fallback, current-source checks, restart reconciliation and Open original.
+use richos_search::corpus::MetadataSource;
 use richos_search::embed::{ConceptEmbedder, Embedder};
 use richos_search::manifest::{point_id, Manifest, SourceEntry, SourceState};
 use richos_search::rank::Why;
@@ -68,6 +69,72 @@ fn ask(service: &SearchService, query: &str, super_finder: bool, strict: bool) -
 
 fn files(r: &richos_search::SearchResponse) -> Vec<String> {
     r.hits.iter().map(|h| h.rel_path.clone()).collect()
+}
+
+#[test]
+fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_named_file() {
+    use std::sync::{mpsc, Mutex};
+    use std::time::{Duration, Instant};
+    let (folder, cache) = fixture_copy("media-background");
+    std::fs::write(folder.join("00-slow.png"), "fixture").unwrap();
+    std::fs::write(folder.join("01-noted.png"), "fixture").unwrap();
+    let target = folder.join("01-noted.png");
+    let (entered, reading) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    let (changed, watch) = mpsc::channel();
+    let watch = Mutex::new(Some(watch));
+    let blocked = Mutex::new(Some(blocked));
+    let reads = Arc::new(Mutex::new(Vec::new()));
+    let calls = reads.clone();
+    let note = Arc::new(Mutex::new("Initial fixture note".to_string()));
+    let current = note.clone();
+    let metadata = MetadataSource {
+        extensions: &["png"],
+        watch: Arc::new(move || watch.lock().unwrap().take().unwrap()),
+        read: Arc::new(move |path, _| {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            calls.lock().unwrap().push(name.clone());
+            if name == "00-slow.png" {
+                if let Some(block) = blocked.lock().unwrap().take() {
+                    entered.send(()).unwrap();
+                    block.recv().map_err(|_| "the fixture released its reader")?;
+                }
+                Ok(None)
+            } else {
+                Ok(Some(current.lock().unwrap().clone()))
+            }
+        }),
+    };
+    let service = SearchService::start_with_grant(Config {
+        root: Some(folder.clone()),
+        cache: Ok(cache),
+        make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
+        busy: None,
+        tuning: Tuning::default(),
+    }, Some(metadata), None, || {});
+    // load-bound: hang guard only; the metadata reader announces entry and stays blocked until released.
+    reading.recv_timeout(Duration::from_secs(10)).unwrap();
+    let text = ask(&service, "refund", false, false);
+    release.send(()).unwrap();
+    assert!(!text.hits.is_empty(), "Markdown must be searchable while the portable reader is blocked");
+    service.wait_idle();
+    assert_eq!(files(&ask(&service, "\"Initial fixture note\"", false, true)), ["01-noted.png"]);
+    *note.lock().unwrap() = "Replacement fixture note".into();
+    changed.send(vec![target]).unwrap();
+    let guard = Instant::now() + Duration::from_secs(10); // load-bound: hang guard for the change notification.
+    loop {
+        if files(&ask(&service, "\"Replacement fixture note\"", false, true)) == ["01-noted.png"] {
+            break;
+        }
+        assert!(Instant::now() < guard, "catalog change was never applied"); // load-bound: wait for the actual replacement.
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(ask(&service, "\"Initial fixture note\"", false, true).hits.is_empty());
+    assert_eq!(files(&ask(&service, "replacement", false, false)), ["01-noted.png"]);
+    assert_eq!(files(&ask(&service, "refund", false, false)), files(&text));
+    assert_eq!(*reads.lock().unwrap(), ["00-slow.png", "01-noted.png", "01-noted.png"]);
+    service.shutdown();
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
 }
 
 #[test]

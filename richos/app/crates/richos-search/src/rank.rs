@@ -49,21 +49,20 @@ fn by_date_then_path(a: &Document, b: &Document) -> Ordering {
 
 /// The text list: one scan over the cached text of every document.
 pub fn lexical(corpus: &Corpus, query: &ParsedQuery, strict: bool) -> Vec<LexicalHit> {
-    let mut out: Vec<LexicalHit> = Vec::new();
-    for (i, doc) in corpus.docs.iter().enumerate() {
-        let spans = spans_in(doc, &query.spans);
-        if strict && spans < query.spans.len() {
-            continue;
-        }
-        let title_words = count_words(&doc.folded_title, &query.words);
-        let file_words = query.words.iter().filter(|w| has_word(&doc.folded_title, w) || has_word(&doc.folded_text, w)).count();
-        if file_words == 0 && spans == 0 {
-            continue;
-        }
-        out.push(LexicalHit { doc: i, title_words, spans, file_words });
-    }
+    let mut out: Vec<_> = corpus.docs.iter().enumerate()
+        .filter_map(|(i, doc)| lexical_hit(i, doc, query, strict)).collect();
     sort_lexical(corpus, &mut out);
     out
+}
+
+fn lexical_hit(i: usize, doc: &Document, query: &ParsedQuery, strict: bool) -> Option<LexicalHit> {
+    let spans = spans_in(doc, &query.spans);
+    if strict && spans < query.spans.len() {
+        return None;
+    }
+    let title_words = count_words(&doc.folded_title, &query.words);
+    let file_words = query.words.iter().filter(|w| has_word(&doc.folded_title, w) || has_word(&doc.folded_text, w)).count();
+    (file_words > 0 || spans > 0).then_some(LexicalHit { doc: i, title_words, spans, file_words })
 }
 
 fn sort_lexical(corpus: &Corpus, hits: &mut [LexicalHit]) {
@@ -87,6 +86,26 @@ struct WordHit {
 /// token or across whitespace, so those queries still use the literal scan.
 pub(crate) struct LexicalIndex {
     words: HashMap<String, Vec<WordHit>>,
+}
+
+/// Markdown remains in its original order when media is inserted or removed.
+pub(crate) struct UpdatedPositions {
+    markdown: Vec<usize>,
+    media: Vec<usize>,
+}
+
+impl UpdatedPositions {
+    pub(crate) fn for_corpus(corpus: &Corpus) -> Self {
+        let mut result = Self { markdown: Vec::new(), media: Vec::new() };
+        for (i, doc) in corpus.docs.iter().enumerate() {
+            if doc.metadata_version.is_some() {
+                result.media.push(i);
+            } else {
+                result.markdown.push(i);
+            }
+        }
+        result
+    }
 }
 
 impl LexicalIndex {
@@ -117,7 +136,7 @@ impl LexicalIndex {
         Some(Self { words })
     }
 
-    pub(crate) fn search(&self, corpus: &Corpus, query: &ParsedQuery, strict: bool) -> Vec<LexicalHit> {
+    pub(crate) fn search(&self, corpus: &Corpus, query: &ParsedQuery, strict: bool, positions: Option<&UpdatedPositions>) -> Vec<LexicalHit> {
         if !query.spans.is_empty() {
             return lexical(corpus, query, strict);
         }
@@ -129,6 +148,7 @@ impl LexicalIndex {
             last_file: usize,
         }
         let mut counts = vec![Counts::default(); corpus.docs.len()];
+        let position = |doc| positions.map_or(doc, |p| p.markdown[doc]);
         for (i, word) in query.words.iter().enumerate() {
             let mark = i + 1;
             let mut add = |doc: usize, title: bool, body: bool| {
@@ -146,7 +166,7 @@ impl LexicalIndex {
                 for key in [word.clone(), format!("{word}s"), format!("{word}es")] {
                     if let Some(hits) = self.words.get(&key) {
                         for h in hits {
-                            add(h.doc, h.title, h.body);
+                            add(position(h.doc), h.title, h.body);
                         }
                     }
                 }
@@ -156,8 +176,9 @@ impl LexicalIndex {
                 let anchor = word.split(|c: char| !c.is_alphanumeric()).next().unwrap_or_default();
                 if let Some(hits) = self.words.get(anchor) {
                     for h in hits {
-                        let d = &corpus.docs[h.doc];
-                        add(h.doc, h.title && has_word(&d.folded_title, word), h.body && has_word(&d.folded_text, word));
+                        let doc = position(h.doc);
+                        let d = &corpus.docs[doc];
+                        add(doc, h.title && has_word(&d.folded_title, word), h.body && has_word(&d.folded_text, word));
                     }
                 }
             }
@@ -165,6 +186,9 @@ impl LexicalIndex {
         let mut hits: Vec<_> = counts.into_iter().enumerate().filter_map(|(doc, c)| {
             (c.file_words > 0).then_some(LexicalHit { doc, title_words: c.title_words, spans: 0, file_words: c.file_words })
         }).collect();
+        if let Some(positions) = positions {
+            hits.extend(positions.media.iter().filter_map(|&i| lexical_hit(i, &corpus.docs[i], query, strict)));
+        }
         sort_lexical(corpus, &mut hits);
         hits
     }
@@ -407,7 +431,7 @@ mod tests {
     }
 
     fn corpus(docs: Vec<Document>) -> Corpus {
-        Corpus { docs, ..Corpus::default() }
+        Corpus { docs: docs.into_iter().map(std::sync::Arc::new).collect(), ..Corpus::default() }
     }
 
     fn order(c: &Corpus, ranked: &[Ranked]) -> Vec<String> {
@@ -442,7 +466,7 @@ mod tests {
         for text in ["names inv price", "dmitri's", "dmitri’s", "cache api.v2", "inv-2049", "ärger", "price cache", "\"terminal\"", "\"inv 2049\"", "is in"] {
             let q = parse(text);
             for strict in [false, true] {
-                assert_eq!(index.search(&c, &q, strict), lexical(&c, &q, strict), "{text}, strict={strict}");
+                assert_eq!(index.search(&c, &q, strict, None), lexical(&c, &q, strict), "{text}, strict={strict}");
             }
         }
     }
