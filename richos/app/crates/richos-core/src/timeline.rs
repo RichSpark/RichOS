@@ -1017,7 +1017,51 @@ pub struct Timeline {
     rejections: Vec<TimelineRejection>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchMessageRole {
+    User,
+    Assistant,
+}
+
+/// An exact, visible message anchor in a conversation's durable timeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedSearchMessage {
+    pub message_id: String,
+    pub turn_id: String,
+    pub role: SearchMessageRole,
+    pub text: String,
+    pub at: u64,
+}
+
 impl Timeline {
+    /// Source for native conversation search. Use the renderer's text projection so
+    /// the stable item ID can open the exact message and hidden prose cannot enter the
+    /// index. Machinery and workers do not affect text IDs and are not read.
+    pub fn committed_search_messages(ledger: &Ledger, binding: &ThreadBinding) -> Result<Vec<CommittedSearchMessage>, LedgerError> {
+        let turns = ledger.thread_turns_scoped(binding)?;
+        let messages = turns.into_iter()
+            .filter(|turn| !matches!(turn.state, TurnState::Received | TurnState::InFlight))
+            .flat_map(|turn| turn_items(turn, binding.entity_id(), binding.binding_revision()))
+            .filter_map(|item| {
+                if !item.base().visibility.renders_in(ViewMode::Ceo) {
+                    return None;
+                }
+                let (base, role, text) = match item {
+                    // The question surface renders structured answers in their card, not
+                    // as a user message. Its internal delivery copy has no message anchor.
+                    TimelineItem::UserMessage { base, text, .. } if !base.turn_id.starts_with("question-answer:") =>
+                        (base, SearchMessageRole::User, text),
+                    TimelineItem::RichMessage { base, text, .. } =>
+                        (base, SearchMessageRole::Assistant, text),
+                    _ => return None,
+                };
+                (!text.trim().is_empty()).then_some(CommittedSearchMessage {
+                    message_id: base.id, turn_id: base.turn_id, role, text, at: base.created_at,
+                })
+            }).collect();
+        Ok(messages)
+    }
+
     /// Build one thread's timeline from durable inputs.
     ///
     /// `machinery` takes the RAW records for this thread — the journal's Tier A lines, or
@@ -2365,6 +2409,42 @@ pub(crate) fn classify(payload: &Value) -> Option<ActivityType> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn committed_search_messages_have_exact_visible_anchors() {
+        let file = std::env::temp_dir().join(crate::util::new_id("search-timeline"));
+        let mut ledger = Ledger::open(&file).unwrap();
+        let thread = ledger.create_thread("Pricing", &entity()).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let pending = ledger.record_prompt_received(&binding, "Still in progress", Source::Text).unwrap();
+        ledger.mark_turn_started(&pending, "session").unwrap();
+        ledger.append_assistant_delta(&pending, "Streaming draft", 1).unwrap();
+        let superseded = ledger.record_prompt_received(&binding, "Old retry", Source::Text).unwrap();
+        ledger.complete_turn(&superseded, "done").unwrap();
+        let visible = ledger.record_prompt_received(&binding, "Visible prompt", Source::Text).unwrap();
+        ledger.mark_turn_superseded(&superseded, &visible).unwrap();
+        ledger.append_assistant_delta(&visible, "First answer", 1).unwrap();
+        ledger.append_assistant_delta(&visible, "First answer", 3).unwrap();
+        ledger.append_assistant_delta(&visible, "Second answer\nAPI Error: 529 Overloaded.", 5).unwrap();
+        ledger.complete_turn(&visible, "done").unwrap();
+        ledger.record_proactive_message(&binding, AttentionTier::Silent, "Silent notice").unwrap();
+
+        let messages = Timeline::committed_search_messages(&ledger, &binding).unwrap();
+        let actual: Vec<_> = messages.iter().map(|m| (m.role, m.text.trim())).collect();
+        assert_eq!(actual, vec![
+            (SearchMessageRole::User, "Visible prompt"),
+            (SearchMessageRole::Assistant, "First answer"),
+            (SearchMessageRole::Assistant, "Second answer"),
+        ]);
+        let shown = Timeline::project(&ledger, &binding, &[]).unwrap().view(ViewMode::Ceo);
+        for message in messages {
+            assert_eq!(message.turn_id, visible);
+            assert!(shown.items().iter().any(|item| item.base().id == message.message_id));
+        }
+        let foreign = ThreadBinding::new(binding.person_id().clone(), EntityId::parse("foreign").unwrap(), &thread, binding.binding_revision());
+        assert!(matches!(Timeline::committed_search_messages(&ledger, &foreign), Err(LedgerError::ScopeMismatch { .. })));
+        std::fs::remove_file(file).unwrap();
+    }
 
     fn entity() -> EntityId {
         EntityId::parse("femcboost").unwrap()
