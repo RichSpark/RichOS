@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
 /// Retrieval settings the harness may vary; the app uses [`Tuning::default`].
@@ -66,7 +66,8 @@ pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type Grant = Box<dyn Fn() -> bool + Send + Sync>;
 /// Local relevance scores for the already retrieved sources, in candidate order.
-pub type Reranker = Arc<dyn Fn(&str, &[String]) -> Option<Vec<f32>> + Send + Sync>;
+pub type Reranker = Arc<ScorePassages>;
+type ScorePassages = dyn Fn(&str, &[String], &dyn Fn() -> bool) -> Option<Vec<f32>> + Send + Sync;
 
 pub struct Config {
     /// `RICHOS_SEARCH_DOCUMENTS_ROOT`, or `None` when unset.
@@ -220,6 +221,7 @@ struct CacheKey {
 }
 
 struct CachedRanking {
+    snapshot: Arc<SearchableCorpus>,
     rows: Vec<Ranked>,
     query_vector: Option<Vec<f32>>,
     selected_passages: HashMap<usize, usize>,
@@ -484,6 +486,7 @@ impl SearchService {
     fn build_meaning(&self, rebuild: bool, corpus: &Corpus, pending_media: &HashSet<&str>) -> Result<Option<IndexWriter>, String> {
         let cache = self.0.config.cache.clone()?;
         let embedder = (self.0.config.make_embedder)()?;
+        embedder.prepare(&|| self.background_stopping())?;
         if self.background_stopping() {
             return Ok(None);
         }
@@ -568,7 +571,7 @@ impl SearchService {
                         return Ok(None);
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed(&[&text])?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())?.pop().ok_or("The embedding model returned nothing.")?;
                     if self.background_stopping() {
                         return Ok(None);
                     }
@@ -610,7 +613,7 @@ impl SearchService {
                     return updates;
                 }
                 let doc = if root.join(path).exists() {
-                    corpus::read_metadata_document(root, path, source)
+                    corpus::read_metadata_document(root, path, source, self.0.config.cache.as_deref().ok())
                 } else {
                     Ok(None)
                 };
@@ -705,7 +708,7 @@ impl SearchService {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed(&[&text])?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())?.pop().ok_or("The embedding model returned nothing.")?;
                     if self.background_stopping() {
                         return Ok(());
                     }
@@ -756,10 +759,18 @@ impl SearchService {
     }
 
     pub fn search(&self, request: &SearchRequest) -> SearchResponse {
-        let _access = self.0.access.lock().unwrap();
+        self.search_while_current(request, &|| false).expect("a search without cancellation returns a response")
+    }
+
+    pub fn search_while_current(&self, request: &SearchRequest, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
         let started = Instant::now();
+        if obsolete() { return None; }
+        let _access = self.0.access.lock().unwrap();
+        if obsolete() { return None; }
+        trace_query_stage("lock", started);
         let parsed = query::parse(&request.query);
         let requested = Mode { super_finder: request.super_finder, strict: request.strict };
+        let generation = self.0.generation.load(Ordering::SeqCst);
         let stopped = self.stopping();
         let corpus = if stopped { None } else { self.0.corpus.read().unwrap().clone() };
         let meaning = if request.super_finder && !stopped { self.meaning_for_query() } else { None };
@@ -767,7 +778,7 @@ impl SearchService {
         let mut response = SearchResponse {
             requested,
             effective,
-            status: self.status(),
+            status: Status { generation, ..self.status() },
             total: 0,
             offset: request.offset,
             hits: Vec::new(),
@@ -779,16 +790,16 @@ impl SearchService {
         };
         let Some(snapshot) = corpus else {
             response.empty = Some(Empty::NoFolder);
-            return finish(response, started);
+            return Some(finish(response, started));
         };
         let corpus = snapshot.corpus.as_ref();
         if parsed.is_empty() {
             response.empty = Some(Empty::NoQuery);
-            return finish(response, started);
+            return Some(finish(response, started));
         }
         if request.strict && parsed.unmatched_quote {
             response.empty = Some(Empty::QuoteMismatch);
-            return finish(response, started);
+            return Some(finish(response, started));
         }
         let key = CacheKey {
             query: request.query.trim().to_string(),
@@ -796,12 +807,18 @@ impl SearchService {
             strict: request.strict,
             generation: response.status.generation,
         };
-        let cached = self.0.last.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, r)| r.clone());
+        let cached = self.0.last.lock().unwrap().as_ref()
+            .filter(|(k, ranking)| *k == key && Arc::ptr_eq(&ranking.snapshot, &snapshot))
+            .map(|(_, ranking)| ranking.clone());
         let ranked = match cached {
             Some(r) => r,
             None => {
+                let phase = Instant::now();
                 let lexical = snapshot.lexical.search(corpus, &parsed, request.strict, snapshot.positions.as_ref());
+                trace_query_stage("lexical", phase);
+                if obsolete() { return None; }
                 let semantic = meaning.as_ref().map(|m| semantic_hits(m, corpus, &request.query, &self.0.config.tuning));
+                if obsolete() { return None; }
                 let (semantic, query_vector) = match semantic {
                     Some(Ok((hits, query_vector))) => (Some(hits), Some(query_vector)),
                     Some(Err(_)) => {
@@ -815,14 +832,18 @@ impl SearchService {
                 let selected_passages = if parsed.spans.is_empty() && !parsed.unmatched_quote && rows.len() > 1 {
                     self.0.reranker.as_ref().zip(meaning.as_deref()).zip(query_vector.as_deref())
                         .map(|((reranker, meaning), vector)| {
-                            rerank_sources(&mut rows, corpus, &parsed, request.query.trim(), meaning, vector, reranker)
+                            rerank_sources(&mut rows, corpus, &parsed, request.query.trim(), (meaning, vector), reranker, obsolete)
                         }).unwrap_or_default()
                 } else {
                     HashMap::new()
                 };
-                let ranked = Arc::new(CachedRanking { rows, query_vector, selected_passages });
-                if response.effective.super_finder == effective.super_finder {
-                    *self.0.last.lock().unwrap() = Some((key, ranked.clone()));
+                if obsolete() { return None; }
+                let ranked = Arc::new(CachedRanking { snapshot: snapshot.clone(), rows, query_vector, selected_passages });
+                let mut last = self.0.last.lock().unwrap();
+                if response.effective.super_finder == effective.super_finder
+                    && self.0.generation.load(Ordering::SeqCst) == generation
+                {
+                    *last = Some((key, ranked.clone()));
                 }
                 ranked
             }
@@ -830,7 +851,7 @@ impl SearchService {
         response.total = ranked.rows.len();
         if ranked.rows.is_empty() {
             response.empty = Some(if request.strict && !parsed.spans.is_empty() { Empty::NoExact } else { Empty::NoMatch });
-            return finish(response, started);
+            return Some(finish(response, started));
         }
         // The page is filled from the rows after a dropped one, so an empty page means no
         // current document is left from `offset` on, never that the first rows looked at had
@@ -839,6 +860,7 @@ impl SearchService {
         // this page stopped looking, the next page's offset.
         let limit = request.limit.clamp(1, MAX_PAGE);
         for row in ranked.rows.iter().skip(request.offset) {
+            if obsolete() { return None; }
             if self.stopping() || response.hits.len() == limit {
                 break;
             }
@@ -852,7 +874,7 @@ impl SearchService {
             });
             response.hits.push(hit(doc, row, &parsed, passage));
         }
-        finish(response, started)
+        (!obsolete()).then(|| finish(response, started))
     }
 
     /// Which of `texts` is closest in meaning to `query`, by the same model the index uses:
@@ -864,7 +886,7 @@ impl SearchService {
         let mut all = Vec::with_capacity(texts.len() + 1);
         all.push(query.trim());
         all.extend_from_slice(texts);
-        let vectors = meaning.embedder.embed(&all).ok()?;
+        let vectors = meaning.embedder.embed_query(&all).ok()?;
         let (q, rest) = vectors.split_first()?;
         let dot = |v: &Vec<f32>| v.iter().zip(q).map(|(a, b)| a * b).sum::<f32>();
         rest.iter().enumerate().max_by(|a, b| dot(a.1).total_cmp(&dot(b.1)).then(b.0.cmp(&a.0))).map(|(i, _)| i)
@@ -893,7 +915,39 @@ impl SearchService {
     }
 }
 
+type QueryStages = Vec<(&'static str, f64)>;
+thread_local! {
+    static QUERY_STAGES: std::cell::RefCell<Option<QueryStages>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Capture the stage durations for the synchronous app request on this thread.
+pub fn capture_query_stages<T>(run: impl FnOnce() -> T) -> (T, QueryStages) {
+    struct Restore(Option<QueryStages>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _removed = QUERY_STAGES.replace(self.0.take());
+        }
+    }
+
+    let _restore = Restore(QUERY_STAGES.replace(Some(Vec::new())));
+    let result = run();
+    (result, QUERY_STAGES.take().unwrap_or_default())
+}
+
+/// Record numbers only, with no query, result or source details.
+fn trace_query_stage(stage: &'static str, started: Instant) {
+    static STDERR: OnceLock<bool> = OnceLock::new();
+    let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+    QUERY_STAGES.with_borrow_mut(|current| {
+        if let Some(stages) = current { stages.push((stage, elapsed)); }
+    });
+    if *STDERR.get_or_init(|| std::env::var_os("RICHOS_SEARCH_TIMINGS").is_some()) {
+        eprintln!("[richfinder timing] {stage}={elapsed:.1}ms");
+    }
+}
+
 fn finish(mut response: SearchResponse, started: Instant) -> SearchResponse {
+    trace_query_stage("total", started);
     response.elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     response
 }
@@ -933,8 +987,13 @@ pub fn embedding_text(title: &str, heading: &str, passage: &str) -> String {
 }
 
 fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning) -> Result<(Vec<SemanticHit>, Vec<f32>), String> {
-    let mut vector = meaning.embedder.embed(&[query.trim()])?.pop().ok_or("no query vector")?;
+    let phase = Instant::now();
+    let embedded = meaning.embedder.embed_query(&[query.trim()]);
+    trace_query_stage("embedding", phase);
+    let mut vector = embedded?.pop().ok_or("no query vector")?;
+    let phase = Instant::now();
     let nearest = meaning.index.nearest(vector.clone(), tuning.semantic_passages)?;
+    trace_query_stage("nearest", phase);
     crate::embed::normalize(&mut vector);
     let points = meaning.points.read().unwrap();
     let mut out: Vec<SemanticHit> = Vec::new();
@@ -1040,19 +1099,26 @@ fn selected_passage(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, 
 
 fn rerank_sources(
     rows: &mut [Ranked], corpus: &Corpus, parsed: &ParsedQuery, query: &str,
-    meaning: &Meaning, vector: &[f32], reranker: &Reranker,
+    meaning: (&Meaning, &[f32]), reranker: &Reranker, obsolete: &dyn Fn() -> bool,
 ) -> HashMap<usize, usize> {
     const SHORTLIST: usize = 16;
     let count = rows.len().min(SHORTLIST);
     let mut passages = HashMap::with_capacity(count);
-    let candidates: Vec<_> = rows[..count].iter().map(|row| {
+    let mut candidates = Vec::with_capacity(count);
+    let phase = Instant::now();
+    for row in &rows[..count] {
+        if obsolete() { return passages; }
         let doc = &corpus.docs[row.doc];
-        let passage = selected_passage(doc, row, parsed, Some((meaning, vector)));
+        let passage = selected_passage(doc, row, parsed, Some(meaning));
         passages.insert(row.doc, passage);
         let text = doc.passages.get(passage).map_or("", |p| p.text(&doc.text));
-        format!("{}\n{}", doc.title, bounded_passage(text))
-    }).collect();
-    if let Some(scores) = reranker(query, &candidates).filter(|scores| {
+        candidates.push(format!("{}\n{}", doc.title, bounded_passage(text)));
+    }
+    trace_query_stage("passage_selection", phase);
+    let phase = Instant::now();
+    let scored = reranker(query, &candidates, obsolete);
+    trace_query_stage("reranker", phase);
+    if let Some(scores) = scored.filter(|scores| {
         scores.len() == count && scores.iter().all(|score| score.is_finite())
     }) {
         let mut scored: Vec<_> = scores.into_iter().zip(rows[..count].iter().cloned()).collect();
@@ -1094,5 +1160,44 @@ fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, p: usize) -> 
             .cloned()
             .collect(),
         passage: PassageView { heading, text, line },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embed::ConceptEmbedder;
+
+    #[test]
+    fn cached_rows_are_only_reused_with_the_snapshot_that_ranked_them() {
+        let base = std::env::temp_dir().join(format!("richos-search-snapshot-cache-{}", std::process::id()));
+        let root = base.join("documents");
+        std::fs::create_dir_all(&root).unwrap();
+        let original = root.join("original.md");
+        std::fs::write(&original, "unique fixture phrase").unwrap();
+        let service = SearchService::start(Config {
+            root: Some(root.clone()),
+            cache: Ok(base.join("index")),
+            make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
+            busy: None,
+            tuning: Tuning::default(),
+        });
+        service.wait_idle();
+        let request = SearchRequest { query: "fixture phrase".into(), super_finder: false, strict: false, offset: 0, limit: 1 };
+        let initial = service.search(&request);
+        assert_eq!(initial.hits[0].rel_path, "original.md");
+
+        std::fs::rename(original, root.join("replacement.md")).unwrap();
+        std::fs::write(root.join("alphabetically-first.md"), "unrelated content").unwrap();
+        let corpus = Arc::new(corpus::load(&root).unwrap());
+        let lexical = Arc::new(rank::LexicalIndex::build(&corpus, || false).unwrap());
+        // Reproduce the instant after publication and before its generation bump.
+        *service.0.corpus.write().unwrap() = Some(Arc::new(SearchableCorpus { corpus, lexical, positions: None }));
+        let replacement = service.search(&request);
+        assert_eq!(replacement.status.generation, initial.status.generation);
+        assert_eq!(replacement.hits[0].rel_path, "replacement.md");
+
+        service.shutdown();
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

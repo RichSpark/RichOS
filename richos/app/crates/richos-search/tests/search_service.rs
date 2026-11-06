@@ -7,7 +7,7 @@ use richos_search::manifest::{point_id, Manifest, SourceEntry, SourceState};
 use richos_search::rank::Why;
 use richos_search::service::{index_dir, Config, Empty, MeaningStatus, SearchRequest, SearchService, Tuning};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 fn fixture_copy(name: &str) -> (PathBuf, PathBuf) {
@@ -91,7 +91,7 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     let metadata = MetadataSource {
         extensions: &["png"],
         watch: Arc::new(move || watch.lock().unwrap().take().unwrap()),
-        read: Arc::new(move |path, _| {
+        read: Arc::new(move |path, _, _| {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             calls.lock().unwrap().push(name.clone());
             if name == "00-slow.png" {
@@ -186,8 +186,13 @@ Introductory needleword.").unwrap();
 A green receipt filed under needleword.").unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let counted = calls.clone();
-    let reranker: richos_search::service::Reranker = Arc::new(move |query, candidates| {
+    let obsolete = Arc::new(AtomicBool::new(false));
+    let obsolete_during_scoring = obsolete.clone();
+    let reranker: richos_search::service::Reranker = Arc::new(move |query, candidates, _is_obsolete| {
         counted.fetch_add(1, Ordering::SeqCst);
+        if query.ends_with("superseded") {
+            obsolete_during_scoring.store(true, Ordering::SeqCst);
+        }
         if query.ends_with("malfunction") {
             return Some(vec![f32::NAN; candidates.len()]);
         }
@@ -220,6 +225,14 @@ A green receipt filed under needleword.").unwrap();
     assert!(fallback.effective.super_finder);
     assert_eq!(fallback.hits[0].rel_path, "needleword.md");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+    request.query = "needleword superseded".into();
+    request.offset = 0;
+    let is_obsolete = || obsolete.load(Ordering::SeqCst);
+    assert!(service.search_while_current(&request, &is_obsolete).is_none());
+    assert!(service.search_while_current(&request, &is_obsolete).is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "an already obsolete request must skip scoring");
+    assert_eq!(service.search(&request).hits[0].rel_path, "ledger.md");
+    assert_eq!(calls.load(Ordering::SeqCst), 4, "a superseded ranking must not be cached");
     service.shutdown();
     std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
 }

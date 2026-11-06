@@ -1,12 +1,38 @@
 //! Score each query and retrieved passage together with the bundled MiniLM model.
-use ort::{session::Session, value::Tensor};
+use ort::{environment::ThreadManager, session::Session, value::Tensor};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::{self, JoinHandle};
 use richos_search::{embed::Embedder, service::Reranker};
 use tokenizers::{Encoding, Tokenizer, TruncationParams};
 
 const TOKEN_LIMIT: usize = 192;
 const BUCKET_WIDTH: usize = 32;
+
+struct RankingThreads;
+
+impl ThreadManager for RankingThreads {
+    type Thread = JoinHandle<()>;
+
+    fn create(&self, work: impl FnOnce() + Send + 'static) -> ort::Result<Self::Thread> {
+        thread::Builder::new().name("richfinder-ranking".into()).spawn(move || {
+            // The session is opened on the utility-priority indexing thread,
+            // but inference serves an interactive search.
+            unsafe extern "C" {
+                fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+            }
+            const USER_INITIATED: u32 = 0x19;
+            if unsafe { pthread_set_qos_class_self_np(USER_INITIATED, 0) } != 0 {
+                eprintln!("[richos] document search: could not set relevance worker priority");
+            }
+            work();
+        }).map_err(|error| ort::Error::new(error.to_string()))
+    }
+
+    fn join(thread: Self::Thread) -> ort::Result<()> {
+        thread.join().map_err(|_| ort::Error::new("Relevance worker stopped unexpectedly."))
+    }
+}
 
 struct Model {
     tokenizer: Tokenizer,
@@ -23,12 +49,13 @@ impl Model {
         let session = Session::builder().map_err(|error| error.to_string())?
             .with_intra_threads(2).map_err(|error| error.to_string())?
             .with_inter_threads(1).map_err(|error| error.to_string())?
+            .with_thread_manager(RankingThreads).map_err(|error| error.to_string())?
             .with_intra_op_spinning(false).map_err(|error| error.to_string())?
             .commit_from_file(model).map_err(|error| error.to_string())?;
         Ok(Self { tokenizer, session })
     }
 
-    fn scores(&mut self, query: &str, candidates: &[String]) -> Result<Vec<f32>, String> {
+    fn scores(&mut self, query: &str, candidates: &[String], obsolete: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
         let encodings = candidates.iter().map(|candidate| self.tokenizer.encode((query, candidate.as_str()), true))
             .collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         let mut buckets: [_; TOKEN_LIMIT / BUCKET_WIDTH] = std::array::from_fn(|_| Vec::new());
@@ -39,6 +66,7 @@ impl Model {
 
         let mut scores = vec![0.0; candidates.len()];
         for bucket in buckets.iter().filter(|bucket| !bucket.is_empty()) {
+            if obsolete() { return Ok(Vec::new()); }
             let width = bucket.iter().map(|(_, encoding)| encoding.len()).max().unwrap_or(0);
             let tensor = |values: fn(&Encoding) -> &[u32]| {
                 let mut data = Vec::with_capacity(bucket.len() * width);
@@ -83,8 +111,14 @@ pub(crate) fn models() -> (impl Fn() -> Result<Box<dyn Embedder>, String> + Send
         });
         Ok(embedder)
     };
-    let reranker: Reranker = Arc::new(move |query, candidates| {
-        model.get()?.as_ref()?.lock().ok()?.scores(query, candidates).ok()
+    let reranker: Reranker = Arc::new(move |query, candidates, obsolete| {
+        if obsolete() { return None; }
+        let model = model.get()?.as_ref()?;
+        let scores = model.lock().ok().and_then(|mut model| model.scores(query, candidates, obsolete).ok());
+        if scores.is_none() && !obsolete() {
+            eprintln!("[richos] document search: relevance scoring failed");
+        }
+        scores
     });
     (embedder, reranker)
 }
@@ -110,7 +144,7 @@ mod tests {
         let scores = model.scores("How do I get my money back?", &[
             "Street guide\nThe nearest bus stops on every corner.".into(),
             "Cancel a purchase\nWe issue a refund to the original payment method.".into(),
-        ]).unwrap();
+        ], &|| false).unwrap();
         assert!(scores[1] > scores[0]);
     }
 }
