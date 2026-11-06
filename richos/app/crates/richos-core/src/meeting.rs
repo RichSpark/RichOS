@@ -38,8 +38,9 @@
 //! the meeting link's app when the event names one ([`Scheduled::covers`]), is that meeting,
 //! however often he leaves and rejoins; any other call prompts. A rejoin of a meeting he is taking
 //! notes on (Take Notes, not stopped or declined since) records that meeting again without asking;
-//! after Stop or Not this one it records nothing. A browser call is a meeting only
-//! when its link is a browser meeting (Google Meet). While prompts are paused nothing prompts, and
+//! after Stop or Not this one it records nothing. Browser activity can end an explicitly started
+//! calendar recording, but without a tab identity it never inherits a native app meeting
+//! answer. While prompts are paused nothing prompts, and
 //! a running recording is left alone.
 //!
 //! # Nothing that waits is forgotten
@@ -591,7 +592,18 @@ impl MeetingMonitor {
             None => true,
             Some(m) => {
                 let other = || self.answered.values().any(|a| a.event_id != m.event_id && a.app.is_some() && a.covers(c));
-                m.takes(&c.family) && (m.app.is_some() || !other())
+                if m.takes(&c.family) {
+                    return m.app.is_some() || !other();
+                }
+                // A Zoom/Teams/Webex invite can be opened in a browser. Only a recording
+                // explicitly started from this reminder may use that input to know when to
+                // stop. Do not treat a browser family as proof of the meeting for prompts,
+                // remembered dismissals or automatic rejoins.
+                matches!(self.phase, Phase::Recording { call: None, .. } | Phase::Failed { call: None, .. })
+                    && MeetingApp::BROWSERS.contains(&c.family.as_str())
+                    && c.since.saturating_add(PROMPT_LEAD_MS) >= m.starts_at
+                    && c.since < m.ends_at
+                    && !other()
             }
         }
     }
@@ -1877,6 +1889,19 @@ mod tests {
             assert_eq!(m.watch(&on(8, "us.zoom.xos", "Zoom"), 60_000), vec![], "the real Zoom join asked again");
             m.watch(&off(8, "us.zoom.xos"), 900_000);
             assert_eq!(m.clock(908_000, &cal), vec![Action::StopCapture(EndReason::CallEnded)], "the recording ends with Zoom");
+        }
+
+        #[test]
+        fn taking_notes_from_a_zoom_reminder_stops_when_the_browser_call_ends() {
+            let cal = calendar();
+            let mut m = MeetingMonitor::new();
+            assert_eq!(m.clock(0, &cal).len(), 1);
+            assert!(m.input(Input::TakeNotes).iter().any(|a| matches!(a, Action::StartCapture { .. })));
+            assert_eq!(m.watch(&on(8, "com.google.Chrome", "Chrome"), 60_000), vec![]);
+            m.watch(&off(8, "com.google.Chrome"), 90_000);
+            assert_eq!(m.clock(90_000 + END_GRACE_MS, &cal), vec![Action::StopCapture(EndReason::CallEnded)]);
+            let next = m.watch(&on(8, "com.google.Chrome", "Chrome"), 100_000);
+            assert!(matches!(next.as_slice(), [Action::ShowPrompt(PromptKind::Unscheduled { .. })]));
         }
 
         #[test]
