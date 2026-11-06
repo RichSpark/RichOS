@@ -4106,6 +4106,7 @@ fn main() {
             // --- document search (search PRD v3.1, 2026-10-13) — appended, never reordered ---
             search_documents,
             search_documents_status,
+            cancel_search_documents,
             open_search_document,
             // --- Meeting notes (Granola PRD V4) — appended ---
             meetings::meeting_panel_state,
@@ -6907,8 +6908,13 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
 /// One page of the palette's Documents section (`doc_search.rs`). Navigation hits stay with
 /// `search_nav`, unchanged by either checkbox.
 #[richos_command::command]
-fn search_documents(state: State<AppState>, request: richos_search::SearchRequest) -> richos_search::SearchResponse {
-    doc_search::search(&state.search, request)
+fn search_documents(state: State<AppState>, request: richos_search::SearchRequest, generation: Option<u64>) -> Option<richos_search::SearchResponse> {
+    doc_search::search_palette(&state.search, request, generation)
+}
+
+#[richos_command::command]
+fn cancel_search_documents(state: State<AppState>, generation: u64) {
+    doc_search::cancel_palette(&state.search, generation);
 }
 
 /// Ready, indexing or unavailable, and where the index is kept, for the status line.

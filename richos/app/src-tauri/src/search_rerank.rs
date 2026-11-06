@@ -28,7 +28,7 @@ impl Model {
         Ok(Self { tokenizer, session })
     }
 
-    fn scores(&mut self, query: &str, candidates: &[String]) -> Result<Vec<f32>, String> {
+    fn scores(&mut self, query: &str, candidates: &[String], obsolete: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
         let encodings = candidates.iter().map(|candidate| self.tokenizer.encode((query, candidate.as_str()), true))
             .collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         let mut buckets: [_; TOKEN_LIMIT / BUCKET_WIDTH] = std::array::from_fn(|_| Vec::new());
@@ -39,6 +39,7 @@ impl Model {
 
         let mut scores = vec![0.0; candidates.len()];
         for bucket in buckets.iter().filter(|bucket| !bucket.is_empty()) {
+            if obsolete() { return Ok(Vec::new()); }
             let width = bucket.iter().map(|(_, encoding)| encoding.len()).max().unwrap_or(0);
             let tensor = |values: fn(&Encoding) -> &[u32]| {
                 let mut data = Vec::with_capacity(bucket.len() * width);
@@ -83,8 +84,14 @@ pub(crate) fn models() -> (impl Fn() -> Result<Box<dyn Embedder>, String> + Send
         });
         Ok(embedder)
     };
-    let reranker: Reranker = Arc::new(move |query, candidates| {
-        model.get()?.as_ref()?.lock().ok()?.scores(query, candidates).ok()
+    let reranker: Reranker = Arc::new(move |query, candidates, obsolete| {
+        if obsolete() { return None; }
+        let model = model.get()?.as_ref()?;
+        let scores = model.lock().ok().and_then(|mut model| model.scores(query, candidates, obsolete).ok());
+        if scores.is_none() && !obsolete() {
+            eprintln!("[richos] document search: relevance scoring failed");
+        }
+        scores
     });
     (embedder, reranker)
 }
@@ -110,7 +117,7 @@ mod tests {
         let scores = model.scores("How do I get my money back?", &[
             "Street guide\nThe nearest bus stops on every corner.".into(),
             "Cancel a purchase\nWe issue a refund to the original payment method.".into(),
-        ]).unwrap();
+        ], &|| false).unwrap();
         assert!(scores[1] > scores[0]);
     }
 }

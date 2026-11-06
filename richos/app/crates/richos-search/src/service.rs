@@ -66,7 +66,8 @@ pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type Grant = Box<dyn Fn() -> bool + Send + Sync>;
 /// Local relevance scores for the already retrieved sources, in candidate order.
-pub type Reranker = Arc<dyn Fn(&str, &[String]) -> Option<Vec<f32>> + Send + Sync>;
+pub type Reranker = Arc<ScorePassages>;
+type ScorePassages = dyn Fn(&str, &[String], &dyn Fn() -> bool) -> Option<Vec<f32>> + Send + Sync;
 
 pub struct Config {
     /// `RICHOS_SEARCH_DOCUMENTS_ROOT`, or `None` when unset.
@@ -757,8 +758,14 @@ impl SearchService {
     }
 
     pub fn search(&self, request: &SearchRequest) -> SearchResponse {
-        let _access = self.0.access.lock().unwrap();
+        self.search_while_current(request, &|| false).expect("a search without cancellation returns a response")
+    }
+
+    pub fn search_while_current(&self, request: &SearchRequest, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
         let started = Instant::now();
+        if obsolete() { return None; }
+        let _access = self.0.access.lock().unwrap();
+        if obsolete() { return None; }
         let parsed = query::parse(&request.query);
         let requested = Mode { super_finder: request.super_finder, strict: request.strict };
         let generation = self.0.generation.load(Ordering::SeqCst);
@@ -781,16 +788,16 @@ impl SearchService {
         };
         let Some(snapshot) = corpus else {
             response.empty = Some(Empty::NoFolder);
-            return finish(response, started);
+            return Some(finish(response, started));
         };
         let corpus = snapshot.corpus.as_ref();
         if parsed.is_empty() {
             response.empty = Some(Empty::NoQuery);
-            return finish(response, started);
+            return Some(finish(response, started));
         }
         if request.strict && parsed.unmatched_quote {
             response.empty = Some(Empty::QuoteMismatch);
-            return finish(response, started);
+            return Some(finish(response, started));
         }
         let key = CacheKey {
             query: request.query.trim().to_string(),
@@ -805,7 +812,9 @@ impl SearchService {
             Some(r) => r,
             None => {
                 let lexical = snapshot.lexical.search(corpus, &parsed, request.strict, snapshot.positions.as_ref());
+                if obsolete() { return None; }
                 let semantic = meaning.as_ref().map(|m| semantic_hits(m, corpus, &request.query, &self.0.config.tuning));
+                if obsolete() { return None; }
                 let (semantic, query_vector) = match semantic {
                     Some(Ok((hits, query_vector))) => (Some(hits), Some(query_vector)),
                     Some(Err(_)) => {
@@ -819,11 +828,12 @@ impl SearchService {
                 let selected_passages = if parsed.spans.is_empty() && !parsed.unmatched_quote && rows.len() > 1 {
                     self.0.reranker.as_ref().zip(meaning.as_deref()).zip(query_vector.as_deref())
                         .map(|((reranker, meaning), vector)| {
-                            rerank_sources(&mut rows, corpus, &parsed, request.query.trim(), meaning, vector, reranker)
+                            rerank_sources(&mut rows, corpus, &parsed, request.query.trim(), (meaning, vector), reranker, obsolete)
                         }).unwrap_or_default()
                 } else {
                     HashMap::new()
                 };
+                if obsolete() { return None; }
                 let ranked = Arc::new(CachedRanking { snapshot: snapshot.clone(), rows, query_vector, selected_passages });
                 let mut last = self.0.last.lock().unwrap();
                 if response.effective.super_finder == effective.super_finder
@@ -837,7 +847,7 @@ impl SearchService {
         response.total = ranked.rows.len();
         if ranked.rows.is_empty() {
             response.empty = Some(if request.strict && !parsed.spans.is_empty() { Empty::NoExact } else { Empty::NoMatch });
-            return finish(response, started);
+            return Some(finish(response, started));
         }
         // The page is filled from the rows after a dropped one, so an empty page means no
         // current document is left from `offset` on, never that the first rows looked at had
@@ -846,6 +856,7 @@ impl SearchService {
         // this page stopped looking, the next page's offset.
         let limit = request.limit.clamp(1, MAX_PAGE);
         for row in ranked.rows.iter().skip(request.offset) {
+            if obsolete() { return None; }
             if self.stopping() || response.hits.len() == limit {
                 break;
             }
@@ -859,7 +870,7 @@ impl SearchService {
             });
             response.hits.push(hit(doc, row, &parsed, passage));
         }
-        finish(response, started)
+        (!obsolete()).then(|| finish(response, started))
     }
 
     /// Which of `texts` is closest in meaning to `query`, by the same model the index uses:
@@ -1047,19 +1058,21 @@ fn selected_passage(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, 
 
 fn rerank_sources(
     rows: &mut [Ranked], corpus: &Corpus, parsed: &ParsedQuery, query: &str,
-    meaning: &Meaning, vector: &[f32], reranker: &Reranker,
+    meaning: (&Meaning, &[f32]), reranker: &Reranker, obsolete: &dyn Fn() -> bool,
 ) -> HashMap<usize, usize> {
     const SHORTLIST: usize = 16;
     let count = rows.len().min(SHORTLIST);
     let mut passages = HashMap::with_capacity(count);
-    let candidates: Vec<_> = rows[..count].iter().map(|row| {
+    let mut candidates = Vec::with_capacity(count);
+    for row in &rows[..count] {
+        if obsolete() { return passages; }
         let doc = &corpus.docs[row.doc];
-        let passage = selected_passage(doc, row, parsed, Some((meaning, vector)));
+        let passage = selected_passage(doc, row, parsed, Some(meaning));
         passages.insert(row.doc, passage);
         let text = doc.passages.get(passage).map_or("", |p| p.text(&doc.text));
-        format!("{}\n{}", doc.title, bounded_passage(text))
-    }).collect();
-    if let Some(scores) = reranker(query, &candidates).filter(|scores| {
+        candidates.push(format!("{}\n{}", doc.title, bounded_passage(text)));
+    }
+    if let Some(scores) = reranker(query, &candidates, obsolete).filter(|scores| {
         scores.len() == count && scores.iter().all(|score| score.is_finite())
     }) {
         let mut scored: Vec<_> = scores.into_iter().zip(rows[..count].iter().cloned()).collect();
