@@ -220,6 +220,7 @@ struct CacheKey {
 }
 
 struct CachedRanking {
+    snapshot: Arc<SearchableCorpus>,
     rows: Vec<Ranked>,
     query_vector: Option<Vec<f32>>,
     selected_passages: HashMap<usize, usize>,
@@ -760,6 +761,7 @@ impl SearchService {
         let started = Instant::now();
         let parsed = query::parse(&request.query);
         let requested = Mode { super_finder: request.super_finder, strict: request.strict };
+        let generation = self.0.generation.load(Ordering::SeqCst);
         let stopped = self.stopping();
         let corpus = if stopped { None } else { self.0.corpus.read().unwrap().clone() };
         let meaning = if request.super_finder && !stopped { self.meaning_for_query() } else { None };
@@ -767,7 +769,7 @@ impl SearchService {
         let mut response = SearchResponse {
             requested,
             effective,
-            status: self.status(),
+            status: Status { generation, ..self.status() },
             total: 0,
             offset: request.offset,
             hits: Vec::new(),
@@ -796,7 +798,9 @@ impl SearchService {
             strict: request.strict,
             generation: response.status.generation,
         };
-        let cached = self.0.last.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, r)| r.clone());
+        let cached = self.0.last.lock().unwrap().as_ref()
+            .filter(|(k, ranking)| *k == key && Arc::ptr_eq(&ranking.snapshot, &snapshot))
+            .map(|(_, ranking)| ranking.clone());
         let ranked = match cached {
             Some(r) => r,
             None => {
@@ -820,9 +824,12 @@ impl SearchService {
                 } else {
                     HashMap::new()
                 };
-                let ranked = Arc::new(CachedRanking { rows, query_vector, selected_passages });
-                if response.effective.super_finder == effective.super_finder {
-                    *self.0.last.lock().unwrap() = Some((key, ranked.clone()));
+                let ranked = Arc::new(CachedRanking { snapshot: snapshot.clone(), rows, query_vector, selected_passages });
+                let mut last = self.0.last.lock().unwrap();
+                if response.effective.super_finder == effective.super_finder
+                    && self.0.generation.load(Ordering::SeqCst) == generation
+                {
+                    *last = Some((key, ranked.clone()));
                 }
                 ranked
             }
@@ -1094,5 +1101,44 @@ fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, p: usize) -> 
             .cloned()
             .collect(),
         passage: PassageView { heading, text, line },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embed::ConceptEmbedder;
+
+    #[test]
+    fn cached_rows_are_only_reused_with_the_snapshot_that_ranked_them() {
+        let base = std::env::temp_dir().join(format!("richos-search-snapshot-cache-{}", std::process::id()));
+        let root = base.join("documents");
+        std::fs::create_dir_all(&root).unwrap();
+        let original = root.join("original.md");
+        std::fs::write(&original, "unique fixture phrase").unwrap();
+        let service = SearchService::start(Config {
+            root: Some(root.clone()),
+            cache: Ok(base.join("index")),
+            make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
+            busy: None,
+            tuning: Tuning::default(),
+        });
+        service.wait_idle();
+        let request = SearchRequest { query: "fixture phrase".into(), super_finder: false, strict: false, offset: 0, limit: 1 };
+        let initial = service.search(&request);
+        assert_eq!(initial.hits[0].rel_path, "original.md");
+
+        std::fs::rename(original, root.join("replacement.md")).unwrap();
+        std::fs::write(root.join("alphabetically-first.md"), "unrelated content").unwrap();
+        let corpus = Arc::new(corpus::load(&root).unwrap());
+        let lexical = Arc::new(rank::LexicalIndex::build(&corpus, || false).unwrap());
+        // Reproduce the instant after publication and before its generation bump.
+        *service.0.corpus.write().unwrap() = Some(Arc::new(SearchableCorpus { corpus, lexical, positions: None }));
+        let replacement = service.search(&request);
+        assert_eq!(replacement.status.generation, initial.status.generation);
+        assert_eq!(replacement.hits[0].rel_path, "replacement.md");
+
+        service.shutdown();
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
