@@ -206,6 +206,21 @@ fn bounded_text(text: &str) -> String {
     text.chars().take(8192).map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c }).collect()
 }
 
+fn running_in_virtual_machine() -> bool {
+    let mut present: libc::c_int = 0;
+    let mut bytes = std::mem::size_of_val(&present);
+    let status = unsafe {
+        libc::sysctlbyname(
+            c"kern.hv_vmm_present".as_ptr(),
+            (&mut present as *mut libc::c_int).cast(),
+            &mut bytes,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    status == 0 && bytes == std::mem::size_of_val(&present) && present != 0
+}
+
 impl Running {
     fn start(resources: &Path, stop: &dyn Fn() -> bool) -> Result<Self, String> {
         if stop() {
@@ -219,7 +234,12 @@ impl Running {
         command.env_clear().env("RICHFINDER_OWNER_SOCKET", &socket).arg("--model").arg(model).arg("--host").arg(&socket).args([
             "--embedding", "--parallel", "1", "-c", "512", "-b", "512", "-ub", "512",
             "--threads", "2", "--threads-batch", "2", "--no-webui", "--no-slots", "--log-disable",
-        ]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+        ]);
+        if running_in_virtual_machine() {
+            // On Apple's paravirtual GPU, the small embedding model is faster on CPU.
+            command.args(["--device", "none", "--gpu-layers", "0"]);
+        }
+        command.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
         OwnedChild::configure(&mut command);
         let start = Instant::now();
         let mut child = OwnedChild::new(command.spawn().map_err(|_| "The local search model could not start.")?);
