@@ -1584,6 +1584,9 @@ window.RichBug = (function () {
     $("bugdock").querySelector(".bugdock-title").textContent = words.name;
     $("bugdock").setAttribute("aria-label", words.name + ", with Rich");
     $("bugdock-x").setAttribute("aria-label", words.close);
+    // RichDoctor files bug reports only, so its line is under a bug report and never an idea.
+    var doctor = $("bugdock-doctor");
+    if (doctor) doctor.hidden = postOf(f || dockFlow()) !== "bug";
     quietOtherInputs();
     $("bugdock").hidden = false;
     document.body.classList.add("bug-dock-open");

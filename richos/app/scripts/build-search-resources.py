@@ -18,7 +18,13 @@ MODEL_REV = "d32f8c040ea3b516330eeb75b72bcc2d3a780ab7"
 MODEL = "bge-small-en-v1.5-q8_0.gguf"
 RANK_REV = "eeed17e3bfc6fa06a790f2d12a9501fec587fccf"
 RANK_URL = f"https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2/resolve/{RANK_REV}"
+TINY_RANK_REV = "81d1926f67cb8eee2c2be17ca9f793c7c3bd20cc"
+TINY_RANK_URL = f"https://huggingface.co/cross-encoder/ms-marco-TinyBERT-L2-v2/resolve/{TINY_RANK_REV}"
 RANK_PINS = {
+    "tinybert_qint8_arm64.onnx": (
+        f"{TINY_RANK_URL}/onnx/model_qint8_arm64.onnx",
+        "7497b40504d425ef6482693039690106dca4f1f8d88fb5c4aedd63e73ed6ef68",
+    ),
     "model_qint8_arm64.onnx": (
         f"{RANK_URL}/onnx/model_qint8_arm64.onnx",
         "3573b6b9593cb2f75987a31815d409ca3dd8808629118fd20451bb1a5d90cec7",
@@ -27,7 +33,7 @@ RANK_PINS = {
         f"{RANK_URL}/tokenizer.json",
         "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
     ),
-    "MINILM-LICENSE": (
+    "RANKING-LICENSE": (
         "https://www.apache.org/licenses/LICENSE-2.0.txt",
         "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     ),
@@ -167,7 +173,7 @@ def build(cache):
 
 
 def build_ranking(cache):
-    destination = cache / f"minilm-{RANK_REV[:12]}"
+    destination = cache / f"rerank-{RANK_REV[:12]}-{TINY_RANK_REV[:12]}"
     destination.mkdir(exist_ok=True)
     for name in RANK_PINS:
         pinned_input(destination, name, RANK_PINS)

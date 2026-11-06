@@ -659,4 +659,5 @@ The corresponding notices are in the app's `Resources/RichFinder` directory.
 The helper accepts requests through a private Unix socket on the Mac.
 
 [MS MARCO MiniLM-L6-v2](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2/tree/eeed17e3bfc6fa06a790f2d12a9501fec587fccf)
-is bundled under Apache-2.0 with its license in `Resources/RichFinder/Ranking`.
+and [MS MARCO TinyBERT-L2-v2](https://huggingface.co/cross-encoder/ms-marco-TinyBERT-L2-v2/tree/81d1926f67cb8eee2c2be17ca9f793c7c3bd20cc)
+are bundled under Apache-2.0 with the license in `Resources/RichFinder/Ranking`.

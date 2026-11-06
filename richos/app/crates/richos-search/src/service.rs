@@ -61,6 +61,7 @@ pub const MAX_PAGE: usize = 50;
 /// How long indexing steps aside before each passage while [`Config::busy`] says a turn is
 /// running.
 pub const BUSY_YIELD: std::time::Duration = std::time::Duration::from_millis(100);
+const MODEL_RETRY_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -201,6 +202,19 @@ struct Meaning {
     points: RwLock<HashMap<u64, (Arc<Document>, usize)>>,
 }
 
+enum IndexFailure {
+    Model(String),
+    Other(String),
+}
+
+impl From<String> for IndexFailure {
+    fn from(reason: String) -> Self { Self::Other(reason) }
+}
+
+impl From<&str> for IndexFailure {
+    fn from(reason: &str) -> Self { Self::Other(reason.into()) }
+}
+
 struct IndexWriter {
     meaning: Arc<Meaning>,
     manifest: Manifest,
@@ -246,6 +260,7 @@ struct Inner {
     grant: Option<Grant>,
     access: Mutex<()>,
     last: Mutex<Option<(CacheKey, Arc<CachedRanking>)>>,
+    retry_model_requested: AtomicBool,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     initial: (Mutex<bool>, Condvar),
 }
@@ -318,6 +333,7 @@ impl SearchService {
             grant,
             access: Mutex::new(()),
             last: Mutex::new(None),
+            retry_model_requested: AtomicBool::new(false),
             worker: Mutex::new(None),
             initial: (Mutex::new(false), Condvar::new()),
         }));
@@ -403,7 +419,7 @@ impl SearchService {
         *self.0.meaning_status.write().unwrap() = status;
     }
 
-    fn run(&self, rebuild: bool, before_index: impl FnOnce()) {
+    fn run(&self, mut rebuild: bool, before_index: impl FnOnce()) {
         let Some(root) = self.0.config.root.clone() else { return };
         let metadata = self.0.metadata.as_ref();
         let changes = metadata.map(|source| (source.watch)());
@@ -420,7 +436,8 @@ impl SearchService {
         let Some(lexical) = rank::LexicalIndex::build(&base, || self.background_stopping()) else { return };
         self.publish_corpus(SearchableCorpus { corpus: base.clone(), lexical: Arc::new(lexical), positions: None });
 
-        let (mut writer, initial_media) = std::thread::scope(|scope| {
+        self.0.retry_model_requested.store(false, Ordering::Release);
+        let (mut writer, mut retry_after, initial_media) = std::thread::scope(|scope| {
             let reader = metadata.map(|source| {
                 let root = &base.root;
                 let paths = &pending.media;
@@ -431,34 +448,63 @@ impl SearchService {
             });
             before_index();
             let pending_paths: HashSet<_> = pending.media.iter().map(String::as_str).collect();
-            let writer = if self.background_stopping() {
-                None
+            let (writer, retry_after) = if self.background_stopping() {
+                (None, None)
             } else {
-                match self.build_meaning(rebuild, &base, &pending_paths) {
-                    Ok(writer) => writer,
-                    Err(reason) => {
-                        self.meaning_failed(reason);
-                        None
-                    }
+                match self.build_meaning(&mut rebuild, &base, &pending_paths) {
+                    Ok(writer) => (writer, None),
+                    Err(failure) => (None, self.index_failed(failure)),
                 }
             };
             let initial = reader.map(|reader| reader.join().expect("metadata reader panicked")).unwrap_or_default();
-            (writer, initial)
+            (writer, retry_after, initial)
         });
-        self.update_media_index(&mut writer, &initial_media);
+        if let Some(failure) = self.update_media_index(&mut writer, &initial_media) {
+            retry_after = self.index_failed(failure);
+        }
+        // Give a transient failure one delayed retry even if nobody searches.
+        // Further retry bursts require a new meaning search and the same cooldown.
+        self.0.retry_model_requested.store(retry_after.is_some(), Ordering::Release);
         self.0.initial_ready();
-        if let (Some(source), Some(changes)) = (metadata, changes) {
-            while !self.stopping() {
-                let paths = match changes.recv_timeout(std::time::Duration::from_millis(100)) {
-                    Ok(paths) => paths,
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                };
-                let paths: BTreeSet<_> = paths.into_iter().chain(changes.try_iter().flatten())
-                    .filter_map(|path| corpus::catalog_relative(&base.root, &root, &path, source)).collect();
-                if !paths.is_empty() {
-                    let updates = self.read_media(&base.root, &paths.into_iter().collect::<Vec<_>>(), source);
-                    self.update_media_index(&mut writer, &updates);
+        let mut changes = changes;
+        while !self.stopping() {
+            if retry_after.is_some_and(|due| Instant::now() >= due)
+                && self.0.retry_model_requested.swap(false, Ordering::AcqRel)
+            {
+                let snapshot = self.0.corpus.read().unwrap().clone();
+                if let Some(snapshot) = snapshot {
+                    self.set_meaning(MeaningStatus::Starting);
+                    match self.build_meaning(&mut rebuild, &snapshot.corpus, &HashSet::new()) {
+                        Ok(recovered) => {
+                            writer = recovered;
+                            retry_after = None;
+                        }
+                        Err(failure) => retry_after = self.index_failed(failure),
+                    }
+                }
+            }
+            let (Some(source), Some(receiver)) = (metadata, &changes) else {
+                if retry_after.is_some() && self.0.retry_model_requested.load(Ordering::Acquire) {
+                    std::thread::sleep(BUSY_YIELD);
+                    continue;
+                }
+                break;
+            };
+            let paths = match receiver.recv_timeout(BUSY_YIELD) {
+                Ok(paths) => paths,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    changes = None;
+                    continue;
+                }
+            };
+            let paths: BTreeSet<_> = paths.into_iter().chain(receiver.try_iter().flatten())
+                .filter_map(|path| corpus::catalog_relative(&base.root, &root, &path, source)).collect();
+            if !paths.is_empty() {
+                let updates = self.read_media(&base.root, &paths.into_iter().collect::<Vec<_>>(), source);
+                if let Some(failure) = self.update_media_index(&mut writer, &updates) {
+                    retry_after = self.index_failed(failure);
+                    self.0.retry_model_requested.store(retry_after.is_some(), Ordering::Release);
                 }
             }
         }
@@ -483,18 +529,28 @@ impl SearchService {
         self.bump();
     }
 
-    fn build_meaning(&self, rebuild: bool, corpus: &Corpus, pending_media: &HashSet<&str>) -> Result<Option<IndexWriter>, String> {
+    fn index_failed(&self, failure: IndexFailure) -> Option<Instant> {
+        let (reason, retry_after) = match failure {
+            IndexFailure::Model(reason) => (reason, Some(Instant::now() + MODEL_RETRY_COOLDOWN)),
+            IndexFailure::Other(reason) => (reason, None),
+        };
+        self.meaning_failed(reason);
+        retry_after
+    }
+
+    fn build_meaning(&self, rebuild: &mut bool, corpus: &Corpus, pending_media: &HashSet<&str>) -> Result<Option<IndexWriter>, IndexFailure> {
         let cache = self.0.config.cache.clone()?;
         let embedder = (self.0.config.make_embedder)()?;
-        embedder.prepare(&|| self.background_stopping())?;
+        embedder.prepare(&|| self.background_stopping()).map_err(IndexFailure::Model)?;
         if self.background_stopping() {
             return Ok(None);
         }
         let identity = format!("{}|{}", embedder.identity(), CHUNKER_IDENTITY);
         let dir = index_dir(&cache, &corpus.root, &identity);
-        if rebuild && dir.exists() {
+        if *rebuild && dir.exists() {
             std::fs::remove_dir_all(&dir).map_err(|e| format!("The old search index could not be removed: {e}"))?;
         }
+        *rebuild = false;
         let (index, mut manifest) = open_index(&dir, embedder.dimension(), &identity)?;
         let meaning = Arc::new(Meaning { index, embedder, points: RwLock::new(HashMap::new()) });
 
@@ -542,6 +598,8 @@ impl SearchService {
         };
         self.set_meaning(report(files_done, passages_done));
 
+        let stopping = || self.background_stopping();
+        let mut bulk_indexer = if todo.is_empty() { None } else { meaning.embedder.bulk_indexer() };
         for batch in todo.chunks(self.0.config.tuning.batch_files.max(1)) {
             if self.background_stopping() {
                 return Ok(None);
@@ -571,7 +629,12 @@ impl SearchService {
                         return Ok(None);
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = if let Some(index) = &mut bulk_indexer {
+                        index(&text, &stopping).map_err(IndexFailure::Model)?
+                    } else {
+                        meaning.embedder.embed_for_index(&[&text], &stopping)
+                            .map_err(IndexFailure::Model)?.pop().ok_or("The embedding model returned nothing.")?
+                    };
                     if self.background_stopping() {
                         return Ok(None);
                     }
@@ -597,6 +660,7 @@ impl SearchService {
             self.bump();
             self.set_meaning(report(files_done, passages_done));
         }
+        drop(bulk_indexer);
         if !todo.is_empty() && !self.background_stopping() {
             meaning.index.optimize()?;
         }
@@ -646,20 +710,21 @@ impl SearchService {
         updates
     }
 
-    fn update_media_index(&self, writer: &mut Option<IndexWriter>, updates: &[MediaUpdate]) {
+    fn update_media_index(&self, writer: &mut Option<IndexWriter>, updates: &[MediaUpdate]) -> Option<IndexFailure> {
         if updates.is_empty() || self.stopping() {
-            return;
+            return None;
         }
-        if let Some(index) = writer {
-            if let Err(reason) = self.write_media(index, updates) {
-                *writer = None;
-                self.meaning_failed(reason);
-            }
+        let failure = self.write_media(writer.as_mut()?, updates).err();
+        if failure.is_some() {
+            *writer = None;
         }
+        failure
     }
 
-    fn write_media(&self, writer: &mut IndexWriter, updates: &[MediaUpdate]) -> Result<(), String> {
+    fn write_media(&self, writer: &mut IndexWriter, updates: &[MediaUpdate]) -> Result<(), IndexFailure> {
         let IndexWriter { meaning, manifest, dir } = writer;
+        let stopping = || self.background_stopping();
+        let mut bulk_indexer = meaning.embedder.bulk_indexer();
         for update in updates {
             if self.background_stopping() {
                 return Ok(());
@@ -708,7 +773,12 @@ impl SearchService {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = if let Some(index) = &mut bulk_indexer {
+                        index(&text, &stopping).map_err(IndexFailure::Model)?
+                    } else {
+                        meaning.embedder.embed_for_index(&[&text], &stopping)
+                            .map_err(IndexFailure::Model)?.pop().ok_or("The embedding model returned nothing.")?
+                    };
                     if self.background_stopping() {
                         return Ok(());
                     }
@@ -754,6 +824,10 @@ impl SearchService {
     fn meaning_for_query(&self) -> Option<Arc<Meaning>> {
         match &*self.0.meaning_status.read().unwrap() {
             MeaningStatus::Ready { .. } | MeaningStatus::Indexing { .. } => self.0.meaning.read().unwrap().clone(),
+            MeaningStatus::Unavailable { .. } => {
+                self.0.retry_model_requested.store(true, Ordering::Release);
+                None
+            }
             _ => None,
         }
     }
@@ -870,7 +944,7 @@ impl SearchService {
                 continue;
             }
             let passage = ranked.selected_passages.get(&row.doc).copied().unwrap_or_else(|| {
-                selected_passage(doc, row, &parsed, meaning.as_deref().zip(ranked.query_vector.as_deref()))
+                selected_passage(doc, row, &parsed, meaning.as_deref().zip(ranked.query_vector.as_deref())).evidence
             });
             response.hits.push(hit(doc, row, &parsed, passage));
         }
@@ -882,11 +956,18 @@ impl SearchService {
     /// `None` when meaning search is not available or the model fails; the caller then keeps
     /// the passage's beginning.
     pub fn closest_in_meaning(&self, query: &str, texts: &[&str]) -> Option<usize> {
+        let _access = self.0.access.lock().unwrap();
+        if self.background_stopping() {
+            return None;
+        }
         let meaning = self.meaning_for_query()?;
         let mut all = Vec::with_capacity(texts.len() + 1);
         all.push(query.trim());
         all.extend_from_slice(texts);
         let vectors = meaning.embedder.embed_query(&all).ok()?;
+        if self.background_stopping() {
+            return None;
+        }
         let (q, rest) = vectors.split_first()?;
         let dot = |v: &Vec<f32>| v.iter().zip(q).map(|(a, b)| a * b).sum::<f32>();
         rest.iter().enumerate().max_by(|a, b| dot(a.1).total_cmp(&dot(b.1)).then(b.0.cmp(&a.0))).map(|(i, _)| i)
@@ -1087,14 +1168,14 @@ fn evidence(doc: &corpus::Document, p: usize, parsed: &ParsedQuery) -> (usize, u
     (start, end)
 }
 
-fn selected_passage(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, meaning: Option<(&Meaning, &[f32])>) -> usize {
+fn selected_passage(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, meaning: Option<(&Meaning, &[f32])>) -> rank::PassageChoice {
     // A word-only result shows its word evidence. Quoted spans have their own rule.
     let scores = if row.semantic_passage.is_some() && parsed.spans.is_empty() {
         meaning.and_then(|(meaning, vector)| passage_scores(meaning, doc, vector))
     } else {
         None
     };
-    rank::best_passage_with_scores(doc, parsed, row.semantic_passage, scores.as_deref())
+    rank::passage_choices(doc, parsed, row.semantic_passage, scores.as_deref())
 }
 
 fn rerank_sources(
@@ -1110,8 +1191,8 @@ fn rerank_sources(
         if obsolete() { return passages; }
         let doc = &corpus.docs[row.doc];
         let passage = selected_passage(doc, row, parsed, Some(meaning));
-        passages.insert(row.doc, passage);
-        let text = doc.passages.get(passage).map_or("", |p| p.text(&doc.text));
+        passages.insert(row.doc, passage.evidence);
+        let text = doc.passages.get(passage.ranking).map_or("", |p| p.text(&doc.text));
         candidates.push(format!("{}\n{}", doc.title, bounded_passage(text)));
     }
     trace_query_stage("passage_selection", phase);
