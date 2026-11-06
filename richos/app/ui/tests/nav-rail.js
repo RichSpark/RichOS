@@ -26,6 +26,9 @@
 //       rail's painted pixels; the tooltip names each item to its right at 16 px and 4.5:1
 //   10  Up and Down move along the rail
 //   11  the rail photographed in both themes (shots-nav-rail/)
+//   12  the rail stays on Token spend (review rv-20261106T173510Z-aa7dd4d6-bca3, finding 1), and with
+//       RichScribe open its hover label and the activity square's Ink/Readout menu sit above the
+//       sheet and a choice can be clicked (finding 2)
 //
 // Run: node nav-rail.js            (RICHOS_SHOTS_REGENERATE=shots-nav-rail to rewrite shots)
 
@@ -430,6 +433,51 @@ async function main() {
       publishShot(buf, path.join(SHOTS, `rail-${theme}.png`));
       assertEqual(page.__errors, [], "no page errors");
       return `shots-nav-rail/rail-${theme}.png`;
+    });
+
+    await run.check(`12 ${theme}  the rail stays on Token spend; over RichScribe its flyouts sit above the sheet and take a click`, async () => {
+      const topId = (sel) => page.evaluate((s2) => {
+        const r = document.querySelector(s2).getBoundingClientRect();
+        const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const own = el && el.closest(s2);
+        return own ? "self" : (el ? (el.id || el.className || el.tagName) : "nothing");
+      }, sel);
+      await page.click("#set-btn");
+      await page.waitForSelector("#set-menu #set-spend-open");
+      await page.click("#set-spend-open");
+      await page.waitForSelector("#spend-fig .ch");
+      await flushFrames(page);
+      const onSpend = await page.evaluate(() => {
+        const n = document.getElementById("nav-rail");
+        const r = n.getBoundingClientRect();
+        return { shown: getComputedStyle(n).display !== "none" && r.width === 52 && r.height > 0, spendLeft: document.getElementById("spend").getBoundingClientRect().left };
+      });
+      assert(onSpend.shown, "the rail is drawn on Token spend");
+      assertEqual(onSpend.spendLeft, 52, "Token spend starts at the rail's right edge");
+      assertEqual(await topId("#nr-chats"), "self", "a rail item is the topmost thing at its own center on Token spend");
+      await page.click("#spend-back");
+      await page.waitForSelector("#spend", { state: "hidden" });
+      await page.click("#nr-scribe");
+      await page.waitForSelector("#dictation-sheet", { state: "visible" });
+      await flushFrames(page);
+      await page.hover("#nr-finder");
+      await page.waitForSelector("#nr-tip", { state: "visible" });
+      // The label takes no pointer (`pointer-events: none`), so it cannot be hit-tested; its stacking can.
+      const z = await page.evaluate(() => ["nr-tip", "dictation-sheet"].map((id) => parseInt(getComputedStyle(document.getElementById(id)).zIndex, 10)));
+      assert(z[0] > z[1], `the hover label (z ${z[0]}) is above the RichScribe sheet (z ${z[1]})`);
+      await page.click("#res-square", { button: "right" });
+      await page.waitForSelector("#res-menu", { state: "visible" });
+      await flushFrames(page);
+      assertEqual(await topId('#res-menu [data-view="readout"]'), "self", "the Readout choice is above the RichScribe sheet");
+      await page.click('#res-menu [data-view="readout"]');
+      await flushFrames(page);
+      assertEqual(await page.getAttribute('#res-menu [data-view="readout"]', "aria-checked"), "true", "the click on the choice took");
+      await page.click("#res-square", { button: "right" });
+      await page.waitForSelector("#res-menu", { state: "visible" });
+      await page.click('#res-menu [data-view="ink"]');
+      await page.keyboard.press("Escape");
+      assertEqual(page.__errors, [], "no page errors");
+      return "Token spend shows the rail; over RichScribe the label and the menu are on top and a choice was clicked";
     });
 
     await page.close();
