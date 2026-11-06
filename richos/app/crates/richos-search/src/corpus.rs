@@ -174,6 +174,32 @@ impl Corpus {
         }
         resolve_inside(root, relative)
     }
+
+    pub(crate) fn display_key(&self, key: &str) -> Option<String> {
+        if self.roots.is_empty() { return None; }
+        let (root, relative) = self.origin(key)?;
+        Some(format!("{}/{relative}", root.file_name()?.to_string_lossy()))
+    }
+
+    pub(crate) fn catalog_key(&self, configured: Option<&Path>, path: &Path, source: &MetadataSource) -> Option<String> {
+        if self.roots.is_empty() {
+            return catalog_relative(&self.root, configured?, path, source);
+        }
+        self.roots.iter().find_map(|(prefix, root)| {
+            let relative = catalog_relative(root, root, path, source)?;
+            (!self.excluded.iter().any(|excluded| path.starts_with(excluded))).then(|| format!("{prefix}/{relative}"))
+        })
+    }
+
+    pub(crate) fn key_media_document(&self, key: &str, doc: &mut Arc<Document>) {
+        if !self.roots.is_empty() {
+            if let Some((root, relative)) = self.origin(key) {
+                let doc = Arc::make_mut(doc);
+                doc.id = source_id(&root.join(relative).to_string_lossy());
+                key.clone_into(&mut doc.rel_path);
+            }
+        }
+    }
 }
 
 fn supported(path: &Path) -> bool {

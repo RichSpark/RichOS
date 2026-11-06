@@ -5,7 +5,7 @@ use richos_search::corpus::MetadataSource;
 use richos_search::embed::{ConceptEmbedder, Embedder};
 use richos_search::manifest::{point_id, Manifest, SourceEntry, SourceState};
 use richos_search::rank::Why;
-use richos_search::service::{index_dir, Config, Empty, MeaningStatus, SearchRequest, SearchService, Tuning};
+use richos_search::service::{index_dir, Config, Empty, FolderSetConfig, MeaningStatus, SearchRequest, SearchService, Tuning};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -69,6 +69,43 @@ fn ask(service: &SearchService, query: &str, super_finder: bool, strict: bool) -
 
 fn files(r: &richos_search::SearchResponse) -> Vec<String> {
     r.hits.iter().map(|h| h.rel_path.clone()).collect()
+}
+
+#[test]
+fn selected_folders_share_results_and_reindex_keeps_unchanged_embeddings() {
+    let (first, cache) = fixture_copy("scope-service");
+    let second = first.with_file_name("second");
+    let missing = first.with_file_name("disconnected");
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(first.join("notes.md"), "# First\n\nRavenseal clue in the first folder.").unwrap();
+    std::fs::write(second.join("notes.md"), "# Second\n\nRavenseal clue in the second folder.").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let service = SearchService::start_with_folders(Config {
+        root: None,
+        cache: Ok(cache),
+        make_embedder: Box::new(move || Ok(Box::new(Counting(counted.clone(), ConceptEmbedder::stand_in())))),
+        busy: None,
+        tuning: Tuning::default(),
+    }, FolderSetConfig { selected: vec![first.clone(), second.clone(), missing], excluded: Vec::new() },
+       None, None, Box::new(|| true), || {});
+    service.wait_idle();
+    let response = ask(&service, "ravenseal", false, false);
+    assert_eq!(response.status.unavailable_folders, 1);
+    assert_eq!(response.hits.len(), 2);
+    let mut originals: Vec<_> = response.hits.iter().map(|hit| service.resolve_for_open(&hit.source_id).unwrap()).collect();
+    originals.sort_unstable();
+    assert_eq!(originals, [first.join("notes.md"), second.join("notes.md")]);
+    assert!(response.hits.iter().any(|hit| hit.rel_path == "second/notes.md"));
+
+    let before = calls.load(Ordering::SeqCst);
+    assert!(before > 0, "the first scan embedded the files");
+    service.reindex();
+    service.wait_idle();
+    assert!(matches!(service.status().meaning, MeaningStatus::Ready { .. }));
+    assert_eq!(calls.load(Ordering::SeqCst), before, "unchanged files must not be re-embedded");
+    service.shutdown();
+    std::fs::remove_dir_all(first.parent().unwrap()).unwrap();
 }
 
 #[test]
