@@ -4328,6 +4328,15 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   padding-top: 12vh;
 }
 
+/* THE NAVIGATION RAIL STAYS REACHABLE OVER THEM (round 58: the mockup keeps every surface the
+   rail opens inside the content area, and the rail usable). In the app's window, while the
+   rail is showing, an overlay and its scrim start at the rail's right edge; a press on the rail
+   closes it and goes where the item goes (nav-rail.js). On the home screen there is no rail,
+   and an overlay covers the whole window as before. */
+:root:has(#nav-rail) body:not(.home-open) .overlay {
+  left: 3.25rem;
+}
+
 .overlay-panel {
   width: min(620px, 92vw);
   background: var(--surface);

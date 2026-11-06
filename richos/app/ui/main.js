@@ -8156,7 +8156,7 @@ function openSearch() {
 }
 
 /// The navigation rail's RichFinder item opens the palette ⌘K opens (round 58).
-window.RichSearch = { open: () => openSearch() };
+window.RichSearch = { open: () => openSearch(), close: () => { if (!searchOverlayEl.hidden) closeSearch(); } };
 
 function closeSearch() {
   searchOverlayEl.hidden = true;

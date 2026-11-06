@@ -92,11 +92,37 @@
     },
   };
 
+  /// A press on the rail goes where the item goes, so a sheet or palette open in the content area
+  /// steps aside first, each by its own close: a `control:` declaration's named button, the
+  /// palette's own close. The Bust a bug panel stays (it is beside the screen, not over it, and
+  /// holds a report), and so does Settings, which closes on any press outside itself. Returns
+  /// false while a first-run question owns the window: then the rail does nothing.
+  function clearForRail(item) {
+    const D = window.RichDismiss;
+    if (D && D.question && D.question()) return false;
+    // Bust a bug reports the screen as it is, Settings opens over anything, and RichCleaner is
+    // another window: none of them is a place, so nothing steps aside for them.
+    if (item === "bug" || item === "me" || item === "cleaner") return true;
+    for (const o of document.querySelectorAll(".overlay:not([hidden])")) {
+      if (item === "finder" && o.id === "search-overlay") continue;
+      if (item === "scribe" && o.id === "dictation-sheet") continue;
+      const spec = o.getAttribute("data-dismiss") || "";
+      if (spec.indexOf("control:") === 0) {
+        const close = document.querySelector(spec.slice(8));
+        if (close) close.click();
+      } else if (o.id === "search-overlay" && window.RichSearch && window.RichSearch.close) {
+        window.RichSearch.close();
+      }
+    }
+    return true;
+  }
+
   nav.addEventListener("click", (e) => {
     const b = e.target.closest ? e.target.closest(".nr-item[data-item]") : null;
     if (!b || !nav.contains(b)) return;
     hideTip();
     if (b.getAttribute("aria-disabled") === "true") return;
+    if (!clearForRail(b.dataset.item)) return;
     const go = OPEN[b.dataset.item] || (pages.has(b.dataset.item) ? () => showPage(b.dataset.item) : null);
     if (go) go();
   });

@@ -12,7 +12,7 @@
 //       is covered and inert, and the home screen's own frame is unchanged
 //    2  Home and the wordmark both go to the home screen
 //    3  Chats is selected on the app, with the 3 px gold bar beside it; RichFinder opens the
-//       palette ⌘K opens and is selected while it is open
+//       palette ⌘K opens and is selected while it is open; over it the rail stays reachable
 //    4  RichCleaner opens RichCleaner's own window (`cleaner_open_window`)
 //    5  RichScribe is shown only where RichScribe is; it opens the RichScribe sheet, is selected
 //       while it is open, and carries its gold dot while a Mac permission is missing
@@ -179,6 +179,22 @@ async function main() {
       f = await railFacts(page);
       assertEqual(f.selected, ["finder"], "RichFinder is selected while its palette is open");
       assert(f.barBesideSelected, "the bar slid to RichFinder");
+      // The rail stays reachable over the palette (round 58): its scrim starts at the rail's
+      // edge, and a press on Home closes the palette and goes home.
+      const reach = await page.evaluate(() => {
+        const o = document.getElementById("search-overlay").getBoundingClientRect();
+        const h = document.getElementById("nr-home").getBoundingClientRect();
+        const hit = document.elementFromPoint(h.left + h.width / 2, h.top + h.height / 2);
+        return { overlayLeft: o.left, railRight: document.getElementById("nav-rail").getBoundingClientRect().right, onHome: !!hit && !!hit.closest("#nr-home") };
+      });
+      assert(reach.onHome && reach.overlayLeft >= reach.railRight - 1, "the palette covers the rail: " + JSON.stringify(reach));
+      await page.click("#nr-home");
+      await page.waitForFunction(() => window.RichHome.isOpen() && document.getElementById("search-overlay").hidden);
+      await page.evaluate(() => window.RichHome.hide("nav-rail-test"));
+      await page.waitForFunction(() => !window.RichHome.isOpen());
+      await flushFrames(page);
+      await page.click("#nr-finder");
+      await page.waitForSelector("#search-overlay", { state: "visible" });
       await page.keyboard.press("Escape");
       await page.waitForSelector("#search-overlay", { state: "hidden" });
       await flushFrames(page);
@@ -218,8 +234,10 @@ async function main() {
         const img = h && h.querySelector("img.feature-icon");
         return !!img && /richscribe-128\.png$/.test(img.getAttribute("src")) && h.textContent.trim() === "RichScribe";
       }), "the RichScribe icon is in front of the sheet's title");
-      await page.click("#dict-close");
+      // Over the sheet the rail is still reachable: Chats closes it by its own Close.
+      await page.click("#nr-chats");
       await page.waitForSelector("#dictation-sheet", { state: "hidden" });
+      assertEqual((await railFacts(page)).selected, ["chats"], "Chats again, the sheet closed");
       await page.evaluate(() => window.__RICHOS_MOCK__.dictationSet({ ax: "allowed", keyTap: true }));
       await page.evaluate(() => document.getElementById("nr-scribe").click());
       await page.waitForFunction(() => document.querySelector("#nr-scribe .nr-dot").hidden);
