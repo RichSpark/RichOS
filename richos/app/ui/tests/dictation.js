@@ -701,11 +701,21 @@ async function main() {
           assert(result.nodes > 0, `${theme} ${name}: EMPTY INVENTORY`);
           if (viewport.width === 1440) measured.push(`${name} ${result.worst}:1${result.worstIndicator < 99 ? "/" + result.worstIndicator + ":1" : ""}`);
           // Every control is reachable, by scrolling where the window is small.
-          const controls = page.locator("#dictation-sheet:not([hidden]) button, #dictation-sheet:not([hidden]) [contenteditable]");
-          for (let i = 0, n = await controls.count(); i < n; i++) {
-            const control = controls.nth(i);
-            await control.scrollIntoViewIfNeeded(); assert(await control.isVisible(), `${theme} ${name} ${viewport.width}: control ${i} is out of reach`);
-          }
+          // One synchronous pass inside the page: the sheet repaints itself on its own timers (the
+          // "Saved." notice clears after 1.6 s and replaces the column's nodes), so a handle taken
+          // by count() and scrolled to a few round trips later is a node that is gone when the host
+          // is loaded ("Element is not attached to the DOM"). Nothing can repaint between the
+          // lookup, the scroll and the visibility read of one control here.
+          const unreachable = await page.evaluate(() => {
+            const out = [];
+            document.querySelectorAll("#dictation-sheet:not([hidden]) button, #dictation-sheet:not([hidden]) [contenteditable]").forEach((c, i) => {
+              c.scrollIntoView({ block: "nearest", inline: "nearest" });
+              const r = c.getBoundingClientRect(), s = getComputedStyle(c);
+              if (!(r.width > 0 && r.height > 0 && s.visibility !== "hidden")) out.push(i);
+            });
+            return out;
+          });
+          assertEqual(unreachable, [], `${theme} ${name} ${viewport.width}: controls out of reach`);
           await page.close();
         }
       }

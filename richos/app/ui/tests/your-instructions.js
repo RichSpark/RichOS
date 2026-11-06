@@ -228,7 +228,8 @@ async function main() {
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => document.getElementById("your-instructions").hidden);
     await openSheet(page);
-    await page.mouse.click(30, 450);
+    // Just right of the navigation rail, which stays outside every sheet (round 58).
+    await page.mouse.click(60, 450);
     await page.waitForFunction(() => document.getElementById("your-instructions").hidden);
     await openSheet(page);
     // Typed and closed at once, before the save would have run: closing saves it.
