@@ -315,6 +315,7 @@
   const mockFolderRows = [
     { id: "fixture-home", name: "Home", path: "/fixture/home", state: "eligible", reason: null },
     { id: "fixture-docs", name: "Documents", path: "/fixture/home/Documents", state: "eligible", reason: null },
+    { id: "fixture-archive", name: "Archive", path: "/fixture/home/Archive", state: "eligible", reason: null },
     { id: "fixture-library", name: "Library", path: "/fixture/home/Library", state: "locked", reason: "App data" },
   ];
   const mockFolderPreferences = { mode: "off", chosen: [], company_limits: {} };
@@ -334,8 +335,16 @@
     return { folder, meaning, index_location: "/Users/someone/Library/Caches/RichOS/search", generation: mockFolderGeneration };
   }
 
-  function mockDocSearch(req) {
+  function mockDocSources() {
+    if (mockDocStatus().folder.state !== "ready") return [];
+    const choices = mockFolderRows.filter(row => ["fixture-docs", "fixture-archive"].includes(row.id));
+    return mockFolderGeneration === 1 || mockFolderPreferences.mode === "all" ? choices
+      : choices.filter(row => mockFolderPreferences.chosen.includes(row.path));
+  }
+
+  function mockDocSearch(req, sourceIds) {
     const status = mockDocStatus();
+    const sources = mockDocSources().filter(row => sourceIds == null || sourceIds.includes(row.id));
     const query = String(req.query || "");
     const spans = [];
     query.replace(/"([^"]*)"/g, (_, s) => { if (s.trim()) spans.push(s.trim().toLowerCase().replace(/\s+/g, " ")); return " "; });
@@ -347,13 +356,15 @@
     const superOn = !!req.super_finder && (status.meaning.state === "ready" || status.meaning.state === "indexing");
     const base = { requested: { super_finder: !!req.super_finder, strict: !!req.strict }, effective: { super_finder: superOn, strict: !!req.strict },
       status, total: 0, offset: req.offset || 0, hits: [], dropped: 0, empty: null, spans, words, elapsed_ms: 3 };
-    if (status.folder.state !== "ready") return { ...base, empty: "no_folder" };
+    if (status.folder.state !== "ready" || !sources.length) return { ...base, empty: "no_folder" };
     if (!words.length && !spans.length) return { ...base, empty: "no_query" };
     if (req.strict && unmatched) return { ...base, empty: "quote_mismatch" };
     const text = (d) => (d.title + " " + d.passages.map((p) => p.text).join(" ")).toLowerCase();
     const hasWord = (t, w) => new RegExp("(^|[^a-z0-9])" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(s|es)?([^a-z0-9]|$)").test(t);
     const rows = [];
     for (const d of MOCK_DOCS) {
+      const folder = d.path.startsWith("2024/") ? "fixture-archive" : "fixture-docs";
+      if (!sources.some(source => source.id === folder)) continue;
       const t = text(d);
       const sp = spans.filter((s) => t.includes(s));
       if (req.strict && sp.length < spans.length) continue;
@@ -4216,9 +4227,10 @@
         case "search_documents_status": {
           return mockDocStatus();
         }
+        case "search_document_sources": return mockDocSources();
         case "search_documents": {
           const req = (args && args.request) || {};
-          return mockDocSearch(req);
+          return mockDocSearch(req, args?.sourceIds);
         }
         case "open_search_document": {
           const doc = MOCK_DOCS.find((d) => d.id === (args && args.sourceId));

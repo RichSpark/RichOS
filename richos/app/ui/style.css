@@ -13108,6 +13108,57 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 }
 
 /* the list */
+.srch-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.srch-results-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.srch-sources {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 min(220px, 28vw);
+  min-width: 0;
+  min-height: 0;
+  margin: 10px 12px 8px 0;
+  padding: 4px 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.srch-sources legend {
+  padding: 0 4px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.srch-source-options {
+  overflow-y: auto;
+  min-height: 0;
+  max-height: 36vh;
+  scrollbar-width: thin;
+}
+.srch-source-options .srch-check {
+  display: flex;
+  min-height: 30px;
+  overflow-wrap: anywhere;
+}
+.srch-source-note {
+  margin: 6px 0;
+  color: var(--ink-soft);
+}
+.srch-source-settings {
+  align-self: flex-start;
+}
+@media (max-width: 660px) {
+  .srch-body { flex-direction: column; }
+  .srch-sources { flex: 0 0 auto; margin: 4px 12px 8px; }
+  .srch-source-options { max-height: 15vh; }
+}
 #search-results.srch-results {
   max-height: none;
   flex: 1 1 auto;

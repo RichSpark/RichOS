@@ -327,7 +327,8 @@ async function main() {
         assertEqual(await p.evaluate(() => document.querySelector(".srch-group-mode").textContent), mode, "the Documents heading");
         if (preset === "none") {
           const note = await p.evaluate(() => document.querySelector("#search-results .srch-note").textContent);
-          assert(note.includes("RICHOS_SEARCH_DOCUMENTS_ROOT"), note);
+          assert(note.includes("Companies, threads and conversations are still searched above."), note);
+          assert(await p.locator(".srch-sources").getByRole("button", { name: "Choose folders…" }).isVisible(), "folder settings can be opened from this state");
         }
         const out = [];
         for (const theme of ["light", "dark"]) {
@@ -366,6 +367,33 @@ async function main() {
         return out.join("; ");
       });
     }
+    await run.check("The Sources column narrows the current query and leaves saved folders alone", async () => {
+      const scoped = await openApp(browser);
+      try {
+        const sources = scoped.locator(".srch-sources");
+        const docs = sources.getByRole("checkbox", { name: "Documents" });
+        const archive = sources.getByRole("checkbox", { name: "Archive" });
+        await docs.waitFor();
+        assert(await docs.isChecked() && await archive.isChecked(), "all granted folders start selected");
+        await scoped.fill("#search-input", "refund");
+        await waitFor(scoped, "both folders match the query", () => document.querySelectorAll(".srch-doc").length === 2);
+        await docs.uncheck();
+        await waitFor(scoped, "only the archived draft remains", () => {
+          const rows = document.querySelectorAll(".srch-doc");
+          return rows.length === 1 && rows[0].textContent.includes("Early draft of the refund rule");
+        });
+        await archive.uncheck();
+        await scoped.getByText("No selected folders are available for this search.").waitFor();
+        assertEqual((await docTitles(scoped)).length, 0, "explicit empty scope cannot fall back to all folders");
+        await scoped.keyboard.press("Escape");
+        await scoped.keyboard.press("Meta+k");
+        await docs.waitFor();
+        assert(await docs.isChecked() && await archive.isChecked(), "the next search starts with all granted folders again");
+        assertEqual(scoped.__errors.length, 0, scoped.__errors.join("\n"));
+      } finally {
+        await scoped.close();
+      }
+    });
     await run.check("Folder map starts off, refuses locked folders and saves a chosen folder without restart", async () => {
       const folders = await openApp(browser);
       try {

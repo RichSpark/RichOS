@@ -1170,6 +1170,23 @@ const FIXTURES = {
     return page;
   },
 
+  async "search-no-folders"(browser) {
+    const page = await openApp(browser, undefined, { documentSearch: "none" });
+    await page.click("#nav-search");
+    await page.getByText("No folders are available for document search.", { exact: true }).waitFor();
+    return page;
+  },
+
+  async "search-no-sources-selected"(browser) {
+    const page = await openApp(browser);
+    await page.click("#nav-search");
+    await page.fill("#search-input", "refund");
+    await page.locator('#srch-source-options input[value="fixture-docs"]').uncheck();
+    await page.locator('#srch-source-options input[value="fixture-archive"]').uncheck();
+    await page.getByText("No selected folders are available for this search.", { exact: true }).waitFor();
+    return page;
+  },
+
   async "search-folders-off"(browser) {
     const page = await openApp(browser);
     await page.click("#set-btn");
@@ -1563,6 +1580,8 @@ const TEXT_RENDERING_FIXTURES = new Set([
   "not-connected",
   "search-empty",
   "search-folders-off",
+  "search-no-folders",
+  "search-no-sources-selected",
   "search-folders-chosen",
   "entity-view",
   "thread-create-refused",
