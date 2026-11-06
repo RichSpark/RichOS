@@ -62,14 +62,112 @@ pub fn lexical(corpus: &Corpus, query: &ParsedQuery, strict: bool) -> Vec<Lexica
         }
         out.push(LexicalHit { doc: i, title_words, spans, file_words });
     }
-    out.sort_by(|a, b| {
+    sort_lexical(corpus, &mut out);
+    out
+}
+
+fn sort_lexical(corpus: &Corpus, hits: &mut [LexicalHit]) {
+    hits.sort_by(|a, b| {
         b.title_words
             .cmp(&a.title_words)
             .then(b.spans.cmp(&a.spans))
             .then(b.file_words.cmp(&a.file_words))
             .then_with(|| by_date_then_path(&corpus.docs[a.doc], &corpus.docs[b.doc]))
     });
-    out
+}
+
+#[derive(Default)]
+struct WordHit {
+    doc: usize,
+    title: bool,
+    body: bool,
+}
+
+/// Inverted postings for the word rules. A quoted span can match inside a
+/// token or across whitespace, so those queries still use the literal scan.
+pub(crate) struct LexicalIndex {
+    words: HashMap<String, Vec<WordHit>>,
+}
+
+impl LexicalIndex {
+    pub(crate) fn build(corpus: &Corpus, stopped: impl Fn() -> bool) -> Option<Self> {
+        let mut words: HashMap<String, Vec<WordHit>> = HashMap::new();
+        for (doc, source) in corpus.docs.iter().enumerate() {
+            if stopped() {
+                return None;
+            }
+            for (is_title, text) in [(true, &source.folded_title), (false, &source.folded_text)] {
+                for word in text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+                    let hits = match words.get_mut(word) {
+                        Some(hits) => hits,
+                        None => words.entry(word.to_owned()).or_default(),
+                    };
+                    if hits.last().is_none_or(|hit| hit.doc != doc) {
+                        hits.push(WordHit { doc, ..WordHit::default() });
+                    }
+                    let hit = hits.last_mut().expect("the current document has a posting");
+                    if is_title {
+                        hit.title = true;
+                    } else {
+                        hit.body = true;
+                    }
+                }
+            }
+        }
+        Some(Self { words })
+    }
+
+    pub(crate) fn search(&self, corpus: &Corpus, query: &ParsedQuery, strict: bool) -> Vec<LexicalHit> {
+        if !query.spans.is_empty() {
+            return lexical(corpus, query, strict);
+        }
+        #[derive(Clone, Default)]
+        struct Counts {
+            title_words: usize,
+            file_words: usize,
+            last_title: usize,
+            last_file: usize,
+        }
+        let mut counts = vec![Counts::default(); corpus.docs.len()];
+        for (i, word) in query.words.iter().enumerate() {
+            let mark = i + 1;
+            let mut add = |doc: usize, title: bool, body: bool| {
+                let c = &mut counts[doc];
+                if title && c.last_title != mark {
+                    c.last_title = mark;
+                    c.title_words += 1;
+                }
+                if (title || body) && c.last_file != mark {
+                    c.last_file = mark;
+                    c.file_words += 1;
+                }
+            };
+            if word.chars().all(char::is_alphanumeric) {
+                for key in [word.clone(), format!("{word}s"), format!("{word}es")] {
+                    if let Some(hits) = self.words.get(&key) {
+                        for h in hits {
+                            add(h.doc, h.title, h.body);
+                        }
+                    }
+                }
+            } else {
+                // For an identifier such as inv-2049, only files with the
+                // opening token can match. Verify the punctuation in those.
+                let anchor = word.split(|c: char| !c.is_alphanumeric()).next().unwrap_or_default();
+                if let Some(hits) = self.words.get(anchor) {
+                    for h in hits {
+                        let d = &corpus.docs[h.doc];
+                        add(h.doc, h.title && has_word(&d.folded_title, word), h.body && has_word(&d.folded_text, word));
+                    }
+                }
+            }
+        }
+        let mut hits: Vec<_> = counts.into_iter().enumerate().filter_map(|(doc, c)| {
+            (c.file_words > 0).then_some(LexicalHit { doc, title_words: c.title_words, spans: 0, file_words: c.file_words })
+        }).collect();
+        sort_lexical(corpus, &mut hits);
+        hits
+    }
 }
 
 /// Why a result is in the list, shown on its row (design round 26: *meaning*, *words*,
@@ -330,6 +428,23 @@ mod tests {
         let ranked = rank(&c, &q, false, &lex, None);
         assert_eq!(order(&c, &ranked), vec!["b.md", "a.md", "c.md", "d.md"]);
         assert!(ranked.iter().all(|r| r.why == Why::Words));
+    }
+
+    #[test]
+    fn indexed_word_retrieval_matches_the_original_literal_rules() {
+        let c = corpus(vec![
+            doc("a.md", "# Names, INV-2049 and prices\nDmitri’s estimate. Caches and API.v2.", 3),
+            doc("b.md", "# Price list\nInv-2049s. Cached result and APIs. Dmitri's proposal.", 4),
+            doc("c.md", "# Cache API\nINV 2049 and DMITRI. Price changes inside the building.", 4),
+            doc("d.md", "# ÄRGER\nLots of lowercase ärgers. Prefixterminal is one word.", 6),
+        ]);
+        let index = LexicalIndex::build(&c, || false).unwrap();
+        for text in ["names inv price", "dmitri's", "dmitri’s", "cache api.v2", "inv-2049", "ärger", "price cache", "\"terminal\"", "\"inv 2049\"", "is in"] {
+            let q = parse(text);
+            for strict in [false, true] {
+                assert_eq!(index.search(&c, &q, strict), lexical(&c, &q, strict), "{text}, strict={strict}");
+            }
+        }
     }
 
     #[test]
