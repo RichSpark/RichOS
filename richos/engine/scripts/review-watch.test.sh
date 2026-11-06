@@ -2567,6 +2567,32 @@ W="$(cat "$(ls -d "$SB"/calls/* | tail -1)/words.txt" 2>/dev/null)"
   && has "$(lastargv)" "\"--tip\", \"$LTIP\"" && has "$W" "LATE-ASK-LINE"
 check "W07 a READY held for missing words starts once an entry names its branch, one review, told held once" $? "n0=$N0 calls=$(ncalls) o1=$O1 o2=$O2 words=$W"
 
+# A newer READY for the same branch, posted while an older one is held, is never displaced by the
+# held one when the ORDER arrives: one review, of the newer tip.
+resetstate
+G checkout -qb codex/late-w7b "$BASE"
+printf 'base\ncodex\nold\n' >"$REPO/a.txt"
+G commit -qam "codex: first try"
+OLDTIP="$(G rev-parse HEAD)"
+printf 'base\ncodex\nnewer\n' >"$REPO/a.txt"
+G commit -qam "codex: second try"
+NEWTIP="$(G rev-parse HEAD)"
+G checkout -q cc/echo-sonnet-w1
+: >"$SB/codex/to-codex.md"
+printf '## 2026-10-09T00:00:00Z STATUS: old\n\nold entry\n' >"$SB/codex/to-rich.md"
+tickrw
+printf '\n## 2026-10-09T02:00:00Z READY TO LAND: codex/late-w7b\n\nCommit: `%s`\nRepository: richos only.\n' "$OLDTIP" >>"$SB/codex/to-rich.md"
+FAKE_SR_MODE=passed tickrw
+FAKE_SR_MODE=passed tickrw
+printf '\n## 2026-10-09T03:00:00Z READY TO LAND: codex/late-w7b\n\nCommit: `%s`\nRepository: richos only.\n' "$NEWTIP" >>"$SB/codex/to-rich.md"
+printf '\n## 2026-10-09T03:00:01Z ORDER: please build codex/late-w7b\n\nNEWER-ASK-LINE\n' >>"$SB/codex/to-codex.md"
+for _ in 1 2 3; do FAKE_SR_MODE=passed tickrw; done
+waitcalls 1
+sleep 1 # load-bound: absence of a second review cannot be waited for as a fact; the fake review is instant
+ALLARGV="$(cat "$SB"/calls/*/argv.json 2>/dev/null)"
+[ "$(ncalls)" = "1" ] && has "$ALLARGV" "\"--tip\", \"$NEWTIP\"" && ! has "$ALLARGV" "$OLDTIP"
+check "W07 an older held READY never displaces a newer READY for the same branch, one review of the newer tip" $? "calls=$(ncalls) argv=$ALLARGV"
+
 # --- W08 ---------------------------------------------------------------------
 resetstate
 reg echo-sonnet-w1 600 30

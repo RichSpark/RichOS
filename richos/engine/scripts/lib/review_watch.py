@@ -649,15 +649,22 @@ class World(object):
             codex_state["seen"] = st.st_size
         # A READY held for missing original words is looked at again: once an entry naming its
         # branch is in to-codex.md it starts, without Codex posting it again. Told only once.
+        # Entries not read yet may hold a newer READY for the same branch, so nothing is retried
+        # until the file is read to its end; and a retried older entry never displaces a newer tip.
+        unread = st is not None and st.st_size > (codex_state.get("offset") or 0)
         still = []
         for a in awaiting:
             if now - float(a.get("at") or now) > KEEP_SECONDS:
+                continue
+            if unread:
+                still.append(a)
                 continue
             got = self.codex_handover(a["header"], a["body"], to_rich, to_codex, now)
             if isinstance(got, NoWords):
                 still.append(a)
             elif isinstance(got, dict):
-                self._add_pending(pending, got)
+                if not any(p.get("work") == got["work"] and p.get("tip") != got["tip"] for p in pending):
+                    self._add_pending(pending, got)
         awaiting[:] = still
         items = []
         keep = []
