@@ -131,11 +131,17 @@ pub struct Skipped {
 
 #[derive(Clone, Debug, Default)]
 pub struct Corpus {
-    /// Canonical folder path.
+    /// Canonical folder path for the single-folder pilot.
     pub root: PathBuf,
+    /// Opaque path prefixes for the multi-folder corpus. A document's key uses
+    /// this prefix, so identical relative names in different roots cannot collide.
+    pub(crate) roots: BTreeMap<String, PathBuf>,
+    pub(crate) excluded: Vec<PathBuf>,
     /// Documents in path order.
     pub docs: Vec<Arc<Document>>,
     pub skipped: Vec<Skipped>,
+    /// Folders that could not be enumerated, separate from known skipped files.
+    pub unavailable: Vec<Skipped>,
     /// Symbolic links met and not followed.
     pub links_skipped: usize,
 }
@@ -150,6 +156,23 @@ impl Corpus {
 
     pub(crate) fn position(&self, path: &str) -> Option<usize> {
         self.docs.binary_search_by(|d| d.rel_path.as_str().cmp(path)).ok()
+    }
+
+    pub fn origin<'a>(&'a self, key: &'a str) -> Option<(&'a Path, &'a str)> {
+        if self.roots.is_empty() {
+            return self.root.is_absolute().then_some((&self.root, key));
+        }
+        let (prefix, relative) = key.split_once('/')?;
+        self.roots.get(prefix).map(|root| (root.as_path(), relative))
+    }
+
+    pub fn resolve_key(&self, key: &str) -> Result<PathBuf, String> {
+        let (root, relative) = self.origin(key).ok_or("That document is no longer in a search folder.")?;
+        if self.excluded.iter().any(|prefix| root.starts_with(prefix)
+            || prefix.strip_prefix(root).is_ok_and(|tail| Path::new(relative).starts_with(tail))) {
+            return Err("That document is in a folder excluded from search.".into());
+        }
+        resolve_inside(root, relative)
     }
 }
 
@@ -281,18 +304,27 @@ impl FolderScope {
 struct DirectoryEntries {
     files: Vec<(String, PathBuf)>,
     links_skipped: usize,
+    unavailable: Vec<Skipped>,
 }
 
 /// Every supported file under `root`, in path order, as `(relative path, absolute path)`.
-fn list(root: &Path, metadata: Option<&MetadataSource>, stopped: &impl Fn() -> bool) -> Result<Option<DirectoryEntries>, String> {
+fn list(root: &Path, metadata: Option<&MetadataSource>, excluded: &[PathBuf], partial: bool, stopped: &impl Fn() -> bool) -> Result<Option<DirectoryEntries>, String> {
     let mut files = Vec::new();
     let mut links = 0usize;
+    let mut unavailable = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         if stopped() {
             return Ok(None);
         }
-        let entries = std::fs::read_dir(&dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if partial && dir != root => {
+                unavailable.push(Skipped { rel_path: relative(root, &dir).unwrap_or_default(), reason: error.to_string() });
+                continue;
+            }
+            Err(error) => return Err(format!("Cannot read {}: {error}", dir.display())),
+        };
         for entry in entries.flatten() {
             if stopped() {
                 return Ok(None);
@@ -303,7 +335,7 @@ fn list(root: &Path, metadata: Option<&MetadataSource>, stopped: &impl Fn() -> b
             if kind.is_symlink() {
                 links += 1;
             } else if kind.is_dir() {
-                if directory_exclusion(&path).is_none() {
+                if directory_exclusion(&path).is_none() && !excluded.iter().any(|prefix| path.starts_with(prefix)) {
                     stack.push(path);
                 }
             } else if kind.is_file() && !name.starts_with('.') && (supported(&path) || metadata.is_some_and(|m| supports_metadata(m, &path))) {
@@ -314,7 +346,7 @@ fn list(root: &Path, metadata: Option<&MetadataSource>, stopped: &impl Fn() -> b
         }
     }
     files.sort();
-    Ok(Some(DirectoryEntries { files, links_skipped: links }))
+    Ok(Some(DirectoryEntries { files, links_skipped: links, unavailable }))
 }
 
 fn relative(root: &Path, path: &Path) -> Option<String> {
@@ -366,8 +398,12 @@ pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>,
         return Ok(None);
     }
     let root = validate_root(root)?;
-    let Some(DirectoryEntries { files, links_skipped }) = list(&root, metadata, &stopped)? else { return Ok(None) };
-    let mut corpus = Corpus { root, docs: Vec::with_capacity(files.len()), skipped: Vec::new(), links_skipped };
+    load_root(root, metadata, &[], false, &stopped)
+}
+
+fn load_root(root: PathBuf, metadata: Option<&MetadataSource>, excluded: &[PathBuf], partial: bool, stopped: &impl Fn() -> bool) -> Result<Option<PendingCorpus>, String> {
+    let Some(DirectoryEntries { files, links_skipped, unavailable }) = list(&root, metadata, excluded, partial, stopped)? else { return Ok(None) };
+    let mut corpus = Corpus { root, docs: Vec::with_capacity(files.len()), links_skipped, unavailable, ..Corpus::default() };
     let mut media = Vec::new();
     for (rel, path) in files {
         if stopped() {
@@ -383,6 +419,63 @@ pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>,
         }
     }
     Ok((!stopped()).then_some(PendingCorpus { corpus, media }))
+}
+
+/// Load a disjoint set of selected folders as one searchable corpus. Each file
+/// keeps its source identity even if unrelated folders are added to the choice.
+pub fn load_scope(configured: &[PathBuf], excluded: &[PathBuf]) -> Corpus {
+    load_scope_until_stopped(configured, excluded, None, || false)
+        .expect("no cancellation requested").corpus
+}
+
+pub(crate) fn load_scope_until_stopped(configured: &[PathBuf], excluded: &[PathBuf], metadata: Option<&MetadataSource>, stopped: impl Fn() -> bool) -> Option<PendingCorpus> {
+    let (scope, unresolved) = FolderScope::resolve(configured);
+    let mut corpus = Corpus {
+        unavailable: unresolved.into_iter().map(|(path, reason)| Skipped {
+            rel_path: path.to_string_lossy().into_owned(), reason,
+        }).collect(),
+        ..Corpus::default()
+    };
+    corpus.excluded = excluded.iter().map(|path| path.canonicalize().unwrap_or_else(|_| path.clone())).collect();
+    let mut media = Vec::new();
+    for root in scope.roots() {
+        if stopped() { return None; }
+        if corpus.excluded.iter().any(|path| root.starts_with(path)) {
+            corpus.unavailable.push(Skipped { rel_path: root.to_string_lossy().into_owned(), reason: "This folder is excluded from search.".into() });
+            continue;
+        }
+        let found = match load_root(root.clone(), metadata, &corpus.excluded, true, &stopped) {
+            Ok(Some(found)) => found,
+            Ok(None) => return None,
+            Err(reason) => {
+                corpus.unavailable.push(Skipped { rel_path: root.to_string_lossy().into_owned(), reason });
+                continue;
+            }
+        };
+        let prefix = source_id(&root.to_string_lossy());
+        let key = |relative: &str| format!("{prefix}/{relative}");
+        corpus.links_skipped += found.corpus.links_skipped;
+        for mut doc in found.corpus.docs {
+            let doc_mut = Arc::make_mut(&mut doc);
+            doc_mut.id = source_id(&root.join(&doc_mut.rel_path).to_string_lossy());
+            doc_mut.rel_path = key(&doc_mut.rel_path);
+            corpus.docs.push(doc);
+        }
+        for mut skipped in found.corpus.skipped {
+            skipped.rel_path = key(&skipped.rel_path);
+            corpus.skipped.push(skipped);
+        }
+        for mut dir in found.corpus.unavailable {
+            dir.rel_path = root.join(&dir.rel_path).to_string_lossy().into_owned();
+            corpus.unavailable.push(dir);
+        }
+        media.extend(found.media.iter().map(|relative| key(relative)));
+        corpus.roots.insert(prefix, root.clone());
+    }
+    corpus.docs.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    corpus.skipped.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    media.sort_unstable();
+    (!stopped()).then_some(PendingCorpus { corpus, media })
 }
 
 pub(crate) fn catalog_relative(root: &Path, configured: &Path, path: &Path, source: &MetadataSource) -> Option<String> {
@@ -559,6 +652,35 @@ mod tests {
             assert!(scope.roots().is_empty());
             assert_eq!(errors.len(), 1);
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scoped_corpus_keeps_equal_relative_paths_distinct_and_reports_missing_roots() {
+        let root = scratch("scope-corpus");
+        let alpha = root.join("alpha");
+        let beta = root.join("beta");
+        let cache = alpha.join("index");
+        let absent = root.join("unplugged");
+        for folder in [&alpha, &beta, &cache] {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(folder.join("same.md"), folder.file_name().unwrap().to_string_lossy().as_bytes()).unwrap();
+        }
+        let scoped = load_scope(&[alpha.clone(), beta.clone(), absent.clone()], std::slice::from_ref(&cache));
+        assert_eq!(scoped.docs.len(), 2);
+        assert_ne!(scoped.docs[0].id, scoped.docs[1].id);
+        assert_eq!(scoped.unavailable.len(), 1);
+        assert_eq!(Path::new(&scoped.unavailable[0].rel_path), absent);
+        for doc in &scoped.docs {
+            let expected = root.join(doc.text.trim()).join("same.md");
+            assert_eq!(scoped.resolve_key(&doc.rel_path).unwrap(), expected);
+        }
+        let alpha_key = &scoped.docs.iter().find(|d| d.text == "alpha").unwrap().rel_path;
+        let (prefix, _) = alpha_key.split_once('/').unwrap();
+        assert!(scoped.resolve_key(&format!("{prefix}/index/same.md")).is_err());
+        let combined = load_scope(&[root.clone(), alpha], &[cache]);
+        assert_eq!(combined.docs.len(), 2);
+        assert!(combined.docs.iter().all(|doc| scoped.docs.iter().any(|other| other.id == doc.id)));
         std::fs::remove_dir_all(root).unwrap();
     }
 
