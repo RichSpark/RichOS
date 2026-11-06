@@ -870,7 +870,7 @@ impl SearchService {
                 continue;
             }
             let passage = ranked.selected_passages.get(&row.doc).copied().unwrap_or_else(|| {
-                selected_passage(doc, row, &parsed, meaning.as_deref().zip(ranked.query_vector.as_deref()))
+                selected_passage(doc, row, &parsed, meaning.as_deref().zip(ranked.query_vector.as_deref())).evidence
             });
             response.hits.push(hit(doc, row, &parsed, passage));
         }
@@ -1064,14 +1064,14 @@ fn evidence(doc: &corpus::Document, p: usize, parsed: &ParsedQuery) -> (usize, u
     (start, end)
 }
 
-fn selected_passage(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, meaning: Option<(&Meaning, &[f32])>) -> usize {
+fn selected_passage(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, meaning: Option<(&Meaning, &[f32])>) -> rank::PassageChoice {
     // A word-only result shows its word evidence. Quoted spans have their own rule.
     let scores = if row.semantic_passage.is_some() && parsed.spans.is_empty() {
         meaning.and_then(|(meaning, vector)| passage_scores(meaning, doc, vector))
     } else {
         None
     };
-    rank::best_passage_with_scores(doc, parsed, row.semantic_passage, scores.as_deref())
+    rank::passage_choices(doc, parsed, row.semantic_passage, scores.as_deref())
 }
 
 fn rerank_sources(
@@ -1087,8 +1087,8 @@ fn rerank_sources(
         if obsolete() { return passages; }
         let doc = &corpus.docs[row.doc];
         let passage = selected_passage(doc, row, parsed, Some(meaning));
-        passages.insert(row.doc, passage);
-        let text = doc.passages.get(passage).map_or("", |p| p.text(&doc.text));
+        passages.insert(row.doc, passage.evidence);
+        let text = doc.passages.get(passage.ranking).map_or("", |p| p.text(&doc.text));
         candidates.push(format!("{}\n{}", doc.title, bounded_passage(text)));
     }
     trace_query_stage("passage_selection", phase);
