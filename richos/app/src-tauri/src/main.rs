@@ -856,7 +856,7 @@ struct AppState {
     control: TurnControl,
     /// DOCUMENT SEARCH (`doc_search.rs`): the one search service for the palette and Rich's
     /// tool, started at launch; text search answers as soon as the folder is read.
-    search: richos_search::SearchService,
+    search: std::sync::Arc<doc_search::DocumentSearch>,
     /// The socket Rich's `richos_search` tool reaches the service through; closed at exit.
     search_socket: Option<richos_core::search_tools::SearchSocket>,
     /// THE LORO CORRECTION DESK (open-items 3.5). Its writer comes from the SAME
