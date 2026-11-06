@@ -16,6 +16,7 @@ import { parseFrontMatter, setFields } from '../lib/frontmatter.js';
 import { REF_RESOLVERS, appendRecord, correctRecord, createCompany, isWidening, locate, resolveRef, resolvePartition, setJsonlField, supersedeRecord } from '../writer/writer.js';
 import { checkAgainstBaseline, readBaseline } from '../writer/coverage-write.js';
 import { SOURCES, loadCorpus, resolveRoot } from '../lib/store.js';
+import { loadSearchProjection } from '../lib/search.js';
 import {
   AUDIENCE_SCOPES,
   assertAudience,
@@ -197,6 +198,44 @@ test('record: an unrecognized kind degrades to passage — never promoted, never
 test('record: supersededBy makes a record non-current so it can never read as truth', () => {
   assert.equal(deriveStatus({ supersededBy: 'other' }, NOW), 'superseded');
 });
+
+test('RichFinder: current memory retains citations and cannot cross a partition', () => withTempCorpus(dir => {
+  const write = (rel, text) => {
+    const file = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  };
+  const company = (id, status) => write(
+    `companies/${id}/company.yaml`, `id: ${id}\nname: ${id}\nrole: owner\nstatus: ${status}\n`
+  );
+  const record = (id, file, fields) => write(
+    `companies/${id}/records/${file}.md`, `---\nkind: decision\nscope: org-shared\n${fields}\n---\n\nBody for ${file}.\n`
+  );
+  company('rival', 'active');
+  company('oldco', 'retired');
+  record('northwind', 'old-rate', 'supersededBy: rec:companies/northwind/records/current-rate');
+  record('northwind', 'current-rate', 'supersedes: rec:companies/northwind/records/old-rate\nvalidUntil: 2026-09-01');
+  record('northwind', 'future-rate', 'validFrom: 2026-09-01');
+  record('rival', 'stolen-company-label', 'company: northwind');
+  record('rival', 'rival-rate', '');
+  record('oldco', 'retired-rate', '');
+
+  const grant = { audience: 'rich', companyIds: ['northwind', 'oldco'], includeCeo: false };
+  const snapshot = loadSearchProjection({ corpusRoot: dir, grant, now: NOW });
+  const current = snapshot.records.find(rec => rec.ref.endsWith('/current-rate'));
+  assert.equal(current.supersedes, 'rec:companies/northwind/records/old-rate');
+  assert.equal(current.provenance.path, 'companies/northwind/records/current-rate.md');
+  assert.ok(snapshot.records.every(rec => rec.company === 'northwind'));
+  assert.ok(!snapshot.records.some(rec => /old-rate|future-rate|stolen-company-label/.test(rec.ref)));
+
+  const both = loadSearchProjection({ corpusRoot: dir, grant: { ...grant, companyIds: ['northwind', 'rival'] }, now: NOW });
+  assert.ok(both.records.some(rec => rec.ref.endsWith('/rival-rate')));
+  assert.ok(!both.records.some(rec => rec.ref.endsWith('/stolen-company-label')));
+  const expired = loadSearchProjection({ corpusRoot: dir, grant, now: Date.parse('2026-09-02') });
+  assert.ok(!expired.records.some(rec => rec.ref === current.ref));
+  assert.deepEqual(loadSearchProjection({ corpusRoot: dir, grant: { ...grant, companyIds: [] }, now: NOW }).records, []);
+  assert.throws(() => loadSearchProjection({ corpusRoot: dir, grant: { ...grant, audience: 'worker' }, now: NOW }), /explicit Rich audience/);
+}));
 
 test('record: a validUntil in the past makes a record expired', () => {
   assert.equal(deriveStatus({ validUntil: '2025-04-30T00:00:00Z' }, NOW), 'expired');

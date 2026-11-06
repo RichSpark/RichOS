@@ -14138,12 +14138,33 @@
       "keys": [],
       "edges": []
     },
+    "loro/lib/search.js": {
+      "source": "loro/lib/search.js",
+      "sha256": "98bb763ba65ff30929f0153afc9cb76898cbb47d8d8cc817859c820ecddeab08",
+      "evidence": "RichFinder projection reads the caller's explicit corpus through the reviewed Loro layout, audience and store modules. No environment or execution access.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "loro/lib/layout.js"
+        },
+        {
+          "to": "loro/lib/privacy.js"
+        },
+        {
+          "to": "loro/lib/store.js"
+        }
+      ]
+    },
     "loro/tests/run.js": {
       "source": "loro/tests/run.js",
-      "sha256": "8d2176eb1e0c7b05ab6c265aac83e9b54713d60129f5c159b74df3689af71720",
+      "sha256": "df5407ba47fb9851132565c2c2f7b57f9f8dccc31f7da66f47d267fb82e00c55",
       "evidence": "Bound member of the reviewed Loro fixture component: fixed local modules and Node builtins only. Corpus data is parsed as Markdown/JSON/YAML; source-scan inputs are read as text. No orchestration setting or shell execution. The suite binds the complete transitive component set.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "loro/lib/search.js"
+        }
+      ]
     },
     "loro/tests/relocation.js": {
       "source": "loro/tests/relocation.js",
