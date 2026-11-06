@@ -289,8 +289,11 @@ def python_runtime(executable):
     def inputs(path):
         path = Path(path)
         if path.is_dir() and not path.is_symlink():
+            # A __pycache__ is output: any python process on the Mac compiles into the standard
+            # library's own (2026-11-06: no-foreign-app-data INVALID twice with all its assertions
+            # passing). Python checks each .pyc against the .py beside it, so the source binds.
             return {p.name: inputs(p) for p in sorted(path.iterdir())
-                    if p.name not in ("site-packages", "dist-packages")}
+                    if p.name not in ("site-packages", "dist-packages", "__pycache__")}
         return path_identity(path)
     runtime["paths"] = {p: digest(inputs(p)) for p in runtime["paths"]}
     framework = Path(runtime["prefix"]) / "Python"

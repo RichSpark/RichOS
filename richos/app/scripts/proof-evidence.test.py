@@ -1507,6 +1507,24 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
             (library / "module.py").write_text("value = 2")
             self.assertNotEqual(before, evidence.python_runtime("python3"))
 
+    def test_python_runtime_ignores_bytecode_another_process_writes_into_the_standard_library(self):
+        # no-foreign-app-data went INVALID three times (2026-11-05, 11-06 x2) with every assertion
+        # passing: identity differed at tools.python3.runtime.paths.<stdlib>, because another
+        # python process compiled a stdlib module into the stdlib's own __pycache__ mid-run.
+        # Bytecode is derived from the .py beside it (checked against its mtime), so it is output.
+        library = Path(self.tmp.name) / "stdlib2"
+        (library / "pkg" / "__pycache__").mkdir(parents=True)
+        (library / "module.py").write_text("value = 1")
+        output = json.dumps({"version": "fixture", "paths": [str(library)], "prefix": str(library)})
+        with patch.object(evidence.subprocess, "run", return_value=SimpleNamespace(stdout=output)):
+            before = evidence.python_runtime("python3")
+            (library / "__pycache__").mkdir()
+            (library / "__pycache__" / "module.cpython-314.pyc").write_bytes(b"compiled")
+            (library / "pkg" / "__pycache__" / "x.cpython-314.pyc").write_bytes(b"compiled")
+            self.assertEqual(before, evidence.python_runtime("python3"))
+            (library / "module.py").write_text("value = 2")
+            self.assertNotEqual(before, evidence.python_runtime("python3"))
+
     def test_input_owner_joins_then_reuses_finished_evidence_while_original_run_stays_open(self):
         old, previous = self.attempt("author")
         new, current = self.attempt("target")
