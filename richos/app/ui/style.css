@@ -641,6 +641,24 @@ button {
   }
 }
 
+/* THE APP ICON BEFORE A FEATURE'S NAME (CEO 2026-11-06): "when a nav rail opens a page/screen
+   that has the name of the feature ... we should show the corresponding app icon there". The
+   icon sets of rounds 52 and 56, their 128px size. Decorative (`alt=""`): the name follows. */
+.feature-title {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.feature-icon {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: block;
+}
+.feature-icon--inline {
+  width: 1.25rem;
+  height: 1.25rem;
+}
 
 /* ---------------------------------------------------------------------------------------
    Rail — recessive. A quiet index of topics Rich is tracking, never a channel list.

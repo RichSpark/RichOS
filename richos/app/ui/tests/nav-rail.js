@@ -183,6 +183,10 @@ async function main() {
       await page.waitForSelector("#search-overlay", { state: "hidden" });
       await flushFrames(page);
       assertEqual((await railFacts(page)).selected, ["chats"], "closed, Chats again");
+      assert(await page.evaluate(() => {
+        const img = document.querySelector("#search-overlay .srch-check img.feature-icon");
+        return !!img && /richfinder-128\.png$/.test(img.getAttribute("src")) && img.nextElementSibling && img.nextElementSibling.tagName === "SPAN";
+      }), "the RichFinder icon is in front of its name in the palette");
       return "Chats, then RichFinder while the palette is open, then Chats";
     });
 
@@ -209,6 +213,11 @@ async function main() {
       const f = await railFacts(page);
       assertEqual(f.selected, ["scribe"], "RichScribe is selected while its sheet is open");
       assertEqual(await page.getAttribute("#nr-scribe", "aria-label"), "RichScribe, needs a Mac permission", "the dot is said, not only shown");
+      assert(await page.evaluate(() => {
+        const h = document.getElementById("dict-title");
+        const img = h && h.querySelector("img.feature-icon");
+        return !!img && /richscribe-128\.png$/.test(img.getAttribute("src")) && h.textContent.trim() === "RichScribe";
+      }), "the RichScribe icon is in front of the sheet's title");
       await page.click("#dict-close");
       await page.waitForSelector("#dictation-sheet", { state: "hidden" });
       await page.evaluate(() => window.__RICHOS_MOCK__.dictationSet({ ax: "allowed", keyTap: true }));
