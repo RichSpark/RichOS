@@ -491,6 +491,14 @@ async function main() {
       await page.waitForSelector("#res-menu", { state: "visible" });
       await page.click('#res-menu [data-view="ink"]');
       await page.keyboard.press("Escape");
+      await page.waitForSelector("#dictation-sheet", { state: "hidden" });
+      // A card pinned from the keyboard does not stay over Home (Home is under the card's z-index now).
+      await page.focus("#res-square");
+      await page.keyboard.press("Space");
+      await page.waitForSelector("#res-card", { state: "visible" });
+      await page.evaluate(() => document.getElementById("nr-home").click());
+      await page.waitForFunction(() => window.RichHome.isOpen());
+      assertEqual(await page.evaluate(() => getComputedStyle(document.getElementById("res-card")).display), "none", "the pinned activity card is hidden once Home is up");
       assertEqual(page.__errors, [], "no page errors");
       return "Token spend shows the rail; over RichScribe the label and the menu are on top and a choice was clicked";
     });

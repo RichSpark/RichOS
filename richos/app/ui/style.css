@@ -13975,6 +13975,9 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
    sheet (160) and Token spend (200), below Settings (300). THE FIRST-RUN QUESTION BOUNDARY: while a
    first-run question is up (QUESTION_SELECTOR in main.js) it owns the window, the rail is inert, and
    none of these may be painted over it, so they are not shown at all. */
-:root:has(.overlay[aria-modal="true"][data-dismiss^="control:"]:not([hidden])) :is(#nr-tip, .res-card, .res-menu) {
+:root:has(.overlay[aria-modal="true"][data-dismiss^="control:"]:not([hidden])) :is(#nr-tip, .res-card, .res-menu),
+/* Home (150) has no rail: a card pinned from the keyboard (Space on the square, then Up to Home and Enter
+   raises no pointer press to unpin it) must not stay painted over it (review rv-20261106T215921Z-fae9a28f-30ee). */
+body.home-open :is(#nr-tip, .res-card, .res-menu) {
   display: none !important;
 }
