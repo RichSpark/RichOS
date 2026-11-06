@@ -8,6 +8,33 @@ use tokenizers::{Encoding, Tokenizer, TruncationParams};
 
 const TOKEN_LIMIT: usize = 192;
 const BUCKET_WIDTH: usize = 32;
+const USER_INITIATED: u32 = 0x19;
+
+unsafe extern "C" {
+    fn pthread_override_qos_class_start_np(
+        thread: libc::pthread_t, qos_class: u32, relative_priority: i32,
+    ) -> *mut libc::c_void;
+    fn pthread_override_qos_class_end_np(override_token: *mut libc::c_void) -> i32;
+}
+
+/// Lift only the work the open palette is waiting on. The Tauri worker's
+/// original priority resumes even when a request is superseded or fails.
+pub(crate) struct QueryPriority(*mut libc::c_void);
+
+impl QueryPriority {
+    pub(crate) fn begin() -> Self {
+        Self(unsafe { pthread_override_qos_class_start_np(libc::pthread_self(), USER_INITIATED, 0) })
+    }
+}
+
+impl Drop for QueryPriority {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            let _status = unsafe { pthread_override_qos_class_end_np(self.0) };
+        }
+    }
+}
+
 
 struct RankingThreads;
 
@@ -21,7 +48,6 @@ impl ThreadManager for RankingThreads {
             unsafe extern "C" {
                 fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
             }
-            const USER_INITIATED: u32 = 0x19;
             if unsafe { pthread_set_qos_class_self_np(USER_INITIATED, 0) } != 0 {
                 eprintln!("[richos] document search: could not set relevance worker priority");
             }
@@ -47,10 +73,12 @@ impl Model {
             .map_err(|error| error.to_string())?;
         tokenizer.with_padding(None);
         let session = Session::builder().map_err(|error| error.to_string())?
-            .with_intra_threads(2).map_err(|error| error.to_string())?
+            .with_intra_threads(4).map_err(|error| error.to_string())?
             .with_inter_threads(1).map_err(|error| error.to_string())?
             .with_thread_manager(RankingThreads).map_err(|error| error.to_string())?
-            .with_intra_op_spinning(false).map_err(|error| error.to_string())?
+            .with_intra_op_spinning(true).map_err(|error| error.to_string())?
+            // Keep workers available inside a scoring call, then let them sleep.
+            .with_config_entry("session.force_spinning_stop", "1").map_err(|error| error.to_string())?
             .commit_from_file(model).map_err(|error| error.to_string())?;
         Ok(Self { tokenizer, session })
     }

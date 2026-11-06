@@ -293,6 +293,8 @@ pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, gene
         service.palette_generation.load(std::sync::atomic::Ordering::Relaxed) > generation
     });
     if obsolete() { return None; }
+    #[cfg(target_os = "macos")]
+    let _priority = generation.map(|_| crate::search_rerank::QueryPriority::begin());
     request.limit = request.limit.clamp(1, PAGE);
     service.read(|active, revoked| {
         let mut response = active.search_while_current(&request, revoked, &obsolete)?;
