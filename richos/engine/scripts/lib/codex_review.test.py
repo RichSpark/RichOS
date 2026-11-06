@@ -64,7 +64,7 @@ class Reviews(unittest.TestCase):
         self.assertFalse(problems)
         self.assertEqual(len(items), 1)
         item = items[0]
-        self.assertEqual((item.repo, item.tip, item.base), (str(self.repo), self.tip, self.base))
+        self.assertEqual((item.repo, item.tip, item.base), (os.path.realpath(self.repo),self.tip, self.base))
         self.assertEqual(item.channel, dict(locator=str(self.path), message_id="ready"))
         self.assertIn("Exact user words", Path(item.words[0]).read_text())
         self.assertNotIn("Claims:", Path(item.words[0]).read_text())
@@ -99,7 +99,7 @@ class Reviews(unittest.TestCase):
         self.assertFalse(problems)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].channel, dict(locator=str(path), message_id="plain-ready"))
-        self.assertEqual((items[0].repo, items[0].tip), (str(self.repo), self.tip))
+        self.assertEqual((items[0].repo, items[0].tip), (os.path.realpath(self.repo), self.tip))
         self.assertIn("Original plain-message task", Path(items[0].words[0]).read_text())
         self.assertIn(text, Path(items[0].claims[0]).read_text())
         self.assertEqual(c.read(path, "to-rich")["records"][0]["text"], text, "normalization never rewrites the source")
