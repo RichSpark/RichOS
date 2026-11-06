@@ -227,6 +227,49 @@ pub fn best_passage(doc: &Document, query: &ParsedQuery, semantic_passage: Optio
     }
 }
 
+/// Rerank the passages of an already selected file. Each distinct term in the body
+/// contributes once, with more weight for a term found in fewer of this file's
+/// passages. The bounded word bonus lets a closer textual answer win a near tie
+/// without requiring literal overlap for a paraphrase.
+pub fn best_passage_with_scores(
+    doc: &Document,
+    query: &ParsedQuery,
+    semantic_passage: Option<usize>,
+    scores: Option<&[f32]>,
+) -> usize {
+    let Some(scores) = scores.filter(|s| s.len() == doc.passages.len() && s.len() > 1) else {
+        return best_passage(doc, query, semantic_passage);
+    };
+    if !query.spans.is_empty() {
+        return best_passage(doc, query, semantic_passage);
+    }
+
+    const MAX_WORD_BONUS: f32 = 0.16;
+    let mut matches = vec![0.0; scores.len()];
+    let mut possible = 0.0;
+    for word in &query.words {
+        let matching: Vec<_> = doc.folded_passages.iter().enumerate()
+            .filter(|(_, parts)| parts.last().is_some_and(|body| has_word(body, word)))
+            .map(|(i, _)| i)
+            .collect();
+        if matching.is_empty() {
+            continue;
+        }
+        let weight = 1.0 + ((scores.len() + 1) as f32 / (matching.len() + 1) as f32).ln();
+        possible += weight;
+        for i in matching {
+            matches[i] += weight;
+        }
+    }
+
+    let score = |i: usize| scores[i] + MAX_WORD_BONUS * matches[i] / possible.max(1.0);
+    (0..scores.len()).max_by(|&a, &b| {
+        score(a).total_cmp(&score(b))
+            .then_with(|| scores[a].total_cmp(&scores[b]))
+            .then_with(|| b.cmp(&a))
+    }).unwrap_or(0)
+}
+
 /// The query's quoted spans the document holds that no single passage holds whole: a quote
 /// across the cut of a paragraph longer than [`crate::chunk::MAX_CHARS`]. Strict search finds it
 /// in the document, so the passage it begins in is the evidence (rv-20261014T132419Z-a81de6d6-6891
@@ -356,6 +399,15 @@ mod tests {
         assert_eq!(best_passage(&d, &parse("refund days"), Some(2)), 2);
         // A quoted span outranks the meaning passage.
         assert_eq!(best_passage(&d, &parse("\"30 days\""), Some(2)), 1);
+    }
+
+    #[test]
+    fn passage_reranking_uses_evidence_in_the_body_and_preserves_literal_quotes() {
+        let d = doc("a.md", "# Planning\nDiscussion of profile location.\n\n## Decision\nUse a directory junction to keep the profile on another drive.\n\n## Note\nKeep backups.", 0);
+        let q = parse("profile location on another drive");
+        assert_eq!(best_passage_with_scores(&d, &q, Some(0), Some(&[0.65, 0.64, 0.1])), 1);
+        assert_eq!(best_passage_with_scores(&d, &parse("recover my account"), Some(0), Some(&[0.5, 0.7, 0.1])), 1);
+        assert_eq!(best_passage_with_scores(&d, &parse("\"keep backups\""), Some(0), Some(&[0.99, 0.8, 0.1])), 2);
     }
 
     fn shown(d: &Document, query: &str) -> String {

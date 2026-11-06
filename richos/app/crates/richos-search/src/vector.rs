@@ -18,7 +18,7 @@
 //!   (`prevent_unoptimized: false`) so a partly built index still answers.
 use qdrant_edge::{
     Distance, EdgeConfig, EdgeOptimizersConfig, EdgeShard, EdgeVectorParams, NamedQuery, PointId, PointInsertOperations,
-    PointOperations, PointStruct, QueryEnum, SearchRequestBuilder, UpdateOperation, WalOptions, WithPayloadInterface,
+    PointOperations, PointStruct, QueryEnum, RetrieveRequestBuilder, SearchRequestBuilder, UpdateOperation, WalOptions, WithPayloadInterface,
     WithVector, DEFAULT_VECTOR_NAME,
 };
 use std::fs::File;
@@ -120,6 +120,20 @@ impl VectorIndex {
                 _ => None,
             })
             .collect())
+    }
+
+    /// Score known passages directly, independently of the global nearest-passage cutoff.
+    pub fn score_passages(&self, ids: &[u64], query: &[f32]) -> Result<Vec<(u64, f32)>, String> {
+        let request = RetrieveRequestBuilder::new(ids.iter().copied().map(PointId::NumId).collect())
+            .with_payload(WithPayloadInterface::Bool(false))
+            .with_vector(WithVector::Bool(true))
+            .build();
+        let points = self.shard.retrieve(request).map_err(|e| format!("the search index could not read passages: {e}"))?;
+        Ok(points.into_iter().filter_map(|point| {
+            let PointId::NumId(id) = point.id else { return None };
+            let vector: &[f32] = point.get_vector_by_name(DEFAULT_VECTOR_NAME)?.try_into().ok()?;
+            (vector.len() == query.len()).then(|| (id, query.iter().zip(vector).map(|(a, b)| a * b).sum()))
+        }).collect())
     }
 }
 
