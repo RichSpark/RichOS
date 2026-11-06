@@ -259,6 +259,31 @@ fn hybrid_word_only_results_show_the_matching_words() {
 }
 
 #[test]
+fn revoked_folder_passages_are_never_sent_for_excerpt_selection() {
+    let (folder, cache) = fixture_copy("excerpt-grant");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let allowed = Arc::new(AtomicBool::new(true));
+    let grant = allowed.clone();
+    let service = SearchService::start_with_grant(Config {
+        root: Some(folder.clone()),
+        cache: Ok(cache),
+        make_embedder: Box::new(move || Ok(Box::new(Counting(counted.clone(), ConceptEmbedder::stand_in())))),
+        busy: None,
+        tuning: Tuning::default(),
+    }, None, None, Some(Box::new(move || grant.load(Ordering::SeqCst))), || {});
+    service.wait_idle();
+    let passages = ["Customer refund after cancellation.", "A walk in the garden."];
+    assert_eq!(service.closest_in_meaning("money back", &passages), Some(0));
+    let before = calls.load(Ordering::SeqCst);
+    allowed.store(false, Ordering::SeqCst);
+    assert_eq!(service.closest_in_meaning("money back", &passages), None);
+    assert_eq!(calls.load(Ordering::SeqCst), before);
+    service.shutdown();
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn relevance_sort_uses_passage_evidence_and_preserves_text_quotes_and_pagination() {
     let (folder, cache) = fixture_copy("rerank");
     std::fs::write(folder.join("needleword.md"), "# Needleword plan
