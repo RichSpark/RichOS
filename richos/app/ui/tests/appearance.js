@@ -1937,31 +1937,34 @@ async function main() {
       `gone; ink #DFE4EE -> #0C1322 and swoosh ${dark.swoosh} -> ${light.swoosh} across the theme`;
   });
 
-  await run.check("16  the foot of the rail is HIS — and says nothing it does not know", async () => {
+  await run.check("16  the initials circle at the bottom of the rail is HIS — and says nothing it does not know", async () => {
     // The CEO's correction to round 10.1, and the honest-unset half is the load-bearing one:
     // there was no user-name preference in this product until today, so this is the state
-    // almost every install is in.
+    // almost every install is in. Since round 58 it is the navigation rail's `#nr-me`.
     const page = track(await openApp(browser));
     const unset = await page.evaluate(() => {
-      const row = document.getElementById("rail-identity");
+      const row = document.getElementById("nr-me");
       return {
         isUnset: row.classList.contains("is-unset"),
-        initials: document.getElementById("rail-initials").textContent,
-        label: document.getElementById("rail-user-name").textContent,
+        initials: document.getElementById("nr-initials").textContent,
+        label: row.getAttribute("aria-label"),
+        tip: row.dataset.tip,
+        outline: getComputedStyle(row.querySelector(".nr-anon")).display !== "none",
         richLabelGone: !document.querySelector(".rail-rich-label"),
       };
     });
     assert(unset.isUnset, "a fresh install has no name and must say so");
     assertEqual(unset.initials, "", "the circle carries NO letters — not invented ones, and not '??'");
+    assert(unset.outline, "it holds a plain person outline instead");
     assert(!/\?\?/.test(unset.label), "and the label is not '??' either: " + unset.label);
-    assertEqual(unset.label, "Set your name", "it says what is true, and it is an offer rather than a dead end");
+    assertEqual([unset.tip, unset.label], ["Set your name", "Set your name, open Settings"], "it says what is true, and it is an offer rather than a dead end");
     assert(unset.richLabelGone, "Rich's nameplate is gone from the CEO's own rail");
 
-    // Round 27: the unset nameplate opens the ONE Settings panel on the name field.
-    await page.click("#rail-identity");
+    // Round 27: with no name, the circle opens the ONE Settings panel on the name field.
+    await page.click("#nr-me");
     await overlayOpen(page, "#set-menu");
     assertEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), "user-name-input",
-      "the nameplate opens Settings with the name field ready");
+      "the circle opens Settings with the name field ready");
     await page.fill("#user-name-input", "Alex Booster");
     // The `change` handler is `await set_user_name` and THEN `await renderUserIdentity()`,
     // which re-reads `get_user_identity`. The second read is what paints the initials and the
@@ -1971,15 +1974,15 @@ async function main() {
     await page.dispatchEvent("#user-name-input", "change");
     await afterInvoke(page, "get_user_identity", reread);
     const named = await page.evaluate(() => ({
-      isUnset: document.getElementById("rail-identity").classList.contains("is-unset"),
-      initials: document.getElementById("rail-initials").textContent,
-      label: document.getElementById("rail-user-name").textContent,
+      isUnset: document.getElementById("nr-me").classList.contains("is-unset"),
+      initials: document.getElementById("nr-initials").textContent,
+      tip: document.getElementById("nr-me").dataset.tip,
     }));
     assertEqual(named.initials, "AB", "first and last, two letters — the pattern his Codex app uses");
-    assertEqual(named.label, "Alex Booster", "with the name beside it");
-    assertEqual(named.isUnset, false, "and the row stops being an offer once it is a nameplate");
+    assertEqual(named.tip, "Alex Booster", "with the whole name as its tooltip");
+    assertEqual(named.isUnset, false, "and the circle is filled once there is a name");
     await page.close();
-    return "unset: empty circle + 'Set your name'; named: AB + Alex Booster";
+    return "unset: a person outline, 'Set your name'; named: AB, Alex Booster";
   });
 
   // ---- 12h. every scrolling surface declares its color scheme (walk 39, D11) -----------------

@@ -5,8 +5,9 @@
 // check hands the mock a FIXED snapshot in `system_resources.rs`'s shape (live, busy, measuring,
 // stale, unavailable, after sleep) — a fixture, not a sampler: nothing here moves on its own.
 //
-//    1  Ink is the default on a first run: the square is opposite the name at 34 px, no numbers
-//    2  Ink and Readout, both themes: footer and card photographed (shots-resources/)
+//    1  Ink is the default on a first run: the square is on the navigation rail at 36 px,
+//       centered, above the initials circle, no numbers (design round 58 moved it there)
+//    2  Ink and Readout, both themes: the rail's foot and the card photographed (shots-resources/)
 //    3  every text pair in the card, the readout and the menu clears 4.5:1, both themes,
 //       computed with the repository's contrast arithmetic; the repository's own walk finds no
 //       failure under the square, the card or the menu
@@ -17,14 +18,15 @@
 //    6  the keyboard: focus opens the card, Escape closes it with focus kept on the square;
 //       Shift+F10 and the context-menu key open the same menu, arrows and Enter choose, Escape
 //       leaves it, and focus comes back to the square; the selected chat never changes
-//    7  Readout at the default 300 px rail does not cut the name, and the numbers never change
-//       width between 8%, 88% and 100%
+//    7  Readout's two numbers stack under the square inside the rail, and never change width
+//       between 8%, 88% and 100%
 //    8  warming up, not current, unavailable and a failed read never show 0%
 //    9  after sleep the gap is drawn as a gap labeled Asleep, never as zeros
 //   10  hover and click open the card without moving focus or changing the selected chat
 //   11–13 ordered settings and stale/pending-read regressions
-//   14  collapsed sidebar stops UI reads/paint, restores fresh values and dismisses overlays
-//   15  long names wrap at all seven type sizes, both views; an open card follows reflow
+//   14  hiding the sidebar leaves the square on the rail, live, its card still opening
+//   15  at all seven type sizes, both views, "100%" fits the rail and nothing overlaps the
+//       initials circle; an open card opens to the right of the rail and follows reflow
 //   16  visible keyboard hint, Down Arrow menu access, saved choice and focus restoration
 //   17  hiding the window pauses work without losing a pin or the view menu's focus
 //
@@ -43,7 +45,6 @@ const png = require("./lib/png");
 
 const APP = "file://" + path.join(UI_DIR, "index.html");
 const SHOTS = path.join(__dirname, "shots-resources");
-const NAME = "Alex Booster";
 const TEXT_FLOOR = 4.5;
 const PAINT_FLOOR = 3;
 
@@ -181,15 +182,18 @@ async function setKind(page, kind) {
 const facts = (page) => page.evaluate(() => {
   const sq = document.getElementById("res-square");
   const tile = sq.querySelector(".res-tile").getBoundingClientRect();
-  const name = document.getElementById("rail-user-name");
-  const nr = name.getBoundingClientRect();
+  const me = document.getElementById("nr-me").getBoundingClientRect();
+  const nav = document.getElementById("nav-rail").getBoundingClientRect();
+  const readout = sq.querySelector(".res-readout").getBoundingClientRect();
   const card = document.getElementById("res-card");
   const menu = document.getElementById("res-menu");
   return {
     view: sq.dataset.view,
     state: sq.dataset.state,
     tile: { w: tile.width, h: tile.height, left: tile.left, top: tile.top, right: tile.right, bottom: tile.bottom },
-    name: { text: name.textContent, right: nr.right, top: nr.top, bottom: nr.bottom, truncated: name.scrollWidth > name.clientWidth },
+    me: { left: me.left, top: me.top, right: me.right, bottom: me.bottom },
+    nav: { left: nav.left, right: nav.right, width: nav.width, bottom: nav.bottom },
+    readoutBox: { left: readout.left, right: readout.right, top: readout.top, bottom: readout.bottom },
     readoutShown: getComputedStyle(sq.querySelector(".res-readout")).display !== "none",
     readout: Array.from(sq.querySelectorAll(".res-num b")).map((b) => b.textContent),
     cardOpen: card.classList.contains("is-open"),
@@ -199,14 +203,14 @@ const facts = (page) => page.evaluate(() => {
     focused: document.activeElement ? document.activeElement.id || document.activeElement.className : null,
     thread: typeof activeThreadId === "undefined" ? null : activeThreadId,
     stored: JSON.parse(localStorage.getItem("richos-mock-config") || "{}").resources_view || null,
-    railWidth: document.getElementById("rail").getBoundingClientRect().width,
   };
 });
 
-/// The footer, and the card when it is open, as one picture.
+/// The foot of the navigation rail (Bust a bug, the square, the initials), and the card when it
+/// is open, as one picture.
 async function footerShot(page, file) {
   const clip = await page.evaluate(() => {
-    const rects = [document.getElementById("rail-footer").getBoundingClientRect()];
+    const rects = [document.querySelector("#nav-rail .nr-bottom").getBoundingClientRect()];
     const card = document.getElementById("res-card");
     if (card.classList.contains("is-open")) rects.push(card.getBoundingClientRect());
     const x = Math.min(...rects.map((r) => r.left)) - 8;
@@ -341,16 +345,16 @@ async function main() {
     const context = await newContext(browser, theme);
     let page = await openApp(context, "live");
 
-    await run.check(`1 ${theme}  Ink is the default on a first run: 34 px, opposite the name, no numbers`, async () => {
+    await run.check(`1 ${theme}  Ink is the default on a first run: 36 px on the navigation rail, above the initials, no numbers`, async () => {
       const f = await facts(page);
       assertEqual(f.view, "ink", "the view a first run opens in");
-      assertEqual([f.tile.w, f.tile.h], [34, 34], "the square's size");
+      assertEqual([f.tile.w, f.tile.h], [36, 36], "the square's size");
       assert(!f.readoutShown, "Ink shows no numbers");
-      assert(f.tile.left > f.name.right, "the square is to the right of the name");
-      assert(Math.abs((f.tile.top + f.tile.bottom) / 2 - (f.name.top + f.name.bottom) / 2) <= 2, "on the name's row");
-      assertEqual(f.name.text, NAME, "the name shown");
-      assert(!f.name.truncated, "the name is not cut");
-      return `${f.tile.w}x${f.tile.h} at x=${f.tile.left}, name ends at ${Math.round(f.name.right)}`;
+      assert(Math.abs((f.tile.left + f.tile.right) / 2 - (f.nav.left + f.nav.width / 2 - 0.5)) <= 1, "centered on the rail");
+      assert(f.tile.bottom <= f.me.top, "above the initials circle");
+      assertEqual(await page.evaluate(() => document.getElementById("rail").contains(document.getElementById("res-square"))), false, "not in the sidebar");
+      assertEqual(await page.evaluate(() => document.getElementById("nr-initials").textContent), "AB", "the initials under it");
+      return `${f.tile.w}x${f.tile.h} at x=${f.tile.left} on a ${f.nav.width}px rail, initials at y=${Math.round(f.me.top)}`;
     });
 
     await run.check(`2 ${theme}  Ink and Readout photographed with the card pinned (shots-resources/)`, async () => {
@@ -387,9 +391,11 @@ async function main() {
         await setKind(page, kind);
         await openCard(page);
         for (const p of await textPairs(page, "#res-card")) pairs.push(Object.assign({ where: "card", kind }, p));
+        // The rail's painted pixels in the gap between the numbers and the initials circle.
         const r = await page.evaluate(() => {
           const b = document.querySelector("#res-square .res-readout").getBoundingClientRect();
-          return { x: b.left - 12, y: b.top - 2, width: 8, height: b.height + 4 };
+          const nav = document.getElementById("nav-rail").getBoundingClientRect();
+          return { x: nav.left + 4, y: b.bottom + 2, width: nav.width - 9, height: 3 };
         });
         const ground = await groundPixel(page, r);
         for (const p of await textPairs(page, "#res-square .res-readout", ground)) pairs.push(Object.assign({ where: "readout", kind }, p));
@@ -449,7 +455,7 @@ async function main() {
         const ring = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
         return { t: { x: t.left, y: t.top, w: t.width, h: t.height }, edge: cs.borderTopColor, keys, ring };
       });
-      // The rail's own painted pixels in the footer's padding just above the square.
+      // The rail's own painted pixels in the gap just above the square.
       const rail = await groundPixel(page, { x: geo.t.x + 4, y: geo.t.y - 7, width: geo.t.w - 8, height: 4 });
       const probe = await page.evaluate((v) => { const p = document.createElement("canvas").getContext("2d"); p.fillStyle = v; return p.fillStyle; }, geo.ring);
       for (const [what, color] of [["square edge", geo.edge], ["focus ring", probe], ...geo.keys.map((k, i) => [["cpu key user", "cpu key system", "ram key (warning)"][i], k])]) {
@@ -495,7 +501,7 @@ async function main() {
 
     await run.check(`6 ${theme}  keyboard: focus opens the card, Escape closes it with focus kept; Shift+F10 and the menu key switch the view`, async () => {
       const thread = (await facts(page)).thread;
-      // Reached the way a keyboard user reaches it: Tab from the name beside it.
+      // Reached the way a keyboard user reaches it: Tab along the navigation rail.
       // WebKit on macOS leaves buttons out of the Tab order unless the Mac's keyboard
       // navigation setting is on, as it does for every button in the app; so the focus is
       // given right after a key, which is what makes it keyboard focus (:focus-visible).
@@ -538,14 +544,15 @@ async function main() {
       return "card on focus, Escape keeps focus, Shift+F10 / ContextMenu / arrows / Enter / Space / Escape";
     });
 
-    await run.check(`7 ${theme}  Readout at the default 300 px rail keeps the whole name, and the numbers never change width`, async () => {
+    await run.check(`7 ${theme}  Readout stacks under the square inside the rail, and the numbers never change width`, async () => {
       await page.click("#res-square", { button: "right" });
       await page.click('#res-menu [data-view="readout"]');
       await setKind(page, "full");
       const f = await facts(page);
-      assertEqual(f.railWidth, 300, "the rail's default width");
       assertEqual(f.readout[0], "100%", "the widest CPU figure");
-      assert(!f.name.truncated, `"${f.name.text}" is cut at 300 px with Readout on`);
+      assert(f.readoutBox.top >= f.tile.bottom, "the numbers are under the square");
+      assert(f.readoutBox.left >= f.nav.left && f.readoutBox.right <= f.nav.right - 1, "the numbers stay inside the rail: " + JSON.stringify([f.readoutBox, f.nav]));
+      assert(f.readoutBox.bottom <= f.me.top, "the numbers stay above the initials circle");
       const widths = await page.evaluate(() => {
         const r = document.querySelector("#res-square .res-readout");
         const b = document.getElementById("res-cpu");
@@ -559,55 +566,7 @@ async function main() {
       await page.click("#res-square", { button: "right" });
       await page.click('#res-menu [data-view="ink"]');
       await setKind(page, "live");
-      return `rail ${f.railWidth}px, name whole, readout ${widths[0]}px for every figure`;
-    });
-
-    await run.check(`7b ${theme}  with no name saved, "Set your name" stays on one line beside the Readout at the default 300 px rail`, async () => {
-      await page.click("#res-square", { button: "right" });
-      await page.click('#res-menu [data-view="readout"]');
-      await setKind(page, "full");
-      await page.evaluate(async () => {
-        await window.RichBridge.invoke("set_user_name", { name: "" });
-        await renderUserIdentity();
-      });
-      await flushFrames(page);
-      const m = await page.evaluate(() => {
-        const n = document.getElementById("rail-user-name");
-        const range = document.createRange(); range.selectNodeContents(n);
-        const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top)));
-        const identity = document.getElementById("rail-identity").getBoundingClientRect();
-        const resource = document.getElementById("res-square").getBoundingClientRect();
-        return { text: n.textContent, lines: lines.size, clipped: n.scrollWidth > n.clientWidth,
-          overlap: identity.right > resource.left + 1, railWidth: document.getElementById("rail").getBoundingClientRect().width };
-      });
-      assertEqual(m.railWidth, 300, "the rail's default width");
-      assertEqual(m.text, "Set your name", "the unset label");
-      assertEqual(m.lines, 1, "\"Set your name\" is on one line");
-      assert(!m.clipped && !m.overlap, "the label is cut or overlaps the readout: " + JSON.stringify(m));
-      // A larger Text size: the label may wrap, but never paints into the Readout.
-      for (const scale of [120, 150]) {
-        await page.evaluate((v) => window.RichTheme.setScale(v), scale);
-        await flushFrames(page);
-        const big = await page.evaluate(() => {
-          const n = document.getElementById("rail-user-name");
-          const range = document.createRange(); range.selectNodeContents(n);
-          const glyphRight = Math.max(...[...range.getClientRects()].map((r) => r.right));
-          const readout = document.querySelector("#res-square .res-readout").getBoundingClientRect();
-          return { glyphRight, readoutLeft: readout.left, intrusion: Math.max(0, glyphRight - readout.left),
-            clipped: n.scrollWidth > n.clientWidth };
-        });
-        await page.evaluate(() => window.RichTheme.setScale(100));
-        assert(big.intrusion === 0 && !big.clipped, `at ${scale}% text size the label paints into the readout or is cut: ` + JSON.stringify(big));
-      }
-      await flushFrames(page);
-      await page.evaluate(async () => {
-        await window.RichBridge.invoke("set_user_name", { name: "Alex Booster" });
-        await renderUserIdentity();
-      });
-      await page.click("#res-square", { button: "right" });
-      await page.click('#res-menu [data-view="ink"]');
-      await setKind(page, "live");
-      return "one line at 300px, Readout on";
+      return `rail ${f.nav.width}px, readout ${widths[0]}px for every figure`;
     });
 
     await run.check(`8 ${theme}  measuring, not current, unavailable and a failed read never show 0%`, async () => {
@@ -785,7 +744,7 @@ async function main() {
       }
     });
 
-    await run.check(`14 ${theme}  collapsed rail stops cache reads and canvas paints, then refreshes before showing live values`, async () => {
+    await run.check(`14 ${theme}  hiding the sidebar leaves the square on the rail, live, its card still opening`, async () => {
       const pausedContext = await newContext(browser, theme, { motion: true });
       try {
         const p = await openApp(pausedContext, "live", { clock: true });
@@ -794,12 +753,7 @@ async function main() {
           const invoke = window.RichBridge.invoke.bind(window.RichBridge);
           window.RichBridge.invoke = async (cmd, args) => {
             if (cmd === "system_resources") window.__resourceCounts.reads++;
-            const answer = await invoke(cmd, args);
-            if (cmd === "system_resources" && window.__holdResourceResume) {
-              window.__resumePending = true;
-              await new Promise((resolve) => { window.__releaseResourceResume = resolve; });
-            }
-            return answer;
+            return invoke(cmd, args);
           };
           const fill = CanvasRenderingContext2D.prototype.fillRect;
           CanvasRenderingContext2D.prototype.fillRect = function (...args) {
@@ -807,102 +761,80 @@ async function main() {
             return fill.apply(this, args);
           };
         });
-        await p.clock.fastForward(2000);
-        const active = await p.evaluate(() => window.__resourceCounts);
-        assert(active.reads > 0 && active.paints > 0, "the visible square has an active read and glide control");
-        await p.click("#res-square");
         await p.click("#rail-toggle");
         await p.clock.fastForward(500);
-        const stopped = await p.evaluate(() => ({ ...window.__resourceCounts }));
-        await p.clock.fastForward(5000);
-        assertEqual(await p.evaluate(() => window.__resourceCounts), stopped, "no reads or paints while collapsed");
-        assertEqual(await p.evaluate(() => document.getElementById("res-card").classList.contains("is-open")), false, "the detached card closes with its rail");
-        await p.evaluate(() => { window.__resourcesKind = "busy"; window.__holdResourceResume = true; });
-        await p.click("#rail-toggle");
-        await p.waitForFunction(() => window.__resumePending);
-        assertEqual(await p.evaluate(() => window.RichResources.status), "stale", "old values are stale while the restored cache read is pending");
-        await p.evaluate(() => { window.__holdResourceResume = false; window.__releaseResourceResume(); });
-        await p.waitForFunction(() => window.RichResources.status === "live");
+        const before = await p.evaluate(() => ({ ...window.__resourceCounts }));
+        await p.clock.fastForward(3000);
+        const after = await p.evaluate(() => ({ ...window.__resourceCounts }));
+        assert(after.reads > before.reads && after.paints > before.paints, "the square keeps reading and painting with the sidebar hidden");
+        assert(await p.isVisible("#res-square"), "the square is still on screen");
         await p.click("#res-square");
-        assert((await facts(p)).cardText.includes("Warning"), "restoring reads the new busy snapshot, not the held pre-collapse values");
-        // The first-paint mirror can hide the rail without the body class too.
+        assert((await facts(p)).cardOpen, "its card still pins open");
+        await p.click("#res-square");
+        // The first-paint mirror of a hidden sidebar changes nothing on the rail either.
         await p.evaluate(() => document.documentElement.setAttribute("data-sidebar", "hidden"));
         await p.clock.fastForward(500);
-        assertEqual(await p.evaluate(() => document.getElementById("res-card").classList.contains("is-open")), false, "the mirrored close dismisses the detached card");
         const mirrored = await p.evaluate(() => ({ ...window.__resourceCounts }));
-        await p.clock.fastForward(5000);
-        assertEqual(await p.evaluate(() => window.__resourceCounts), mirrored, "the durable hidden mirror also stops all resource work");
+        await p.clock.fastForward(3000);
+        assert((await p.evaluate(() => window.__resourceCounts.reads)) > mirrored.reads, "the durable hidden mirror does not stop the square");
         await p.evaluate(() => document.documentElement.removeAttribute("data-sidebar"));
-        await p.waitForFunction((n) => window.__resourceCounts.reads > n, mirrored.reads);
-        await p.click("#res-square", { button: "right" });
-        await p.evaluate(() => document.documentElement.setAttribute("data-sidebar", "hidden"));
-        await p.waitForFunction(() => document.getElementById("res-menu").hidden);
-        assertEqual(await p.evaluate(() => document.activeElement.id), "rail-toggle", "a hidden menu returns focus to the way back to its rail");
+        await p.click("#rail-toggle");
         assertEqual(p.__errors, [], "no page errors");
-        return "visible activity control; no cache reads or canvas paint in either closed selector; held restore is stale, then fresh busy values arrive";
+        return `reads ${before.reads} -> ${after.reads} and paints ${before.paints} -> ${after.paints} with the sidebar hidden; the card pins`;
       } finally { await pausedContext.close(); }
     });
 
-    await run.check(`15 ${theme}  long names remain whole beside both resource views at every supported type size`, async () => {
-      const namesContext = await newContext(browser, theme);
+    await run.check(`15 ${theme}  at every supported type size the square, its Readout and the initials stay inside the rail; the card follows`, async () => {
+      const scaleContext = await newContext(browser, theme);
       try {
-        const p = await openApp(namesContext, "live");
-        const names = ["Alexandra Montgomery-Booster", "AlexandertheGreatBooster", "WWMMWWMMWWMMWWMMWWMMWWMM"];
+        const p = await openApp(scaleContext, "full");
         let measured = 0;
         for (const scale of [80, 90, 100, 110, 120, 135, 150]) {
           for (const view of ["ink", "readout"]) {
             await p.click("#res-square", { button: "right" });
             await p.click(`#res-menu [data-view="${view}"]`);
-            for (const name of names) {
-              await p.evaluate(async ({ name, scale }) => {
-                await window.RichBridge.invoke("set_user_name", { name });
-                await renderUserIdentity();
-                window.RichTheme.setScale(scale);
-              }, { name, scale });
-              await flushFrames(p);
-              const layout = await p.evaluate(() => {
-                const n = document.getElementById("rail-user-name");
-                const box = n.getBoundingClientRect();
-                const range = document.createRange(); range.selectNodeContents(n);
-                const glyphs = [...range.getClientRects()];
-                const identity = document.getElementById("rail-identity").getBoundingClientRect();
-                const resource = document.getElementById("res-square").getBoundingClientRect();
-                const footer = document.getElementById("rail-footer").getBoundingClientRect();
-                const figures = getComputedStyle(document.querySelector(".res-readout"));
-                return { text: n.textContent, clipped: n.scrollWidth > n.clientWidth || n.scrollHeight > n.clientHeight,
-                  outside: glyphs.some((r) => r.left < box.left - 1 || r.right > box.right + 1 || r.top < box.top - 1 || r.bottom > box.bottom + 1),
-                  overlap: identity.right > resource.left + 1, footerBottom: footer.bottom, height: innerHeight,
-                  railWidth: document.getElementById("rail").getBoundingClientRect().width,
-                  font: parseFloat(getComputedStyle(n).fontSize), line: parseFloat(figures.lineHeight), figuresFont: parseFloat(figures.fontSize) };
-              });
-              assertEqual(layout.text, name, "the saved name is rendered in full");
-              assert(!layout.clipped && !layout.outside && !layout.overlap, `${view} ${scale}% clips or overlaps ${name}: ${JSON.stringify(layout)}`);
-              assertEqual(layout.railWidth, 300, "no rail widening to make the name fit");
-              assert(Math.abs(layout.font - 16 * scale / 100) < 0.001, "the chosen type size is preserved: " + layout.font);
-              assert(layout.footerBottom <= layout.height + 1, "the footer remains within the window");
-              if (view === "readout") assert(layout.line >= layout.figuresFont, "Readout line spacing follows the chosen type size");
-              measured++;
-              if ((scale === 100 && name === names[0]) || (scale === 150 && name === names[1])) {
-                await p.evaluate(() => document.activeElement.blur());
-                await p.mouse.move(700, 450);
-                await footerShot(p, `${scale === 100 ? "long-name" : "long-word-150"}-${view}-${theme}.png`);
-              }
+            await p.evaluate((v) => window.RichTheme.setScale(v), scale);
+            await flushFrames(p);
+            const f = await facts(p);
+            const figures = await p.evaluate(() => {
+              const cs = getComputedStyle(document.querySelector(".res-readout"));
+              return { font: parseFloat(cs.fontSize), line: parseFloat(cs.lineHeight) };
+            });
+            if (view === "readout") {
+              assertEqual(f.readout[0], "100%", "the widest figure");
+              assert(f.readoutBox.left >= f.nav.left && f.readoutBox.right <= f.nav.right - 1, `${scale}%: "100%" leaves the rail: ` + JSON.stringify([f.readoutBox, f.nav]));
+              assert(f.readoutBox.bottom <= f.me.top, `${scale}%: the numbers run into the initials circle`);
+              assert(Math.abs(figures.font - 16 * scale / 100) < 0.001, "the figures keep the chosen type size: " + figures.font);
+              assert(figures.line >= figures.font, "Readout line spacing follows the chosen type size");
+            }
+            assert(f.tile.left >= f.nav.left && f.tile.right <= f.nav.right, `${scale}% ${view}: the square leaves the rail`);
+            assert(f.me.bottom <= f.nav.bottom, `${scale}% ${view}: the initials circle leaves the window`);
+            measured++;
+            if (scale === 150 && view === "readout") {
+              await p.evaluate(() => document.activeElement.blur());
+              await p.mouse.move(700, 450);
+              await footerShot(p, `readout-150-${theme}.png`);
             }
           }
         }
-        await p.evaluate(async () => {
-          await window.RichBridge.invoke("set_user_name", { name: "Alexandra Montgomery-Booster" });
-          await renderUserIdentity();
-          window.RichTheme.setScale(100);
-        });
+        await p.click("#res-square", { button: "right" });
+        await p.click('#res-menu [data-view="ink"]');
+        await p.evaluate(() => window.RichTheme.setScale(100));
         await p.click("#res-square");
         await p.evaluate(() => window.RichTheme.setScale(150));
         await flushFrames(p);
-        const anchorGap = await p.evaluate(() => document.querySelector("#res-square .res-tile").getBoundingClientRect().top - document.getElementById("res-card").getBoundingClientRect().bottom);
-        assert(Math.abs(anchorGap - 12) <= 1.5, "the card follows the reflowed footer: " + anchorGap);
+        const at = await p.evaluate(() => {
+          const t = document.querySelector("#res-square .res-tile").getBoundingClientRect();
+          const c = document.getElementById("res-card").getBoundingClientRect();
+          const nav = document.getElementById("nav-rail").getBoundingClientRect();
+          return { gap: c.left - t.right, overRail: c.left < nav.right, footGap: c.bottom - t.bottom };
+        });
+        assert(Math.abs(at.gap - 14) <= 1.5, "the card opens 14px right of the square after reflow: " + JSON.stringify(at));
+        assert(!at.overRail, "the card never covers the rail");
+        await p.evaluate(() => window.RichTheme.setScale(100));
         assertEqual(p.__errors, [], "no page errors");
-        return `${measured} rendered layouts: three names, seven supported scales, both views; no clipping, overlap or font reduction`;
-      } finally { await namesContext.close(); }
+        return `${measured} rendered layouts: seven supported scales, both views; card ${Math.round(at.gap)}px right of the square`;
+      } finally { await scaleContext.close(); }
     });
 
     await run.check(`16 ${theme}  a visible keyboard hint opens view choices with Down Arrow and preserves click-to-pin`, async () => {
@@ -983,17 +915,8 @@ async function main() {
         await p.evaluate(() => window.__setResourceWindowHidden(false));
         assert((await facts(p)).menuOpen, "the same menu is available when the window returns");
         assertEqual(await p.evaluate(() => document.activeElement.dataset.view), focused, "window hiding preserves menu focus");
-        // A rail collapse still dismisses detached UI, even if the window was hidden first.
-        await p.evaluate(() => {
-          window.__setResourceWindowHidden(true);
-          document.documentElement.setAttribute("data-sidebar", "hidden");
-        });
-        await p.clock.fastForward(500);
-        assertEqual((await facts(p)).menuOpen, false, "a rail collapsed during the window pause dismisses its menu");
-        await p.evaluate(() => window.__setResourceWindowHidden(false));
-        assertEqual((await facts(p)).cardOpen, false, "showing a window with a collapsed rail keeps the card closed");
         assertEqual(p.__errors, [], "no page errors");
-        return "controlled hidden-document pause preserves pin and menu focus; a later rail collapse still dismisses detached UI";
+        return "controlled hidden-document pause preserves pin and menu focus";
       } finally { await hiddenContext.close(); }
     });
 

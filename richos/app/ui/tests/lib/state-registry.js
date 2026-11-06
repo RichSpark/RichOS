@@ -407,24 +407,22 @@ module.exports = [
   {
     s: "Set your name",
     c: "ACTIONABLE",
-    control: "#rail-identity",
+    control: "#nr-me",
     why:
-      "The rail footer's honest unset state (CEO correction to round 10.1). There is no " +
+      "The initials circle's honest unset state at the bottom of the navigation rail (CEO " +
+      "correction to round 10.1; moved from the sidebar's foot by round 58). There is no " +
       "user-name preference on a fresh install, so this is what almost every install shows, " +
-      "and it is deliberately NOT an invented name or a '??' placeholder. It is ACTIONABLE " +
-      "because it is an imperative aimed at the reader, and the control is the row itself — " +
-      "in the unset state `#rail-identity` is a button that opens the one Settings panel " +
-      "on the field (round 27). Once a name is set the row stops being a control and the " +
-      "string stops rendering, which is the correct pairing in both directions.",
+      "and it is deliberately NOT an invented name or a '??' placeholder. It is the circle's " +
+      "tooltip, and the control is the circle itself, which opens the one Settings panel on " +
+      "the name field (round 27). Once a name is set the tooltip is the name.",
   },
   {
-    s: "No name is set. Open Settings to add yours.",
+    s: "Set your name, open Settings",
     c: "ACTIONABLE",
-    control: "#rail-identity",
+    control: "#nr-me",
     why:
-      "The accessible name of the same row, and for a screen-reader user it is the whole " +
-      "message — the empty initials circle is `aria-hidden`. Same control, stated longer " +
-      "because a two-word label reads as a heading when it is announced alone.",
+      "The accessible name of the same circle, and for a screen-reader user it is the whole " +
+      "message: the person outline is `aria-hidden`. Same control; it names what a press does.",
   },
   {
     s: "I can't hear anything. Check your mic isn't muted, then try again.",

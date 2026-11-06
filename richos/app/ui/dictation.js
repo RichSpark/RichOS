@@ -478,6 +478,16 @@
   function paint() {
     paintRow();
     paintSheet();
+    paintRail();
+  }
+  /// The navigation rail's RichScribe item (round 58): shown where RichScribe is in this build,
+  /// with its gold dot while RichScribe is on and waits on a Mac permission.
+  function paintRail() {
+    if (!window.RichNavRail || !view) return;
+    window.RichNavRail.setScribe({
+      available: !!view.ready,
+      needsPermission: !!view.on && !elsewhere() && (mic() !== "allowed" || ax() !== "allowed"),
+    });
   }
 
   // ---- the sample bar breathes, while the sheet shows and motion is welcome ---------------

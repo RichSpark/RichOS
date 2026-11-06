@@ -394,6 +394,255 @@ button {
 }
 
 /* ---------------------------------------------------------------------------------------
+   THE NAVIGATION RAIL — design round 58, version A "Hairline" (the CEO's pick, 2026-11-06).
+   `#rail` is the sidebar; this strip is `#nav-rail` (index.html, nav-rail.js).
+
+   Urban as written (richos-hq `docs/design/2026-11-06-navigation-rail-recommendation.md`):
+   52px wide in rem so the text-size control grows it, a 36px target round each 20px glyph, the
+   sidebar's own ground with a hairline between, every glyph in a solid soft ink at rest, the
+   selected one gold on a soft gold tile with a 3px gold bar at the left edge that slides to it.
+
+   THE INKS ARE SOLID, not the sidebar's alpha `--ink-soft`, so a glyph's contrast is one number
+   per theme and does not move with whatever is under it. Computed with
+   `richos/app/scripts/qa/contrast.py --nontext` against the rail as the app paints it (dark:
+   the ground under the speckle's 32% black, #080d17; light: the ruled ground #eae6dd), floor 3:1:
+     rest      dark #9298a2  6.70:1   light #53575e  5.83:1
+     hover     dark #dfe4ee 15.25:1   light #0c1322 14.90:1
+     selected  dark #c2a35c  8.04:1   light #715715  5.48:1  (the glyph, the bar and RichScribe's dot)
+   Light mode selects in `--gold-text`, not `--gold`: #9c7c34 is 3.15:1 there, too near the
+   floor for a key's thin teeth. `tests/nav-rail.js` measures the rendered glyphs. */
+:root {
+  --nr-ink: #9298a2;
+  --nr-ink-hover: #dfe4ee;
+  --nr-sel: #c2a35c;
+  --nr-sel-soft: rgba(194, 163, 92, 0.13);
+}
+:root[data-theme="light"] {
+  --nr-ink: #53575e;
+  --nr-ink-hover: #0c1322;
+  --nr-sel: #715715;
+  --nr-sel-soft: rgba(156, 124, 52, 0.14);
+}
+
+#nav-rail {
+  position: relative;
+  z-index: 31;
+  flex: none;
+  width: 3.25rem;
+  height: 100%;
+  box-sizing: border-box;
+  border-right: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.75rem 0;
+  background: var(--paper-rail);
+}
+.nr-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+}
+.nr-bottom {
+  margin-top: auto;
+  gap: 0.5rem;
+}
+.nr-div {
+  width: 1.5rem;
+  height: 1px;
+  border: 0;
+  margin: 0.25rem 0;
+  background: var(--line-strong);
+}
+.nr-item {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--nr-ink);
+  font-family: var(--font);
+  cursor: pointer;
+  transition: color 0.16s, background-color 0.16s;
+}
+.nr-item[hidden] {
+  display: none;
+}
+.nr-glyph {
+  width: 1.25rem;
+  height: 1.25rem;
+  display: block;
+  overflow: visible;
+}
+.nr-item:hover {
+  background: var(--tint-soft);
+  color: var(--nr-ink-hover);
+}
+.nr-item:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.nr-item.is-sel,
+.nr-item.is-sel:hover {
+  background: var(--nr-sel-soft);
+  color: var(--nr-sel);
+}
+.nr-item[aria-disabled="true"] {
+  cursor: default;
+}
+/* RichScribe's one status dot: while a Mac permission is missing (nav-rail.js `setScribe`). */
+.nr-dot {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--nr-sel);
+  box-shadow: 0 0 0 2px var(--rail-bg);
+}
+.nr-dot[hidden] {
+  display: none;
+}
+/* The bar at the rail's left edge, slid to the selected item by nav-rail.js. */
+.nr-ind {
+  position: absolute;
+  z-index: 0;
+  left: 0;
+  top: 0;
+  width: 3px;
+  height: 1.25rem;
+  border-radius: 0 3px 3px 0;
+  background: var(--nr-sel);
+  pointer-events: none;
+  opacity: 0;
+  transition: transform 0.34s cubic-bezier(0.3, 1.25, 0.5, 1), opacity 0.2s;
+}
+.nr-ind.is-on {
+  opacity: 1;
+}
+
+/* YOUR INITIALS, moved here from the sidebar's foot: a filled gold circle the size of every
+   other target, the full name as its tooltip and its screen-reader name. Unset, a plain person
+   outline, never invented letters. #0c1322 on #c2a35c is 7.68:1 dark; on #9c7c34 light, 4.72:1.
+   The letters are 15px, DECLARED in the 14px skippable tier: they stand for the name, which the
+   tooltip and the screen-reader name carry whole at 16px. At 16px a wide pair ("WW") leaves the
+   36px circle (`tests/rail-initials-fit.js` measures the ink of every glyph). */
+.nr-me {
+  border-radius: 50%;
+  background: var(--gold);
+  color: var(--on-gold);
+}
+.nr-me:hover {
+  background: var(--gold);
+  color: var(--on-gold);
+  filter: brightness(1.08);
+}
+.nr-initials {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+.nr-anon {
+  display: none;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.nr-me.is-unset {
+  background: transparent;
+  color: var(--nr-ink);
+  box-shadow: inset 0 0 0 1.5px var(--line-control);
+  filter: none;
+}
+.nr-me.is-unset:hover {
+  background: var(--tint-soft);
+  color: var(--nr-ink-hover);
+}
+.nr-me.is-unset .nr-anon {
+  display: block;
+}
+.nr-me.is-unset .nr-initials {
+  display: none;
+}
+
+/* The Mac resources square, moved here from the sidebar's foot: 36px and centered, its
+   Readout numbers stacked under it, CPU first, in 16px tabular figures (nothing shrinks). */
+.nr-res {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* THE TOOLTIP: to the right of the item, on hover and on keyboard focus, the item's only
+   visible name, so 16px. The app's own tooltip paint (`#composer-tip`): ink on ground,
+   14.55:1 dark and 14.90:1 light; the shortcut in the same ink in a hairline frame. */
+#nr-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--ground);
+  font-family: var(--font);
+  font-size: 1rem;
+  font-weight: 550;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 20px var(--shadow-weak);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+#nr-tip[hidden] {
+  display: none;
+}
+#nr-tip.is-on {
+  opacity: 1;
+  transform: none;
+}
+#nr-tip::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  margin-top: -5px;
+  border: 5px solid transparent;
+  border-left: 0;
+  border-right-color: var(--ink);
+}
+#nr-tip kbd {
+  font: inherit;
+  font-weight: 450;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 1px solid currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nr-item,
+  .nr-ind,
+  #nr-tip {
+    transition: none;
+  }
+}
+
+
+/* ---------------------------------------------------------------------------------------
    Rail — recessive. A quiet index of topics Rich is tracking, never a channel list.
 --------------------------------------------------------------------------------------- */
 #rail {
@@ -476,96 +725,8 @@ button {
   color: var(--ink-soft);
 }
 
-#rail-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 6px 2px;
-  border-top: 1px solid var(--line);
-  margin-top: 8px;
-  position: relative;
-}
-
-/* THE FOOT OF THE RAIL — the CEO's identity, not Rich's (his correction to round 10.1).
-   A filled circle of initials, then the name. `assets/rich-hand.png` is still Rich's
-   avatar in the conversation, where it belongs; it is only this nameplate that changed
-   hands. */
-.rail-identity {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 2px 4px 2px 2px;
-  margin: 0;
-  border: 0;
-  border-radius: 999px;
-  background: none;
-  font-family: var(--font);
-  text-align: left;
-  cursor: default;
-}
-/* Only an offer when there is something to accept — see `.is-unset` below. */
-.rail-identity.is-unset {
-  cursor: pointer;
-  /* 4px tighter than a name's nameplate: with Readout on, "Set your name" on one line is 2px
-     wider than the room the default 300px rail leaves it (measured: 108px against 106px). */
-  gap: 6px;
-  padding-right: 0;
-}
-.rail-identity.is-unset:hover {
-  background: var(--tint-weak);
-}
-.rail-identity:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* 34px, not 26px: at the 14px floor a wide pair ("MW") is as wide as a 26px disc and the W's
-   top corner stuck out past the edge (walk 40, D12). `tests/rail-initials-fit.js` measures it. */
-.rail-initials {
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--gold);
-  color: var(--on-gold);
-  font-size: 0.875rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1;
-}
-
-/* UNSET: an EMPTY circle, drawn as an outline rather than a filled disc, because a filled
-   gold disc with nothing in it reads as a rendering failure. No letters at all — inventing
-   two is exactly what the correction forbids, and "??" is a placeholder pretending to be a
-   value. */
-.rail-identity.is-unset .rail-initials {
-  background: none;
-  border: 1px dashed var(--line);
-  color: transparent;
-}
-
-.rail-user-name {
-  font-size: 1rem;
-  color: var(--ink-soft);
-  min-width: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-/* The unset label is a real sentence the CEO is meant to read and act on, so it is tier 1
-   and it is `--ink-faint` rather than a whisper: 5.51:1 dark, 4.85:1 light. */
-.rail-identity.is-unset .rail-user-name {
-  color: var(--ink-faint);
-  /* A fixed two-word offer, never a name. It wraps like a name does (inherited `normal`):
-     one line at 100% beside the Readout on the default 300px rail, where the tighter
-     nameplate above leaves 110px for a 108px label, and two lines at a larger Text size
-     instead of painting into the Readout (`tests/resources.js` check 7b). */
-}
-
-/* The live Mac resources square (`resources.js`): opposite the name on the footer's
-   row, 34px like the initials disc. Ink by default, Readout through the context menu.
+/* The live Mac resources square (`resources.js`): on the navigation rail since round 58,
+   36px like every rail target. Ink by default, Readout through the context menu.
    The paints are measured from rendered pixels against the ground they sit on by
    `tests/resources.js` (floor 3:1), and every text pair by the same suite (floor 4.5:1).
 
@@ -602,11 +763,11 @@ button {
 }
 
 .res {
-  margin-left: auto;
   flex: 0 0 auto;
   display: flex;
+  flex-direction: column-reverse;
   align-items: center;
-  gap: 6px;
+  gap: 0.25rem;
   padding: 0;
   border: 0;
   background: none;
@@ -621,9 +782,9 @@ button {
 }
 .res-tile {
   position: relative;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
   border-radius: 8px;
   overflow: hidden;
   box-sizing: border-box;
@@ -646,13 +807,14 @@ button {
   transform: translateY(-1px);
 }
 
-/* Readout: the two numbers beside the square, text meant to be read, so 16px. No words: at the
-   default 300px rail "CPU" and "RAM" cut the name (round 47's walk measured it); each number
-   carries a key in the square's own paints instead, and the card names both. */
+/* Readout: the two numbers stacked under the square, CPU first, text meant to be read, so 16px
+   (round 58: the rail has no room beside the square, and the type stays at the readable floor
+   rather than shrinking to fit; "100%" fits the rail at 150% text, `tests/nav-rail.js`). No
+   words: each number carries a key in the square's own paints, and the card names both. */
 .res-readout {
   display: none;
   flex-direction: column;
-  align-items: stretch;
+  align-items: flex-end;
   font-size: 1rem;
   line-height: 1.0625;
   font-variant-numeric: tabular-nums;
@@ -666,23 +828,27 @@ button {
 .res-num {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 5px;
+  justify-content: flex-end;
+  gap: 0.125rem;
 }
+/* "100%" has to fit the 52px rail at 16px with its key (the rail's content is 51px): tabular
+   figures with 0.03em less tracking are 44.9px, so every figure gets one fixed 2.85em box (45.6px)
+   and the column never changes width between 8% and 100%. The size never shrinks. */
 .res-num b {
   font-weight: 500;
   color: var(--ink);
-  min-width: 3em;
   text-align: right;
+  letter-spacing: -0.03em;
+  min-width: 2.85em;
 }
 .res-key {
   display: flex;
   flex-direction: column;
-  width: 4px;
-  height: 12px;
-  border-radius: 1.5px;
+  width: 0.1875rem;
+  height: 0.75rem;
+  border-radius: 1px;
   overflow: hidden;
-  flex: 0 0 4px;
+  flex: 0 0 0.1875rem;
 }
 .res-key i {
   display: block;
@@ -734,8 +900,8 @@ button {
   box-shadow: 0 18px 40px -16px var(--shadow-strong), 0 2px 6px -2px var(--shadow-weak);
   opacity: 0;
   visibility: hidden;
-  transform: translateY(6px) scale(0.985);
-  transform-origin: calc(100% - 24px) 100%;
+  transform: translateX(-6px) scale(0.985);
+  transform-origin: 0 calc(100% - var(--res-arrow, 18px));
   pointer-events: none;
   transition: opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 180ms;
 }
@@ -746,18 +912,19 @@ button {
   pointer-events: auto;
   transition: opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
 }
+/* The arrow on the card's left edge, pointing at the square on the rail (round 58). */
 .res-card::after {
   content: "";
   position: absolute;
-  bottom: -7px;
-  right: var(--res-arrow, 24px);
+  left: -7px;
+  bottom: var(--res-arrow, 18px);
   width: 12px;
   height: 12px;
   background: inherit;
-  border-right: 1px solid var(--line-control);
+  border-left: 1px solid var(--line-control);
   border-bottom: 1px solid var(--line-control);
   transform: rotate(45deg);
-  border-bottom-right-radius: 3px;
+  border-bottom-left-radius: 3px;
 }
 .res-card-head {
   display: flex;
@@ -4904,10 +5071,11 @@ body.rail-instant #rail > * {
   }
 }
 
+/* The drawer slides out from the navigation rail's right edge (round 58): the rail stays. */
 body.bp-narrow #rail {
   position: fixed;
   top: 0;
-  left: 0;
+  left: 3.25rem;
   bottom: 0;
   z-index: 30;
   width: min(86vw, 320px);
@@ -9562,11 +9730,13 @@ body.home-open {
   background: transparent;
 }
 
-#rail {
+#rail,
+#nav-rail {
   background: var(--speckle-rail);
 }
 
-:root[data-theme="light"] #rail {
+:root[data-theme="light"] #rail,
+:root[data-theme="light"] #nav-rail {
   background: transparent;
 }
 
@@ -12532,6 +12702,18 @@ body.bug-dock-open .overlay-panel--desk {
   display: flex;
   align-items: flex-end;
   gap: 8px;
+}
+/* The RichDoctor line at the panel's foot (round 58, Urban): body ink, 16px, under a bug report
+   only. --ink on the panel's raised surface: 13.02:1 dark, 17.02:1 light (contrast.js holds it). */
+.bugdock-doctor {
+  margin: 0;
+  padding: 0 18px 14px;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.bugdock-doctor[hidden] {
+  display: none;
 }
 .bugdock-form {
   flex: 1;
