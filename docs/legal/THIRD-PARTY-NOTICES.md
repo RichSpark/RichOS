@@ -657,3 +657,6 @@ both under the MIT license. The BGE weights use the
 [CompendiumLabs GGUF conversion](https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf).
 The corresponding notices are in the app's `Resources/RichFinder` directory.
 The helper accepts requests through a private Unix socket on the Mac.
+
+[MS MARCO MiniLM-L6-v2](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2/tree/eeed17e3bfc6fa06a790f2d12a9501fec587fccf)
+is bundled under Apache-2.0 with its license in `Resources/RichFinder/Ranking`.

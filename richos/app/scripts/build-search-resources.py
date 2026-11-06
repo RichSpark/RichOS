@@ -16,6 +16,22 @@ HERE = Path(__file__).resolve().parent
 LLAMA_REV = "eed25bc6b052c363aa760d0055282cc2222ccf6e"
 MODEL_REV = "d32f8c040ea3b516330eeb75b72bcc2d3a780ab7"
 MODEL = "bge-small-en-v1.5-q8_0.gguf"
+RANK_REV = "eeed17e3bfc6fa06a790f2d12a9501fec587fccf"
+RANK_URL = f"https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2/resolve/{RANK_REV}"
+RANK_PINS = {
+    "model_qint8_arm64.onnx": (
+        f"{RANK_URL}/onnx/model_qint8_arm64.onnx",
+        "3573b6b9593cb2f75987a31815d409ca3dd8808629118fd20451bb1a5d90cec7",
+    ),
+    "tokenizer.json": (
+        f"{RANK_URL}/tokenizer.json",
+        "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+    ),
+    "MINILM-LICENSE": (
+        "https://www.apache.org/licenses/LICENSE-2.0.txt",
+        "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    ),
+}
 PINS = {
     "llama-source.tar.gz": (
         f"https://codeload.github.com/ggml-org/llama.cpp/tar.gz/{LLAMA_REV}",
@@ -45,8 +61,8 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def pinned_input(cache, name):
-    url, expected = PINS[name]
+def pinned_input(cache, name, pins=PINS):
+    url, expected = pins[name]
     path = cache / name
     if not path.exists():
         part = cache / (name + ".download")
@@ -150,6 +166,14 @@ def build(cache):
     return destination
 
 
+def build_ranking(cache):
+    destination = cache / f"minilm-{RANK_REV[:12]}"
+    destination.mkdir(exist_ok=True)
+    for name in RANK_PINS:
+        pinned_input(destination, name, RANK_PINS)
+    return destination
+
+
 def main():
     cache = Path(subprocess.check_output([
         sys.executable, HERE / "../../engine/scripts/lib/machine_settings.py",
@@ -158,7 +182,12 @@ def main():
     cache.mkdir(parents=True, exist_ok=True)
     with (cache / "build.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        print(build(cache))
+        if sys.argv[1:] == ["--ranking"]:
+            print(build_ranking(cache))
+        elif len(sys.argv) == 1:
+            print(build(cache))
+        else:
+            raise SystemExit("Usage: build-search-resources.py [--ranking]")
 
 
 if __name__ == "__main__":
