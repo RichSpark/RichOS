@@ -161,17 +161,17 @@ async function main() {
   });
 
   // ---- 2. its own screen ---------------------------------------------------------------------
-  await run.check("its own screen: the app view and the home screen are covered, Settings stays on top, Back has the focus", async () => {
+  await run.check("its own screen: the app view and the home screen are covered beside the rail, which stays, Settings stays on top, Back has the focus", async () => {
     const page = await open("dark", undefined);
     await screen(page);
     const got = await page.evaluate(() => {
       const sp = document.getElementById("spend").getBoundingClientRect();
       const hit = (x, y) => { const e = document.elementFromPoint(x, y); return e && (e.closest("#spend") ? "spend" : e.closest(".settings") ? "settings" : e.id || e.className); };
-      return { full: sp.left === 0 && sp.top === 0 && sp.width === innerWidth && sp.height === innerHeight,
-        app: getComputedStyle(document.getElementById("app")).display, middle: hit(innerWidth / 2, innerHeight / 2), corner: hit(innerWidth - 38, 38),
+      return { full: sp.left === 52 && sp.top === 0 && sp.width === innerWidth - 52 && sp.height === innerHeight,
+        app: [...document.getElementById("app").children].filter(c => getComputedStyle(c).display !== "none" && c.getBoundingClientRect().width > 0).map(c => c.id), middle: hit(innerWidth / 2, innerHeight / 2), corner: hit(innerWidth - 38, 38),
         focus: document.activeElement && document.activeElement.id, menu: document.getElementById("set-menu").hidden };
     });
-    assertEqual(got, { full: true, app: "none", middle: "spend", corner: "settings", focus: "spend-back", menu: true });
+    assertEqual(got, { full: true, app: ["nav-rail"], middle: "spend", corner: "settings", focus: "spend-back", menu: true });
     await page.close();
   });
 
@@ -294,7 +294,7 @@ async function main() {
   // exception for this screen, so Enter on Back, Refresh or a period was canceled and hid Home
   // instead ("Enter on spend-back: defaultPrevented=true, home hide=enter-key"). Each Enter here
   // must do what its control says, and Home must still be there when the screen closes.
-  await run.check("opened from Home, Enter on Refresh, on a period and on Back does what the control says, and Home is still open beneath", async () => {
+  await run.check("opened from Home, Home steps aside for the screen (the rail is there), Enter on Refresh, on a period and on Back does what the control says, and Back brings Home back", async () => {
     const page = await open("dark", undefined);
     await page.evaluate(() => window.RichHome.show("spend-suite"));
     await page.waitForFunction(() => window.RichHome.isOpen());
@@ -306,26 +306,24 @@ async function main() {
     const n = await views();
     await page.focus("#spend-refresh");
     await page.keyboard.press("Enter");
-    await page.waitForFunction(k => window.__RICHOS_MOCK__.spendCalls().filter(c => c.cmd === "spend_view").length > k || !window.RichHome.isOpen(), n);
+    await page.waitForFunction(k => window.__RICHOS_MOCK__.spendCalls().filter(c => c.cmd === "spend_view").length > k || window.RichHome.isOpen(), n);
     if ((await views()) <= n) wrong.push("Enter on Refresh did not refresh");
-    if (!(await homeOpen())) wrong.push("Enter on Refresh hid Home");
+    if (await homeOpen()) wrong.push("Home is up over the screen after Enter on Refresh");
     // Today
-    await page.evaluate(() => window.RichHome.isOpen() || window.RichHome.show("spend-suite"));
     await page.focus('#spend-period button[data-p="today"]');
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.querySelector('#spend-period button[data-p="today"]').getAttribute("aria-pressed") === "true" || !window.RichHome.isOpen());
+    await page.waitForFunction(() => document.querySelector('#spend-period button[data-p="today"]').getAttribute("aria-pressed") === "true" || window.RichHome.isOpen());
     if ((await page.getAttribute('#spend-period button[data-p="today"]', "aria-pressed")) !== "true") wrong.push("Enter on Today did not choose Today");
-    if (!(await homeOpen())) wrong.push("Enter on Today hid Home");
+    if (await homeOpen()) wrong.push("Home is up over the screen after Enter on Today");
     // Back
-    await page.evaluate(() => window.RichHome.isOpen() || window.RichHome.show("spend-suite"));
     await page.focus("#spend-back");
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.getElementById("spend").hidden || !window.RichHome.isOpen());
+    await page.waitForFunction(() => document.getElementById("spend").hidden);
     if (!(await page.evaluate(() => document.getElementById("spend").hidden))) wrong.push("Enter on Back did not close the screen");
-    if (!(await homeOpen())) wrong.push("Enter on Back hid Home");
+    if (!(await homeOpen())) wrong.push("Back did not bring Home back");
     await page.close();
     assertEqual(wrong, []);
-    return "Refresh refreshed, Today chosen, Back closed the screen; Home open beneath after each";
+    return "Refresh refreshed, Today chosen, Back closed the screen and Home came back";
   });
 
   // ---- 7c. a Settings sheet opened over the screen -------------------------------------------

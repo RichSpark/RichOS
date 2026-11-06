@@ -822,6 +822,8 @@ window.RichSettings = (function () {
       var b = menuEl && menuEl.querySelector(sel);
       if (b) b.disabled = !!(bug && bug.busy && bug.busy());
     });
+    // The navigation rail's Bust a bug is the same door and is inert at the same moments.
+    if (window.RichNavRail) window.RichNavRail.paint();
   }
 
   // ---- open / close --------------------------------------------------------------------
@@ -1252,6 +1254,15 @@ window.RichSettings = (function () {
     /** A report opened or ended: Bust a bug is disabled or pressable again (`paintBug`). */
     repaintBugReport: function () {
       paintBug();
+    },
+
+    /** The navigation rail's Bust a bug (round 58): the floor's own press, and whether a report
+     *  is open, which makes both doors inert. */
+    bustABug: function () {
+      bustABug();
+    },
+    bugBusy: function () {
+      return !!(bug && bug.busy && bug.busy());
     },
 
     /** THE UPDATE SURFACE (RICH-TODOs row 12), as a SLOT rather than as data — see

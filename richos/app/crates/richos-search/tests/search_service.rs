@@ -73,8 +73,25 @@ fn files(r: &richos_search::SearchResponse) -> Vec<String> {
 
 #[test]
 fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_named_file() {
+    use richos_search::embed::BulkIndexer;
     use std::sync::{mpsc, Mutex};
     use std::time::{Duration, Instant};
+    struct ScopedMediaEmbedder {
+        model: ConceptEmbedder,
+        indexed: Arc<Mutex<Vec<String>>>,
+    }
+    impl Embedder for ScopedMediaEmbedder {
+        fn identity(&self) -> String { self.model.identity() }
+        fn dimension(&self) -> usize { self.model.dimension() }
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> { self.model.embed(texts) }
+        fn bulk_indexer(&self) -> Option<Box<BulkIndexer<'_>>> {
+            Some(Box::new(move |text, _stop| {
+                let vector = self.model.embed(&[text])?.pop().unwrap();
+                self.indexed.lock().unwrap().push(text.to_string());
+                Ok(vector)
+            }))
+        }
+    }
     let (folder, cache) = fixture_copy("media-background");
     std::fs::write(folder.join("00-slow.png"), "fixture").unwrap();
     std::fs::write(folder.join("01-noted.png"), "fixture").unwrap();
@@ -88,6 +105,8 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     let calls = reads.clone();
     let note = Arc::new(Mutex::new("Initial fixture note".to_string()));
     let current = note.clone();
+    let indexed = Arc::new(Mutex::new(Vec::new()));
+    let indexing = indexed.clone();
     let metadata = MetadataSource {
         extensions: &["png"],
         watch: Arc::new(move || watch.lock().unwrap().take().unwrap()),
@@ -108,7 +127,10 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     let service = SearchService::start_with_grant(Config {
         root: Some(folder.clone()),
         cache: Ok(cache),
-        make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
+        make_embedder: Box::new(move || Ok(Box::new(ScopedMediaEmbedder {
+            model: ConceptEmbedder::stand_in(),
+            indexed: indexing.clone(),
+        }))),
         busy: None,
         tuning: Tuning::default(),
     }, Some(metadata), None, None, || {});
@@ -119,11 +141,14 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     assert!(!text.hits.is_empty(), "Markdown must be searchable while the portable reader is blocked");
     service.wait_idle();
     assert_eq!(files(&ask(&service, "\"Initial fixture note\"", false, true)), ["01-noted.png"]);
+    assert!(indexed.lock().unwrap().iter().any(|text| text.contains("Initial fixture note")));
     *note.lock().unwrap() = "Replacement fixture note".into();
     changed.send(vec![target]).unwrap();
     let guard = Instant::now() + Duration::from_secs(10); // load-bound: hang guard for the change notification.
     loop {
-        if files(&ask(&service, "\"Replacement fixture note\"", false, true)) == ["01-noted.png"] {
+        if files(&ask(&service, "\"Replacement fixture note\"", false, true)) == ["01-noted.png"]
+            && indexed.lock().unwrap().iter().any(|text| text.contains("Replacement fixture note"))
+        {
             break;
         }
         assert!(Instant::now() < guard, "catalog change was never applied"); // load-bound: wait for the actual replacement.
@@ -135,6 +160,64 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     assert_eq!(*reads.lock().unwrap(), ["00-slow.png", "01-noted.png", "01-noted.png"]);
     service.shutdown();
     std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn transient_model_failure_recovers_after_a_bounded_attempt() {
+    use std::time::{Duration, Instant};
+
+    struct FailOnce {
+        fail_at_start: bool,
+        failed: Arc<AtomicBool>,
+        delegate: ConceptEmbedder,
+    }
+    impl Embedder for FailOnce {
+        fn identity(&self) -> String { self.delegate.identity() }
+        fn dimension(&self) -> usize { self.delegate.dimension() }
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> { self.delegate.embed(texts) }
+        fn prepare(&self, _: &dyn Fn() -> bool) -> Result<(), String> {
+            if self.fail_at_start && !self.failed.swap(true, Ordering::SeqCst) {
+                return Err("temporary startup failure".into());
+            }
+            Ok(())
+        }
+        fn embed_for_index(&self, texts: &[&str], _: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>, String> {
+            if !self.fail_at_start && !self.failed.swap(true, Ordering::SeqCst) {
+                return Err("temporary indexing failure".into());
+            }
+            self.embed(texts)
+        }
+    }
+
+    for (fixture, fail_at_start) in [("retry-startup", true), ("retry-passage", false)] {
+        let (folder, cache) = fixture_copy(fixture);
+        let failed = Arc::new(AtomicBool::new(false));
+        let witness = failed.clone();
+        let service = SearchService::start(Config {
+            root: Some(folder.clone()),
+            cache: Ok(cache),
+            make_embedder: Box::new(move || Ok(Box::new(FailOnce {
+                fail_at_start, failed: failed.clone(), delegate: ConceptEmbedder::stand_in(),
+            }))),
+            busy: None,
+            tuning: Tuning::default(),
+        });
+        service.wait_idle();
+        assert!(witness.load(Ordering::SeqCst));
+        assert!(!ask(&service, "refund", false, false).hits.is_empty());
+        let guard = Instant::now() + Duration::from_secs(30); // load-bound: hang guard for a delayed model retry.
+        loop {
+            if matches!(service.status().meaning, MeaningStatus::Ready { .. }) {
+                break;
+            }
+            assert!(Instant::now() < guard, "meaning search did not recover"); // load-bound: wait for the recovered index.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let meaning = ask(&service, "refund", true, false);
+        assert!(meaning.effective.super_finder && !meaning.hits.is_empty());
+        service.shutdown();
+        std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+    }
 }
 
 #[test]
@@ -171,6 +254,31 @@ fn hybrid_word_only_results_show_the_matching_words() {
     let hit = result.hits.iter().find(|hit| hit.rel_path == "invoice.md").unwrap();
     assert_eq!(hit.why, Why::Words);
     assert!(hit.passage.text.contains("4471 to Northwind"));
+    service.shutdown();
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn revoked_folder_passages_are_never_sent_for_excerpt_selection() {
+    let (folder, cache) = fixture_copy("excerpt-grant");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let allowed = Arc::new(AtomicBool::new(true));
+    let grant = allowed.clone();
+    let service = SearchService::start_with_grant(Config {
+        root: Some(folder.clone()),
+        cache: Ok(cache),
+        make_embedder: Box::new(move || Ok(Box::new(Counting(counted.clone(), ConceptEmbedder::stand_in())))),
+        busy: None,
+        tuning: Tuning::default(),
+    }, None, None, Some(Box::new(move || grant.load(Ordering::SeqCst))), || {});
+    service.wait_idle();
+    let passages = ["Customer refund after cancellation.", "A walk in the garden."];
+    assert_eq!(service.closest_in_meaning("money back", &passages), Some(0));
+    let before = calls.load(Ordering::SeqCst);
+    allowed.store(false, Ordering::SeqCst);
+    assert_eq!(service.closest_in_meaning("money back", &passages), None);
+    assert_eq!(calls.load(Ordering::SeqCst), before);
     service.shutdown();
     std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
 }

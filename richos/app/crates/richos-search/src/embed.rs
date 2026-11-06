@@ -19,6 +19,9 @@
 //! is stored under that identity, so vectors from two models are never mixed (*"never mix
 //! language-specific spaces"*, *"never … mix incompatible vectors"*).
 
+pub type BulkIndexer<'a> =
+    dyn FnMut(&str, &dyn Fn() -> bool) -> Result<Vec<f32>, String> + 'a;
+
 pub trait Embedder: Send + Sync {
     /// Model, language, revision and dimension, e.g. `apple-sentence:en:r1:512`.
     fn identity(&self) -> String;
@@ -35,6 +38,10 @@ pub trait Embedder: Send + Sync {
     fn embed_for_index(&self, texts: &[&str], _stop: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>, String> {
         self.embed(texts)
     }
+
+    /// An optional dedicated model for a bulk backfill. Dropping it releases
+    /// any resources needed only while the index worker is embedding passages.
+    fn bulk_indexer(&self) -> Option<Box<BulkIndexer<'_>>> { None }
 
     /// Interactive lookups can fall back to words while the model recovers.
     fn embed_query(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
