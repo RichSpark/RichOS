@@ -2519,6 +2519,28 @@ tickrw; O1="$OUT"
 tickrw
 [ "$(ncalls)" = "0" ] && has "$O1$OUT" "NOT STARTED" && has "$O1$OUT" "codex/missing-w7"
 check "W07 a READY for richos whose commit is not in richos still says no review started" $? "calls=$(ncalls) out=$O1 / $OUT"
+# Codex's real handovers put each repository on a bullet line under a label with other words
+# ("Repository/commit/base:" 2026-11-05T19:48:17Z; "Repositories and exact tips:" 02:47:22Z). Both
+# were skipped without a word. The tip is the one on the repository's own line, not the first SHA.
+for SHAPE in "Repository/commit/base:" "Repositories and exact tips:"; do
+  resetstate
+  tickrw
+  printf '\n## 2026-10-09T06:00:00Z READY TO LAND: codex/fix-w7\n\nCurrent main base %s stays as is.\n\n%s\n- richos public: `%s`, tested base `%s`. Worktree `/x/richos`.\n- richos-hq private: `%s`, base `%s`. Worktree `/x/richos-hq`.\nBoth clean.\n' \
+      "$HQTIP" "$SHAPE" "$CTIP" "$BASE" "$HQTIP" "$BASE" >>"$SB/codex/to-rich.md"
+  FAKE_SR_MODE=passed tickrw
+  FAKE_SR_MODE=passed tickrw
+  waitcalls 1
+  A="$(lastargv)"
+  [ "$(ncalls)" = "1" ] && has "$A" '"--branch", "codex/fix-w7"' && has "$A" "\"--tip\", \"$CTIP\""
+  check "W07 a READY headed '$SHAPE' with bullet lines starts a review of the richos tip on its line" $? "calls=$(ncalls) argv=$A out=$OUT"
+done
+resetstate
+tickrw
+printf '\n## 2026-10-09T07:00:00Z READY TO LAND: codex/fix-w7\n\nRepository/commit/base:\n- somewhere-else: `%s`\n' "$CTIP" >>"$SB/codex/to-rich.md"
+tickrw; O1="$OUT"
+tickrw
+[ "$(ncalls)" = "0" ] && has "$O1$OUT" "codex/fix-w7" && has "$O1$OUT" "no review"
+check "W07 a READY naming a codex branch but no repository is told, never a silent skip" $? "calls=$(ncalls) out=$O1 / $OUT"
 
 # --- W08 ---------------------------------------------------------------------
 resetstate
