@@ -292,7 +292,7 @@ pub(crate) fn catalog_relative(root: &Path, path: &Path, source: &MetadataSource
         _ => None,
     }).collect::<Option<_>>()?;
     let (leaf, parents) = names.split_last()?;
-    if leaf.starts_with('.') || parents.iter().any(|name| skipped_dir(name)) || !supports_metadata(source, path) {
+    if leaf.starts_with('.') || parents.iter().any(|name| skipped_dir(name)) || supported(path) || !supports_metadata(source, path) {
         return None;
     }
     Some(names.join("/"))

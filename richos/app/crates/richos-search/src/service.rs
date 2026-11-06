@@ -217,10 +217,21 @@ struct CacheKey {
     generation: u64,
 }
 
+struct CachedRanking {
+    rows: Vec<Ranked>,
+    query_vector: Option<Vec<f32>>,
+}
+
+struct SearchableCorpus {
+    corpus: Arc<Corpus>,
+    lexical: Arc<rank::LexicalIndex>,
+    positions: Option<rank::UpdatedPositions>,
+}
+
 struct Inner {
     config: Config,
     metadata: Option<MetadataSource>,
-    corpus: RwLock<Option<Arc<Corpus>>>,
+    corpus: RwLock<Option<Arc<SearchableCorpus>>>,
     folder: RwLock<FolderStatus>,
     meaning_status: RwLock<MeaningStatus>,
     meaning: RwLock<Option<Arc<Meaning>>>,
@@ -228,7 +239,7 @@ struct Inner {
     stop: AtomicBool,
     grant: Option<Grant>,
     access: Mutex<()>,
-    last: Mutex<Option<(CacheKey, Arc<Vec<Ranked>>)>>,
+    last: Mutex<Option<(CacheKey, Arc<CachedRanking>)>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     initial: (Mutex<bool>, Condvar),
 }
@@ -398,7 +409,8 @@ impl SearchService {
             }
         };
         let base = Arc::new(pending.corpus);
-        self.publish_corpus(base.clone());
+        let Some(lexical) = rank::LexicalIndex::build(&base, || self.background_stopping()) else { return };
+        self.publish_corpus(SearchableCorpus { corpus: base.clone(), lexical: Arc::new(lexical), positions: None });
 
         let (mut writer, initial_media) = std::thread::scope(|scope| {
             let reader = metadata.map(|source| {
@@ -444,14 +456,15 @@ impl SearchService {
         }
     }
 
-    fn publish_corpus(&self, corpus: Arc<Corpus>) {
+    fn publish_corpus(&self, snapshot: SearchableCorpus) {
+        let corpus = &snapshot.corpus;
         let status = FolderStatus::Ready {
             files: corpus.docs.len(),
             passages: corpus.passage_count(),
             skipped: corpus.skipped.len(),
             links_skipped: corpus.links_skipped,
         };
-        *self.0.corpus.write().unwrap() = Some(corpus);
+        *self.0.corpus.write().unwrap() = Some(Arc::new(snapshot));
         *self.0.folder.write().unwrap() = status;
         self.bump();
     }
@@ -598,7 +611,7 @@ impl SearchService {
                 updates.push(MediaUpdate { path: path.clone(), doc });
             }
             let Some(snapshot) = self.0.corpus.read().unwrap().clone() else { break };
-            let mut next = (*snapshot).clone();
+            let mut next = (*snapshot.corpus).clone();
             for update in &updates[start..] {
                 let position = next.docs.binary_search_by(|d| d.rel_path.cmp(&update.path));
                 next.skipped.retain(|s| s.rel_path != update.path);
@@ -613,7 +626,12 @@ impl SearchService {
                 }
             }
             if !self.stopping() {
-                self.publish_corpus(Arc::new(next));
+                let positions = rank::UpdatedPositions::for_corpus(&next);
+                self.publish_corpus(SearchableCorpus {
+                    corpus: Arc::new(next),
+                    lexical: snapshot.lexical.clone(),
+                    positions: Some(positions),
+                });
             }
         }
         updates
@@ -703,8 +721,8 @@ impl SearchService {
                 manifest.save(dir)?;
             }
         }
-        if let Some(corpus) = self.0.corpus.read().unwrap().as_ref() {
-            self.set_meaning(MeaningStatus::Ready { files: corpus.docs.len(), passages: corpus.passage_count() });
+        if let Some(snapshot) = self.0.corpus.read().unwrap().as_ref() {
+            self.set_meaning(MeaningStatus::Ready { files: snapshot.corpus.docs.len(), passages: snapshot.corpus.passage_count() });
         }
         self.bump();
         Ok(())
@@ -753,10 +771,11 @@ impl SearchService {
             words: parsed.words.clone(),
             elapsed_ms: 0.0,
         };
-        let Some(corpus) = corpus else {
+        let Some(snapshot) = corpus else {
             response.empty = Some(Empty::NoFolder);
             return finish(response, started);
         };
+        let corpus = snapshot.corpus.as_ref();
         if parsed.is_empty() {
             response.empty = Some(Empty::NoQuery);
             return finish(response, started);
@@ -775,26 +794,29 @@ impl SearchService {
         let ranked = match cached {
             Some(r) => r,
             None => {
-                let lexical = rank::lexical(&corpus, &parsed, request.strict);
-                let semantic = meaning.as_ref().map(|m| semantic_hits(m, &corpus, &request.query, &self.0.config.tuning));
-                let semantic = match semantic {
-                    Some(Ok(hits)) => Some(hits),
+                let lexical = snapshot.lexical.search(corpus, &parsed, request.strict, snapshot.positions.as_ref());
+                let semantic = meaning.as_ref().map(|m| semantic_hits(m, corpus, &request.query, &self.0.config.tuning));
+                let (semantic, query_vector) = match semantic {
+                    Some(Ok((hits, query_vector))) => (Some(hits), Some(query_vector)),
                     Some(Err(_)) => {
                         // The model failed on this query: answer with text and say so.
                         response.effective.super_finder = false;
-                        None
+                        (None, None)
                     }
-                    None => None,
+                    None => (None, None),
                 };
-                let ranked = Arc::new(rank::rank(&corpus, &parsed, request.strict, &lexical, semantic.as_deref()));
+                let ranked = Arc::new(CachedRanking {
+                    rows: rank::rank(corpus, &parsed, request.strict, &lexical, semantic.as_deref()),
+                    query_vector,
+                });
                 if response.effective.super_finder == effective.super_finder {
                     *self.0.last.lock().unwrap() = Some((key, ranked.clone()));
                 }
                 ranked
             }
         };
-        response.total = ranked.len();
-        if ranked.is_empty() {
+        response.total = ranked.rows.len();
+        if ranked.rows.is_empty() {
             response.empty = Some(if request.strict && !parsed.spans.is_empty() { Empty::NoExact } else { Empty::NoMatch });
             return finish(response, started);
         }
@@ -804,7 +826,7 @@ impl SearchService {
         // "No documents match." while two still matched). `offset + hits + dropped` is where
         // this page stopped looking, the next page's offset.
         let limit = request.limit.clamp(1, MAX_PAGE);
-        for row in ranked.iter().skip(request.offset) {
+        for row in ranked.rows.iter().skip(request.offset) {
             if self.stopping() || response.hits.len() == limit {
                 break;
             }
@@ -813,7 +835,15 @@ impl SearchService {
                 response.dropped += 1;
                 continue;
             }
-            response.hits.push(hit(doc, row, &parsed));
+            // A word-only result should show the evidence that earned its place.
+            // Quotes already have their own selection rule.
+            let scores = if row.semantic_passage.is_some() && parsed.spans.is_empty() {
+                meaning.as_ref().zip(ranked.query_vector.as_deref())
+                    .and_then(|(meaning, query)| passage_scores(meaning, doc, query))
+            } else {
+                None
+            };
+            response.hits.push(hit(doc, row, &parsed, scores.as_deref()));
         }
         finish(response, started)
     }
@@ -840,7 +870,8 @@ impl SearchService {
         if self.stopping() {
             return Err("That document is not in the search folder.".into());
         }
-        let corpus = self.0.corpus.read().unwrap().clone().ok_or("No search folder is configured.")?;
+        let snapshot = self.0.corpus.read().unwrap().clone().ok_or("No search folder is configured.")?;
+        let corpus = &snapshot.corpus;
         let doc = corpus.docs.iter().find(|d| d.id == source_id).ok_or("That document is not in the search folder.")?;
         let path = corpus::resolve_inside(&corpus.root, &doc.rel_path)?;
         let current = if let Some(version) = &doc.metadata_version {
@@ -894,9 +925,10 @@ pub fn embedding_text(title: &str, heading: &str, passage: &str) -> String {
     }
 }
 
-fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning) -> Result<Vec<SemanticHit>, String> {
-    let vector = meaning.embedder.embed(&[query.trim()])?.pop().ok_or("no query vector")?;
-    let nearest = meaning.index.nearest(vector, tuning.semantic_passages)?;
+fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning) -> Result<(Vec<SemanticHit>, Vec<f32>), String> {
+    let mut vector = meaning.embedder.embed(&[query.trim()])?.pop().ok_or("no query vector")?;
+    let nearest = meaning.index.nearest(vector.clone(), tuning.semantic_passages)?;
+    crate::embed::normalize(&mut vector);
     let points = meaning.points.read().unwrap();
     let mut out: Vec<SemanticHit> = Vec::new();
     for (id, score) in nearest {
@@ -917,7 +949,23 @@ fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tunin
             break;
         }
     }
-    Ok(out)
+    Ok((out, vector))
+}
+
+fn passage_scores(meaning: &Meaning, doc: &corpus::Document, query: &[f32]) -> Option<Vec<f32>> {
+    if doc.passages.len() < 2 {
+        return None;
+    }
+    let ids: Vec<_> = (0..doc.passages.len()).map(|i| point_id(&doc.id, &doc.hash, i)).collect();
+    if !meaning.points.read().unwrap().contains_key(&ids[0]) {
+        return None;
+    }
+    let mut by_id = HashMap::with_capacity(ids.len());
+    // Bound the number of vectors held by Qdrant's response, even for very long files.
+    for batch in ids.chunks(256) {
+        by_id.extend(meaning.index.score_passages(batch, query).ok()?);
+    }
+    ids.iter().map(|id| by_id.get(id).copied()).collect()
 }
 
 /// Is the file still the one that was read: inside the folder, a regular file, same content?
@@ -973,8 +1021,8 @@ fn evidence(doc: &corpus::Document, p: usize, parsed: &ParsedQuery) -> (usize, u
     (start, end)
 }
 
-fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery) -> DocHit {
-    let p = rank::best_passage(doc, parsed, row.semantic_passage);
+fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, scores: Option<&[f32]>) -> DocHit {
+    let p = rank::best_passage_with_scores(doc, parsed, row.semantic_passage, scores);
     let (heading, text, line) = match doc.passages.get(p) {
         Some(passage) => {
             let (start, end) = evidence(doc, p, parsed);

@@ -49,27 +49,149 @@ fn by_date_then_path(a: &Document, b: &Document) -> Ordering {
 
 /// The text list: one scan over the cached text of every document.
 pub fn lexical(corpus: &Corpus, query: &ParsedQuery, strict: bool) -> Vec<LexicalHit> {
-    let mut out: Vec<LexicalHit> = Vec::new();
-    for (i, doc) in corpus.docs.iter().enumerate() {
-        let spans = spans_in(doc, &query.spans);
-        if strict && spans < query.spans.len() {
-            continue;
-        }
-        let title_words = count_words(&doc.folded_title, &query.words);
-        let file_words = query.words.iter().filter(|w| has_word(&doc.folded_title, w) || has_word(&doc.folded_text, w)).count();
-        if file_words == 0 && spans == 0 {
-            continue;
-        }
-        out.push(LexicalHit { doc: i, title_words, spans, file_words });
+    let mut out: Vec<_> = corpus.docs.iter().enumerate()
+        .filter_map(|(i, doc)| lexical_hit(i, doc, query, strict)).collect();
+    sort_lexical(corpus, &mut out);
+    out
+}
+
+fn lexical_hit(i: usize, doc: &Document, query: &ParsedQuery, strict: bool) -> Option<LexicalHit> {
+    let spans = spans_in(doc, &query.spans);
+    if strict && spans < query.spans.len() {
+        return None;
     }
-    out.sort_by(|a, b| {
+    let title_words = count_words(&doc.folded_title, &query.words);
+    let file_words = query.words.iter().filter(|w| has_word(&doc.folded_title, w) || has_word(&doc.folded_text, w)).count();
+    (file_words > 0 || spans > 0).then_some(LexicalHit { doc: i, title_words, spans, file_words })
+}
+
+fn sort_lexical(corpus: &Corpus, hits: &mut [LexicalHit]) {
+    hits.sort_by(|a, b| {
         b.title_words
             .cmp(&a.title_words)
             .then(b.spans.cmp(&a.spans))
             .then(b.file_words.cmp(&a.file_words))
             .then_with(|| by_date_then_path(&corpus.docs[a.doc], &corpus.docs[b.doc]))
     });
-    out
+}
+
+#[derive(Default)]
+struct WordHit {
+    doc: usize,
+    title: bool,
+    body: bool,
+}
+
+/// Inverted postings for the word rules. A quoted span can match inside a
+/// token or across whitespace, so those queries still use the literal scan.
+pub(crate) struct LexicalIndex {
+    words: HashMap<String, Vec<WordHit>>,
+}
+
+/// Markdown remains in its original order when media is inserted or removed.
+pub(crate) struct UpdatedPositions {
+    markdown: Vec<usize>,
+    media: Vec<usize>,
+}
+
+impl UpdatedPositions {
+    pub(crate) fn for_corpus(corpus: &Corpus) -> Self {
+        let mut result = Self { markdown: Vec::new(), media: Vec::new() };
+        for (i, doc) in corpus.docs.iter().enumerate() {
+            if doc.metadata_version.is_some() {
+                result.media.push(i);
+            } else {
+                result.markdown.push(i);
+            }
+        }
+        result
+    }
+}
+
+impl LexicalIndex {
+    pub(crate) fn build(corpus: &Corpus, stopped: impl Fn() -> bool) -> Option<Self> {
+        let mut words: HashMap<String, Vec<WordHit>> = HashMap::new();
+        for (doc, source) in corpus.docs.iter().enumerate() {
+            if stopped() {
+                return None;
+            }
+            for (is_title, text) in [(true, &source.folded_title), (false, &source.folded_text)] {
+                for word in text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+                    let hits = match words.get_mut(word) {
+                        Some(hits) => hits,
+                        None => words.entry(word.to_owned()).or_default(),
+                    };
+                    if hits.last().is_none_or(|hit| hit.doc != doc) {
+                        hits.push(WordHit { doc, ..WordHit::default() });
+                    }
+                    let hit = hits.last_mut().expect("the current document has a posting");
+                    if is_title {
+                        hit.title = true;
+                    } else {
+                        hit.body = true;
+                    }
+                }
+            }
+        }
+        Some(Self { words })
+    }
+
+    pub(crate) fn search(&self, corpus: &Corpus, query: &ParsedQuery, strict: bool, positions: Option<&UpdatedPositions>) -> Vec<LexicalHit> {
+        if !query.spans.is_empty() {
+            return lexical(corpus, query, strict);
+        }
+        #[derive(Clone, Default)]
+        struct Counts {
+            title_words: usize,
+            file_words: usize,
+            last_title: usize,
+            last_file: usize,
+        }
+        let mut counts = vec![Counts::default(); corpus.docs.len()];
+        let position = |doc| positions.map_or(doc, |p| p.markdown[doc]);
+        for (i, word) in query.words.iter().enumerate() {
+            let mark = i + 1;
+            let mut add = |doc: usize, title: bool, body: bool| {
+                let c = &mut counts[doc];
+                if title && c.last_title != mark {
+                    c.last_title = mark;
+                    c.title_words += 1;
+                }
+                if (title || body) && c.last_file != mark {
+                    c.last_file = mark;
+                    c.file_words += 1;
+                }
+            };
+            if word.chars().all(char::is_alphanumeric) {
+                for key in [word.clone(), format!("{word}s"), format!("{word}es")] {
+                    if let Some(hits) = self.words.get(&key) {
+                        for h in hits {
+                            add(position(h.doc), h.title, h.body);
+                        }
+                    }
+                }
+            } else {
+                // For an identifier such as inv-2049, only files with the
+                // opening token can match. Verify the punctuation in those.
+                let anchor = word.split(|c: char| !c.is_alphanumeric()).next().unwrap_or_default();
+                if let Some(hits) = self.words.get(anchor) {
+                    for h in hits {
+                        let doc = position(h.doc);
+                        let d = &corpus.docs[doc];
+                        add(doc, h.title && has_word(&d.folded_title, word), h.body && has_word(&d.folded_text, word));
+                    }
+                }
+            }
+        }
+        let mut hits: Vec<_> = counts.into_iter().enumerate().filter_map(|(doc, c)| {
+            (c.file_words > 0).then_some(LexicalHit { doc, title_words: c.title_words, spans: 0, file_words: c.file_words })
+        }).collect();
+        if let Some(positions) = positions {
+            hits.extend(positions.media.iter().filter_map(|&i| lexical_hit(i, &corpus.docs[i], query, strict)));
+        }
+        sort_lexical(corpus, &mut hits);
+        hits
+    }
 }
 
 /// Why a result is in the list, shown on its row (design round 26: *meaning*, *words*,
@@ -227,6 +349,49 @@ pub fn best_passage(doc: &Document, query: &ParsedQuery, semantic_passage: Optio
     }
 }
 
+/// Rerank the passages of an already selected file. Each distinct term in the body
+/// contributes once, with more weight for a term found in fewer of this file's
+/// passages. The bounded word bonus lets a closer textual answer win a near tie
+/// without requiring literal overlap for a paraphrase.
+pub fn best_passage_with_scores(
+    doc: &Document,
+    query: &ParsedQuery,
+    semantic_passage: Option<usize>,
+    scores: Option<&[f32]>,
+) -> usize {
+    let Some(scores) = scores.filter(|s| s.len() == doc.passages.len() && s.len() > 1) else {
+        return best_passage(doc, query, semantic_passage);
+    };
+    if !query.spans.is_empty() {
+        return best_passage(doc, query, semantic_passage);
+    }
+
+    const MAX_WORD_BONUS: f32 = 0.16;
+    let mut matches = vec![0.0; scores.len()];
+    let mut possible = 0.0;
+    for word in &query.words {
+        let matching: Vec<_> = doc.folded_passages.iter().enumerate()
+            .filter(|(_, parts)| parts.last().is_some_and(|body| has_word(body, word)))
+            .map(|(i, _)| i)
+            .collect();
+        if matching.is_empty() {
+            continue;
+        }
+        let weight = 1.0 + ((scores.len() + 1) as f32 / (matching.len() + 1) as f32).ln();
+        possible += weight;
+        for i in matching {
+            matches[i] += weight;
+        }
+    }
+
+    let score = |i: usize| scores[i] + MAX_WORD_BONUS * matches[i] / possible.max(1.0);
+    (0..scores.len()).max_by(|&a, &b| {
+        score(a).total_cmp(&score(b))
+            .then_with(|| scores[a].total_cmp(&scores[b]))
+            .then_with(|| b.cmp(&a))
+    }).unwrap_or(0)
+}
+
 /// The query's quoted spans the document holds that no single passage holds whole: a quote
 /// across the cut of a paragraph longer than [`crate::chunk::MAX_CHARS`]. Strict search finds it
 /// in the document, so the passage it begins in is the evidence (rv-20261014T132419Z-a81de6d6-6891
@@ -287,6 +452,23 @@ mod tests {
         let ranked = rank(&c, &q, false, &lex, None);
         assert_eq!(order(&c, &ranked), vec!["b.md", "a.md", "c.md", "d.md"]);
         assert!(ranked.iter().all(|r| r.why == Why::Words));
+    }
+
+    #[test]
+    fn indexed_word_retrieval_matches_the_original_literal_rules() {
+        let c = corpus(vec![
+            doc("a.md", "# Names, INV-2049 and prices\nDmitri’s estimate. Caches and API.v2.", 3),
+            doc("b.md", "# Price list\nInv-2049s. Cached result and APIs. Dmitri's proposal.", 4),
+            doc("c.md", "# Cache API\nINV 2049 and DMITRI. Price changes inside the building.", 4),
+            doc("d.md", "# ÄRGER\nLots of lowercase ärgers. Prefixterminal is one word.", 6),
+        ]);
+        let index = LexicalIndex::build(&c, || false).unwrap();
+        for text in ["names inv price", "dmitri's", "dmitri’s", "cache api.v2", "inv-2049", "ärger", "price cache", "\"terminal\"", "\"inv 2049\"", "is in"] {
+            let q = parse(text);
+            for strict in [false, true] {
+                assert_eq!(index.search(&c, &q, strict, None), lexical(&c, &q, strict), "{text}, strict={strict}");
+            }
+        }
     }
 
     #[test]
@@ -356,6 +538,15 @@ mod tests {
         assert_eq!(best_passage(&d, &parse("refund days"), Some(2)), 2);
         // A quoted span outranks the meaning passage.
         assert_eq!(best_passage(&d, &parse("\"30 days\""), Some(2)), 1);
+    }
+
+    #[test]
+    fn passage_reranking_uses_evidence_in_the_body_and_preserves_literal_quotes() {
+        let d = doc("a.md", "# Planning\nDiscussion of profile location.\n\n## Decision\nUse a directory junction to keep the profile on another drive.\n\n## Note\nKeep backups.", 0);
+        let q = parse("profile location on another drive");
+        assert_eq!(best_passage_with_scores(&d, &q, Some(0), Some(&[0.65, 0.64, 0.1])), 1);
+        assert_eq!(best_passage_with_scores(&d, &parse("recover my account"), Some(0), Some(&[0.5, 0.7, 0.1])), 1);
+        assert_eq!(best_passage_with_scores(&d, &parse("\"keep backups\""), Some(0), Some(&[0.99, 0.8, 0.1])), 2);
     }
 
     fn shown(d: &Document, query: &str) -> String {

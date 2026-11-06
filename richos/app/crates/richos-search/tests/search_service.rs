@@ -130,7 +130,47 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(ask(&service, "\"Initial fixture note\"", false, true).hits.is_empty());
+    assert_eq!(files(&ask(&service, "replacement", false, false)), ["01-noted.png"]);
+    assert_eq!(files(&ask(&service, "refund", false, false)), files(&text));
     assert_eq!(*reads.lock().unwrap(), ["00-slow.png", "01-noted.png", "01-noted.png"]);
+    service.shutdown();
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn hybrid_word_only_results_show_the_matching_words() {
+    struct Scores;
+    impl Embedder for Scores {
+        fn identity(&self) -> String { "word-evidence-test".into() }
+        fn dimension(&self) -> usize { 2 }
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
+            Ok(texts.iter().map(|text| {
+                if *text == "Northwind 4471" || text.contains("Separate semantic result") {
+                    vec![1.0, 0.0]
+                } else if text.contains("Routine planning") {
+                    vec![0.8, 0.6]
+                } else {
+                    vec![0.0, 1.0]
+                }
+            }).collect())
+        }
+    }
+    let (folder, cache) = fixture_copy("word-evidence");
+    std::fs::write(folder.join("invoice.md"), "# Invoices\n\nRoutine planning.\n\n## Payments\n\nPaid invoice 4471 to Northwind.").unwrap();
+    std::fs::write(folder.join("semantic.md"), "Separate semantic result").unwrap();
+    let service = SearchService::start(Config {
+        root: Some(folder.clone()),
+        cache: Ok(cache),
+        make_embedder: Box::new(|| Ok(Box::new(Scores))),
+        busy: None,
+        tuning: Tuning { semantic_passages: 1, ..Tuning::default() },
+    });
+    service.wait_idle();
+    let result = ask(&service, "Northwind 4471", true, false);
+    assert!(result.effective.super_finder);
+    let hit = result.hits.iter().find(|hit| hit.rel_path == "invoice.md").unwrap();
+    assert_eq!(hit.why, Why::Words);
+    assert!(hit.passage.text.contains("4471 to Northwind"));
     service.shutdown();
     std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
 }

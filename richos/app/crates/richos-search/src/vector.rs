@@ -18,7 +18,7 @@
 //!   (`prevent_unoptimized: false`) so a partly built index still answers.
 use qdrant_edge::{
     Distance, EdgeConfig, EdgeOptimizersConfig, EdgeShard, EdgeVectorParams, NamedQuery, PointId, PointInsertOperations,
-    PointOperations, PointStruct, QueryEnum, SearchRequestBuilder, UpdateOperation, WalOptions, WithPayloadInterface,
+    PointOperations, PointStruct, QueryEnum, RetrieveRequestBuilder, SearchRequestBuilder, UpdateOperation, WalOptions, WithPayloadInterface,
     WithVector, DEFAULT_VECTOR_NAME,
 };
 use std::fs::File;
@@ -121,6 +121,20 @@ impl VectorIndex {
             })
             .collect())
     }
+
+    /// Score known passages directly, independently of the global nearest-passage cutoff.
+    pub fn score_passages(&self, ids: &[u64], query: &[f32]) -> Result<Vec<(u64, f32)>, String> {
+        let request = RetrieveRequestBuilder::new(ids.iter().copied().map(PointId::NumId).collect())
+            .with_payload(WithPayloadInterface::Bool(false))
+            .with_vector(WithVector::Bool(true))
+            .build();
+        let points = self.shard.retrieve(request).map_err(|e| format!("the search index could not read passages: {e}"))?;
+        Ok(points.into_iter().filter_map(|point| {
+            let PointId::NumId(id) = point.id else { return None };
+            let vector: &[f32] = point.get_vector_by_name(DEFAULT_VECTOR_NAME)?.try_into().ok()?;
+            (vector.len() == query.len()).then(|| (id, query.iter().zip(vector).map(|(a, b)| a * b).sum()))
+        }).collect())
+    }
 }
 
 #[cfg(test)]
@@ -148,6 +162,15 @@ mod tests {
             index.flush().unwrap();
             let hits = index.nearest(unit(&[1.0, 0.05, 0.0]), 2).unwrap();
             assert_eq!(hits.iter().map(|h| h.0).collect::<Vec<_>>(), vec![1, 3]);
+            // Restricted scoring includes a passage the global top two did not
+            // return. Missing IDs yield no score and stored vectors use cosine.
+            let query = unit(&[1.0, 1.0, 0.0]);
+            let mut scored = index.score_passages(&[2, 3, 999], &query).unwrap();
+            scored.sort_by_key(|(id, _)| *id);
+            assert_eq!(scored.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![2, 3]);
+            assert!((scored[0].1 - query[1]).abs() < 1e-6);
+            let expected: f32 = unit(&[0.9, 0.1, 0.0]).iter().zip(&query).map(|(a, b)| a * b).sum();
+            assert!((scored[1].1 - expected).abs() < 1e-6);
             index.delete(&[1]).unwrap();
             index.flush().unwrap();
             assert!(index.upsert(vec![(9, vec![1.0, 0.0])]).is_err(), "a vector of the wrong size is refused");
