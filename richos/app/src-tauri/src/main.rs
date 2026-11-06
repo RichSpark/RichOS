@@ -153,6 +153,10 @@ mod opener;
 // DOCUMENT SEARCH (search PRD v3.1): the palette's Documents section, Super Finder, Open
 // original and the socket Rich's search tool reaches it through.
 mod doc_search;
+#[cfg(target_os = "macos")]
+mod search_embed;
+#[cfg(target_os = "macos")]
+mod search_rerank;
 /// **A file Rich puts in front of the user** (§138, item 12): the cards' items, open and Show in
 /// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
 mod rich_files_host;

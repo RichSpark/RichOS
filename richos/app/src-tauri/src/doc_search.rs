@@ -19,7 +19,7 @@
 //!   accept a renderer-supplied path or command."*).
 use richos_search::corpus::MetadataSource;
 use richos_search::embed::Embedder;
-use richos_search::service::{Busy, Config, Grant, SearchRequest, SearchResponse, SearchService, Status, Tuning};
+use richos_search::service::{Busy, Config, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -81,6 +81,7 @@ pub struct DocumentSearch {
     make_embedder: EmbedderFactory,
     busy: Option<Busy>,
     metadata: Option<MetadataSource>,
+    reranker: Option<Reranker>,
     retire: mpsc::Sender<RetiredService>,
     closed: std::sync::atomic::AtomicBool,
 }
@@ -91,6 +92,7 @@ impl DocumentSearch {
         make_embedder: impl Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync + 'static,
         busy: Option<Busy>,
         metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
     ) -> Arc<Self> {
         let location: Locate = Arc::new(location);
         let make_embedder: EmbedderFactory = Arc::new(make_embedder);
@@ -107,13 +109,14 @@ impl DocumentSearch {
             }
         }).expect("the search cleanup thread could not start");
         let factory = make_embedder.clone();
-        let service = Self::build(initial.clone(), location.clone(), Box::new(move || factory()), busy.clone(), metadata.clone(), None);
+        let service = Self::build(initial.clone(), location.clone(), Box::new(move || factory()), busy.clone(), metadata.clone(), reranker.clone(), None);
         Arc::new(Self {
             active: Mutex::new(ActiveSearch { location: initial, service, base: 0 }),
             location,
             make_embedder,
             busy,
             metadata,
+            reranker,
             retire,
             closed: std::sync::atomic::AtomicBool::new(false),
         })
@@ -125,6 +128,7 @@ impl DocumentSearch {
         make_embedder: richos_search::service::MakeEmbedder,
         busy: Option<Busy>,
         metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
         retired: Option<mpsc::Receiver<()>>,
     ) -> SearchService {
         let config = Config {
@@ -135,7 +139,7 @@ impl DocumentSearch {
             tuning: Tuning::default(),
         };
         let authorized: Grant = Box::new(move || current() == *location);
-        SearchService::start_with_grant(config, metadata, Some(authorized), move || {
+        SearchService::start_with_grant(config, metadata, reranker, Some(authorized), move || {
             if let Some(retired) = retired {
                 retired.recv().expect("the previous search index did not close");
             }
@@ -164,7 +168,7 @@ impl DocumentSearch {
         // Text loads without waiting. The background worker only waits to open the
         // index, so even an A -> B -> A switch preserves exclusive index ownership.
         let factory = self.make_embedder.clone();
-        let service = Self::build(location.clone(), self.location.clone(), Box::new(move || factory()), self.busy.clone(), self.metadata.clone(), Some(retired));
+        let service = Self::build(location.clone(), self.location.clone(), Box::new(move || factory()), self.busy.clone(), self.metadata.clone(), self.reranker.clone(), Some(retired));
         *active = ActiveSearch { location, service, base: active.base + active.service.status().generation };
         active.clone()
     }
@@ -217,13 +221,18 @@ pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -
         let resources = crate::cleaner_native::Native::bundled().ok().map(|native| native.directory);
         Some(cleaner_metadata_source(catalog, resources))
     };
+    #[cfg(target_os = "macos")]
+    let (make_embedder, reranker) = crate::search_rerank::models();
+    #[cfg(target_os = "macos")]
+    let reranker = Some(reranker);
     #[cfg(not(target_os = "macos"))]
-    let metadata: Option<MetadataSource> = { let _ = data_dir; None };
+    let (metadata, reranker) = { let _ = data_dir; (None, None) };
     DocumentSearch::new(
         move || Location::from_settings(&home, richos_core::machine_settings::Settings::current()),
         make_embedder,
         Some(busy),
         metadata,
+        reranker,
     )
 }
 
@@ -250,11 +259,6 @@ fn cleaner_metadata_source(catalog: PathBuf, resources: Option<PathBuf>) -> Meta
             crate::cleaner_metadata::search_text(path, resources.as_deref()).map(Some)
         }),
     }
-}
-
-#[cfg(target_os = "macos")]
-fn make_embedder() -> Result<Box<dyn Embedder>, String> {
-    Ok(Box::new(richos_search::embed::AppleSentenceEmbedder::new("en")?))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -463,6 +467,7 @@ mod tests {
                     Err("Apple's sentence embedding for 'en' is not available on this Mac.".into())
                 }
             },
+            None,
             None,
             None,
         );
@@ -687,6 +692,7 @@ mod tests {
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
             None,
+            None,
         );
         let tool = ToolAnswer(service.clone());
         let request = SearchRequest { query: "refund".into(), super_finder: true, strict: false, offset: 0, limit: PAGE };
@@ -794,6 +800,7 @@ mod tests {
                 Some(blocker) => Ok(Box::new(blocker)),
                 None => Ok(Box::new(ConceptEmbedder::stand_in())),
             },
+            None,
             None,
             None,
         );
@@ -916,6 +923,7 @@ mod tests {
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
             Some(adapter),
+            None,
         );
         let query = |query: &str, super_finder, strict| search(&service, SearchRequest {
             query: query.into(), super_finder, strict, offset: 0, limit: PAGE,

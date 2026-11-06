@@ -65,6 +65,8 @@ pub const BUSY_YIELD: std::time::Duration = std::time::Duration::from_millis(100
 pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type Grant = Box<dyn Fn() -> bool + Send + Sync>;
+/// Local relevance scores for the already retrieved sources, in candidate order.
+pub type Reranker = Arc<dyn Fn(&str, &[String]) -> Option<Vec<f32>> + Send + Sync>;
 
 pub struct Config {
     /// `RICHOS_SEARCH_DOCUMENTS_ROOT`, or `None` when unset.
@@ -220,6 +222,7 @@ struct CacheKey {
 struct CachedRanking {
     rows: Vec<Ranked>,
     query_vector: Option<Vec<f32>>,
+    selected_passages: HashMap<usize, usize>,
 }
 
 struct SearchableCorpus {
@@ -231,6 +234,7 @@ struct SearchableCorpus {
 struct Inner {
     config: Config,
     metadata: Option<MetadataSource>,
+    reranker: Option<Reranker>,
     corpus: RwLock<Option<Arc<SearchableCorpus>>>,
     folder: RwLock<FolderStatus>,
     meaning_status: RwLock<MeaningStatus>,
@@ -287,7 +291,7 @@ impl SearchService {
     /// Start the service: reading the folder and building the meaning index happen on a
     /// background thread; this returns at once.
     pub fn start(config: Config) -> Self {
-        Self::start_with_grant(config, None, None, || {})
+        Self::start_with_grant(config, None, None, None, || {})
     }
 
     /// Read the corpus right away, then wait for the host's previous index to close.
@@ -295,6 +299,7 @@ impl SearchService {
     pub fn start_with_grant(
         config: Config,
         metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
         grant: Option<Grant>,
         before_index: impl FnOnce() + Send + 'static,
     ) -> Self {
@@ -302,6 +307,7 @@ impl SearchService {
             folder: RwLock::new(if config.root.is_some() { FolderStatus::Loading } else { FolderStatus::None }),
             config,
             metadata,
+            reranker,
             corpus: RwLock::new(None),
             meaning_status: RwLock::new(MeaningStatus::Starting),
             meaning: RwLock::new(None),
@@ -805,10 +811,16 @@ impl SearchService {
                     }
                     None => (None, None),
                 };
-                let ranked = Arc::new(CachedRanking {
-                    rows: rank::rank(corpus, &parsed, request.strict, &lexical, semantic.as_deref()),
-                    query_vector,
-                });
+                let mut rows = rank::rank(corpus, &parsed, request.strict, &lexical, semantic.as_deref());
+                let selected_passages = if parsed.spans.is_empty() && !parsed.unmatched_quote && rows.len() > 1 {
+                    self.0.reranker.as_ref().zip(meaning.as_deref()).zip(query_vector.as_deref())
+                        .map(|((reranker, meaning), vector)| {
+                            rerank_sources(&mut rows, corpus, &parsed, request.query.trim(), meaning, vector, reranker)
+                        }).unwrap_or_default()
+                } else {
+                    HashMap::new()
+                };
+                let ranked = Arc::new(CachedRanking { rows, query_vector, selected_passages });
                 if response.effective.super_finder == effective.super_finder {
                     *self.0.last.lock().unwrap() = Some((key, ranked.clone()));
                 }
@@ -835,15 +847,10 @@ impl SearchService {
                 response.dropped += 1;
                 continue;
             }
-            // A word-only result should show the evidence that earned its place.
-            // Quotes already have their own selection rule.
-            let scores = if row.semantic_passage.is_some() && parsed.spans.is_empty() {
-                meaning.as_ref().zip(ranked.query_vector.as_deref())
-                    .and_then(|(meaning, query)| passage_scores(meaning, doc, query))
-            } else {
-                None
-            };
-            response.hits.push(hit(doc, row, &parsed, scores.as_deref()));
+            let passage = ranked.selected_passages.get(&row.doc).copied().unwrap_or_else(|| {
+                selected_passage(doc, row, &parsed, meaning.as_deref().zip(ranked.query_vector.as_deref()))
+            });
+            response.hits.push(hit(doc, row, &parsed, passage));
         }
         finish(response, started)
     }
@@ -1021,17 +1028,59 @@ fn evidence(doc: &corpus::Document, p: usize, parsed: &ParsedQuery) -> (usize, u
     (start, end)
 }
 
-fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, scores: Option<&[f32]>) -> DocHit {
-    let p = rank::best_passage_with_scores(doc, parsed, row.semantic_passage, scores);
+fn selected_passage(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, meaning: Option<(&Meaning, &[f32])>) -> usize {
+    // A word-only result shows its word evidence. Quoted spans have their own rule.
+    let scores = if row.semantic_passage.is_some() && parsed.spans.is_empty() {
+        meaning.and_then(|(meaning, vector)| passage_scores(meaning, doc, vector))
+    } else {
+        None
+    };
+    rank::best_passage_with_scores(doc, parsed, row.semantic_passage, scores.as_deref())
+}
+
+fn rerank_sources(
+    rows: &mut [Ranked], corpus: &Corpus, parsed: &ParsedQuery, query: &str,
+    meaning: &Meaning, vector: &[f32], reranker: &Reranker,
+) -> HashMap<usize, usize> {
+    const SHORTLIST: usize = 16;
+    let count = rows.len().min(SHORTLIST);
+    let mut passages = HashMap::with_capacity(count);
+    let candidates: Vec<_> = rows[..count].iter().map(|row| {
+        let doc = &corpus.docs[row.doc];
+        let passage = selected_passage(doc, row, parsed, Some((meaning, vector)));
+        passages.insert(row.doc, passage);
+        let text = doc.passages.get(passage).map_or("", |p| p.text(&doc.text));
+        format!("{}\n{}", doc.title, bounded_passage(text))
+    }).collect();
+    if let Some(scores) = reranker(query, &candidates).filter(|scores| {
+        scores.len() == count && scores.iter().all(|score| score.is_finite())
+    }) {
+        let mut scored: Vec<_> = scores.into_iter().zip(rows[..count].iter().cloned()).collect();
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for (row, (_, ranked)) in rows.iter_mut().zip(scored) {
+            *row = ranked;
+        }
+    }
+    passages
+}
+
+fn bounded_passage(text: &str) -> String {
+    if text.chars().count() > MAX_PASSAGE_CHARS {
+        text.chars().take(MAX_PASSAGE_CHARS).collect::<String>() + "…"
+    } else {
+        text.to_string()
+    }
+}
+
+fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, p: usize) -> DocHit {
     let (heading, text, line) = match doc.passages.get(p) {
         Some(passage) => {
             let (start, end) = evidence(doc, p, parsed);
             let line = if start == passage.start { passage.line } else { 1 + doc.text[..start].matches('\n').count() as u32 };
-            (shown_heading(doc, p, parsed), doc.text[start..end].to_string(), line)
+            (shown_heading(doc, p, parsed), bounded_passage(&doc.text[start..end]), line)
         }
         None => (String::new(), String::new(), 1),
     };
-    let text: String = if text.chars().count() > MAX_PASSAGE_CHARS { text.chars().take(MAX_PASSAGE_CHARS).collect::<String>() + "…" } else { text };
     DocHit {
         source_id: doc.id.clone(),
         title: doc.title.clone(),

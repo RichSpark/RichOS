@@ -111,7 +111,7 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
         make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
         busy: None,
         tuning: Tuning::default(),
-    }, Some(metadata), None, || {});
+    }, Some(metadata), None, None, || {});
     // load-bound: hang guard only; the metadata reader announces entry and stays blocked until released.
     reading.recv_timeout(Duration::from_secs(10)).unwrap();
     let text = ask(&service, "refund", false, false);
@@ -171,6 +171,55 @@ fn hybrid_word_only_results_show_the_matching_words() {
     let hit = result.hits.iter().find(|hit| hit.rel_path == "invoice.md").unwrap();
     assert_eq!(hit.why, Why::Words);
     assert!(hit.passage.text.contains("4471 to Northwind"));
+    service.shutdown();
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn relevance_sort_uses_passage_evidence_and_preserves_text_quotes_and_pagination() {
+    let (folder, cache) = fixture_copy("rerank");
+    std::fs::write(folder.join("needleword.md"), "# Needleword plan
+
+Introductory needleword.").unwrap();
+    std::fs::write(folder.join("ledger.md"), "# Ledger
+
+A green receipt filed under needleword.").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let reranker: richos_search::service::Reranker = Arc::new(move |query, candidates| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        if query.ends_with("malfunction") {
+            return Some(vec![f32::NAN; candidates.len()]);
+        }
+        assert!(candidates.iter().any(|text| text.starts_with("Ledger\n") && text.contains("green receipt")));
+        Some(candidates.iter().map(|text| if text.starts_with("Ledger\n") { 1.0 } else { 0.0 }).collect())
+    });
+    let service = SearchService::start_with_grant(Config {
+        root: Some(folder.clone()),
+        cache: Ok(cache),
+        make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
+        busy: None,
+        tuning: Tuning::default(),
+    }, None, Some(reranker), None, || {});
+    service.wait_idle();
+    assert_eq!(ask(&service, "needleword", false, false).hits[0].rel_path, "needleword.md");
+    assert_eq!(ask(&service, "\"needleword\"", true, true).hits[0].rel_path, "needleword.md");
+    assert_eq!(ask(&service, "\"needleword\"", true, false).hits[0].rel_path, "needleword.md");
+    assert_eq!(ask(&service, "“needleword”", true, false).hits[0].rel_path, "needleword.md");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let mut request = SearchRequest { query: "needleword".into(), super_finder: true, strict: false, offset: 0, limit: 1 };
+    let first = service.search(&request);
+    assert_eq!(first.hits[0].rel_path, "ledger.md");
+    assert!(first.hits[0].passage.text.contains("green receipt"));
+    request.offset = 1;
+    assert_eq!(service.search(&request).hits[0].rel_path, "needleword.md");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the second page must reuse the same ranking");
+
+    let fallback = ask(&service, "needleword malfunction", true, false);
+    assert!(fallback.effective.super_finder);
+    assert_eq!(fallback.hits[0].rel_path, "needleword.md");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
     service.shutdown();
     std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
 }
