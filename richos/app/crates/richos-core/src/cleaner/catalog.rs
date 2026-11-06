@@ -178,7 +178,15 @@ impl Catalog {
                 (None, None) => true,
                 _ => false,
             };
-            if !same {
+            let relocated = before.as_ref().filter(|prior| {
+                matches!(prior.phase, Phase::Moving | Phase::Restoring)
+                    && matches!(e.phase, Phase::Draft | Phase::Filed)
+                    && prior.path != e.path
+            });
+            if let Some(prior) = relocated {
+                // A move can finish after search already saw the old location.
+                notify(&self.path, vec![prior.path.clone(), e.path.clone()]);
+            } else if !same {
                 let mut paths: Vec<_> = old.into_iter().chain(new).map(|entry| entry.path.clone()).collect();
                 paths.dedup();
                 notify(&self.path, paths);

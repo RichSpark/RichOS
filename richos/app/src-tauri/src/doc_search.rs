@@ -240,7 +240,7 @@ fn cleaner_metadata_source(catalog: PathBuf, resources: Option<PathBuf>) -> Meta
             let volume = meta.dev() & u32::MAX as u64;
             let record = Catalog::filed_context(&catalog, volume, meta.ino()).ok().flatten();
             if let Some(entry) = record.filter(|entry| {
-                entry.path == path
+                (entry.path == path || entry.path.canonicalize().ok().as_deref() == Some(path))
                     && entry.identity.size == meta.len()
                     && entry.identity.modified == format!("{}:{}", meta.mtime(), meta.mtime_nsec())
                     && entry.identity.changed == format!("{}:{}", meta.ctime(), meta.ctime_nsec())
@@ -857,6 +857,9 @@ mod tests {
         let cleaner = base.join("cleaner");
         for dir in [&included, &excluded, &cleaner] { std::fs::create_dir_all(dir).unwrap(); }
         let catalog = cleaner.join("library.sqlite");
+        let alias = base.join("alias");
+        std::os::unix::fs::symlink(&included, &alias).unwrap();
+        std::os::unix::fs::symlink(&excluded, included.join("outside-link")).unwrap();
         let identity = |path: &Path| {
             let meta = std::fs::metadata(path).unwrap();
             Identity { volume: meta.dev() & u32::MAX as u64, object: meta.ino(), size: meta.len(),
@@ -870,7 +873,7 @@ mod tests {
         };
         create_zip(&included.join("portable.zip"), "Refund approved for the cobalt lantern.");
         create_zip(&excluded.join("outside.zip"), "Ambiguous unauthorized sapphire fixture");
-        let catalog_only = included.join("local.zip");
+        let catalog_only = alias.join("local.zip");
         create_zip(&catalog_only, "");
         let mut entry = Entry::new(catalog_only.clone(), identity(&catalog_only), "Zirconium local note.".into()).unwrap();
         entry.labels = vec!["obsidian-tag".into()];
@@ -906,7 +909,7 @@ mod tests {
             assert_eq!(witnesses.len(), 5, "qualification must exercise both screenshots, audio, video and archive");
         }
         let adapter = cleaner_metadata_source(catalog.clone(), resources);
-        let folder = included.clone();
+        let folder = alias;
         let cache = base.join("cache");
         let service = DocumentSearch::new(
             move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()) },
