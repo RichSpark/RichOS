@@ -97,6 +97,23 @@ impl Catalog {
             .map_err(|e| e.to_string())?;
         id.map(|id| self.get(&id)).transpose()
     }
+
+    /// Read the settled file record without creating or migrating the library.
+    /// A caller still has to check the live file and its own search grant.
+    pub fn filed_context(path: &Path, volume: u64, object: u64) -> Result<Option<Entry>> {
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(None);
+        }
+        let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(|e| e.to_string())?;
+        db.busy_timeout(std::time::Duration::from_millis(250)).map_err(|e| e.to_string())?;
+        let text: Option<String> = db.query_row(
+            "SELECT record FROM files WHERE volume=?1 AND object=?2 AND phase='\"filed\"'",
+            params![volume.to_string(), object.to_string()],
+            |row| row.get(0),
+        ).optional().map_err(|e| e.to_string())?;
+        text.map(|text| serde_json::from_str(&text).map_err(|e| e.to_string())).transpose()
+    }
     pub fn save(&mut self, e: &Entry) -> Result<()> {
         let tx = self.db.transaction().map_err(|e| e.to_string())?;
         let record = serde_json::to_string(e).map_err(|e| e.to_string())?;

@@ -19,7 +19,7 @@
 //!   disk (still inside the folder, still a regular file, same content hash) and dropped if not;
 //!   opening a result checks the same again.
 use crate::chunk::CHUNKER_IDENTITY;
-use crate::corpus::{self, Corpus};
+use crate::corpus::{self, Corpus, FileVersion, MetadataSource};
 use crate::embed::Embedder;
 use crate::manifest::{point_id, Manifest, SourceEntry, SourceState};
 use crate::query::{self, ParsedQuery};
@@ -207,6 +207,7 @@ struct CacheKey {
 
 struct Inner {
     config: Config,
+    metadata: Option<MetadataSource>,
     corpus: RwLock<Option<Arc<Corpus>>>,
     folder: RwLock<FolderStatus>,
     meaning_status: RwLock<MeaningStatus>,
@@ -247,9 +248,14 @@ impl SearchService {
     /// Start the service: reading the folder and building the meaning index happen on a
     /// background thread; this returns at once.
     pub fn start(config: Config) -> Self {
+        Self::start_with_metadata(config, None)
+    }
+
+    pub fn start_with_metadata(config: Config, metadata: Option<MetadataSource>) -> Self {
         let service = SearchService(Arc::new(Inner {
             folder: RwLock::new(if config.root.is_some() { FolderStatus::Loading } else { FolderStatus::None }),
             config,
+            metadata,
             corpus: RwLock::new(None),
             meaning_status: RwLock::new(MeaningStatus::Starting),
             meaning: RwLock::new(None),
@@ -324,7 +330,7 @@ impl SearchService {
 
     fn run(&self, rebuild: bool) {
         let Some(root) = self.0.config.root.clone() else { return };
-        match corpus::load(&root) {
+        match corpus::load_with_metadata(&root, self.0.metadata.as_ref()) {
             Ok(c) => {
                 *self.0.folder.write().unwrap() = FolderStatus::Ready {
                     files: c.docs.len(),
@@ -584,8 +590,12 @@ impl SearchService {
         let corpus = self.0.corpus.read().unwrap().clone().ok_or("No search folder is configured.")?;
         let doc = corpus.docs.iter().find(|d| d.id == source_id).ok_or("That document is not in the search folder.")?;
         let path = corpus::resolve_inside(&corpus.root, &doc.rel_path)?;
-        let bytes = std::fs::read(&path).map_err(|_| "That document could not be read.".to_string())?;
-        if corpus::content_hash(&bytes) != doc.hash {
+        let current = if let Some(version) = &doc.metadata_version {
+            std::fs::metadata(&path).map(|meta| FileVersion::of(&meta) == *version)
+        } else {
+            std::fs::read(&path).map(|bytes| corpus::content_hash(&bytes) == doc.hash)
+        }.map_err(|_| "That document could not be read.".to_string())?;
+        if !current {
             return Err("That document changed after it was searched. Search again to see it as it is now.".into());
         }
         Ok(path)
@@ -656,11 +666,18 @@ fn semantic_hits(meaning: &Meaning, query: &str, tuning: &Tuning) -> Result<Vec<
 /// Is the file still the one that was read: inside the folder, a regular file, same content?
 fn still_current(root: &Path, doc: &corpus::Document) -> bool {
     let Ok(path) = corpus::resolve_inside(root, &doc.rel_path) else { return false };
-    match std::fs::metadata(&path) {
+    same_file_version(&path, doc)
+}
+
+fn same_file_version(path: &Path, doc: &corpus::Document) -> bool {
+    if let Some(version) = &doc.metadata_version {
+        return std::fs::metadata(path).is_ok_and(|meta| FileVersion::of(&meta) == *version);
+    }
+    match std::fs::metadata(path) {
         Ok(meta) if meta.len() == doc.size => {}
         _ => return false,
     }
-    std::fs::read(&path).map(|bytes| corpus::content_hash(&bytes) == doc.hash).unwrap_or(false)
+    std::fs::read(path).map(|bytes| corpus::content_hash(&bytes) == doc.hash).unwrap_or(false)
 }
 
 /// The heading a result shows with its passage: the nearest heading, and, when an outer heading

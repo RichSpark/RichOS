@@ -1098,8 +1098,8 @@ fn add_svg_keywords(xml: &str, labels: &[String]) -> Result<String> {
     Ok(replace_content(xml,span,&format!("{body}<dc:subject xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><rdf:Bag xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">{tags}</rdf:Bag></dc:subject>")))
 }
 
-/// Reopen rewritten containers before allowing the native original replacement.
-pub fn verify_note(path: &Path, projection: &Projection, ext: &str) -> Result<()> {
+/// Read the native note field used by the package and audio writers.
+fn read_note(path: &Path, ext: &str) -> Result<String> {
     use lofty::{config::ParseOptions, file::AudioFile};
     let actual = match ext {
         "zip" => {
@@ -1163,13 +1163,91 @@ pub fn verify_note(path: &Path, projection: &Projection, ext: &str) -> Result<()
                 .unwrap_or_default()
                 .to_string()
         }
-        // ExifTool's fresh reader has already verified these fields in write_exif.
-        _ => return Ok(()),
+        _ => return Err("Unsupported native note format".into()),
     };
+    Ok(actual)
+}
+
+/// Reopen rewritten containers before allowing the native original replacement.
+pub fn verify_note(path: &Path, projection: &Projection, ext: &str) -> Result<()> {
+    // ExifTool's fresh reader has already verified its fields in write_exif.
+    if !matches!(ext, "zip" | "docx" | "xlsx" | "pptx" | "odt" | "ods" | "odp" | "svg" | "mp3" | "flac" | "ogg") {
+        return Ok(());
+    }
+    let actual = read_note(path, ext)?;
     if actual != projection.written {
         return Err("The newly embedded note did not verify".into());
     }
     Ok(())
+}
+
+/// Portable RichCleaner metadata, using the same fields as the writers. Read
+/// only these fields, with no archive extraction, OCR or media transcription.
+pub fn search_text(path: &Path, resources: Option<&Path>) -> Result<String> {
+    let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = extension.as_str();
+    match ext {
+        "zip" | "mp3" | "flac" | "ogg" => read_note(path, ext),
+        "docx" | "xlsx" | "pptx" | "odt" | "ods" | "odp" => {
+            let odf = matches!(ext, "odt" | "ods" | "odp");
+            let mut archive = ZipArchive::new(File::open(path).map_err(err)?).map_err(err)?;
+            let mut xml = String::new();
+            match archive.by_name(if odf { "meta.xml" } else { "docProps/core.xml" }) {
+                Ok(file) => file.take(1024 * 1024 + 1).read_to_string(&mut xml).map_err(err)?,
+                Err(zip::result::ZipError::FileNotFound) => return Ok(String::new()),
+                Err(error) => return Err(err(error)),
+            };
+            if xml.len() > 1024 * 1024 {
+                return Err("The document's metadata is unexpectedly large".into());
+            }
+            let mut text = vec![document_note(&xml, None, odf)?.1];
+            let (namespace, field) = if odf {
+                ("urn:oasis:names:tc:opendocument:xmlns:meta:1.0", "keyword")
+            } else {
+                ("http://schemas.openxmlformats.org/package/2006/metadata/core-properties", "keywords")
+            };
+            for span in xml_spans(&xml, namespace, field)? {
+                text.push(xml_text(&xml[span.content_start..span.content_end])?);
+            }
+            Ok(text.join("\n\n"))
+        }
+        "svg" => {
+            const MAX_SVG_BYTES: u64 = 16 * 1024 * 1024;
+            let mut xml = String::new();
+            File::open(path).map_err(err)?.take(MAX_SVG_BYTES + 1).read_to_string(&mut xml).map_err(err)?;
+            if xml.len() as u64 > MAX_SVG_BYTES {
+                return Err("SVG metadata is beyond the supported file size".into());
+            }
+            let mut text = vec![svg_note(&xml, None)?.1];
+            let subjects = xml_spans(&xml, "http://purl.org/dc/elements/1.1/", "subject")?;
+            for item in xml_spans(&xml, "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "li")? {
+                if subjects.iter().any(|s| item.start > s.start && item.end < s.end) {
+                    text.push(xml_text(&xml[item.content_start..item.content_end])?);
+                }
+            }
+            Ok(text.join("\n\n"))
+        }
+        _ => {
+            let resources = resources.ok_or("The portable metadata reader is unavailable.")?;
+            let fields: &[&str] = match ext {
+                "m4a" | "m4v" | "mp4" | "mov" => &["ItemList:Comment", "ItemList:Keyword"],
+                "pdf" => &["XMP-dc:Description-x-default", "XMP-dc:Subject", "PDF:Subject", "PDF:Keywords"],
+                _ => &["XMP-dc:Description-x-default", "XMP-dc:Subject"],
+            };
+            let values = read_exif(path, resources, fields)?;
+            let mut text = Vec::new();
+            for field in fields {
+                let value = values.get(*field).or_else(|| values.get(field.trim_end_matches("-x-default")));
+                match value {
+                    Some(serde_json::Value::String(value)) => text.push(value.as_str()),
+                    Some(serde_json::Value::Array(values)) => text.extend(values.iter().filter_map(serde_json::Value::as_str)),
+                    _ => {}
+                }
+            }
+            text.dedup();
+            Ok(text.join("\n\n"))
+        }
+    }
 }
 
 // ExifTool replaces only its previous incremental metadata revision on edit. All

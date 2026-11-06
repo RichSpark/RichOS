@@ -16,13 +16,47 @@ use crate::chunk::{self, Passage};
 use crate::text::fold;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::fs::Metadata;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 pub const SKIPPED_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "__pycache__", "vendor"];
 /// A Markdown file larger than this is reported as skipped. 16 MB is far above any single
 /// conversation the archive's lower bound implies (30+ MB over 1,500+ files, about 20 KB each).
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+pub type ReadMetadata = dyn Fn(&Path, &Metadata) -> Result<Option<String>, String> + Send + Sync;
+
+/// The desktop supplies its format readers. Plain Markdown needs no adapter.
+#[derive(Clone)]
+pub struct MetadataSource {
+    pub extensions: &'static [&'static str],
+    pub read: Arc<ReadMetadata>,
+}
+
+/// An inexpensive file version for metadata-only hits. Media can be large, so a
+/// result never re-reads or hashes its payload merely to check its identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileVersion {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+impl FileVersion {
+    pub(crate) fn of(meta: &Metadata) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            #[cfg(unix)]
+            identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+}
 
 /// A stable identifier for one file: derived from its path inside the folder, so it survives
 /// a restart and a Reindex, and carries no path itself (the renderer sends it back to open the
@@ -61,6 +95,7 @@ pub struct Document {
     /// them: `## Annual plan` over `### Pricing` is not the phrase "annual plan pricing"
     /// (review rv-20261013T151528Z-71779eae-6117).
     pub folded_passages: Vec<Vec<String>>,
+    pub(crate) metadata_version: Option<FileVersion>,
 }
 
 impl Document {
@@ -81,6 +116,7 @@ impl Document {
             text,
             passages,
             folded_passages,
+            metadata_version: None,
         }
     }
 }
@@ -134,7 +170,7 @@ pub fn validate_root(root: &Path) -> Result<PathBuf, String> {
 }
 
 /// Every supported file under `root`, in path order, as `(relative path, absolute path)`.
-pub fn list(root: &Path) -> Result<(Vec<(String, PathBuf)>, usize), String> {
+fn list(root: &Path, metadata: Option<&MetadataSource>) -> Result<(Vec<(String, PathBuf)>, usize), String> {
     let mut files = Vec::new();
     let mut links = 0usize;
     let mut stack = vec![root.to_path_buf()];
@@ -150,7 +186,9 @@ pub fn list(root: &Path) -> Result<(Vec<(String, PathBuf)>, usize), String> {
                 if !skipped_dir(&name) {
                     stack.push(path);
                 }
-            } else if kind.is_file() && supported(&path) && !name.starts_with('.') {
+            } else if kind.is_file() && !name.starts_with('.') && (supported(&path) || metadata.is_some_and(|m| {
+                path.extension().and_then(|v| v.to_str()).is_some_and(|ext| m.extensions.iter().any(|s| s.eq_ignore_ascii_case(ext)))
+            })) {
                 if let Some(rel) = relative(root, &path) {
                     files.push((rel, path));
                 }
@@ -196,16 +234,45 @@ pub fn read_document(rel_path: &str, path: &Path) -> Result<Document, String> {
 /// no index (PRD: *"Text search must work independently of Edge availability and model
 /// startup."*).
 pub fn load(root: &Path) -> Result<Corpus, String> {
+    load_with_metadata(root, None)
+}
+
+pub(crate) fn load_with_metadata(root: &Path, metadata: Option<&MetadataSource>) -> Result<Corpus, String> {
     let root = validate_root(root)?;
-    let (files, links_skipped) = list(&root)?;
+    let (files, links_skipped) = list(&root, metadata)?;
     let mut corpus = Corpus { root, docs: Vec::with_capacity(files.len()), skipped: Vec::new(), links_skipped };
     for (rel, path) in files {
-        match read_document(&rel, &path) {
-            Ok(doc) => corpus.docs.push(doc),
+        let result = if supported(&path) {
+            read_document(&rel, &path).map(Some)
+        } else {
+            read_metadata_document(&corpus.root, &rel, metadata.expect("media listed without metadata source"))
+        };
+        match result {
+            Ok(Some(doc)) => corpus.docs.push(doc),
+            Ok(None) => {}
             Err(reason) => corpus.skipped.push(Skipped { rel_path: rel, reason }),
         }
     }
     Ok(corpus)
+}
+
+fn read_metadata_document(root: &Path, rel: &str, source: &MetadataSource) -> Result<Option<Document>, String> {
+    let path = resolve_inside(root, rel)?;
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let version = FileVersion::of(&meta);
+    let Some(text) = (source.read)(&path, &meta)?.filter(|s| !s.trim().is_empty()) else { return Ok(None) };
+    if resolve_inside(root, rel)? != path || std::fs::metadata(&path).ok().map(|m| FileVersion::of(&m)) != Some(version.clone()) {
+        return Err("The file changed while its metadata was being read.".into());
+    }
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(rel);
+    if text.len() > 256 * 1024 {
+        return Err("The file metadata exceeds the search limit.".into());
+    }
+    let text = format!("# {name}\n\n## File metadata\n\n{text}");
+    let hash = content_hash(text.as_bytes());
+    let mut doc = Document::from_text(rel, text, modified_ms(&meta), meta.len(), hash);
+    doc.metadata_version = Some(version);
+    Ok(Some(doc))
 }
 
 /// Resolve a document's file for opening or revalidation: the path is rebuilt from the
@@ -220,6 +287,9 @@ pub fn resolve_inside(root: &Path, rel_path: &str) -> Result<PathBuf, String> {
     let canonical = candidate.canonicalize().map_err(|_| "That document is no longer in the search folder.".to_string())?;
     if !canonical.starts_with(root) {
         return Err("That document is outside the search folder.".into());
+    }
+    if canonical != candidate {
+        return Err("That document is reached through a symbolic link.".into());
     }
     Ok(canonical)
 }
