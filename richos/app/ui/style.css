@@ -618,7 +618,7 @@ button {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 80;
+  z-index: 210;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -936,7 +936,7 @@ button {
    `aria-describedby` still reads it. */
 .res-card {
   position: fixed;
-  z-index: 85;
+  z-index: 210;
   width: 300px;
   box-sizing: border-box;
   padding: 14px 16px 12px;
@@ -1117,8 +1117,9 @@ button {
 
 /* The view menu (right-click, the context-menu key, Shift+F10): the app's own menu, with the
    current view checked. */
-.res-menu {
-  z-index: 90;
+/* `.menu` (z 70) is declared further down and, at one class, beat this rule's z-index; two classes win. */
+.menu.res-menu {
+  z-index: 210;
   min-width: 150px;
 }
 .res-menu-item {
@@ -12981,7 +12982,19 @@ body.bug-dock-open .overlay-panel--desk {
    =========================================================================== */
 :root { --m-fable: #E8CC7E; --m-opus: #8E7437; --m-sonnet: #7E92B8; }   /* model marks, each 3:1 or more on the ground (round 22) */
 :root[data-theme="light"] { --m-fable: #5A4410; --m-opus: #8F7030; --m-sonnet: #44567A; }
-body.spend-open #app { display: none; }
+/* THE RAIL STAYS ON THIS SCREEN (review rv-20261106T173510Z-aa7dd4d6-bca3, finding 1; the CEO's
+   round-58 pick: "Nav rail everywhere else but not on the home screen"). The rail is a child of #app,
+   so hiding #app hid it. Everything in #app but the rail and its tooltip is hidden instead, and this
+   screen starts at the rail's right edge, as an overlay does. Opened over Home, Home steps
+   aside while this screen is up (spend.js `open`), so the rail is there too. */
+body.spend-open #app > :not(#nav-rail):not(#nr-tip) { display: none; }
+body.spend-open #spend { left: 3.25rem; }
+/* The rail takes 52px of this screen's width (tests/spend.js measures every fit). Docked beside the Rich
+   panel the column is that much narrower: the tokens line drops to the 16px floor (its second sentence
+   is 883px at 18px, 785px at 16px) and the four periods wrap to a second row of two instead of
+   squeezing a word onto two lines. */
+body.bug-dock-open .sp-tokens { font-size: 1rem; }
+body.bug-dock-open .sp-period { flex-wrap: wrap; border-radius: 22px; }
 #spend { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; background: var(--ground); color: var(--ink);
   font-family: var(--font); animation: fadein .35s ease both; }
 #spend[hidden] { display: none; }
@@ -13956,3 +13969,15 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 .voc-list .voc-opt:hover, .voc-list .voc-opt:focus-visible { background: var(--gold-soft); }
 .voc-save { background: var(--gold); color: var(--on-gold); border-color: var(--gold); font-weight: 600; }
 .voc-edit-cell { padding: 8px; }
+
+/* THE RAIL'S FLYOUTS SIT ABOVE EVERY SHEET THE RAIL LEAVES UP (review rv-20261106T173510Z-aa7dd4d6-bca3,
+   finding 2): the hover label, the Mac activity card and its Ink/Readout menu are 210, above RichScribe's
+   sheet (160) and Token spend (200), below Settings (300). THE FIRST-RUN QUESTION BOUNDARY: while a
+   first-run question is up (QUESTION_SELECTOR in main.js) it owns the window, the rail is inert, and
+   none of these may be painted over it, so they are not shown at all. */
+:root:has(.overlay[aria-modal="true"][data-dismiss^="control:"]:not([hidden])) :is(#nr-tip, .res-card, .res-menu),
+/* Home (150) has no rail: a card pinned from the keyboard (Space on the square, then Up to Home and Enter
+   raises no pointer press to unpin it) must not stay painted over it (review rv-20261106T215921Z-fae9a28f-30ee). */
+body.home-open :is(#nr-tip, .res-card, .res-menu) {
+  display: none !important;
+}

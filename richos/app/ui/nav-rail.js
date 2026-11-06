@@ -113,6 +113,9 @@
       return all.filter((o) => o.classList.contains("overlay") && !o.hidden && !keep(o));
     };
     let closed = 0;
+    // Token spend is a screen of its own, not an `.overlay`, and the rail stays on it: a place or a
+    // tool steps it aside by `RichSpend.leave` (Home, if it was beneath, is not brought back).
+    if (document.body.classList.contains("spend-open") && window.RichSpend) { window.RichSpend.leave(); closed++; }
     for (let tries = 0; tries < 12; tries++) {
       const top = open()[0];
       if (!top) break;

@@ -345,6 +345,11 @@
     if (window.RichSettings) window.RichSettings.close(false);
     if (S.open) return refresh();
     S.opener = document.activeElement;
+    // Opened over Home, this screen is still its own screen with the rail on it, and the rail
+    // lives in #app, which Home covers and holds inert. So Home steps aside while this screen is
+    // up, as it does for a sheet (home.js `giveWayToOpenDeskSheet`), and Back brings it back.
+    S.homeWas = !!(window.RichHome && window.RichHome.isOpen && window.RichHome.isOpen());
+    if (S.homeWas) window.RichHome.hide("token-spend");
     S.open = true;
     const gen = ++S.gen;
     if (!screen.isConnected) document.body.appendChild(screen);
@@ -357,7 +362,8 @@
     paintRow();
   }
   // `keepFocus === true` when a sheet takes this screen's place: the focus belongs to the sheet.
-  function close(keepFocus) {
+  // `leave === true` when the rail (or a sheet) takes the person elsewhere: Home is then not brought back.
+  function close(keepFocus, leave) {
     if (!S.open) return;
     S.open = false;
     S.gen++;
@@ -366,10 +372,17 @@
     document.body.classList.remove("spend-open");
     const back = S.opener;
     S.opener = null;
+    const homeWas = S.homeWas;
+    S.homeWas = false;
+    if (homeWas && keepFocus !== true && leave !== true && window.RichHome && window.RichHome.show) {
+      window.RichHome.show("token-spend-back");
+      paintRow();
+      return;
+    }
     if (keepFocus !== true && back && document.contains(back) && typeof back.focus === "function" && back.id !== "set-spend-open") back.focus();
     paintRow();
   }
-  $("spend-back").addEventListener("click", close);
+  $("spend-back").addEventListener("click", () => close());
 
   // A SETTINGS SHEET OPENED OVER THIS SCREEN TAKES ITS PLACE (the review of e7c316d11). Settings
   // stays above this screen and its rows still work, but the sheets they open live on the desk (an
@@ -436,6 +449,7 @@
   // For the acceptance suite: paint any amount into the figure as the screen would (the gap walk).
   window.RichSpend = {
     open, close, refresh,
+    leave: () => close(true, true),
     isOpen: () => S.open,
     paintFigure: v => { const f = $("spend-fig"); if (f) paintFigure(f, v, false); return f ? f.textContent : null; },
   };
