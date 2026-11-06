@@ -648,3 +648,12 @@ RichCleaner also uses Lofty 0.25.5 (MIT or Apache-2.0), ZIP 9.2.0 (MIT),
 quick-xml 0.41.0 (MIT), Ogg 0.9.2 (BSD-3-Clause) and rusqlite 0.32.1 (MIT).
 SQLite links to the operating system runtime. No SQLite server or media codec
 is bundled for this feature.
+
+### RichFinder
+
+RichFinder bundles [llama.cpp b7870](https://github.com/ggml-org/llama.cpp/releases/tag/b7870)
+and [BAAI BGE small English v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5),
+both under the MIT license. The BGE weights use the
+[CompendiumLabs GGUF conversion](https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf).
+The corresponding notices are in the app's `Resources/RichFinder` directory.
+The helper accepts requests through a private Unix socket on the Mac.
