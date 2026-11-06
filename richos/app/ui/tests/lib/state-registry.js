@@ -5794,6 +5794,7 @@ module.exports = [
   {"s":"The local search model is busy.","c":"INFORMATIONAL","why":"An interactive lookup can return words while the model is occupied."},
   {"s":"The local search model is unavailable.","c":"INFORMATIONAL","why":"The model could not serve this search. The app can still return text matches."},
   {"s":"The local search model connection is unavailable.","c":"INFORMATIONAL","why":"The app retries the local connection and can still return word matches while meaning search is unavailable."},
+  {"s":"The search index was stopped.","c":"NOT-RENDERED","why":"A background indexing callback can return this after its grant or app stops. The shell discards results from that retired service."},
   {"s":"The local search model could not answer.","c":"INFORMATIONAL","why":"A local search model failure can explain the word-search fallback in the status tooltip. It reports the failure and asks for no separate action."},
   {"s":"The local search model exited during startup.","c":"INFORMATIONAL","why":"A local search model failure can explain the word-search fallback in the status tooltip. It reports the failure and asks for no separate action."},
   {"s":"The local search model rejected the bounded input.","c":"INFORMATIONAL","why":"A local search model failure can explain the word-search fallback in the status tooltip. It reports the failure and asks for no separate action."},
