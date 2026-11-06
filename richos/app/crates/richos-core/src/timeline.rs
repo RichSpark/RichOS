@@ -116,7 +116,7 @@
 //! they are §12-verbatim and carry fields (`result_ref`, `error_ref`, `completed_at`) that
 //! nothing witnesses.
 
-use crate::entity::{EntityId, ThreadBinding};
+use crate::entity::{EntityId, PersonId, ThreadBinding};
 use crate::worker_events::{ObservedWorkerState, SessionScope, WorkerEventRow};
 use crate::ledger::{AttentionTier, Ledger, LedgerError, Source, Turn, TurnState};
 use crate::machinery::{MachineryKind, MachineryRecord, ToolStatus};
@@ -1046,6 +1046,20 @@ impl Timeline {
     pub fn committed_search_turn(ledger: &Ledger, binding: &ThreadBinding, turn_id: &str) -> Result<Vec<CommittedSearchMessage>, LedgerError> {
         Ok(ledger.thread_turn_scoped(binding, turn_id)?.into_iter()
             .flat_map(|turn| Self::searchable_turn(turn, binding)).collect())
+    }
+
+    /// Seed or reconcile a person's search index from one published ledger view. Each
+    /// message carries the same binding and title as its thread. A company restriction
+    /// must be supplied by the host; it is never obtained from the query text.
+    pub fn visit_committed_search_messages(
+        ledger: &Ledger,
+        person: &PersonId,
+        entity: Option<&EntityId>,
+        mut visit: impl FnMut(&ThreadBinding, &str, CommittedSearchMessage) -> bool,
+    ) {
+        ledger.visit_person_turns(person, entity, |binding, title, turn| {
+            Self::searchable_turn(turn, binding).all(|message| visit(binding, title, message))
+        });
     }
 
     fn searchable_turn(turn: &Turn, binding: &ThreadBinding) -> impl Iterator<Item = CommittedSearchMessage> {
@@ -2458,6 +2472,43 @@ mod tests {
         let foreign = ThreadBinding::new(binding.person_id().clone(), EntityId::parse("foreign").unwrap(), &thread, binding.binding_revision());
         assert!(matches!(Timeline::committed_search_messages(&ledger, &foreign), Err(LedgerError::ScopeMismatch { .. })));
         assert!(matches!(Timeline::committed_search_turn(&ledger, &foreign, &visible), Err(LedgerError::ScopeMismatch { .. })));
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn committed_search_seed_stays_within_the_person_and_optional_company() {
+        let file = std::env::temp_dir().join(crate::util::new_id("search-seed"));
+        let mut ledger = Ledger::open(&file).unwrap();
+        let person = PersonId::default_ceo();
+        let other = PersonId::new("fixture-person");
+        let company = entity();
+        let neighbor = EntityId::parse("neighbor").unwrap();
+        for (owner, home, title, text) in [
+            (&person, &company, "Pricing", "First visible prompt"),
+            (&other, &company, "Other person's pricing", "Hidden from this person"),
+            (&person, &neighbor, "Release", "Second visible prompt"),
+        ] {
+            let thread = ledger.create_thread_for(owner, title, home).unwrap();
+            let binding = ledger.thread_binding(&thread).unwrap();
+            let turn = ledger.record_prompt_received(&binding, text, Source::Text).unwrap();
+            ledger.complete_turn(&turn, "done").unwrap();
+        }
+        let collect = |scope: Option<&EntityId>| {
+            let mut messages = Vec::new();
+            Timeline::visit_committed_search_messages(&ledger, &person, scope, |binding, title, message| {
+                assert_eq!(binding, &ledger.thread_binding(binding.thread_id()).unwrap());
+                messages.push((title.to_owned(), message.text));
+                true
+            });
+            messages
+        };
+        let pricing = ("Pricing".into(), "First visible prompt".into());
+        assert_eq!(collect(Some(&company)), vec![pricing.clone()]);
+        assert_eq!(collect(None), vec![pricing, ("Release".into(), "Second visible prompt".into())]);
+        let mut calls = 0;
+        Timeline::visit_committed_search_messages(&ledger, &person, None, |_, _, _| { calls += 1; false });
+        assert_eq!(calls, 1);
+        drop(ledger);
         std::fs::remove_file(file).unwrap();
     }
 
