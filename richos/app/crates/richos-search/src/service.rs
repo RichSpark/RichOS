@@ -85,9 +85,11 @@ pub struct Config {
 
 /// The user-selected folder set. The shell owns authorization and supplies the
 /// current exclusions (for example its own data directory and search cache).
+#[derive(Clone, PartialEq, Eq)]
 pub struct FolderSetConfig {
     pub selected: Vec<PathBuf>,
     pub excluded: Vec<PathBuf>,
+    pub automatic: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -463,7 +465,10 @@ impl SearchService {
         let changes = metadata.map(|source| (source.watch)());
         let stopped = || self.background_stopping();
         let loaded = match &self.0.folders {
-            Some(scope) => Ok(corpus::load_scope_until_stopped(&scope.selected, &scope.excluded, metadata, stopped)),
+            Some(scope) => {
+                let selected = if scope.automatic { corpus::automatic_roots(&scope.selected) } else { scope.selected.clone() };
+                Ok(corpus::load_scope_until_stopped(&selected, &scope.excluded, scope.automatic, metadata, stopped))
+            }
             None => corpus::load_until_stopped(root.expect("a pilot root was configured"), metadata, stopped),
         };
         let pending = match loaded {

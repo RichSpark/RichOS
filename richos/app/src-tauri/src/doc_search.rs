@@ -19,7 +19,8 @@
 //!   accept a renderer-supplied path or command."*).
 use richos_search::corpus::MetadataSource;
 use richos_search::embed::Embedder;
-use richos_search::service::{Busy, Config, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
+use richos_core::config::{SearchFolderMode, SearchFolderPreferences};
+use richos_search::service::{Busy, Config, FolderSetConfig, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -27,6 +28,30 @@ use std::sync::{mpsc, Arc, Mutex};
 struct Location {
     root: Result<Option<PathBuf>, String>,
     cache: Result<PathBuf, String>,
+    folders: Option<FolderSetConfig>,
+}
+
+enum FolderChoice {
+    Pilot,
+    Off,
+    Selected(FolderSetConfig),
+    Unreadable,
+}
+
+impl FolderChoice {
+    fn from_preferences(home: &Path, data_dir: &Path, preferences: std::io::Result<Option<SearchFolderPreferences>>) -> Self {
+        let preferences = match preferences {
+            Ok(Some(preferences)) => preferences,
+            Ok(None) => return Self::Pilot,
+            Err(_) => return Self::Unreadable,
+        };
+        let (selected, automatic) = match preferences.mode {
+            SearchFolderMode::Off => return Self::Off,
+            SearchFolderMode::Chosen => (preferences.chosen, false),
+            SearchFolderMode::All => (vec![home.to_path_buf()], true),
+        };
+        Self::Selected(FolderSetConfig { selected, excluded: vec![data_dir.to_path_buf()], automatic })
+    }
 }
 
 type Locate = Arc<dyn Fn() -> Location + Send + Sync>;
@@ -34,10 +59,18 @@ type EmbedderFactory = Arc<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send 
 type RetiredService = (SearchService, mpsc::Sender<()>);
 
 impl Location {
-    fn from_settings(home: &Path, settings: Result<richos_core::machine_settings::Settings, String>) -> Self {
+    fn from_settings(home: &Path, settings: Result<richos_core::machine_settings::Settings, String>, choice: &FolderChoice) -> Self {
         match settings {
-            Ok(s) => Self { root: Ok(s.search_documents_root()), cache: s.cache(home, "search") },
-            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()) },
+            Ok(s) => {
+                let (root, folders) = match choice {
+                    FolderChoice::Pilot => (Ok(s.search_documents_root()), None),
+                    FolderChoice::Off => (Ok(None), None),
+                    FolderChoice::Selected(folders) => (Ok(None), Some(folders.clone())),
+                    FolderChoice::Unreadable => (Err("Search folder settings could not be read.".into()), None),
+                };
+                Self { root, folders, cache: s.cache(home, "search") }
+            }
+            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()), folders: None },
         }
     }
 }
@@ -146,12 +179,17 @@ impl DocumentSearch {
             busy,
             tuning: Tuning::default(),
         };
+        let folders = location.folders.clone();
         let authorized: Grant = Box::new(move || current() == *location);
-        SearchService::start_with_grant(config, metadata, reranker, Some(authorized), move || {
+        let before_index = move || {
             if let Some(retired) = retired {
                 retired.recv().expect("the previous search index did not close");
             }
-        })
+        };
+        match folders {
+            Some(folders) => SearchService::start_with_folders(config, folders, metadata, reranker, authorized, before_index),
+            None => SearchService::start_with_grant(config, metadata, reranker, Some(authorized), before_index),
+        }
     }
 
     fn current(&self) -> ActiveSearch {
@@ -167,10 +205,11 @@ impl DocumentSearch {
         active.service.request_stop();
         let (done, retired) = mpsc::channel();
         self.retire.send((active.service.clone(), done)).expect("search cleanup thread stopped");
-        let state = match &location.root {
-            Ok(Some(_)) => "changed",
-            Ok(None) => "cleared",
-            Err(_) => "unreadable",
+        let state = match (&location.root, &location.folders) {
+            (Err(_), _) => "unreadable",
+            (Ok(Some(_)), _) => "changed",
+            (Ok(None), Some(folders)) if !folders.selected.is_empty() => "changed",
+            (Ok(None), _) => "cleared",
         };
         eprintln!("[richos] document search: grant={state}; previous access revoked");
         // Text loads without waiting. The background worker only waits to open the
@@ -221,8 +260,9 @@ impl DocumentSearch {
     }
 }
 
-pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -> Arc<DocumentSearch> {
+pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy, preferences: std::io::Result<Option<SearchFolderPreferences>>) -> Arc<DocumentSearch> {
     crate::search_diagnostics::init(data_dir);
+    let choice = FolderChoice::from_preferences(home, data_dir, preferences);
     let home = home.to_path_buf();
     #[cfg(target_os = "macos")]
     let metadata = {
@@ -237,7 +277,7 @@ pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -
     #[cfg(not(target_os = "macos"))]
     let (metadata, reranker) = { let _ = data_dir; (None, None) };
     DocumentSearch::new(
-        move || Location::from_settings(&home, richos_core::machine_settings::Settings::current()),
+        move || Location::from_settings(&home, richos_core::machine_settings::Settings::current(), &choice),
         make_embedder,
         Some(busy),
         metadata,
@@ -328,7 +368,19 @@ struct ToolAnswer(Arc<DocumentSearch>);
 
 impl richos_core::search_tools::SearchAnswer for ToolAnswer {
     fn answer(&self, ask: &richos_core::search_tools::Ask) -> serde_json::Value {
-        self.0.read(|active, revoked| Self::answer_active(active, ask, revoked))
+        self.0.read(|active, revoked| {
+            // The pilot endpoint identifies an app launch, not a specific company.
+            // New folder grants stay palette-only until the tool supplies a verified
+            // conversation identity that can be intersected with the saved limit.
+            if active.location.folders.is_some() {
+                return serde_json::json!({
+                    "empty": "no_folder",
+                    "results": [],
+                    "note": "Rich needs a verified company scope to search these folders.",
+                });
+            }
+            Self::answer_active(active, ask, revoked)
+        })
     }
 }
 
@@ -466,6 +518,31 @@ mod tests {
     use richos_core::search_tools::{Ask, SearchAnswer, MAX_EXCERPT_CHARS};
     use richos_search::embed::ConceptEmbedder;
 
+    #[test]
+    fn saved_folder_modes_do_not_restore_the_pilot_grant() {
+        let home = Path::new("/Users/fixture");
+        let data = home.join("Library/Application Support/RichOS");
+        let settings = richos_core::machine_settings::parse("RICHOS_SEARCH_DOCUMENTS_ROOT=/pilot\n").unwrap();
+        let locate = |preferences| {
+            let choice = FolderChoice::from_preferences(home, &data, preferences);
+            Location::from_settings(home, Ok(settings.clone()), &choice)
+        };
+        assert_eq!(locate(Ok(None)).root.unwrap(), Some(PathBuf::from("/pilot")));
+        assert_eq!(locate(Ok(Some(SearchFolderPreferences::default()))).root.unwrap(), None);
+        assert!(locate(Err(std::io::Error::other("fixture"))).root.is_err());
+        let chosen = SearchFolderPreferences {
+            mode: SearchFolderMode::Chosen,
+            chosen: vec![PathBuf::from("/Volumes/Archive")],
+            ..SearchFolderPreferences::default()
+        };
+        let location = locate(Ok(Some(chosen)));
+        assert_eq!(location.root.unwrap(), None);
+        let scope = location.folders.unwrap();
+        assert_eq!(scope.selected, [PathBuf::from("/Volumes/Archive")]);
+        assert_eq!(scope.excluded, [data]);
+        assert!(!scope.automatic);
+    }
+
     /// The stand-in folder (ten files) plus `extra` more notes that all mention refunds.
     fn standin(name: &str, with_model: bool, extra: usize) -> (Arc<DocumentSearch>, PathBuf) {
         standin_with(name, with_model, extra, &[])
@@ -490,7 +567,7 @@ mod tests {
         }
         let cache = base.join("cache");
         let service = DocumentSearch::new(
-            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()) },
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), folders: None },
             move || {
                 if with_model {
                     Ok(Box::new(ConceptEmbedder::stand_in()))
@@ -719,7 +796,7 @@ mod tests {
         set(&first);
         let home = base.clone();
         let service = DocumentSearch::new(
-            move || Location::from_settings(&home, Settings::load(&home, &Default::default())),
+            move || Location::from_settings(&home, Settings::load(&home, &Default::default()), &FolderChoice::Pilot),
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
             None,
@@ -826,7 +903,7 @@ mod tests {
         let first = Mutex::new(Some(BlockFirst { calls: calls.clone(), entered, release: Mutex::new(Some(blocked)) }));
         let home = base.clone();
         let service = DocumentSearch::new(
-            move || Location::from_settings(&home, Settings::load(&home, &Default::default())),
+            move || Location::from_settings(&home, Settings::load(&home, &Default::default()), &FolderChoice::Pilot),
             move || match first.lock().unwrap().take() {
                 Some(blocker) => Ok(Box::new(blocker)),
                 None => Ok(Box::new(ConceptEmbedder::stand_in())),
@@ -950,7 +1027,7 @@ mod tests {
         let folder = alias;
         let cache = base.join("cache");
         let service = DocumentSearch::new(
-            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()) },
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), folders: None },
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
             Some(adapter),

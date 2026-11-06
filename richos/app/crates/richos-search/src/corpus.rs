@@ -137,6 +137,7 @@ pub struct Corpus {
     /// this prefix, so identical relative names in different roots cannot collide.
     pub(crate) roots: BTreeMap<String, PathBuf>,
     pub(crate) excluded: Vec<PathBuf>,
+    pub(crate) automatic: bool,
     /// Documents in path order.
     pub docs: Vec<Arc<Document>>,
     pub skipped: Vec<Skipped>,
@@ -172,7 +173,13 @@ impl Corpus {
             || prefix.strip_prefix(root).is_ok_and(|tail| Path::new(relative).starts_with(tail))) {
             return Err("That document is in a folder excluded from search.".into());
         }
-        resolve_inside(root, relative)
+        let path = resolve_inside(root, relative)?;
+        if self.automatic && path.parent().is_some_and(|parent|
+            parent.ancestors().take_while(|dir| dir.starts_with(root)).any(has_git_marker)
+        ) {
+            return Err("Choose this project folder explicitly to search it.".into());
+        }
+        Ok(path)
     }
 
     pub(crate) fn in_scope(&self, key: &str, scope: &FolderScope) -> bool {
@@ -343,8 +350,19 @@ struct DirectoryEntries {
     unavailable: Vec<Skipped>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WalkPolicy {
+    Pilot,
+    Chosen,
+    All,
+}
+
+fn has_git_marker(dir: &Path) -> bool {
+    dir.join(".git").symlink_metadata().is_ok()
+}
+
 /// Every supported file under `root`, in path order, as `(relative path, absolute path)`.
-fn list(root: &Path, metadata: Option<&MetadataSource>, excluded: &[PathBuf], partial: bool, stopped: &impl Fn() -> bool) -> Result<Option<DirectoryEntries>, String> {
+fn list(root: &Path, metadata: Option<&MetadataSource>, excluded: &[PathBuf], policy: WalkPolicy, stopped: &impl Fn() -> bool) -> Result<Option<DirectoryEntries>, String> {
     let mut files = Vec::new();
     let mut links = 0usize;
     let mut unavailable = Vec::new();
@@ -353,9 +371,17 @@ fn list(root: &Path, metadata: Option<&MetadataSource>, excluded: &[PathBuf], pa
         if stopped() {
             return Ok(None);
         }
+        // Broad discovery is not permission to search a project checkout. A
+        // linked worktree has a .git file instead of a directory.
+        if policy == WalkPolicy::All && has_git_marker(&dir) {
+            if dir == root {
+                return Err("Choose this project folder explicitly to search it.".into());
+            }
+            continue;
+        }
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
-            Err(error) if partial && dir != root => {
+            Err(error) if policy != WalkPolicy::Pilot && dir != root => {
                 unavailable.push(Skipped { rel_path: relative(root, &dir).unwrap_or_default(), reason: error.to_string() });
                 continue;
             }
@@ -434,11 +460,11 @@ pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>,
         return Ok(None);
     }
     let root = validate_root(root)?;
-    load_root(root, metadata, &[], false, &stopped)
+    load_root(root, metadata, &[], WalkPolicy::Pilot, &stopped)
 }
 
-fn load_root(root: PathBuf, metadata: Option<&MetadataSource>, excluded: &[PathBuf], partial: bool, stopped: &impl Fn() -> bool) -> Result<Option<PendingCorpus>, String> {
-    let Some(DirectoryEntries { files, links_skipped, unavailable }) = list(&root, metadata, excluded, partial, stopped)? else { return Ok(None) };
+fn load_root(root: PathBuf, metadata: Option<&MetadataSource>, excluded: &[PathBuf], policy: WalkPolicy, stopped: &impl Fn() -> bool) -> Result<Option<PendingCorpus>, String> {
+    let Some(DirectoryEntries { files, links_skipped, unavailable }) = list(&root, metadata, excluded, policy, stopped)? else { return Ok(None) };
     let mut corpus = Corpus { root, docs: Vec::with_capacity(files.len()), links_skipped, unavailable, ..Corpus::default() };
     let mut media = Vec::new();
     for (rel, path) in files {
@@ -460,13 +486,35 @@ fn load_root(root: PathBuf, metadata: Option<&MetadataSource>, excluded: &[PathB
 /// Load a disjoint set of selected folders as one searchable corpus. Each file
 /// keeps its source identity even if unrelated folders are added to the choice.
 pub fn load_scope(configured: &[PathBuf], excluded: &[PathBuf]) -> Corpus {
-    load_scope_until_stopped(configured, excluded, None, || false)
+    load_scope_until_stopped(configured, excluded, false, None, || false)
         .expect("no cancellation requested").corpus
 }
 
-pub(crate) fn load_scope_until_stopped(configured: &[PathBuf], excluded: &[PathBuf], metadata: Option<&MetadataSource>, stopped: impl Fn() -> bool) -> Option<PendingCorpus> {
+/// Discover mounted volumes on the search worker. The desktop does not touch
+/// removable storage while opening a conversation or starting the app.
+pub(crate) fn automatic_roots(home: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots = home.to_vec();
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let mount = Path::new("/Volumes");
+        if let (Ok(parent), Ok(entries)) = (mount.metadata(), std::fs::read_dir(mount)) {
+            roots.extend(entries.flatten().filter_map(|entry| {
+                let path = entry.path();
+                let meta = path.symlink_metadata().ok()?;
+                (meta.is_dir() && meta.dev() != parent.dev()).then_some(path)
+            }));
+        }
+    }
+    roots.sort_unstable();
+    roots.dedup();
+    roots
+}
+
+pub(crate) fn load_scope_until_stopped(configured: &[PathBuf], excluded: &[PathBuf], automatic: bool, metadata: Option<&MetadataSource>, stopped: impl Fn() -> bool) -> Option<PendingCorpus> {
     let (scope, unresolved) = FolderScope::resolve(configured);
     let mut corpus = Corpus {
+        automatic,
         unavailable: unresolved.into_iter().map(|(path, reason)| Skipped {
             rel_path: path.to_string_lossy().into_owned(), reason,
         }).collect(),
@@ -480,7 +528,8 @@ pub(crate) fn load_scope_until_stopped(configured: &[PathBuf], excluded: &[PathB
             corpus.unavailable.push(Skipped { rel_path: root.to_string_lossy().into_owned(), reason: "This folder is excluded from search.".into() });
             continue;
         }
-        let found = match load_root(root.clone(), metadata, &corpus.excluded, true, &stopped) {
+        let policy = if automatic { WalkPolicy::All } else { WalkPolicy::Chosen };
+        let found = match load_root(root.clone(), metadata, &corpus.excluded, policy, &stopped) {
             Ok(Some(found)) => found,
             Ok(None) => return None,
             Err(reason) => {
@@ -718,6 +767,25 @@ mod tests {
         assert_eq!(combined.docs.len(), 2);
         assert!(combined.docs.iter().all(|doc| scoped.docs.iter().any(|other| other.id == doc.id)));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn automatic_folder_discovery_needs_an_explicit_choice_to_include_a_repository() {
+        let home = scratch("automatic");
+        let project = home.join("workspace");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(home.join("notes.md"), "ordinary notes").unwrap();
+        std::fs::write(project.join("details.md"), "project notes").unwrap();
+        std::fs::write(project.join(".git"), "gitdir: fixture").unwrap();
+        let automatic = load_scope_until_stopped(std::slice::from_ref(&home), &[], true, None, || false).unwrap().corpus;
+        assert_eq!(automatic.docs.len(), 1);
+        let (prefix, _) = automatic.docs[0].rel_path.split_once('/').unwrap();
+        assert!(automatic.resolve_key(&format!("{prefix}/workspace/details.md")).is_err());
+
+        let chosen = load_scope(&[project], &[]);
+        assert_eq!(chosen.docs.len(), 1);
+        assert!(chosen.resolve_key(&chosen.docs[0].rel_path).is_ok());
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

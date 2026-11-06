@@ -87,7 +87,7 @@ fn selected_folders_share_results_and_reindex_keeps_unchanged_embeddings() {
         make_embedder: Box::new(move || Ok(Box::new(Counting(counted.clone(), ConceptEmbedder::stand_in())))),
         busy: None,
         tuning: Tuning::default(),
-    }, FolderSetConfig { selected: vec![first.clone(), second.clone(), missing], excluded: Vec::new() },
+    }, FolderSetConfig { selected: vec![first.clone(), second.clone(), missing], excluded: Vec::new(), automatic: false },
        None, None, Box::new(|| true), || {});
     service.wait_idle();
     let response = ask(&service, "ravenseal", false, false);

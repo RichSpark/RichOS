@@ -3466,7 +3466,7 @@ fn main() {
             let search = {
                 let busy_control = control.clone();
                 let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
-                doc_search::start(&home, &data_dir, std::sync::Arc::new(move || busy_control.has_active_turns()))
+                doc_search::start(&home, &data_dir, std::sync::Arc::new(move || busy_control.has_active_turns()), config.search_folders())
             };
             let search_socket = doc_search::serve_tool(&search, &data_dir);
 
