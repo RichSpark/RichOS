@@ -1571,6 +1571,13 @@ if [ ! -x "$search_bundle/llama-server" ] || [ ! -s "$search_bundle/bge-small-en
   exit 5
 fi
 
+for asset in model_qint8_arm64.onnx tinybert_qint8_arm64.onnx tokenizer.json RANKING-LICENSE; do
+  if [ ! -s "$search_bundle/Ranking/$asset" ]; then
+    warn "the packaged app is missing a RichFinder relevance resource: $asset."
+    exit 5
+  fi
+done
+
 # ---------------------------------------------------------------------------
 # The remap above is the fix. THIS is the proof.
 # ---------------------------------------------------------------------------

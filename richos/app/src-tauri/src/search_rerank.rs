@@ -1,4 +1,4 @@
-//! Score each query and retrieved passage together with the bundled MiniLM model.
+//! Score each query and retrieved passage together with the bundled relevance models.
 use ort::{environment::ThreadManager, session::Session, value::Tensor};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -8,6 +8,33 @@ use tokenizers::{Encoding, Tokenizer, TruncationParams};
 
 const TOKEN_LIMIT: usize = 192;
 const BUCKET_WIDTH: usize = 32;
+const USER_INITIATED: u32 = 0x19;
+
+unsafe extern "C" {
+    fn pthread_override_qos_class_start_np(
+        thread: libc::pthread_t, qos_class: u32, relative_priority: i32,
+    ) -> *mut libc::c_void;
+    fn pthread_override_qos_class_end_np(override_token: *mut libc::c_void) -> i32;
+}
+
+/// Lift only the work the open palette is waiting on. The Tauri worker's
+/// original priority resumes even when a request is superseded or fails.
+pub(crate) struct QueryPriority(*mut libc::c_void);
+
+impl QueryPriority {
+    pub(crate) fn begin() -> Self {
+        Self(unsafe { pthread_override_qos_class_start_np(libc::pthread_self(), USER_INITIATED, 0) })
+    }
+}
+
+impl Drop for QueryPriority {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            let _status = unsafe { pthread_override_qos_class_end_np(self.0) };
+        }
+    }
+}
+
 
 struct RankingThreads;
 
@@ -21,7 +48,6 @@ impl ThreadManager for RankingThreads {
             unsafe extern "C" {
                 fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
             }
-            const USER_INITIATED: u32 = 0x19;
             if unsafe { pthread_set_qos_class_self_np(USER_INITIATED, 0) } != 0 {
                 eprintln!("[richos] document search: could not set relevance worker priority");
             }
@@ -47,10 +73,12 @@ impl Model {
             .map_err(|error| error.to_string())?;
         tokenizer.with_padding(None);
         let session = Session::builder().map_err(|error| error.to_string())?
-            .with_intra_threads(2).map_err(|error| error.to_string())?
+            .with_intra_threads(4).map_err(|error| error.to_string())?
             .with_inter_threads(1).map_err(|error| error.to_string())?
             .with_thread_manager(RankingThreads).map_err(|error| error.to_string())?
-            .with_intra_op_spinning(false).map_err(|error| error.to_string())?
+            .with_intra_op_spinning(true).map_err(|error| error.to_string())?
+            // Keep workers available inside a scoring call, then let them sleep.
+            .with_config_entry("session.force_spinning_stop", "1").map_err(|error| error.to_string())?
             .commit_from_file(model).map_err(|error| error.to_string())?;
         Ok(Self { tokenizer, session })
     }
@@ -95,8 +123,44 @@ impl Model {
 }
 
 
+struct Ranking {
+    strong: Model,
+    first: Option<Model>,
+}
+
+impl Ranking {
+    fn scores(&mut self, query: &str, candidates: &[String], obsolete: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
+        const PRELIMINARY: usize = 8;
+        const RETAIN_FROM_HYBRID: usize = 2;
+        let Some(first) = self.first.as_mut().filter(|_| candidates.len() > PRELIMINARY + RETAIN_FROM_HYBRID) else {
+            return self.strong.scores(query, candidates, obsolete);
+        };
+        let early = first.scores(query, candidates, obsolete);
+        if obsolete() { return Ok(Vec::new()); }
+        let Ok(early) = early else {
+            return self.strong.scores(query, candidates, obsolete);
+        };
+        let mut order: Vec<_> = (0..candidates.len()).collect();
+        order.sort_by(|&a, &b| early[b].total_cmp(&early[a]));
+        order.truncate(PRELIMINARY);
+        for position in 0..RETAIN_FROM_HYBRID {
+            if !order.contains(&position) { order.push(position); }
+        }
+        // Give the best hybrid candidates a second look even if the smaller model
+        // ranks them low. The main model still decides the final order.
+        let finalists: Vec<_> = order.iter().map(|&i| candidates[i].clone()).collect();
+        let final_scores = self.strong.scores(query, &finalists, obsolete)?;
+        if obsolete() { return Ok(Vec::new()); }
+        let mut scores = vec![f32::MIN; candidates.len()];
+        for (i, score) in order.into_iter().zip(final_scores) {
+            scores[i] = score;
+        }
+        Ok(scores)
+    }
+}
+
 pub(crate) fn models() -> (impl Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync, Reranker) {
-    let model = Arc::new(OnceLock::<Option<Mutex<Model>>>::new());
+    let model = Arc::new(OnceLock::<Option<Mutex<Ranking>>>::new());
     let start_model = model.clone();
     let embedder = move || {
         let embedder = Box::new(crate::search_embed::ResidentEmbedder::bundled()?) as Box<dyn Embedder>;
@@ -123,11 +187,14 @@ pub(crate) fn models() -> (impl Fn() -> Result<Box<dyn Embedder>, String> + Send
     (embedder, reranker)
 }
 
-fn bundled() -> Result<Model, String> {
+fn bundled() -> Result<Ranking, String> {
     let directory = crate::search_embed::resources()?.join("Ranking");
-    let model = directory.join("model_qint8_arm64.onnx");
     let tokenizer = directory.join("tokenizer.json");
-    Model::open(&model, &tokenizer)
+    let strong = Model::open(&directory.join("model_qint8_arm64.onnx"), &tokenizer)?;
+    let first = Model::open(&directory.join("tinybert_qint8_arm64.onnx"), &tokenizer)
+        .inspect_err(|_| eprintln!("[richos] document search: preliminary relevance scoring is unavailable"))
+        .ok();
+    Ok(Ranking { strong, first })
 }
 
 
@@ -147,4 +214,25 @@ mod tests {
         ], &|| false).unwrap();
         assert!(scores[1] > scores[0]);
     }
+
+    #[test]
+    #[ignore = "requires the pinned RichFinder ranking resources"]
+    fn bundled_shortlist_keeps_the_relevant_passage_for_final_scoring() {
+        let path = std::env::var_os("RICHOS_SEARCH_RANKING_RESOURCES").expect("set the ranking resource directory");
+        let directory = Path::new(&path);
+        let tokenizer = directory.join("tokenizer.json");
+        let mut ranking = Ranking {
+            strong: Model::open(&directory.join("model_qint8_arm64.onnx"), &tokenizer).unwrap(),
+            first: Some(Model::open(&directory.join("tinybert_qint8_arm64.onnx"), &tokenizer).unwrap()),
+        };
+        let mut passages: Vec<String> = (0..15)
+            .map(|i| format!("Street guide {i}\nThe nearest bus stops on every corner."))
+            .collect();
+        passages.push("Cancel a purchase\nWe issue a refund to the original payment method.".into());
+        let scores = ranking.scores("How do I get my money back?", &passages, &|| false).unwrap();
+        assert_eq!(scores.len(), passages.len());
+        assert!(scores.contains(&f32::MIN));
+        assert_eq!(scores.iter().enumerate().max_by(|(_, a), (_, b)| a.total_cmp(b)).unwrap().0, 15);
+    }
+
 }

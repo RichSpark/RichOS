@@ -203,7 +203,7 @@ impl Report {
             .evidence
             .iter()
             .filter(|i| i.status.has_text() && !i.text.trim().is_empty() && i.category != crate::collect::Category::Installation)
-            .filter(|i| wanted.is_none_or(|ids| ids.contains(&i.id)))
+            .filter(|i| i.category == crate::collect::Category::RichFinder || wanted.is_none_or(|ids| ids.contains(&i.id)))
             .map(|i| {
                 let when = i.observed_at.map(|t| format!(" · {}", crate::util::local_clock(t))).unwrap_or_default();
                 Excerpt { evidence_id: i.id.clone(), source_line: format!("{}{when}", i.source), text: i.text.clone(), removed: false }
@@ -500,7 +500,7 @@ pub const WITHOUT_AI_QUESTIONS: [&str; 3] = ["About what time did it happen?", "
 /// Whether an item belongs in the no-AI path's default collection.
 pub fn without_ai_categories(diagnostics: bool) -> Vec<crate::collect::Category> {
     use crate::collect::Category::*;
-    if diagnostics { vec![Installation, StartupCrash, ConversationFailure, Richscribe, ClaudeAvailability] } else { vec![Installation] }
+    if diagnostics { vec![Installation, StartupCrash, ConversationFailure, Richscribe, RichFinder, ClaudeAvailability] } else { vec![Installation] }
 }
 
 /// An item's status in the review's words, for the found-section header.
