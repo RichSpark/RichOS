@@ -551,6 +551,29 @@ struct ScopedToolAnswer {
     reader: SpineReader,
 }
 
+fn tool_folder_scope(active: &ActiveSearch, company_limit: Option<&[PathBuf]>, requested: Option<&[String]>) -> Result<Option<FolderScope>, &'static str> {
+    if company_limit.is_none() && requested.is_none() { return Ok(None); }
+    let authorized: Vec<_> = active.service.searchable_folders().into_iter()
+        .filter(|(_, path)| company_limit.is_none_or(|paths| paths.contains(path))).collect();
+    let ids = if let Some(names) = requested {
+        let mut ids = Vec::with_capacity(names.len());
+        for name in names {
+            let name = name.to_lowercase();
+            let mut matching = authorized.iter().filter(|(_, path)| {
+                path.file_name().and_then(|part| part.to_str()).is_some_and(|part| part.to_lowercase() == name)
+            });
+            match (matching.next(), matching.next()) {
+                (Some((id, _)), None) => ids.push(id.clone()),
+                _ => return Err("A requested folder name does not identify one folder Rich can search in this company."),
+            }
+        }
+        ids
+    } else {
+        authorized.into_iter().map(|(id, _)| id).collect()
+    };
+    Ok(Some(active.service.limit_to_folder_ids(&ids)))
+}
+
 fn refused_tool_search() -> serde_json::Value {
     serde_json::json!({"empty": "no_folder", "results": [], "note": "The search access changed. Try the search again."})
 }
@@ -577,10 +600,10 @@ impl ScopedToolAnswer {
         let obsolete = || !live() || controls.access_revision.load(Ordering::SeqCst) != revision;
         let result = self.service.read(|active, revoked| {
             if revoked || obsolete() { return refused_tool_search(); }
-            let scope = limit.as_ref().map(|paths| {
-                let ids: Vec<_> = paths.iter().map(|path| richos_search::corpus::source_id(&path.to_string_lossy())).collect();
-                active.service.limit_to_folder_ids(&ids)
-            });
+            let scope = match tool_folder_scope(active, limit.as_deref(), ask.folders.as_deref()) {
+                Ok(scope) => scope,
+                Err(note) => return serde_json::json!({"empty": "no_folder", "results": [], "note": note}),
+            };
             answer_tool_search(active, ask, false, scope.as_ref(), &obsolete)
         });
         if obsolete() || !authorized() { return refused_tool_search(); }
@@ -855,6 +878,10 @@ mod tests {
         assert_eq!(find(1, true)["results"].as_array().unwrap().len(), 0);
         assert_eq!(find(2, true)["results"].as_array().unwrap().len(), 2);
         assert_eq!(find(2, false)["results"].as_array().unwrap().len(), 0);
+        let mut one_folder = ask("silvercove", false, false);
+        one_folder.folders = Some(vec!["Archive".into()]);
+        assert_eq!(tool.answer_scoped(&one_folder, &bindings[0], &|| true)["results"].as_array().unwrap().len(), 0);
+        assert_eq!(tool.answer_scoped(&one_folder, &bindings[2], &|| true)["results"].as_array().unwrap().len(), 1);
         let mut narrowed = preferences;
         let _previous = narrowed.company_limits.insert("alpha".into(), Vec::new());
         service.apply_folder_preferences(narrowed);
@@ -920,7 +947,7 @@ mod tests {
     }
 
     fn ask(query: &str, super_finder: bool, strict: bool) -> Ask {
-        Ask { query: query.into(), super_finder, strict, limit: 8 }
+        Ask { query: query.into(), super_finder, strict, limit: 8, folders: None }
     }
 
     #[test]

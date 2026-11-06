@@ -189,6 +189,7 @@ pub struct Ask {
     pub super_finder: bool,
     pub strict: bool,
     pub limit: usize,
+    pub folders: Option<Vec<String>>,
 }
 
 /// What answers a call: the app's search service; a fake in the tests. The answer is the
@@ -274,8 +275,8 @@ fn read_line(stream: &UnixStream) -> io::Result<String> {
 pub fn parse_arguments(arguments: &Value) -> Result<Ask, String> {
     let fields = arguments.as_object().ok_or("The arguments must be an object.")?;
     for key in fields.keys() {
-        if !["query", "super_finder", "strict", "limit"].contains(&key.as_str()) {
-            return Err(format!("This tool takes query, super_finder, strict and limit; '{key}' is not one of them. Nothing was searched."));
+        if !["query", "super_finder", "strict", "limit", "folders"].contains(&key.as_str()) {
+            return Err(format!("This tool takes query, super_finder, strict, limit and folders; '{key}' is not one of them. Nothing was searched."));
         }
     }
     let query = fields.get("query").and_then(Value::as_str).map(str::trim).unwrap_or("");
@@ -296,7 +297,19 @@ pub fn parse_arguments(arguments: &Value) -> Result<Ask, String> {
         None | Some(Value::Null) => 5,
         Some(v) => v.as_u64().filter(|n| *n >= 1).ok_or("`limit` must be a whole number from 1. Nothing was searched.")? as usize,
     };
-    Ok(Ask { query: query.to_string(), super_finder: flag("super_finder", true)?, strict: flag("strict", false)?, limit: limit.min(MAX_RESULTS) })
+    let folders = match fields.get("folders") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let array = value.as_array().filter(|items| items.len() <= 32)
+                .ok_or("`folders` must be a list of up to 32 folder names. Nothing was searched.")?;
+            Some(array.iter().map(|item| {
+                item.as_str().map(str::trim).filter(|name| !name.is_empty() && name.len() <= 255
+                    && !matches!(*name, "." | "..") && !name.contains(['/', '\\', '\0']))
+                    .map(str::to_string).ok_or("Use folder names in `folders`. Nothing was searched.")
+            }).collect::<Result<Vec<_>, _>>()?)
+        }
+    };
+    Ok(Ask { query: query.to_string(), super_finder: flag("super_finder", true)?, strict: flag("strict", false)?, limit: limit.min(MAX_RESULTS), folders })
 }
 
 fn authorized_answer(service: &dyn SearchAnswer, authorization: &LeaseGrants, request: &Value) -> Value {
@@ -341,7 +354,8 @@ pub fn tools() -> Value {
             "query": {"type":"string","description":"What to look for, in his words. Put text in double quotes to prefer it or to require it with strict."},
             "super_finder": {"type":"boolean","default":true,"description":"Meaning search together with text search. False: text search only."},
             "strict": {"type":"boolean","default":false,"description":"Require every double-quoted span word for word."},
-            "limit": {"type":"integer","minimum":1,"maximum":MAX_RESULTS,"default":5}
+            "limit": {"type":"integer","minimum":1,"maximum":MAX_RESULTS,"default":5},
+            "folders": {"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":255},"description":"Limit this search to these folder names. Each name must identify one folder Rich can search in this company."}
         },"required":["query"],"additionalProperties":false},
         "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
     }]})
@@ -485,13 +499,16 @@ mod tests {
     #[test]
     fn defaults_are_the_desktop_defaults_and_arguments_only_narrow() {
         let ask = parse_arguments(&json!({"query": "  the slow app  "})).unwrap();
-        assert_eq!(ask, Ask { query: "the slow app".into(), super_finder: true, strict: false, limit: 5 });
+        assert_eq!(ask, Ask { query: "the slow app".into(), super_finder: true, strict: false, limit: 5, folders: None });
         assert_eq!(parse_arguments(&json!({"query": "x", "limit": 500})).unwrap().limit, MAX_RESULTS);
         for widening in [json!({"query": "x", "folder": "/"}), json!({"query": "x", "path": "/etc"}), json!({"query": "x", "audience": "worker"})] {
             assert!(parse_arguments(&widening).is_err(), "{widening}");
         }
         assert!(parse_arguments(&json!({"query": ""})).is_err());
         assert!(parse_arguments(&json!({"query": "x", "strict": "yes"})).is_err());
+        assert_eq!(parse_arguments(&json!({"query": "x", "folders": ["Notes"]})).unwrap().folders, Some(vec!["Notes".into()]));
+        assert!(parse_arguments(&json!({"query": "x", "folders": ["/private"]})).is_err());
+        assert!(parse_arguments(&json!({"query": "x", "folders": "Notes"})).is_err());
     }
 
     #[test]
