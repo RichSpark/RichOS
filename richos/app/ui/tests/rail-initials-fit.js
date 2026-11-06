@@ -2,7 +2,9 @@
 //
 // The circle was 26px while `.rail-initials` went from 11px to 14px, so a wide pair like "MW"
 // was as wide as the disc and the top of the W stuck out past its edge, where in dark it sits on
-// the sidebar background at 1.04:1. This renders the widest likely pairs and measures the INK
+// the sidebar background at 1.04:1. Since design round 58 the circle is the navigation rail's
+// `#nr-me` (36px, the size of every rail target) and the initials in it are 16px. This renders
+// the widest likely pairs in that circle and measures the INK
 // of every glyph (canvas `actualBoundingBox*`, placed by the per-character Range rect so the
 // letter spacing is included), then fails if any corner of any glyph's ink box lies outside the
 // circle with a 1px margin. The ink box's corners are the conservative test: the W and M fill
@@ -18,10 +20,10 @@ const PAIRS = ["MW", "WM", "MM", "WW"];
 const MARGIN = 1;
 
 const MEASURE = `(text) => {
-  const el = document.getElementById("rail-initials");
+  const el = document.getElementById("nr-initials");
   el.textContent = text;
   const cs = getComputedStyle(el);
-  const box = el.getBoundingClientRect();
+  const box = document.getElementById("nr-me").getBoundingClientRect();
   const cx = box.left + box.width / 2, cy = box.top + box.height / 2, r = box.width / 2;
   const ctx = document.createElement("canvas").getContext("2d");
   ctx.font = cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily;
@@ -48,7 +50,7 @@ async function main() {
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();
   for (const theme of ["dark", "light"]) {
-    await run.check(`${theme}: the widest capital pairs sit inside the circle at 14px`, async () => {
+    await run.check(`${theme}: the widest capital pairs sit inside the rail circle at 15px`, async () => {
       const page = await browser.newPage({ viewport: { width: 1024, height: 700 } });
       await page.addInitScript((t) => {
         try {
@@ -59,9 +61,9 @@ async function main() {
         } catch (e) { /* default theme */ }
       }, theme);
       await page.goto(APP);
-      await page.waitForSelector("#rail-initials", { state: "attached" });
+      await page.waitForSelector("#nr-initials", { state: "attached" });
       await page.evaluate(() => window.RichSplash && window.RichSplash.yieldNow("rail-initials-fit"));
-      await page.waitForFunction(() => document.getElementById("rail-initials").textContent.length > 0);
+      await page.waitForFunction(() => document.getElementById("nr-initials").textContent.length > 0);
       const out = [];
       for (const pair of PAIRS) {
         const m = await page.evaluate(`(${MEASURE})(${JSON.stringify(pair)})`);
