@@ -592,15 +592,16 @@
   let focusDismissed = false;
 
   /// To the right of the rail, never over it, its foot level with the square's and its arrow on
-  /// the square's middle (round 58).
+  /// the square's middle (round 58). Anchored by its FOOT, so a card whose content grows or
+  /// shrinks (Live to Measuring, a sentence added) keeps its arrow on the square without being
+  /// placed again.
   function place() {
     const r = btn.querySelector(".res-tile").getBoundingClientRect();
-    const ch = card.offsetHeight || 360;
-    const top = Math.max(8, Math.min(window.innerHeight - ch - 10, r.bottom - ch + 14));
+    const foot = Math.min(window.innerHeight - 10, r.bottom + 14);
     card.style.left = Math.round(r.right + 14) + "px";
-    card.style.top = Math.round(top) + "px";
-    card.style.bottom = "auto";
-    card.style.setProperty("--res-arrow", Math.round(Math.max(10, top + ch - (r.top + r.height / 2) - 6)) + "px");
+    card.style.top = "auto";
+    card.style.bottom = Math.round(window.innerHeight - foot) + "px";
+    card.style.setProperty("--res-arrow", Math.round(Math.max(10, foot - (r.top + r.height / 2) - 6)) + "px");
   }
   function focusShowsCard() {
     return !focusDismissed && btn.matches(":focus-visible");
