@@ -613,8 +613,14 @@ impl SearchService {
                 response.dropped += 1;
                 continue;
             }
-            let scores = meaning.as_ref().zip(ranked.query_vector.as_deref())
-                .and_then(|(meaning, query)| passage_scores(meaning, doc, query));
+            // A word-only result should show the evidence that earned its place.
+            // Quotes already have their own selection rule.
+            let scores = if row.semantic_passage.is_some() && parsed.spans.is_empty() {
+                meaning.as_ref().zip(ranked.query_vector.as_deref())
+                    .and_then(|(meaning, query)| passage_scores(meaning, doc, query))
+            } else {
+                None
+            };
             response.hits.push(hit(doc, row, &parsed, scores.as_deref()));
         }
         finish(response, started)
