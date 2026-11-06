@@ -478,6 +478,19 @@ pub fn search_sources(service: &DocumentSearch) -> Vec<SearchSource> {
     })
 }
 
+/// Unlike a one-time filter, a saved limit must not silently ignore an unknown
+/// ID. The user may be looking at the previous folder grant and should reload it.
+pub fn company_limit_paths(service: &DocumentSearch, ids: &[String]) -> Result<Vec<PathBuf>, String> {
+    service.read(|active, revoked| {
+        let unavailable = || "A selected search folder is no longer available.".to_string();
+        if revoked { return Err(unavailable()); }
+        let active: std::collections::HashMap<_, _> = active.service.searchable_folders().into_iter().collect();
+        ids.iter().map(|id| active.get(id).cloned().ok_or_else(&unavailable))
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()
+            .map(|paths| paths.into_iter().collect())
+    })
+}
+
 pub fn status(service: &DocumentSearch) -> Status {
     let active = service.current();
     let mut status = active.service.status();
@@ -730,6 +743,8 @@ mod tests {
         assert_eq!(sources.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["archive", "notes"]);
         let archive_id = sources[0].id.clone();
         let forged = richos_search::corpus::source_id(&base.join("private").to_string_lossy());
+        assert!(company_limit_paths(&service, std::slice::from_ref(&forged)).is_err());
+        assert_eq!(company_limit_paths(&service, &[archive_id.clone(), archive_id.clone()]).unwrap(), [base.join("archive")]);
         let request = SearchRequest { query: "silvercove".into(), super_finder: false, strict: false, offset: 0, limit: PAGE };
         let find = |ids: Option<&[String]>| search_palette(&service, request.clone(), None, ids).unwrap();
         assert_eq!(find(None).hits.len(), 2);
@@ -737,6 +752,7 @@ mod tests {
         assert!(find(Some(&[])).hits.is_empty());
         service.apply_folder_preferences(chosen(vec![notes]));
         service.current().service.wait_idle();
+        assert!(company_limit_paths(&service, std::slice::from_ref(&archive_id)).is_err());
         assert!(find(Some(&[archive_id])).hits.is_empty());
         assert_eq!(find(None).hits.len(), 1);
         service.shutdown();

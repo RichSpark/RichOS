@@ -4179,6 +4179,8 @@ fn main() {
             search_folder_tree,
             search_selected_folders,
             set_search_folder_selected,
+            search_company_folders,
+            set_search_company_folders,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -6998,12 +7000,53 @@ fn set_search_folder_selected(state: State<AppState>, folder_id: String, selecte
             preferences.mode = SearchFolderMode::Chosen;
         } else {
             preferences.chosen.retain(|folder| folder != &path);
+            for folders in preferences.company_limits.values_mut() {
+                folders.retain(|folder| folder != &path);
+            }
             if preferences.chosen.is_empty() {
                 preferences.mode = SearchFolderMode::Off;
             }
         }
         Ok(())
     })
+}
+
+#[derive(serde::Serialize)]
+struct SearchCompanyFolders {
+    company_id: String,
+    name: String,
+    // Absent inherits the global list. An empty limit gives Rich no files.
+    source_ids: Option<Vec<String>>,
+}
+
+#[richos_command::command]
+fn search_company_folders(state: State<AppState>) -> Result<Vec<SearchCompanyFolders>, String> {
+    let saved = state.config.lock().unwrap().search_folders().map_err(|e| e.to_string())?;
+    let preferences = state.search.current_folder_preferences(saved);
+    let snapshot = state.reader.snapshot();
+    Ok(snapshot.entity_registry().entities().iter().map(|entity| {
+        let company_id = entity.id.to_string();
+        let source_ids = preferences.company_limits.get(&company_id).map(|paths| paths.iter()
+            .map(|path| richos_search::corpus::source_id(&path.to_string_lossy())).collect());
+        SearchCompanyFolders { company_id, name: entity.display_name.clone(), source_ids }
+    }).collect())
+}
+
+#[richos_command::command]
+fn set_search_company_folders(state: State<AppState>, company_id: String, source_ids: Option<Vec<String>>) -> Result<(), String> {
+    let id = richos_core::entity::EntityId::parse(&company_id).map_err(|error| error.to_string())?;
+    if state.reader.snapshot().entity_registry().get(&id).is_none() {
+        return Err("That company is no longer available.".into());
+    }
+    update_search_folder_preferences(&state, |preferences| {
+        if let Some(ids) = source_ids {
+            let paths = doc_search::company_limit_paths(&state.search, &ids)?;
+            let _previous = preferences.company_limits.insert(id.to_string(), paths);
+        } else {
+            let _previous = preferences.company_limits.remove(id.as_str());
+        }
+        Ok(())
+    }).map(|_| ())
 }
 
 /// **Open original**: a source ID from the renderer, resolved and revalidated by the host, and

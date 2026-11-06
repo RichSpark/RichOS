@@ -5778,6 +5778,7 @@ module.exports = [
   {"s":"on, a document is found by what it is about; put text in double quotes and check","c":"FRAGMENT","why":"The middle of `#search-hint`, between the bold `RichFinder` and `Require quoted text`."},
   {"s":"when it has to be there word for word.","c":"FRAGMENT","why":"The end of `#search-hint`."},
   {"s":"No search folder configured","c":"INFORMATIONAL","why":"The status and Documents note when no folder is available. The adjacent Sources column explains the state and opens the folder settings."},
+  {"s":"That company is no longer available.","c":"NOT-RENDERED","why":"The host refuses a stale or unknown company ID. The company folder-limit editor does not call this command yet."},
   {"s":"Sources · this search","c":"CONTROL","why":"The legend that labels the palette's per-query folder checkboxes."},
   {"s":"Change saved folders","c":"CONTROL","why":"The Sources column's button opens the folder map."},
   {"s":"Reading search folders…","c":"INFORMATIONAL","why":"The Sources column is waiting for the active folder list to arrive."},
