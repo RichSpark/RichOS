@@ -62,6 +62,7 @@ pub const MAX_PAGE: usize = 50;
 /// running.
 pub const BUSY_YIELD: std::time::Duration = std::time::Duration::from_millis(100);
 const MODEL_RETRY_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+const INDEX_WRITE_BATCH: usize = 32;
 
 pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -219,6 +220,32 @@ struct IndexWriter {
     meaning: Arc<Meaning>,
     manifest: Manifest,
     dir: PathBuf,
+}
+
+/// Coalesce small Edge writes without changing the durable publication unit.
+/// A stopped worker drops unwritten vectors and the manifest still says indexing.
+struct IndexWrites<'a> {
+    index: &'a VectorIndex,
+    pending: Vec<(u64, Vec<f32>)>,
+}
+
+impl<'a> IndexWrites<'a> {
+    fn new(index: &'a VectorIndex) -> Self {
+        Self { index, pending: Vec::with_capacity(INDEX_WRITE_BATCH) }
+    }
+
+    fn push(&mut self, id: u64, vector: Vec<f32>) -> Result<(), String> {
+        self.pending.push((id, vector));
+        if self.pending.len() == INDEX_WRITE_BATCH {
+            self.index.upsert(std::mem::replace(&mut self.pending, Vec::with_capacity(INDEX_WRITE_BATCH)))?;
+        }
+        Ok(())
+    }
+
+    fn flush(self) -> Result<(), String> {
+        self.index.upsert(self.pending)?;
+        self.index.flush()
+    }
 }
 
 struct MediaUpdate {
@@ -413,6 +440,18 @@ impl SearchService {
             return true;
         }
         self.stopping()
+    }
+
+    fn ready_for_background_passage(&self) -> bool {
+        if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
+            std::thread::sleep(BUSY_YIELD);
+        }
+        if self.stopping() { return false; }
+        // Let the current query finish before submitting more inference. Release
+        // the lock before embedding: a new query can always overtake a passage
+        // already in flight on the isolated helper.
+        drop(self.0.access.lock().unwrap());
+        !self.background_stopping()
     }
 
     fn set_meaning(&self, status: MeaningStatus) {
@@ -619,13 +658,11 @@ impl SearchService {
                 );
             }
             manifest.save(&dir)?;
+            let mut writes = IndexWrites::new(&meaning.index);
             for &i in batch {
                 let doc = &corpus.docs[i];
                 for (p, passage) in doc.passages.iter().enumerate() {
-                    if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
-                        std::thread::sleep(BUSY_YIELD);
-                    }
-                    if self.background_stopping() {
+                    if !self.ready_for_background_passage() {
                         return Ok(None);
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
@@ -638,10 +675,10 @@ impl SearchService {
                     if self.background_stopping() {
                         return Ok(None);
                     }
-                    meaning.index.upsert(vec![(point_id(&doc.id, &doc.hash, p), vector)])?;
+                    writes.push(point_id(&doc.id, &doc.hash, p), vector)?;
                 }
             }
-            meaning.index.flush()?;
+            writes.flush()?;
             {
                 let mut points = meaning.points.write().unwrap();
                 for &i in batch {
@@ -765,11 +802,9 @@ impl SearchService {
             }
             meaning.index.delete(&stale)?;
             if let Some(doc) = doc {
+                let mut writes = IndexWrites::new(&meaning.index);
                 for (passage, &id) in doc.passages.iter().zip(&fresh) {
-                    if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
-                        std::thread::sleep(BUSY_YIELD);
-                    }
-                    if self.background_stopping() {
+                    if !self.ready_for_background_passage() {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
@@ -782,9 +817,9 @@ impl SearchService {
                     if self.background_stopping() {
                         return Ok(());
                     }
-                    meaning.index.upsert(vec![(id, vector)])?;
+                    writes.push(id, vector)?;
                 }
-                meaning.index.flush()?;
+                writes.flush()?;
                 if let Some(entry) = manifest.sources.get_mut(&id) {
                     entry.state = SourceState::Complete;
                     entry.points = fresh.clone();
@@ -1115,6 +1150,39 @@ fn passage_scores(meaning: &Meaning, doc: &corpus::Document, query: &[f32]) -> O
     ids.iter().map(|id| by_id.get(id).copied()).collect()
 }
 
+/// Load the shortlist's vectors together, retaining the same exact per-passage
+/// cosine scores. Each Edge read still has a bounded response and gives a
+/// superseded query a chance to stop before asking for the next batch.
+fn shortlist_passage_scores(
+    rows: &[Ranked], corpus: &Corpus, meaning: &Meaning, query: &[f32], obsolete: &dyn Fn() -> bool,
+) -> Option<HashMap<usize, Vec<f32>>> {
+    let mut ids = Vec::new();
+    let mut documents = Vec::new();
+    {
+        let complete = meaning.points.read().unwrap();
+        for row in rows.iter().filter(|row| row.semantic_passage.is_some()) {
+            if obsolete() { return None; }
+            let doc = &corpus.docs[row.doc];
+            if doc.passages.len() < 2 { continue; }
+            let first = point_id(&doc.id, &doc.hash, 0);
+            if !complete.contains_key(&first) { continue; }
+            let start = ids.len();
+            ids.push(first);
+            ids.extend((1..doc.passages.len()).map(|i| point_id(&doc.id, &doc.hash, i)));
+            documents.push((row.doc, start..ids.len()));
+        }
+    }
+    let mut by_id = HashMap::with_capacity(ids.len());
+    for batch in ids.chunks(256) {
+        if obsolete() { return None; }
+        by_id.extend(meaning.index.score_passages(batch, query).ok()?);
+    }
+    Some(documents.into_iter().filter_map(|(doc, positions)| {
+        let scores = ids[positions].iter().map(|id| by_id.get(id).copied()).collect::<Option<Vec<_>>>()?;
+        Some((doc, scores))
+    }).collect())
+}
+
 /// Is the file still the one that was read: inside the folder, a regular file, same content?
 fn still_current(root: &Path, doc: &corpus::Document) -> bool {
     let Ok(path) = corpus::resolve_inside(root, &doc.rel_path) else { return false };
@@ -1187,10 +1255,18 @@ fn rerank_sources(
     let mut passages = HashMap::with_capacity(count);
     let mut candidates = Vec::with_capacity(count);
     let phase = Instant::now();
+    let scores = if parsed.spans.is_empty() {
+        shortlist_passage_scores(&rows[..count], corpus, meaning.0, meaning.1, obsolete)
+    } else {
+        Some(HashMap::new())
+    };
     for row in &rows[..count] {
         if obsolete() { return passages; }
         let doc = &corpus.docs[row.doc];
-        let passage = selected_passage(doc, row, parsed, Some(meaning));
+        let passage = match &scores {
+            Some(scores) => rank::passage_choices(doc, parsed, row.semantic_passage, scores.get(&row.doc).map(Vec::as_slice)),
+            None => selected_passage(doc, row, parsed, Some(meaning)),
+        };
         passages.insert(row.doc, passage.evidence);
         let text = doc.passages.get(passage.ranking).map_or("", |p| p.text(&doc.text));
         candidates.push(format!("{}\n{}", doc.title, bounded_passage(text)));
