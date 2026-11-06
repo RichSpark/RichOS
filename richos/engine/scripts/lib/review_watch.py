@@ -679,6 +679,25 @@ class World(object):
         listed = [n.strip(".") for line in re.findall(r"Repositor(?:y|ies)\b([^\n]*)", text)
                   for n in re.findall(r"[A-Za-z0-9._-]+", line)]
         allowed = list(repo_map) if repo_map is not None else (self.repos or [])
+        # Codex also writes the label with other words ("Repository/commit/base:", "Repositories
+        # and exact tips:") and puts each repository on the bullet line below it, naming it before
+        # the first colon or in a path, with that repository's commit on the same line.
+        line_tips = {}
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            if not re.match(r"\s*Repositor(?:y|ies)\b", line) or not line.rstrip().endswith(":"):
+                continue
+            for bullet in lines[i + 1:]:
+                if not re.match(r"\s*[-*]\s", bullet):
+                    break
+                label = bullet.split(":", 1)[0]
+                tipm = SHA_RE.search(bullet)
+                for n in re.findall(r"[A-Za-z0-9._-]+", label):
+                    n = n.strip(".")
+                    if n in allowed or self.repo_named(n):
+                        listed.append(n)
+                        if tipm:
+                            line_tips.setdefault(n, tipm.group(0))
         names = [n for n in listed if n in allowed]
         if repo_map is not None and listed and not names:
             return "Codex's handover %r names no uniquely connected repository for this company; no review started" % header[:90]
@@ -688,10 +707,13 @@ class World(object):
         if not names and not listed and len(allowed) == 1:
             names = [allowed[0]]
         repo = (repo_map[names[0]] if repo_map is not None else self.repo_named(names[0])) if names else ""
-        if not repo or not self.wanted(repo):
+        if not repo:
+            return ("Codex's handover %r names %s but no repository this watcher can review, so no review of it "
+                    "started" % (header[:90], branch))
+        if not self.wanted(repo):
             return None
         cm = re.search(r"Commit:\s*`?([0-9a-f]{40})", text) or SHA_RE.search(text)
-        tip = cm.group(1) if cm and cm.groups() else (cm.group(0) if cm else "")
+        tip = line_tips.get(names[0]) or (cm.group(1) if cm and cm.groups() else (cm.group(0) if cm else ""))
         if not tip:
             tip = git(repo, "rev-parse", "--verify", "-q", "refs/heads/%s^{commit}" % branch) or ""
         if not tip or git(repo, "cat-file", "-e", tip + "^{commit}") is None:
