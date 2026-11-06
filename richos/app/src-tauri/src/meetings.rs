@@ -28,7 +28,7 @@ use crate::dictation::appkit::{self, Win};
 use richos_core::ledger::AttentionTier;
 use richos_core::meeting::{parse_watch_line, Action, EndReason, Input, MeetingMonitor, PromptKind, WatchLine};
 use richos_core::meeting_calendar::{self, CalendarMeeting};
-use richos_core::meeting_notes::{self, meeting_zone, MeetingFacts, NextStep};
+use richos_core::meeting_notes::{self, meeting_zone, MeetingFacts, NextStep, SavedRetry};
 use richos_core::util::now_millis;
 use richos_voice::dictation_bar::Rect;
 use serde::Serialize;
@@ -102,6 +102,8 @@ pub struct MeetingState {
     pub started_at: Option<u64>,
     /// "preparing", "transcript-failed", "notes-failed", or none.
     pub processing: Option<String>,
+    #[serde(rename = "retryTurns")]
+    pub retry_turns: Vec<String>,
 }
 
 /// One recording, from the click to its closed session.
@@ -227,6 +229,7 @@ struct Inner {
     /// Recorders told to stop that are still finishing their files ([`take_run`]).
     draining: Vec<CaptureRun>,
     processing: Option<String>,
+    retry_turns: BTreeMap<String, PathBuf>,
     /// Holding this keeps the watcher's stdin open; dropping it ends the watcher.
     watcher_stdin: Option<ChildStdin>,
     watcher_pid: Option<u32>,
@@ -296,6 +299,7 @@ pub fn start(app: &AppHandle) {
             capture: None,
             draining: Vec::new(),
             processing: None,
+            retry_turns: BTreeMap::new(),
             watcher_stdin: None,
             watcher_pid: None,
             system_audio_seen,
@@ -312,7 +316,12 @@ pub fn start(app: &AppHandle) {
     // a time on a thread of their own (handover review rv-20261013T141401Z-390d6bea-2e23 #2).
     let unfinished = meeting_notes::unfinished_sessions(&meetings.corpus_root());
     let resume = meetings.clone();
-    std::thread::Builder::new().name("meeting-resume".into()).spawn(move || resume.resume_unfinished(unfinished)).ok();
+    std::thread::Builder::new().name("meeting-resume".into()).spawn(move || {
+        let retries = meeting_notes::saved_retries(&resume.corpus_root());
+        resume.inner.lock().unwrap().retry_turns.extend(retries);
+        resume.publish_state();
+        resume.resume_unfinished(unfinished);
+    }).ok();
     let watcher = meetings.clone();
     std::thread::Builder::new().name("meeting-watcher".into()).spawn(move || watcher.run_watcher()).ok();
     let clock = meetings.clone();
@@ -530,6 +539,7 @@ impl Meetings {
             recording: inner.capture.is_some(),
             started_at: inner.capture.as_ref().filter(|c| c.recording).map(|c| c.started_at),
             processing: inner.processing.clone(),
+            retry_turns: inner.retry_turns.keys().cloned().collect(),
         }
     }
 
@@ -996,16 +1006,49 @@ impl Meetings {
         );
     }
 
-    /// A failure said through Rich finishes the session: the next launch does not say it again.
-    fn failure_said(&self, dir: &Path, said: Result<(), String>) {
+    /// The failed stage is already logged locally. Give the conversation one recovery action
+    /// bound to this saved session and to the actual destination of the failure message.
+    fn failure_said(&self, dir: &Path, said: Result<SavedRetry, String>) {
         match said {
-            Ok(()) => {
+            Ok(retry) => {
                 let mut state = meeting_notes::read_state(dir);
                 state.failure_said = true;
-                logged("recording that the failure was said", meeting_notes::write_state(dir, &state));
+                state.retry = Some(retry.clone());
+                match meeting_notes::write_state(dir, &state) {
+                    Ok(()) => self.register_retry(retry.turn, dir.to_path_buf()),
+                    Err(e) => eprintln!("[richos] meeting notes: saving retry state failed: {e}"),
+                }
             }
             Err(e) => eprintln!("[richos] meeting notes: saying the failure failed: {e}"),
         }
+    }
+
+    fn register_retry(&self, turn: String, dir: PathBuf) {
+        self.inner.lock().unwrap().retry_turns.insert(turn, dir);
+        self.publish_state();
+    }
+
+    fn retry_saved(self: &Arc<Self>, turn: String) -> Result<(), String> {
+        const UNAVAILABLE: &str = "This saved meeting can't be retried here.";
+        let (entity, thread) = self.active_scope();
+        let dir = self.inner.lock().unwrap().retry_turns.get(&turn).cloned().ok_or(UNAVAILABLE)?;
+        let state = meeting_notes::read_state(&dir);
+        let retry = state.retry.filter(|r| r.turn == turn && Some(r.thread.as_str()) == thread.as_deref())
+            .filter(|_| state.failure_said && !state.delivered).ok_or(UNAVAILABLE)?;
+        let facts = meeting_notes::retry_facts(&self.corpus_root(), &dir, entity.as_deref(), &retry).ok_or(UNAVAILABLE)?;
+        let zone = dir.parent().ok_or(UNAVAILABLE)?.to_path_buf();
+        // Removing the action claims this one retry. Two clicks cannot queue two jobs.
+        self.inner.lock().unwrap().retry_turns.remove(&turn).ok_or(UNAVAILABLE)?;
+        self.publish_state();
+        let (worker, saved) = (self.clone(), dir.clone());
+        if let Err(e) = std::thread::Builder::new().name("meeting-notes-retry".into())
+            .spawn(move || worker.run_notes(&saved, &zone, facts, Some(retry)))
+        {
+            self.register_retry(turn, dir);
+            eprintln!("[richos] meeting notes: starting saved retry failed: {e}");
+            return Err("RichBrief couldn't start the retry. Your recording is still saved.".into());
+        }
+        Ok(())
     }
 
     fn set_processing(&self, what: Option<&str>) {
@@ -1016,14 +1059,30 @@ impl Meetings {
     /// Transcript, then the one brief, then Rich's message. Each failure is said through Rich in
     /// the design's own words; the recording and the transcript are never lost.
     fn prepare_notes(&self, dir: &Path, zone: &Path, facts: MeetingFacts) {
+        self.run_notes(dir, zone, facts, None);
+    }
+
+    fn run_notes(&self, dir: &Path, zone: &Path, facts: MeetingFacts, retry: Option<SavedRetry>) {
         // One meeting's notes at a time: a rejoin's notes are written from the earlier recordings'
         // transcripts, so those are finished first, and never overwritten by an earlier run.
         let _one_at_a_time = NOTES_RUN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(request) = &retry {
+            let mut state = meeting_notes::read_state(dir);
+            if !state.begin_retry(request) {
+                return;
+            }
+            if let Err(e) = meeting_notes::write_state(dir, &state) {
+                eprintln!("[richos] meeting notes: claiming the saved retry failed: {e}");
+                self.register_retry(request.turn.clone(), dir.to_path_buf());
+                return;
+            }
+            eprintln!("[richos] meeting notes: retrying a saved recording");
+        }
         self.set_processing(Some("preparing"));
         if !dir.join(meeting_notes::TRANSCRIPT_FILE).is_file() {
             if let Err(why) = self.transcribe(dir, zone, &facts) {
                 eprintln!("[richos] meeting notes: transcription failed: {why}");
-                self.failure_said(dir, self.say(&facts, &meeting_notes::transcript_failed_text(&why), &[]));
+                self.failure_said(dir, self.say(&facts, &meeting_notes::transcript_failed_text(""), &[]));
                 self.set_processing(Some("transcript-failed"));
                 return;
             }
@@ -1039,19 +1098,38 @@ impl Meetings {
         logged("writing meeting.json", meeting_notes::write_facts(dir, &facts));
         // A rejoin's recording: the meeting's notes, in its first recording's folder, are written
         // again from every recording so far, and said again (rv-20261014T124853Z-b9f32acd-a19d #3).
-        if let Some(first) = facts.continues.as_ref().map(|name| zone.join(name)) {
-            let parts: Vec<PathBuf> = meeting_notes::segments(&first).into_iter().take_while(|s| s != dir).chain([dir.to_path_buf()]).collect();
-            let (transcript, missing) = meeting_notes::joined_transcript(&parts);
-            let notes = meeting_notes::joined_facts(&parts[..parts.len() - 1], &facts, missing);
-            let transcripts: Vec<PathBuf> = parts.iter().map(|s| s.join(meeting_notes::TRANSCRIPT_FILE)).filter(|t| t.is_file()).collect();
-            eprintln!("[richos] meeting notes: a rejoin continues the notes of {} ({} recordings)", first.display(), parts.len());
-            self.notes_from(dir, &first, &notes, &transcript, &transcripts, true);
-            return;
+        let first = facts.continues.as_ref().map(|name| zone.join(name))
+            .or_else(|| retry.as_ref().map(|_| dir.to_path_buf()));
+        if let Some(first) = first {
+            let mut parts = meeting_notes::segments(&first);
+            if retry.is_some() {
+                // Retrying an older segment must not replace notes that already include
+                // later parts. Exclude recordings that are still in progress.
+                parts.retain(|s| s == dir || meeting_notes::read_facts(s).is_some_and(|f| f.ended_at != 0));
+            } else {
+                parts = parts.into_iter().take_while(|s| s != dir).chain([dir.to_path_buf()]).collect();
+            }
+            if !parts.iter().any(|s| s == dir) {
+                parts.push(dir.to_path_buf());
+            }
+            if parts.len() > 1 || facts.continues.is_some() {
+                let (transcript, missing) = meeting_notes::joined_transcript(&parts);
+                let latest = parts.last().and_then(|s| meeting_notes::read_facts(s)).unwrap_or_else(|| facts.clone());
+                let mut notes = meeting_notes::joined_facts(&parts[..parts.len() - 1], &latest, missing);
+                if let Some(request) = &retry {
+                    notes.thread = Some(request.thread.clone());
+                }
+                let transcripts: Vec<PathBuf> = parts.iter().map(|s| s.join(meeting_notes::TRANSCRIPT_FILE)).filter(|t| t.is_file()).collect();
+                eprintln!("[richos] meeting notes: a rejoin continues the notes of {} ({} recordings)", first.display(), parts.len());
+                self.notes_from(dir, &first, &notes, &transcript, &transcripts, true);
+                return;
+            }
         }
         let transcript = match std::fs::read_to_string(dir.join(meeting_notes::TRANSCRIPT_FILE)) {
             Ok(t) => t,
             Err(e) => {
-                self.failure_said(dir, self.say(&facts, &meeting_notes::transcript_failed_text(&format!("the transcript could not be read: {e}")), &[]));
+                eprintln!("[richos] meeting notes: reading the transcript failed: {e}");
+                self.failure_said(dir, self.say(&facts, &meeting_notes::transcript_failed_text(""), &[]));
                 self.set_processing(Some("transcript-failed"));
                 return;
             }
@@ -1092,7 +1170,7 @@ impl Meetings {
                     let brief = std::fs::read_to_string(brief_dir.join(meeting_notes::BRIEF_FILE)).unwrap_or_default();
                     let files: Vec<PathBuf> = std::iter::once(brief_dir.join(meeting_notes::BRIEF_FILE)).chain(transcripts.iter().cloned()).collect();
                     match self.say(facts, &meeting_notes::message_text(&brief, facts), &files) {
-                        Ok(()) => {
+                        Ok(_) => {
                             state.delivered = true;
                             eprintln!("[richos] meeting notes: Rich said the notes in the conversation ({})", dir.display());
                             logged("recording the delivery", meeting_notes::write_state(dir, &state));
@@ -1110,8 +1188,7 @@ impl Meetings {
                     return;
                 }
                 NextStep::GiveUp => {
-                    let why = state.last_error.clone().unwrap_or_default();
-                    self.failure_said(dir, self.say(facts, &meeting_notes::notes_failed_text(&why), &[]));
+                    self.failure_said(dir, self.say(facts, &meeting_notes::notes_failed_text(""), &[]));
                     self.set_processing(Some("notes-failed"));
                     return;
                 }
@@ -1158,9 +1235,7 @@ impl Meetings {
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => break Ok(()),
                 Ok(Some(status)) => {
-                    let tail = std::fs::read_to_string(dir.join("pipeline.log")).unwrap_or_default();
-                    let last = tail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
-                    break Err(format!("the transcription ended with {status}: {last}"));
+                    break Err(format!("the transcription ended with {status}"));
                 }
                 Ok(None) if started.elapsed() < TRANSCRIBE_DEADLINE => std::thread::sleep(Duration::from_millis(500)),
                 _ => {
@@ -1187,15 +1262,15 @@ impl Meetings {
 
     /// Rich says it, in the conversation and company captured at meeting start, as a visible
     /// (Digest) proactive message; `files` become the Output record's entries of that turn.
-    fn say(&self, facts: &MeetingFacts, text: &str, files: &[PathBuf]) -> Result<(), String> {
+    fn say(&self, facts: &MeetingFacts, text: &str, files: &[PathBuf]) -> Result<SavedRetry, String> {
         let state = self.app.state::<crate::AppState>();
         let mut spine = state.spine.lock().map_err(|_| "the conversation is unavailable".to_string())?;
         let turn = spine.raise_proactive(facts.thread.as_deref(), AttentionTier::Digest, text).map_err(|e| e.to_string())?;
+        let thread = facts.thread.clone().or_else(|| spine.active_thread().map(str::to_string)).ok_or("no conversation")?;
         if !files.is_empty() {
-            let thread = facts.thread.clone().or_else(|| spine.active_thread().map(str::to_string)).ok_or("no conversation")?;
             spine.witness_app_files(&thread, &turn, files).map_err(|e| e.to_string())?;
         }
-        Ok(())
+        Ok(SavedRetry { turn, thread })
     }
 
     // ---- scope: which company this meeting belongs to ----------------------------------------
@@ -1464,12 +1539,18 @@ pub fn meeting_set_paused(app: AppHandle, paused: bool) -> Result<MeetingState, 
     Ok(m.state())
 }
 
+/// Retry a previously saved session from its own failure message, without opening a microphone.
+#[richos_command::command]
+pub fn meeting_retry_saved(app: AppHandle, turn_id: String) -> Result<(), String> {
+    meetings(&app)?.retry_saved(turn_id)
+}
+
 /// The main window's view of meeting notes.
 #[richos_command::command]
 pub fn meeting_state(app: AppHandle) -> MeetingState {
     match meetings(&app) {
         Ok(m) => m.state(),
-        Err(_) => MeetingState { available: false, paused: false, recording: false, started_at: None, processing: None },
+        Err(_) => MeetingState { available: false, paused: false, recording: false, started_at: None, processing: None, retry_turns: Vec::new() },
     }
 }
 

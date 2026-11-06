@@ -36,6 +36,7 @@
   let root = null;
   let registered = false;
   let ticker = null;
+  const retrying = new Set();
 
   async function call(cmd, args) {
     try { return await bridge.invoke(cmd, args || {}); }
@@ -85,8 +86,51 @@
     root.querySelector("#mn-pause").setAttribute("aria-checked", String(!!(st && st.paused)));
   }
 
+  function fillRetry(slot) {
+    const id = slot.dataset.meetingRetry;
+    const pending = retrying.has(id);
+    const canRetry = (st?.retryTurns || []).includes(id);
+    slot.hidden = !(canRetry || pending);
+    slot.firstChild.disabled = pending;
+  }
+
+  function retrySlot(turnId) {
+    if (!turnId) return null;
+    const slot = document.createElement("div");
+    slot.className = "acc-note-acts";
+    slot.dataset.meetingRetry = turnId;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "desk-btn";
+    button.textContent = "Try again";
+    const error = document.createElement("p");
+    error.setAttribute("role", "status");
+    error.hidden = true;
+    button.addEventListener("click", async () => {
+      if (retrying.has(turnId)) return;
+      retrying.add(turnId);
+      fillRetry(slot);
+      error.hidden = true;
+      try {
+        await bridge.invoke("meeting_retry_saved", { turnId });
+        if (st) st.retryTurns = (st.retryTurns || []).filter(id => id !== turnId);
+      } catch (e) {
+        error.textContent = String(e);
+        error.hidden = false;
+      } finally {
+        retrying.delete(turnId);
+        paint();
+        fillRetry(slot);
+      }
+    });
+    slot.append(button, error);
+    fillRetry(slot);
+    return slot;
+  }
+
   function paint() {
     paintRows();
+    for (const slot of document.querySelectorAll("[data-meeting-retry]")) fillRetry(slot);
     const chip = document.getElementById("mn-paused-chip");
     if (chip) chip.hidden = !(st && st.available && st.paused);
     const status = document.getElementById("mn-status");
@@ -102,5 +146,5 @@
   read();
 
   // For the page's own suite: the clock's spelling.
-  window.RichMeetingNotes = { clock };
+  window.RichMeetingNotes = { clock, retrySlot };
 })();
