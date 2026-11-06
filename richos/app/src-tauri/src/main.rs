@@ -4110,6 +4110,8 @@ fn main() {
             search_documents,
             search_conversations,
             resolve_search_message,
+            search_company_memory,
+            resolve_search_memory,
             search_documents_status,
             cancel_search_documents,
             open_search_document,
@@ -6925,6 +6927,16 @@ fn search_conversations(state: State<AppState>, request: richos_search::SearchRe
 #[richos_command::command]
 fn resolve_search_message(state: State<AppState>, source_id: String) -> Option<doc_search::MessageAnchor> {
     doc_search::resolve_search_message(&state.reader, &source_id)
+}
+
+#[richos_command::command]
+fn search_company_memory(state: State<AppState>, request: richos_search::SearchRequest, generation: u64) -> Result<Option<richos_search::SearchResponse>, &'static str> {
+    doc_search::search_company_memory(&state.search, &state.reader, &state.loro_install, request, generation)
+}
+
+#[richos_command::command]
+fn resolve_search_memory(state: State<AppState>, source_id: String) -> Option<doc_search::MemoryDetail> {
+    doc_search::resolve_search_memory(&state.reader, &state.loro_install, &source_id)
 }
 
 #[richos_command::command]

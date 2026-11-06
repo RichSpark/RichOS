@@ -350,6 +350,40 @@ async function main() {
       await p.close();
     });
 
+    await run.check("Company memory opens a verified record with its citation and predecessor", async () => {
+      const p = await openApp(browser, { documentSearch: "none" });
+      await p.evaluate(() => {
+        const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+        const text = "The refund deadline was moved to the end of the month.";
+        window.RichBridge.invoke = async (cmd, args) => {
+          if (cmd === "resolve_search_memory") {
+            if (args.sourceId !== "fixture-record-revision") return null;
+            return { citation: "companies/acme/records/refund.md", text, supersedes: "refund-v1" };
+          }
+          if (cmd !== "search_company_memory") return invoke(cmd, args);
+          if (args.request.query === "unavailable") throw new Error("The memory projection could not be read");
+          return {
+            requested: args.request, effective: args.request, words: [], spans: [],
+            status: { folder: { state: "ready" }, meaning: { state: "ready" } },
+            hits: [{ source_id: "fixture-record-revision", title: "Refund decision", rel_path: "Acme", why: "meaning", exact: [],
+              passage: { heading: "", text, line: 1 } }],
+          };
+        };
+      });
+      await p.fill("#search-input", "return the money");
+      await p.waitForSelector(".srch-memory");
+      await p.locator(".srch-memory").dblclick();
+      const record = await p.locator(".srch-memory .srch-note").textContent();
+      assert(record.includes("companies/acme/records/refund.md"), record);
+      assert(record.includes("refund-v1"), record);
+      await p.fill("#search-input", "unavailable");
+      await waitFor(p, "the unavailable memory state never arrived", () =>
+        document.querySelector("#search-results").textContent.includes("Company memory is unavailable."));
+      assertEqual(await p.locator(".srch-memory").count(), 0, "the earlier result was cleared");
+      assertEqual(p.__errors.length, 0, p.__errors.join("\n"));
+      await p.close();
+    });
+
     for (const [preset, line, mode] of [
       ["unavailable", "Super Finder unavailable; showing text matches", "words only, Super Finder unavailable"],
       ["none", "No search folder configured", ""],

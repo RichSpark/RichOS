@@ -4188,6 +4188,8 @@
         // `__RICHOS_MOCK_PRESET__.documentSearch` picks the folder state: "ready" (default),
         // "indexing", "unavailable", "none" or "error".
         case "cancel_search_documents": return null;
+        case "search_company_memory": return null;
+        case "search_conversations": return null;
         case "search_documents_status": {
           return mockDocStatus();
         }

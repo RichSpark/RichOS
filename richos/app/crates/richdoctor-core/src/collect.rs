@@ -657,13 +657,13 @@ pub fn search_timing_lines(text: &str) -> Vec<(u64, String)> {
         let operation = record["operation"].as_u64()?;
         let mode = record["mode"].as_str()?;
         let total = record["total_ms"].as_f64()?;
-        if !matches!(mode, "meaning" | "words" | "words_fallback" | "superseded") { return None; }
+        if !matches!(mode, "meaning" | "words" | "words_fallback" | "superseded" | "unavailable") { return None; }
         let build: String = record["build"].as_str()?.chars()
             .filter(|c| c.is_ascii_hexdigit() || matches!(c, '-' | '.' | '+')).take(64).collect();
         let stages = record["stages"].as_array()?.iter().take(24).filter_map(|stage| {
             let name = stage[0].as_str()?;
             let ms = stage[1].as_f64()?;
-            matches!(name, "lock" | "lexical" | "embedding" | "nearest" | "passage_selection" | "reranker" | "total" | "conversations")
+            matches!(name, "lock" | "lexical" | "embedding" | "nearest" | "passage_selection" | "reranker" | "total" | "conversations" | "company_memory" | "memory_projection")
                 .then(|| format!("{name}={ms:.1}ms"))
         }).collect::<Vec<_>>().join(" ");
         Some((at, format!("{} build={build} query={operation} mode={mode} response={total:.1}ms {stages}", crate::util::utc_stamp(at))))

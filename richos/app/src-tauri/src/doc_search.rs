@@ -93,6 +93,7 @@ pub struct DocumentSearch {
     closed: std::sync::atomic::AtomicBool,
     palette_generation: std::sync::atomic::AtomicU64,
     conversations: OnceLock<SearchService>,
+    memory: OnceLock<MemoryPool>,
 }
 
 impl DocumentSearch {
@@ -130,6 +131,7 @@ impl DocumentSearch {
             closed: std::sync::atomic::AtomicBool::new(false),
             palette_generation: std::sync::atomic::AtomicU64::new(0),
             conversations: OnceLock::new(),
+            memory: OnceLock::new(),
         })
     }
 
@@ -202,6 +204,9 @@ impl DocumentSearch {
         active.service.request_stop();
         if let Some(service) = self.conversations.get() {
             service.shutdown();
+        }
+        if let Some(pool) = self.memory.get() {
+            pool.index.shutdown();
         }
         let (done, retired) = mpsc::channel();
         if self.retire.send((active.service.clone(), done)).is_ok() {
@@ -398,6 +403,249 @@ pub fn search_conversations(
     response
 }
 
+const LORO_READ: &str = r#"
+import { pathToFileURL } from 'node:url';
+const [module, kind, directory, scope] = process.argv.slice(1);
+const { loadSearchProjection } = await import(pathToFileURL(module).href);
+const projection = loadSearchProjection({ [kind]: directory, grant: JSON.parse(scope) });
+process.stdout.write(JSON.stringify(projection));
+"#;
+
+#[derive(PartialEq, Eq)]
+struct MemoryGrant {
+    root: richos_core::loro::LoroRoot,
+    tools: richos_core::loro::LoroTools,
+    companies: Vec<String>,
+    repo_owner: Option<String>,
+}
+
+impl MemoryGrant {
+    fn current(reader: &SpineReader, install: &Mutex<Option<richos_core::loro::LoroInstall>>) -> Option<Self> {
+        use richos_core::{entity::EntityStatus, loro::{LaneMap, LoroRoot}};
+        let install = install.lock().ok()?.clone()?;
+        let view = reader.snapshot();
+        let registry = view.entity_registry();
+        let lanes = LaneMap::from_env(registry).ok()?;
+        lanes.validate_against(registry).ok()?;
+        let mut companies: Vec<_> = registry.entities().iter()
+            .filter(|entity| entity.status == EntityStatus::Active)
+            .filter_map(|entity| lanes.lane_for(entity.id.as_str()).map(str::to_owned)).collect();
+        companies.sort_unstable();
+        companies.dedup();
+        let repo_owner = match install.root() {
+            LoroRoot::Root(path) if path.join("wiki").is_dir() && path.join("loro").is_dir() => {
+                let root = path.canonicalize().ok()?;
+                registry.resolve_root(&root).ok().filter(|owner| owner.status == EntityStatus::Active)
+                    .map(|owner| owner.id.to_string())
+            }
+            _ => None,
+        };
+        Some(Self { root: install.root().clone(), tools: install.tools().clone(), companies, repo_owner })
+    }
+
+    fn read(&self, obsolete: &dyn Fn() -> bool) -> Option<MemoryProjection> {
+        use richos_core::owned_process::OwnedChild;
+        use std::{io::Read, process::{Command, Stdio}, time::{Duration, Instant}};
+        const OUTPUT_LIMIT: u64 = 32 * 1024 * 1024;
+        let (flag, directory) = self.root.args();
+        let mut grant = serde_json::json!({"audience": "rich", "includeCeo": true, "companyIds": self.companies});
+        if let Some(owner) = &self.repo_owner { grant["repoOwner"] = serde_json::json!(owner); }
+        let mut command = Command::new(self.tools.node());
+        command.args(["--input-type=module", "-e", LORO_READ, "--"])
+            .arg(self.tools.dir().join("lib/search.js"))
+            .arg(if flag == "--corpus" { "corpusRoot" } else { "root" }).arg(directory)
+            .arg(grant.to_string()).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        OwnedChild::configure(&mut command);
+        let mut child = command.spawn().ok()?;
+        let stdout = child.stdout.take().expect("piped Loro output");
+        let mut owned = OwnedChild::new(child);
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(OUTPUT_LIMIT + 1).read_to_end(&mut bytes).ok()?;
+            (bytes.len() as u64 <= OUTPUT_LIMIT).then_some(bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let succeeded = loop {
+            if obsolete() || Instant::now() >= deadline { break false; }
+            match owned.try_wait() {
+                Ok(Some(status)) => break status.success(),
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                Err(_) => break false,
+            }
+        };
+        drop(owned);
+        let bytes = output.join().ok()??;
+        if !succeeded || obsolete() { return None; }
+        let projection: MemoryProjection = serde_json::from_slice(&bytes).ok()?;
+        (projection.schema_version == 1).then_some(projection)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryProjection {
+    schema_version: u32,
+    records: Vec<MemoryRecord>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MemoryRecord {
+    #[serde(rename = "ref")]
+    reference: String,
+    company: Option<String>,
+    scope: String,
+    title: String,
+    text: String,
+    provenance: MemoryProvenance,
+    supersedes: Option<String>,
+    #[serde(rename = "validUntil")]
+    valid_until: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MemoryProvenance {
+    source: String,
+    path: Option<String>,
+    anchor: Option<String>,
+    origin: Option<String>,
+}
+
+impl MemoryRecord {
+    fn key(&self) -> String {
+        serde_json::to_string(&(&self.company, &self.reference, &self.provenance.source, &self.provenance.path))
+            .expect("serializing a memory reference")
+    }
+
+    fn revision(&self) -> String {
+        richos_search::corpus::content_hash(&serde_json::to_vec(self).expect("serializing a memory record"))
+    }
+
+    fn citation(&self) -> String {
+        let location = self.provenance.path.as_deref().unwrap_or(&self.reference);
+        match &self.provenance.anchor {
+            Some(anchor) => format!("{location} · {anchor}"),
+            None => location.to_owned(),
+        }
+    }
+}
+
+type MemoryDocuments = std::collections::BTreeMap<String, Arc<richos_search::corpus::Document>>;
+type MemoryRows<'a> = std::collections::BTreeMap<String, (String, &'a MemoryRecord)>;
+
+struct MemoryPool {
+    index: SearchService,
+    snapshot: Arc<Mutex<MemoryDocuments>>,
+    refresh: mpsc::SyncSender<()>,
+}
+
+impl MemoryPool {
+    fn new(service: &DocumentSearch, records: &MemoryRows<'_>) -> Self {
+        let (refresh, pending) = mpsc::sync_channel(1);
+        let pending = Mutex::new(pending);
+        let snapshot = Arc::new(Mutex::new(Self::documents(records, &MemoryDocuments::new())));
+        let input = snapshot.clone();
+        let index = service.project(richos_search::service::ProjectionSource {
+            index_key: PathBuf::from("richfinder-company-memory-v1"),
+            read: Box::new(move |_| Ok(input.lock().unwrap().values().cloned().collect())),
+            wait_for_change: Box::new(move |timeout| pending.lock().unwrap().recv_timeout(timeout).is_ok()),
+        });
+        Self { index, snapshot, refresh }
+    }
+
+    fn documents(records: &MemoryRows<'_>, prior: &MemoryDocuments) -> MemoryDocuments {
+        use richos_search::corpus::Document;
+        records.iter().map(|(key, (revision, record))| {
+            let document = prior.get(key).filter(|document| document.hash == *revision).cloned().unwrap_or_else(|| {
+                let mut document = Document::from_record(key, &record.title, record.text.clone(), 0);
+                document.hash.clone_from(revision);
+                Arc::new(document)
+            });
+            (key.clone(), document)
+        }).collect()
+    }
+
+    fn publish(&self, records: &MemoryRows<'_>, obsolete: &dyn Fn() -> bool) {
+        let mut prior = self.snapshot.lock().unwrap();
+        if obsolete() { return; }
+        let next = Self::documents(records, &prior);
+        if next.len() == prior.len() && next.iter().zip(prior.iter()).all(|((a, x), (b, y))| a == b && Arc::ptr_eq(x, y)) {
+            return;
+        }
+        *prior = next;
+        let _queued = self.refresh.try_send(());
+    }
+}
+
+pub fn search_company_memory(
+    service: &DocumentSearch,
+    reader: &SpineReader,
+    install: &Mutex<Option<richos_core::loro::LoroInstall>>,
+    mut request: SearchRequest,
+    generation: u64,
+) -> Result<Option<SearchResponse>, &'static str> {
+    let started = std::time::Instant::now();
+    cancel_palette(service, generation);
+    let obsolete = || service.palette_obsolete(generation);
+    if obsolete() || install.lock().unwrap().is_none() { return Ok(None); }
+    let unavailable = "Company memory is unavailable.";
+    let Some(grant) = MemoryGrant::current(reader, install) else { return Err(unavailable) };
+    let projection_started = std::time::Instant::now();
+    let projection = grant.read(&obsolete);
+    let projection_ms = projection_started.elapsed().as_secs_f64() * 1_000.0;
+    if obsolete() || MemoryGrant::current(reader, install).as_ref() != Some(&grant) { return Ok(None); }
+    let Some(projection) = projection else {
+        crate::search_diagnostics::record_unavailable(started.elapsed(), &[("memory_projection", projection_ms)]);
+        return Err(unavailable);
+    };
+    let (result, mut stages) = richos_search::service::capture_query_stages(|| {
+        let authorized: MemoryRows<'_> = projection.records.iter()
+            .map(|record| (record.key(), (record.revision(), record))).collect();
+        let pool = service.memory.get_or_init(|| MemoryPool::new(service, &authorized));
+        if service.closed.load(std::sync::atomic::Ordering::Acquire) {
+            pool.index.request_stop();
+            return None;
+        }
+        pool.publish(&authorized, &obsolete);
+        request.offset = 0;
+        request.limit = request.limit.clamp(1, PAGE);
+        let mut response = pool.index.search_projection(&request, &obsolete, &|document| {
+            authorized.get(&document.rel_path).is_some_and(|(revision, _)| revision == &document.hash)
+        })?;
+        response.hits.retain_mut(|hit| {
+            let Some((revision, record)) = authorized.get(&hit.rel_path) else { return false };
+            if revision != &hit.revision { return false; }
+            hit.source_id = serde_json::to_string(&(&hit.rel_path, revision)).expect("serializing a memory result");
+            hit.rel_path = record.citation();
+            true
+        });
+        (!obsolete() && MemoryGrant::current(reader, install).as_ref() == Some(&grant)).then_some(response)
+    });
+    stages.push(("memory_projection", projection_ms));
+    stages.push(("company_memory", started.elapsed().as_secs_f64() * 1_000.0));
+    crate::search_diagnostics::record(request.super_finder, result.as_ref(), started.elapsed(), &stages);
+    Ok(result)
+}
+
+#[derive(serde::Serialize)]
+pub struct MemoryDetail {
+    title: String,
+    citation: String,
+    text: String,
+    supersedes: Option<String>,
+}
+
+pub fn resolve_search_memory(
+    reader: &SpineReader, install: &Mutex<Option<richos_core::loro::LoroInstall>>, token: &str,
+) -> Option<MemoryDetail> {
+    let (key, revision): (String, String) = serde_json::from_str(token).ok()?;
+    let grant = MemoryGrant::current(reader, install)?;
+    let records = grant.read(&|| false)?.records;
+    if MemoryGrant::current(reader, install).as_ref() != Some(&grant) { return None; }
+    let record = records.into_iter().find(|record| record.key() == key && record.revision() == revision)?;
+    let citation = record.citation();
+    Some(MemoryDetail { title: record.title, citation, text: record.text.chars().take(6_000).collect(), supersedes: record.supersedes })
+}
+
 #[cfg(test)]
 pub fn search(service: &DocumentSearch, request: SearchRequest) -> SearchResponse {
     search_palette(service, request, None).unwrap()
@@ -584,6 +832,59 @@ mod tests {
     use super::*;
     use richos_core::search_tools::{Ask, SearchAnswer, MAX_EXCERPT_CHARS};
     use richos_search::embed::ConceptEmbedder;
+
+    #[test]
+    fn company_memory_search_uses_current_grant_and_provenance() {
+        use richos_core::{entity::{Entity, EntityRegistry}, ledger::Ledger, loro::{CorpusPaths, LoroInstall}, spine::Spine};
+        let base = std::env::temp_dir().join(richos_core::util::new_id("search-company-memory"));
+        let corpus = base.join("corpus");
+        std::fs::create_dir_all(corpus.join("ceo")).unwrap();
+        let write_company = |company: &str, body: &str| {
+            let path = corpus.join("companies").join(company);
+            std::fs::create_dir_all(path.join("records")).unwrap();
+            std::fs::write(path.join("company.yaml"), format!("id: {company}\nname: {company}\nrole: owner\nstatus: active\n")).unwrap();
+            std::fs::write(path.join("records/refund.md"), body).unwrap();
+        };
+        write_company("northwind", "---\nkind: decision\nscope: org-shared\n---\n\nA member asked for a refund.\n");
+        write_company("rival", "---\nkind: decision\nscope: org-shared\n---\n\nA customer asked for a refund.\n");
+        let engine = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../engine");
+        let paths = CorpusPaths {
+            env_corpus: Some(corpus.to_string_lossy().into_owned()),
+            engine_dir: Some(engine),
+            env_node: Some("node".into()),
+            env_tools: None,
+            env_root: None,
+            ..CorpusPaths::from_process()
+        };
+        let install = Mutex::new(LoroInstall::locate(&paths).unwrap().0);
+        let mut spine = Spine::new(Ledger::open(base.join("ledger.jsonl")).unwrap());
+        spine.set_entity_registry(EntityRegistry::new(vec![Entity::new("northwind", "Northwind", &["/fixture/northwind"]).unwrap()]).unwrap());
+        let reader = spine.reader();
+        let cache = base.join("cache");
+        let service = DocumentSearch::new(
+            move || Location { root: Ok(None), cache: Ok(cache.clone()) },
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None, None, None,
+        );
+        let query = SearchRequest { query: "chargeback".into(), super_finder: true, strict: false, offset: 0, limit: 6 };
+        let _initial = search_company_memory(&service, &reader, &install, query.clone(), 1).unwrap();
+        service.memory.get().unwrap().index.wait_idle();
+        let response = search_company_memory(&service, &reader, &install, query.clone(), 2).unwrap().unwrap();
+        assert!(response.effective.super_finder);
+        assert_eq!(response.hits.len(), 1);
+        let hit = &response.hits[0];
+        assert_eq!(hit.rel_path, "companies/northwind/records/refund.md");
+        let detail = resolve_search_memory(&reader, &install, &hit.source_id).unwrap();
+        assert!(detail.text.contains("member asked for a refund"));
+        write_company("northwind", "---\nkind: decision\nscope: org-shared\nsupersededBy: rec:companies/northwind/records/replacement\n---\n\nA member asked for a refund.\n");
+        assert!(resolve_search_memory(&reader, &install, &hit.source_id).is_none());
+        assert!(search_company_memory(&service, &reader, &install, query, 3).unwrap().unwrap().hits.is_empty());
+        service.shutdown();
+        drop(spine);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+
 
     #[test]
     fn conversation_search_finds_the_committed_message_by_meaning_and_refuses_a_superseded_anchor() {
