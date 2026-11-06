@@ -132,6 +132,7 @@ pub struct EngineProfile {
     pub state: PathBuf,
     pub runtime: EngineRuntime,
     pub work_scope: Option<(String, String)>,
+    pub(crate) search_binding: Option<crate::entity::ThreadBinding>,
     /// Host-selected shared coordination root, also passed to scoped tools.
     pub codex_root: PathBuf,
     /// **Fill-first: the Claude account this lease runs under.** Set by the shell from the
@@ -715,7 +716,7 @@ impl EngineProfile {
             .collect();
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
-        let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None, codex_root:crate::codex_bridge::root(),
+        let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None, search_binding: None, codex_root:crate::codex_bridge::root(),
                   claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None,
                   lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
         write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
@@ -775,6 +776,7 @@ impl EngineProfile {
 
     pub fn scope_to(&mut self, binding: &crate::entity::ThreadBinding) -> Result<(), RuntimeError> {
         self.work_scope = Some((binding.entity_id().to_string(), binding.thread_id().to_string()));
+        self.search_binding = Some(binding.clone());
         // The team this lease runs is the company's own: its governed repository's definitions
         // first (`team_sync.rs`), re-rendered into this lease's own plugin before it starts.
         let data = self.state.parent().ok_or_else(|| RuntimeError("Missing app data directory".into()))?;

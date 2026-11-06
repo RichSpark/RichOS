@@ -1448,6 +1448,7 @@ impl StallWatch {
 /// A live session to a native `claude` child.
 pub struct NativeClient {
     stall_watch: Option<StallWatch>,
+    search_endpoint: Option<crate::search_tools::LeaseEndpoint>,
     child: crate::owned_process::OwnedChild,
     /// The supervisor's per-lease state file, when this lease is supervised (the product reap,
     /// `lease_commands.rs`): which tool commands are running outside the provider's group.
@@ -2044,7 +2045,6 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             "CODEX_COORDINATION_ROOT":profile.codex_root, "RICHOS_CHANNEL_ENGINE":profile.engine,"RICHOS_CHANNEL_PYTHON":profile.runtime.python,
             "PYTHONDONTWRITEBYTECODE":"1"});
     }
-    search_server(&mut config, executable, role, crate::search_tools::endpoint_file());
     // **The continuity tools read THEIR OWN scope file, not the hook's** — the two differ in
     // one flag and in when it opens (`prepare_work_turn`'s note, and the measurement that
     // forced it). `continuity_tools_scope` is `None` only on a lease with no bridge, where
@@ -2328,8 +2328,15 @@ impl NativeClient {
         }
         // The selected model, with low effort for replies and high effort for work.
         args.extend(lease_model_args(role, profile));
+        let search_endpoint = if role == LeaseRole::Conversation && onboarding.is_some() {
+            profile.and_then(|profile| profile.search_binding.as_ref()
+                .and_then(|binding| crate::search_tools::issue_for_conversation(binding, &profile.state)))
+        } else { None };
         if let Some((executable, scope, assignments, status)) = onboarding {
-            let config = mcp_config(executable, scope, assignments, status, continuity, continuity_tools, profile, role, bin);
+            let mut config = mcp_config(executable, scope, assignments, status, continuity, continuity_tools, profile, role, bin);
+            if let Some(endpoint) = search_endpoint.as_ref() {
+                search_server(&mut config, executable, role, Some(endpoint.path()));
+            }
             args.extend(["--strict-mcp-config".into(), "--mcp-config".into(), config.to_string()]);
         }
         // The supervisor observes parent death, including a crash where Rust
@@ -2496,6 +2503,7 @@ impl NativeClient {
         }
         let mut client = NativeClient {
             stall_watch: None,
+            search_endpoint,
             child: if reap_state.is_some() {
                 crate::owned_process::OwnedChild::supervised(child)
             } else {
@@ -4161,6 +4169,7 @@ impl TurnCancel for NativeCancelHandle {
 
 impl Drop for NativeClient {
     fn drop(&mut self) {
+        drop(self.search_endpoint.take());
         if let Some(watch)=&self.stall_watch {watch.closing.store(true,Ordering::SeqCst);}
         drop(self.stall_watch.take());
         let _ = self.child.kill();
@@ -5970,6 +5979,7 @@ while True:
                 versions: Default::default(),
             },
             work_scope: None,
+            search_binding: None,
             codex_root: root.join("codex-coordination"),
             user: Default::default(),
 
@@ -9280,7 +9290,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(), user: Default::default(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                codex_root:root.join("codex-coordination"), work_scope:None, claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, lease_models: Default::default(), machine_settings: Default::default()
+                codex_root:root.join("codex-coordination"), work_scope:None, search_binding: None, claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, lease_models: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

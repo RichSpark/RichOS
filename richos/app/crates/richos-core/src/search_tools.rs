@@ -11,14 +11,13 @@
 //! `operator_desk_tools.rs` already uses). The search service lives in the running app: one
 //! owner of the index, one loaded model. The tool is this executable, spawned by `claude` over
 //! stdio ([`run_stdio`]), and it speaks one JSON line per call to a Unix socket the app serves
-//! ([`SearchSocket`]). Every request carries a token the app generated at launch and wrote only
-//! into a 0600 endpoint file, so a process that cannot read the app's folder cannot search.
+//! ([`SearchSocket`]). Each Rich lease holds a separate token the app writes only into its
+//! private endpoint file. The token identifies an ECS binding and expires with the lease.
 //!
 //! **Who gets it.** The CONVERSATION lease only — the CEO's own conversation with Rich, the
-//! audience the archive was included for. The work lease (background workers) is not given it
-//! (*"Other company or worker bindings receive no archive access."*), and the folder itself is
-//! never in a child's environment (`machine_settings::NOT_FORWARDED`). There is no argument that
-//! names a folder, a file or a path: the host's configured folder is the only source.
+//! audience the archive was included for. Work leases get no token. The app intersects each
+//! conversation's company limit with the global grant; a model cannot name a company, file or
+//! folder in its request. Configured folders are not forwarded in the child's environment.
 //!
 //! **What comes back is evidence, never an instruction.** The tool's description and every
 //! answer say so, and it cannot change anything: it reads, and its answer carries the status
@@ -29,8 +28,57 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+
+use crate::entity::ThreadBinding;
+use std::collections::HashMap;
+#[derive(Clone, Default)]
+pub(crate) struct LeaseGrants(Arc<Mutex<HashMap<String, Arc<ConversationGrant>>>>);
+
+pub struct ConversationGrant {
+    binding: ThreadBinding,
+    live: AtomicBool,
+}
+
+impl ConversationGrant {
+    pub fn binding(&self) -> &ThreadBinding { &self.binding }
+    pub fn is_live(&self) -> bool { self.live.load(Ordering::Acquire) }
+}
+
+pub(crate) struct LeaseEndpoint {
+    issuer: LeaseGrants,
+    token: String,
+    endpoint: PathBuf,
+    grant: Arc<ConversationGrant>,
+}
+
+impl LeaseEndpoint {
+    pub(crate) fn path(&self) -> &Path { &self.endpoint }
+}
+
+impl Drop for LeaseEndpoint {
+    fn drop(&mut self) {
+        self.grant.live.store(false, Ordering::Release);
+        let _revoked = self.issuer.0.lock().unwrap().remove(&self.token);
+        remove_quietly(&self.endpoint);
+    }
+}
+
+impl LeaseGrants {
+    pub(crate) fn issue(&self, socket: &Path, state: &Path, binding: &ThreadBinding) -> Result<LeaseEndpoint, String> {
+        let grant = Arc::new(ConversationGrant { binding: binding.clone(), live: AtomicBool::new(true) });
+        let token = new_token();
+        let endpoint = state.join("search-leases").join(format!("{}.json", uuid::Uuid::new_v4().simple()));
+        write_endpoint(&endpoint, &Endpoint { version: 1, socket: socket.to_path_buf(), token: token.clone() })?;
+        let _old = self.0.lock().unwrap().insert(token.clone(), grant.clone());
+        Ok(LeaseEndpoint { issuer: self.clone(), token, endpoint, grant })
+    }
+
+    pub(crate) fn authorize(&self, token: &str) -> Option<Arc<ConversationGrant>> {
+        self.0.lock().unwrap().get(token).filter(|grant| grant.is_live()).cloned()
+    }
+}
 
 pub const SERVER_NAME: &str = "richos_search";
 pub const TOOL_NAME: &str = "search_documents";
@@ -56,16 +104,16 @@ pub struct Endpoint {
     pub token: String,
 }
 
-static ENDPOINT_FILE: OnceLock<PathBuf> = OnceLock::new();
+static CONVERSATION_ENDPOINT: OnceLock<(PathBuf, LeaseGrants)> = OnceLock::new();
 
-/// Set once by the app when document search's socket is serving: from then on every
-/// conversation lease registers the tool with this endpoint file. Unset (no app, a test, a
-/// launch whose socket could not open) means the tool is simply not offered.
-pub fn set_endpoint_file(path: PathBuf) {
-    // One socket per launch; a second call would be a second server, which the app never
-    // starts. Said, and the first endpoint kept.
-    if let Err(second) = ENDPOINT_FILE.set(path) {
-        eprintln!("[richos] document search: an endpoint was already set; {} is not used", second.display());
+pub(crate) fn issue_for_conversation(binding: &crate::entity::ThreadBinding, state: &Path) -> Option<LeaseEndpoint> {
+    let (socket, issuer) = CONVERSATION_ENDPOINT.get()?;
+    match issuer.issue(socket, state, binding) {
+        Ok(endpoint) => Some(endpoint),
+        Err(error) => {
+            eprintln!("[richos] document search: could not issue this lease's endpoint ({error})");
+            None
+        }
     }
 }
 
@@ -76,10 +124,6 @@ fn remove_quietly(path: &Path) {
             eprintln!("[richos] document search: {} could not be removed ({error})", path.display());
         }
     }
-}
-
-pub fn endpoint_file() -> Option<&'static Path> {
-    ENDPOINT_FILE.get().map(PathBuf::as_path)
 }
 
 pub fn new_token() -> String {
@@ -150,7 +194,7 @@ pub struct Ask {
 /// What answers a call: the app's search service; a fake in the tests. The answer is the
 /// JSON the model reads.
 pub trait SearchAnswer: Send + Sync {
-    fn answer(&self, ask: &Ask) -> Value;
+    fn answer_for_conversation(&self, ask: &Ask, grant: &ConversationGrant) -> Value;
 }
 
 pub struct SearchSocket {
@@ -159,11 +203,16 @@ pub struct SearchSocket {
 }
 
 impl SearchSocket {
-    pub fn serve(service: Arc<dyn SearchAnswer>, path: &Path, token: &str) -> io::Result<SearchSocket> {
+    pub fn serve_conversations(service: Arc<dyn SearchAnswer>, path: &Path) -> io::Result<SearchSocket> {
+        let issuer = LeaseGrants::default();
+        let socket = Self::serve_authorized(service, path, issuer.clone())?;
+        CONVERSATION_ENDPOINT.set((path.to_path_buf(), issuer))
+            .map_err(|_| io::Error::other("the conversation search endpoint is already set"))?;
+        Ok(socket)
+    }
+
+    fn serve_authorized(service: Arc<dyn SearchAnswer>, path: &Path, authorization: LeaseGrants) -> io::Result<SearchSocket> {
         use std::os::unix::fs::PermissionsExt;
-        if token.len() < 16 {
-            return Err(io::Error::other("the search token is too short"));
-        }
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -176,17 +225,17 @@ impl SearchSocket {
         let listener = UnixListener::bind(path)?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         let closing = Arc::new(AtomicBool::new(false));
-        let (flag, expected) = (closing.clone(), token.to_string());
+        let flag = closing.clone();
         std::thread::Builder::new().name("richos-search-socket".into()).spawn(move || {
             for stream in listener.incoming() {
                 if flag.load(Ordering::SeqCst) {
                     return;
                 }
                 let Ok(stream) = stream else { continue };
-                let (service, expected) = (service.clone(), expected.clone());
+                let (service, authorization) = (service.clone(), authorization.clone());
                 if let Err(e) = std::thread::Builder::new()
                     .name("richos-search-call".into())
-                    .spawn(move || answer_stream(service.as_ref(), &expected, stream))
+                    .spawn(move || answer_stream(service.as_ref(), &authorization, stream))
                 {
                     eprintln!("document search: a call could not be served ({e})");
                 }
@@ -208,10 +257,6 @@ impl Drop for SearchSocket {
     fn drop(&mut self) {
         self.close();
     }
-}
-
-fn same_token(given: &str, expected: &str) -> bool {
-    given.len() == expected.len() && given.bytes().zip(expected.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
 fn read_line(stream: &UnixStream) -> io::Result<String> {
@@ -254,14 +299,24 @@ pub fn parse_arguments(arguments: &Value) -> Result<Ask, String> {
     Ok(Ask { query: query.to_string(), super_finder: flag("super_finder", true)?, strict: flag("strict", false)?, limit: limit.min(MAX_RESULTS) })
 }
 
-fn answer_stream(service: &dyn SearchAnswer, token: &str, stream: UnixStream) {
+fn authorized_answer(service: &dyn SearchAnswer, authorization: &LeaseGrants, request: &Value) -> Value {
+    let token = request["token"].as_str().unwrap_or("");
+    let refused = || json!({"ok": false, "say": "This request did not come from RichOS."});
+    let Some(grant) = authorization.authorize(token) else { return refused() };
+    match parse_arguments(&request["arguments"]) {
+        Ok(ask) => {
+            let result = service.answer_for_conversation(&ask, &grant);
+            if !grant.is_live() { return refused(); }
+            json!({"ok": true, "answer": result})
+        }
+        Err(why) => json!({"ok": false, "say": why}),
+    }
+}
+
+fn answer_stream(service: &dyn SearchAnswer, authorization: &LeaseGrants, stream: UnixStream) {
     let reply = match read_line(&stream) {
         Ok(line) => match serde_json::from_str::<Value>(&line) {
-            Ok(request) if same_token(request["token"].as_str().unwrap_or(""), token) => match parse_arguments(&request["arguments"]) {
-                Ok(ask) => json!({"ok": true, "answer": service.answer(&ask)}),
-                Err(why) => json!({"ok": false, "say": why}),
-            },
-            Ok(_) => json!({"ok": false, "say": "This request did not come from RichOS."}),
+            Ok(request) => authorized_answer(service, authorization, &request),
             Err(_) => json!({"ok": false, "say": "The request was not readable."}),
         },
         Err(e) => json!({"ok": false, "say": format!("The request could not be read ({e}).")}),
@@ -406,11 +461,18 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    struct Fake(Mutex<Vec<Ask>>);
+    #[derive(Default)]
+    struct Fake {
+        asks: Mutex<Vec<(Ask, String)>>,
+        revoke_during_answer: Mutex<Option<LeaseEndpoint>>,
+    }
     impl SearchAnswer for Fake {
-        fn answer(&self, ask: &Ask) -> Value {
-            self.0.lock().unwrap().push(ask.clone());
-            json!({"requested": {"super_finder": ask.super_finder, "strict": ask.strict}, "results": []})
+        fn answer_for_conversation(&self, ask: &Ask, grant: &ConversationGrant) -> Value {
+            self.asks.lock().unwrap().push((ask.clone(), grant.binding().entity_id().to_string()));
+            if ask.query == "revoke" {
+                drop(self.revoke_during_answer.lock().unwrap().take());
+            }
+            json!({"requested": {"super_finder": ask.super_finder, "strict": ask.strict}, "results": ["evidence"]})
         }
     }
 
@@ -433,27 +495,40 @@ mod tests {
     }
 
     #[test]
-    fn a_call_reaches_the_app_only_with_its_token() {
+    fn only_the_live_conversation_grant_can_reach_the_app_or_return_evidence() {
         let dir = folder("sock");
-        let fake = Arc::new(Fake(Mutex::new(Vec::new())));
-        let token = new_token();
-        let socket = SearchSocket::serve(fake.clone(), &dir.join("s.sock"), &token).unwrap();
-        let endpoint_file = dir.join("endpoint.json");
-        write_endpoint(&endpoint_file, &Endpoint { version: 1, socket: dir.join("s.sock"), token: token.clone() }).unwrap();
-        let answer = call(&endpoint_file, TOOL_NAME, json!({"query": "refund window", "super_finder": false})).unwrap();
+        let mut ledger = crate::ledger::Ledger::open(dir.join("ledger.jsonl")).unwrap();
+        let company = crate::entity::EntityId::parse("alpha").unwrap();
+        let thread = ledger.create_thread("Alpha", &company).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let fake = Arc::new(Fake::default());
+        let issuer = LeaseGrants::default();
+        let path = dir.join("s.sock");
+        let socket = SearchSocket::serve_authorized(fake.clone(), &path, issuer.clone()).unwrap();
+        let endpoint = issuer.issue(&path, &dir, &binding).unwrap();
+        let answer = call(endpoint.path(), TOOL_NAME, json!({"query": "refund window", "super_finder": false})).unwrap();
         assert_eq!(answer["requested"]["super_finder"], false);
-        assert_eq!(fake.0.lock().unwrap().len(), 1);
-        // A forged token is refused before the service is asked anything.
-        write_endpoint(&endpoint_file, &Endpoint { version: 1, socket: dir.join("s.sock"), token: new_token() }).unwrap();
-        assert!(call(&endpoint_file, TOOL_NAME, json!({"query": "x"})).unwrap_err().contains("did not come from RichOS"));
-        assert_eq!(fake.0.lock().unwrap().len(), 1);
+        assert_eq!(fake.asks.lock().unwrap()[0].1, "alpha");
+        let replay = dir.join("copied-endpoint.json");
+        let forged = dir.join("forged-endpoint.json");
+        write_endpoint(&replay, &read_endpoint(endpoint.path()).unwrap()).unwrap();
+        write_endpoint(&forged, &Endpoint { version: 1, socket: path, token: new_token() }).unwrap();
+        assert!(call(&forged, TOOL_NAME, json!({"query": "x"})).unwrap_err().contains("did not come from RichOS"));
+        assert!(call(endpoint.path(), TOOL_NAME, json!({"query": "x", "company_id": "beta"})).is_err());
+        assert_eq!(fake.asks.lock().unwrap().len(), 1);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&endpoint_file).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(endpoint.path()).unwrap().permissions().mode() & 0o777, 0o600);
         }
+        let original = endpoint.path().to_path_buf();
+        *fake.revoke_during_answer.lock().unwrap() = Some(endpoint);
+        assert!(call(&replay, TOOL_NAME, json!({"query": "revoke"})).unwrap_err().contains("did not come from RichOS"));
+        assert!(!original.exists());
+        assert!(call(&replay, TOOL_NAME, json!({"query": "x"})).unwrap_err().contains("did not come from RichOS"));
+        assert_eq!(fake.asks.lock().unwrap().len(), 2);
         socket.close();
-        assert!(call(&endpoint_file, TOOL_NAME, json!({"query": "x"})).unwrap_err().contains("not running"));
+        assert!(call(&replay, TOOL_NAME, json!({"query": "x"})).unwrap_err().contains("not running"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
