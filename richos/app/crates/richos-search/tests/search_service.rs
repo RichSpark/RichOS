@@ -7,7 +7,7 @@ use richos_search::manifest::{point_id, Manifest, SourceEntry, SourceState};
 use richos_search::rank::Why;
 use richos_search::service::{index_dir, Config, Empty, MeaningStatus, SearchRequest, SearchService, Tuning};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 fn fixture_copy(name: &str) -> (PathBuf, PathBuf) {
@@ -171,6 +171,31 @@ fn hybrid_word_only_results_show_the_matching_words() {
     let hit = result.hits.iter().find(|hit| hit.rel_path == "invoice.md").unwrap();
     assert_eq!(hit.why, Why::Words);
     assert!(hit.passage.text.contains("4471 to Northwind"));
+    service.shutdown();
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn revoked_folder_passages_are_never_sent_for_excerpt_selection() {
+    let (folder, cache) = fixture_copy("excerpt-grant");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let allowed = Arc::new(AtomicBool::new(true));
+    let grant = allowed.clone();
+    let service = SearchService::start_with_grant(Config {
+        root: Some(folder.clone()),
+        cache: Ok(cache),
+        make_embedder: Box::new(move || Ok(Box::new(Counting(counted.clone(), ConceptEmbedder::stand_in())))),
+        busy: None,
+        tuning: Tuning::default(),
+    }, None, Some(Box::new(move || grant.load(Ordering::SeqCst))), || {});
+    service.wait_idle();
+    let passages = ["Customer refund after cancellation.", "A walk in the garden."];
+    assert_eq!(service.closest_in_meaning("money back", &passages), Some(0));
+    let before = calls.load(Ordering::SeqCst);
+    allowed.store(false, Ordering::SeqCst);
+    assert_eq!(service.closest_in_meaning("money back", &passages), None);
+    assert_eq!(calls.load(Ordering::SeqCst), before);
     service.shutdown();
     std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
 }
