@@ -252,6 +252,17 @@ async function main() {
       await page.waitForSelector("#search-overlay", { state: "hidden" });
       await flushFrames(page);
       assertEqual((await railFacts(page)).selected, ["chats"], "Chats again, both closed");
+      // Stacked: the palette, then the RichScribe sheet over it (Settings opens it there), then
+      // Home: both close, top down, and the home screen stays up.
+      await page.evaluate(() => { window.RichSearch.open(); window.RichDictation.open(); });
+      await page.waitForSelector("#dictation-sheet", { state: "visible" });
+      await page.click("#nr-home");
+      await page.waitForFunction(() => window.RichHome.isOpen() && document.getElementById("search-overlay").hidden && document.getElementById("dictation-sheet").hidden);
+      await flushFrames(page);
+      assert(await page.evaluate(() => window.RichHome.isOpen()), "the home screen stays up once the stacked sheets are closed");
+      await page.evaluate(() => window.RichHome.hide("nav-rail-test"));
+      await page.waitForFunction(() => !window.RichHome.isOpen());
+      await flushFrames(page);
       await page.evaluate(() => window.__RICHOS_MOCK__.dictationSet({ ax: "allowed", keyTap: true }));
       await page.evaluate(() => document.getElementById("nr-scribe").click());
       await page.waitForFunction(() => document.querySelector("#nr-scribe .nr-dot").hidden);

@@ -105,12 +105,20 @@
     // Bust a bug reports the screen as it is, Settings opens over anything, and RichCleaner is
     // another window: none of them is a place, so nothing steps aside for them.
     if (item === "bug" || item === "me" || item === "cleaner") return 0;
+    const keep = (o) => (item === "finder" && o.id === "search-overlay") || (item === "scribe" && o.id === "dictation-sheet");
+    // Topmost first, one at a time, as Escape would: a surface refuses to close while another
+    // covers it, so stacked sheets (the palette under RichScribe) close from the top down.
+    const open = () => {
+      const all = D && D.open ? D.open() : Array.from(document.querySelectorAll(".overlay:not([hidden])"));
+      return all.filter((o) => o.classList.contains("overlay") && !o.hidden && !keep(o));
+    };
     let closed = 0;
-    for (const o of document.querySelectorAll(".overlay:not([hidden])")) {
-      if (item === "finder" && o.id === "search-overlay") continue;
-      if (item === "scribe" && o.id === "dictation-sheet") continue;
-      if (D && D.dismiss) D.dismiss(o);
-      else o.hidden = true;
+    for (let tries = 0; tries < 12; tries++) {
+      const top = open()[0];
+      if (!top) break;
+      if (D && D.dismiss) D.dismiss(top);
+      else top.hidden = true;
+      if (!top.hidden) break;
       closed++;
     }
     return closed;
