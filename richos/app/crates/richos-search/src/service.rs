@@ -1108,6 +1108,39 @@ fn passage_scores(meaning: &Meaning, doc: &corpus::Document, query: &[f32]) -> O
     ids.iter().map(|id| by_id.get(id).copied()).collect()
 }
 
+/// Load the shortlist's vectors together, retaining the same exact per-passage
+/// cosine scores. Each Edge read still has a bounded response and gives a
+/// superseded query a chance to stop before asking for the next batch.
+fn shortlist_passage_scores(
+    rows: &[Ranked], corpus: &Corpus, meaning: &Meaning, query: &[f32], obsolete: &dyn Fn() -> bool,
+) -> Option<HashMap<usize, Vec<f32>>> {
+    let mut ids = Vec::new();
+    let mut documents = Vec::new();
+    {
+        let complete = meaning.points.read().unwrap();
+        for row in rows.iter().filter(|row| row.semantic_passage.is_some()) {
+            if obsolete() { return None; }
+            let doc = &corpus.docs[row.doc];
+            if doc.passages.len() < 2 { continue; }
+            let first = point_id(&doc.id, &doc.hash, 0);
+            if !complete.contains_key(&first) { continue; }
+            let start = ids.len();
+            ids.push(first);
+            ids.extend((1..doc.passages.len()).map(|i| point_id(&doc.id, &doc.hash, i)));
+            documents.push((row.doc, start..ids.len()));
+        }
+    }
+    let mut by_id = HashMap::with_capacity(ids.len());
+    for batch in ids.chunks(256) {
+        if obsolete() { return None; }
+        by_id.extend(meaning.index.score_passages(batch, query).ok()?);
+    }
+    Some(documents.into_iter().filter_map(|(doc, positions)| {
+        let scores = ids[positions].iter().map(|id| by_id.get(id).copied()).collect::<Option<Vec<_>>>()?;
+        Some((doc, scores))
+    }).collect())
+}
+
 /// Is the file still the one that was read: inside the folder, a regular file, same content?
 fn still_current(root: &Path, doc: &corpus::Document) -> bool {
     let Ok(path) = corpus::resolve_inside(root, &doc.rel_path) else { return false };
@@ -1180,10 +1213,18 @@ fn rerank_sources(
     let mut passages = HashMap::with_capacity(count);
     let mut candidates = Vec::with_capacity(count);
     let phase = Instant::now();
+    let scores = if parsed.spans.is_empty() {
+        shortlist_passage_scores(&rows[..count], corpus, meaning.0, meaning.1, obsolete)
+    } else {
+        Some(HashMap::new())
+    };
     for row in &rows[..count] {
         if obsolete() { return passages; }
         let doc = &corpus.docs[row.doc];
-        let passage = selected_passage(doc, row, parsed, Some(meaning));
+        let passage = match &scores {
+            Some(scores) => rank::passage_choices(doc, parsed, row.semantic_passage, scores.get(&row.doc).map(Vec::as_slice)),
+            None => selected_passage(doc, row, parsed, Some(meaning)),
+        };
         passages.insert(row.doc, passage.evidence);
         let text = doc.passages.get(passage.ranking).map_or("", |p| p.text(&doc.text));
         candidates.push(format!("{}\n{}", doc.title, bounded_passage(text)));
