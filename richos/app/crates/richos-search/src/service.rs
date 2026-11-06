@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
 /// Retrieval settings the harness may vary; the app uses [`Tuning::default`].
@@ -767,6 +767,7 @@ impl SearchService {
         if obsolete() { return None; }
         let _access = self.0.access.lock().unwrap();
         if obsolete() { return None; }
+        trace_query_stage("lock", started);
         let parsed = query::parse(&request.query);
         let requested = Mode { super_finder: request.super_finder, strict: request.strict };
         let generation = self.0.generation.load(Ordering::SeqCst);
@@ -812,7 +813,9 @@ impl SearchService {
         let ranked = match cached {
             Some(r) => r,
             None => {
+                let phase = Instant::now();
                 let lexical = snapshot.lexical.search(corpus, &parsed, request.strict, snapshot.positions.as_ref());
+                trace_query_stage("lexical", phase);
                 if obsolete() { return None; }
                 let semantic = meaning.as_ref().map(|m| semantic_hits(m, corpus, &request.query, &self.0.config.tuning));
                 if obsolete() { return None; }
@@ -912,7 +915,16 @@ impl SearchService {
     }
 }
 
+/// Record numbers only, with no query, result or source details.
+fn trace_query_stage(stage: &str, started: Instant) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var_os("RICHOS_SEARCH_TIMINGS").is_some()) {
+        eprintln!("[richfinder timing] {stage}={:.1}ms", started.elapsed().as_secs_f64() * 1_000.0);
+    }
+}
+
 fn finish(mut response: SearchResponse, started: Instant) -> SearchResponse {
+    trace_query_stage("total", started);
     response.elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
     response
 }
@@ -952,8 +964,13 @@ pub fn embedding_text(title: &str, heading: &str, passage: &str) -> String {
 }
 
 fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning) -> Result<(Vec<SemanticHit>, Vec<f32>), String> {
-    let mut vector = meaning.embedder.embed_query(&[query.trim()])?.pop().ok_or("no query vector")?;
+    let phase = Instant::now();
+    let embedded = meaning.embedder.embed_query(&[query.trim()]);
+    trace_query_stage("embedding", phase);
+    let mut vector = embedded?.pop().ok_or("no query vector")?;
+    let phase = Instant::now();
     let nearest = meaning.index.nearest(vector.clone(), tuning.semantic_passages)?;
+    trace_query_stage("nearest", phase);
     crate::embed::normalize(&mut vector);
     let points = meaning.points.read().unwrap();
     let mut out: Vec<SemanticHit> = Vec::new();
@@ -1065,6 +1082,7 @@ fn rerank_sources(
     let count = rows.len().min(SHORTLIST);
     let mut passages = HashMap::with_capacity(count);
     let mut candidates = Vec::with_capacity(count);
+    let phase = Instant::now();
     for row in &rows[..count] {
         if obsolete() { return passages; }
         let doc = &corpus.docs[row.doc];
@@ -1073,7 +1091,11 @@ fn rerank_sources(
         let text = doc.passages.get(passage).map_or("", |p| p.text(&doc.text));
         candidates.push(format!("{}\n{}", doc.title, bounded_passage(text)));
     }
-    if let Some(scores) = reranker(query, &candidates, obsolete).filter(|scores| {
+    trace_query_stage("passage_selection", phase);
+    let phase = Instant::now();
+    let scored = reranker(query, &candidates, obsolete);
+    trace_query_stage("reranker", phase);
+    if let Some(scores) = scored.filter(|scores| {
         scores.len() == count && scores.iter().all(|score| score.is_finite())
     }) {
         let mut scored: Vec<_> = scores.into_iter().zip(rows[..count].iter().cloned()).collect();
