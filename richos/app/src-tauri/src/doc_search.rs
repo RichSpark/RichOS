@@ -215,7 +215,7 @@ pub fn start(home: &Path, busy: richos_search::service::Busy) -> Arc<DocumentSea
 
 #[cfg(target_os = "macos")]
 fn make_embedder() -> Result<Box<dyn Embedder>, String> {
-    Ok(Box::new(richos_search::embed::AppleSentenceEmbedder::new("en")?))
+    Ok(Box::new(crate::search_embed::ResidentEmbedder::bundled()?))
 }
 
 #[cfg(not(target_os = "macos"))]
