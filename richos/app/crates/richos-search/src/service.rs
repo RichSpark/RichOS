@@ -499,7 +499,7 @@ impl SearchService {
                 }
             };
             let paths: BTreeSet<_> = paths.into_iter().chain(receiver.try_iter().flatten())
-                .filter_map(|path| corpus::catalog_relative(&base.root, &path, source)).collect();
+                .filter_map(|path| corpus::catalog_relative(&base.root, &root, &path, source)).collect();
             if !paths.is_empty() {
                 let updates = self.read_media(&base.root, &paths.into_iter().collect::<Vec<_>>(), source);
                 if let Some(failure) = self.update_media_index(&mut writer, &updates) {

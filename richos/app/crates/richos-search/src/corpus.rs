@@ -285,8 +285,9 @@ pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>,
     Ok((!stopped()).then_some(PendingCorpus { corpus, media }))
 }
 
-pub(crate) fn catalog_relative(root: &Path, path: &Path, source: &MetadataSource) -> Option<String> {
-    let tail = path.strip_prefix(root).ok()?;
+pub(crate) fn catalog_relative(root: &Path, configured: &Path, path: &Path, source: &MetadataSource) -> Option<String> {
+    // Only the selected root may be an alias. Descendants must still pass resolve_inside.
+    let tail = path.strip_prefix(root).or_else(|_| path.strip_prefix(configured)).ok()?;
     let names: Vec<_> = tail.components().map(|part| match part {
         Component::Normal(name) => name.to_str(),
         _ => None,
