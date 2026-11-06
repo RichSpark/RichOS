@@ -73,8 +73,25 @@ fn files(r: &richos_search::SearchResponse) -> Vec<String> {
 
 #[test]
 fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_named_file() {
+    use richos_search::embed::BulkIndexer;
     use std::sync::{mpsc, Mutex};
     use std::time::{Duration, Instant};
+    struct ScopedMediaEmbedder {
+        model: ConceptEmbedder,
+        indexed: Arc<Mutex<Vec<String>>>,
+    }
+    impl Embedder for ScopedMediaEmbedder {
+        fn identity(&self) -> String { self.model.identity() }
+        fn dimension(&self) -> usize { self.model.dimension() }
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> { self.model.embed(texts) }
+        fn bulk_indexer(&self) -> Option<Box<BulkIndexer<'_>>> {
+            Some(Box::new(move |text, _stop| {
+                let vector = self.model.embed(&[text])?.pop().unwrap();
+                self.indexed.lock().unwrap().push(text.to_string());
+                Ok(vector)
+            }))
+        }
+    }
     let (folder, cache) = fixture_copy("media-background");
     std::fs::write(folder.join("00-slow.png"), "fixture").unwrap();
     std::fs::write(folder.join("01-noted.png"), "fixture").unwrap();
@@ -88,6 +105,8 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     let calls = reads.clone();
     let note = Arc::new(Mutex::new("Initial fixture note".to_string()));
     let current = note.clone();
+    let indexed = Arc::new(Mutex::new(Vec::new()));
+    let indexing = indexed.clone();
     let metadata = MetadataSource {
         extensions: &["png"],
         watch: Arc::new(move || watch.lock().unwrap().take().unwrap()),
@@ -108,7 +127,10 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     let service = SearchService::start_with_grant(Config {
         root: Some(folder.clone()),
         cache: Ok(cache),
-        make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
+        make_embedder: Box::new(move || Ok(Box::new(ScopedMediaEmbedder {
+            model: ConceptEmbedder::stand_in(),
+            indexed: indexing.clone(),
+        }))),
         busy: None,
         tuning: Tuning::default(),
     }, Some(metadata), None, None, || {});
@@ -119,11 +141,14 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     assert!(!text.hits.is_empty(), "Markdown must be searchable while the portable reader is blocked");
     service.wait_idle();
     assert_eq!(files(&ask(&service, "\"Initial fixture note\"", false, true)), ["01-noted.png"]);
+    assert!(indexed.lock().unwrap().iter().any(|text| text.contains("Initial fixture note")));
     *note.lock().unwrap() = "Replacement fixture note".into();
     changed.send(vec![target]).unwrap();
     let guard = Instant::now() + Duration::from_secs(10); // load-bound: hang guard for the change notification.
     loop {
-        if files(&ask(&service, "\"Replacement fixture note\"", false, true)) == ["01-noted.png"] {
+        if files(&ask(&service, "\"Replacement fixture note\"", false, true)) == ["01-noted.png"]
+            && indexed.lock().unwrap().iter().any(|text| text.contains("Replacement fixture note"))
+        {
             break;
         }
         assert!(Instant::now() < guard, "catalog change was never applied"); // load-bound: wait for the actual replacement.

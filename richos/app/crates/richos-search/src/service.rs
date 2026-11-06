@@ -598,6 +598,8 @@ impl SearchService {
         };
         self.set_meaning(report(files_done, passages_done));
 
+        let stopping = || self.background_stopping();
+        let mut bulk_indexer = if todo.is_empty() { None } else { meaning.embedder.bulk_indexer() };
         for batch in todo.chunks(self.0.config.tuning.batch_files.max(1)) {
             if self.background_stopping() {
                 return Ok(None);
@@ -627,8 +629,12 @@ impl SearchService {
                         return Ok(None);
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())
-                        .map_err(IndexFailure::Model)?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = if let Some(index) = &mut bulk_indexer {
+                        index(&text, &stopping).map_err(IndexFailure::Model)?
+                    } else {
+                        meaning.embedder.embed_for_index(&[&text], &stopping)
+                            .map_err(IndexFailure::Model)?.pop().ok_or("The embedding model returned nothing.")?
+                    };
                     if self.background_stopping() {
                         return Ok(None);
                     }
@@ -654,6 +660,7 @@ impl SearchService {
             self.bump();
             self.set_meaning(report(files_done, passages_done));
         }
+        drop(bulk_indexer);
         if !todo.is_empty() && !self.background_stopping() {
             meaning.index.optimize()?;
         }
@@ -716,6 +723,8 @@ impl SearchService {
 
     fn write_media(&self, writer: &mut IndexWriter, updates: &[MediaUpdate]) -> Result<(), IndexFailure> {
         let IndexWriter { meaning, manifest, dir } = writer;
+        let stopping = || self.background_stopping();
+        let mut bulk_indexer = meaning.embedder.bulk_indexer();
         for update in updates {
             if self.background_stopping() {
                 return Ok(());
@@ -764,8 +773,12 @@ impl SearchService {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())
-                        .map_err(IndexFailure::Model)?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = if let Some(index) = &mut bulk_indexer {
+                        index(&text, &stopping).map_err(IndexFailure::Model)?
+                    } else {
+                        meaning.embedder.embed_for_index(&[&text], &stopping)
+                            .map_err(IndexFailure::Model)?.pop().ok_or("The embedding model returned nothing.")?
+                    };
                     if self.background_stopping() {
                         return Ok(());
                     }
