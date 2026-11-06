@@ -2542,6 +2542,31 @@ tickrw
 [ "$(ncalls)" = "0" ] && has "$O1$OUT" "codex/fix-w7" && has "$O1$OUT" "no review"
 check "W07 a READY naming a codex branch but no repository is told, never a silent skip" $? "calls=$(ncalls) out=$O1 / $OUT"
 
+# 2026-11-06: a READY held for missing original words was never looked at again, so Rich asked
+# Codex to repost it five times. An entry naming the branch, appended later, starts it.
+resetstate
+G checkout -qb codex/late-w7 "$BASE"
+printf 'base\ncodex\nlate\n' >"$REPO/a.txt"
+G commit -qam "codex: a late fix"
+LTIP="$(G rev-parse HEAD)"
+G checkout -q cc/echo-sonnet-w1
+: >"$SB/codex/to-codex.md"
+printf '## 2026-10-09T00:00:00Z STATUS: old\n\nold entry\n' >"$SB/codex/to-rich.md"
+tickrw
+printf '\n## 2026-10-09T02:00:00Z READY TO LAND: codex/late-w7\n\nCommit: `%s`\nRepository: richos only.\n' "$LTIP" >>"$SB/codex/to-rich.md"
+FAKE_SR_MODE=passed tickrw; O1="$OUT"
+FAKE_SR_MODE=passed tickrw; O2="$OUT"
+N0="$(ncalls)"
+printf '\n## 2026-10-09T03:00:00Z ORDER: please build codex/late-w7\n\nLATE-ASK-LINE\n' >>"$SB/codex/to-codex.md"
+FAKE_SR_MODE=passed tickrw; O3="$OUT"
+FAKE_SR_MODE=passed tickrw; O4="$OUT"
+waitcalls 1
+FAKE_SR_MODE=passed tickrw; O5="$OUT"
+W="$(cat "$(ls -d "$SB"/calls/* | tail -1)/words.txt" 2>/dev/null)"
+[ "$N0" = "0" ] && has "$O1$O2" "no original words" && ! has "$O3$O4$O5" "no original words" && [ "$(ncalls)" = "1" ] \
+  && has "$(lastargv)" "\"--tip\", \"$LTIP\"" && has "$W" "LATE-ASK-LINE"
+check "W07 a READY held for missing words starts once an entry names its branch, one review, told held once" $? "n0=$N0 calls=$(ncalls) o1=$O1 o2=$O2 words=$W"
+
 # --- W08 ---------------------------------------------------------------------
 resetstate
 reg echo-sonnet-w1 600 30
