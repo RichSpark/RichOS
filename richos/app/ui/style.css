@@ -12985,11 +12985,16 @@ body.bug-dock-open .overlay-panel--desk {
 /* THE RAIL STAYS ON THIS SCREEN (review rv-20261106T173510Z-aa7dd4d6-bca3, finding 1; the CEO's
    round-58 pick: "Nav rail everywhere else but not on the home screen"). The rail is a child of #app,
    so hiding #app hid it. Everything in #app but the rail and its tooltip is hidden instead, and this
-   screen starts at the rail's right edge, as an overlay does. On the home screen (which is above #app
-   and has no rail) nothing changes: #app is hidden whole and the screen covers the window. */
+   screen starts at the rail's right edge, as an overlay does. Opened over Home, Home steps
+   aside while this screen is up (spend.js `open`), so the rail is there too. */
 body.spend-open #app > :not(#nav-rail):not(#nr-tip) { display: none; }
-body.spend-open.home-open #app { display: none; }
-body.spend-open:not(.home-open) #spend { left: 3.25rem; }
+body.spend-open #spend { left: 3.25rem; }
+/* The rail takes 52px of this screen's width (tests/spend.js measures every fit). Docked beside the Rich
+   panel the column is that much narrower: the tokens line drops to the 16px floor (its second sentence
+   is 883px at 18px, 785px at 16px) and the four periods wrap to a second row of two instead of
+   squeezing a word onto two lines. */
+body.bug-dock-open .sp-tokens { font-size: 1rem; }
+body.bug-dock-open .sp-period { flex-wrap: wrap; border-radius: 22px; }
 #spend { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; background: var(--ground); color: var(--ink);
   font-family: var(--font); animation: fadein .35s ease both; }
 #spend[hidden] { display: none; }

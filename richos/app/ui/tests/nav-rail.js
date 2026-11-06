@@ -457,6 +457,21 @@ async function main() {
       assertEqual(await topId("#nr-chats"), "self", "a rail item is the topmost thing at its own center on Token spend");
       await page.click("#spend-back");
       await page.waitForSelector("#spend", { state: "hidden" });
+      // The other way in: from Home (Settings is over Home too). Home steps aside, the rail is there and
+      // takes a press; Chats leaves Token spend and does not bring Home back.
+      await page.evaluate(() => window.RichHome.show("nav-rail-test"));
+      await page.waitForFunction(() => window.RichHome.isOpen());
+      await page.click("#set-btn");
+      await page.waitForSelector("#set-menu #set-spend-open");
+      await page.click("#set-spend-open");
+      await page.waitForSelector("#spend-fig .ch");
+      await flushFrames(page);
+      assert(!(await page.evaluate(() => window.RichHome.isOpen())), "Home steps aside while Token spend is up");
+      await page.waitForFunction(() => { const r = document.getElementById("nr-chats").getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && !!e.closest("#nr-chats"); });
+      assertEqual(await topId("#nr-chats"), "self", "from Home too, a rail item is the topmost thing at its own center on Token spend");
+      await page.click("#nr-chats");
+      await page.waitForSelector("#spend", { state: "hidden" });
+      assert(!(await page.evaluate(() => window.RichHome.isOpen())), "a rail press leaves Token spend without bringing Home back");
       await page.click("#nr-scribe");
       await page.waitForSelector("#dictation-sheet", { state: "visible" });
       await flushFrames(page);
