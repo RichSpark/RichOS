@@ -18,6 +18,7 @@ const DIMENSION: usize = 384;
 const CONTEXT: usize = 512;
 const MAX_REPLY: u64 = 256 * 1024;
 const REQUEST_BOUND: Duration = Duration::from_millis(500);
+const RETRY_BOUND: Duration = Duration::from_secs(2);
 // The first launch of the newly built Metal helper took about eight seconds on
 // the reference Mac. Markdown remains available while the helper starts.
 const START_BOUND: Duration = Duration::from_secs(15);
@@ -52,9 +53,23 @@ impl Drop for SocketDirectory {
 }
 
 pub struct ResidentEmbedder {
-    // Fields drop in declaration order, so the child is reaped before its socket is removed.
-    _child: Mutex<OwnedChild>,
+    resources: PathBuf,
+    running: Mutex<Option<Running>>,
+}
+
+struct Running {
+    // Drop the process before removing its socket directory.
+    child: OwnedChild,
     directory: SocketDirectory,
+}
+
+enum LookupError {
+    Retry(String),
+    Input(String),
+}
+
+impl From<String> for LookupError {
+    fn from(message: String) -> Self { Self::Retry(message) }
 }
 
 pub(crate) fn resources() -> Result<PathBuf, String> {
@@ -69,24 +84,58 @@ pub(crate) fn resources() -> Result<PathBuf, String> {
 
 impl ResidentEmbedder {
     pub fn bundled() -> Result<Self, String> {
-        Self::start(&resources()?)
-    }
-
-    fn start(resources: &Path) -> Result<Self, String> {
+        let resources = resources()?;
         let model = resources.join(MODEL);
-        let server = resources.join("llama-server");
         let bytes = std::fs::read(&model).map_err(|_| "The bundled search model is unavailable.")?;
         if richos_search::corpus::content_hash(&bytes) != MODEL_SHA {
             return Err("The bundled search model failed its integrity check.".into());
         }
         drop(bytes);
+        let running = Mutex::new(Some(Running::start(&resources)?));
+        Ok(Self { resources, running })
+    }
+
+    fn one(&self, text: &str) -> Result<Vec<f32>, String> {
+        // Bound even a pasted query before handing it to the child.
+        let text: String = text.chars().take(8192).map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c }).collect();
+        let mut running = self.running.lock().map_err(|_| "The local search model is unavailable.")?;
+        if let Some(runtime) = running.as_mut() {
+            match runtime.one(&text, REQUEST_BOUND) {
+                Ok(vector) => return Ok(vector),
+                Err(LookupError::Input(reason)) => return Err(reason),
+                Err(LookupError::Retry(_)) => {}
+            }
+            if runtime.child.try_wait().is_ok_and(|status| status.is_none()) {
+                match runtime.one(&text, RETRY_BOUND) {
+                    Ok(vector) => return Ok(vector),
+                    Err(LookupError::Input(reason)) => return Err(reason),
+                    Err(LookupError::Retry(_)) => {}
+                }
+            }
+            eprintln!("[richos] document search model: restarting after a failed request");
+        }
+
+        drop(running.take());
+        let runtime = Running::start(&self.resources)?;
+        let result = runtime.one(&text, RETRY_BOUND);
+        *running = Some(runtime);
+        result.map_err(|error| match error {
+            LookupError::Retry(reason) | LookupError::Input(reason) => reason,
+        })
+    }
+}
+
+impl Running {
+    fn start(resources: &Path) -> Result<Self, String> {
+        let model = resources.join(MODEL);
+        let server = resources.join("llama-server");
         let directory = SocketDirectory::create()?;
         let socket = directory.socket();
         let mut command = Command::new(server);
-        command.env_clear().arg("--model").arg(model).arg("--host").arg(&socket).args([
+        command.env_clear().env("RICHFINDER_OWNER_SOCKET", &socket).arg("--model").arg(model).arg("--host").arg(&socket).args([
             "--embedding", "--parallel", "1", "-c", "512", "-b", "512", "-ub", "512",
             "--threads", "2", "--threads-batch", "2", "--no-webui", "--no-slots", "--log-disable",
-        ]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        ]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
         OwnedChild::configure(&mut command);
         let start = Instant::now();
         let mut child = OwnedChild::new(command.spawn().map_err(|_| "The local search model could not start.")?);
@@ -94,47 +143,43 @@ impl ResidentEmbedder {
             if child.try_wait().map_err(|_| "The local search model could not start.")?.is_some() {
                 return Err("The local search model exited during startup.".into());
             }
-            if request(&socket, "GET", "/health", None).is_ok_and(|(status, _)| status == 200) {
-                let runtime = Self { _child: Mutex::new(child), directory };
-                runtime.one("search model readiness")?;
+            if request(&socket, "GET", "/health", None, REQUEST_BOUND).is_ok_and(|(status, _)| status == 200) {
                 eprintln!("[richos] document search model: ready in {} ms", start.elapsed().as_millis());
-                return Ok(runtime);
+                return Ok(Self { child, directory });
             }
             std::thread::sleep(Duration::from_millis(15));
         }
         Err("The local search model timed out during startup.".into())
     }
 
-    fn one(&self, text: &str) -> Result<Vec<f32>, String> {
-        // Bound even a pasted query before handing it to the child.
-        let text: String = text.chars().take(8192).map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c }).collect();
+    fn one(&self, text: &str, bound: Duration) -> Result<Vec<f32>, LookupError> {
         let socket = self.directory.socket();
-        let (status, first) = request(&socket, "POST", "/v1/embeddings", Some(json!({"input":text})))?;
+        let (status, first) = request(&socket, "POST", "/v1/embeddings", Some(json!({"input":text})), bound)?;
         let data = if status == 200 {
             first
         } else if matches!(status, 400 | 500) {
             let (status, tokenized) = request(&socket, "POST", "/tokenize",
-                Some(json!({"content":text, "add_special":true, "parse_special":false})))?;
+                Some(json!({"content":text, "add_special":true, "parse_special":false})), bound)?;
             let mut tokens: Vec<u32> = serde_json::from_value(tokenized["tokens"].clone())
-                .map_err(|_| "The local search tokenizer returned invalid tokens.")?;
+                .map_err(|_| "The local search tokenizer returned invalid tokens.".to_string())?;
             if status != 200 || tokens.len() <= CONTEXT {
-                return Err("The local search model rejected the input.".into());
+                return Err(LookupError::Input("The local search model rejected the input.".into()));
             }
-            let last = tokens.pop().ok_or("The local search tokenizer returned no tokens.")?;
+            let last = tokens.pop().ok_or_else(|| "The local search tokenizer returned no tokens.".to_string())?;
             tokens.truncate(CONTEXT - 1);
             tokens.push(last);
-            let (status, data) = request(&socket, "POST", "/v1/embeddings", Some(json!({"input":tokens})))?;
+            let (status, data) = request(&socket, "POST", "/v1/embeddings", Some(json!({"input":tokens})), bound)?;
             if status != 200 {
-                return Err("The local search model rejected the bounded input.".into());
+                return Err(LookupError::Input("The local search model rejected the bounded input.".into()));
             }
             data
         } else {
-            return Err("The local search model could not answer.".into());
+            return Err(LookupError::Retry("The local search model could not answer.".into()));
         };
         let mut vector: Vec<f32> = serde_json::from_value(data["data"][0]["embedding"].clone())
-            .map_err(|_| "The local search model returned an invalid vector.")?;
+            .map_err(|_| "The local search model returned an invalid vector.".to_string())?;
         if vector.len() != DIMENSION || vector.iter().any(|n| !n.is_finite()) || vector.iter().all(|n| *n == 0.0) {
-            return Err("The local search model returned an invalid vector.".into());
+            return Err(LookupError::Retry("The local search model returned an invalid vector.".into()));
         }
         richos_search::embed::normalize(&mut vector);
         Ok(vector)
@@ -149,12 +194,12 @@ impl Embedder for ResidentEmbedder {
     }
 }
 
-fn request(socket: &Path, method: &str, endpoint: &str, payload: Option<Value>) -> Result<(u16, Value), String> {
+fn request(socket: &Path, method: &str, endpoint: &str, payload: Option<Value>, bound: Duration) -> Result<(u16, Value), String> {
     let body = payload.map_or_else(Vec::new, |value| value.to_string().into_bytes());
     let unavailable = |_| "The local search model connection is unavailable.".to_string();
     let mut stream = UnixStream::connect(socket).map_err(unavailable)?;
-    stream.set_read_timeout(Some(REQUEST_BOUND)).map_err(unavailable)?;
-    stream.set_write_timeout(Some(REQUEST_BOUND)).map_err(unavailable)?;
+    stream.set_read_timeout(Some(bound)).map_err(unavailable)?;
+    stream.set_write_timeout(Some(bound)).map_err(unavailable)?;
     write!(stream, "{method} {endpoint} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", body.len())
         .map_err(unavailable)?;
     stream.write_all(&body).map_err(unavailable)?;
@@ -181,7 +226,7 @@ mod tests {
     fn bundled_search_model_keeps_a_private_socket_and_bounds_long_inputs() {
         assert!(std::env::var_os("RICHOS_SEARCH_RESOURCES").is_some());
         let model = ResidentEmbedder::bundled().unwrap();
-        let socket = model.directory.socket();
+        let socket = model.running.lock().unwrap().as_ref().unwrap().directory.socket();
         let vectors = model.embed(&[
             "how do I get my money back",
             "Refunds are approved within 30 days",
@@ -194,7 +239,14 @@ mod tests {
         assert_eq!(bounded.len(), DIMENSION);
         assert!((score(&bounded, &bounded) - 1.0).abs() < 1e-4);
         assert!(socket.exists());
-        drop(model);
+
+        model.running.lock().unwrap().as_mut().unwrap().child.kill().unwrap();
+        let recovered = model.one("how do I get my money back").unwrap();
+        assert!(score(&vectors[0], &recovered) > 0.99);
+        let replacement = model.running.lock().unwrap().as_ref().unwrap().directory.socket();
+        assert_ne!(socket, replacement);
         assert!(!socket.exists());
+        drop(model);
+        assert!(!replacement.exists());
     }
 }
