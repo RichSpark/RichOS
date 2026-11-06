@@ -12742,6 +12742,12 @@ body.bug-dock-open .overlay-panel--desk {
 .bugdock-doctor[hidden] {
   display: none;
 }
+/* Once Rich's report card is written the line steps aside, so the card keeps the room it had:
+   it is for the moment a report starts (`tests/bug-report.js` holds the card on top on the
+   smallest screens). */
+#bugdock:has(.bugcard) .bugdock-doctor {
+  display: none;
+}
 .bugdock-form {
   flex: 1;
   display: flex;
