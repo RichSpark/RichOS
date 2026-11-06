@@ -1315,6 +1315,7 @@ const ENTITY_DRAFT_PREFIX = "entity:";
 /// for "land at the newest turn". Consumed by `flushRender` — see below for why it cannot
 /// be applied where it is set.
 let pendingScrollRestore = null;
+let pendingSearchAnchor = null;
 
 function restoreThreadViewState(threadId) {
   inputEl.value = drafts.get(threadId) || "";
@@ -2215,6 +2216,16 @@ function flushRender() {
   } else {
     // Keep the same content under the CEO's eye when something above changed height.
     conversationEl.scrollTop = anchorTop + (conversationEl.scrollHeight - anchorHeight);
+  }
+  if (pendingSearchAnchor && pendingSearchAnchor.ticket !== navTicket) pendingSearchAnchor = null;
+  if (pendingSearchAnchor && pendingSearchAnchor.thread_id === timelineModel.threadId) {
+    const { turn_id, message_id } = pendingSearchAnchor;
+    pendingSearchAnchor = null;
+    const target = window.RichTimeline.searchMessageAnchor(messagesEl, turn_id, message_id);
+    if (target) {
+      followBottom = false;
+      target.scrollIntoView({ block: "center" });
+    }
   }
   updateJumpButton();
   startOrStopTimer();
@@ -8112,6 +8123,8 @@ const searchState = {
   gen: Math.floor(performance.timeOrigin * 1024),
   open: false,
   navHits: [],
+  conversations: null,
+  conversationTimer: null,
   docs: [],
   total: 0,
   resp: null,
@@ -8144,6 +8157,7 @@ function openSearch() {
   searchState.items = [];
   searchState.active = -1;
   searchState.navHits = [];
+  searchState.conversations = null;
   searchState.docs = [];
   searchState.sourceGen = null;
   searchState.status = null;
@@ -8169,6 +8183,7 @@ function closeSearch() {
     searchState.more = null;
   }
   clearTimeout(searchState.statusTimer);
+  clearTimeout(searchState.conversationTimer);
   searchInputEl.setAttribute("aria-expanded", "false");
 }
 
@@ -8271,7 +8286,7 @@ function paintSearchStatus() {
 }
 
 function searchModeLabel(resp) {
-  const folder = searchState.status && searchState.status.folder;
+  const folder = resp?.status?.folder || searchState.status?.folder;
   if (!resp || (folder && folder.state !== "ready")) return "";
   let m = resp.effective.super_finder ? "meaning and words" : "words only";
   if (resp.requested.super_finder && !resp.effective.super_finder) m = "words only, Super Finder unavailable";
@@ -8379,15 +8394,15 @@ function searchWhy(hit) {
   return hit.why;
 }
 
-function searchDocRow(hit, resp) {
+function searchDocRow(hit, resp, kind = "doc") {
   const idx = searchState.items.length;
   // `result-item` like every palette row, so a selector for "the rows" means all of them.
-  const row = searchNode("div", "result-item srch-hit srch-doc");
+  const row = searchNode("div", "result-item srch-hit srch-" + kind);
   row.id = "search-result-" + idx;
   row.setAttribute("role", "option");
   row.tabIndex = -1;
   row.dataset.index = String(idx);
-  row.dataset.key = "d:" + hit.source_id;
+  row.dataset.key = kind + ":" + hit.source_id;
   const top = searchNode("span", "srch-hit-top");
   const title = searchNode("span", "srch-title");
   title.appendChild(searchMarked(hit.title, resp, 0));
@@ -8408,25 +8423,25 @@ function searchDocRow(hit, resp) {
   const btn = searchNode("button", "srch-open-btn");
   btn.type = "button";
   btn.tabIndex = -1;
-  btn.appendChild(document.createTextNode("Open original "));
+  btn.appendChild(document.createTextNode(kind === "doc" ? "Open original " : "Open message "));
   btn.appendChild(searchNode("kbd", null, "⏎"));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    openSearchDocument(idx);
+    activateSearchHit(idx);
   });
   actions.appendChild(btn);
   const fileName = hit.rel_path.split("/").pop();
-  actions.appendChild(searchNode("span", "srch-where", "line " + hit.passage.line + " of " + fileName));
+  actions.appendChild(searchNode("span", "srch-where", kind === "doc" ? "line " + hit.passage.line + " of " + fileName : ""));
   inner.appendChild(actions);
   open.appendChild(inner);
   row.appendChild(open);
   row.setAttribute("aria-label", [hit.title, searchDate(hit.modified_ms), searchWhy(hit), hit.passage.text].join(", "));
   row.addEventListener("click", () => {
-    if (searchState.active === idx) openSearchDocument(idx);
+    if (searchState.active === idx) activateSearchHit(idx);
     else setSearchActive(idx, true);
   });
-  row.addEventListener("dblclick", () => openSearchDocument(idx));
-  searchState.items.push({ key: row.dataset.key, node: row, kind: "doc", hit, resp, passage: hit.passage.text });
+  row.addEventListener("dblclick", () => activateSearchHit(idx));
+  searchState.items.push({ key: row.dataset.key, node: row, kind, hit, resp, passage: hit.passage.text, generation: searchState.gen });
   return row;
 }
 
@@ -8492,6 +8507,7 @@ function renderSearchResults(before) {
   const order = [];
   const byEntity = new Map();
   for (const hit of searchState.navHits) {
+    if (hit.kind === "message" && searchState.conversations?.status?.folder?.state === "ready") continue;
     const key = hit.entity_label;
     if (!byEntity.has(key)) {
       byEntity.set(key, []);
@@ -8515,6 +8531,15 @@ function renderSearchResults(before) {
   } else {
     for (const hit of searchState.docs) frag.appendChild(searchDocRow(hit, resp));
     frag.appendChild(searchTail());
+  }
+  const conversations = searchState.conversations;
+  if (conversations && (conversations.hits.length || conversations.status.folder.state === "loading")) {
+    const group = searchNode("div", "result-group srch-group");
+    group.appendChild(searchNode("span", null, "Conversations"));
+    group.appendChild(searchNode("span", "srch-group-mode", searchModeLabel(conversations)));
+    frag.appendChild(group);
+    if (!conversations.hits.length) frag.appendChild(searchNote("Reading conversations…"));
+    for (const hit of conversations.hits) frag.appendChild(searchDocRow(hit, conversations, "message"));
   }
   searchResultsEl.textContent = "";
   searchResultsEl.appendChild(frag);
@@ -8565,7 +8590,7 @@ function setSearchActive(i, scroll) {
   if (old) {
     old.node.classList.remove("is-active");
     old.node.setAttribute("aria-selected", "false");
-    if (old.kind === "doc") {
+    if (old.kind !== "nav") {
       old.node.querySelector(".srch-open-btn").tabIndex = -1;
       const p = old.node.querySelector(".srch-passage");
       p.textContent = "";
@@ -8581,7 +8606,7 @@ function setSearchActive(i, scroll) {
   it.node.classList.add("is-active");
   it.node.setAttribute("aria-selected", "true");
   searchInputEl.setAttribute("aria-activedescendant", it.node.id);
-  if (it.kind === "doc") {
+  if (it.kind !== "nav") {
     const p = it.node.querySelector(".srch-passage");
     p.textContent = "";
     p.appendChild(searchMarked(it.passage, it.resp, 0));
@@ -8595,6 +8620,7 @@ function setSearchActive(i, scroll) {
 async function runSearch(animate) {
   const gen = ++searchState.gen;
   const query = searchInputEl.value.trim();
+  clearTimeout(searchState.conversationTimer);
   if (searchState.more) {
     searchState.more.disconnect();
     searchState.more = null;
@@ -8622,6 +8648,7 @@ async function runSearch(animate) {
   if (gen !== searchState.gen || !searchState.open) return;
   const before = animate ? searchSnapshot() : null;
   searchState.navHits = nav || [];
+  searchState.conversations = null;
   searchState.resp = docs;
   searchState.sourceGen = docs && docs.status ? docs.status.generation : null;
   if (docs?.status && docs.status.generation > (searchState.status?.generation ?? -1)) {
@@ -8639,6 +8666,25 @@ async function runSearch(animate) {
   const ms = Math.round(performance.now() - started);
   searchCountEl.textContent = (n ? n + (n === 1 ? " result" : " results") + " · " : "") + ms + " ms";
   searchCountEl.classList.remove("is-empty");
+  void loadSearchConversations(request, gen);
+}
+
+async function loadSearchConversations(request, generation) {
+  const response = await Bridge.invoke("search_conversations", { request, generation }).catch(() => null);
+  if (!response || generation !== searchState.gen || !searchState.open) return;
+  searchState.conversations = response;
+  const scroll = searchResultsEl.scrollTop;
+  renderSearchResults(null);
+  searchResultsEl.scrollTop = scroll;
+  const documents = searchState.total;
+  const navigation = searchState.navHits.filter((hit) => hit.kind !== "message" || response.status.folder.state !== "ready").length;
+  const results = documents + navigation + response.hits.length;
+  const ms = searchCountEl.textContent.split(" · ").pop();
+  searchCountEl.textContent = (results ? results + (results === 1 ? " result" : " results") + " · " : "") + ms;
+  const meaning = response.status.meaning.state;
+  if (response.status.folder.state === "loading" || (request.super_finder && ["starting", "indexing"].includes(meaning))) {
+    searchState.conversationTimer = setTimeout(() => loadSearchConversations(request, generation), 1000);
+  }
 }
 
 /// The next page of documents, when the end of the list comes into view.
@@ -8702,8 +8748,9 @@ function watchSearchTail() {
         frag.appendChild(row);
         searchState.docs.push(hit);
       });
+      frag.appendChild(searchTail());
       if (old) old.replaceWith(frag);
-      searchResultsEl.appendChild(searchTail());
+      else searchResultsEl.appendChild(frag);
       watchSearchTail();
     },
     { root: searchResultsEl, rootMargin: "0px 0px 80px 0px" }
@@ -8729,6 +8776,25 @@ async function activateSearchHit(index) {
   if (!it) return;
   if (it.kind === "doc") {
     openSearchDocument(index);
+    return;
+  }
+  if (it.kind === "message") {
+    const generation = searchState.gen;
+    if (it.generation !== generation) return;
+    const anchor = await Bridge.invoke("resolve_search_message", { sourceId: it.hit.source_id }).catch(() => null);
+    if (generation !== searchState.gen || !searchState.open) return;
+    if (!anchor) {
+      it.node.querySelector(".srch-where").textContent = "This message changed since you searched.";
+      return;
+    }
+    closeSearch();
+    const opening = openThread(anchor.thread_id);
+    const ticket = navTicket;
+    await opening;
+    if (ticket === navTicket && activeThreadId === anchor.thread_id) {
+      pendingSearchAnchor = { ...anchor, ticket };
+      scheduleRender();
+    }
     return;
   }
   const hit = it.hit;

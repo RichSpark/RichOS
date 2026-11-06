@@ -315,6 +315,41 @@ async function main() {
       return "12 documents after a gone first page; an all-gone list says No documents match.";
     });
 
+    await run.check("a conversation result opens the exact message in its own thread", async () => {
+      const p = await openApp(browser, { documentSearch: "none" });
+      await p.evaluate(async () => {
+        const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+        const timeline = await invoke("get_timeline", { threadId: "acme" });
+        const target = timeline.items.find((item) => item.kind === "rich_message" && item.text.includes("holding at list"));
+        if (!target) throw new Error("The Acme search fixture has no target message");
+        const anchor = { thread_id: "acme", turn_id: target.turnId, message_id: target.id };
+        const locate = window.RichTimeline.searchMessageAnchor;
+        window.RichTimeline.searchMessageAnchor = (container, turnId, messageId) => {
+          const node = locate(container, turnId, messageId);
+          if (node && turnId === anchor.turn_id && messageId === anchor.message_id) {
+            document.documentElement.dataset.searchJump = node.dataset.messageId;
+          }
+          return node;
+        };
+        window.RichBridge.invoke = async (cmd, args) => {
+          if (cmd === "resolve_search_message") return args.sourceId === target.id ? anchor : null;
+          if (cmd !== "search_conversations") return invoke(cmd, args);
+          return {
+            requested: args.request, effective: args.request, words: [], spans: [],
+            status: { folder: { state: "ready" }, meaning: { state: "ready" } },
+            hits: [{ source_id: target.id, title: "Acme", rel_path: "Acme", why: "meaning", exact: [],
+              passage: { heading: "", text: target.text, line: 1 } }],
+          };
+        };
+      });
+      await p.fill("#search-input", "negotiated discount");
+      await p.waitForSelector(".srch-message");
+      await p.locator(".srch-message").dblclick();
+      await waitFor(p, "the Acme message was never located", () => !!document.documentElement.dataset.searchJump);
+      assertEqual(p.__errors.length, 0, p.__errors.join("\n"));
+      await p.close();
+    });
+
     for (const [preset, line, mode] of [
       ["unavailable", "Super Finder unavailable; showing text matches", "words only, Super Finder unavailable"],
       ["none", "No search folder configured", ""],

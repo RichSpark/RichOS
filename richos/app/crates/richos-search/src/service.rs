@@ -67,6 +67,16 @@ const INDEX_WRITE_BATCH: usize = 32;
 pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type Grant = Box<dyn Fn() -> bool + Send + Sync>;
+type ReadProjection = dyn Fn(&dyn Fn() -> bool) -> Result<Vec<Arc<Document>>, String> + Send + Sync;
+type WaitForProjection = dyn Fn(std::time::Duration) -> bool + Send + Sync;
+
+/// A host-authorized source whose truth is a projection rather than a file tree.
+/// The host revalidates the selected records against its live authority at query time.
+pub struct ProjectionSource {
+    pub index_key: PathBuf,
+    pub read: Box<ReadProjection>,
+    pub wait_for_change: Box<WaitForProjection>,
+}
 /// Local relevance scores for the already retrieved sources, in candidate order.
 pub type Reranker = Arc<ScorePassages>;
 type ScorePassages = dyn Fn(&str, &[String], &dyn Fn() -> bool) -> Option<Vec<f32>> + Send + Sync;
@@ -147,6 +157,8 @@ pub struct PassageView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DocHit {
     pub source_id: String,
+    #[serde(skip_serializing)]
+    pub revision: String,
     pub title: String,
     /// Path inside the search folder, for display.
     pub rel_path: String,
@@ -276,6 +288,7 @@ struct SearchableCorpus {
 
 struct Inner {
     config: Config,
+    projection: Option<ProjectionSource>,
     metadata: Option<MetadataSource>,
     reranker: Option<Reranker>,
     corpus: RwLock<Option<Arc<SearchableCorpus>>>,
@@ -347,9 +360,26 @@ impl SearchService {
         grant: Option<Grant>,
         before_index: impl FnOnce() + Send + 'static,
     ) -> Self {
+        Self::start_source(config, None, metadata, reranker, grant, before_index)
+    }
+
+    pub fn start_projection(config: Config, source: ProjectionSource, reranker: Option<Reranker>) -> Self {
+        Self::start_source(config, Some(source), None, reranker, None, || {})
+    }
+
+    fn start_source(
+        config: Config,
+        projection: Option<ProjectionSource>,
+        metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
+        grant: Option<Grant>,
+        before_index: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        let loading = config.root.is_some() || projection.is_some();
         let service = SearchService(Arc::new(Inner {
-            folder: RwLock::new(if config.root.is_some() { FolderStatus::Loading } else { FolderStatus::None }),
+            folder: RwLock::new(if loading { FolderStatus::Loading } else { FolderStatus::None }),
             config,
+            projection,
             metadata,
             reranker,
             corpus: RwLock::new(None),
@@ -459,6 +489,10 @@ impl SearchService {
     }
 
     fn run(&self, mut rebuild: bool, before_index: impl FnOnce()) {
+        if let Some(source) = &self.0.projection {
+            self.run_projection(source);
+            return;
+        }
         let Some(root) = self.0.config.root.clone() else { return };
         let metadata = self.0.metadata.as_ref();
         let changes = metadata.map(|source| (source.watch)());
@@ -546,6 +580,62 @@ impl SearchService {
                     self.0.retry_model_requested.store(retry_after.is_some(), Ordering::Release);
                 }
             }
+        }
+    }
+
+    fn run_projection(&self, source: &ProjectionSource) {
+        let stopped = || self.stopping();
+        let mut previous: Option<Arc<Corpus>> = None;
+        let mut writer = None;
+        let mut retry_after = None;
+        let mut refresh = true;
+        while !stopped() {
+            if refresh {
+                match (source.read)(&stopped) {
+                    Ok(mut docs) if !stopped() => {
+                        docs.sort_unstable_by(|a, b| a.rel_path.cmp(&b.rel_path));
+                        let corpus = Arc::new(Corpus { root: source.index_key.clone(), docs, ..Corpus::default() });
+                        if let Some(lexical) = rank::LexicalIndex::build(&corpus, stopped) {
+                            self.publish_corpus(SearchableCorpus { corpus: corpus.clone(), lexical: Arc::new(lexical), positions: None });
+                            if let Some(old) = previous.replace(corpus.clone()) {
+                                let changes = projection_updates(&old, &corpus);
+                                if let Some(failure) = self.update_media_index(&mut writer, &changes) {
+                                    retry_after = self.index_failed(failure);
+                                }
+                            }
+                        }
+                    }
+                    Err(message) if !stopped() => {
+                        writer = None;
+                        previous = None;
+                        *self.0.corpus.write().unwrap() = None;
+                        *self.0.folder.write().unwrap() = FolderStatus::Error { message: message.clone() };
+                        self.meaning_failed(message);
+                    }
+                    _ => break,
+                }
+            }
+            if writer.is_none() && retry_after.is_none_or(|due| Instant::now() >= due) {
+                match previous.as_ref() {
+                    Some(corpus) if corpus.docs.is_empty() => {
+                        self.set_meaning(MeaningStatus::Ready { files: 0, passages: 0 });
+                    }
+                    Some(corpus) => {
+                        let access = self.0.access.lock().unwrap();
+                        *self.0.meaning.write().unwrap() = None;
+                        drop(access);
+                        match self.build_meaning(&mut false, corpus, &HashSet::new()) {
+                            Ok(index) => { writer = index; retry_after = None; }
+                            Err(failure) => {
+                                retry_after = self.index_failed(failure).or_else(|| Some(Instant::now() + MODEL_RETRY_COOLDOWN));
+                            }
+                        }
+                    }
+                    None => {}
+                }
+            }
+            self.0.initial_ready();
+            refresh = (source.wait_for_change)(BUSY_YIELD);
         }
     }
 
@@ -872,6 +962,27 @@ impl SearchService {
     }
 
     pub fn search_while_current(&self, request: &SearchRequest, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
+        self.search_checked(request, obsolete, &|root, document| {
+            self.0.projection.is_none() && still_current(root, document)
+        })
+    }
+
+    pub fn search_projection(
+        &self,
+        request: &SearchRequest,
+        obsolete: &dyn Fn() -> bool,
+        current: &dyn Fn(&Document) -> bool,
+    ) -> Option<SearchResponse> {
+        self.0.projection.as_ref()?;
+        self.search_checked(request, obsolete, &|_, document| current(document))
+    }
+
+    fn search_checked(
+        &self,
+        request: &SearchRequest,
+        obsolete: &dyn Fn() -> bool,
+        current: &dyn Fn(&Path, &Document) -> bool,
+    ) -> Option<SearchResponse> {
         let started = Instant::now();
         if obsolete() { return None; }
         let _access = self.0.access.lock().unwrap();
@@ -974,7 +1085,7 @@ impl SearchService {
                 break;
             }
             let doc = &corpus.docs[row.doc];
-            if !still_current(&corpus.root, doc) {
+            if !current(&corpus.root, doc) {
                 response.dropped += 1;
                 continue;
             }
@@ -1029,6 +1140,22 @@ impl SearchService {
         }
         Ok(path)
     }
+}
+
+fn projection_updates(old: &Corpus, new: &Corpus) -> Vec<MediaUpdate> {
+    let mut updates = Vec::new();
+    for doc in &new.docs {
+        let changed = old.position(&doc.rel_path).is_none_or(|i| old.docs[i].hash != doc.hash);
+        if changed {
+            updates.push(MediaUpdate { path: doc.rel_path.clone(), doc: Ok(Some(doc.clone())) });
+        }
+    }
+    for doc in &old.docs {
+        if new.position(&doc.rel_path).is_none() {
+            updates.push(MediaUpdate { path: doc.rel_path.clone(), doc: Ok(None) });
+        }
+    }
+    updates
 }
 
 type QueryStages = Vec<(&'static str, f64)>;
@@ -1306,6 +1433,7 @@ fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, p: usize) -> 
     };
     DocHit {
         source_id: doc.id.clone(),
+        revision: doc.hash.clone(),
         title: doc.title.clone(),
         rel_path: doc.rel_path.clone(),
         modified_ms: doc.modified_ms,

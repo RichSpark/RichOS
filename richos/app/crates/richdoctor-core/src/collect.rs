@@ -663,7 +663,7 @@ pub fn search_timing_lines(text: &str) -> Vec<(u64, String)> {
         let stages = record["stages"].as_array()?.iter().take(24).filter_map(|stage| {
             let name = stage[0].as_str()?;
             let ms = stage[1].as_f64()?;
-            matches!(name, "lock" | "lexical" | "embedding" | "nearest" | "passage_selection" | "reranker" | "total")
+            matches!(name, "lock" | "lexical" | "embedding" | "nearest" | "passage_selection" | "reranker" | "total" | "conversations")
                 .then(|| format!("{name}={ms:.1}ms"))
         }).collect::<Vec<_>>().join(" ");
         Some((at, format!("{} build={build} query={operation} mode={mode} response={total:.1}ms {stages}", crate::util::utc_stamp(at))))

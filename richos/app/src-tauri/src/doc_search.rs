@@ -20,8 +20,9 @@
 use richos_search::corpus::MetadataSource;
 use richos_search::embed::Embedder;
 use richos_search::service::{Busy, Config, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
+use richos_core::{entity::PersonId, read_view::{ReadView, SpineReader, SpineView}, timeline::Timeline};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 
 #[derive(PartialEq, Eq)]
 struct Location {
@@ -91,6 +92,7 @@ pub struct DocumentSearch {
     retire: mpsc::Sender<RetiredService>,
     closed: std::sync::atomic::AtomicBool,
     palette_generation: std::sync::atomic::AtomicU64,
+    conversations: OnceLock<SearchService>,
 }
 
 impl DocumentSearch {
@@ -127,6 +129,7 @@ impl DocumentSearch {
             retire,
             closed: std::sync::atomic::AtomicBool::new(false),
             palette_generation: std::sync::atomic::AtomicU64::new(0),
+            conversations: OnceLock::new(),
         })
     }
 
@@ -197,6 +200,9 @@ impl DocumentSearch {
         let active = self.active.lock().unwrap();
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
         active.service.request_stop();
+        if let Some(service) = self.conversations.get() {
+            service.shutdown();
+        }
         let (done, retired) = mpsc::channel();
         if self.retire.send((active.service.clone(), done)).is_ok() {
             drop(active);
@@ -280,6 +286,117 @@ fn make_embedder() -> Result<Box<dyn Embedder>, String> {
 /// The most results one palette request returns; the palette asks for twelve at a time as the
 /// list scrolls (design round 26), never with page controls.
 pub const PAGE: usize = 12;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct MessageAnchor {
+    thread_id: String,
+    turn_id: String,
+    message_id: String,
+}
+
+impl MessageAnchor {
+    fn current(&self, view: &ReadView) -> Option<(String, String)> {
+        let ledger = view.ledger();
+        let binding = ledger.thread_binding(&self.thread_id).ok()?;
+        if binding.person_id() != &PersonId::default_ceo() { return None; }
+        let thread = ledger.threads().iter().find(|thread| thread.id == self.thread_id)?;
+        let message = Timeline::committed_search_turn(ledger, &binding, &self.turn_id).ok()?
+            .into_iter().find(|message| message.message_id == self.message_id)?;
+        let label = view.entity_registry().get(binding.entity_id())
+            .map(|entity| entity.display_name.clone()).unwrap_or_default();
+        Some((richos_search::corpus::record_revision(&thread.title, &message.text), label))
+    }
+}
+
+pub fn resolve_search_message(reader: &SpineReader, token: &str) -> Option<MessageAnchor> {
+    let (anchor, revision): (MessageAnchor, String) = serde_json::from_str(token).ok()?;
+    let (current, _) = anchor.current(&reader.snapshot())?;
+    (current == revision).then_some(anchor)
+}
+
+fn conversation_projection(reader: SpineReader) -> richos_search::service::ProjectionSource {
+    let changes = Mutex::new(reader.watch_search_turns());
+    richos_search::service::ProjectionSource {
+        index_key: PathBuf::from("richfinder-native-conversations-v1"),
+        read: Box::new(move |stopped| {
+            use richos_search::corpus::Document;
+            let view = reader.snapshot();
+            let mut documents = Vec::new();
+            Timeline::visit_committed_search_messages(view.ledger(), &PersonId::default_ceo(), None, |binding, title, message| {
+                if stopped() { return false; }
+                let anchor = MessageAnchor {
+                    thread_id: binding.thread_id().into(),
+                    turn_id: message.turn_id,
+                    message_id: message.message_id,
+                };
+                let key = serde_json::to_string(&anchor).expect("serializing a search anchor");
+                documents.push(Arc::new(Document::from_record(&key, title, message.text, message.at)));
+                true
+            });
+            Ok(documents)
+        }),
+        wait_for_change: Box::new(move |timeout| {
+            let changes = changes.lock().unwrap();
+            let received = changes.events.recv_timeout(timeout).is_ok();
+            let drained = changes.events.try_iter().count() != 0;
+            let overflow = changes.take_rescan();
+            received || drained || overflow
+        }),
+    }
+}
+
+impl DocumentSearch {
+    fn project(&self, source: richos_search::service::ProjectionSource) -> SearchService {
+        let factory = self.make_embedder.clone();
+        SearchService::start_projection(Config {
+            root: None,
+            cache: (self.location)().cache,
+            make_embedder: Box::new(move || factory()),
+            busy: self.busy.clone(),
+            tuning: Tuning::default(),
+        }, source, self.reranker.clone())
+    }
+
+    fn palette_obsolete(&self, generation: u64) -> bool {
+        use std::sync::atomic::Ordering;
+        self.closed.load(Ordering::Acquire) || self.palette_generation.load(Ordering::Relaxed) > generation
+    }
+}
+
+pub fn search_conversations(
+    service: &DocumentSearch, reader: &SpineReader, mut request: SearchRequest, generation: u64,
+) -> Option<SearchResponse> {
+    let started = std::time::Instant::now();
+    cancel_palette(service, generation);
+    let obsolete = || service.palette_obsolete(generation);
+    if obsolete() { return None; }
+    let pool = service.conversations.get_or_init(|| service.project(conversation_projection(reader.clone())));
+    if obsolete() {
+        if service.closed.load(std::sync::atomic::Ordering::Acquire) { pool.request_stop(); }
+        return None;
+    }
+    request.offset = 0;
+    request.limit = request.limit.clamp(1, PAGE);
+    let (response, mut stages) = richos_search::service::capture_query_stages(|| {
+        let mut response = pool.search_projection(&request, &obsolete, &|document| {
+            serde_json::from_str::<MessageAnchor>(&document.rel_path).ok()
+                .and_then(|anchor| anchor.current(&reader.snapshot())).is_some_and(|(revision, _)| revision == document.hash)
+        })?;
+        let view = reader.snapshot();
+        response.hits.retain_mut(|hit| {
+            let Ok(anchor) = serde_json::from_str::<MessageAnchor>(&hit.rel_path) else { return false };
+            let Some((revision, label)) = anchor.current(&view) else { return false };
+            if revision != hit.revision { return false; }
+            hit.source_id = serde_json::to_string(&(anchor, revision)).expect("serializing a search result");
+            hit.rel_path = label;
+            true
+        });
+        (!obsolete()).then_some(response)
+    });
+    stages.push(("conversations", started.elapsed().as_secs_f64() * 1_000.0));
+    crate::search_diagnostics::record(request.super_finder, response.as_ref(), started.elapsed(), &stages);
+    response
+}
 
 #[cfg(test)]
 pub fn search(service: &DocumentSearch, request: SearchRequest) -> SearchResponse {
@@ -467,6 +584,47 @@ mod tests {
     use super::*;
     use richos_core::search_tools::{Ask, SearchAnswer, MAX_EXCERPT_CHARS};
     use richos_search::embed::ConceptEmbedder;
+
+    #[test]
+    fn conversation_search_finds_the_committed_message_by_meaning_and_refuses_a_superseded_anchor() {
+        use richos_core::{entity::EntityId, ledger::{Ledger, Source}, spine::Spine};
+        let base = std::env::temp_dir().join(richos_core::util::new_id("search-conversations"));
+        std::fs::create_dir_all(&base).unwrap();
+        let ledger_path = base.join("ledger.jsonl");
+        let mut ledger = Ledger::open(&ledger_path).unwrap();
+        let entity = EntityId::parse("fixture").unwrap();
+        let thread = ledger.create_thread("Club notes", &entity).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let turn = ledger.record_prompt_received(&binding, "A member asked for a refund.", Source::Text).unwrap();
+        ledger.complete_turn(&turn, "done").unwrap();
+        let mut spine = Spine::new(ledger);
+        let reader = spine.reader();
+        let cache = base.join("cache");
+        let service = DocumentSearch::new(
+            move || Location { root: Ok(None), cache: Ok(cache.clone()) },
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None, None, None,
+        );
+        let request = SearchRequest { query: "chargeback".into(), super_finder: true, strict: false, offset: 0, limit: 6 };
+        let _initial = search_conversations(&service, &reader, request.clone(), 1);
+        service.conversations.get().unwrap().wait_idle();
+        let results = search_conversations(&service, &reader, request.clone(), 2).unwrap();
+        assert!(results.effective.super_finder);
+        assert_eq!(results.hits.len(), 1);
+        assert!(results.hits[0].passage.text.contains("refund"));
+        let token = &results.hits[0].source_id;
+        assert_eq!(resolve_search_message(&reader, token).unwrap().turn_id, turn);
+        assert!(search_conversations(&service, &reader, SearchRequest { super_finder: false, ..request }, 3).unwrap().hits.is_empty());
+        service.shutdown();
+        drop(spine);
+        let mut ledger = Ledger::open(ledger_path).unwrap();
+        let revised = ledger.record_prompt_received(&binding, "I withdrew the request.", Source::Text).unwrap();
+        ledger.complete_turn(&revised, "done").unwrap();
+        ledger.mark_turn_superseded(&turn, &revised).unwrap();
+        let current = Spine::new(ledger).reader();
+        assert!(resolve_search_message(&current, token).is_none());
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     /// The stand-in folder (ten files) plus `extra` more notes that all mention refunds.
     fn standin(name: &str, with_model: bool, extra: usize) -> (Arc<DocumentSearch>, PathBuf) {

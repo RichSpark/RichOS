@@ -4108,6 +4108,8 @@ fn main() {
             codex_reviews_set,
             // --- document search (search PRD v3.1, 2026-10-13) — appended, never reordered ---
             search_documents,
+            search_conversations,
+            resolve_search_message,
             search_documents_status,
             cancel_search_documents,
             open_search_document,
@@ -6913,6 +6915,16 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
 #[richos_command::command]
 fn search_documents(state: State<AppState>, request: richos_search::SearchRequest, generation: Option<u64>) -> Option<richos_search::SearchResponse> {
     doc_search::search_palette(&state.search, request, generation)
+}
+
+#[richos_command::command]
+fn search_conversations(state: State<AppState>, request: richos_search::SearchRequest, generation: u64) -> Option<richos_search::SearchResponse> {
+    doc_search::search_conversations(&state.search, &state.reader, request, generation)
+}
+
+#[richos_command::command]
+fn resolve_search_message(state: State<AppState>, source_id: String) -> Option<doc_search::MessageAnchor> {
+    doc_search::resolve_search_message(&state.reader, &source_id)
 }
 
 #[richos_command::command]
