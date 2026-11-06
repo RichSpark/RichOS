@@ -668,6 +668,8 @@ impl SearchService {
 
     fn write_media(&self, writer: &mut IndexWriter, updates: &[MediaUpdate]) -> Result<(), String> {
         let IndexWriter { meaning, manifest, dir } = writer;
+        let stopping = || self.background_stopping();
+        let mut bulk_indexer = meaning.embedder.bulk_indexer();
         for update in updates {
             if self.background_stopping() {
                 return Ok(());
@@ -716,7 +718,12 @@ impl SearchService {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = if let Some(index) = &mut bulk_indexer {
+                        index(&text, &stopping)?
+                    } else {
+                        meaning.embedder.embed_for_index(&[&text], &stopping)?
+                            .pop().ok_or("The embedding model returned nothing.")?
+                    };
                     if self.background_stopping() {
                         return Ok(());
                     }
