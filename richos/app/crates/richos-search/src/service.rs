@@ -211,9 +211,14 @@ struct CachedRanking {
     query_vector: Option<Vec<f32>>,
 }
 
+struct SearchableCorpus {
+    corpus: Corpus,
+    lexical: rank::LexicalIndex,
+}
+
 struct Inner {
     config: Config,
-    corpus: RwLock<Option<Arc<Corpus>>>,
+    corpus: RwLock<Option<Arc<SearchableCorpus>>>,
     folder: RwLock<FolderStatus>,
     meaning_status: RwLock<MeaningStatus>,
     meaning: RwLock<Option<Arc<Meaning>>>,
@@ -362,13 +367,14 @@ impl SearchService {
         let Some(root) = self.0.config.root.clone() else { return };
         match corpus::load_until_stopped(&root, || self.background_stopping()) {
             Ok(Some(c)) => {
+                let Some(lexical) = rank::LexicalIndex::build(&c, || self.background_stopping()) else { return };
                 *self.0.folder.write().unwrap() = FolderStatus::Ready {
                     files: c.docs.len(),
                     passages: c.passage_count(),
                     skipped: c.skipped.len(),
                     links_skipped: c.links_skipped,
                 };
-                *self.0.corpus.write().unwrap() = Some(Arc::new(c));
+                *self.0.corpus.write().unwrap() = Some(Arc::new(SearchableCorpus { corpus: c, lexical }));
                 self.bump();
             }
             Ok(None) => return,
@@ -390,7 +396,8 @@ impl SearchService {
     }
 
     fn build_meaning(&self, rebuild: bool) -> Result<(), String> {
-        let corpus = self.0.corpus.read().unwrap().clone().ok_or("The folder was not read.")?;
+        let snapshot = self.0.corpus.read().unwrap().clone().ok_or("The folder was not read.")?;
+        let corpus = &snapshot.corpus;
         let cache = self.0.config.cache.clone()?;
         let embedder = (self.0.config.make_embedder)()?;
         if self.background_stopping() {
@@ -550,10 +557,11 @@ impl SearchService {
             words: parsed.words.clone(),
             elapsed_ms: 0.0,
         };
-        let Some(corpus) = corpus else {
+        let Some(snapshot) = corpus else {
             response.empty = Some(Empty::NoFolder);
             return finish(response, started);
         };
+        let corpus = &snapshot.corpus;
         if parsed.is_empty() {
             response.empty = Some(Empty::NoQuery);
             return finish(response, started);
@@ -572,7 +580,7 @@ impl SearchService {
         let ranked = match cached {
             Some(r) => r,
             None => {
-                let lexical = rank::lexical(&corpus, &parsed, request.strict);
+                let lexical = snapshot.lexical.search(corpus, &parsed, request.strict);
                 let semantic = meaning.as_ref().map(|m| semantic_hits(m, &request.query, &self.0.config.tuning));
                 let (semantic, query_vector) = match semantic {
                     Some(Ok((hits, query_vector))) => (Some(hits), Some(query_vector)),
@@ -584,7 +592,7 @@ impl SearchService {
                     None => (None, None),
                 };
                 let ranked = Arc::new(CachedRanking {
-                    rows: rank::rank(&corpus, &parsed, request.strict, &lexical, semantic.as_deref()),
+                    rows: rank::rank(corpus, &parsed, request.strict, &lexical, semantic.as_deref()),
                     query_vector,
                 });
                 if response.effective.super_finder == effective.super_finder {
@@ -648,7 +656,8 @@ impl SearchService {
         if self.stopping() {
             return Err("That document is not in the search folder.".into());
         }
-        let corpus = self.0.corpus.read().unwrap().clone().ok_or("No search folder is configured.")?;
+        let snapshot = self.0.corpus.read().unwrap().clone().ok_or("No search folder is configured.")?;
+        let corpus = &snapshot.corpus;
         let doc = corpus.docs.iter().find(|d| d.id == source_id).ok_or("That document is not in the search folder.")?;
         let path = corpus::resolve_inside(&corpus.root, &doc.rel_path)?;
         let bytes = std::fs::read(&path).map_err(|_| "That document could not be read.".to_string())?;
