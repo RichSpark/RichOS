@@ -4172,6 +4172,9 @@ fn main() {
             git_name_host::git_name_save,
             git_name_host::git_name_use_richos,
             git_name_host::git_name_open_file,
+            search_folder_preferences,
+            set_search_folder_mode,
+            reindex_search_folders,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -6924,6 +6927,28 @@ fn cancel_search_documents(state: State<AppState>, generation: u64) {
 #[richos_command::command]
 fn search_documents_status(state: State<AppState>) -> richos_search::Status {
     doc_search::status(&state.search)
+}
+
+#[richos_command::command]
+fn search_folder_preferences(state: State<AppState>) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    let preferences = state.config.lock().unwrap().search_folders().map_err(|e| e.to_string())?;
+    Ok(state.search.current_folder_preferences(preferences))
+}
+
+#[richos_command::command]
+fn set_search_folder_mode(state: State<AppState>, mode: richos_core::config::SearchFolderMode) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    let mut config = state.config.lock().unwrap();
+    let saved = config.search_folders().map_err(|e| e.to_string())?;
+    let mut preferences = state.search.current_folder_preferences(saved);
+    preferences.mode = mode;
+    config.set_search_folders(&preferences).map_err(|e| e.to_string())?;
+    state.search.apply_folder_preferences(preferences.clone());
+    Ok(preferences)
+}
+
+#[richos_command::command]
+fn reindex_search_folders(state: State<AppState>) -> richos_search::Status {
+    state.search.reindex_folders()
 }
 
 /// **Open original**: a source ID from the renderer, resolved and revalidated by the host, and

@@ -22,20 +22,48 @@ use richos_search::embed::Embedder;
 use richos_core::config::{SearchFolderMode, SearchFolderPreferences};
 use richos_search::service::{Busy, Config, FolderSetConfig, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(PartialEq, Eq)]
 struct Location {
     root: Result<Option<PathBuf>, String>,
     cache: Result<PathBuf, String>,
     folders: Option<FolderSetConfig>,
+    reindex: u64,
 }
 
+#[derive(Clone)]
 enum FolderChoice {
     Pilot,
     Off,
     Selected(FolderSetConfig),
     Unreadable,
+}
+
+struct FolderControls {
+    home: PathBuf,
+    data_dir: PathBuf,
+    choice: RwLock<FolderChoice>,
+    reindex: AtomicU64,
+}
+
+impl FolderControls {
+    fn new(home: &Path, data_dir: &Path, preferences: std::io::Result<Option<SearchFolderPreferences>>) -> Self {
+        Self {
+            home: home.to_path_buf(),
+            data_dir: data_dir.to_path_buf(),
+            choice: RwLock::new(FolderChoice::from_preferences(home, data_dir, preferences)),
+            reindex: AtomicU64::new(0),
+        }
+    }
+
+    fn locate(&self, settings: Result<richos_core::machine_settings::Settings, String>) -> Location {
+        let choice = self.choice.read().unwrap().clone();
+        let mut location = Location::from_settings(&self.home, settings, &choice);
+        location.reindex = self.reindex.load(Ordering::SeqCst);
+        location
+    }
 }
 
 impl FolderChoice {
@@ -68,9 +96,9 @@ impl Location {
                     FolderChoice::Selected(folders) => (Ok(None), Some(folders.clone())),
                     FolderChoice::Unreadable => (Err("Search folder settings could not be read.".into()), None),
                 };
-                Self { root, folders, cache: s.cache(home, "search") }
+                Self { root, folders, cache: s.cache(home, "search"), reindex: 0 }
             }
-            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()), folders: None },
+            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()), folders: None, reindex: 0 },
         }
     }
 }
@@ -121,6 +149,7 @@ pub struct DocumentSearch {
     busy: Option<Busy>,
     metadata: Option<MetadataSource>,
     reranker: Option<Reranker>,
+    folder_controls: Option<Arc<FolderControls>>,
     retire: mpsc::Sender<RetiredService>,
     closed: std::sync::atomic::AtomicBool,
     palette_generation: std::sync::atomic::AtomicU64,
@@ -133,6 +162,7 @@ impl DocumentSearch {
         busy: Option<Busy>,
         metadata: Option<MetadataSource>,
         reranker: Option<Reranker>,
+        folder_controls: Option<Arc<FolderControls>>,
     ) -> Arc<Self> {
         let location: Locate = Arc::new(location);
         let make_embedder: EmbedderFactory = Arc::new(make_embedder);
@@ -157,10 +187,44 @@ impl DocumentSearch {
             busy,
             metadata,
             reranker,
+            folder_controls,
             retire,
             closed: std::sync::atomic::AtomicBool::new(false),
             palette_generation: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// Called only after the app has saved a user's choice.
+    pub fn apply_folder_preferences(&self, preferences: SearchFolderPreferences) {
+        if let Some(controls) = &self.folder_controls {
+            let choice = FolderChoice::from_preferences(&controls.home, &controls.data_dir, Ok(Some(preferences)));
+            *controls.choice.write().unwrap() = choice;
+            self.current();
+        }
+    }
+
+    pub fn current_folder_preferences(&self, saved: Option<SearchFolderPreferences>) -> SearchFolderPreferences {
+        if let Some(saved) = saved {
+            return saved;
+        }
+        let active = self.current();
+        if let Ok(Some(root)) = &active.location.root {
+            return SearchFolderPreferences {
+                mode: SearchFolderMode::Chosen,
+                chosen: vec![root.clone()],
+                ..SearchFolderPreferences::default()
+            };
+        }
+        SearchFolderPreferences::default()
+    }
+
+    /// Replace the current service without blocking on its old worker. The new
+    /// service can read files at once and waits to take exclusive index ownership.
+    pub fn reindex_folders(&self) -> Status {
+        if let Some(controls) = &self.folder_controls {
+            controls.reindex.fetch_add(1, Ordering::SeqCst);
+        }
+        status(self)
     }
 
     fn build(
@@ -206,6 +270,7 @@ impl DocumentSearch {
         let (done, retired) = mpsc::channel();
         self.retire.send((active.service.clone(), done)).expect("search cleanup thread stopped");
         let state = match (&location.root, &location.folders) {
+            _ if active.location.reindex != location.reindex => "reindex",
             (Err(_), _) => "unreadable",
             (Ok(Some(_)), _) => "changed",
             (Ok(None), Some(folders)) if !folders.selected.is_empty() => "changed",
@@ -262,8 +327,8 @@ impl DocumentSearch {
 
 pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy, preferences: std::io::Result<Option<SearchFolderPreferences>>) -> Arc<DocumentSearch> {
     crate::search_diagnostics::init(data_dir);
-    let choice = FolderChoice::from_preferences(home, data_dir, preferences);
-    let home = home.to_path_buf();
+    let controls = Arc::new(FolderControls::new(home, data_dir, preferences));
+    let source = controls.clone();
     #[cfg(target_os = "macos")]
     let metadata = {
         let catalog = data_dir.join("RichCleaner/library.sqlite");
@@ -277,11 +342,12 @@ pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy, p
     #[cfg(not(target_os = "macos"))]
     let (metadata, reranker) = { let _ = data_dir; (None, None) };
     DocumentSearch::new(
-        move || Location::from_settings(&home, richos_core::machine_settings::Settings::current(), &choice),
+        move || source.locate(richos_core::machine_settings::Settings::current()),
         make_embedder,
         Some(busy),
         metadata,
         reranker,
+        Some(controls),
     )
 }
 
@@ -543,6 +609,45 @@ mod tests {
         assert!(!scope.automatic);
     }
 
+    #[test]
+    fn live_folder_controls_reindex_and_revoke_old_result_ids() {
+        let base = std::env::temp_dir().join(richos_core::util::new_id("search-controls"));
+        let folder = base.join("chosen");
+        std::fs::create_dir_all(&folder).unwrap();
+        let folder = folder.canonicalize().unwrap();
+        std::fs::write(folder.join("evidence.md"), "# Document\n\nSilvercove is in this folder.").unwrap();
+        let controls = Arc::new(FolderControls::new(&base, &base.join("app-data"), Ok(Some(SearchFolderPreferences {
+            mode: SearchFolderMode::Chosen,
+            chosen: vec![folder.clone()],
+            ..SearchFolderPreferences::default()
+        }))));
+        let source = controls.clone();
+        let service = DocumentSearch::new(
+            move || source.locate(Ok(richos_core::machine_settings::Settings::default())),
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None, None, None, Some(controls),
+        );
+        let request = SearchRequest { query: "silvercove".into(), super_finder: false, strict: false, offset: 0, limit: PAGE };
+        service.current().service.wait_idle();
+        let before = search(&service, request.clone());
+        let old = &before.hits[0].source_id;
+        assert_eq!(service.resolve_for_open(old).unwrap(), folder.join("evidence.md"));
+
+        let reindex = service.reindex_folders();
+        assert!(reindex.generation > before.status.generation);
+        assert!(service.resolve_for_open(old).is_err());
+        service.current().service.wait_idle();
+        let refreshed = search(&service, request.clone());
+        let refreshed_id = &refreshed.hits[0].source_id;
+        assert_ne!(refreshed_id, old);
+
+        service.apply_folder_preferences(SearchFolderPreferences::default());
+        assert!(search(&service, request).hits.is_empty());
+        assert!(service.resolve_for_open(refreshed_id).is_err());
+        service.shutdown();
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     /// The stand-in folder (ten files) plus `extra` more notes that all mention refunds.
     fn standin(name: &str, with_model: bool, extra: usize) -> (Arc<DocumentSearch>, PathBuf) {
         standin_with(name, with_model, extra, &[])
@@ -567,7 +672,7 @@ mod tests {
         }
         let cache = base.join("cache");
         let service = DocumentSearch::new(
-            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), folders: None },
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), folders: None, reindex: 0 },
             move || {
                 if with_model {
                     Ok(Box::new(ConceptEmbedder::stand_in()))
@@ -575,6 +680,7 @@ mod tests {
                     Err("Apple's sentence embedding for 'en' is not available on this Mac.".into())
                 }
             },
+            None,
             None,
             None,
             None,
@@ -801,6 +907,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let tool = ToolAnswer(service.clone());
         let request = SearchRequest { query: "refund".into(), super_finder: true, strict: false, offset: 0, limit: PAGE };
@@ -908,6 +1015,7 @@ mod tests {
                 Some(blocker) => Ok(Box::new(blocker)),
                 None => Ok(Box::new(ConceptEmbedder::stand_in())),
             },
+            None,
             None,
             None,
             None,
@@ -1027,10 +1135,11 @@ mod tests {
         let folder = alias;
         let cache = base.join("cache");
         let service = DocumentSearch::new(
-            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), folders: None },
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), folders: None, reindex: 0 },
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None,
             Some(adapter),
+            None,
             None,
         );
         let query = |query: &str, super_finder, strict| search(&service, SearchRequest {
