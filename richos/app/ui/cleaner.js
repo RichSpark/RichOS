@@ -102,6 +102,9 @@
   root.addEventListener("input",event=>{if(event.target.id!=="cleaner-note")return;clearTimeout(saveTimer);const field=event.target;const hint=document.getElementById("cleaner-save-state");if(hint)hint.textContent="Unsaved changes";saveTimer=setTimeout(()=>saveNote(field).catch(tell),600);});
   root.addEventListener("focusout",event=>{if(event.target.id!=="cleaner-note")return;clearTimeout(saveTimer);if(dirty())saveNote(event.target).catch(tell);});
   if(!panel && native.window?.getCurrentWindow){const win=native.window.getCurrentWindow();let closing=false;win.onCloseRequested(async event=>{if(closing || !dirty() && !saveBusy)return;event.preventDefault();try{await flushEdits();closing=true;await win.close();}catch(e){tell(e);}}).catch(tell);}
+  // Back in the window (after Turn on RichCleaner in the main window, say), read the switch and the list
+  // again, so an off state that is no longer true never stays on screen (round 58).
+  if(!panel){const back=()=>{if(document.hidden || !document.getElementById("cleaner-list") || saveBusy || dirty())return;load(false);};window.addEventListener("focus",back);document.addEventListener("visibilitychange",back);}
   document.body.className=panel ? "cleaner-panel" : "cleaner-library";
   document.documentElement.classList.toggle("cleaner-panel",panel);
   native.event.listen("rich://cleaner",event=>{const view=event.payload;if(panel){if(view.stage!=="library-changed")paintPanel(view);}else if(!saveBusy && !dirty() && !document.getElementById("cleaner-note")?.matches(":focus"))load(false);}).catch(tell);
