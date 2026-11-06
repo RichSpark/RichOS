@@ -33,7 +33,7 @@ pub fn tools() -> Value {
     json!([
         {
             "name": TOOL_COLLECT,
-            "description": "Collect one category of RichOS diagnostic information from this Mac, already cleaned of private details. Returns short summaries and opaque evidence IDs. Categories: installation, startup_crash, conversation_failure, configuration, richscribe, claude_availability.",
+            "description": "Collect one category of RichOS diagnostic information from this Mac, already cleaned of private details. Returns short summaries and opaque evidence IDs. Categories: installation, startup_crash, conversation_failure, configuration, richscribe, richfinder, claude_availability.",
             "inputSchema": {"type": "object", "properties": {"category": {"type": "string", "enum": categories}}, "required": ["category"], "additionalProperties": false},
             "annotations": {"readOnlyHint": true, "openWorldHint": false}
         },

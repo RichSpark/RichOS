@@ -971,6 +971,8 @@ impl Engine {
                 this.busy.store(true, Ordering::SeqCst);
                 this.collect_here(&report::without_ai_categories(diagnostics));
                 this.busy.store(false, Ordering::SeqCst);
+            } else if diagnostics {
+                this.collect_here(&[Category::RichFinder]);
             }
             this.build(drafted, provenance);
             this.send(json!({"t": "review"}));
