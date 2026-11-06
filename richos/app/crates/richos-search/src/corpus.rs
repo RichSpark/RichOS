@@ -133,14 +133,25 @@ pub fn validate_root(root: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+struct DirectoryEntries {
+    files: Vec<(String, PathBuf)>,
+    links_skipped: usize,
+}
+
 /// Every supported file under `root`, in path order, as `(relative path, absolute path)`.
-pub fn list(root: &Path) -> Result<(Vec<(String, PathBuf)>, usize), String> {
+fn list(root: &Path, stopped: &impl Fn() -> bool) -> Result<Option<DirectoryEntries>, String> {
     let mut files = Vec::new();
     let mut links = 0usize;
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if stopped() {
+            return Ok(None);
+        }
         let entries = std::fs::read_dir(&dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
         for entry in entries.flatten() {
+            if stopped() {
+                return Ok(None);
+            }
             let path = entry.path();
             let Ok(kind) = entry.file_type() else { continue };
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -158,7 +169,7 @@ pub fn list(root: &Path) -> Result<(Vec<(String, PathBuf)>, usize), String> {
         }
     }
     files.sort();
-    Ok((files, links))
+    Ok(Some(DirectoryEntries { files, links_skipped: links }))
 }
 
 fn relative(root: &Path, path: &Path) -> Option<String> {
@@ -196,16 +207,27 @@ pub fn read_document(rel_path: &str, path: &Path) -> Result<Document, String> {
 /// no index (PRD: *"Text search must work independently of Edge availability and model
 /// startup."*).
 pub fn load(root: &Path) -> Result<Corpus, String> {
+    Ok(load_until_stopped(root, || false)?.expect("no cancellation requested"))
+}
+
+/// Cancellation discards the partial corpus. Check before opening each directory and file.
+pub(crate) fn load_until_stopped(root: &Path, stopped: impl Fn() -> bool) -> Result<Option<Corpus>, String> {
+    if stopped() {
+        return Ok(None);
+    }
     let root = validate_root(root)?;
-    let (files, links_skipped) = list(&root)?;
+    let Some(DirectoryEntries { files, links_skipped }) = list(&root, &stopped)? else { return Ok(None) };
     let mut corpus = Corpus { root, docs: Vec::with_capacity(files.len()), skipped: Vec::new(), links_skipped };
     for (rel, path) in files {
+        if stopped() {
+            return Ok(None);
+        }
         match read_document(&rel, &path) {
             Ok(doc) => corpus.docs.push(doc),
             Err(reason) => corpus.skipped.push(Skipped { rel_path: rel, reason }),
         }
     }
-    Ok(corpus)
+    Ok((!stopped()).then_some(corpus))
 }
 
 /// Resolve a document's file for opening or revalidation: the path is rebuilt from the

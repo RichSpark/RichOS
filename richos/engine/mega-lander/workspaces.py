@@ -3510,6 +3510,10 @@ def hold_end(text, strict=True):
     if ok and kind == "at":
         value = _hold_time(value)
         ok = bool(value)
+    if ok and kind == "review" and strict and not (_REVIEW_ID.fullmatch(value) or _REVIEW_AT.fullmatch(value)):
+        raise SpecError("a review end is review:<rv- id> or review:<repository name>@<commit prefix, 7-40 hex "
+                        "characters>, e.g. review:richos@ed8bcf92c; %r is neither, so it could never be seen "
+                        "ending" % value)
     if ok:
         return "%s:%s" % (kind, value)
     if strict:
@@ -3541,8 +3545,43 @@ def _hold_time(value):
     return iso(t)
 
 
+_REVIEW_ID = re.compile(r"rv-[A-Za-z0-9._-]+")
+_REVIEW_AT = re.compile(r"([A-Za-z0-9._-]+)@([0-9a-fA-F]{7,40})")
+
+
+def _review_at_ended(repo_name, prefix):
+    """None while a review of a tip starting `prefix` in repository `repo_name` runs (its review-watch
+    lock); else why it counts as ended. Lock first: a recheck of a tip that already has a verdict runs."""
+    prefix = prefix.lower()
+    ref = "%s@%s" % (repo_name, prefix)
+    watch = (os.environ.get("REVIEW_WATCH_STATE_DIR") or "").strip() or os.path.join(
+        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
+        "state", "review-watch")
+    quiet = None
+    for path in sorted(glob.glob(os.path.join(watch, "locks", "*.lock"))):
+        try:
+            with open(path, encoding="utf-8") as f:
+                lock = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if (os.path.basename(str(lock.get("repo") or "").rstrip("/")) != repo_name
+                or not str(lock.get("tip") or "").startswith(prefix)):
+            continue
+        age = now() - float(lock.get("started_at") or os.path.getmtime(path))
+        if age <= REVIEW_RUN_SECONDS:
+            return None
+        quiet = "review %s wrote nothing for %d min and has no verdict" % (ref, age // 60)
+    for tip, row in _reviews_by_tip().items():
+        if tip.startswith(prefix) and os.path.basename(str(row.get("repo") or "").rstrip("/")) == repo_name:
+            return "review %s has its verdict" % ref
+    return quiet or "no review %s is running" % ref
+
+
 def _review_ended(review_id):
-    """None while review <id> runs; else why it counts as ended."""
+    """None while review <id> runs; else why it counts as ended. <id> is an rv- id or <repo>@<sha prefix>."""
+    m = _REVIEW_AT.fullmatch(review_id)
+    if m:
+        return _review_at_ended(m.group(1), m.group(2))
     base = (os.environ.get("SECOND_REVIEW_STATE_DIR") or "").strip() or os.path.join(claude_home(), "state")
     try:
         with open(os.path.join(base, "reviews.jsonl"), encoding="utf-8") as f:
