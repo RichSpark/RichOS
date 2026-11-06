@@ -5,8 +5,9 @@
 //! dependencies and generated output; preserve linked-path restrictions."*
 //!
 //! - **Supported files** in slice one are Markdown: `.md` and `.markdown`, any case.
-//! - **Skipped folders**: any whose name starts with a dot (`.git`, `.obsidian`, …) and the
-//!   dependency and build-output names in [`SKIPPED_DIRS`].
+//! - **Skipped folders**: operating system folders, app internals, hidden folders and the
+//!   dependency and build-output names in [`SKIPPED_DIRS`]. The folder picker can use the
+//!   same [`directory_exclusion`] rule as the scan and opening paths.
 //! - **Links are not followed.** A symbolic link, to a file or a folder, is skipped and
 //!   counted: a link is the one way a folder can reach outside itself, and the PRD's
 //!   *"preserve linked-path restrictions"* is kept by never crossing one.
@@ -21,7 +22,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::time::UNIX_EPOCH;
 
-pub const SKIPPED_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "__pycache__", "vendor"];
+pub const SKIPPED_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "__pycache__", "vendor", "Pods"];
 /// A Markdown file larger than this is reported as skipped. 16 MB is far above any single
 /// conversation the archive's lower bound implies (30+ MB over 1,500+ files, about 20 KB each).
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -160,8 +161,48 @@ fn supports_metadata(source: &MetadataSource, path: &Path) -> bool {
     path.extension().and_then(|v| v.to_str()).is_some_and(|ext| source.extensions.iter().any(|s| s.eq_ignore_ascii_case(ext)))
 }
 
-fn skipped_dir(name: &str) -> bool {
-    name.starts_with('.') || SKIPPED_DIRS.contains(&name)
+/// Stable reasons for a locked folder. OS access and user selection are checked separately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectoryExclusion {
+    System,
+    AppBundle,
+    Hidden,
+    DependencyOrGenerated,
+}
+
+/// Accepts an absolute path, inspecting its ancestry as well as the final component.
+/// Checking the ancestry makes an explicitly selected child obey the same rules as a
+/// child encountered when walking a broader folder. Check the canonical path as well
+/// when opening a selected root so an alias cannot grant an excluded destination.
+pub fn directory_exclusion(path: &Path) -> Option<DirectoryExclusion> {
+    let components = path.components().filter_map(|part| match part {
+        Component::Normal(name) => Some(name),
+        _ => None,
+    });
+    if cfg!(target_os = "macos") {
+        let mut ancestry = components.clone();
+        if let Some(first) = ancestry.next() {
+            let system = ["System", "Applications", "Library"].iter().any(|name| first.eq_ignore_ascii_case(name));
+            let user_library = first.eq_ignore_ascii_case("Users") && ancestry.nth(1).is_some_and(|name| name.eq_ignore_ascii_case("Library"));
+            if system || user_library {
+                return Some(DirectoryExclusion::System);
+            }
+        }
+    }
+    for name in components {
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            return Some(DirectoryExclusion::Hidden);
+        }
+        if name.rsplit_once('.').is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("app")) {
+            return Some(DirectoryExclusion::AppBundle);
+        }
+        if SKIPPED_DIRS.iter().any(|part| name.eq_ignore_ascii_case(part)) {
+            return Some(DirectoryExclusion::DependencyOrGenerated);
+        }
+    }
+    None
 }
 
 /// Validate the configured folder: absolute, existing, a folder. The error names the path and
@@ -171,11 +212,70 @@ pub fn validate_root(root: &Path) -> Result<PathBuf, String> {
     if !root.is_absolute() {
         return Err(format!("The search folder must be an absolute path: {}", root.display()));
     }
+    if root.parent().is_none() || directory_exclusion(root).is_some() {
+        return Err(format!("This folder is excluded from search: {}", root.display()));
+    }
     let canonical = root.canonicalize().map_err(|_| format!("Search folder not found: {}", root.display()))?;
     if !canonical.is_dir() {
         return Err(format!("The search folder is not a folder: {}", root.display()));
     }
+    if canonical.parent().is_none() || directory_exclusion(&canonical).is_some() {
+        return Err(format!("This folder is excluded from search: {}", root.display()));
+    }
     Ok(canonical)
+}
+
+/// The currently reachable part of a saved folder choice. Roots are canonical
+/// and disjoint, so a parent and child selected together do not index files twice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FolderScope(Vec<PathBuf>);
+
+impl FolderScope {
+    /// An unavailable folder stays in the caller's saved choices. Returning its
+    /// error alongside the other roots lets the caller report partial coverage.
+    pub fn resolve(paths: &[PathBuf]) -> (Self, Vec<(PathBuf, String)>) {
+        let mut roots = Vec::new();
+        let mut unavailable = Vec::new();
+        for path in paths {
+            match validate_root(path) {
+                Ok(root) if root == *path => roots.push(root),
+                Ok(_) => unavailable.push((path.clone(), "The selected path reaches a different folder through a link.".into())),
+                Err(reason) => unavailable.push((path.clone(), reason)),
+            }
+        }
+        (Self::normalized(roots), unavailable)
+    }
+
+    fn normalized(mut roots: Vec<PathBuf>) -> Self {
+        roots.sort_unstable();
+        let mut distinct: Vec<PathBuf> = Vec::new();
+        for root in roots {
+            if distinct.last().is_none_or(|parent| !root.starts_with(parent)) {
+                distinct.push(root);
+            }
+        }
+        Self(distinct)
+    }
+
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.0
+    }
+
+    /// Apply a company or request limit without ever granting a new subtree. An
+    /// explicit empty limit is an empty grant; inheritance is handled by the caller.
+    pub fn intersect(&self, limit: &Self) -> Self {
+        let mut roots = Vec::new();
+        for base in &self.0 {
+            for bound in &limit.0 {
+                if base.starts_with(bound) {
+                    roots.push(base.clone());
+                } else if bound.starts_with(base) {
+                    roots.push(bound.clone());
+                }
+            }
+        }
+        Self::normalized(roots)
+    }
 }
 
 struct DirectoryEntries {
@@ -203,7 +303,7 @@ fn list(root: &Path, metadata: Option<&MetadataSource>, stopped: &impl Fn() -> b
             if kind.is_symlink() {
                 links += 1;
             } else if kind.is_dir() {
-                if !skipped_dir(&name) {
+                if directory_exclusion(&path).is_none() {
                     stack.push(path);
                 }
             } else if kind.is_file() && !name.starts_with('.') && (supported(&path) || metadata.is_some_and(|m| supports_metadata(m, &path))) {
@@ -277,7 +377,7 @@ pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>,
             media.push(rel);
             continue;
         }
-        match read_document(&rel, &path) {
+        match resolve_inside(&corpus.root, &rel).and_then(|path| read_document(&rel, &path)) {
             Ok(doc) => corpus.docs.push(Arc::new(doc)),
             Err(reason) => corpus.skipped.push(Skipped { rel_path: rel, reason }),
         }
@@ -292,8 +392,8 @@ pub(crate) fn catalog_relative(root: &Path, configured: &Path, path: &Path, sour
         Component::Normal(name) => name.to_str(),
         _ => None,
     }).collect::<Option<_>>()?;
-    let (leaf, parents) = names.split_last()?;
-    if leaf.starts_with('.') || parents.iter().any(|name| skipped_dir(name)) || supported(path) || !supports_metadata(source, path) {
+    let (leaf, _) = names.split_last()?;
+    if leaf.starts_with('.') || directory_exclusion(root.join(tail).parent()?).is_some() || supported(path) || !supports_metadata(source, path) {
         return None;
     }
     Some(names.join("/"))
@@ -322,7 +422,13 @@ pub(crate) fn read_metadata_document(root: &Path, rel: &str, source: &MetadataSo
 /// canonical folder and the stored relative path, canonicalized again, and refused unless it is
 /// still a regular file inside the folder. Nothing the renderer sends is a path.
 pub fn resolve_inside(root: &Path, rel_path: &str) -> Result<PathBuf, String> {
+    if Path::new(rel_path).components().any(|part| !matches!(part, Component::Normal(_))) {
+        return Err("That document is outside the search folder.".into());
+    }
     let candidate = root.join(rel_path);
+    if candidate.parent().is_some_and(|parent| directory_exclusion(parent).is_some()) {
+        return Err("That document is in a folder excluded from search.".into());
+    }
     let meta = std::fs::symlink_metadata(&candidate).map_err(|_| "That document is no longer in the search folder.".to_string())?;
     if meta.file_type().is_symlink() || !meta.is_file() {
         return Err("That document is no longer a file in the search folder.".into());
@@ -392,6 +498,68 @@ mod tests {
         assert!(validate_root(Path::new("relative/path")).unwrap_err().contains("absolute"));
         let missing = std::env::temp_dir().join("richos-search-definitely-missing-folder");
         assert!(validate_root(&missing).unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn excluded_folders_cannot_be_granted_directly_or_through_an_alias() {
+        let root = scratch("excluded");
+        let hidden = root.join(".git/objects");
+        let generated = root.join("project/TARGET/logs");
+        let bundle = root.join("Tool.app/Contents");
+        let docs = root.join("project/notes");
+        for folder in [&hidden, &generated, &bundle, &docs] {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(folder.join("notes.md"), "a witness").unwrap();
+        }
+        for folder in [&hidden, &generated, &bundle] {
+            assert!(validate_root(folder).unwrap_err().contains("excluded"));
+            let path = folder.join("notes.md");
+            assert!(resolve_inside(&root, path.strip_prefix(&root).unwrap().to_str().unwrap()).is_err());
+        }
+        #[cfg(unix)]
+        {
+            let alias = root.join("elsewhere");
+            std::os::unix::fs::symlink(&generated, &alias).unwrap();
+            assert!(validate_root(&alias).unwrap_err().contains("excluded"));
+        }
+        let corpus = load(&root).unwrap();
+        assert_eq!(corpus.docs.len(), 1);
+        assert_eq!(corpus.docs[0].rel_path, "project/notes/notes.md");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_folder_limit_can_only_narrow_the_reachable_global_selection() {
+        let root = scratch("scope");
+        let parent = root.join("archive");
+        let child = parent.join("chats");
+        let other = root.join("archive-other");
+        let disconnected = root.join("disconnected");
+        for folder in [&child, &other] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let (global, unavailable) = FolderScope::resolve(&[child.clone(), parent.clone(), disconnected.clone()]);
+        assert_eq!(global.roots(), &[parent]);
+        assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0].0, disconnected);
+
+        let (company, _) = FolderScope::resolve(&[child.clone(), other.clone()]);
+        let (broader_request, _) = FolderScope::resolve(std::slice::from_ref(&root));
+        let allowed = global.intersect(&company);
+        assert_eq!(allowed.roots(), &[child]);
+        assert_eq!(allowed.intersect(&broader_request), allowed);
+        assert!(allowed.intersect(&FolderScope::default()).roots().is_empty());
+        let (unrelated, _) = FolderScope::resolve(&[other]);
+        assert!(allowed.intersect(&unrelated).roots().is_empty());
+        #[cfg(unix)]
+        {
+            let alias = root.join("archive-link");
+            std::os::unix::fs::symlink(allowed.roots()[0].as_path(), &alias).unwrap();
+            let (scope, errors) = FolderScope::resolve(&[alias]);
+            assert!(scope.roots().is_empty());
+            assert_eq!(errors.len(), 1);
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
