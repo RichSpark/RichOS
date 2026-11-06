@@ -78,6 +78,30 @@ def verify(directory):
             raise RuntimeError(f"The built RichFinder resource {name} failed its integrity check.")
 
 
+def watch_owner(source):
+    server = source / "tools/server/server.cpp"
+    code = server.read_text()
+    include = "#include <thread> // for std::thread::hardware_concurrency\n"
+    entry = "int main(int argc, char ** argv) {\n"
+    if code.count(include) != 1 or code.count(entry) != 1:
+        raise RuntimeError("The pinned RichFinder server entry point changed.")
+    code = code.replace(include, include + "#include <cerrno>\n#include <cstdlib>\n#include <unistd.h>\n")
+    server.write_text(code.replace(entry, entry + """    // The application owns the write end of stdin. EOF survives a forced quit.
+    if (const char * socket = std::getenv("RICHFINDER_OWNER_SOCKET")) {
+        std::thread([path = std::string(socket)] {
+            char byte;
+            ssize_t result;
+            do {
+                result = read(STDIN_FILENO, &byte, 1);
+            } while (result > 0 || (result < 0 && errno == EINTR));
+            unlink(path.c_str());
+            rmdir(path.substr(0, path.find_last_of('/')).c_str());
+            _exit(0);
+        }).detach();
+    }
+"""))
+
+
 def build(cache):
     destination = cache / f"b7870-{digest(Path(__file__))[:16]}"
     if destination.exists():
@@ -91,6 +115,7 @@ def build(cache):
         with tarfile.open(pinned_input(cache, "llama-source.tar.gz")) as source:
             source.extractall(work, filter="data")
         source = work / f"llama.cpp-{LLAMA_REV}"
+        watch_owner(source)
         compiled = work / "build"
         path_map = f"-ffile-prefix-map={source}=llama.cpp-source"
         env = {**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
