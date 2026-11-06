@@ -41,6 +41,8 @@
   function paintList(total) {
     const list=document.getElementById("cleaner-list");
     list.innerHTML=`<div class="rf-list-head"><b>${query ? "Search results" : "Recent files"}</b><span>${total} ${total===1 ? "file" : "files"}</span></div>`;
+    // Off, the empty window says so and offers the switch, rather than steps that cannot work (round 58).
+    if(!entries.length && !query && status.enabled===false) {list.innerHTML+=`<div class="rf-empty"><img src="cleaner-icon.png" alt=""><h3>RichCleaner is off</h3><p>Turn it on to file the Desktop files you describe. Your files stay where they are until you do.</p>${button("settings","Turn on RichCleaner",null,"rf-open")}</div>`;selected=null;paintDetails();return;}
     if(!entries.length) {list.innerHTML+=`<div class="rf-empty"><img src="cleaner-icon.png" alt=""><h3>${query ? "No matching notes" : "A clear Desktop starts here"}</h3><p>${query ? "Try a different description, or ask Rich to find it." : `Select one Desktop file, tap F${status.key || 1}, describe it and tap the same key again.`}</p></div>`;selected=null;paintDetails();return;}
     for(const e of entries) { const fileName=name(e); list.insertAdjacentHTML("beforeend",`<button type="button" role="option" aria-selected="${selected===e.id}" class="rf-row" data-select="${esc(e.id)}"><span class="rf-ico">${icon(e)}</span><span class="rf-row-text"><span class="rf-nm" title="${esc(fileName)}"><span class="h">${esc(fileName.slice(0,-15))}</span><span class="t">${esc(fileName.slice(-15))}</span></span><span class="rf-row-note">${esc(e.note)}</span><span class="rf-row-meta">${esc(e.folder || "Not filed")} · ${esc(new Date(e.updated).toLocaleString())}${e.pendingSort ? '<span class="rf-chip">In Inbox · sorting</span>' : e.phase==="draft" ? '<span class="rf-chip">Not filed</span>' : e.inbox ? '<span class="rf-chip">Inbox</span>' : ""}</span></span></button>`); }
     if(!selected || !entries.some(e=>e.id===selected)) selected=entries[0].id;
@@ -60,10 +62,10 @@
   }
   async function load(more) {
     if(loading){if(!more)reload=true;return;}loading=true;const id=generation;
-    try{const answer=await call("cleaner_list",{query,offset:more ? next || 0 : 0});if(id!==generation)return;if(saveBusy || dirty()){deferredRefresh=true;return;}entries=more ? entries.concat(answer.entries) : answer.entries;next=answer.next;paintList(answer.total);}catch(e){tell(e);}finally{loading=false;if(reload){reload=false;load(false);}}
+    try{const [answer,view]=await Promise.all([call("cleaner_list",{query,offset:more ? next || 0 : 0}),more ? null : call("cleaner_status").catch(()=>null)]);if(view)status=view;if(id!==generation)return;if(saveBusy || dirty()){deferredRefresh=true;return;}entries=more ? entries.concat(answer.entries) : answer.entries;next=answer.next;paintList(answer.total);}catch(e){tell(e);}finally{loading=false;if(reload){reload=false;load(false);}}
   }
   function paintLibrary() {
-    root.innerHTML=`<section class="rf-win"><header class="rf-win-bar"><div class="rf-win-title"><img src="cleaner-icon.png" alt="">RichCleaner</div><label class="rf-search"><input id="cleaner-search" type="search" placeholder="Search your notes" aria-label="Search your saved files"></label></header><div class="rf-win-body"><div class="rf-list" id="cleaner-list" role="listbox" aria-label="Saved files"></div><aside class="rf-det" id="cleaner-details" aria-label="Selected file"></aside></div></section>`;
+    root.innerHTML=`<section class="rf-win"><header class="rf-win-bar"><div class="rf-win-title"><img src="assets/app-icons/richcleaner-128.png" alt="">RichCleaner</div><label class="rf-search"><input id="cleaner-search" type="search" placeholder="Search your notes" aria-label="Search your saved files"></label></header><div class="rf-win-body"><div class="rf-list" id="cleaner-list" role="listbox" aria-label="Saved files"></div><aside class="rf-det" id="cleaner-details" aria-label="Selected file"></aside></div></section>`;
     let timer;document.getElementById("cleaner-search").addEventListener("input",event=>{query=event.target.value;generation++;clearTimeout(timer);timer=setTimeout(()=>load(false),100);});
     document.getElementById("cleaner-list").addEventListener("scroll",event=>{const list=event.target;if(next!==null && list.scrollTop+list.clientHeight>=list.scrollHeight-100)load(true);});load(false);
   }
@@ -100,6 +102,9 @@
   root.addEventListener("input",event=>{if(event.target.id!=="cleaner-note")return;clearTimeout(saveTimer);const field=event.target;const hint=document.getElementById("cleaner-save-state");if(hint)hint.textContent="Unsaved changes";saveTimer=setTimeout(()=>saveNote(field).catch(tell),600);});
   root.addEventListener("focusout",event=>{if(event.target.id!=="cleaner-note")return;clearTimeout(saveTimer);if(dirty())saveNote(event.target).catch(tell);});
   if(!panel && native.window?.getCurrentWindow){const win=native.window.getCurrentWindow();let closing=false;win.onCloseRequested(async event=>{if(closing || !dirty() && !saveBusy)return;event.preventDefault();try{await flushEdits();closing=true;await win.close();}catch(e){tell(e);}}).catch(tell);}
+  // Back in the window (after Turn on RichCleaner in the main window, say), read the switch and the list
+  // again, so an off state that is no longer true never stays on screen (round 58); never while the note is being edited.
+  if(!panel){const back=()=>{if(document.hidden || !document.getElementById("cleaner-list") || saveBusy || dirty() || document.activeElement?.id==="cleaner-note")return;load(false);};window.addEventListener("focus",back);document.addEventListener("visibilitychange",back);}
   document.body.className=panel ? "cleaner-panel" : "cleaner-library";
   document.documentElement.classList.toggle("cleaner-panel",panel);
   native.event.listen("rich://cleaner",event=>{const view=event.payload;if(panel){if(view.stage!=="library-changed")paintPanel(view);}else if(!saveBusy && !dirty() && !document.getElementById("cleaner-note")?.matches(":focus"))load(false);}).catch(tell);

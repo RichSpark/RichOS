@@ -243,21 +243,22 @@ async function main() {
     return surfaces.length + " derived surfaces, all closed by Escape: " + report.join(", ");
   });
 
-  await run.check("B2  Settings opened from the nameplate (round 27's second way in), by the real path", async () => {
-    // Round 27 retired the gear's Preferences popover: the unset nameplate at the foot of the
-    // rail opens the ONE Settings panel on the name field. Escape closes it from there too.
+  await run.check("B2  Settings opened from the initials circle (round 27's second way in), by the real path", async () => {
+    // Round 27 retired the gear's Preferences popover: with no name set, the initials circle at
+    // the bottom of the navigation rail (round 58) opens the ONE Settings panel on the name
+    // field. Escape closes it from there too.
     const page = await openApp(browser);
-    await page.waitForSelector("#rail-identity.is-unset");
-    await page.click("#rail-identity");
+    await page.waitForSelector("#nr-me.is-unset");
+    await page.click("#nr-me");
     await page.waitForSelector("#set-menu:not([hidden])");
     assertEqual(
       await page.evaluate(() => document.activeElement && document.activeElement.id),
       "user-name-input",
-      "the nameplate opened Settings on the name field"
+      "the initials circle opened Settings on the name field"
     );
     await focusTheComposer(page);
     await page.keyboard.press("Escape");
-    assert(await page.isHidden("#set-menu"), "Settings opened from the nameplate survived Escape");
+    assert(await page.isHidden("#set-menu"), "Settings opened from the initials circle survived Escape");
     // The button must not go on announcing a panel that is not there.
     assertEqual(
       await page.getAttribute("#set-btn", "aria-expanded"),

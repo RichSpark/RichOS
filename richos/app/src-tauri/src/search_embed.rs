@@ -3,12 +3,12 @@
 use richos_core::owned_process::OwnedChild;
 use richos_search::embed::{BulkIndexer, Embedder};
 use serde_json::{json, Value};
-use std::io::{Read, Write};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +20,8 @@ const MAX_REPLY: u64 = 256 * 1024;
 const REQUEST_BOUND: Duration = Duration::from_millis(500);
 const INDEX_REQUEST_BOUND: Duration = Duration::from_secs(8);
 const MODEL_ATTEMPTS: usize = 3;
+const QUERY_TIMEOUTS_BEFORE_REPAIR: usize = 3;
+const BUSY: &str = "The local search model is busy.";
 // A fresh test guest can exceed the old 15-second startup bound. The search
 // worker starts the helper while Markdown search remains available.
 const START_BOUND: Duration = Duration::from_secs(45);
@@ -67,6 +69,7 @@ struct Running {
     // Drop the process before removing its socket directory.
     _child: OwnedChild,
     directory: SocketDirectory,
+    consecutive_query_timeouts: AtomicUsize,
 }
 
 #[derive(Clone, Copy)]
@@ -76,12 +79,25 @@ enum Helper {
 }
 
 enum LookupError {
+    Busy,
     Retry(String),
     Input(String),
 }
 
 impl From<String> for LookupError {
     fn from(message: String) -> Self { Self::Retry(message) }
+}
+
+impl From<&str> for LookupError {
+    fn from(message: &str) -> Self { Self::Retry(message.into()) }
+}
+
+fn transport_error(error: Error) -> LookupError {
+    if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) {
+        LookupError::Busy
+    } else {
+        LookupError::Retry("The local search model connection is unavailable.".into())
+    }
 }
 
 pub(crate) fn resources() -> Result<PathBuf, String> {
@@ -132,6 +148,7 @@ impl ResidentEmbedder {
             match runtime.one(&text, INDEX_REQUEST_BOUND) {
                 Ok(vector) => return Ok(vector),
                 Err(LookupError::Input(reason)) => return Err(reason),
+                Err(LookupError::Busy) => failure = BUSY.into(),
                 Err(LookupError::Retry(reason)) => failure = reason,
             }
             self.0.retire(&runtime);
@@ -147,18 +164,20 @@ impl ResidentEmbedder {
     fn query_one(&self, text: &str) -> Result<Vec<f32>, String> {
         let _foreground = self.0.foreground.lock().map_err(|_| "The local search model is unavailable.")?;
         let text = bounded_text(text);
-        let runtime = self.0.running.try_lock().map_err(|_| "The local search model is busy.")?.clone();
+        let runtime = self.0.running.try_lock().map_err(|_| BUSY)?.clone();
         let Some(runtime) = runtime else {
             self.0.repair(None);
-            return Err("The local search model is busy.".into());
+            return Err(BUSY.into());
         };
-        match runtime.one(&text, REQUEST_BOUND) {
+        let result = runtime.one(&text, REQUEST_BOUND);
+        let repair = runtime.query_needs_repair(&result);
+        if repair {
+            self.0.repair(Some(runtime));
+        }
+        match result {
             Ok(vector) => Ok(vector),
-            Err(LookupError::Input(reason)) => Err(reason),
-            Err(LookupError::Retry(reason)) => {
-                self.0.repair(Some(runtime));
-                Err(reason)
-            }
+            Err(LookupError::Busy) => Err(BUSY.into()),
+            Err(LookupError::Input(reason) | LookupError::Retry(reason)) => Err(reason),
         }
     }
 }
@@ -287,7 +306,7 @@ impl Running {
                     Helper::Query => eprintln!("[richos] document search model: ready in {elapsed} ms"),
                     Helper::BulkIndex => eprintln!("[richos] document search model: bulk index helper ready in {elapsed} ms"),
                 }
-                return Ok(Self { _child: child, directory });
+                return Ok(Self { _child: child, directory, consecutive_query_timeouts: AtomicUsize::new(0) });
             }
             std::thread::sleep(Duration::from_millis(15));
         }
@@ -330,6 +349,17 @@ impl Running {
         richos_search::embed::normalize(&mut vector);
         Ok(vector)
     }
+
+    fn query_needs_repair(&self, result: &Result<Vec<f32>, LookupError>) -> bool {
+        // One late reply can come from CPU contention. Persistent timeouts
+        // can still mean the child is wedged and require the normal repair.
+        if matches!(result, Err(LookupError::Busy)) {
+            return self.consecutive_query_timeouts.fetch_add(1, Ordering::Relaxed)
+                >= QUERY_TIMEOUTS_BEFORE_REPAIR - 1;
+        }
+        self.consecutive_query_timeouts.store(0, Ordering::Relaxed);
+        matches!(result, Err(LookupError::Retry(_)))
+    }
 }
 
 fn rejected(status: u16, input: &str) -> LookupError {
@@ -370,7 +400,7 @@ impl Embedder for ResidentEmbedder {
                     match worker.one(&bounded_text(text), INDEX_REQUEST_BOUND) {
                         Ok(vector) => return Ok(vector),
                         Err(LookupError::Input(reason)) => return Err(reason),
-                        Err(LookupError::Retry(_)) => {}
+                        Err(LookupError::Busy | LookupError::Retry(_)) => {}
                     }
                 }
                 runtime = None;
@@ -388,17 +418,16 @@ impl Embedder for ResidentEmbedder {
     }
 }
 
-fn request(socket: &Path, method: &str, endpoint: &str, payload: Option<Value>, bound: Duration) -> Result<(u16, Value), String> {
+fn request(socket: &Path, method: &str, endpoint: &str, payload: Option<Value>, bound: Duration) -> Result<(u16, Value), LookupError> {
     let body = payload.map_or_else(Vec::new, |value| value.to_string().into_bytes());
-    let unavailable = |_| "The local search model connection is unavailable.".to_string();
-    let mut stream = UnixStream::connect(socket).map_err(unavailable)?;
-    stream.set_read_timeout(Some(bound)).map_err(unavailable)?;
-    stream.set_write_timeout(Some(bound)).map_err(unavailable)?;
+    let mut stream = UnixStream::connect(socket).map_err(transport_error)?;
+    stream.set_read_timeout(Some(bound)).map_err(transport_error)?;
+    stream.set_write_timeout(Some(bound)).map_err(transport_error)?;
     write!(stream, "{method} {endpoint} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", body.len())
-        .map_err(unavailable)?;
-    stream.write_all(&body).map_err(unavailable)?;
+        .map_err(transport_error)?;
+    stream.write_all(&body).map_err(transport_error)?;
     let mut reply = Vec::new();
-    stream.take(MAX_REPLY + 1).read_to_end(&mut reply).map_err(unavailable)?;
+    stream.take(MAX_REPLY + 1).read_to_end(&mut reply).map_err(transport_error)?;
     if reply.len() as u64 > MAX_REPLY {
         return Err("The local search model response exceeded its limit.".into());
     }
@@ -414,6 +443,13 @@ fn request(socket: &Path, method: &str, endpoint: &str, payload: Option<Value>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_timeout_is_distinct_from_a_lost_connection() {
+        assert!(matches!(transport_error(ErrorKind::TimedOut.into()), LookupError::Busy));
+        assert!(matches!(transport_error(ErrorKind::WouldBlock.into()), LookupError::Busy));
+        assert!(matches!(transport_error(ErrorKind::ConnectionRefused.into()), LookupError::Retry(_)));
+    }
 
     #[test]
     fn compute_errors_retry_and_foreground_queries_do_not_wait_on_the_model_lock() {
@@ -449,7 +485,19 @@ mod tests {
         let listener = UnixListener::bind(directory.socket()).unwrap();
         let mut command = Command::new("/usr/bin/true");
         OwnedChild::configure(&mut command);
-        let runtime = Running { _child: OwnedChild::new(command.spawn().unwrap()), directory };
+        let runtime = Running {
+            _child: OwnedChild::new(command.spawn().unwrap()),
+            directory,
+            consecutive_query_timeouts: AtomicUsize::new(0),
+        };
+        let late = Err(LookupError::Busy);
+        assert!(!runtime.query_needs_repair(&late));
+        assert!(!runtime.query_needs_repair(&late));
+        assert!(!runtime.query_needs_repair(&Ok(vec![1.0])));
+        assert!(!runtime.query_needs_repair(&late));
+        assert!(!runtime.query_needs_repair(&late));
+        assert!(runtime.query_needs_repair(&late));
+        assert!(runtime.query_needs_repair(&Err(LookupError::Retry("disconnected".into()))));
         let model = ResidentEmbedder(Arc::new(ModelProcess {
             resources: PathBuf::new(),
             running: Mutex::new(Some(Arc::new(runtime))),

@@ -676,7 +676,8 @@ async function main() {
       scrim: !document.getElementById("outpanel-scrim").hidden,
     }));
     assertEqual(r, { position: "fixed", scrim: true });
-    await p.mouse.click(40, 400);
+    // On the scrim, right of the navigation rail (which stays above it, round 58).
+    await p.mouse.click(120, 400);
     await p.waitForFunction(() => document.getElementById("outpanel").hidden);
     await p.context().close();
     return "fixed over the conversation with a scrim at 1000px; a click on the scrim closed it";
@@ -1689,7 +1690,8 @@ async function pullRead(page) {
       max: p.max,
       settling: p.settling,
       appRight: app.right,
-      appWidth: app.width,
+      // The room right of the navigation rail (round 58), which the panel never covers.
+      appWidth: app.width - $("nav-rail").getBoundingClientRect().width,
       railWidth: away ? 0 : $("rail").getBoundingClientRect().width,
       panel: $("outpanel").getBoundingClientRect().width,
       open: !$("outpanel").hidden,
@@ -1757,7 +1759,7 @@ async function pullChecks(run, browser, byName) {
     let g = await pullRead(p);
     // The stop, derived from the DOM rather than read from the code under test.
     const stopWidth = Math.floor(g.appWidth - g.railWidth - STAGE_MIN);
-    assertEqual(stopWidth, 780, "the stop at 1440px with the 300px rail: 1440 − 300 − 360");
+    assertEqual(stopWidth, 728, "the stop at 1440px with the 52px navigation rail and the 300px sidebar: 1440 − 52 − 300 − 360");
     assertEqual(g.max, stopWidth, "the panel's stop");
     assertEqual(g.valuemax, String(stopWidth), "aria-valuemax is the stop");
     const stopX = g.appRight - stopWidth;
@@ -1937,7 +1939,7 @@ async function pullChecks(run, browser, byName) {
     await p.waitForFunction(() => document.body.classList.contains("rail-closed"));
     await pullSettled(p);
     let g = await pullRead(p);
-    near(g.panel, g.appWidth, 1, "sidebar away and open completely is the window");
+    near(g.panel, g.appWidth, 1, "sidebar away and open completely is the window right of the navigation rail");
     assert(g.full);
     await p.keyboard.press("Meta+Shift+S");
     await p.waitForFunction(() => !document.body.classList.contains("rail-closed"));

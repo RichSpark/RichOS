@@ -359,12 +359,25 @@ pub fn best_passage_with_scores(
     semantic_passage: Option<usize>,
     scores: Option<&[f32]>,
 ) -> usize {
-    let Some(scores) = scores.filter(|s| s.len() == doc.passages.len() && s.len() > 1) else {
-        return best_passage(doc, query, semantic_passage);
+    passage_choices(doc, query, semantic_passage, scores).ranking
+}
+
+pub(crate) struct PassageChoice {
+    pub(crate) ranking: usize,
+    pub(crate) evidence: usize,
+}
+
+pub(crate) fn passage_choices(
+    doc: &Document,
+    query: &ParsedQuery,
+    semantic_passage: Option<usize>,
+    scores: Option<&[f32]>,
+) -> PassageChoice {
+    let available = scores.filter(|s| s.len() == doc.passages.len() && s.len() > 1);
+    let Some(scores) = available.filter(|_| query.spans.is_empty()) else {
+        let ranking = best_passage(doc, query, semantic_passage);
+        return PassageChoice { ranking, evidence: ranking };
     };
-    if !query.spans.is_empty() {
-        return best_passage(doc, query, semantic_passage);
-    }
 
     const MAX_WORD_BONUS: f32 = 0.16;
     let mut matches = vec![0.0; scores.len()];
@@ -385,11 +398,42 @@ pub fn best_passage_with_scores(
     }
 
     let score = |i: usize| scores[i] + MAX_WORD_BONUS * matches[i] / possible.max(1.0);
-    (0..scores.len()).max_by(|&a, &b| {
+    let order = |a: usize, b: usize| {
         score(a).total_cmp(&score(b))
             .then_with(|| scores[a].total_cmp(&scores[b]))
             .then_with(|| b.cmp(&a))
-    }).unwrap_or(0)
+    };
+    let ranking = (0..scores.len()).max_by(|&a, &b| order(a, b)).unwrap_or(0);
+    let evidence = if query.unmatched_quote {
+        ranking
+    } else {
+        answer_passages(doc, ranking)
+            .filter(|&i| matches[i] > 0.0 && score(i) >= score(ranking) - 0.06)
+            .max_by(|&a, &b| order(a, b)).unwrap_or(ranking)
+    };
+    PassageChoice { ranking, evidence }
+}
+
+/// An export puts the user's prompt in a blockquote immediately before its
+/// ChatGPT heading. Consider a few passages of that answer for the preview.
+/// Ordinary Markdown and the evidence used to rank the source keep their rules.
+fn answer_passages(doc: &Document, selected: usize) -> impl Iterator<Item = usize> + '_ {
+    let mut header = doc.text.lines();
+    let is_export = header.next() == Some("---")
+        && header.take(20).take_while(|line| *line != "---").any(|line| line.trim() == "type: gpt-chat");
+    let is_quote = |index: usize| {
+        doc.passages[index].text(&doc.text).lines().filter(|line| !line.trim().is_empty())
+            .all(|line| line.trim_start().starts_with('>'))
+    };
+    let has_marker = |before: usize, after: usize| {
+        doc.text[doc.passages[before].end..doc.passages[after].start].lines()
+            .any(|line| line.trim() == "#### ChatGPT:")
+    };
+    let first = selected + 1;
+    let has_answer = is_export && first < doc.passages.len() && is_quote(selected) && has_marker(selected, first);
+    (first..doc.passages.len()).take(4).take_while(move |&i| {
+        has_answer && !is_quote(i) && (i == first || !has_marker(i - 1, i))
+    })
 }
 
 /// The query's quoted spans the document holds that no single passage holds whole: a quote
@@ -538,6 +582,24 @@ mod tests {
         assert_eq!(best_passage(&d, &parse("refund days"), Some(2)), 2);
         // A quoted span outranks the meaning passage.
         assert_eq!(best_passage(&d, &parse("\"30 days\""), Some(2)), 1);
+    }
+
+    #[test]
+    fn a_close_answer_can_supply_preview_evidence_without_changing_the_ranked_passage() {
+        let text = "---\ntitle: Backups\ntype: gpt-chat\n---\n\n# Backups\n\n> Why did the backup fail?\n\n#### ChatGPT:\n\nThe backup failed because the drive was read-only.\n\n#### ChatGPT:\n\nThe next backup belongs to a different conversation turn.";
+        let d = doc("chat.md", text, 1);
+        let position = |phrase| d.passages.iter().position(|p| p.text(&d.text).contains(phrase)).unwrap();
+        let prompt = position("Why did the backup fail?");
+        let answer = position("drive was read-only");
+        let unrelated = position("different conversation turn");
+        let mut scores = vec![0.0; d.passages.len()];
+        scores[prompt] = 0.71;
+        scores[answer] = 0.66;
+        scores[unrelated] = 0.69;
+        let choices = passage_choices(&d, &parse("backup"), Some(prompt), Some(&scores));
+        assert_eq!((choices.ranking, choices.evidence), (prompt, answer));
+        let strict = passage_choices(&d, &parse("\"backup fail\""), Some(prompt), Some(&scores));
+        assert_eq!((strict.ranking, strict.evidence), (prompt, prompt));
     }
 
     #[test]

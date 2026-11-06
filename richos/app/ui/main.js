@@ -64,9 +64,6 @@ const railToggleBtn = el("rail-toggle");
 const railDrawerCloseBtn = el("rail-drawer-close");
 const railResizerEl = el("rail-resizer");
 const railCompanyEl = el("rail-company");
-const railIdentityEl = el("rail-identity");
-const railInitialsEl = el("rail-initials");
-const railUserNameEl = el("rail-user-name");
 const scopeEntityEl = el("scope-entity");
 const scopeSepEl = el("scope-sep");
 const scopeThreadEl = el("scope-thread");
@@ -8159,6 +8156,9 @@ function openSearch() {
   refreshSearchStatus();
 }
 
+/// The navigation rail's RichFinder item opens the palette ⌘K opens (round 58).
+window.RichSearch = { open: () => openSearch() };
+
 function closeSearch() {
   searchOverlayEl.hidden = true;
   searchState.open = false;
@@ -10677,7 +10677,14 @@ const POPUP_CLOSERS = {
 function dismissTopmostPopup() {
   const open = openPopups();
   if (!open.length) return false;
-  const top = open[0];
+  return dismissPopup(open[0]);
+}
+
+/// Close ONE named surface by its own declared way out: what Escape does to the topmost, done
+/// to a surface the caller names. The navigation rail uses it (round 58): a press on a rail
+/// place closes the sheet or palette in the content area by that surface's own close, whatever
+/// sits above it (the Bust a bug panel stays).
+function dismissPopup(top) {
   // A KEY PRESSED AT A PICTURE DOES NOT ANSWER WHAT IS BEHIND THE PICTURE, and this is where
   // that holds for every covering surface rather than for the two that thought to say so. It
   // returns TRUE — Escape has been ANSWERED, by being refused — for the same reason a
@@ -10725,6 +10732,7 @@ window.RichDismiss = {
   selector: POPUP_SELECTOR,
   open: openPopups,
   dismissTopmost: dismissTopmostPopup,
+  dismiss: (node) => dismissPopup(node),
   question: openQuestion,
 };
 
@@ -10896,32 +10904,20 @@ async function syncAppearanceFromBackend() {
   window.RichSettings.paint();
 }
 
-/// The foot of the rail: HIS initials, then HIS name.
+/// HIS INITIALS IN A CIRCLE at the very bottom of the navigation rail (design round 58, CEO
+/// 2026-11-06: "The user's name (reduced to a circle with initials like in the Codex app)"),
+/// moved there from the sidebar's foot.
 ///
-/// THE UNSET STATE IS THE COMMON ONE and it is rendered honestly. There was no user-name
-/// preference in this product until today, so most installs have nothing here. The circle
-/// stays empty — no letters, because inventing two is the thing the correction forbids and
-/// "??" is a placeholder pretending to be a value — and the label says what is true. In
-/// that state the row is an OFFER (it opens the preferences popover, where the field is)
-/// rather than a dead end; once he has a name it is a nameplate and not a control.
+/// THE UNSET STATE IS THE COMMON ONE and it is rendered honestly: a plain person outline, no
+/// letters, because inventing two is the thing his correction to round 10.1 forbids. On the
+/// rail every item is a button, so the circle always opens Settings, on the name field while
+/// there is no name (`nav-rail.js`).
 async function renderUserIdentity() {
-  if (!railIdentityEl) return;
   const who = (await invokeQuiet("get_user_identity")) || { name: null, initials: null };
   const field = el("user-name-input");
   // Never clobber what he is mid-way through typing.
   if (field && document.activeElement !== field) field.value = who.name || "";
-  const named = !!(who.name && who.name.trim());
-  railIdentityEl.classList.toggle("is-unset", !named);
-  railInitialsEl.textContent = named ? who.initials || "" : "";
-  railUserNameEl.textContent = named ? who.name : "Set your name";
-  railIdentityEl.setAttribute(
-    "aria-label",
-    named ? who.name : "No name is set. Open Settings to add yours."
-  );
-  // A nameplate is not a button. Only the unset state is actionable, so only the unset
-  // state advertises itself as one.
-  if (named) railIdentityEl.removeAttribute("aria-haspopup");
-  else railIdentityEl.setAttribute("aria-haspopup", "true");
+  if (window.RichNavRail) window.RichNavRail.setIdentity(who);
 }
 
 const userNameInput = el("user-name-input");
@@ -10935,15 +10931,6 @@ if (userNameInput) {
   });
   userNameInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") userNameInput.blur();
-  });
-}
-
-if (railIdentityEl) {
-  railIdentityEl.addEventListener("click", () => {
-    // The SAME Settings panel the button opens (round 27), on the name field, lit for 1.6s.
-    if (railIdentityEl.classList.contains("is-unset")) {
-      window.RichSettings.openMenu({ focus: "#user-name-input", call: true });
-    }
   });
 }
 
