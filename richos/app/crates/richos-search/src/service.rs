@@ -613,7 +613,7 @@ impl SearchService {
                     return updates;
                 }
                 let doc = if root.join(path).exists() {
-                    corpus::read_metadata_document(root, path, source)
+                    corpus::read_metadata_document(root, path, source, self.0.config.cache.as_deref().ok())
                 } else {
                     Ok(None)
                 };
@@ -915,11 +915,34 @@ impl SearchService {
     }
 }
 
+type QueryStages = Vec<(&'static str, f64)>;
+thread_local! {
+    static QUERY_STAGES: std::cell::RefCell<Option<QueryStages>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Capture the stage durations for the synchronous app request on this thread.
+pub fn capture_query_stages<T>(run: impl FnOnce() -> T) -> (T, QueryStages) {
+    struct Restore(Option<QueryStages>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _removed = QUERY_STAGES.replace(self.0.take());
+        }
+    }
+
+    let _restore = Restore(QUERY_STAGES.replace(Some(Vec::new())));
+    let result = run();
+    (result, QUERY_STAGES.take().unwrap_or_default())
+}
+
 /// Record numbers only, with no query, result or source details.
-fn trace_query_stage(stage: &str, started: Instant) {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    if *ENABLED.get_or_init(|| std::env::var_os("RICHOS_SEARCH_TIMINGS").is_some()) {
-        eprintln!("[richfinder timing] {stage}={:.1}ms", started.elapsed().as_secs_f64() * 1_000.0);
+fn trace_query_stage(stage: &'static str, started: Instant) {
+    static STDERR: OnceLock<bool> = OnceLock::new();
+    let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+    QUERY_STAGES.with_borrow_mut(|current| {
+        if let Some(stages) = current { stages.push((stage, elapsed)); }
+    });
+    if *STDERR.get_or_init(|| std::env::var_os("RICHOS_SEARCH_TIMINGS").is_some()) {
+        eprintln!("[richfinder timing] {stage}={elapsed:.1}ms");
     }
 }
 

@@ -91,7 +91,7 @@ fn portable_media_does_not_delay_markdown_and_catalog_changes_touch_only_the_nam
     let metadata = MetadataSource {
         extensions: &["png"],
         watch: Arc::new(move || watch.lock().unwrap().take().unwrap()),
-        read: Arc::new(move |path, _| {
+        read: Arc::new(move |path, _, _| {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             calls.lock().unwrap().push(name.clone());
             if name == "00-slow.png" {
