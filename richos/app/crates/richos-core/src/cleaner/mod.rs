@@ -671,6 +671,31 @@ mod tests {
         }
     }
     #[test]
+    fn search_refreshes_both_locations_when_a_file_move_settles() {
+        let fixture = Fixture::new();
+        let mut db = fixture.db();
+        let mut file = entry("/Desktop/shot.png", "search note", 3);
+        file.phase = Phase::Filed;
+        db.save(&file).unwrap();
+        let updates = Catalog::watch_filed_context(&fixture.0.join("library.sqlite"));
+        for (moving, settled, destination) in [
+            (Phase::Moving, Phase::Filed, "/Library/shot.png"),
+            (Phase::Restoring, Phase::Draft, "/Desktop/shot.png"),
+        ] {
+            file.phase = moving;
+            db.save(&file).unwrap();
+            let original = file.path.clone();
+            assert_eq!(updates.try_recv().unwrap().as_slice(), std::slice::from_ref(&original));
+
+            file.phase = settled;
+            file.path = destination.into();
+            db.save(&file).unwrap();
+            assert_eq!(updates.try_recv().unwrap(), [original, file.path.clone()]);
+            assert!(updates.try_recv().is_err());
+        }
+    }
+
+    #[test]
     fn restart_after_rename_recovers_location_without_rewriting_or_refiling() {
         let f = Fixture::new();
         let mut db = f.db();
