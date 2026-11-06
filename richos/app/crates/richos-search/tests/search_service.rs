@@ -1,7 +1,7 @@
 //! The search service end to end over the synthetic stand-in folder (`tests/fixtures/standin`),
 //! with the stand-in embedder so no model is needed: the four checkbox combinations, the
 //! truthful fallback, current-source checks, restart reconciliation and Open original.
-use richos_search::corpus::MetadataSource;
+use richos_search::corpus::{FolderScope, MetadataSource};
 use richos_search::embed::{ConceptEmbedder, Embedder};
 use richos_search::manifest::{point_id, Manifest, SourceEntry, SourceState};
 use richos_search::rank::Why;
@@ -97,6 +97,21 @@ fn selected_folders_share_results_and_reindex_keeps_unchanged_embeddings() {
     originals.sort_unstable();
     assert_eq!(originals, [first.join("notes.md"), second.join("notes.md")]);
     assert!(response.hits.iter().any(|hit| hit.rel_path == "second/notes.md"));
+
+    let request = SearchRequest { query: "\"ravenseal\"".into(), super_finder: true, strict: true, offset: 0, limit: 12 };
+    assert_eq!(service.search(&request).hits.len(), 2);
+    let (limit, unavailable) = FolderScope::resolve(std::slice::from_ref(&second));
+    assert!(unavailable.is_empty());
+    let narrowed = service.search_in_folders_while_current(&request, Some(&limit), &|| false).unwrap();
+    assert!(narrowed.effective.super_finder);
+    assert_eq!(files(&narrowed), ["second/notes.md"]);
+    assert_eq!(narrowed.total, 1);
+    assert!(narrowed.status.link_count_unknown);
+    assert!(matches!(narrowed.status.meaning, MeaningStatus::Ready { files: 1, .. }));
+    let no_grant = service.search_in_folders_while_current(&request, Some(&FolderScope::default()), &|| false).unwrap();
+    assert_eq!(no_grant.empty, Some(Empty::NoFolder));
+    assert!(no_grant.hits.is_empty());
+    assert_eq!(service.search(&request).hits.len(), 2);
 
     let before = calls.load(Ordering::SeqCst);
     assert!(before > 0, "the first scan embedded the files");

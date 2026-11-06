@@ -175,6 +175,12 @@ impl Corpus {
         resolve_inside(root, relative)
     }
 
+    pub(crate) fn in_scope(&self, key: &str, scope: &FolderScope) -> bool {
+        self.origin(key).is_some_and(|(root, relative)| scope.roots().iter().any(|allowed|
+            root.starts_with(allowed) || allowed.strip_prefix(root).is_ok_and(|tail| Path::new(relative).starts_with(tail))
+        ))
+    }
+
     pub(crate) fn display_key(&self, key: &str) -> Option<String> {
         if self.roots.is_empty() { return None; }
         let (root, relative) = self.origin(key)?;
@@ -308,6 +314,10 @@ impl FolderScope {
 
     pub fn roots(&self) -> &[PathBuf] {
         &self.0
+    }
+
+    pub(crate) fn contains_path(&self, path: &Path) -> bool {
+        self.0.iter().any(|root| path.starts_with(root))
     }
 
     /// Apply a company or request limit without ever granting a new subtree. An

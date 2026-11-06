@@ -119,12 +119,19 @@ pub struct Status {
     /// Unreachable folders, separate from skipped files that could be counted.
     #[serde(skip_serializing_if = "is_zero")]
     pub unavailable_folders: usize,
+    /// For a narrowed search, link skips are not attributed to individual folders.
+    #[serde(skip_serializing_if = "is_false")]
+    pub link_count_unknown: bool,
     /// Changes whenever the searchable set changes; part of a result's identity.
     pub generation: u64,
 }
 
 fn is_zero(value: &usize) -> bool {
     *value == 0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -232,6 +239,7 @@ struct CacheKey {
     super_finder: bool,
     strict: bool,
     generation: u64,
+    scope: Option<corpus::FolderScope>,
 }
 
 struct CachedRanking {
@@ -811,6 +819,7 @@ impl SearchService {
                 Err(e) => e.clone(),
             },
             unavailable_folders,
+            link_count_unknown: false,
             generation: self.0.generation.load(Ordering::SeqCst),
         }
     }
@@ -829,6 +838,12 @@ impl SearchService {
     }
 
     pub fn search_while_current(&self, request: &SearchRequest, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
+        self.search_in_folders_while_current(request, None, obsolete)
+    }
+
+    /// Optional company or request limit, applied before ranking. A supplied
+    /// empty grant searches no files. The shell must use its current verified grant.
+    pub fn search_in_folders_while_current(&self, request: &SearchRequest, scope: Option<&corpus::FolderScope>, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
         let started = Instant::now();
         if obsolete() { return None; }
         let _access = self.0.access.lock().unwrap();
@@ -863,6 +878,18 @@ impl SearchService {
             response.empty = Some(Empty::NoFolder);
             return Some(finish(response, started));
         }
+        let allowed_points = if let Some(scope) = scope {
+            let status_meaning = meaning.clone().or_else(|| self.meaning_for_query());
+            let points = restrict_status(&mut response.status, corpus, status_meaning.as_deref(), scope);
+            if scope.roots().is_empty() {
+                response.effective.super_finder = false;
+                response.empty = Some(Empty::NoFolder);
+                return Some(finish(response, started));
+            }
+            Some(points)
+        } else {
+            None
+        };
         if parsed.is_empty() {
             response.empty = Some(Empty::NoQuery);
             return Some(finish(response, started));
@@ -876,6 +903,7 @@ impl SearchService {
             super_finder: effective.super_finder,
             strict: request.strict,
             generation: response.status.generation,
+            scope: scope.cloned(),
         };
         let cached = self.0.last.lock().unwrap().as_ref()
             .filter(|(k, ranking)| *k == key && Arc::ptr_eq(&ranking.snapshot, &snapshot))
@@ -884,13 +912,16 @@ impl SearchService {
             Some(r) => r,
             None => {
                 let phase = Instant::now();
-                let lexical = snapshot.lexical.search(corpus, &parsed, request.strict, snapshot.positions.as_ref());
+                let mut lexical = snapshot.lexical.search(corpus, &parsed, request.strict, snapshot.positions.as_ref());
+                if let Some(scope) = scope {
+                    lexical.retain(|hit| corpus.in_scope(&corpus.docs[hit.doc].rel_path, scope));
+                }
                 trace_query_stage("lexical", phase);
                 if obsolete() { return None; }
-                let semantic = meaning.as_ref().map(|m| semantic_hits(m, corpus, &request.query, &self.0.config.tuning));
+                let semantic = meaning.as_ref().map(|m| semantic_hits(m, corpus, &request.query, &self.0.config.tuning, allowed_points.as_deref()));
                 if obsolete() { return None; }
                 let (semantic, query_vector) = match semantic {
-                    Some(Ok((hits, query_vector))) => (Some(hits), Some(query_vector)),
+                    Some(Ok((hits, query_vector))) => (Some(hits), (!query_vector.is_empty()).then_some(query_vector)),
                     Some(Err(_)) => {
                         // The model failed on this query: answer with text and say so.
                         response.effective.super_finder = false;
@@ -1060,13 +1091,55 @@ pub fn embedding_text(title: &str, heading: &str, passage: &str) -> String {
     }
 }
 
-fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning) -> Result<(Vec<SemanticHit>, Vec<f32>), String> {
+fn restrict_status(status: &mut Status, corpus: &Corpus, meaning: Option<&Meaning>, scope: &corpus::FolderScope) -> Vec<u64> {
+    let mut versions = HashMap::new();
+    let mut passages = 0;
+    for doc in &corpus.docs {
+        if corpus.in_scope(&doc.rel_path, scope) {
+            versions.insert(doc.rel_path.as_str(), doc.hash.as_str());
+            passages += doc.passages.len();
+        }
+    }
+    let files = versions.len();
+    let skipped = corpus.skipped.iter().filter(|s| corpus.in_scope(&s.rel_path, scope)).count();
+    status.folder = if scope.roots().is_empty() {
+        FolderStatus::None
+    } else {
+        FolderStatus::Ready { files, passages, skipped, links_skipped: 0 }
+    };
+    status.unavailable_folders = corpus.unavailable.iter().filter(|s| scope.contains_path(Path::new(&s.rel_path))).count();
+    status.link_count_unknown = true;
+    let mut allowed = Vec::new();
+    let files_done = meaning.map_or(0, |m| {
+        let points = m.points.read().unwrap();
+        let mut seen = HashSet::new();
+        for (&point, (doc, _)) in points.iter() {
+            if versions.get(doc.rel_path.as_str()) == Some(&doc.hash.as_str()) {
+                seen.insert(doc.id.as_str());
+                allowed.push(point);
+            }
+        }
+        seen.len()
+    });
+    let passages_done = allowed.len();
+    match status.meaning {
+        MeaningStatus::Ready { .. } => status.meaning = MeaningStatus::Ready { files: files_done, passages: passages_done },
+        MeaningStatus::Indexing { .. } => status.meaning = MeaningStatus::Indexing { files_done, passages_done, files_total: files, passages_total: passages },
+        _ => {}
+    }
+    allowed
+}
+
+fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning, allowed: Option<&[u64]>) -> Result<(Vec<SemanticHit>, Vec<f32>), String> {
+    if allowed.is_some_and(<[u64]>::is_empty) {
+        return Ok((Vec::new(), Vec::new()));
+    }
     let phase = Instant::now();
     let embedded = meaning.embedder.embed_query(&[query.trim()]);
     trace_query_stage("embedding", phase);
     let mut vector = embedded?.pop().ok_or("no query vector")?;
     let phase = Instant::now();
-    let nearest = meaning.index.nearest(vector.clone(), tuning.semantic_passages)?;
+    let nearest = meaning.index.nearest_in(vector.clone(), tuning.semantic_passages, allowed)?;
     trace_query_stage("nearest", phase);
     crate::embed::normalize(&mut vector);
     let points = meaning.points.read().unwrap();
