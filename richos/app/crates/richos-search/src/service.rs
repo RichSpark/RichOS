@@ -64,6 +64,7 @@ pub const BUSY_YIELD: std::time::Duration = std::time::Duration::from_millis(100
 
 pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
+pub type Grant = Box<dyn Fn() -> bool + Send + Sync>;
 
 pub struct Config {
     /// `RICHOS_SEARCH_DOCUMENTS_ROOT`, or `None` when unset.
@@ -214,6 +215,8 @@ struct Inner {
     meaning: RwLock<Option<Arc<Meaning>>>,
     generation: AtomicU64,
     stop: AtomicBool,
+    grant: Option<Grant>,
+    access: Mutex<()>,
     last: Mutex<Option<(CacheKey, Arc<Vec<Ranked>>)>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -248,10 +251,17 @@ impl SearchService {
     /// Start the service: reading the folder and building the meaning index happen on a
     /// background thread; this returns at once.
     pub fn start(config: Config) -> Self {
-        Self::start_with_metadata(config, None)
+        Self::start_with_grant(config, None, None, || {})
     }
 
-    pub fn start_with_metadata(config: Config, metadata: Option<MetadataSource>) -> Self {
+    /// Read the corpus right away, then wait for the host's previous index to close.
+    /// Background reads and embeddings check the grant even when nobody is searching.
+    pub fn start_with_grant(
+        config: Config,
+        metadata: Option<MetadataSource>,
+        grant: Option<Grant>,
+        before_index: impl FnOnce() + Send + 'static,
+    ) -> Self {
         let service = SearchService(Arc::new(Inner {
             folder: RwLock::new(if config.root.is_some() { FolderStatus::Loading } else { FolderStatus::None }),
             config,
@@ -261,20 +271,22 @@ impl SearchService {
             meaning: RwLock::new(None),
             generation: AtomicU64::new(1),
             stop: AtomicBool::new(false),
+            grant,
+            access: Mutex::new(()),
             last: Mutex::new(None),
             worker: Mutex::new(None),
         }));
-        service.spawn(false);
+        service.spawn(false, before_index);
         service
     }
 
-    fn spawn(&self, rebuild: bool) {
+    fn spawn(&self, rebuild: bool, before_index: impl FnOnce() + Send + 'static) {
         let me = self.clone();
         let handle = std::thread::Builder::new()
             .name("richos-search".into())
             .spawn(move || {
                 lower_this_thread();
-                me.run(rebuild);
+                me.run(rebuild, before_index);
             })
             .expect("the search thread could not start");
         *self.0.worker.lock().unwrap() = Some(handle);
@@ -282,14 +294,21 @@ impl SearchService {
 
     /// Stop background work and wait for it; the index is flushed as it closes.
     pub fn shutdown(&self) {
-        self.0.stop.store(true, Ordering::SeqCst);
-        let handle = self.0.worker.lock().unwrap().take();
-        if let Some(handle) = handle {
+        self.request_stop();
+        let mut worker = self.0.worker.lock().unwrap();
+        if let Some(handle) = worker.take() {
             if handle.join().is_err() {
                 eprintln!("document search: the search thread ended in a panic");
             }
         }
+        // A query can hold a reference to the old index while its result is being discarded.
+        // Release that reference before allowing a replacement to open the same index.
+        let _access = self.0.access.lock().unwrap();
         *self.0.meaning.write().unwrap() = None;
+    }
+
+    pub fn request_stop(&self) {
+        self.0.stop.store(true, Ordering::SeqCst);
     }
 
     /// Explicit Reindex: re-read the folder and rebuild the meaning index from nothing.
@@ -302,13 +321,13 @@ impl SearchService {
             *self.0.folder.write().unwrap() = FolderStatus::Loading;
         }
         self.bump();
-        self.spawn(true);
+        self.spawn(true, || {});
     }
 
     /// Wait (for tests and the harness) until background work has finished.
     pub fn wait_idle(&self) {
-        let handle = self.0.worker.lock().unwrap().take();
-        if let Some(handle) = handle {
+        let mut worker = self.0.worker.lock().unwrap();
+        if let Some(handle) = worker.take() {
             if handle.join().is_err() {
                 eprintln!("document search: the search thread ended in a panic");
             }
@@ -320,18 +339,31 @@ impl SearchService {
         *self.0.last.lock().unwrap() = None;
     }
 
-    fn stopping(&self) -> bool {
+    pub fn stopping(&self) -> bool {
         self.0.stop.load(Ordering::SeqCst)
+    }
+
+    fn background_stopping(&self) -> bool {
+        if self.stopping() {
+            return true;
+        }
+        if self.0.grant.as_ref().is_some_and(|authorized| !authorized()) {
+            if !self.0.stop.swap(true, Ordering::SeqCst) {
+                eprintln!("[richos] document search: background grant revoked");
+            }
+            return true;
+        }
+        self.stopping()
     }
 
     fn set_meaning(&self, status: MeaningStatus) {
         *self.0.meaning_status.write().unwrap() = status;
     }
 
-    fn run(&self, rebuild: bool) {
+    fn run(&self, rebuild: bool, before_index: impl FnOnce()) {
         let Some(root) = self.0.config.root.clone() else { return };
-        match corpus::load_with_metadata(&root, self.0.metadata.as_ref()) {
-            Ok(c) => {
+        match corpus::load_until_stopped(&root, self.0.metadata.as_ref(), || self.background_stopping()) {
+            Ok(Some(c)) => {
                 *self.0.folder.write().unwrap() = FolderStatus::Ready {
                     files: c.docs.len(),
                     passages: c.passage_count(),
@@ -341,11 +373,16 @@ impl SearchService {
                 *self.0.corpus.write().unwrap() = Some(Arc::new(c));
                 self.bump();
             }
+            Ok(None) => return,
             Err(message) => {
                 *self.0.folder.write().unwrap() = FolderStatus::Error { message };
                 self.set_meaning(MeaningStatus::Unavailable { reason: "No search folder to index.".into() });
                 return;
             }
+        }
+        before_index();
+        if self.background_stopping() {
+            return;
         }
         if let Err(reason) = self.build_meaning(rebuild) {
             *self.0.meaning.write().unwrap() = None;
@@ -358,6 +395,9 @@ impl SearchService {
         let corpus = self.0.corpus.read().unwrap().clone().ok_or("The folder was not read.")?;
         let cache = self.0.config.cache.clone()?;
         let embedder = (self.0.config.make_embedder)()?;
+        if self.background_stopping() {
+            return Ok(());
+        }
         let identity = format!("{}|{}", embedder.identity(), CHUNKER_IDENTITY);
         let dir = index_dir(&cache, &corpus.root, &identity);
         if rebuild && dir.exists() {
@@ -408,6 +448,9 @@ impl SearchService {
         self.set_meaning(report(files_done, passages_done));
 
         for batch in todo.chunks(self.0.config.tuning.batch_files.max(1)) {
+            if self.background_stopping() {
+                return Ok(());
+            }
             // Mark the batch indexing, with the points it will write, before writing any.
             for &i in batch {
                 let doc = &corpus.docs[i];
@@ -429,11 +472,14 @@ impl SearchService {
                     if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
                         std::thread::sleep(BUSY_YIELD);
                     }
-                    if self.stopping() {
+                    if self.background_stopping() {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
                     let vector = meaning.embedder.embed(&[&text])?.pop().ok_or("The embedding model returned nothing.")?;
+                    if self.background_stopping() {
+                        return Ok(());
+                    }
                     meaning.index.upsert(vec![(point_id(&doc.id, &doc.hash, p), vector)])?;
                 }
             }
@@ -456,7 +502,7 @@ impl SearchService {
             self.bump();
             self.set_meaning(report(files_done, passages_done));
         }
-        if !todo.is_empty() && !self.stopping() {
+        if !todo.is_empty() && !self.background_stopping() {
             meaning.index.optimize()?;
         }
         self.set_meaning(report(files_done, passages_done));
@@ -485,11 +531,13 @@ impl SearchService {
     }
 
     pub fn search(&self, request: &SearchRequest) -> SearchResponse {
+        let _access = self.0.access.lock().unwrap();
         let started = Instant::now();
         let parsed = query::parse(&request.query);
         let requested = Mode { super_finder: request.super_finder, strict: request.strict };
-        let corpus = self.0.corpus.read().unwrap().clone();
-        let meaning = if request.super_finder { self.meaning_for_query() } else { None };
+        let stopped = self.stopping();
+        let corpus = if stopped { None } else { self.0.corpus.read().unwrap().clone() };
+        let meaning = if request.super_finder && !stopped { self.meaning_for_query() } else { None };
         let effective = Mode { super_finder: meaning.is_some(), strict: request.strict };
         let mut response = SearchResponse {
             requested,
@@ -556,7 +604,7 @@ impl SearchService {
         // this page stopped looking, the next page's offset.
         let limit = request.limit.clamp(1, MAX_PAGE);
         for row in ranked.iter().skip(request.offset) {
-            if response.hits.len() == limit {
+            if self.stopping() || response.hits.len() == limit {
                 break;
             }
             let doc = &corpus.docs[row.doc];
@@ -587,6 +635,10 @@ impl SearchService {
     /// The file behind a result, for Open original: found by its source ID, resolved inside the
     /// folder, and refused unless it is still the version that was searched.
     pub fn resolve_for_open(&self, source_id: &str) -> Result<PathBuf, String> {
+        let _access = self.0.access.lock().unwrap();
+        if self.stopping() {
+            return Err("That document is not in the search folder.".into());
+        }
         let corpus = self.0.corpus.read().unwrap().clone().ok_or("No search folder is configured.")?;
         let doc = corpus.docs.iter().find(|d| d.id == source_id).ok_or("That document is not in the search folder.")?;
         let path = corpus::resolve_inside(&corpus.root, &doc.rel_path)?;

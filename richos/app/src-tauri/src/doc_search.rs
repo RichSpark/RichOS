@@ -17,31 +17,36 @@
 //!   `/usr/bin/open`. It is not an entry in `opener.rs`'s fixed table and accepts no path, URL
 //!   or command from the renderer (*"It does not widen the existing fixed URL allowlist or
 //!   accept a renderer-supplied path or command."*).
-use richos_search::embed::Embedder;
 use richos_search::corpus::MetadataSource;
-use richos_search::service::{Config, SearchRequest, SearchResponse, SearchService, Status, Tuning};
+use richos_search::embed::Embedder;
+use richos_search::service::{Busy, Config, Grant, SearchRequest, SearchResponse, SearchService, Status, Tuning};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc, Mutex};
 
 #[derive(PartialEq, Eq)]
 struct Location {
     root: Result<Option<PathBuf>, String>,
     cache: Result<PathBuf, String>,
-    #[cfg(target_os = "macos")]
-    cleaner_revision: [Option<(u64, i64, i64)>; 2],
+    cleaner_revision: CleanerRevision,
 }
+
+type CleanerRevision = [Option<(u64, i64, i64)>; 2];
+type Locate = Arc<dyn Fn() -> Location + Send + Sync>;
+type EmbedderFactory = Arc<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
+type RetiredService = (SearchService, mpsc::Sender<()>);
 
 impl Location {
     fn from_settings(home: &Path, settings: Result<richos_core::machine_settings::Settings, String>) -> Self {
         match settings {
-            Ok(s) => Self { root: Ok(s.search_documents_root()), cache: s.cache(home, "search"), #[cfg(target_os = "macos")] cleaner_revision: [None; 2] },
-            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()), #[cfg(target_os = "macos")] cleaner_revision: [None; 2] },
+            Ok(s) => Self { root: Ok(s.search_documents_root()), cache: s.cache(home, "search"), cleaner_revision: [None; 2] },
+            Err(e) => Self { root: Err(e), cache: Err("RichOS's storage settings could not be read.".into()), cleaner_revision: [None; 2] },
         }
     }
 }
 
+#[derive(Clone)]
 struct ActiveSearch {
-    location: Location,
+    location: Arc<Location>,
     service: SearchService,
     /// Generations never go backwards when a new service starts at generation one.
     base: u64,
@@ -70,85 +75,139 @@ impl ActiveSearch {
 }
 
 /// One live grant shared by the palette, Open original and Rich's existing socket.
-/// The machine settings file is read at those host boundaries, including just before
-/// returning hits or opening a file. No watcher or app restart is needed.
+/// The host rechecks the grant before giving out results. Background work checks
+/// it before reading each file or embedding a passage, even with the palette closed.
 pub struct DocumentSearch {
     active: Mutex<ActiveSearch>,
-    location: Box<dyn Fn() -> Location + Send + Sync>,
-    build: Box<dyn Fn(&Location) -> SearchService + Send + Sync>,
+    location: Locate,
+    make_embedder: EmbedderFactory,
+    busy: Option<Busy>,
+    metadata: Option<MetadataSource>,
+    retire: mpsc::Sender<RetiredService>,
+    closed: std::sync::atomic::AtomicBool,
 }
 
 impl DocumentSearch {
     fn new(
         location: impl Fn() -> Location + Send + Sync + 'static,
-        build: impl Fn(&Location) -> SearchService + Send + Sync + 'static,
+        make_embedder: impl Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync + 'static,
+        busy: Option<Busy>,
+        metadata: Option<MetadataSource>,
     ) -> Arc<Self> {
-        let initial = location();
+        let location: Locate = Arc::new(location);
+        let make_embedder: EmbedderFactory = Arc::new(make_embedder);
+        let initial = Arc::new(location());
         if initial.root.is_err() {
             eprintln!("[richos] document search: settings unreadable, no folder searched");
         }
-        let service = build(&initial);
+        let (retire, queue) = mpsc::channel::<RetiredService>();
+        std::thread::Builder::new().name("richos-search-retire".into()).spawn(move || {
+            for (old, done) in queue {
+                old.shutdown();
+                // A grant without a usable folder can finish before it needs the index.
+                let _delivered = done.send(());
+            }
+        }).expect("the search cleanup thread could not start");
+        let factory = make_embedder.clone();
+        let service = Self::build(initial.clone(), location.clone(), Box::new(move || factory()), busy.clone(), metadata.clone(), None);
         Arc::new(Self {
             active: Mutex::new(ActiveSearch { location: initial, service, base: 0 }),
-            location: Box::new(location),
-            build: Box::new(build),
+            location,
+            make_embedder,
+            busy,
+            metadata,
+            retire,
+            closed: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
-    /// Hold the same lock across the transition and reads. Finish the previous worker
-    /// before opening another index, including when the user switches back to a prior root.
-    fn refresh(&self, active: &mut ActiveSearch) -> bool {
-        let location = (self.location)();
-        if active.location == location {
-            return false;
+    fn build(
+        location: Arc<Location>,
+        current: Locate,
+        make_embedder: richos_search::service::MakeEmbedder,
+        busy: Option<Busy>,
+        metadata: Option<MetadataSource>,
+        retired: Option<mpsc::Receiver<()>>,
+    ) -> SearchService {
+        let config = Config {
+            root: location.root.clone().ok().flatten(),
+            cache: location.cache.clone(),
+            make_embedder,
+            busy,
+            tuning: Tuning::default(),
+        };
+        let authorized: Grant = Box::new(move || current() == *location);
+        SearchService::start_with_grant(config, metadata, Some(authorized), move || {
+            if let Some(retired) = retired {
+                retired.recv().expect("the previous search index did not close");
+            }
+        })
+    }
+
+    fn current(&self) -> ActiveSearch {
+        use std::sync::atomic::Ordering;
+        let mut active = self.active.lock().unwrap();
+        if self.closed.load(Ordering::SeqCst) {
+            return active.clone();
         }
-        active.service.shutdown();
-        active.base += active.service.status().generation;
-        // The setting may have changed again while the old worker stopped.
-        active.location = (self.location)();
-        let state = match &active.location.root {
+        let location = Arc::new((self.location)());
+        if active.location == location && !active.service.stopping() {
+            return active.clone();
+        }
+        active.service.request_stop();
+        let (done, retired) = mpsc::channel();
+        self.retire.send((active.service.clone(), done)).expect("search cleanup thread stopped");
+        let state = match &location.root {
             Ok(Some(_)) => "changed",
             Ok(None) => "cleared",
             Err(_) => "unreadable",
         };
         eprintln!("[richos] document search: grant={state}; previous access revoked");
-        active.service = (self.build)(&active.location);
-        true
-    }
-
-    fn current(&self) -> MutexGuard<'_, ActiveSearch> {
-        let mut active = self.active.lock().unwrap();
-        self.refresh(&mut active);
-        active
+        // Text loads without waiting. The background worker only waits to open the
+        // index, so even an A -> B -> A switch preserves exclusive index ownership.
+        let factory = self.make_embedder.clone();
+        let service = Self::build(location.clone(), self.location.clone(), Box::new(move || factory()), self.busy.clone(), self.metadata.clone(), Some(retired));
+        *active = ActiveSearch { location, service, base: active.base + active.service.status().generation };
+        active.clone()
     }
 
     fn read<T>(&self, read: impl Fn(&ActiveSearch, bool) -> T) -> T {
-        let mut active = self.current();
+        let active = self.current();
         let result = read(&active, false);
-        if self.refresh(&mut active) {
+        let current = self.current();
+        if current.base != active.base || active.service.stopping() {
             // The old result may contain excerpts. Return an empty response from the
             // new state rather than exposing it or reusing an old page offset.
-            return read(&active, true);
+            return read(&current, true);
         }
         result
     }
 
     pub fn shutdown(&self) {
-        self.active.lock().unwrap().service.shutdown();
+        let active = self.active.lock().unwrap();
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        active.service.request_stop();
+        let (done, retired) = mpsc::channel();
+        if self.retire.send((active.service.clone(), done)).is_ok() {
+            drop(active);
+            if retired.recv().is_err() {
+                eprintln!("[richos] document search: cleanup interrupted at shutdown");
+            }
+        }
     }
 
     fn resolve_for_open(&self, source_id: &str) -> Result<PathBuf, String> {
-        let mut active = self.current();
+        let active = self.current();
         let absent = || "That document is not in the search folder.".to_string();
         let (base, id) = source_id.split_once(':').ok_or_else(absent)?;
         if base.parse::<u64>().ok() != Some(active.base) {
             return Err(absent());
         }
-        let path = active.service.resolve_for_open(id)?;
-        if self.refresh(&mut active) {
+        let path = active.service.resolve_for_open(id);
+        if self.current().base != active.base || active.service.stopping() {
             return Err(absent());
         }
-        Ok(path)
+        path
     }
 }
 
@@ -170,18 +229,14 @@ pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -
             let location = Location { cleaner_revision: cleaner_revision(&catalog, &location), ..location };
             location
         },
-        move |location| SearchService::start_with_metadata(Config {
-            root: location.root.clone().ok().flatten(),
-            cache: location.cache.clone(),
-            make_embedder: Box::new(make_embedder),
-            busy: Some(busy.clone()),
-            tuning: Tuning::default(),
-        }, metadata.clone()),
+        make_embedder,
+        Some(busy),
+        metadata,
     )
 }
 
 #[cfg(target_os = "macos")]
-fn cleaner_revision(directory: &Path, location: &Location) -> [Option<(u64, i64, i64)>; 2] {
+fn cleaner_revision(directory: &Path, location: &Location) -> CleanerRevision {
     use std::os::unix::fs::MetadataExt;
     if !matches!(location.root, Ok(Some(_))) {
         return [None; 2];
@@ -416,20 +471,16 @@ mod tests {
         }
         let cache = base.join("cache");
         let service = DocumentSearch::new(
-            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), #[cfg(target_os = "macos")] cleaner_revision: [None; 2] },
-            move |location| SearchService::start(Config {
-                root: location.root.clone().unwrap(),
-                cache: location.cache.clone(),
-                make_embedder: Box::new(move || {
-                    if with_model {
-                        Ok(Box::new(ConceptEmbedder::stand_in()))
-                    } else {
-                        Err("Apple's sentence embedding for 'en' is not available on this Mac.".into())
-                    }
-                }),
-                busy: None,
-                tuning: Tuning::default(),
-            }),
+            move || Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), cleaner_revision: [None; 2] },
+            move || {
+                if with_model {
+                    Ok(Box::new(ConceptEmbedder::stand_in()))
+                } else {
+                    Err("Apple's sentence embedding for 'en' is not available on this Mac.".into())
+                }
+            },
+            None,
+            None,
         );
         service.current().service.wait_idle();
         (service, base)
@@ -649,13 +700,9 @@ mod tests {
         let home = base.clone();
         let service = DocumentSearch::new(
             move || Location::from_settings(&home, Settings::load(&home, &Default::default())),
-            |location| SearchService::start(Config {
-                root: location.root.clone().ok().flatten(),
-                cache: location.cache.clone(),
-                make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
-                busy: None,
-                tuning: Tuning::default(),
-            }),
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None,
+            None,
         );
         let tool = ToolAnswer(service.clone());
         let request = SearchRequest { query: "refund".into(), super_finder: true, strict: false, offset: 0, limit: PAGE };
@@ -700,6 +747,107 @@ mod tests {
         assert!(in_flight.hits.is_empty());
         assert!(matches!(in_flight.status.folder, richos_search::service::FolderStatus::Error { .. }));
         assert!(in_flight.requested.super_finder && !in_flight.effective.super_finder);
+        service.shutdown();
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_folder_switch_can_search_replacement_text_while_the_old_worker_is_blocked() {
+        blocked_grant_worker(true);
+    }
+
+    #[test]
+    fn a_folder_edit_stops_background_embedding_without_a_search_request() {
+        blocked_grant_worker(false);
+    }
+
+    fn blocked_grant_worker(switch: bool) {
+        use richos_core::machine_settings::{self, Settings};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        struct BlockFirst {
+            calls: Arc<AtomicUsize>,
+            entered: mpsc::Sender<()>,
+            release: Mutex<Option<mpsc::Receiver<()>>>,
+        }
+
+        impl Embedder for BlockFirst {
+            fn identity(&self) -> String { ConceptEmbedder::stand_in().identity() }
+            fn dimension(&self) -> usize { ConceptEmbedder::stand_in().dimension() }
+            fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if let Some(release) = self.release.lock().unwrap().take() {
+                    self.entered.send(()).unwrap();
+                    release.recv().map_err(|_| "test released the blocked worker")?;
+                }
+                ConceptEmbedder::stand_in().embed(texts)
+            }
+        }
+
+        let base = std::env::temp_dir().join(format!("richos-blocked-grant-{}-{switch}", std::process::id()));
+        let old = base.join("old");
+        let new = base.join("new");
+        for (folder, name) in [(&old, "old"), (&new, "new")] {
+            std::fs::create_dir_all(folder).unwrap();
+            for i in 1..=2 {
+                std::fs::write(folder.join(format!("{i}.md")), format!("# Refund\n\nThe {name} refund note.")).unwrap();
+            }
+        }
+        let file = machine_settings::file(&base);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let set = |folder: &Path| std::fs::write(&file, format!("RICHOS_SEARCH_DOCUMENTS_ROOT={}\n", folder.display())).unwrap();
+        set(&old);
+
+        let (entered, in_embedding) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let first = Mutex::new(Some(BlockFirst { calls: calls.clone(), entered, release: Mutex::new(Some(blocked)) }));
+        let home = base.clone();
+        let service = DocumentSearch::new(
+            move || Location::from_settings(&home, Settings::load(&home, &Default::default())),
+            move || match first.lock().unwrap().take() {
+                Some(blocker) => Ok(Box::new(blocker)),
+                None => Ok(Box::new(ConceptEmbedder::stand_in())),
+            },
+            None,
+            None,
+        );
+        let prior = service.current();
+        // load-bound: hang guard only. The worker must enter the controlled block.
+        in_embedding.recv_timeout(Duration::from_secs(10)).unwrap();
+        if switch {
+            set(&new);
+            let (reported, result) = mpsc::channel();
+            let host = service.clone();
+            let query = std::thread::spawn(move || {
+                let request = SearchRequest { query: "refund".into(), super_finder: false, strict: false, offset: 0, limit: PAGE };
+                loop {
+                    let response = search(&host, request.clone());
+                    if !response.hits.is_empty() {
+                        reported.send(response).unwrap();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                    if host.closed.load(Ordering::SeqCst) { break; }
+                }
+            });
+            // load-bound: hang guard only. The old worker stays held by the channel until the replacement replies.
+            let response = result.recv_timeout(Duration::from_secs(10));
+            release.send(()).unwrap();
+            if response.is_err() { service.shutdown(); }
+            query.join().unwrap();
+            let response = response.unwrap();
+            assert!(response.hits.iter().all(|hit| hit.passage.text.contains("new refund")));
+            assert!(response.status.generation > prior.base);
+            service.current().service.wait_idle();
+        } else {
+            std::fs::remove_file(&file).unwrap();
+            release.send(()).unwrap();
+            prior.service.wait_idle();
+            assert!(prior.service.stopping(), "the worker must observe the edit on its own");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "no later embedding may start under the revoked grant");
         service.shutdown();
         std::fs::remove_dir_all(base).unwrap();
     }
@@ -781,11 +929,9 @@ mod tests {
                 let location = Location { root: Ok(Some(folder.clone())), cache: Ok(cache.clone()), cleaner_revision: [None; 2] };
                 Location { cleaner_revision: cleaner_revision(&cleaner, &location), ..location }
             },
-            move |location| SearchService::start_with_metadata(Config {
-                root: location.root.clone().unwrap(), cache: location.cache.clone(),
-                make_embedder: Box::new(|| Ok(Box::new(ConceptEmbedder::stand_in()))),
-                busy: None, tuning: Tuning::default(),
-            }, Some(adapter.clone())),
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None,
+            Some(adapter),
         );
         let query = |query: &str, super_finder, strict| search(&service, SearchRequest {
             query: query.into(), super_finder, strict, offset: 0, limit: PAGE,

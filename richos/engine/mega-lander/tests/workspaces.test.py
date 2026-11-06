@@ -8216,6 +8216,45 @@ class NoSilentHolds(Base):
         ws.release("stream-b", ceo_word="park Stream B until Monday", session_id=self.sid)
         self.assertEqual(ws.holds(self.sid), [])
 
+    def _review_world(self):
+        """A review ledger and a review-watch folder of this test's own."""
+        for k in ("SECOND_REVIEW_STATE_DIR", "REVIEW_WATCH_STATE_DIR"):
+            self.env.saved.setdefault(k, os.environ.get(k))
+        led = os.path.join(self.env.root, "hold-reviews")
+        watch = os.path.join(self.env.root, "hold-watch")
+        os.makedirs(os.path.join(watch, "locks"))
+        os.makedirs(led)
+        os.environ["SECOND_REVIEW_STATE_DIR"] = led
+        os.environ["REVIEW_WATCH_STATE_DIR"] = watch
+        return led, watch
+
+    def test_holds_review_by_repo_and_sha_is_pending_while_it_runs_and_ended_with_its_verdict(self):
+        led, watch = self._review_world()
+        tip = "ed8bcf92c318b82853c91b18491f96c05b1a07d9"
+        end = ws.hold_end("review:richos@ed8bcf92c")
+        self.assertEqual(end, "review:richos@ed8bcf92c")
+        self.assertEqual(ws.hold_end_state(end)[0], "due")                        # nothing runs yet
+        with open(os.path.join(watch, "locks", "abc-%s.lock" % tip), "w") as f:
+            json.dump({"repo": "/x/ab/richos", "tip": tip, "started_at": ws.now() - 60}, f)
+        self.assertEqual(ws.hold_end_state(end)[0], "pending")                    # running
+        self.assertEqual(ws.hold_end_state("review:other@ed8bcf92c")[0], "due")   # another repository
+        os.remove(os.path.join(watch, "locks", "abc-%s.lock" % tip))
+        with open(os.path.join(led, "reviews.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "rv-1", "repo": "/x/ab/richos", "tip": tip, "verdict": "passed"}) + "\n")
+        state, why = ws.hold_end_state(end)
+        self.assertEqual(state, "due")
+        self.assertIn("verdict", why)
+
+    def test_holds_review_by_rv_id_still_works_and_a_malformed_end_is_refused(self):
+        led, _w = self._review_world()
+        self.assertEqual(ws.hold_end_state("review:rv-20261106T083301Z-ed8bcf92-82b3")[0], "due")
+        with open(os.path.join(led, "reviews.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "rv-9", "tip": "c" * 40, "verdict": "passed"}) + "\n")
+        self.assertIn("verdict", ws.hold_end_state("review:rv-9")[1])
+        for bad in ("review:richos", "review:richos@zz", "review:ed8bcf92c", "review:@ed8bcf92c"):
+            with self.assertRaises(ws.SpecError, msg=bad):
+                ws.hold_end(bad)
+
     def test_holds_t5_the_work_running_ends_it_and_a_false_catch_is_shown_once(self):
         aid, _n = self.spawn("zach-opus-y")
         ws.hold("stream-c", "Stream C", "agent:zach-opus-y", "", self.sid)

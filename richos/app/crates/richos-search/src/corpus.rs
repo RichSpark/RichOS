@@ -169,14 +169,25 @@ pub fn validate_root(root: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+struct DirectoryEntries {
+    files: Vec<(String, PathBuf)>,
+    links_skipped: usize,
+}
+
 /// Every supported file under `root`, in path order, as `(relative path, absolute path)`.
-fn list(root: &Path, metadata: Option<&MetadataSource>) -> Result<(Vec<(String, PathBuf)>, usize), String> {
+fn list(root: &Path, metadata: Option<&MetadataSource>, stopped: &impl Fn() -> bool) -> Result<Option<DirectoryEntries>, String> {
     let mut files = Vec::new();
     let mut links = 0usize;
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if stopped() {
+            return Ok(None);
+        }
         let entries = std::fs::read_dir(&dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
         for entry in entries.flatten() {
+            if stopped() {
+                return Ok(None);
+            }
             let path = entry.path();
             let Ok(kind) = entry.file_type() else { continue };
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -196,7 +207,7 @@ fn list(root: &Path, metadata: Option<&MetadataSource>) -> Result<(Vec<(String, 
         }
     }
     files.sort();
-    Ok((files, links))
+    Ok(Some(DirectoryEntries { files, links_skipped: links }))
 }
 
 fn relative(root: &Path, path: &Path) -> Option<String> {
@@ -234,14 +245,21 @@ pub fn read_document(rel_path: &str, path: &Path) -> Result<Document, String> {
 /// no index (PRD: *"Text search must work independently of Edge availability and model
 /// startup."*).
 pub fn load(root: &Path) -> Result<Corpus, String> {
-    load_with_metadata(root, None)
+    Ok(load_until_stopped(root, None, || false)?.expect("no cancellation requested"))
 }
 
-pub(crate) fn load_with_metadata(root: &Path, metadata: Option<&MetadataSource>) -> Result<Corpus, String> {
+/// Cancellation discards the partial corpus. Check before opening each directory and file.
+pub(crate) fn load_until_stopped(root: &Path, metadata: Option<&MetadataSource>, stopped: impl Fn() -> bool) -> Result<Option<Corpus>, String> {
+    if stopped() {
+        return Ok(None);
+    }
     let root = validate_root(root)?;
-    let (files, links_skipped) = list(&root, metadata)?;
+    let Some(DirectoryEntries { files, links_skipped }) = list(&root, metadata, &stopped)? else { return Ok(None) };
     let mut corpus = Corpus { root, docs: Vec::with_capacity(files.len()), skipped: Vec::new(), links_skipped };
     for (rel, path) in files {
+        if stopped() {
+            return Ok(None);
+        }
         let result = if supported(&path) {
             read_document(&rel, &path).map(Some)
         } else {
@@ -253,7 +271,7 @@ pub(crate) fn load_with_metadata(root: &Path, metadata: Option<&MetadataSource>)
             Err(reason) => corpus.skipped.push(Skipped { rel_path: rel, reason }),
         }
     }
-    Ok(corpus)
+    Ok((!stopped()).then_some(corpus))
 }
 
 fn read_metadata_document(root: &Path, rel: &str, source: &MetadataSource) -> Result<Option<Document>, String> {
