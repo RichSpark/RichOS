@@ -486,6 +486,7 @@ impl SearchService {
     fn build_meaning(&self, rebuild: bool, corpus: &Corpus, pending_media: &HashSet<&str>) -> Result<Option<IndexWriter>, String> {
         let cache = self.0.config.cache.clone()?;
         let embedder = (self.0.config.make_embedder)()?;
+        embedder.prepare(&|| self.background_stopping())?;
         if self.background_stopping() {
             return Ok(None);
         }
@@ -570,7 +571,7 @@ impl SearchService {
                         return Ok(None);
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed(&[&text])?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())?.pop().ok_or("The embedding model returned nothing.")?;
                     if self.background_stopping() {
                         return Ok(None);
                     }
@@ -707,7 +708,7 @@ impl SearchService {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
-                    let vector = meaning.embedder.embed(&[&text])?.pop().ok_or("The embedding model returned nothing.")?;
+                    let vector = meaning.embedder.embed_for_index(&[&text], &|| self.background_stopping())?.pop().ok_or("The embedding model returned nothing.")?;
                     if self.background_stopping() {
                         return Ok(());
                     }
@@ -882,7 +883,7 @@ impl SearchService {
         let mut all = Vec::with_capacity(texts.len() + 1);
         all.push(query.trim());
         all.extend_from_slice(texts);
-        let vectors = meaning.embedder.embed(&all).ok()?;
+        let vectors = meaning.embedder.embed_query(&all).ok()?;
         let (q, rest) = vectors.split_first()?;
         let dot = |v: &Vec<f32>| v.iter().zip(q).map(|(a, b)| a * b).sum::<f32>();
         rest.iter().enumerate().max_by(|a, b| dot(a.1).total_cmp(&dot(b.1)).then(b.0.cmp(&a.0))).map(|(i, _)| i)
@@ -951,7 +952,7 @@ pub fn embedding_text(title: &str, heading: &str, passage: &str) -> String {
 }
 
 fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning) -> Result<(Vec<SemanticHit>, Vec<f32>), String> {
-    let mut vector = meaning.embedder.embed(&[query.trim()])?.pop().ok_or("no query vector")?;
+    let mut vector = meaning.embedder.embed_query(&[query.trim()])?.pop().ok_or("no query vector")?;
     let nearest = meaning.index.nearest(vector.clone(), tuning.semantic_passages)?;
     crate::embed::normalize(&mut vector);
     let points = meaning.points.read().unwrap();
