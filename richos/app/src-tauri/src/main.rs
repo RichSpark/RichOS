@@ -153,6 +153,7 @@ mod opener;
 // DOCUMENT SEARCH (search PRD v3.1): the palette's Documents section, Super Finder, Open
 // original and the socket Rich's search tool reaches it through.
 mod doc_search;
+mod search_diagnostics;
 #[cfg(target_os = "macos")]
 mod search_embed;
 #[cfg(target_os = "macos")]

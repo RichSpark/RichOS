@@ -473,7 +473,15 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
     off_the_ipc_threads(move || {
         let picture = bugs.look.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let looked = picture.is_some() || !bug::screen_words(&screen.content).is_empty();
-        let prompt = bug::writer_prompt_for(post, &answer, &screen, &bugs.version, scrubber.terms(), picture.is_some());
+        let mut prompt = bug::writer_prompt_for(post, &answer, &screen, &bugs.version, scrubber.terms(), picture.is_some());
+        let report_topic = answer.to_ascii_lowercase();
+        let concerns_search = post == bug::Post::Bug
+            && (report_topic.contains("richfinder") || report_topic.contains("super finder"));
+        let timings = if concerns_search { crate::search_diagnostics::recent() } else { None };
+        if let Some(timings) = timings {
+            prompt.push_str("\n\nRecent local RichFinder timing measurements (milliseconds):\n");
+            prompt.push_str(&timings);
+        }
         let input = bug::writer_input(&prompt, picture.as_ref());
         // Rich writes it, the scanner goes over it, and Rich gets the last word (CEO §115).
         let last = |prompt: &str| ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));

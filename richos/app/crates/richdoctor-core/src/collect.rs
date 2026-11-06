@@ -216,7 +216,7 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
     match category {
         Category::Installation => vec![installation(scope, ctx)],
         Category::StartupCrash => startup_crash(scope, ctx, &mut budget),
-        Category::ConversationFailure => vec![conversation_failure(scope, ctx, &mut budget)],
+        Category::ConversationFailure => vec![conversation_failure(scope, ctx, &mut budget), richfinder_timing(scope, ctx, &mut budget)],
         Category::Configuration => vec![configuration(scope, ctx, &mut budget)],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
         Category::ClaudeAvailability => vec![claude_availability(scope)],
@@ -642,6 +642,52 @@ fn configuration(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     finish(item, &lines.join("\n"), ctx, false)
 }
 
+pub const SEARCH_TIMING_LOG: &str = "richfinder-timing.jsonl";
+
+/// Read only the fixed timing fields. Unknown text in the file is discarded.
+pub fn search_timing_lines(text: &str) -> Vec<(u64, String)> {
+    text.lines().filter_map(|line| {
+        let record = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        let at = record["at_ms"].as_u64()?;
+        let operation = record["operation"].as_u64()?;
+        let mode = record["mode"].as_str()?;
+        let total = record["total_ms"].as_f64()?;
+        if !matches!(mode, "meaning" | "words" | "words_fallback" | "superseded") { return None; }
+        let build: String = record["build"].as_str()?.chars()
+            .filter(|c| c.is_ascii_hexdigit() || matches!(c, '-' | '.' | '+')).take(64).collect();
+        let stages = record["stages"].as_array()?.iter().take(24).filter_map(|stage| {
+            let name = stage[0].as_str()?;
+            let ms = stage[1].as_f64()?;
+            matches!(name, "lock" | "lexical" | "embedding" | "nearest" | "passage_selection" | "reranker" | "total")
+                .then(|| format!("{name}={ms:.1}ms"))
+        }).collect::<Vec<_>>().join(" ");
+        Some((at, format!("{} build={build} query={operation} mode={mode} response={total:.1}ms {stages}", crate::util::utc_stamp(at))))
+    }).collect()
+}
+
+fn richfinder_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
+    let root = scope.data_root();
+    let source = "RichFinder timing log";
+    let category = Category::ConversationFailure;
+    let reads: Vec<_> = [format!("{SEARCH_TIMING_LOG}.1"), SEARCH_TIMING_LOG.to_string()]
+        .iter().map(|name| read_source(&root, &root.join(name), scope, budget, true)).collect();
+    if reads.iter().all(Result::is_err) {
+        return unread(category, source, reads.into_iter().filter_map(Result::err).find(|s| *s != Status::Absent).unwrap_or(Status::Absent));
+    }
+    let reads: Vec<_> = reads.into_iter().filter_map(Result::ok).collect();
+    let lines: Vec<_> = reads.iter().flat_map(|read| search_timing_lines(&read.text)).collect();
+    let (picked, coverage) = pick(&lines, |row| Some(row.0), &scope.window, 10);
+    let selected: Vec<_> = picked.into_iter().rev().take(50).rev().collect();
+    let mut item = Item::new(category, source).expect("random source");
+    item.input_bytes = reads.iter().map(|read| read.bytes).sum();
+    item.coverage = coverage;
+    item.observed_at = selected.last().map(|row| row.0);
+    item.label = "the RichFinder timing log".into();
+    item.summary = format!("{} RichFinder timing record(s).", selected.len());
+    let text = selected.into_iter().map(|row| row.1).collect::<Vec<_>>().join("\n");
+    finish(item, &text, ctx, reads.iter().any(|read| read.truncated))
+}
+
 // ---------------------------------------------------------------------------------------
 // richscribe
 // ---------------------------------------------------------------------------------------
@@ -793,6 +839,28 @@ mod tests {
         assert_eq!(items[1].status, Status::Absent);
         assert_eq!(items[2].status, Status::Absent);
         assert!(items[2].note.contains("No crash record"));
+    }
+
+    #[test]
+    fn richfinder_diagnostics_collect_only_known_timing_fields() {
+        let h = home();
+        let scope = scope(&h.0, Window::around(T));
+        let record = serde_json::json!({
+            "at_ms": T,
+            "operation": 3,
+            "build": "a123",
+            "mode": "meaning",
+            "total_ms": 152.1,
+            "query": "private-search-terms",
+            "stages": [["embedding", 10.2], ["private-stage-label", 8.1]]
+        });
+        write(&scope.data_root().join(SEARCH_TIMING_LOG), &record.to_string());
+        let items = collect(Category::ConversationFailure, &scope, &Context::default(), 0);
+        let timing = items.iter().find(|item| item.source == "RichFinder timing log").unwrap();
+        assert_eq!(timing.status, Status::Collected);
+        assert_eq!(timing.coverage, Coverage::InWindow);
+        assert!(timing.text.contains("response=152.1ms embedding=10.2ms"), "{}", timing.text);
+        assert!(!timing.text.contains("private-"));
     }
 
     #[test]

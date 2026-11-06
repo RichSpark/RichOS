@@ -222,6 +222,7 @@ impl DocumentSearch {
 }
 
 pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy) -> Arc<DocumentSearch> {
+    crate::search_diagnostics::init(data_dir);
     let home = home.to_path_buf();
     #[cfg(target_os = "macos")]
     let metadata = {
@@ -290,13 +291,17 @@ pub fn cancel_palette(service: &DocumentSearch, generation: u64) {
 }
 
 pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, generation: Option<u64>) -> Option<SearchResponse> {
+    let started = std::time::Instant::now();
     if let Some(generation) = generation { cancel_palette(service, generation); }
     let obsolete = || generation.is_some_and(|generation| {
         service.palette_generation.load(std::sync::atomic::Ordering::Relaxed) > generation
     });
-    if obsolete() { return None; }
+    if obsolete() {
+        crate::search_diagnostics::record(request.super_finder, None, started.elapsed(), &[]);
+        return None;
+    }
     request.limit = request.limit.clamp(1, PAGE);
-    service.read(|active, revoked| {
+    let (response, stages) = richos_search::service::capture_query_stages(|| service.read(|active, revoked| {
         let mut response = active.search_while_current(&request, revoked, &obsolete)?;
         for hit in &mut response.hits {
             // Source IDs inside the index are relative to its folder. A result from
@@ -304,7 +309,9 @@ pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, gene
             hit.source_id = format!("{}:{}", active.base, hit.source_id);
         }
         (!obsolete()).then_some(response)
-    })
+    }));
+    crate::search_diagnostics::record(request.super_finder, response.as_ref(), started.elapsed(), &stages);
+    response
 }
 
 pub fn status(service: &DocumentSearch) -> Status {
