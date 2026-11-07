@@ -201,34 +201,59 @@ class Walk(folders.Walk):
         time.sleep(1.2)
         self.shot('scribe-hover.png')
         ev['hover_label_over_sheet'] = bool(self.nodes('--id', 'nr-tip')) and self.text_on_screen('RichFinder')
+        if not ev['hover_label_over_sheet']:
+            raise StepFailed('no RichFinder label while the RichScribe sheet is open: ' + json.dumps(ev))
         c = self.center('res-square')
         if not c:
             raise StepFailed('the activity square is not on screen')
-        self.pointer(c[0], c[1], 'right')
-        time.sleep(1.5)
+        checked = ('1', 'true', 'True')
+
+        def choice(title):
+            found = self.nodes('--title', title, '--contains')
+            return found[0] if found else None
+
+        def open_menu():
+            at = self.center('res-square')
+            self.pointer(at[0], at[1], 'right')
+            time.sleep(1.5)
+
+        def press(node):
+            self.pointer(round(node['x'] + node['w'] / 2), round(node['y'] + node['h'] / 2))
+            time.sleep(1.5)
+
+        open_menu()
         self.shot('scribe-menu.png')
-        readout = self.nodes('--title', 'Readout', '--contains')
-        ev['menu_choice_on_screen'] = bool(readout)
-        if readout:
-            n = readout[0]
-            self.pointer(round(n['x'] + n['w'] / 2), round(n['y'] + n['h'] / 2))
-            time.sleep(1.5)
-            self.shot('scribe-readout.png')
-            ev['readout_node'] = {k: n.get(k) for k in ('x', 'y', 'w', 'h', 'title', 'value')}
-            # put it back to Ink
-            c = self.center('res-square')
-            self.pointer(c[0], c[1], 'right')
-            time.sleep(1.5)
-            ink = self.nodes('--title', 'Ink', '--contains')
-            if ink:
-                self.pointer(round(ink[0]['x'] + ink[0]['w'] / 2), round(ink[0]['y'] + ink[0]['h'] / 2))
-                time.sleep(1)
-        self.escape()
+        readout, ink = choice('Readout'), choice('Ink')
+        ev['menu_choice_on_screen'] = bool(readout and ink)
+        if not ev['menu_choice_on_screen']:
+            raise StepFailed('the activity menu did not show Ink and Readout over the sheet: ' + json.dumps(ev))
+        ev['before'] = {'ink': str(ink.get('value')), 'readout': str(readout.get('value'))}
+        press(readout)
+        self.shot('scribe-readout.png')
+        # the selected view is read back from the menu itself, opened again
+        open_menu()
+        self.shot('scribe-menu-after-readout.png')
+        after_readout = {'ink': str((choice('Ink') or {}).get('value')), 'readout': str((choice('Readout') or {}).get('value'))}
+        ev['after_readout_click'] = after_readout
+        # put it back to Ink and read that back too
+        if choice('Ink'):
+            press(choice('Ink'))
+        open_menu()
+        after_ink = {'ink': str((choice('Ink') or {}).get('value')), 'readout': str((choice('Readout') or {}).get('value'))}
+        ev['after_ink_click'] = after_ink
+        self.shot('scribe-menu-after-ink.png')
+        if after_readout['readout'] not in checked or after_readout['ink'] in checked:
+            raise StepFailed('the click on Readout did not select it: ' + json.dumps(ev))
+        if after_ink['ink'] not in checked or after_ink['readout'] in checked:
+            raise StepFailed('the click on Ink did not put Ink back: ' + json.dumps(ev))
+        self.escape()  # the open menu
+        if self.nodes('--id', 'dictation-sheet'):
+            self.escape()  # then the sheet
         ev['sheet_closed_by_escape'] = not self.nodes('--id', 'dictation-sheet')
         self.facts['scribe'] = ev
         self.save()
-        if not (ev['sheet_open'] and ev['menu_choice_on_screen']):
-            raise StepFailed('RichScribe sheet or the activity menu did not show: ' + json.dumps(ev))
+        if not ev['sheet_open']:
+            raise StepFailed('the RichScribe sheet did not open: ' + json.dumps(ev))
         return ev
 
     def home_screen(self):  # not `home`: Walk.home is the guest's home folder path

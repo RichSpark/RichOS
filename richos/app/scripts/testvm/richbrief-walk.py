@@ -73,21 +73,27 @@ async function join() {
   }, 5000);
   document.title = 'fixture call: in call';
 }
-async function act(c) {
+function ack(n, c) {
+  // The page says what it did and what its tracks look like now, to the walk's own server in the guest.
+  const live = stream ? stream.getTracks().filter(t => t.readyState === 'live').length : 0;
+  const en = stream ? stream.getAudioTracks().filter(t => t.enabled).length : 0;
+  new Image().src = 'http://127.0.0.1:8765/ack?n=' + n + '&cmd=' + c + '&live=' + live + '&en=' + en + '&ctx=' + (ctx ? ctx.state : 'none') + '&t=' + Date.now();
+}
+async function act(c, n) {
   if (c === 'join') await join();
   else if (c === 'mute') stream.getAudioTracks().forEach(t => t.enabled = false);
   else if (c === 'unmute') stream.getAudioTracks().forEach(t => t.enabled = true);
-  else if (c === 'reset') { stream.getTracks().forEach(t => t.stop()); await new Promise(r => setTimeout(r, 1500)); await mic(); }
   else if (c === 'hangup') { stream.getTracks().forEach(t => t.stop()); osc.stop(); await ctx.close(); ctx = null; stream = null; document.title = 'fixture call: left'; }
+  ack(n, c);
 }
 let seen = '';
 setInterval(async () => {
   try {
     const t = (await (await fetch('cmd.txt?' + Date.now(), {cache: 'no-store'})).text()).trim();
-    if (t && t !== seen) { seen = t; await act(t.split(':')[1]); }
+    if (t && t !== seen) { seen = t; const [n, c] = t.split(':'); await act(c, n); }
   } catch (e) {}
 }, 500);
-join().catch(e => { document.title = 'join failed ' + e; });
+join().then(() => ack(0, 'join')).catch(e => { document.title = 'join failed ' + e; });
 </script>"""
 
 MUSIC_HTML = """<!doctype html><meta charset="utf-8"><title>fixture music</title><body>fixture music tab
@@ -110,14 +116,30 @@ def build():
 
         # --- the fixture --------------------------------------------------------------------
         def send(self, cmd):
-            """One command for the call page: the page runs each new line once."""
+            """One command for the call page: the page runs each new line once. Returns its number."""
             self.cmd_n += 1
             self.g(f'printf "%s" {shlex.quote(str(self.cmd_n) + ":" + cmd)} > {WEB}/cmd.txt')
+            return self.cmd_n
 
-        def saw_done(self, cmd, seconds=20):
-            """The page polls twice a second and a reset takes 1.5 s: wait for it, say it was sent."""
-            time.sleep(4 if cmd != 'reset' else 6)
-            return True
+        def ack(self, n, cmd, want, seconds=30):
+            """The page's own account of command n (its tracks and sound context after it ran), read from
+            the guest server's log. Raises when it never came or the tracks are not what the command makes
+            them. `want` is a dict of field -> predicate."""
+            end = time.monotonic() + seconds
+            fields = None
+            while time.monotonic() < end and fields is None:
+                line = self.g(f'grep -m1 "GET /ack?n={n}&cmd={cmd}&" {WEB}/server.log || true').strip()
+                if line:
+                    query = line.split('/ack?', 1)[1].split(' ', 1)[0]
+                    fields = dict(kv.split('=', 1) for kv in query.split('&'))
+                else:
+                    time.sleep(1)
+            if fields is None:
+                raise StepFailed(f'the page never acknowledged command {n} ({cmd}): it was not applied')
+            bad = {k: fields.get(k) for k, ok in want.items() if not ok(fields.get(k))}
+            if bad:
+                raise StepFailed(f'the page acknowledged {cmd} with the wrong state {bad}: {fields}')
+            return fields
 
         def open_tab(self, page):
             self.g(f'open -a "/Applications/Google Chrome.app" file://{WEB}/{page}')
@@ -157,6 +179,8 @@ def build():
                    "indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) VALUES "
                    "('kTCCServiceMicrophone', 'com.google.Chrome', 0, 2, 2, 1, 0, 'UNUSED', 0, strftime('%s','now'));")
             tcc = g(f'sudo -n sqlite3 "{userdb}" "{sql}" 2>&1 || true')
+            g(f'nohup python3 -m http.server 8765 --bind 127.0.0.1 --directory {WEB} > {WEB}/server.log 2>&1 &')
+            time.sleep(2)
             served = g(f'head -c 60 {WEB}/music.html')  # the music tab opens later, for the second call
             # A second watcher on the same machine, only to keep a record of which Chrome process runs
             # input and which runs output, and when (the evidence behind any stop the app logs).
@@ -222,13 +246,16 @@ def build():
             self.shot('recording.png')
             self.g(f'nohup {LABDIR}/mac-audio-lab play {LABDIR}/near-track.wav --device "BlackHole 2ch" > {LABDIR}/near.log 2>&1 &')
             rows = [self.still_recording('speech playing', 20)]
-            self.send('mute')
+            acks = {}
+            n = self.send('mute')
+            acks['mute'] = self.ack(n, 'mute', {'live': lambda v: bool(v) and int(v) >= 1, 'en': lambda v: v == '0', 'ctx': lambda v: v == 'running'})
             rows.append(self.still_recording('muted, 20 s', 20))
             self.shot('muted.png')
-            self.send('unmute')
+            n = self.send('unmute')
+            acks['unmute'] = self.ack(n, 'unmute', {'live': lambda v: bool(v) and int(v) >= 1, 'en': lambda v: bool(v) and int(v) >= 1, 'ctx': lambda v: v == 'running'})
             rows.append(self.still_recording('unmuted', 10))
             rows.append(self.still_recording('unmuted and mic on, one more look', 10))
-            ev = {'recording_text_on_screen': shown, 'sessions': self.sessions(), 'checks': rows}
+            ev = {'recording_text_on_screen': shown, 'sessions': self.sessions(), 'page_acks': acks, 'checks': rows}
             self.facts['browser_record'] = ev
             self.save()
             if not shown:
@@ -240,13 +267,14 @@ def build():
         def browser_hangup(self):
             stops = self.count('StopCapture')
             began = time.monotonic()
-            self.send('hangup')
-            saw = self.saw_done('hangup', 20)
+            n = self.send('hangup')
+            ack = self.ack(n, 'hangup', {'live': lambda v: v == '0', 'ctx': lambda v: v == 'none'})
+            saw = True
             ended = self.wait_log('StopCapture', 40, more_than=stops)
             took = round(time.monotonic() - began, 1)
             self.shot('after-hangup.png')
             tabs = self.chrome_title()
-            ev = {'page_hung_up': saw, 'stop_capture_logged': ended, 'seconds_to_stop': took, 'tabs': tabs,
+            ev = {'page_hung_up': saw, 'page_ack': ack, 'stop_capture_logged': ended, 'seconds_to_stop': took, 'tabs': tabs,
                   'stop_lines': self.g("grep -n 'StopCapture' " + shlex.quote(self.applog) + ' | tail -3')}
             self.facts['browser_hangup'] = ev
             self.save()
@@ -272,9 +300,8 @@ def build():
             # another tab is already playing sound when this call joins (the case the join-window fix is for)
             self.open_tab('music.html')
             time.sleep(6)
-            self.send('join')
-            self.saw_done('join', 20)
-            ev = {}
+            n = self.send('join')
+            ev = {'join_ack': self.ack(n, 'join', {'live': lambda v: bool(v) and int(v) >= 1})}
             took = self.wait_log('StartCapture', 60, more_than=starts)
             ev['rejoin_recorded_without_asking'] = took
             if not took:
@@ -287,7 +314,8 @@ def build():
             time.sleep(25)
             g(f'mkdir -p {shlex.quote(keep)} && mv {shlex.quote(models + "/" + model)} {shlex.quote(keep + "/")} && ls {shlex.quote(models)}')
             stops = self.count('StopCapture')
-            self.send('hangup')
+            n = self.send('hangup')
+            ev['hangup_ack'] = self.ack(n, 'hangup', {'live': lambda v: v == '0', 'ctx': lambda v: v == 'none'})
             ev['stopped'] = self.wait_log('StopCapture', 60, more_than=stops)
             ev['music_tab_was_playing'] = True
             if not ev['stopped']:
