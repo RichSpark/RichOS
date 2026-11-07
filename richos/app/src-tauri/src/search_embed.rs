@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MODEL: &str = "bge-small-en-v1.5-q8_0.gguf";
@@ -57,12 +57,21 @@ impl Drop for SocketDirectory {
 
 pub struct ResidentEmbedder(Arc<ModelProcess>);
 
+pub(crate) struct SharedEmbedder(pub Arc<ResidentEmbedder>);
+
 struct ModelProcess {
     resources: PathBuf,
     running: Mutex<Option<Arc<Running>>>,
-    foreground: Mutex<()>,
+    foreground: Mutex<Option<QueryVector>>,
+    bulk: Mutex<Weak<Running>>,
     repairing: AtomicBool,
     closed: AtomicBool,
+}
+
+struct QueryVector {
+    key: String,
+    vector: Vec<f32>,
+    at: Instant,
 }
 
 struct Running {
@@ -125,7 +134,8 @@ impl ResidentEmbedder {
         Ok(Self(Arc::new(ModelProcess {
             resources,
             running: Mutex::new(None),
-            foreground: Mutex::new(()),
+            foreground: Mutex::new(None),
+            bulk: Mutex::new(Weak::new()),
             repairing: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         })))
@@ -162,8 +172,13 @@ impl ResidentEmbedder {
     }
 
     fn query_one(&self, text: &str) -> Result<Vec<f32>, String> {
-        let _foreground = self.0.foreground.lock().map_err(|_| "The local search model is unavailable.")?;
+        let mut last = self.0.foreground.lock().map_err(|_| "The local search model is unavailable.")?;
         let text = bounded_text(text);
+        let key = richos_search::corpus::content_hash(text.as_bytes());
+        if let Some(cached) = last.as_ref().filter(|cached| cached.key == key && cached.at.elapsed() < Duration::from_secs(1)) {
+            return Ok(cached.vector.clone());
+        }
+        *last = None;
         let runtime = self.0.running.try_lock().map_err(|_| BUSY)?.clone();
         let Some(runtime) = runtime else {
             self.0.repair(None);
@@ -175,7 +190,10 @@ impl ResidentEmbedder {
             self.0.repair(Some(runtime));
         }
         match result {
-            Ok(vector) => Ok(vector),
+            Ok(vector) => {
+                *last = Some(QueryVector { key, vector: vector.clone(), at: Instant::now() });
+                Ok(vector)
+            }
             Err(LookupError::Busy) => Err(BUSY.into()),
             Err(LookupError::Input(reason) | LookupError::Retry(reason)) => Err(reason),
         }
@@ -393,9 +411,15 @@ impl Embedder for ResidentEmbedder {
                 return Err("The search index was stopped.".into());
             }
             if isolated {
-                if runtime.is_none() {
-                    runtime = Running::start(&self.0.resources, Helper::BulkIndex, stop).ok();
-                }
+                let mut shared = self.0.bulk.lock().map_err(|_| "The local search model is unavailable.")?;
+                drop(self.0.foreground.lock().map_err(|_| "The local search model is unavailable.")?);
+                let current = shared.upgrade();
+                runtime = current.or_else(|| {
+                    drop(runtime.take());
+                    let child = Arc::new(Running::start(&self.0.resources, Helper::BulkIndex, stop).ok()?);
+                    *shared = Arc::downgrade(&child);
+                    Some(child)
+                });
                 if let Some(worker) = &runtime {
                     match worker.one(&bounded_text(text), INDEX_REQUEST_BOUND) {
                         Ok(vector) => return Ok(vector),
@@ -403,6 +427,8 @@ impl Embedder for ResidentEmbedder {
                         Err(LookupError::Busy | LookupError::Retry(_)) => {}
                     }
                 }
+                *shared = Weak::new();
+                drop(shared);
                 runtime = None;
                 isolated = false;
                 if !stop() {
@@ -416,6 +442,18 @@ impl Embedder for ResidentEmbedder {
     fn embed_query(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
         texts.iter().map(|text| self.query_one(text)).collect()
     }
+}
+
+impl Embedder for SharedEmbedder {
+    fn identity(&self) -> String { self.0.identity() }
+    fn dimension(&self) -> usize { self.0.dimension() }
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> { self.0.embed(texts) }
+    fn prepare(&self, stop: &dyn Fn() -> bool) -> Result<(), String> { self.0.prepare(stop) }
+    fn embed_for_index(&self, texts: &[&str], stop: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>, String> {
+        self.0.embed_for_index(texts, stop)
+    }
+    fn bulk_indexer(&self) -> Option<Box<BulkIndexer<'_>>> { self.0.bulk_indexer() }
+    fn embed_query(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> { self.0.embed_query(texts) }
 }
 
 fn request(socket: &Path, method: &str, endpoint: &str, payload: Option<Value>, bound: Duration) -> Result<(u16, Value), LookupError> {
@@ -458,7 +496,8 @@ mod tests {
         let model = ResidentEmbedder(Arc::new(ModelProcess {
             resources: PathBuf::new(),
             running: Mutex::new(None),
-            foreground: Mutex::new(()),
+            foreground: Mutex::new(None),
+            bulk: Mutex::new(Weak::new()),
             repairing: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         }));
@@ -501,7 +540,8 @@ mod tests {
         let model = ResidentEmbedder(Arc::new(ModelProcess {
             resources: PathBuf::new(),
             running: Mutex::new(Some(Arc::new(runtime))),
-            foreground: Mutex::new(()),
+            foreground: Mutex::new(None),
+            bulk: Mutex::new(Weak::new()),
             repairing: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         }));

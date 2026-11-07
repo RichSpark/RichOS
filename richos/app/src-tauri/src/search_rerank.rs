@@ -162,8 +162,19 @@ impl Ranking {
 pub(crate) fn models() -> (impl Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync, Reranker) {
     let model = Arc::new(OnceLock::<Option<Mutex<Ranking>>>::new());
     let start_model = model.clone();
+    let resident = Mutex::new(std::sync::Weak::new());
     let embedder = move || {
-        let embedder = Box::new(crate::search_embed::ResidentEmbedder::bundled()?) as Box<dyn Embedder>;
+        let resident = {
+            let mut shared = resident.lock().map_err(|_| "The local search model is unavailable.")?;
+            if let Some(existing) = shared.upgrade() {
+                existing
+            } else {
+                let started = Arc::new(crate::search_embed::ResidentEmbedder::bundled()?);
+                *shared = Arc::downgrade(&started);
+                started
+            }
+        };
+        let embedder = Box::new(crate::search_embed::SharedEmbedder(resident)) as Box<dyn Embedder>;
         // The search worker has already published lexical results. Load once before any
         // semantic response, then share the model across folder changes.
         start_model.get_or_init(|| match bundled() {

@@ -24,13 +24,21 @@ pub(crate) fn init(data: &Path) {
 }
 
 pub(crate) fn record(requested: bool, response: Option<&richos_search::SearchResponse>, elapsed: Duration, stages: &[(&str, f64)]) {
-    let Some(sender) = SENDER.get() else { return };
     let mode = match response {
         None => "superseded",
         Some(response) if response.effective.super_finder => "meaning",
         Some(_) if requested => "words_fallback",
         Some(_) => "words",
     };
+    record_mode(mode, elapsed, stages);
+}
+
+pub(crate) fn record_unavailable(elapsed: Duration, stages: &[(&str, f64)]) {
+    record_mode("unavailable", elapsed, stages);
+}
+
+fn record_mode(mode: &str, elapsed: Duration, stages: &[(&str, f64)]) {
+    let Some(sender) = SENDER.get() else { return };
     let at_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_millis() as u64).unwrap_or(0);
     let entry = serde_json::json!({
         "at_ms": at_ms,

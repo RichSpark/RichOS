@@ -1315,6 +1315,7 @@ const ENTITY_DRAFT_PREFIX = "entity:";
 /// for "land at the newest turn". Consumed by `flushRender` — see below for why it cannot
 /// be applied where it is set.
 let pendingScrollRestore = null;
+let pendingSearchAnchor = null;
 
 function restoreThreadViewState(threadId) {
   inputEl.value = drafts.get(threadId) || "";
@@ -2215,6 +2216,16 @@ function flushRender() {
   } else {
     // Keep the same content under the CEO's eye when something above changed height.
     conversationEl.scrollTop = anchorTop + (conversationEl.scrollHeight - anchorHeight);
+  }
+  if (pendingSearchAnchor && pendingSearchAnchor.ticket !== navTicket) pendingSearchAnchor = null;
+  if (pendingSearchAnchor && pendingSearchAnchor.thread_id === timelineModel.threadId) {
+    const { turn_id, message_id } = pendingSearchAnchor;
+    pendingSearchAnchor = null;
+    const target = window.RichTimeline.searchMessageAnchor(messagesEl, turn_id, message_id);
+    if (target) {
+      followBottom = false;
+      target.scrollIntoView({ block: "center" });
+    }
   }
   updateJumpButton();
   startOrStopTimer();
@@ -8112,10 +8123,18 @@ const searchState = {
   gen: Math.floor(performance.timeOrigin * 1024),
   open: false,
   navHits: [],
+  conversations: null,
+  conversationTimer: null,
+  companyMemory: null,
+  companyMemoryTimer: null,
+  memoryDetail: null,
+  memoryUnavailable: false,
   docs: [],
   total: 0,
   resp: null,
   items: [],
+  primaryCount: 0,
+  recordNodes: [],
   active: -1,
   timer: null,
   more: null,
@@ -8142,8 +8161,14 @@ function openSearch() {
   searchStrictEl.checked = false;
   searchResultsEl.innerHTML = "";
   searchState.items = [];
+  searchState.primaryCount = 0;
+  searchState.recordNodes = [];
   searchState.active = -1;
   searchState.navHits = [];
+  searchState.conversations = null;
+  searchState.companyMemory = null;
+  searchState.memoryDetail = null;
+  searchState.memoryUnavailable = false;
   searchState.docs = [];
   searchState.sourceGen = null;
   searchState.status = null;
@@ -8169,6 +8194,8 @@ function closeSearch() {
     searchState.more = null;
   }
   clearTimeout(searchState.statusTimer);
+  clearTimeout(searchState.conversationTimer);
+  clearTimeout(searchState.companyMemoryTimer);
   searchInputEl.setAttribute("aria-expanded", "false");
 }
 
@@ -8271,7 +8298,7 @@ function paintSearchStatus() {
 }
 
 function searchModeLabel(resp) {
-  const folder = searchState.status && searchState.status.folder;
+  const folder = resp?.status?.folder || searchState.status?.folder;
   if (!resp || (folder && folder.state !== "ready")) return "";
   let m = resp.effective.super_finder ? "meaning and words" : "words only";
   if (resp.requested.super_finder && !resp.effective.super_finder) m = "words only, Super Finder unavailable";
@@ -8369,7 +8396,7 @@ function searchNavRow(hit) {
   if (hit.excerpt && hit.kind === "message") b.appendChild(searchNode("span", "result-excerpt", hit.excerpt));
   b.setAttribute("aria-label", [title.textContent, "in " + hit.entity_label, hit.excerpt].filter(Boolean).join(", "));
   b.addEventListener("click", () => activateSearchHit(idx));
-  searchState.items.push({ key: b.dataset.key, node: b, kind: "nav", hit });
+  searchState.items.push({ key: b.dataset.key, node: b, kind: "nav", hit, generation: searchState.gen });
   return b;
 }
 
@@ -8379,15 +8406,15 @@ function searchWhy(hit) {
   return hit.why;
 }
 
-function searchDocRow(hit, resp) {
+function searchDocRow(hit, resp, kind = "doc") {
   const idx = searchState.items.length;
   // `result-item` like every palette row, so a selector for "the rows" means all of them.
-  const row = searchNode("div", "result-item srch-hit srch-doc");
+  const row = searchNode("div", "result-item srch-hit srch-" + kind);
   row.id = "search-result-" + idx;
   row.setAttribute("role", "option");
   row.tabIndex = -1;
   row.dataset.index = String(idx);
-  row.dataset.key = "d:" + hit.source_id;
+  row.dataset.key = kind + ":" + hit.source_id;
   const top = searchNode("span", "srch-hit-top");
   const title = searchNode("span", "srch-title");
   title.appendChild(searchMarked(hit.title, resp, 0));
@@ -8408,25 +8435,34 @@ function searchDocRow(hit, resp) {
   const btn = searchNode("button", "srch-open-btn");
   btn.type = "button";
   btn.tabIndex = -1;
-  btn.appendChild(document.createTextNode("Open original "));
+  const action = { doc: "Open original ", message: "Open message ", memory: "View record " }[kind];
+  btn.appendChild(document.createTextNode(action));
   btn.appendChild(searchNode("kbd", null, "⏎"));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    openSearchDocument(idx);
+    activateSearchHit(idx);
   });
   actions.appendChild(btn);
   const fileName = hit.rel_path.split("/").pop();
-  actions.appendChild(searchNode("span", "srch-where", "line " + hit.passage.line + " of " + fileName));
+  actions.appendChild(searchNode("span", "srch-where", kind === "doc" ? "line " + hit.passage.line + " of " + fileName : ""));
   inner.appendChild(actions);
   open.appendChild(inner);
   row.appendChild(open);
+  const detail = kind === "memory" && searchState.memoryDetail;
+  if (detail && detail.sourceId === hit.source_id) {
+    const record = searchNode("span", "srch-note");
+    record.appendChild(searchNode("span", "srch-note-title", detail.citation));
+    record.appendChild(searchNode("span", "srch-note-line", detail.text));
+    if (detail.supersedes) record.appendChild(searchNode("span", "srch-note-line", "Supersedes " + detail.supersedes));
+    row.appendChild(record);
+  }
   row.setAttribute("aria-label", [hit.title, searchDate(hit.modified_ms), searchWhy(hit), hit.passage.text].join(", "));
   row.addEventListener("click", () => {
-    if (searchState.active === idx) openSearchDocument(idx);
+    if (searchState.active === idx) activateSearchHit(idx);
     else setSearchActive(idx, true);
   });
-  row.addEventListener("dblclick", () => openSearchDocument(idx));
-  searchState.items.push({ key: row.dataset.key, node: row, kind: "doc", hit, resp, passage: hit.passage.text });
+  row.addEventListener("dblclick", () => activateSearchHit(idx));
+  searchState.items.push({ key: row.dataset.key, node: row, kind, hit, resp, passage: hit.passage.text, generation: searchState.gen });
   return row;
 }
 
@@ -8516,17 +8552,50 @@ function renderSearchResults(before) {
     for (const hit of searchState.docs) frag.appendChild(searchDocRow(hit, resp));
     frag.appendChild(searchTail());
   }
-  searchResultsEl.textContent = "";
-  searchResultsEl.appendChild(frag);
-  searchInputEl.setAttribute("aria-expanded", String(searchState.items.length > 0));
-  let idx = -1;
-  if (prevKey) searchState.items.forEach((it, i) => {
-    if (it.key === prevKey) idx = i;
-  });
+  searchResultsEl.replaceChildren(frag);
+  searchState.recordNodes = [];
+  searchState.primaryCount = searchState.items.length;
   searchState.active = -1;
-  setSearchActive(idx >= 0 ? idx : searchState.items.length ? 0 : -1, false);
+  renderSearchRecords(prevKey);
   if (before && !searchReducedMotion()) searchFlip(before);
   watchSearchTail();
+}
+
+function renderSearchRecords(prevKey = searchState.items[searchState.active]?.key) {
+  // Later sources can refresh without replacing the document rows or interrupting pagination.
+  searchState.items.length = searchState.primaryCount;
+  const frag = document.createDocumentFragment();
+  const exact = new Set(searchState.navHits.map((hit) => hit.message_source_id));
+  const conversations = searchState.conversations;
+  const messages = conversations?.hits.filter((hit) => !exact.has(hit.source_id)) || [];
+  if (conversations && (messages.length || (conversations.status.folder.state === "loading" && !conversations.hits.length))) {
+    const group = searchNode("div", "result-group srch-group");
+    group.appendChild(searchNode("span", null, "Conversations"));
+    group.appendChild(searchNode("span", "srch-group-mode", searchModeLabel(conversations)));
+    frag.appendChild(group);
+    if (!messages.length) frag.appendChild(searchNote("Reading conversations…"));
+    for (const hit of messages) frag.appendChild(searchDocRow(hit, conversations, "message"));
+  }
+  const memory = searchState.companyMemory;
+  if (searchState.memoryUnavailable || (memory && (memory.hits.length || memory.status.folder.state === "loading"))) {
+    const group = searchNode("div", "result-group srch-group");
+    group.appendChild(searchNode("span", null, "Company memory"));
+    group.appendChild(searchNode("span", "srch-group-mode", searchModeLabel(memory)));
+    frag.appendChild(group);
+    if (searchState.memoryUnavailable) frag.appendChild(searchNote("Company memory is unavailable."));
+    else if (!memory.hits.length) frag.appendChild(searchNote("Reading company memory…"));
+    else for (const hit of memory.hits) frag.appendChild(searchDocRow(hit, memory, "memory"));
+  }
+  for (const node of searchState.recordNodes) node.remove();
+  searchState.recordNodes = Array.from(frag.childNodes);
+  searchResultsEl.appendChild(frag);
+  searchInputEl.setAttribute("aria-expanded", String(searchState.items.length > 0));
+  const kept = searchState.active >= 0 && searchState.active < searchState.primaryCount && searchState.items[searchState.active]?.key === prevKey;
+  if (!kept) {
+    const idx = searchState.items.findIndex((it) => it.key === prevKey);
+    searchState.active = -1;
+    setSearchActive(idx >= 0 ? idx : searchState.items.length ? 0 : -1, false);
+  }
 }
 
 /// A toggle re-sorts the list in front of him: rows that stay slide to their new place, new
@@ -8565,7 +8634,7 @@ function setSearchActive(i, scroll) {
   if (old) {
     old.node.classList.remove("is-active");
     old.node.setAttribute("aria-selected", "false");
-    if (old.kind === "doc") {
+    if (old.kind !== "nav") {
       old.node.querySelector(".srch-open-btn").tabIndex = -1;
       const p = old.node.querySelector(".srch-passage");
       p.textContent = "";
@@ -8581,7 +8650,7 @@ function setSearchActive(i, scroll) {
   it.node.classList.add("is-active");
   it.node.setAttribute("aria-selected", "true");
   searchInputEl.setAttribute("aria-activedescendant", it.node.id);
-  if (it.kind === "doc") {
+  if (it.kind !== "nav") {
     const p = it.node.querySelector(".srch-passage");
     p.textContent = "";
     p.appendChild(searchMarked(it.passage, it.resp, 0));
@@ -8595,6 +8664,8 @@ function setSearchActive(i, scroll) {
 async function runSearch(animate) {
   const gen = ++searchState.gen;
   const query = searchInputEl.value.trim();
+  clearTimeout(searchState.conversationTimer);
+  clearTimeout(searchState.companyMemoryTimer);
   if (searchState.more) {
     searchState.more.disconnect();
     searchState.more = null;
@@ -8603,6 +8674,8 @@ async function runSearch(animate) {
     searchHintEl.hidden = false;
     searchResultsEl.textContent = "";
     searchState.items = [];
+    searchState.primaryCount = 0;
+    searchState.recordNodes = [];
     searchState.active = -1;
     searchCountEl.textContent = "";
     searchCountEl.classList.add("is-empty");
@@ -8622,6 +8695,10 @@ async function runSearch(animate) {
   if (gen !== searchState.gen || !searchState.open) return;
   const before = animate ? searchSnapshot() : null;
   searchState.navHits = nav || [];
+  searchState.conversations = null;
+  searchState.companyMemory = null;
+  searchState.memoryDetail = null;
+  searchState.memoryUnavailable = false;
   searchState.resp = docs;
   searchState.sourceGen = docs && docs.status ? docs.status.generation : null;
   if (docs?.status && docs.status.generation > (searchState.status?.generation ?? -1)) {
@@ -8639,6 +8716,30 @@ async function runSearch(animate) {
   const ms = Math.round(performance.now() - started);
   searchCountEl.textContent = (n ? n + (n === 1 ? " result" : " results") + " · " : "") + ms + " ms";
   searchCountEl.classList.remove("is-empty");
+  void loadSearchRecords("conversations", request, gen, ms);
+  void loadSearchRecords("companyMemory", request, gen, ms);
+}
+
+async function loadSearchRecords(section, request, generation, firstResultsMs) {
+  const memory = section === "companyMemory";
+  const command = memory ? "search_company_memory" : "search_conversations";
+  const response = await Bridge.invoke(command, { request, generation }).catch(() => memory ? false : null);
+  if (response === null || response === undefined || generation !== searchState.gen || !searchState.open) return;
+  searchState[section] = response || null;
+  if (memory) {
+    searchState.memoryUnavailable = response === false;
+    if (!response?.hits?.some((hit) => hit.source_id === searchState.memoryDetail?.sourceId)) searchState.memoryDetail = null;
+  }
+  const scroll = searchResultsEl.scrollTop;
+  renderSearchRecords();
+  searchResultsEl.scrollTop = scroll;
+  const results = searchState.total + searchState.navHits.length + searchState.items.length - searchState.primaryCount;
+  searchCountEl.textContent = (results ? results + (results === 1 ? " result" : " results") + " · " : "") + firstResultsMs + " ms";
+  const meaning = response?.status?.meaning.state;
+  if (response?.status?.folder.state === "loading" || (request.super_finder && ["starting", "indexing"].includes(meaning))) {
+    const timer = memory ? "companyMemoryTimer" : "conversationTimer";
+    searchState[timer] = setTimeout(() => loadSearchRecords(section, request, generation, firstResultsMs), 1000);
+  }
 }
 
 /// The next page of documents, when the end of the list comes into view.
@@ -8694,6 +8795,8 @@ function watchSearchTail() {
         return;
       }
       const old = el("srch-tail");
+      const prevKey = searchState.items[searchState.active]?.key;
+      searchState.items.length = searchState.primaryCount;
       const frag = document.createDocumentFragment();
       next.hits.forEach((hit, i) => {
         const row = searchDocRow(hit, next);
@@ -8702,8 +8805,11 @@ function watchSearchTail() {
         frag.appendChild(row);
         searchState.docs.push(hit);
       });
+      frag.appendChild(searchTail());
       if (old) old.replaceWith(frag);
-      searchResultsEl.appendChild(searchTail());
+      else searchResultsEl.insertBefore(frag, searchState.recordNodes[0] || null);
+      searchState.primaryCount = searchState.items.length;
+      renderSearchRecords(prevKey);
       watchSearchTail();
     },
     { root: searchResultsEl, rootMargin: "0px 0px 80px 0px" }
@@ -8729,6 +8835,42 @@ async function activateSearchHit(index) {
   if (!it) return;
   if (it.kind === "doc") {
     openSearchDocument(index);
+    return;
+  }
+  if (it.kind === "memory") {
+    const generation = searchState.gen;
+    if (it.generation !== generation) return;
+    const detail = await Bridge.invoke("resolve_search_memory", { sourceId: it.hit.source_id }).catch(() => null);
+    if (generation !== searchState.gen || !searchState.open) return;
+    if (!detail) {
+      it.node.querySelector(".srch-where").textContent = "This record changed since you searched.";
+      return;
+    }
+    searchState.memoryDetail = { ...detail, sourceId: it.hit.source_id };
+    const scroll = searchResultsEl.scrollTop;
+    renderSearchRecords();
+    searchResultsEl.scrollTop = scroll;
+    return;
+  }
+  const messageSource = it.kind === "message" ? it.hit.source_id : it.hit.message_source_id;
+  if (messageSource) {
+    const generation = searchState.gen;
+    if (it.generation !== generation) return;
+    const anchor = await Bridge.invoke("resolve_search_message", { sourceId: messageSource }).catch(() => null);
+    if (generation !== searchState.gen || !searchState.open) return;
+    if (!anchor) {
+      const note = it.node.querySelector(".srch-where, .result-excerpt");
+      if (note) note.textContent = "This message changed since you searched.";
+      return;
+    }
+    closeSearch();
+    const opening = openThread(anchor.thread_id);
+    const ticket = navTicket;
+    await opening;
+    if (ticket === navTicket && activeThreadId === anchor.thread_id) {
+      pendingSearchAnchor = { ...anchor, ticket };
+      scheduleRender();
+    }
     return;
   }
   const hit = it.hit;
