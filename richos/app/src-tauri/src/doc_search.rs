@@ -20,7 +20,7 @@
 use richos_search::corpus::MetadataSource;
 use richos_search::embed::Embedder;
 use richos_search::service::{Busy, Config, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
-use richos_core::{entity::PersonId, read_view::{ReadView, SpineReader, SpineView}, timeline::Timeline};
+use richos_core::{entity::PersonId, ledger::{Ledger, Message}, read_view::{ReadView, SpineReader, SpineView}, timeline::{SearchMessageRole, Timeline}};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 
@@ -299,24 +299,56 @@ pub struct MessageAnchor {
     message_id: String,
 }
 
+struct CurrentMessage<'a> {
+    revision: String,
+    created_title: &'a str,
+    entity_label: &'a str,
+}
+
 impl MessageAnchor {
-    fn current(&self, view: &ReadView) -> Option<(String, String)> {
+    fn current<'a>(&self, view: &'a ReadView) -> Option<CurrentMessage<'a>> {
         let ledger = view.ledger();
         let binding = ledger.thread_binding(&self.thread_id).ok()?;
         if binding.person_id() != &PersonId::default_ceo() { return None; }
         let thread = ledger.threads().iter().find(|thread| thread.id == self.thread_id)?;
         let message = Timeline::committed_search_turn(ledger, &binding, &self.turn_id).ok()?
             .into_iter().find(|message| message.message_id == self.message_id)?;
-        let label = view.entity_registry().get(binding.entity_id())
-            .map(|entity| entity.display_name.clone()).unwrap_or_default();
-        Some((richos_search::corpus::record_revision(&thread.title, &message.text), label))
+        let entity_label = view.entity_registry().get(binding.entity_id())
+            .map(|entity| entity.display_name.as_str()).unwrap_or_default();
+        Some(CurrentMessage {
+            revision: richos_search::corpus::record_revision("", &message.text),
+            created_title: &thread.title,
+            entity_label,
+        })
+    }
+
+    fn token(&self, revision: &str) -> String {
+        serde_json::to_string(&(self, revision)).expect("serializing a search result")
     }
 }
 
 pub fn resolve_search_message(reader: &SpineReader, token: &str) -> Option<MessageAnchor> {
     let (anchor, revision): (MessageAnchor, String) = serde_json::from_str(token).ok()?;
-    let (current, _) = anchor.current(&reader.snapshot())?;
-    (current == revision).then_some(anchor)
+    let view = reader.snapshot();
+    (anchor.current(&view)?.revision == revision).then_some(anchor)
+}
+
+/// An exact legacy hit can share a row with the index only if it has the same
+/// complete visible message. A legacy assistant message may span several items.
+pub fn exact_message_token(ledger: &Ledger, thread_id: &str, message: &Message) -> Option<String> {
+    let binding = ledger.thread_binding(thread_id).ok()?;
+    if binding.person_id() != &PersonId::default_ceo() { return None; }
+    let role = match message.role.as_str() {
+        "user" => SearchMessageRole::User,
+        "assistant" => SearchMessageRole::Assistant,
+        _ => return None,
+    };
+    let mut matches = Timeline::committed_search_turn(ledger, &binding, &message.turn_id).ok()?
+        .into_iter().filter(|item| item.role == role && item.text == message.text);
+    let item = matches.next()?;
+    if matches.next().is_some() { return None; }
+    let anchor = MessageAnchor { thread_id: thread_id.into(), turn_id: item.turn_id, message_id: item.message_id };
+    Some(anchor.token(&richos_search::corpus::record_revision("", &item.text)))
 }
 
 fn conversation_projection(reader: SpineReader) -> richos_search::service::ProjectionSource {
@@ -327,7 +359,7 @@ fn conversation_projection(reader: SpineReader) -> richos_search::service::Proje
             use richos_search::corpus::Document;
             let view = reader.snapshot();
             let mut documents = Vec::new();
-            Timeline::visit_committed_search_messages(view.ledger(), &PersonId::default_ceo(), None, |binding, title, message| {
+            Timeline::visit_committed_search_messages(view.ledger(), &PersonId::default_ceo(), None, |binding, _, message| {
                 if stopped() { return false; }
                 let anchor = MessageAnchor {
                     thread_id: binding.thread_id().into(),
@@ -335,7 +367,8 @@ fn conversation_projection(reader: SpineReader) -> richos_search::service::Proje
                     message_id: message.message_id,
                 };
                 let key = serde_json::to_string(&anchor).expect("serializing a search anchor");
-                documents.push(Arc::new(Document::from_record(&key, title, message.text, message.at)));
+                // A thread title is a navigation hit. Rank each message by its own text.
+                documents.push(Arc::new(Document::from_record(&key, "", message.text, message.at)));
                 true
             });
             Ok(documents)
@@ -370,6 +403,7 @@ impl DocumentSearch {
 
 pub fn search_conversations(
     service: &DocumentSearch, reader: &SpineReader, mut request: SearchRequest, generation: u64,
+    display_title: &dyn Fn(&str, &str) -> String,
 ) -> Option<SearchResponse> {
     let started = std::time::Instant::now();
     cancel_palette(service, generation);
@@ -385,15 +419,16 @@ pub fn search_conversations(
     let (response, mut stages) = richos_search::service::capture_query_stages(|| {
         let mut response = pool.search_projection(&request, &obsolete, &|document| {
             serde_json::from_str::<MessageAnchor>(&document.rel_path).ok()
-                .and_then(|anchor| anchor.current(&reader.snapshot())).is_some_and(|(revision, _)| revision == document.hash)
+                .is_some_and(|anchor| anchor.current(&reader.snapshot()).is_some_and(|current| current.revision == document.hash))
         })?;
         let view = reader.snapshot();
         response.hits.retain_mut(|hit| {
             let Ok(anchor) = serde_json::from_str::<MessageAnchor>(&hit.rel_path) else { return false };
-            let Some((revision, label)) = anchor.current(&view) else { return false };
-            if revision != hit.revision { return false; }
-            hit.source_id = serde_json::to_string(&(anchor, revision)).expect("serializing a search result");
-            hit.rel_path = label;
+            let Some(current) = anchor.current(&view) else { return false };
+            if current.revision != hit.revision { return false; }
+            hit.source_id = anchor.token(&current.revision);
+            hit.title = display_title(&anchor.thread_id, current.created_title);
+            hit.rel_path = current.entity_label.to_owned();
             true
         });
         (!obsolete()).then_some(response)
@@ -903,6 +938,13 @@ mod tests {
         let binding = ledger.thread_binding(&thread).unwrap();
         let turn = ledger.record_prompt_received(&binding, "A member asked for a refund.", Source::Text).unwrap();
         ledger.complete_turn(&turn, "done").unwrap();
+        let exact = exact_message_token(&ledger, &thread, &ledger.messages(&thread).unwrap()[0]).unwrap();
+        let distracting_thread = ledger.create_thread("Refund planning", &entity).unwrap();
+        let distracting_binding = ledger.thread_binding(&distracting_thread).unwrap();
+        for _ in 0..PAGE {
+            let other = ledger.record_prompt_received(&distracting_binding, "The new office has bicycle parking.", Source::Text).unwrap();
+            ledger.complete_turn(&other, "done").unwrap();
+        }
         let mut spine = Spine::new(ledger);
         let reader = spine.reader();
         let cache = base.join("cache");
@@ -911,16 +953,28 @@ mod tests {
             || Ok(Box::new(ConceptEmbedder::stand_in())),
             None, None, None,
         );
+        let mut nav = crate::nav::NavState::default();
+        nav.auto_titles.insert(thread.clone(), "Member support".into());
+        let display = |id: &str, title: &str| nav.display_title(id, title);
         let request = SearchRequest { query: "chargeback".into(), super_finder: true, strict: false, offset: 0, limit: 6 };
-        let _initial = search_conversations(&service, &reader, request.clone(), 1);
+        let _initial = search_conversations(&service, &reader, request.clone(), 1, &display);
         service.conversations.get().unwrap().wait_idle();
-        let results = search_conversations(&service, &reader, request.clone(), 2).unwrap();
+        let results = search_conversations(&service, &reader, request.clone(), 2, &display).unwrap();
         assert!(results.effective.super_finder);
         assert_eq!(results.hits.len(), 1);
         assert!(results.hits[0].passage.text.contains("refund"));
         let token = &results.hits[0].source_id;
+        assert_eq!(token, &exact);
+        assert_eq!(results.hits[0].title, "Member support");
         assert_eq!(resolve_search_message(&reader, token).unwrap().turn_id, turn);
-        assert!(search_conversations(&service, &reader, SearchRequest { super_finder: false, ..request }, 3).unwrap().hits.is_empty());
+        let words = SearchRequest { super_finder: false, ..request };
+        assert!(search_conversations(&service, &reader, words.clone(), 3, &display).unwrap().hits.is_empty());
+        nav.renamed_threads.insert(thread.clone(), "Refund decision".into());
+        let display = |id: &str, title: &str| nav.display_title(id, title);
+        let results = search_conversations(&service, &reader, SearchRequest { query: "refund".into(), ..words }, 4, &display).unwrap();
+        assert_eq!(results.hits.len(), 1);
+        assert_eq!(results.hits[0].source_id, exact);
+        assert_eq!(results.hits[0].title, "Refund decision");
         service.shutdown();
         drop(spine);
         let mut ledger = Ledger::open(ledger_path).unwrap();

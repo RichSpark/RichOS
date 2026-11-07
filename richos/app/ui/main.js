@@ -8515,6 +8515,11 @@ function searchTail() {
 
 // ---- drawing ---------------------------------------------------------------------------
 
+function searchNavigationHits() {
+  const indexedMessages = new Set(searchState.conversations?.hits.map((hit) => hit.source_id));
+  return searchState.navHits.filter((hit) => hit.message_source_id == null || !indexedMessages.has(hit.message_source_id));
+}
+
 function renderSearchResults(before) {
   const resp = searchState.resp;
   const prevKey = searchState.active >= 0 && searchState.items[searchState.active] ? searchState.items[searchState.active].key : null;
@@ -8523,8 +8528,7 @@ function renderSearchResults(before) {
   // §3.4: "Results group by entity."
   const order = [];
   const byEntity = new Map();
-  for (const hit of searchState.navHits) {
-    if (hit.kind === "message" && searchState.conversations?.status?.folder?.state === "ready") continue;
+  for (const hit of searchNavigationHits()) {
     const key = hit.entity_label;
     if (!byEntity.has(key)) {
       byEntity.set(key, []);
@@ -8715,7 +8719,7 @@ async function loadSearchRecords(section, request, generation, firstResultsMs) {
   renderSearchResults(null);
   searchResultsEl.scrollTop = scroll;
   const native = searchState.conversations;
-  const navigation = searchState.navHits.filter((hit) => hit.kind !== "message" || native?.status.folder.state !== "ready").length;
+  const navigation = searchNavigationHits().length;
   const results = searchState.total + navigation + (native?.hits.length || 0) + (searchState.companyMemory?.hits.length || 0);
   searchCountEl.textContent = (results ? results + (results === 1 ? " result" : " results") + " · " : "") + firstResultsMs + " ms";
   const meaning = response?.status?.meaning.state;

@@ -6756,6 +6756,8 @@ struct SearchHit {
     entity_label: String,
     thread_id: Option<String>,
     thread_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_source_id: Option<String>,
     excerpt: String,
     at: u64,
 }
@@ -6845,6 +6847,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
                 entity_label: e.display_name.clone(),
                 thread_id: None,
                 thread_title: None,
+                message_source_id: None,
                 excerpt: e.display_name.clone(),
                 at: 0,
             });
@@ -6866,6 +6869,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
                 entity_label: label_of(s.entity_id.as_deref()),
                 thread_id: Some(s.id.clone()),
                 thread_title: Some(display),
+                message_source_id: None,
                 excerpt: String::new(),
                 at: s.last_activity,
             });
@@ -6900,6 +6904,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
                     entity_label: label_of(s.entity_id.as_deref()),
                     thread_id: Some(s.id.clone()),
                     thread_title: Some(display.clone()),
+                    message_source_id: doc_search::exact_message_token(ledger, &s.id, m),
                     excerpt,
                     at: m.at,
                 });
@@ -6921,7 +6926,9 @@ fn search_documents(state: State<AppState>, request: richos_search::SearchReques
 
 #[richos_command::command]
 fn search_conversations(state: State<AppState>, request: richos_search::SearchRequest, generation: u64) -> Option<richos_search::SearchResponse> {
-    doc_search::search_conversations(&state.search, &state.reader, request, generation)
+    doc_search::search_conversations(&state.search, &state.reader, request, generation, &|thread_id, created_title| {
+        state.nav.lock().unwrap().state().display_title(thread_id, created_title)
+    })
 }
 
 #[richos_command::command]

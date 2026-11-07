@@ -333,6 +333,12 @@ async function main() {
         };
         window.RichBridge.invoke = async (cmd, args) => {
           if (cmd === "resolve_search_message") return args.sourceId === target.id ? anchor : null;
+          if (cmd === "search_nav") return [
+            { kind: "message", thread_id: "acme", thread_title: "Indexed exact match", entity_label: "Acme",
+              at: 1, excerpt: target.text, message_source_id: target.id },
+            { kind: "message", thread_id: "acme", thread_title: "Unindexed substring", entity_label: "Acme",
+              at: 2, excerpt: "The exact fragment can still be found." },
+          ];
           if (cmd !== "search_conversations") return invoke(cmd, args);
           return {
             requested: args.request, effective: args.request, words: [], spans: [],
@@ -344,6 +350,8 @@ async function main() {
       });
       await p.fill("#search-input", "negotiated discount");
       await p.waitForSelector(".srch-message");
+      assertEqual(await p.getByText("Unindexed substring", { exact: true }).count(), 1, "keep an exact legacy match without an indexed replacement");
+      assertEqual(await p.getByText("Indexed exact match", { exact: true }).count(), 0, "deduplicate a legacy match with the same indexed message");
       await p.locator(".srch-message").dblclick();
       await waitFor(p, "the Acme message was never located", () => !!document.documentElement.dataset.searchJump);
       assertEqual(p.__errors.length, 0, p.__errors.join("\n"));
