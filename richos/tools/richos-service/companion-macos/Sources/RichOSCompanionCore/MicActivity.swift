@@ -75,10 +75,11 @@ public struct MicActivityTracker {
     public let filter: MicActivityFilter
     /// Processes that opened input and whose call audio has not ended, by PID.
     public private(set) var active: [Int32: AudioProcess] = [:]
-    private var chromeOutput: [Int32: (began: Int64, linked: Bool)] = [:]
+    private var chromeJoinStarted: [Int32: Int64] = [:]
 
-    /// Chrome can open playback a few seconds before the microphone as a call joins.
-    /// Playback already running before the join is no evidence that this call is still going.
+    /// A live Chrome Zoom join reopened its input six seconds after first opening it, while
+    /// playback stayed open. Follow playback only during that initial input reset. Chrome uses
+    /// one audio process across tabs, so playback cannot tell when an established call ends.
     private static let chromeJoinWindowMs: Int64 = 8_000
 
     public init(filter: MicActivityFilter) { self.filter = filter }
@@ -86,24 +87,24 @@ public struct MicActivityTracker {
     public mutating func update(_ reading: [AudioProcess], at ms: Int64) -> [MicActivityChange] {
         var now: [Int32: AudioProcess] = [:]
         var present = Set<Int32>()
-        var output: [Int32: (began: Int64, linked: Bool)] = [:]
         for p in reading where !filter.excludes(p) {
             present.insert(p.pid)
-            if p.family == "com.google.Chrome", p.runningOutput {
-                let began = chromeOutput[p.pid]?.began ?? ms
-                let startingInput = p.runningInput && active[p.pid] == nil
-                let linked = chromeOutput[p.pid]?.linked == true ||
-                    (startingInput && ms >= began && ms - began <= Self.chromeJoinWindowMs)
-                output[p.pid] = (began, linked)
-            }
-            // Zoom in Chrome can close and reopen its input during join while the same process
-            // still plays the call. Only input can start detection. Playback linked at that
-            // first input keeps the call alive until the process releases both streams.
-            if p.runningInput || (active[p.pid] != nil && output[p.pid]?.linked == true) {
+            let isChrome = p.family == "com.google.Chrome"
+            if p.runningInput {
+                now[p.pid] = p
+                if isChrome, active[p.pid] == nil {
+                    chromeJoinStarted[p.pid] = ms
+                } else if isChrome, active[p.pid]?.runningInput == false {
+                    chromeJoinStarted.removeValue(forKey: p.pid)
+                }
+            } else if isChrome, p.runningOutput, let began = chromeJoinStarted[p.pid],
+                      ms - began < Self.chromeJoinWindowMs {
                 now[p.pid] = p
             }
         }
-        chromeOutput = output
+        chromeJoinStarted = chromeJoinStarted.filter { pid, began in
+            now[pid] != nil && ms - began < Self.chromeJoinWindowMs
+        }
         var changes: [MicActivityChange] = []
         // Stopped first, in pid order, so the output is deterministic.
         for pid in active.keys.sorted() where now[pid] == nil {
