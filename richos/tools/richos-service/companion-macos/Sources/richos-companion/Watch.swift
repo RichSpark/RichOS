@@ -97,7 +97,8 @@ final class MicWatcher {
                 ]))
             }
         }
-        for change in tracker.update(reading, at: at) {
+        let uptimeMs = Int64(DispatchTime.now().uptimeNanoseconds / 1_000_000)
+        for change in tracker.update(reading, at: uptimeMs) {
             let process: AudioProcess
             switch change {
             case .started(let p): process = p

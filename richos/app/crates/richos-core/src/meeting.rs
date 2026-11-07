@@ -12,8 +12,8 @@
 //!
 //! A call is identified by the app family holding the microphone (`us.zoom.xos`,
 //! `com.google.Chrome`; the companion folds helper processes into their app). It is LIVE while
-//! any process of that family runs input. The watcher also follows Chrome playback that started
-//! around the first input, so a temporary input reset does not end the call. Once all activity
+//! any process of that family runs input. During Chrome's short join window, playback can bridge
+//! the first input reset. After that, other tabs' audio cannot keep the call open. Once all activity
 //! the watcher follows stops, the recording stops after [`END_GRACE_MS`], or immediately if that
 //! app starts a new call during the grace period.
 //! RichOS's own processes never count: the watcher is started excluding the app, and the capture
@@ -69,8 +69,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// routes, with no gap at all inside a call, and stopped 2.6 s after the guest left, 3.2 to 4.0 s
 /// after the host ended the meeting and 1.8 s after the tab closed. An idle Zoom, an idle Chrome
 /// and played sounds never started input. A 2026-11-07 Chrome Zoom join did reset input while
-/// output continued. The watcher now bridges that gap using the output that opened at join. 8 s ends a
-/// recording within about 12 s of hang-up. NOT measured: a change of microphone inside a call; if
+/// output continued. The watcher bridges that first gap for up to 8 s after input opens. The end
+/// grace also lasts 8 s and ends a recording within about 12 s of hang-up. NOT measured: a change of microphone inside a call; if
 /// it stops the app's input, the call is split there and the rest is prompted as the next call.
 pub const END_GRACE_MS: u64 = 8_000;
 
@@ -461,8 +461,8 @@ impl MeetingMonitor {
         // The followed call's app back after every process of it left the microphone: that call
         // is over and this is the next one, with its own prompt and recording (handover review
         // rv-20261013T135051Z-1b6ba88a-4002 #1: leaving one Zoom call and joining the next inside
-        // the end grace recorded the second without its own click). Chrome input resets with
-        // continuous call playback are handled by the watcher before it reports a stop.
+        // the end grace recorded the second without its own click). The watcher bridges Chrome's
+        // initial input reset when playback is still running.
         let mut out = vec![];
         if self.phase.call().is_some_and(|c| c.family == family) {
             out = self.end_call(now);
