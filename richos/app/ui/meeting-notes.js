@@ -97,7 +97,6 @@
   function retrySlot(turnId) {
     if (!turnId) return null;
     const slot = document.createElement("div");
-    slot.className = "acc-note-acts";
     slot.dataset.meetingRetry = turnId;
     const button = document.createElement("button");
     button.type = "button";
