@@ -2277,6 +2277,10 @@
       const slot = window.RichAccounts.noteSlot(item.turnId);
       if (slot) art.appendChild(slot);
     }
+    if (item.phase === "proactive" && window.RichMeetingNotes?.retrySlot) {
+      const slot = window.RichMeetingNotes.retrySlot(item.turnId);
+      if (slot) art.appendChild(slot);
+    }
 
     const actions = elem("div", "tl-rich-actions");
     const copy = elem("button", "tl-mini-btn", "Copy");

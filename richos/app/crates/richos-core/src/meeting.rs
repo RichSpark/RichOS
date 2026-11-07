@@ -12,9 +12,10 @@
 //!
 //! A call is identified by the app family holding the microphone (`us.zoom.xos`,
 //! `com.google.Chrome`; the companion folds helper processes into their app). It is LIVE while
-//! any process of that family runs input, and it is over once none does: its recording stops
-//! after [`END_GRACE_MS`] of that, or at once when that app takes the microphone again, which is
-//! the next call (a call's input never pauses inside the call, measured through mute and silence).
+//! any process of that family runs input. The watcher also follows Chrome playback that started
+//! around the first input, so a temporary input reset does not end the call. Once all activity
+//! the watcher follows stops, the recording stops after [`END_GRACE_MS`], or immediately if that
+//! app starts a new call during the grace period.
 //! RichOS's own processes never count: the watcher is started excluding the app, and the capture
 //! process the app starts is excluded here ([`MeetingMonitor::exclude_pid`]), because a
 //! device-wide "microphone in use" flag cannot see a call end while RichOS itself holds the
@@ -38,8 +39,9 @@
 //! the meeting link's app when the event names one ([`Scheduled::covers`]), is that meeting,
 //! however often he leaves and rejoins; any other call prompts. A rejoin of a meeting he is taking
 //! notes on (Take Notes, not stopped or declined since) records that meeting again without asking;
-//! after Stop or Not this one it records nothing. A browser call is a meeting only
-//! when its link is a browser meeting (Google Meet). While prompts are paused nothing prompts, and
+//! after Stop or Not this one it records nothing. Browser activity can end an explicitly started
+//! calendar recording, but without a tab identity it never inherits a native app meeting
+//! answer. While prompts are paused nothing prompts, and
 //! a running recording is left alone.
 //!
 //! # Nothing that waits is forgotten
@@ -66,7 +68,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// through every mute (55 s native Zoom, 47 s Zoom in Chrome) and every minute of silence on both
 /// routes, with no gap at all inside a call, and stopped 2.6 s after the guest left, 3.2 to 4.0 s
 /// after the host ended the meeting and 1.8 s after the tab closed. An idle Zoom, an idle Chrome
-/// and played sounds never started input; every start after a stop was a new join. 8 s ends a
+/// and played sounds never started input. A 2026-11-07 Chrome Zoom join did reset input while
+/// output continued. The watcher now bridges that gap using the output that opened at join. 8 s ends a
 /// recording within about 12 s of hang-up. NOT measured: a change of microphone inside a call; if
 /// it stops the app's input, the call is split there and the rest is prompted as the next call.
 pub const END_GRACE_MS: u64 = 8_000;
@@ -458,8 +461,8 @@ impl MeetingMonitor {
         // The followed call's app back after every process of it left the microphone: that call
         // is over and this is the next one, with its own prompt and recording (handover review
         // rv-20261013T135051Z-1b6ba88a-4002 #1: leaving one Zoom call and joining the next inside
-        // the end grace recorded the second without its own click). Measured, a call's input
-        // never pauses inside a call, through mute or silence (END_GRACE_MS).
+        // the end grace recorded the second without its own click). Chrome input resets with
+        // continuous call playback are handled by the watcher before it reports a stop.
         let mut out = vec![];
         if self.phase.call().is_some_and(|c| c.family == family) {
             out = self.end_call(now);
@@ -591,7 +594,18 @@ impl MeetingMonitor {
             None => true,
             Some(m) => {
                 let other = || self.answered.values().any(|a| a.event_id != m.event_id && a.app.is_some() && a.covers(c));
-                m.takes(&c.family) && (m.app.is_some() || !other())
+                if m.takes(&c.family) {
+                    return m.app.is_some() || !other();
+                }
+                // A Zoom/Teams/Webex invite can be opened in a browser. Only a recording
+                // explicitly started from this reminder may use that input to know when to
+                // stop. Do not treat a browser family as proof of the meeting for prompts,
+                // remembered dismissals or automatic rejoins.
+                matches!(self.phase, Phase::Recording { call: None, .. } | Phase::Failed { call: None, .. })
+                    && MeetingApp::BROWSERS.contains(&c.family.as_str())
+                    && c.since.saturating_add(PROMPT_LEAD_MS) >= m.starts_at
+                    && c.since < m.ends_at
+                    && !other()
             }
         }
     }
@@ -1877,6 +1891,19 @@ mod tests {
             assert_eq!(m.watch(&on(8, "us.zoom.xos", "Zoom"), 60_000), vec![], "the real Zoom join asked again");
             m.watch(&off(8, "us.zoom.xos"), 900_000);
             assert_eq!(m.clock(908_000, &cal), vec![Action::StopCapture(EndReason::CallEnded)], "the recording ends with Zoom");
+        }
+
+        #[test]
+        fn taking_notes_from_a_zoom_reminder_stops_when_the_browser_call_ends() {
+            let cal = calendar();
+            let mut m = MeetingMonitor::new();
+            assert_eq!(m.clock(0, &cal).len(), 1);
+            assert!(m.input(Input::TakeNotes).iter().any(|a| matches!(a, Action::StartCapture { .. })));
+            assert_eq!(m.watch(&on(8, "com.google.Chrome", "Chrome"), 60_000), vec![]);
+            m.watch(&off(8, "com.google.Chrome"), 90_000);
+            assert_eq!(m.clock(90_000 + END_GRACE_MS, &cal), vec![Action::StopCapture(EndReason::CallEnded)]);
+            let next = m.watch(&on(8, "com.google.Chrome", "Chrome"), 100_000);
+            assert!(matches!(next.as_slice(), [Action::ShowPrompt(PromptKind::Unscheduled { .. })]));
         }
 
         #[test]

@@ -63,8 +63,8 @@ public struct MicActivityFilter: Equatable {
 public enum MicActivityChange: Equatable {
     /// The process began running input (or was already running it at the first reading).
     case started(AudioProcess)
-    /// The process stopped running input. `exited` is true when it left Core Audio's process list
-    /// altogether (quit or crashed) rather than closing its input stream.
+    /// The process released its call audio. `exited` is true when it left Core Audio's process list
+    /// altogether (quit or crashed).
     case stopped(AudioProcess, exited: Bool)
 }
 
@@ -73,18 +73,37 @@ public enum MicActivityChange: Equatable {
 /// longer than the next reading: there is no inference from the ABSENCE of a callback.
 public struct MicActivityTracker {
     public let filter: MicActivityFilter
-    /// The processes running input at the last reading, by pid.
+    /// Processes that opened input and whose call audio has not ended, by PID.
     public private(set) var active: [Int32: AudioProcess] = [:]
+    private var chromeOutput: [Int32: (began: Int64, linked: Bool)] = [:]
+
+    /// Chrome can open playback a few seconds before the microphone as a call joins.
+    /// Playback already running before the join is no evidence that this call is still going.
+    private static let chromeJoinWindowMs: Int64 = 8_000
 
     public init(filter: MicActivityFilter) { self.filter = filter }
 
-    public mutating func update(_ reading: [AudioProcess]) -> [MicActivityChange] {
+    public mutating func update(_ reading: [AudioProcess], at ms: Int64) -> [MicActivityChange] {
         var now: [Int32: AudioProcess] = [:]
         var present = Set<Int32>()
+        var output: [Int32: (began: Int64, linked: Bool)] = [:]
         for p in reading where !filter.excludes(p) {
             present.insert(p.pid)
-            if p.runningInput { now[p.pid] = p }
+            if p.family == "com.google.Chrome", p.runningOutput {
+                let began = chromeOutput[p.pid]?.began ?? ms
+                let startingInput = p.runningInput && active[p.pid] == nil
+                let linked = chromeOutput[p.pid]?.linked == true ||
+                    (startingInput && ms >= began && ms - began <= Self.chromeJoinWindowMs)
+                output[p.pid] = (began, linked)
+            }
+            // Zoom in Chrome can close and reopen its input during join while the same process
+            // still plays the call. Only input can start detection. Playback linked at that
+            // first input keeps the call alive until the process releases both streams.
+            if p.runningInput || (active[p.pid] != nil && output[p.pid]?.linked == true) {
+                now[p.pid] = p
+            }
         }
+        chromeOutput = output
         var changes: [MicActivityChange] = []
         // Stopped first, in pid order, so the output is deterministic.
         for pid in active.keys.sorted() where now[pid] == nil {

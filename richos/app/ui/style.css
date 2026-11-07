@@ -12016,7 +12016,7 @@ body.panel-full .op-body {
 
 /* Rich's lines about accounts: the buttons round 18 puts under them */
 .acc-note-slot:empty { display: none; }
-.acc-note-acts { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.acc-note-acts, [data-meeting-retry] { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 .acc-after { font-size: 1rem; color: var(--ink-soft); margin: 12px 0 0; }
 @media (prefers-reduced-motion: reduce) { #accounts-sheet, #accounts-sheet * { animation: none !important; transition: none !important; } }
 
