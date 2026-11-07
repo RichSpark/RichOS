@@ -2,6 +2,28 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.0-nightly.20261107.91
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.0-nightly.20261107.91)
+
+- Added a navigation rail along the left edge of the window with Home, Chats, RichFinder (the search ⌘K opens), RichCleaner, RichScribe and Bust a bug; your Mac's resources square and your initials, which open Settings, moved onto it from the bottom of the sidebar and stay in view when you hide the sidebar
+- Added Conversations and Company memory to RichFinder: it finds your messages and Rich's replies in all your conversations by what they are about and choosing a message takes you to that exact message; where your team keeps company memory, View record shows the matching record and where it came from
+- Added pictures, PDFs, Office documents, audio and video in your search folder to RichFinder, found by the notes and labels RichCleaner gave them
+- Added Try again to RichBrief's message when it could not prepare your meeting notes: it makes them again from the saved recording without recording anything new and the message no longer shows technical error text
+- Changed the meeting notes prompt to show the RichBrief name and icon; the RichScribe and RichCleaner settings now show their icons beside their names and RichFinder's icon sits beside Super Finder
+- Changed RichCleaner's window to say when RichCleaner is off and offer Turn on RichCleaner instead of showing filing steps that cannot work yet
+- Changed the Bust a bug panel to mention that RichDoctor in your menu bar can file the same report if RichOS ever won't open
+- Improved RichFinder with its own search model built into RichOS in place of Apple's: it puts the right file first more often, shows a better passage from it and stays quick while it reads new files
+- Improved RichFinder to use a new or removed search folder in RichOS's settings file right away, for you and for Rich, where before it took a restart
+- Fixed meeting notes failing when a meeting ended while RichOS was still downloading what it needs to transcribe; RichBrief now says "Recording saved. Finishing setup for your notes…" and waits up to five minutes
+- Fixed meeting notes of a call in Google Chrome stopping moments after you joined
+- Fixed meeting notes you started from a calendar reminder recording until you pressed Stop when you joined that Zoom, Microsoft Teams or Webex meeting in your browser; they now stop when you leave the call
+- Fixed RichBrief's recording indicator disappearing without a word when its recorder stopped unexpectedly; it now says nothing or only part of the meeting was recorded and offers Try again
+- Fixed meeting notes warning that microphone access might be off for RichOS even after your microphone had started picking up sound
+- Fixed the tooltip on the message box's work status staying on screen after you moved the pointer away when that status updated
+- [technical] Added RichFinder's timings, without your search words, to Bust a bug reports and RichDoctor's reports
+- [technical] Fixed a ready-to-land handover from Codex being skipped without a review when it listed its repositories one per line; one naming no repository RichOS can review now gets a reply saying so
+
 ## 1.3.0-nightly.20261105.90
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.0-nightly.20261105.90)
