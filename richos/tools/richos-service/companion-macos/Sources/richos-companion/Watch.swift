@@ -97,7 +97,7 @@ final class MicWatcher {
                 ]))
             }
         }
-        for change in tracker.update(reading) {
+        for change in tracker.update(reading, at: at) {
             let process: AudioProcess
             switch change {
             case .started(let p): process = p
