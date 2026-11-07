@@ -335,23 +335,42 @@ async function main() {
           if (cmd === "resolve_search_message") return args.sourceId === target.id ? anchor : null;
           if (cmd === "search_nav") return [
             { kind: "message", thread_id: "acme", thread_title: "Indexed exact match", entity_label: "Acme",
-              at: 1, excerpt: target.text, message_source_id: target.id },
+              at: 1, excerpt: "An exact match already in the navigation rows.", message_source_id: "exact-match" },
             { kind: "message", thread_id: "acme", thread_title: "Unindexed substring", entity_label: "Acme",
               at: 2, excerpt: "The exact fragment can still be found." },
           ];
+          if (cmd === "search_documents") return {
+            requested: args.request, effective: args.request, words: [], spans: [], offset: 0, dropped: 0, total: 1,
+            status: { generation: 2, folder: { state: "ready", files: 1 }, meaning: { state: "ready", files: 1 } },
+            hits: [{ source_id: "document", title: "Price sheet", rel_path: "pricing.md", why: "meaning", exact: [],
+              passage: { heading: "", text: "The contract lists annual pricing.", line: 1 } }],
+          };
           if (cmd !== "search_conversations") return invoke(cmd, args);
+          await new Promise((resolve) => { window.__deliverConversation = resolve; });
           return {
             requested: args.request, effective: args.request, words: [], spans: [],
             status: { folder: { state: "ready" }, meaning: { state: "ready" } },
-            hits: [{ source_id: target.id, title: "Acme", rel_path: "Acme", why: "meaning", exact: [],
-              passage: { heading: "", text: target.text, line: 1 } }],
+            hits: [
+              { source_id: target.id, title: "Acme", rel_path: "Acme", why: "meaning", exact: [],
+                passage: { heading: "", text: target.text, line: 1 } },
+              { source_id: "exact-match", title: "Duplicate indexed row", rel_path: "Acme", why: "words", exact: [],
+                passage: { heading: "", text: "An exact match already in the navigation rows.", line: 1 } },
+            ],
           };
         };
       });
       await p.fill("#search-input", "negotiated discount");
+      await p.waitForSelector(".srch-doc");
+      await p.evaluate(() => {
+        window.__documentSearchRow = document.querySelector(".srch-doc");
+        window.__deliverConversation();
+      });
       await p.waitForSelector(".srch-message");
+      assert(await p.evaluate(() => document.querySelector(".srch-doc") === window.__documentSearchRow),
+        "the original document row stays mounted when the conversation result arrives");
       assertEqual(await p.getByText("Unindexed substring", { exact: true }).count(), 1, "keep an exact legacy match without an indexed replacement");
-      assertEqual(await p.getByText("Indexed exact match", { exact: true }).count(), 0, "deduplicate a legacy match with the same indexed message");
+      assertEqual(await p.getByText("Indexed exact match", { exact: true }).count(), 1, "keep the exact row in its original place");
+      assertEqual(await p.getByText("Duplicate indexed row", { exact: true }).count(), 0, "deduplicate the same indexed message");
       await p.locator(".srch-message").dblclick();
       await waitFor(p, "the Acme message was never located", () => !!document.documentElement.dataset.searchJump);
       assertEqual(p.__errors.length, 0, p.__errors.join("\n"));
