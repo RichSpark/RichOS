@@ -507,6 +507,19 @@ async function main() {
     await context.close();
   }
 
+  // 13: the first click after RichCleaner's window has been opened and closed. macOS gives the
+  // click that makes an inactive window key to the window and not to the page unless the window
+  // accepts the first mouse; the main window did not, so a rail item or Settings needed two
+  // clicks. Every window the main window is built from is
+  // `tauri.conf.json`'s declaration (`from_config`, both the first window and the Dock reopen).
+  await run.check("13  the main window takes the first click while the app is not in front (RichCleaner opened and closed)", async () => {
+    const conf = JSON.parse(fs.readFileSync(path.resolve(UI_DIR, "..", "src-tauri", "tauri.conf.json"), "utf8"));
+    const wins = conf.app.windows;
+    assert(wins.length > 0, "tauri.conf.json declares the main window");
+    for (const w of wins) assertEqual(w.acceptFirstMouse, true, `window "${w.title}" declares acceptFirstMouse: true`);
+    return "the main window accepts the first mouse";
+  });
+
   console.log("\n  measured:\n    " + report.join("\n    "));
   await browser.close();
   return run.report();

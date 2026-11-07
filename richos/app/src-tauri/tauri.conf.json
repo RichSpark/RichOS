@@ -17,6 +17,7 @@
         "resizable": true,
         "visible": true,
         "zoomHotkeysEnabled": false,
+        "acceptFirstMouse": true,
         "minWidth": 1024,
         "minHeight": 700
       }
