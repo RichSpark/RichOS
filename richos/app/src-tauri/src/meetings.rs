@@ -135,6 +135,21 @@ struct CaptureRun {
 }
 
 impl CaptureRun {
+    /// The first microphone audio clears the initial access suspicion. An actual gap in channel
+    /// delivery stays in the record even if that channel later recovers.
+    fn update_capture_warning(&mut self, event: &serde_json::Value, message: &str) -> bool {
+        if event["stalled"].as_bool() == Some(true) && !message.is_empty() {
+            self.warnings.push(message.to_owned());
+            return true;
+        }
+        if let Some(cleared) = event["clearsWarning"].as_str() {
+            let before = self.warnings.len();
+            self.warnings.retain(|warning| warning != cleared);
+            return self.warnings.len() != before;
+        }
+        false
+    }
+
     /// What the app knows about this recording, as `meeting.json` holds it. `ended_at` 0: the
     /// recording has not ended yet (written at its start, so a quit or crash leaves it findable).
     fn facts(&self, ended_at: u64) -> MeetingFacts {
@@ -803,11 +818,10 @@ impl Meetings {
                 run.dir = v["dir"].as_str().map(PathBuf::from).or(run.dir.take());
             }
             "channel" => {
-                let message = v["message"].as_str().unwrap_or("").to_string();
+                let message = v["message"].as_str().unwrap_or("");
                 eprintln!("[richos] meeting notes: capture: {message}");
-                if v["stalled"].as_bool() == Some(true) && !message.is_empty() {
-                    run.warnings.push(message);
-                    // Kept on disk at once, so a recording cut short still says it.
+                if run.update_capture_warning(&v, message) {
+                    // Persist the current warnings for recordings that get cut short.
                     if let Some(dir) = &run.dir {
                         logged("writing meeting.json", meeting_notes::write_facts(dir, &run.facts(0)));
                     }
@@ -1612,6 +1626,22 @@ mod tests {
             warnings: Vec::new(),
             _stdin: None,
         }
+    }
+
+    #[test]
+    fn microphone_audio_clears_the_access_warning_and_keeps_channel_gaps() {
+        let mut capture = run(9);
+        let stalled = serde_json::json!({"stalled": true});
+        let access_warning = "The microphone may be giving only silence.";
+        let gap = "System audio stopped arriving.";
+        assert!(capture.update_capture_warning(&stalled, access_warning));
+        assert!(capture.update_capture_warning(&stalled, gap));
+        assert_eq!(capture.facts(0).warnings, [access_warning, gap]);
+
+        let recovered = serde_json::json!({"stalled": false, "clearsWarning": access_warning});
+        assert!(capture.update_capture_warning(&recovered, "The microphone is sending audio again."));
+        assert_eq!(capture.facts(0).warnings, [gap]);
+        assert!(!capture.update_capture_warning(&recovered, "The microphone is sending audio again."));
     }
 
     #[test]
