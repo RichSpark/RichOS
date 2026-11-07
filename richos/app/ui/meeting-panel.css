@@ -45,7 +45,7 @@ body { font-family: var(--font); }
 #fl.leaving{transition:opacity .35s ease,transform .35s ease;opacity:0;transform:translateY(-8px);pointer-events:none}
 #fl.swap > *{animation:cxin .32s cubic-bezier(.22,.61,.36,1) both}
 .fl-head{display:flex;align-items:center;gap:7px;margin-bottom:8px}
-.fl-head .rail-logo{width:15px;height:15px;display:block}
+.fl-head .fl-icon{width:16px;height:16px;display:block}
 .lg-ink{fill:var(--ink)}
 .lg-gold{fill:var(--gold)}
 .fl-app{font-size:.875rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--trim-text)}   /* 14px caps micro-label: declared skippable chrome (round 25) */

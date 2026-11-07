@@ -3902,6 +3902,11 @@
         case "meeting_state":
           meetingCalls.push({ cmd });
           return structuredClone(meetingNotes);
+        case "meeting_retry_saved":
+          meetingCalls.push({ cmd, turnId: args.turnId });
+          meetingNotes.retryTurns = (meetingNotes.retryTurns || []).filter(id => id !== args.turnId);
+          emit("meeting-state", structuredClone(meetingNotes));
+          return null;
         case "meeting_start_or_stop":
           meetingCalls.push({ cmd });
           if (meetingNotes.recording) Object.assign(meetingNotes, { recording: false, startedAt: null });

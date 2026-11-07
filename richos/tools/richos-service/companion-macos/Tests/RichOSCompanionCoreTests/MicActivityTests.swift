@@ -19,27 +19,60 @@ final class MicActivityTests: XCTestCase {
 
     func testFirstReadingReportsWhatIsAlreadyRunningInput() {
         var t = MicActivityTracker(filter: MicActivityFilter())
-        let changes = t.update([p(10, "us.zoom.xos", input: true), p(11, "com.apple.Music", input: false, output: true)])
+        let changes = t.update([p(10, "us.zoom.xos", input: true), p(11, "com.apple.Music", input: false, output: true)], at: 0)
         XCTAssertEqual(changes, [.started(p(10, "us.zoom.xos", input: true))])
     }
 
     func testStopIsReportedWhenInputCloses() {
         var t = MicActivityTracker(filter: MicActivityFilter())
-        _ = t.update([p(10, "us.zoom.xos", input: true)])
-        let changes = t.update([p(10, "us.zoom.xos", input: false, output: true)])
+        _ = t.update([p(10, "us.zoom.xos", input: true)], at: 0)
+        let changes = t.update([p(10, "us.zoom.xos", input: false, output: true)], at: 0)
         XCTAssertEqual(changes, [.stopped(p(10, "us.zoom.xos", input: true), exited: false)])
+    }
+
+    func testChromePlaybackBridgesOnlyTheJoinReset() {
+        var tracker = MicActivityTracker(filter: MicActivityFilter())
+        let playback = p(10, "com.google.Chrome.helper", input: false, output: true)
+        let joined = p(10, "com.google.Chrome.helper", input: true, output: true)
+        XCTAssertEqual(tracker.update([playback], at: 0), [], "output alone does not prompt")
+        XCTAssertEqual(tracker.update([joined], at: 2_000), [.started(joined)])
+        XCTAssertEqual(tracker.update([playback], at: 4_000), [], "input reset during join")
+        XCTAssertEqual(tracker.update([joined], at: 8_000), [], "Chrome finished joining")
+        XCTAssertEqual(tracker.update([playback], at: 9_000), [.stopped(joined, exited: false)])
+    }
+
+    func testChromeHangUpAndNextCallWithPlaybackStillRunning() {
+        var tracker = MicActivityTracker(filter: MicActivityFilter())
+        let playback = p(10, "com.google.Chrome.helper", input: false, output: true)
+        let joined = p(10, "com.google.Chrome.helper", input: true, output: true)
+        XCTAssertEqual(tracker.update([playback], at: 0), [])
+        XCTAssertEqual(tracker.update([joined], at: 2_000), [.started(joined)])
+        XCTAssertEqual(tracker.update([joined], at: 599_000), [])
+        XCTAssertEqual(tracker.update([playback], at: 600_000), [.stopped(joined, exited: false)])
+        XCTAssertEqual(tracker.update([playback], at: 1_800_000), [])
+        XCTAssertEqual(tracker.update([joined], at: 1_810_000), [.started(joined)])
+    }
+
+    func testChromeJoinBridgeExpiresWithoutInputReturning() {
+        var tracker = MicActivityTracker(filter: MicActivityFilter())
+        let playback = p(10, "com.google.Chrome.helper", input: false, output: true)
+        let joined = p(10, "com.google.Chrome.helper", input: true, output: true)
+        XCTAssertEqual(tracker.update([playback], at: 0), [])
+        XCTAssertEqual(tracker.update([joined], at: 60_000), [.started(joined)])
+        XCTAssertEqual(tracker.update([playback], at: 62_000), [], "playback may predate the join")
+        XCTAssertEqual(tracker.update([playback], at: 68_000), [.stopped(playback, exited: false)])
     }
 
     func testStopIsReportedAsExitWhenTheProcessLeavesTheList() {
         var t = MicActivityTracker(filter: MicActivityFilter())
-        _ = t.update([p(10, "us.zoom.xos", input: true)])
-        XCTAssertEqual(t.update([]), [.stopped(p(10, "us.zoom.xos", input: true), exited: true)])
+        _ = t.update([p(10, "us.zoom.xos", input: true)], at: 0)
+        XCTAssertEqual(t.update([], at: 0), [.stopped(p(10, "us.zoom.xos", input: true), exited: true)])
     }
 
     func testUnchangedReadingReportsNothing() {
         var t = MicActivityTracker(filter: MicActivityFilter())
-        _ = t.update([p(10, "us.zoom.xos", input: true)])
-        XCTAssertEqual(t.update([p(10, "us.zoom.xos", input: true)]), [])
+        _ = t.update([p(10, "us.zoom.xos", input: true)], at: 0)
+        XCTAssertEqual(t.update([p(10, "us.zoom.xos", input: true)], at: 0), [])
     }
 
     func testOwnProcessesAreExcludedByPidBundleAndFamily() {
@@ -50,14 +83,14 @@ final class MicActivityTests: XCTestCase {
             p(43, "com.richos.app", input: true),             // voice/dictation, by bundle
             p(44, "com.richos.app.helper", input: true),      // by family
             p(45, "com.google.Chrome.helper", input: true),   // a browser call: reported
-        ])
+        ], at: 0)
         XCTAssertEqual(changes, [.started(p(45, "com.google.Chrome.helper", input: true))])
     }
 
     func testChangesAreOrderedStoppedThenStartedByPid() {
         var t = MicActivityTracker(filter: MicActivityFilter())
-        _ = t.update([p(5, "a", input: true), p(3, "b", input: true)])
-        let changes = t.update([p(9, "c", input: true), p(7, "d", input: true)])
+        _ = t.update([p(5, "a", input: true), p(3, "b", input: true)], at: 0)
+        let changes = t.update([p(9, "c", input: true), p(7, "d", input: true)], at: 0)
         XCTAssertEqual(changes, [
             .stopped(p(3, "b", input: true), exited: true),
             .stopped(p(5, "a", input: true), exited: true),
