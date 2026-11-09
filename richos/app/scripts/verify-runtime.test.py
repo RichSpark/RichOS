@@ -3,6 +3,8 @@
 import hashlib
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -35,6 +37,22 @@ class RuntimeInventoryTests(unittest.TestCase):
 
     def test_complete_delivery_passes(self):
         module.verify(self.root, self.sources)
+
+    def test_unlisted_finder_metadata_does_not_change_inventory(self):
+        metadata = [self.root / ".DS_Store", self.root / "bin" / ".DS_Store"]
+        for path in metadata:
+            path.write_text("finder fixture")
+        self.assertEqual(module.verify(self.root, self.sources), self.manifest)
+        members = subprocess.check_output(
+            [sys.executable, str(Path(__file__).with_name("verify-runtime.py")),
+             str(self.root), str(self.sources), "--list"], text=True).splitlines()
+        self.assertEqual(set(members),
+                         {"runtime/" + name for name in {*self.manifest["files"], "delivery.json"}})
+        self.assertTrue(all(path.is_file() for path in metadata))
+        metadata[0].unlink()
+        metadata[0].symlink_to(self.sources)
+        with self.assertRaisesRegex(ValueError, "unexpected"):
+            module.verify(self.root, self.sources)
 
     def test_unlisted_private_record_refuses(self):
         (self.root / "fictional-private-record.json").write_text('{"fictional":true}')

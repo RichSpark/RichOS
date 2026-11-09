@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import tempfile
 
+from source_status import is_finder_metadata
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -102,11 +104,11 @@ DECLARED_OUTPUT_DIRECTORIES = (
     # is the live plugin's audit state, written by sessions as well as tests, and never an input
     # of a check: ci-shard.sh now fails, by name, a unit that writes it (STATE-WRITTEN).
     "richos/engine/.claude/state",
-    # RichDoctor's build writes these generated files into its crate (2026-11-05: the fourth
-    # `no-foreign-app-data` invalid in a row, "RichDoctor generated ignored gen/fonts/tokens
-    # files during the run", all three assertions passed). `richos/app/.gitignore` ignores all
-    # three; `tokens.css` is a file, so declared_output accepts a regular file as well.
+    # RichDoctor generates gen/ and stages the embedded frontend in ui-dist/. Older
+    # checkouts generated the ignored ui/fonts/ and ui/tokens.css in place. Neither
+    # layout is an input to verification.
     "richos/app/crates/richdoctor/gen",
+    "richos/app/crates/richdoctor/ui-dist",
     "richos/app/crates/richdoctor/ui/fonts",
     "richos/app/crates/richdoctor/ui/tokens.css",
 )
@@ -183,7 +185,16 @@ def ignored_and_untracked(path):
         return False
 
 
-def path_identity(path, ancestors=()):
+def untracked_finder_metadata(root, path):
+    if not is_finder_metadata(path) or not path.is_relative_to(root):
+        return False
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    result = subprocess.run(["git", "-C", str(root), "ls-files", "--error-unmatch", "--",
+                             str(path.relative_to(root))], env=env, capture_output=True, timeout=30)
+    return result.returncode == 1
+
+
+def path_identity(path, ancestors=(), *, ignore=None):
     """Includes inventories, absence, executable modes and untracked fixture data.
 
     Build caches inside a directory (build_cache above) are not part of its identity."""
@@ -194,15 +205,26 @@ def path_identity(path, ancestors=()):
     ancestors = (*ancestors, location)
     if path.is_symlink():
         target = os.readlink(path)
-        return {"link": target, "target": path_identity(Path(os.path.normpath(path.parent / target)), ancestors)}
+        return {"link": target, "target": path_identity(Path(os.path.normpath(path.parent / target)), ancestors, ignore=ignore)}
     if not path.exists():
         return {"absent": True}
     if path.is_file():
         return {"sha256": file_digest(path), "mode": path.stat().st_mode & 0o777}
     if path.is_dir():
-        return {entry.name: path_identity(entry, ancestors) for entry in sorted(path.iterdir())
-                if not excluded(entry)}
+        return {entry.name: path_identity(entry, ancestors, ignore=ignore) for entry in sorted(path.iterdir())
+                if not excluded(entry) and not (ignore and ignore(entry))}
     raise ValueError(f"unsupported input type: {path}")
+
+
+def runtime_identity(path):
+    """Bind the runtime and its inventory while tolerating incidental Finder files."""
+    root = Path(path).resolve()
+    delivery = root / "delivery.json"
+    listed = set()
+    if delivery.is_file():
+        inventory = json.loads(delivery.read_text())
+        listed = {root / name for name in (*inventory.get("files", {}), *inventory.get("links", {}))}
+    return path_identity(Path(path).absolute(), ignore=lambda entry: is_finder_metadata(entry) and entry not in listed)
 
 
 def identity_differences(before, after, prefix):
@@ -251,7 +273,7 @@ def identity_changed_keys(planned, now, limit=4):
     return "; identity differs at: " + ", ".join(found[:limit]) + more
 
 
-def inventory_identity(path):
+def inventory_identity(path, *, ignore=None):
     """Bind discovery and existence without hashing unrelated regular-file bytes.
 
     Links retain their target contents because a reader may traverse them. This
@@ -259,13 +281,14 @@ def inventory_identity(path):
     """
     path = Path(path)
     if path.is_symlink():
-        return {"link": path_identity(path)}
+        return {"link": path_identity(path, ignore=ignore)}
     if not path.exists():
         return {"absent": True}
     mode = path.stat().st_mode & 0o777
     if path.is_dir():
         return {"mode": mode, "directory": {
-            p.name: inventory_identity(p) for p in sorted(path.iterdir()) if not excluded(p)}}
+            p.name: inventory_identity(p, ignore=ignore) for p in sorted(path.iterdir())
+            if not excluded(p) and not (ignore and ignore(p))}}
     if path.is_file():
         return {"file": True, "mode": mode}
     raise ValueError(f"unsupported inventory input: {path}")
@@ -450,7 +473,8 @@ def checkout_rows(root):
         mode, blob, stage = meta.split(b" ")
         entries.setdefault(name, {})[stage] = (mode.decode(), blob.decode())
     differing = set(listing("diff", "--name-only", "--no-renames", "-z"))
-    differing |= set(listing("ls-files", "--others", "--exclude-standard", "-z"))
+    differing.update(name for name in listing("ls-files", "--others", "--exclude-standard", "-z")
+                     if not is_finder_metadata(root / os.fsdecode(name)))
     for name in differing:
         entry = _worktree_entry(root / os.fsdecode(name))
         entries[name] = {b"0": entry} if entry else {}
@@ -514,7 +538,7 @@ def checkout_installs(root):
             continue
         path = root / name
         if path.is_dir() and not path.is_symlink():
-            found[name] = digest(path_identity(path))
+            found[name] = digest(path_identity(path, ignore=is_finder_metadata))
     return found
 
 
@@ -875,10 +899,11 @@ class InputSnapshot:
             self.browser_installs[key] = playwright_installs(environment, root)
         return self.browser_installs[key]
 
-    def path(self, path):
-        key = str(Path(path).absolute())
+    def path(self, path, *, runtime=False, checkout=None):
+        key = (str(Path(path).absolute()), runtime, checkout)
         if key not in self.paths:
-            self.paths[key] = path_identity(path)
+            ignore = None if checkout is None else lambda entry: untracked_finder_metadata(checkout, entry)
+            self.paths[key] = runtime_identity(path) if runtime else path_identity(path, ignore=ignore)
         return self.paths[key]
 
     def runtime(self, executable):
@@ -886,10 +911,10 @@ class InputSnapshot:
             self.runtimes[executable] = python_runtime(executable)
         return self.runtimes[executable]
 
-    def inventory(self, path):
-        key = str(Path(path).absolute())
+    def inventory(self, path, *, checkout):
+        key = (str(Path(path).absolute()), checkout)
         if key not in self.inventories:
-            self.inventories[key] = inventory_identity(path)
+            self.inventories[key] = inventory_identity(path, ignore=lambda entry: untracked_finder_metadata(checkout, entry))
         return self.inventories[key]
 
 
@@ -1158,7 +1183,7 @@ def recipe_identity(root, recipe, environment, snapshot=None):
     for rel in selected_paths:
         if Path(rel).is_absolute() or ".." in Path(rel).parts:
             raise ValueError(f"input must be repository-relative: {rel}")
-        paths[rel] = digest(snapshot.content(root, rel) if family else snapshot.path(root / rel))
+        paths[rel] = digest(snapshot.content(root, rel) if family else snapshot.path(root / rel, checkout=root))
     # The prose review is a whole-file authority; the JSON only as the slice this recipe is
     # qualified by (qualification_slice).
     paths[review] = digest(snapshot.path(root / review))
@@ -1177,7 +1202,8 @@ def recipe_identity(root, recipe, environment, snapshot=None):
     external = {}
     for name in recipe["external"]:
         value = environment.get(name)
-        external[name] = digest(snapshot.path(value)) if value else {"unset": True}
+        external[name] = (digest(snapshot.path(value, runtime=name == "RICHOS_RUNTIME_DIR"))
+                          if value else {"unset": True})
     values = {name: digest(environment[name]) if name in environment else None
               for name in recipe["environment"]}
     profile = None
@@ -1199,7 +1225,7 @@ def recipe_identity(root, recipe, environment, snapshot=None):
     literal_external = {path: digest(snapshot.path(path)) for path in recipe.get("external_paths", [])}
     identity = {"contract": digest(recipe), "paths": paths, "tools": tools, "profile": profile,
                 "qualification": qualification_slice(root, recipe),
-                "inventories": {path: digest(snapshot.inventory(root / path))
+                "inventories": {path: digest(snapshot.inventory(root / path, checkout=root))
                                 for path in recipe.get("subset", {}).get("inventories", [])},
                 "external_paths": literal_external,
                 "git_inputs": git_input_identity(root, recipe.get("git_inputs"), environment),

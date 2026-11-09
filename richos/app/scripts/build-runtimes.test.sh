@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run-tests: no-host-screen: Python closure and isolated shell launchers; no screen or downloads
-# run-tests: inputs richos/app/scripts/runtime-launchers.test.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/runtime-sources.json richos/app/scripts/lib/no_host_paths.py richos/app/scripts/build-runtimes.test.sh richos/app/scripts/build-runtimes.py richos/app/scripts/runtime-launcher.c
+# run-tests: inputs richos/app/scripts/runtime-launchers.test.py richos/app/scripts/lib/probe_packaged.py richos/app/scripts/runtime-sources.json richos/app/scripts/lib/no_host_paths.py richos/app/scripts/build-runtimes.test.sh richos/app/scripts/build-runtimes.py richos/app/scripts/runtime-launcher.c richos/app/scripts/lib/source_status.py
 # run-tests: covers richos/app/scripts/build-runtimes.py richos/app/scripts/runtime-launchers.test.py richos/app/scripts/runtime-launcher.c
 #
 # build-runtimes.test.sh — the delivered Python's dependency closure, as build-runtimes.py

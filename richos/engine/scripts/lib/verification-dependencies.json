@@ -15425,7 +15425,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "47fd2f98201d53542b350cebaf5d3a0b9ef4e6f4215cf5f5418bdb8693c4d2d1",
+          "sha256": "bd76eecc65139c2061fde08a825b38674fd4edba9fe8fb5afaeb7aa0f2dd07c0",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15461,7 +15461,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/run-tests.sh",
-          "sha256": "4a558a7d5a4ade72138d48aa8f2d27f8bce9911c669f13f91c9533efef8d27be",
+          "sha256": "bf740fc01d916e5a99b5f2b15d4038ab51b5d2de9f711661c27ec63d36893cf0",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15515,7 +15515,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "84ce7c71e65c706904da6e1324caf2377eb4f55098d59a86c1461c64b94e5283",
+          "sha256": "c751a832c7c50a8c492958ab43c585b7508b324f6ccbc1a5e62cedaaf168d18e",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15551,7 +15551,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "47fd2f98201d53542b350cebaf5d3a0b9ef4e6f4215cf5f5418bdb8693c4d2d1",
+          "sha256": "bd76eecc65139c2061fde08a825b38674fd4edba9fe8fb5afaeb7aa0f2dd07c0",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15563,7 +15563,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "e7850387f384e3f2858c565a16dccaf76f7e7dc8fb5b642d202dde3e5db446ee",
+          "sha256": "f9837cabc40d5e87b64f91578cefa5d3e1ccc863781cc09d75d86293c375b978",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         }
       ]
@@ -15686,13 +15686,13 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "e7850387f384e3f2858c565a16dccaf76f7e7dc8fb5b642d202dde3e5db446ee",
+          "sha256": "f9837cabc40d5e87b64f91578cefa5d3e1ccc863781cc09d75d86293c375b978",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "84ce7c71e65c706904da6e1324caf2377eb4f55098d59a86c1461c64b94e5283",
+          "sha256": "c751a832c7c50a8c492958ab43c585b7508b324f6ccbc1a5e62cedaaf168d18e",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {

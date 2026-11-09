@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import machine_storage as M
 import github_access
+from source_status import STATUS_ARGS, has_source_changes, is_finder_metadata
 import re
 import shutil
 import subprocess
@@ -504,7 +505,7 @@ def identity():
 
 def plan(force=False, now=None):
     now = now or utc_now()
-    if git("status", "--porcelain", "--untracked-files=all"):
+    if has_source_changes(ROOT, git(*STATUS_ARGS)):
         raise ValueError("nightly builds require a clean checkout")
     # Refuse here rather than at the tag push, which is forty minutes of gates later.
     identity()
@@ -758,7 +759,7 @@ def commit_files(files, parent, message, repo=None):
 
 def prepare(info):
     version = info["version"]
-    if git("rev-parse", "HEAD") != info["source_commit"] or git("status", "--porcelain"):
+    if git("rev-parse", "HEAD") != info["source_commit"] or has_source_changes(ROOT, git(*STATUS_ARGS)):
         raise ValueError("source changed after planning")
     tags = remote_tags()
     base = version.split("-", 1)[0]
@@ -905,10 +906,16 @@ def serve_channel_manifest(manifest):
                 str(path))
 
 
-def _candidate_files(out):
-    """Every file under `out`, `candidate.json` itself excepted, as {relative path: sha256}."""
-    return {str(p.relative_to(out)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(out.rglob("*")) if p.is_file() and p.name != CANDIDATE_MANIFEST}
+def _candidate_files(out, recorded=()):
+    """Hash candidate files, preserving checks for every previously recorded file."""
+    files = {}
+    for path in sorted(out.rglob("*")):
+        if not path.is_file() or path.name == CANDIDATE_MANIFEST:
+            continue
+        relative = str(path.relative_to(out))
+        if relative in recorded or not is_finder_metadata(path):
+            files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return files
 
 
 @release_step
@@ -931,7 +938,7 @@ def verify_candidate_manifest(info, out):
     recorded = json.loads(path.read_text())
     if recorded["info"] != info:
         raise ValueError("candidate was built for a different plan than the one given to publish")
-    actual = _candidate_files(out)
+    actual = _candidate_files(out, recorded["files"])
     mismatched = [f"{rel}: recorded {recorded['files'].get(rel, 'UNRECORDED')}, "
                   f"now {actual.get(rel, 'MISSING')}"
                   for rel in recorded["files"].keys() | actual.keys()
@@ -1508,7 +1515,7 @@ def build(info, out):
                 str(out / f"richos-engine-{engine_version}.tar.gz"))
     execute("bash", release, "verify-engine", "--out", str(out))
     execute("bash", release, "app", "--out", str(out), "--notes", label)
-    if git("rev-parse", "HEAD") != info["build_commit"] or git("status", "--porcelain"):
+    if git("rev-parse", "HEAD") != info["build_commit"] or has_source_changes(ROOT, git(*STATUS_ARGS)):
         raise ValueError("build changed the tagged source tree; refusing artifact publication")
     write_candidate_manifest(info, out)
 
@@ -1531,7 +1538,7 @@ def finish(info, out):
     # (verify_candidate_manifest) and the build commit is immutable, so a moved checkout
     # is repaired by putting that commit back, never by a second build and a second walk
     # (hunt part 2, section 16). `nightly-local.py publish` does that before it runs this.
-    if git("status", "--porcelain"):
+    if has_source_changes(ROOT, git(*STATUS_ARGS)):
         raise ValueError("the source worktree has uncommitted changes, so it is not this "
                          "candidate's build commit; inspect them before publishing (nothing "
                          "was discarded)")
@@ -1571,7 +1578,8 @@ def finish(info, out):
     excluded = {"engine-pin.env", "engine-published.ok", "latest.json", CANDIDATE_MANIFEST}
     if not hidden:
         excluded.add(f"richos-engine-{engine_version}.tar.gz")
-    assets = [str(p) for p in sorted(out.iterdir()) if p.is_file() and p.name not in excluded]
+    assets = [str(p) for p in sorted(out.iterdir())
+              if p.is_file() and p.name not in excluded and not is_finder_metadata(p)]
     if hidden:
         # THE PUBLISH STEP, and the first moment the version exists publicly. The tag is
         # created with an empty lease, so of two builds only one can ever publish it.

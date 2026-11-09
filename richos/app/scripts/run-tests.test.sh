@@ -46,7 +46,7 @@
 # scanner exempt from its own rule is a rule with a hole exactly where somebody clever would
 # put something.
 # run-tests: no-host-screen: its matches are its own S6 search pattern and the fake suites S1 writes under mktemp
-# run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/engine/scripts/lib/host_shield.py richos/engine/scripts/lib/machine_settings.py richos/engine/scripts/lib/machine-settings.sh richos/engine/scripts/lib/host-shield richos/engine/scripts/lib/host-shield-fixture.sh richos/engine/scripts/hooks/guard-host-display-power.sh
+# run-tests: inputs richos/app/scripts/run-tests.test.sh richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/test_results.py richos/app/scripts/lib/proof_declarations.py richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm richos/app/scripts/phone-app-suites.tsv richos/app/scripts/bin/cargo richos/app/scripts/lib/cargo_identity.py richos/app/scripts/lib/cargo-cache-env.sh richos/engine/scripts/lib/host_shield.py richos/engine/scripts/lib/machine_settings.py richos/engine/scripts/lib/machine-settings.sh richos/engine/scripts/lib/host-shield richos/engine/scripts/lib/host-shield-fixture.sh richos/engine/scripts/hooks/guard-host-display-power.sh richos/app/scripts/lib/source_status.py
 # run-tests: covers richos/app/scripts/run-tests.sh richos/app/scripts/lib/worktree-resource.sh richos/app/scripts/lib/gui-launch.sh richos/app/scripts/testvm/run-suite.sh richos/app/scripts/testvm/suite-in-guest.sh
 set -uo pipefail
 
@@ -66,7 +66,7 @@ install_harness() {  # install_harness <box directory>
   cp "$HARNESS" "$1/run-tests.sh"
   cp "$DIR/lib/worktree-resource.sh" "$1/lib/worktree-resource.sh"
   cp "$DIR/lib/test_results.py" "$1/lib/test_results.py"
-  cp "$DIR/lib/proof_declarations.py" "$1/lib/proof_declarations.py"
+  cp "$DIR/lib/proof_declarations.py" "$DIR/lib/source_status.py" "$1/lib/"
   cp "$DIR/lib/cargo-cache-env.sh" "$DIR/lib/cargo_identity.py" "$1/lib/"
   cp "$DIR/bin/cargo" "$1/bin/cargo"
   mkdir -p "$1/../../engine/scripts/lib"
@@ -404,6 +404,7 @@ git -C "$KREPO" config user.name "run-tests fixture"
 # machine's git configuration, so this one turns hooks off for itself and `kcommit` checks
 # that the commit actually happened instead of trusting that it did.
 git -C "$KREPO" config core.hooksPath "$KREPO/.nohooks"
+git -C "$KREPO" config core.excludesFile /dev/null
 install_harness "$KREPO/scripts"
 printf 'one\n' > "$KREPO/inputs/a.txt"
 printf '%s\n' \
@@ -447,6 +448,7 @@ elif says "SKIPPED: heavy.test.sh"; then
 else
   ok "K1a a suite with no recorded proof runs"
 fi
+printf 'finder fixture' > "$KREPO/inputs/.DS_Store"
 krun second
 if [ "$CODE" != 0 ]; then
   bad "K1b a proven suite is SKIPPED, naming its digest and its run" "exit $CODE, wanted 0"
@@ -462,8 +464,9 @@ elif ! says "1 of 2 suites passed"; then
   bad "K1b a proven suite is SKIPPED, naming its digest and its run" \
       "the summary claims a suite that did not run: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"
 else
-  ok "K1b a proven suite is SKIPPED, naming the digest and the run that proved it"
+  ok "K1b a proven suite is SKIPPED after Finder metadata appears, naming its digest and run"
 fi
+rm "$KREPO/inputs/.DS_Store"
 
 printf 'two\n' > "$KREPO/inputs/a.txt"
 kcommit change

@@ -2286,6 +2286,54 @@ while True: time.sleep(.02)
                 r.checkout()
             self.assertTrue((r.source / "unexpected").exists())
 
+    def test_dedicated_source_accepts_only_untracked_regular_finder_metadata(self):
+        repo, state = self.root / "repo", self.root / "state"
+        repo.mkdir()
+        state.mkdir()
+        source = state / "source"
+
+        def git(*args, cwd=repo):
+            return subprocess.check_output(
+                ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.excludesFile=/dev/null",
+                 "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", *args],
+                cwd=cwd, text=True, stderr=subprocess.DEVNULL).strip()
+
+        git("init", "-b", "main")
+        git("commit", "--allow-empty", "-m", "fixture")
+        git("worktree", "add", "--detach", str(source))
+        runner = m.Runner(repo, state, {}, io.StringIO())
+
+        def capture_git(*argv, cwd=None, capture=False):
+            self.assertTrue(capture)
+            self.assertEqual(argv[0], "git")
+            return git(*argv[1:], cwd=cwd or source)
+
+        runner.command = capture_git
+        metadata = [source / ".DS_Store", source / "nested folder" / ".DS_Store"]
+        metadata[1].parent.mkdir()
+        for path in metadata:
+            path.write_text("finder fixture")
+
+        other = source / "untracked"
+        other.write_text("leave in place")
+        with self.assertRaisesRegex(ValueError, "has changes"):
+            runner.require_clean_dedicated_source()
+        self.assertTrue(all(path.is_file() for path in metadata))
+        other.unlink()
+
+        git("add", "-f", "--", ".DS_Store", cwd=source)
+        with self.assertRaisesRegex(ValueError, "has changes"):
+            runner.require_clean_dedicated_source()
+        git("reset", "HEAD", "--", ".DS_Store", cwd=source)
+
+        runner.require_clean_dedicated_source()
+        self.assertTrue(all(path.is_file() for path in metadata))
+        metadata[0].unlink()
+        metadata[0].symlink_to(repo)
+        with self.assertRaisesRegex(ValueError, "has changes"):
+            runner.require_clean_dedicated_source()
+        self.assertTrue(metadata[0].is_symlink())
+
     # ---- where the time goes, and the one gate a land is allowed to have already run ----
 
     def gate_commands(self, checks_done_at_land=None):
@@ -4048,6 +4096,40 @@ class GateReconciliationTests(unittest.TestCase):
             store.wrap("gates/core-tests", lambda: None, "before", lambda: "green", lambda: None)()
         self.assertEqual(store.selected["gates/core-tests"]["status"], "inputs-changed")
         self.assertIsNone(store.reusable("gates/core-tests", "before"))
+
+    def test_finder_metadata_during_a_gate_keeps_the_input_fingerprint(self):
+        from nightly_gate_evidence import GateEvidence
+
+        source, state, runtime = (self.root / name for name in ("source", "state", "runtime"))
+        for folder in (source, state, runtime):
+            folder.mkdir()
+        subprocess.run(["git", "init", "-q", str(source)], check=True)
+        subprocess.run(["git", "-C", str(source), "-c", "core.hooksPath=/dev/null",
+                        "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                        "-c", "core.excludesFile=/dev/null", "commit", "--allow-empty", "-qm", "fixture"], check=True)
+        subprocess.run(["git", "-C", str(source), "config", "core.excludesFile", os.devnull], check=True)
+        env = {"HOME": str(self.root), "PATH": os.defpath, "RICHOS_RUNTIME_DIR": str(runtime)}
+        runner = m.Runner(source, state, env, io.StringIO())
+        runner.source = source
+        payload = runtime / "payload"
+        payload.write_text("runtime content")
+
+        def identity():
+            return runner.gate_input_identity(False, True)
+
+        def finder_visit():
+            for folder in (source, runtime):
+                (folder / ".DS_Store").write_text("finder metadata")
+
+        planned = identity()
+        store = GateEvidence(state / "gate-evidence", "fixture", identity, lambda _: None)
+        store.wrap("gates/script-suites", finder_visit, planned, lambda: "green", lambda: {})()
+        self.assertEqual(store.selected["gates/script-suites"]["status"], "passed")
+        payload.write_text("changed runtime content")
+        self.assertNotEqual(planned, identity())
+        payload.write_text("runtime content")
+        subprocess.run(["git", "-C", str(source), "add", "-f", "--", ".DS_Store"], check=True)
+        self.assertNotEqual(planned, identity())
 
     def test_exception_preserves_failure_evidence_and_propagates(self):
         store = self.store()

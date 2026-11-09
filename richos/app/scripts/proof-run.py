@@ -256,6 +256,7 @@ if not os.path.isfile(HOST_SHIELD):
 sys.path.insert(0, os.path.join(HERE, "lib"))
 import test_results  # noqa: E402  (what names a failing test; one reader for every caller)
 import proof_evidence  # noqa: E402
+from source_status import is_finder_metadata  # noqa: E402
 import proof_slots  # noqa: E402  (how many proof runs share the Mac at once)
 
 # The run's host-wide slot (main); every check's supervisor holds it too, so a killed runner keeps it
@@ -1019,15 +1020,16 @@ def describe_input_change(item, baseline, items, limit=5):
             return ""
         root = Path(ROOT).resolve()
         changed = []
+        now = proof_evidence.InputSnapshot()
         if recipe.get("family"):
             # A family binds content, not disk state: compare that, one fresh listing.
-            now = proof_evidence.InputSnapshot()
             changed = [rel for rel in recipe["paths"] if (str(root), rel) in baseline.contents
                        and baseline.contents[(str(root), rel)] != now.content(root, rel)]
         for rel in ([] if recipe.get("family") else recipe.get("subset", {}).get("paths", recipe["paths"])):
-            before = baseline.paths.get(str((root / rel).absolute()))
-            if before is not None:
-                changed += proof_evidence.identity_differences(before, proof_evidence.path_identity(root / rel), rel)
+            path = root / rel
+            before = baseline.path(path, checkout=root)
+            after = now.path(path, checkout=root)
+            changed += proof_evidence.identity_differences(before, after, rel)
         started = sorted(it.label for it in items if it.started is not None)
         where = (", ".join(changed[:limit]) + (" (+%d more)" % (len(changed) - limit) if len(changed) > limit else "")
                  if changed else "nothing under its declared paths (a tool, the environment or its Git inputs)")
@@ -2471,7 +2473,9 @@ def source_identity():
     digest = hashlib.sha256()
     untracked = subprocess.check_output(["git", "-C", ROOT, "ls-files", "--others", "--exclude-standard", "-z"])
     for raw in sorted(p for p in untracked.split(b"\0") if p):
-        path = os.path.join(ROOT, os.fsdecode(raw))
+        path = Path(ROOT) / os.fsdecode(raw)
+        if is_finder_metadata(path):
+            continue
         digest.update(raw + b"\0")
         try:
             if os.path.islink(path):

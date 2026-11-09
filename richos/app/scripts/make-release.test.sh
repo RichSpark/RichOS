@@ -40,7 +40,7 @@
 # tree. Scanning the entire working repository four times tests no additional ordering
 # behavior. A planted hit below proves the real gate still refuses before the pin check.
 # Full-tree privacy remains a production release gate and has its own owning suite.
-# run-tests: inputs richos/app/scripts/make-release.sh richos/app/scripts/lib/updater_tar.py richos/app/scripts/lib/worktree-resource.sh richos/app/src-tauri/Cargo.toml richos/app/src-tauri/tauri.conf.json richos/engine/VERSION richos/engine/scripts/named-persons.sh richos/engine/scripts/lib/named-persons.sh richos/engine/scripts/lib/named-persons.py
+# run-tests: inputs richos/app/scripts/make-release.sh richos/app/scripts/lib/updater_tar.py richos/app/scripts/lib/worktree-resource.sh richos/app/src-tauri/Cargo.toml richos/app/src-tauri/tauri.conf.json richos/engine/VERSION richos/engine/scripts/named-persons.sh richos/engine/scripts/lib/named-persons.sh richos/engine/scripts/lib/named-persons.py richos/app/scripts/lib/source_status.py
 # run-tests: covers richos/app/scripts/make-release.sh
 # run-tests: no-host-screen: its /Contents/MacOS/ matches are a fixture RichDoctor.app under mktemp that is copied, signed, archived and verified, never executed or opened
 set -uo pipefail
@@ -58,7 +58,7 @@ mkdir -p "$FIXTURE/richos/app/scripts" "$FIXTURE/richos/app/src-tauri" \
          "$FIXTURE/richos/engine/scripts/lib"
 cp "$SRC_DIR/make-release.sh" "$FIXTURE/richos/app/scripts/"
 mkdir -p "$FIXTURE/richos/app/scripts/lib"
-cp "$SRC_DIR/lib/updater_tar.py" "$FIXTURE/richos/app/scripts/lib/"
+cp "$SRC_DIR/lib/updater_tar.py" "$SRC_DIR/lib/source_status.py" "$FIXTURE/richos/app/scripts/lib/"
 cp "$APP/src-tauri/Cargo.toml" "$APP/src-tauri/tauri.conf.json" "$FIXTURE/richos/app/src-tauri/"
 cp "$APP/../engine/VERSION" "$FIXTURE/richos/engine/"
 cp "$APP/../engine/scripts/named-persons.sh" "$FIXTURE/richos/engine/scripts/"

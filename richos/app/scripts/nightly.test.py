@@ -704,6 +704,43 @@ class GitTests(GitFixture):
         self.assertEqual(current, info)
         self.assertEqual(json.loads(n.git("show", f"{oid}:latest.json")), self.manifest(info))
 
+    def test_publish_from_same_commit_with_finder_metadata_added_during_qa(self):
+        local_spec = importlib.util.spec_from_file_location(
+            "nightly_local", Path(__file__).with_name("nightly-local.py"))
+        local = importlib.util.module_from_spec(local_spec)
+        local_spec.loader.exec_module(local)
+        n.git("config", "core.excludesFile", os.devnull)
+        metadata = self.repo / ".DS_Store"
+        metadata.write_text("before plan")
+        info = self.reserve()
+        metadata.unlink()
+        out = Path(self.temp.name) / "with-finder-metadata"
+        fake, _ = self.fake_execute(out)
+
+        def execute(*args, **kwargs):
+            fake(*args, **kwargs)
+            if args[:1] == ("bash",) and args[2] == "app":
+                metadata.write_text("during build")
+
+        with patch.object(n, "execute", side_effect=execute):
+            n.build(info, out)
+        metadata.write_text("during QA")
+        candidate_metadata = [out / ".DS_Store", out / "inspection" / ".DS_Store"]
+        candidate_metadata[1].parent.mkdir()
+        for path in candidate_metadata:
+            path.write_text("after candidate hashing")
+        runner = local.Runner(self.repo, self.repo.parent, {}, io.StringIO())
+        runner.source = self.repo
+        with patch.object(runner, "command", side_effect=lambda *argv, **_: n.git(*argv[1:])) as git:
+            runner.restore_build_commit(info)
+        git.assert_called_once_with("git", "rev-parse", "HEAD", capture=True)
+        with patch.object(n, "execute", side_effect=fake):
+            n.finish(info, out)
+        self.assertEqual(n.channel()[1], info)
+        self.assertEqual(metadata.read_text(), "during QA")
+        self.assertTrue(all(path.is_file() for path in candidate_metadata))
+        self.assertNotIn((info["tag"], ".DS_Store"), self.asset_bytes)
+
     def test_an_engine_carrying_ffmpeg_is_published_with_its_corresponding_source(self):
         """GPLv3: the release carries every archive the engine's own runtime lists.
 
@@ -1848,7 +1885,7 @@ class ReleaseScriptTests(unittest.TestCase):
         # directory through ../bin/cargo (lib/cargo_identity.py). Without them the output
         # lock resolves to "/release" and `app` refuses before packaging.
         for rel in ('lib/cargo-cache-env.sh', 'lib/cargo_identity.py', 'lib/machine_storage.py',
-                    'lib/github_access.py', 'bin/cargo'):
+                    'lib/github_access.py', 'lib/source_status.py', 'bin/cargo'):
             (self.scripts / rel).parent.mkdir(exist_ok=True)
             shutil.copy2(Path(__file__).parent / rel, self.scripts / rel)
         self.config = root / n.CONFIG
@@ -2059,6 +2096,16 @@ EOF
         result = self.call('app')
         self.assertIn('fixture reached packaging', result.stderr)
         self.assertIn('does not exist locally yet', result.stdout)
+
+    def test_app_reaches_packaging_with_untracked_finder_metadata(self):
+        root, git = self.app_source_fixture()
+        git('config', 'core.excludesFile', os.devnull)
+        metadata = root / '.DS_Store'
+        metadata.write_text('finder fixture')
+        self.assertEqual(git('status', '--porcelain'), '?? .DS_Store')
+        result = self.call('app')
+        self.assertIn('fixture reached packaging', result.stderr)
+        self.assertEqual(metadata.read_text(), 'finder fixture')
 
     def test_app_still_refuses_uncommitted_source(self):
         root, _ = self.app_source_fixture()

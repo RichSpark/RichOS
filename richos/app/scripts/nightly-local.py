@@ -26,6 +26,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import machine_storage as M
 import github_access
+from source_status import STATUS_ARGS, has_source_changes, is_finder_metadata
 import platform
 import pwd
 import re
@@ -1459,14 +1460,13 @@ class Runner:
     def require_clean_dedicated_source(self):
         """Refuse unless `self.source` is this repository's dedicated worktree, unchanged.
 
-        Moving it never discards anything: changes in it are somebody's, so they stop the
-        move and are left where they are.
+        Tracked changes and other untracked files stop the move and are left in place.
         """
         common = self.command("git", "rev-parse", "--path-format=absolute", "--git-common-dir", capture=True)
         expected = self.command("git", "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=self.repo, capture=True)
         if common != expected or Path(self.command("git", "rev-parse", "--show-toplevel", capture=True)) != self.source:
             raise ValueError("nightly source is not the dedicated worktree for this repository")
-        if self.command("git", "status", "--porcelain", capture=True):
+        if has_source_changes(self.source, self.command("git", *STATUS_ARGS, capture=True)):
             raise ValueError("nightly worktree has changes; inspect it before continuing")
 
     def restore_build_commit(self, info):
@@ -2025,6 +2025,10 @@ class Runner:
         # happened. Tidying up is never allowed to become the reported failure.
         tree = tree or self.source
         try:
+            status = self.command("git", *STATUS_ARGS, cwd=tree, capture=True,
+                                  timeout=CLEANUP_TIMEOUT, cleanup=True)
+            if not has_source_changes(tree, status):
+                return
             dirty = self.command("git", "status", "--porcelain", cwd=tree, capture=True,
                                  timeout=CLEANUP_TIMEOUT, cleanup=True)
         except (RuntimeError, OSError) as error:
@@ -2339,7 +2343,8 @@ class Runner:
         for i, model in enumerate(env.get("RICHOS_GUI_SPEECH_MODELS", "").split(os.pathsep)):
             if model:
                 paths[f"speech-model-{i}"] = Path(model)
-        inputs["external"] = {key: proof_evidence.path_identity(path) for key, path in paths.items()}
+        inputs["external"] = {key: (proof_evidence.runtime_identity(path) if key == "runtime"
+                                    else proof_evidence.path_identity(path)) for key, path in paths.items()}
         inputs["python"] = proof_evidence.path_identity(sys.executable)
         inputs["other_tools"] = {}
         for tool in ("cargo", "cc", "xcrun", "codesign"):
@@ -2358,7 +2363,8 @@ class Runner:
             names = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "-z"],
                                    cwd=ui_tree, env=env, capture_output=True, timeout=15, check=True).stdout
             inputs["ui_untracked"] = {os.fsdecode(p): proof_evidence.path_identity(ui_tree / os.fsdecode(p))
-                                      for p in names.split(b"\0") if p}
+                                      for p in names.split(b"\0") if p and
+                                      not is_finder_metadata(ui_tree / os.fsdecode(p))}
         inputs["environment"] = {k: proof_evidence.digest(v) for k, v in env.items()}
         inputs["settings"] = [checks_done_at_land, bool(no_host_screen), self.gates_at_once,
                               self.simulated_phones, GATE_BUDGETS, GATE_AFTER]

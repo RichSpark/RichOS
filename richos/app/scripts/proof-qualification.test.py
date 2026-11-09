@@ -225,12 +225,12 @@ class ProductionQualification(unittest.TestCase):
             """Every input reads the same except the guard's bytes."""
             def __init__(self, revision):
                 self.revision = revision
-            def path(self, path):
+            def path(self, path, *, checkout=None, runtime=False):
                 path = Path(path)
                 if path == guard or path in guard.parents:
                     return {"guard": self.revision}
                 return {"unchanged": str(path)}
-            def inventory(self, path):
+            def inventory(self, path, *, checkout):
                 return {"unchanged_names": str(path)}
             def runtime(self, executable):
                 return {"unchanged_runtime": str(executable)}
