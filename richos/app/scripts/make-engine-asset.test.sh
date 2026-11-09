@@ -366,7 +366,9 @@ E1="$WORK/real-out"; E2="$WORK/env-b"
 RUNTIME_WITH_FINDER="${RICHOS_RUNTIME_DIR:-}"
 if [ -n "$RUNTIME_WITH_FINDER" ]; then
     RUNTIME_WITH_FINDER="$WORK/runtime-with-finder"
-    if cp -cR "$RICHOS_RUNTIME_DIR" "$RUNTIME_WITH_FINDER" &&
+    # Clone when both are on one volume; a different volume (the nightly) needs a plain copy.
+    if { cp -cR "$RICHOS_RUNTIME_DIR" "$RUNTIME_WITH_FINDER" 2>/dev/null ||
+         { rm -rf "$RUNTIME_WITH_FINDER" && cp -pR "$RICHOS_RUNTIME_DIR" "$RUNTIME_WITH_FINDER"; }; } &&
        printf 'finder fixture' > "$RUNTIME_WITH_FINDER/.DS_Store" &&
        printf 'finder fixture' > "$RUNTIME_WITH_FINDER/node/lib/ossl-modules/.DS_Store"; then
         :
