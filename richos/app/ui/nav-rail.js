@@ -60,6 +60,7 @@
   }
   const OPEN = {
     home() {
+      showPage("chats");
       if (window.RichHome && window.RichHome.show) window.RichHome.show("nav-rail");
     },
     chats() {
@@ -219,6 +220,13 @@
     attributeFilter: ["hidden"],
   });
   new ResizeObserver(schedule).observe(nav);
+
+  // A chat or company chosen anywhere — the sidebar, a new chat, a RichFinder result — is the
+  // conversation, so a page steps aside for it.
+  document.addEventListener("click", (e) => {
+    if (page === "chats" || !e.target.closest) return;
+    if (e.target.closest("#rail-nav, #rail-new-thread, #new-chat-menu, #search-results, #rail-wordmark")) showPage("chats");
+  }, true);
 
   // ---- the tooltip -----------------------------------------------------------------------------
   let tipFor = null;

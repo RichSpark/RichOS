@@ -26,6 +26,9 @@
 //       rail's painted pixels; the tooltip names each item to its right at 16 px and 4.5:1
 //   10  Up and Down move along the rail
 //   11  the rail photographed in both themes (shots-nav-rail/)
+//       RichPass opens its page under the
+//       header, selected, the themed RichPass mark before its title, round 65.1 copy; Chats and a chat
+//       chosen in the sidebar leave it; the page photographed in both themes
 //   12  the rail stays on Token spend (review rv-20261106T173510Z-aa7dd4d6-bca3, finding 1), and with
 //       RichScribe open its hover label and the activity square's Ink/Readout menu sit above the
 //       sheet and a choice can be clicked (finding 2)
@@ -47,7 +50,7 @@ const APP = "file://" + path.join(UI_DIR, "index.html");
 const SHOTS = path.join(__dirname, "shots-nav-rail");
 const GLYPH_FLOOR = 3;
 const TEXT_FLOOR = 4.5;
-const ITEMS = ["home", "chats", "finder", "cleaner", "scribe", "bug"];
+const ITEMS = ["home", "chats", "finder", "cleaner", "scribe", "pass", "bug"];
 
 async function newContext(browser, theme, opts) {
   opts = opts || {};
@@ -426,6 +429,74 @@ async function main() {
       return seen.join(" → ");
     });
 
+    await run.check(`RichPass ${theme}  opens its page under the header, selected, its icon before its title; Chats and a chat in the sidebar leave it`, async () => {
+      await page.click("#nr-pass");
+      await page.waitForSelector("#richpass-page", { state: "visible" });
+      await flushFrames(page);
+      const f = await railFacts(page);
+      assertEqual(f.selected, ["pass"], "RichPass is selected while its page is shown");
+      assert(f.barBesideSelected, "the bar slid to RichPass");
+      const p = await page.evaluate(() => {
+        const ttl = document.querySelector("#richpass-page .rp-ttl");
+        const mark = ttl.querySelector(".rp-mark");
+        const img = [...mark.querySelectorAll("img")].find((node) => node.getClientRects().length);
+        const body = document.querySelector("#richpass-page .rp-body");
+        return {
+          icon: img?.getAttribute("src") || "",
+          iconBeforeTitle: mark.nextElementSibling.id === "rp-title",
+          bodyFormatting: [body.querySelector("i").textContent, body.querySelector("b").textContent, body.querySelectorAll("br").length],
+          facts: [...document.querySelectorAll("#richpass-page .rp-fact b")].map((node) => node.textContent),
+          caption: document.getElementById("rp-download-cap").textContent,
+          protection: document.getElementById("rp-prot-t").textContent,
+          warning: !!document.querySelector("#richpass-page .rp-warn"),
+          title: document.getElementById("rp-title").textContent,
+          lede: document.querySelector("#richpass-page .rp-lede").textContent,
+          crumb: document.getElementById("page-crumb").textContent,
+          conversation: getComputedStyle(document.getElementById("conversation")).display,
+          composer: getComputedStyle(document.getElementById("composer-zone")).display,
+          smallest: Math.min(...Array.from(document.querySelectorAll("#richpass-page p, #richpass-page span, #richpass-page b, #richpass-page button")).filter((n) => n.getClientRects().length && n.textContent.trim()).map((n) => parseFloat(getComputedStyle(n).fontSize))),
+        };
+      });
+      assert(p.iconBeforeTitle && p.icon.endsWith(`richpass-mark-${theme}.svg`), "the matching themed mark is in front of the title");
+      assertEqual(p.bodyFormatting, ["without saving any", "never saves generated passwords!", 4], "the approved emphasis and line breaks");
+      assertEqual(p.facts, ["Works offline, in your browser", "Ready when you return", "Re-generate instead of saving"], "the three approved facts");
+      assertEqual([p.caption, p.protection, p.warning], ["RichPass.html · free · open-source · one file", "Enable protection", false], "approved caption and protection block");
+      await page.locator("#rp-more").press("Enter");
+      const sourceFolder = "github.com/RichSpark/RichOS/tree/main/richos/tools/richpass";
+      await page.waitForFunction((target) => window.__RICHOS_OPENED__?.at(-1) === target, sourceFolder);
+      assertEqual(await page.locator("#rp-more").getAttribute("title"), sourceFolder, "the disclosed and opened destination match");
+      await page.click("#rp-download");
+      await page.waitForFunction(() => document.getElementById("rp-error").textContent.includes("File selection and saving require the installed RichOS app."));
+      await page.locator("#rp-more").press("Enter");
+      await page.waitForFunction(() => document.getElementById("rp-error").hidden);
+      await page.locator("#rp-title").focus();
+      await page.mouse.move(700, 80);
+      assertEqual([p.title, p.crumb], ["RichPass", "RichPass"], "the title and the header name the page");
+      assertEqual(p.lede, "Safer Than Any Password Manager", "the approved lede");
+      assertEqual([p.conversation, p.composer], ["none", "none"], "the page takes the conversation's place");
+      assert(p.smallest >= 16, "every text on the page is 16px or more: " + p.smallest);
+      // The repository's own walk: nothing on the page fails or is unprovable.
+      await page.evaluate(C.pageScript());
+      const walk = await page.evaluate((t) => window.__contrastProbe({ surface: "richpass-page", theme: t }), theme);
+      const mine = (o) => Object.values(o || {}).filter((x) => /rp-|richpass-page/.test(x.selector || x.path || ""));
+      assertEqual(mine(walk.failures), [], "the contrast walk found a failing pair on the RichPass page");
+      assertEqual(mine(walk.unresolvable), [], "the contrast walk could not prove a pair on the RichPass page");
+      const buf = await captureSettled(page, { parkPointer: true });
+      fs.mkdirSync(SHOTS, { recursive: true });
+      publishShot(buf, path.join(SHOTS, `richpass-page-${theme}.png`));
+      await page.click("#nr-chats");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      assertEqual((await railFacts(page)).selected, ["chats"], "Chats leaves the page");
+      await page.click("#nr-pass");
+      await page.waitForSelector("#richpass-page", { state: "visible" });
+      await page.click("#rail-nav .nav-thread");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      await flushFrames(page);
+      assertEqual((await railFacts(page)).selected, ["chats"], "a chat chosen in the sidebar leaves the page");
+      return `page with themed mark and round 65.1 copy, smallest text ${p.smallest}px; Chats and a sidebar chat leave it; shots-nav-rail/richpass-page-${theme}.png`;
+    });
+
+    // Photograph the established chat before case 13 creates its temporary new chat.
     await run.check(`11 ${theme}  the rail photographed (shots-nav-rail/)`, async () => {
       await page.mouse.move(700, 450);
       const buf = await captureSettled(page, { screenshot: { clip: { x: 0, y: 0, width: 420, height: 900 } } });
@@ -433,6 +504,54 @@ async function main() {
       publishShot(buf, path.join(SHOTS, `rail-${theme}.png`));
       assertEqual(page.__errors, [], "no page errors");
       return `shots-nav-rail/rail-${theme}.png`;
+    });
+
+    await run.check(`RichPass ${theme}  from the page the keyboard leaves it too: Enter on a RichFinder chat result, and Command+N`, async () => {
+      const onPage = async () => {
+        await page.click("#nr-pass");
+        await page.waitForSelector("#richpass-page", { state: "visible" });
+      };
+      await onPage();
+      await page.keyboard.press("Meta+k");
+      await page.waitForSelector("#search-overlay", { state: "visible" });
+      await page.fill("#search-input", "a");
+      await page.waitForSelector("#search-results .srch-hit", { state: "visible" });
+      await page.keyboard.press("Enter");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      await flushFrames(page);
+      assertEqual((await railFacts(page)).selected, ["chats"], "Enter on a chat result leaves the page");
+      await onPage();
+      await page.evaluate(() => document.activeElement && document.activeElement.blur());
+      await page.keyboard.press("Meta+n");
+      // With several companies Command+N opens the menu with its first company focused, and
+      // Enter on that is the chat; with one company it is the chat at once.
+      if (await page.evaluate(() => !document.getElementById("new-chat-menu").hidden)) await page.keyboard.press("Enter");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      await flushFrames(page);
+      assertEqual((await railFacts(page)).selected, ["chats"], "Command+N leaves the page");
+      await page.keyboard.press("Escape");
+      return "Enter on a RichFinder chat result and Command+N both leave the RichPass page";
+    });
+
+    await run.check(`RichPass ${theme}  a past repair does not hide a current protection failure`, async () => {
+      await page.click("#nr-pass");
+      await page.waitForSelector("#richpass-page", { state: "visible" });
+      await flushFrames(page);
+      const repaired = {
+        phase: "verified",
+        path: "/fictional/RichPass.html",
+        notice: { kind: "contents", at: 100 },
+      };
+      const emitStatus = (view) => page.evaluate((status) => window.__RICHOS_MOCK__.richpassChanged(status), view);
+      await emitStatus(repaired);
+      assertEqual(await page.locator("#rp-state-title").innerText(), "Restored", "a verified repair is shown");
+      const message = "Allow folder access, then Check now.";
+      await emitStatus({ ...repaired, phase: "blocked", message });
+      assertEqual(await page.locator("#rp-state-line").innerText(), message, "the current failure is shown");
+      const headline = await page.locator("#rp-state-title").innerText();
+      await page.click("#nr-chats");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      assertEqual(headline, "Protection needs attention", "the current phase controls the headline");
     });
 
     await run.check(`12 ${theme}  the rail stays on Token spend; over RichScribe its flyouts sit above the sheet and take a click`, async () => {

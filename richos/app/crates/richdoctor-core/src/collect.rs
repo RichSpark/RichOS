@@ -8,7 +8,7 @@
 //! | installation | RichDoctor's version; RichOS's Info.plist in `/Applications` and `~/Applications`; macOS version (`SystemVersion.plist`), CPU kind, memory class |
 //! | startup_crash | `~/Library/Logs/RichOS/startup.log` and `.log.1`; `launches.json` under `~/Library/Application Support/com.richos.app/`; matching `.ips` reports under `~/Library/Logs/DiagnosticReports/` |
 //! | conversation_failure | `conversation-ledger.jsonl` under the app data root: allowlisted fields of `UpstreamFailure`, `TurnInterruptionCause` and `TurnInterrupted` only |
-//! | configuration | `config.json`'s schema version and a few current settings, labeled as current |
+//! | configuration | `config.json` current settings; bounded `richpass.log` checks with no paths or HTML |
 //! | richscribe | `dictation.log`'s lines in the window (model, timing, errors; it never holds words) |
 //! | claude_availability | whether the CLI is found, its version, and whether the default sign-in answers |
 //!
@@ -221,7 +221,7 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
         Category::Installation => vec![installation(scope, ctx)],
         Category::StartupCrash => startup_crash(scope, ctx, &mut budget),
         Category::ConversationFailure => vec![conversation_failure(scope, ctx, &mut budget)],
-        Category::Configuration => vec![configuration(scope, ctx, &mut budget)],
+        Category::Configuration => vec![configuration(scope, ctx, &mut budget), richpass(scope, ctx, &mut budget)],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
         Category::RichFinder => vec![richfinder_timing(scope, ctx, &mut budget)],
         Category::ClaudeAvailability => vec![claude_availability(scope)],
@@ -729,6 +729,19 @@ fn richscribe(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     finish(item, &text.join("\n"), ctx, truncated)
 }
 
+/// RichPass uses the existing Configuration category. No enrollment paths or HTML are read.
+fn richpass(scope:&Scope,ctx:&Context,budget:&mut u64)->Item {
+    let root=scope.data_root();let source="RichPass protection log";let mut reads=Vec::new();let mut missing=Status::Absent;
+    for name in ["richpass.log.1","richpass.log"] {match read_source(&root,&root.join(name),scope,budget,true){Ok(r)=>reads.push(r),Err(Status::Absent)=>{},Err(s)=>missing=s}}
+    if reads.is_empty(){return unread(Category::Configuration,source,missing);}
+    let bytes=reads.iter().map(|r|r.bytes).sum();let truncated=reads.iter().any(|r|r.truncated)||missing!=Status::Absent;
+    let lines:Vec<(Option<u64>,String)>=reads.iter().flat_map(|r|r.text.lines()).filter(|l|!l.trim().is_empty()).map(|l|(l.split_whitespace().next().and_then(crate::util::parse_utc_stamp),l.chars().take(512).collect())).collect();
+    let (picked,coverage)=pick(&lines,|x|x.0,&scope.window,20);
+    let text:Vec<_>=picked.into_iter().rev().take(200).rev().map(|x|x.1).collect();
+    let mut item=Item::new(Category::Configuration,source).expect("random source");item.input_bytes=bytes;item.coverage=coverage;item.label="RichPass protection checks".into();item.summary=format!("{} checks; file contents and protected paths are excluded.",text.len());
+    finish(item,&text.join("\n"),ctx,truncated)
+}
+
 // ---------------------------------------------------------------------------------------
 // claude_availability
 // ---------------------------------------------------------------------------------------
@@ -948,6 +961,24 @@ mod tests {
         assert_eq!(parsed["detail"]["max_sampled_window_ms"], 1720);
         assert!(item.text.contains("preview_stopped"));
         assert!(item.text.contains("420"));
+    }
+
+    #[test]
+    fn richpass_real_producer_is_bounded_and_collects_no_html_or_enrollment_path() {
+        let h=home();let root=h.0.join("Library/Application Support/com.richos.app");std::fs::create_dir_all(&root).unwrap();
+        crate::richpass_log::record(&root,T/1000,crate::richpass_log::Outcome::Blocked,Some(richos_core::richpass::Issue::Permission),42,false,"fixture-1.3.0");
+        let item=&collect(Category::Configuration,&scope(&h.0,Window::around(T)),&Context::default(),0)[1];
+        assert_eq!(item.status,Status::Collected);assert!(item.text.contains("phase=blocked elapsed_ms=42 event_watch=false"));
+        assert!(item.text.contains("Permission") && item.text.contains("build=fixture-1.3.0"));
+        assert!(!item.text.contains("/"));assert!(!item.text.contains("RichPass.html"));
+        crate::richpass_log::failure(&root,T/1000,crate::richpass_log::FailurePoint::FileAction,Some(richos_core::richpass::Issue::Permission),"fixture-1.3.0");
+        let action=&collect(Category::Configuration,&scope(&h.0,Window::around(T)),&Context::default(),0)[1];assert!(action.text.contains("file_action outcome=unavailable problem=Some(Permission) elapsed_ms=unmeasured"));
+
+        for _ in 0..700 {crate::richpass_log::record(&root,T/1000,crate::richpass_log::Outcome::Verified,None,7,true,"fixture-1.3.0");}
+        assert!(root.join("richpass.log.1").exists());
+        for file in ["richpass.log","richpass.log.1"]{assert!(std::fs::metadata(root.join(file)).unwrap().len()<66*1024);}
+        let items=collect(Category::Configuration,&scope(&h.0,Window::around(T)),&Context::default(),REPORT_INPUT_CAP);assert_eq!(items[1].status,Status::Truncated);
+        let empty=home();let items=collect(Category::Configuration,&scope(&empty.0,Window::around(T)),&Context::default(),0);assert_eq!(items[1].status,Status::Absent);
     }
 
     #[test]

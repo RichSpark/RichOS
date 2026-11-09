@@ -1122,6 +1122,7 @@ function showUnboundView(row, rawError) {
 function showEntityView(entityId, mode) {
   const entity = entityOf(entityId);
   if (!entity) return;
+  leaveRailPage();
   stashThreadViewState(ENTITY_DRAFT_PREFIX + entityId);
   viewEntityId = entityId;
   viewEntityMode = mode;
@@ -1347,10 +1348,19 @@ function restoreThreadViewState(threadId) {
 /// `opts.restore` marks the ONE caller that is not the CEO asking: `init()`'s "put him back
 /// where he was". See the block over `navTicket` — it yields to a press, and every other caller
 /// counts as a press.
+// A rail page (RichPass) replaces the conversation; every way into a chat or a company's new
+// chat goes through openThread or showEntityView, so the page steps aside here, for the mouse
+// and the keyboard alike, rather than in one handler per shortcut.
+function leaveRailPage() {
+  const rail = window.RichNavRail;
+  if (rail && rail.page !== "chats") rail.showPage("chats");
+}
+
 async function openThread(threadId, opts) {
   opts = opts || {};
   const row = threadRow(threadId);
   if (!row) return;
+  if (!opts.restore) leaveRailPage();
   // THE RESTORE NEVER OVERWRITES A CHOICE, and it is checked here as well as at the call site
   // so that a future second caller of the restore path inherits the rule rather than having to
   // remember it.

@@ -40,6 +40,7 @@ window.RichSettings = (function () {
   var account = null; // { open() }, the first account's sign-in, reached from its card (round 18)
   var accounts = null; // { open(), paint() }, "Claude accounts" for everyone (round 18, accounts.js)
   var cleaner = null;
+  var richpass = null;
   var dictation = null; // { open(), paint() }, "Dictation" for everyone once it is there (round 19, dictation.js)
   var instructions = null; // { open(), paint(), onOpen() }, "Your instructions" (round 36 screen 1, your-instructions.js)
   var quota = null; // { open() }, desktop technical settings only
@@ -594,6 +595,7 @@ window.RichSettings = (function () {
         phonePairing.open();
       }, "set-phone-state"));
     }
+    if (richpass) {doors.push(buildDisclosureRow("set-richpass-open", "RichPass", function(){richpass.open();}, "set-richpass-state"));}
     // TERMINAL SETUP (round 41 piece 1): last in the column, with the time it was last read.
     if (terminalSetup) {
       doors.push(buildDisclosureRow("set-terminal-open", "Terminal setup", function () {
@@ -790,6 +792,7 @@ window.RichSettings = (function () {
     if (accounts && accounts.paint && menuEl.querySelector("#set-accounts-open")) accounts.paint();
     if (dictation && dictation.paint && menuEl.querySelector("#set-dictation-open")) dictation.paint();
     if (cleaner && cleaner.paint) cleaner.paint();
+    if (richpass && richpass.paint) richpass.paint();
     if (instructions && instructions.paint && menuEl.querySelector("#set-instructions-open")) instructions.paint();
     // The updates row is painted by its owner, because this file does not know what is in
     // it. Called on every paint so a rebuild (a forced-dark flip) never leaves an empty row.
@@ -1192,6 +1195,7 @@ window.RichSettings = (function () {
     /** "Dictation" (round 19, state 5): `host.open()` opens the Dictation sheet, `host.paint()`
      *  writes the row's plain line. `dictation.js` registers it only once the app says
      *  dictation is there, so a build without it carries no row. */
+    registerRichPass: function(host){richpass=host || null;rebuild();},
     registerCleaner: function(host){cleaner=host || null;rebuild();},
     registerDictation: function (host) { dictation = host || null; rebuild(); },
     /** "Your instructions" (round 36 screen 1): `host.open()` opens the sheet, `host.paint()` writes

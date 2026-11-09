@@ -1,12 +1,12 @@
 # Licensing
 
 **RichOS-authored software is licensed under the GNU Affero General Public
-License, version 3, and no later version — SPDX `AGPL-3.0-only`.**
+License, version 3 and no later version — SPDX `AGPL-3.0-only`.**
 
 The canonical text is the file `LICENSE` at the root of this repository. It is
 byte-identical to the Free Software Foundation's published text
 (<https://www.gnu.org/licenses/agpl-3.0.txt>), sha256
-`0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0`, and it is
+`0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0` and it is
 never to be edited. It sits at the root because GitHub's license detection reads
 only the repository root; a `LICENSE` moved anywhere else silently loses the
 badge that tells a visitor what they may do.
@@ -24,7 +24,7 @@ You may use, study, modify and redistribute this software. In exchange:
 - **Section 13 — the network clause.** If you run a *modified* version and let
   other people interact with it over a network, you must offer those users the
   corresponding source of your modified version. This is the term a permissive
-  license does not have, and it is why this license was chosen: RichOS is the
+  license does not have and it is why this license was chosen: RichOS is the
   kind of software somebody would otherwise host as a closed service.
 - **`-only`, not `-or-later`.** The grant is version 3 of the AGPL and nothing
   else. A future FSF version does not apply automatically.
@@ -41,12 +41,13 @@ Two carve-outs, both narrow, both written down file by file.
 ### 1. Brand material
 
 The RichOS name, the mark and wordmark, the application icons, the banner
-artwork and the Rich Hand avatar are **not** licensed under the AGPL and remain
-all rights reserved unless separately authorized.
+artwork, the Rich Hand avatar and the RichPass name and its logo and icon
+artwork are **not** licensed under the AGPL and remain all rights reserved
+unless separately authorized.
 
 `docs/legal/BRAND-ASSETS.md` is the governing document. It names every excluded
 file and directory exactly, names the three source constants that carry the
-mark's geometry, says what a visitor may do with them, and includes the
+mark's geometry, says what a visitor may do with them and includes the
 trademark position. A summary here would be a second source of truth, so there
 is deliberately not one.
 
@@ -60,9 +61,9 @@ the license it arrived with — Apache-2.0, MIT and the SIL Open Font License, a
 compatible with distributing the combined work under the AGPL.
 
 `docs/legal/THIRD-PARTY-NOTICES.md` is the inventory of what is BUNDLED: sixteen
-skills and tools, four font families, and the authoring-time tools that never
+skills and tools, four font families and the authoring-time tools that never
 ship. Each entry names the upstream, a pinned revision or a declared version,
-the copyright holder and the path to the full terms, and each was verified
+the copyright holder and the path to the full terms and each was verified
 against that upstream rather than carried forward.
 
 `docs/legal/THIRD-PARTY-RUST-DEPENDENCIES.md` is the inventory of what is
@@ -71,7 +72,7 @@ version, its declared license and whether it reaches a macOS binary. It is
 generated from the lockfiles by `richos/app/scripts/dependency-license-inventory.sh`
 and keyed to their sha256, so it describes a graph anybody can reproduce. Two
 documents rather than one because provenance is hand-verified and a resolved
-graph is derived, and a file that mixes the two invites the derived half to be
+graph is derived and a file that mixes the two invites the derived half to be
 trusted as far as the hand-checked half.
 
 ## Where the license text appears
@@ -87,8 +88,8 @@ which is why the engine asset's copy is produced by packaging and verified,
 rather than checked in and trusted.
 
 `richos/app/scripts/make-engine-asset.test.sh` is the gate: it builds the archive,
-opens it, and refuses if the license text is missing, if it is not
-byte-identical to the root file, if the third-party notices are absent, or if
+opens it and refuses if the license text is missing, if it is not
+byte-identical to the root file, if the third-party notices are absent or if
 any bundled third-party directory has lost its own license file.
 
 ## Related documents
@@ -114,5 +115,5 @@ directory saying how.
 
 **A dependency whose own license forbids combination with the AGPL cannot be
 bundled**, however convenient it is. Proprietary binaries and non-free
-redistributables are the usual trap, and the cost of finding out after
+redistributables are the usual trap and the cost of finding out after
 publication is a re-release.

@@ -6,6 +6,7 @@
 // this file is just the window + the Tauri command bridge to the web UI in ../ui.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod richpass_host;
 mod question_host;
 mod swearmeter_host;
 mod peer_messages;
@@ -3723,6 +3724,7 @@ fn main() {
             // A persisted pairing resumes without opening a new pairing window.
             phone_runtime.resume_if_paired(app.handle().clone());
             app.manage(phone_runtime);
+            richpass_host::start(app.handle().clone());
             question_host::start(app.handle().clone());
             rich_files_host::start(app.handle().clone());
             #[cfg(target_os = "macos")]
@@ -4177,6 +4179,14 @@ fn main() {
             git_name_host::git_name_save,
             git_name_host::git_name_use_richos,
             git_name_host::git_name_open_file,
+            richpass_host::richpass_status,
+            richpass_host::richpass_save,
+            richpass_host::richpass_choose,
+            richpass_host::richpass_check,
+            richpass_host::richpass_stop,
+            richpass_host::richpass_acknowledge,
+            richpass_host::richpass_show,
+            richpass_host::richpass_permissions,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -4193,6 +4203,7 @@ fn main() {
         // launch is read as a crash-restart — an undercount by one, no splash once — which
         // is not worth refusing to close the app over.
         .run(|handle, event| {
+            if matches!(&event, tauri::RunEvent::Exit) {richpass_host::shutdown(handle);}
             // =========================================================================
             // ROW 5 — "You close the window. The work keeps going. Quit ends it."
             // =========================================================================

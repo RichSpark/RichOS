@@ -1,0 +1,10 @@
+vendor/** -text
+RichPass.html -text
+tests/RichPass.style-reference.html -text
+tests/RichPass.setup-reference.html -text
+tests/RichPass.states-reference.html -text
+tests/RichPass.master-reference.html -text
+
+/RichPass.html.minisig -text
+/RichPass.html.sha256 -text
+/richos-updater.pub -text

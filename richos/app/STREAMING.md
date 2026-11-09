@@ -876,3 +876,16 @@ the same revision sequence; clients reject older results. Hidden displays contin
 receiving updates. `set_swearmeter_visible` persists only display preference and
 never rebuilds a total. An explicit `retry_swearmeter` may reread unavailable card
 history. Conversation and intake coverage gaps remain qualified until recovery.
+
+
+## RichPass file protection
+
+`rich://richpass` publishes the native file owner's current view: phase, finite problem,
+message, protected path/release, last check, most recent unacknowledged notice, newer-release
+availability, protection availability, native folder-permissions capability and the compiled public download URL when configured.
+It contains no master passphrase, generated password or clue data. The initial snapshot is
+`richpass_status`. Disk state is authoritative; a missed event is recovered by reading again.
+
+`rich://richpass-notice` has an empty payload and coalesces the in-app notification for a new
+restoration notice. The notice remains in the owner's state until acknowledged. Healthy
+checks do not produce repair notifications. Both events are declared in `richpass_host.rs`.

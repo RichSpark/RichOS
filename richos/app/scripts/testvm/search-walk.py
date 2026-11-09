@@ -160,7 +160,7 @@ def build_walk(folders, guest, relaunch):
 
         def first_run(self):
             # The first-run setup sheet can come up after the walk's first look at the screen
-            # (nightly 90: two runs, "Add this company" never appeared with "Set it up" and "Not now"
+            # (two walks: "Add this company" never appeared with "Set it up" and "Not now"
             # on screen), and folders-walk.py answers it only if it is there at that first look.
             try:
                 self.wait_for('Set it up', seconds=40)

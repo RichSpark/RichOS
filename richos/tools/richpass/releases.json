@@ -1,0 +1,11 @@
+{
+  "bundled": "1.1.7",
+  "releases": [
+    {
+      "release": "1.1.7",
+      "sha256": "772b2207f3f4dec7b07542f66189825325fe513f0bb590e9fa689ecb7f965591",
+      "approved": true,
+      "download_url": "https://github.com/RichSpark/RichOS/releases/download/richpass-v1.1.7/RichPass.html"
+    }
+  ]
+}

@@ -1,0 +1,326 @@
+{
+  "profile": "RichPass fixed derivation",
+  "engine": "webkit",
+  "vectors": [
+    {
+      "name": "default",
+      "master": "fictional violet river lantern",
+      "domain": "example.com",
+      "label": "",
+      "version": "v1",
+      "effective": {
+        "domain": "example.com",
+        "label": "default",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f64656661756c741f7631",
+      "argon2id_hex": "d9d48b6ed0d274039cc7eda27caf0890ea82b672ae8b8ed68061a6857adf3384",
+      "password": "2dSLbtDSdA@cxy2ifK8I"
+    },
+    {
+      "name": "account-label",
+      "master": "fictional violet river lantern",
+      "domain": "https://login.example.com/path",
+      "label": "Alice.Example@Example.COM",
+      "version": "v1",
+      "effective": {
+        "domain": "example.com",
+        "label": "alice.example@example.com",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f616c6963652e6578616d706c65406578616d706c652e636f6d1f7631",
+      "argon2id_hex": "c76391fc3c2b4129e8658bbeb416914e332cc6bcc642ff870c07aeb430e05834",
+      "password": "x2O@aDwrQSnoZYustBaR"
+    },
+    {
+      "name": "co-uk",
+      "master": "fictional violet river lantern",
+      "domain": "https://login.example.co.uk/path",
+      "label": "work",
+      "version": "v2",
+      "effective": {
+        "domain": "example.co.uk",
+        "label": "work",
+        "version": "v2",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f2e756b1f776f726b1f7632",
+      "argon2id_hex": "e60b139973d8b192fc8ff5a8180b8ccee63a82f2ad82fb3696800ffb68ee872d",
+      "password": "5gsTmXPYsZL8juWo@AuM"
+    },
+    {
+      "name": "trailing-dot",
+      "master": "fictional violet river lantern",
+      "domain": "WWW.EXAMPLE.COM.",
+      "label": "work",
+      "version": "v02",
+      "effective": {
+        "domain": "example.com",
+        "label": "work",
+        "version": "v2",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f776f726b1f7632",
+      "argon2id_hex": "715fad1fa4e41264790f72e04fefb56b3cc7d165e02c9d5f45fadbb0e7fb2cd9",
+      "password": "cVftH6Tk@mR5D3LgTxr1"
+    },
+    {
+      "name": "label-order",
+      "master": "fictional violet river lantern",
+      "domain": "example.com",
+      "label": "  --ＡＬＩＣＥ   Test!!!___--  ",
+      "version": "rotation 003",
+      "effective": {
+        "domain": "example.com",
+        "label": "alice-test-___",
+        "version": "v3",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f616c6963652d746573742d5f5f5f1f7633",
+      "argon2id_hex": "2ccb43b29a2ae405de43f72e57789523f6f8d95f316630208699b0f9523f28d6",
+      "password": "LM@Dspoq5AXeQecuV3iV"
+    },
+    {
+      "name": "empty-normalized-label",
+      "master": "fictional violet river lantern",
+      "domain": "example.com",
+      "label": "!!!",
+      "version": "none",
+      "effective": {
+        "domain": "example.com",
+        "label": "default",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f64656661756c741f7631",
+      "argon2id_hex": "d9d48b6ed0d274039cc7eda27caf0890ea82b672ae8b8ed68061a6857adf3384",
+      "password": "2dSLbtDSdA@cxy2ifK8I"
+    },
+    {
+      "name": "private-suffix",
+      "master": "fictional violet river lantern",
+      "domain": "person.blogspot.com",
+      "label": "personal",
+      "version": "v1",
+      "effective": {
+        "domain": "blogspot.com",
+        "label": "personal",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "626c6f6773706f742e636f6d1f706572736f6e616c1f7631",
+      "argon2id_hex": "8c1d13c70edfc0b8ffc715deb8ffa14baeabee89ea6272fb810d765d48513f52",
+      "password": "jB0@xw7fwLjkxxXeuPdh"
+    },
+    {
+      "name": "idn",
+      "master": "fictional violet river lantern",
+      "domain": "https://bücher.de/login",
+      "label": "Café",
+      "version": "v1",
+      "effective": {
+        "domain": "xn--bcher-kva.de",
+        "label": "caf",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "786e2d2d62636865722d6b76612e64651f6361661f7631",
+      "argon2id_hex": "15ca7af344d3a28cbcb55e12d9c514b0acf32295736c6149fa2627e45a0883f9",
+      "password": "Fcp68JTTooy@tV4S2cUU"
+    },
+    {
+      "name": "ip-address",
+      "master": "fictional violet river lantern",
+      "domain": "192.168.1.10",
+      "label": "admin",
+      "version": "v1",
+      "effective": {
+        "domain": "192.168.1.10",
+        "label": "admin",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "3139322e3136382e312e31301f61646d696e1f7631",
+      "argon2id_hex": "c01ef69880b85d58bc2ca31fe7d8e9e0a47e8be5bea4621143bfd628b01973f3",
+      "password": "wB72@IC4XVi8LKMf59jp"
+    },
+    {
+      "name": "local-host",
+      "master": "fictional violet river lantern",
+      "domain": "localhost",
+      "label": "admin",
+      "version": "0",
+      "effective": {
+        "domain": "localhost",
+        "label": "admin",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6c6f63616c686f73741f61646d696e1f7631",
+      "argon2id_hex": "4ab8f77ffe3e72e38fe885447f8ebca669033108946f065ec57135cfff2def5d",
+      "password": "Sr@3fb4xcuOP6IVEf46B"
+    },
+    {
+      "name": "fallback-text",
+      "master": "fictional violet river lantern",
+      "domain": "my bank",
+      "label": "work",
+      "version": "x4then99",
+      "effective": {
+        "domain": "my bank",
+        "label": "work",
+        "version": "v4",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6d792062616e6b1f776f726b1f7634",
+      "argon2id_hex": "62add665b1c96be454f9b064cdcbc73e35c8cd4b78db9cab884f0f7a0785f1e5",
+      "password": "Y@3WZbHJaqRUpbBkzcvH"
+    },
+    {
+      "name": "master-outer-trim",
+      "master": "  fictional violet river lantern  ",
+      "domain": "example.com",
+      "label": "",
+      "version": "v1",
+      "effective": {
+        "domain": "example.com",
+        "label": "default",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f64656661756c741f7631",
+      "argon2id_hex": "d9d48b6ed0d274039cc7eda27caf0890ea82b672ae8b8ed68061a6857adf3384",
+      "password": "2dSLbtDSdA@cxy2ifK8I"
+    },
+    {
+      "name": "master-internal-space",
+      "master": "fictional  violet river lantern",
+      "domain": "example.com",
+      "label": "",
+      "version": "v1",
+      "effective": {
+        "domain": "example.com",
+        "label": "default",
+        "version": "v1",
+        "master": "fictional  violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f64656661756c741f7631",
+      "argon2id_hex": "0870cc386dcaf4a8884ec803ce051a42a533979d175db6a21cacc66acb9ea7b3",
+      "password": "CH@MOG3K9KiITsgDzgUa"
+    },
+    {
+      "name": "master-unicode-composed",
+      "master": "fictional café river lantern",
+      "domain": "example.com",
+      "label": "",
+      "version": "v1",
+      "effective": {
+        "domain": "example.com",
+        "label": "default",
+        "version": "v1",
+        "master": "fictional café river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f64656661756c741f7631",
+      "argon2id_hex": "6c43f7b1e258d30ba43a0336a28135953934df8fb1b4f3522115bb6466cbd7b7",
+      "password": "bEP3seJY@wukOgM2ooE1"
+    },
+    {
+      "name": "master-unicode-decomposed",
+      "master": "fictional café river lantern",
+      "domain": "example.com",
+      "label": "",
+      "version": "v1",
+      "effective": {
+        "domain": "example.com",
+        "label": "default",
+        "version": "v1",
+        "master": "fictional café river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f64656661756c741f7631",
+      "argon2id_hex": "a7f62af6d4d3075b6bb21b35c3eadcff3517e04c88309c02574c2d98ff34c45a",
+      "password": "pnYq9tTTB1t@shs1wvrc"
+    },
+    {
+      "name": "rotation-large",
+      "master": "fictional violet river lantern",
+      "domain": "example.com",
+      "label": "work",
+      "version": "1000000000000000000000",
+      "effective": {
+        "domain": "example.com",
+        "label": "work",
+        "version": "v1e+21",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f776f726b1f7631652b3231",
+      "argon2id_hex": "dd2b83ff96669acb48baef45842ee41e95956c93a09edf6fbdb721837e8a0906",
+      "password": "3S@De5ZmmstIuu9FhC7k"
+    },
+    {
+      "name": "rotation-overflow",
+      "master": "fictional violet river lantern",
+      "domain": "example.com",
+      "label": "work",
+      "version": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "effective": {
+        "domain": "example.com",
+        "label": "work",
+        "version": "vInfinity",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f776f726b1f76496e66696e697479",
+      "argon2id_hex": "446923aded5ec7a3965b9063dde224ce9d625c9c1814eabc34d3df173e2ab872",
+      "password": "RGkjre1ex6OWW5@j3eIk"
+    },
+    {
+      "name": "rotation-notation-input",
+      "master": "fictional violet river lantern",
+      "domain": "example.com",
+      "label": "work",
+      "version": "1e+21",
+      "effective": {
+        "domain": "example.com",
+        "label": "work",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "6578616d706c652e636f6d1f776f726b1f7631",
+      "argon2id_hex": "d2b5a1762911c4d8e12c568b608f52663fe6cc630b2ff0b5d4d80ebbc24155aa",
+      "password": "0rWhdikRxNjhLFaLY@9S"
+    },
+    {
+      "name": "refusal-empty-domain",
+      "master": "fictional violet river lantern",
+      "domain": "",
+      "label": "",
+      "version": "v1",
+      "effective": {
+        "domain": "",
+        "label": "default",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "1f64656661756c741f7631",
+      "argon2id_hex": null,
+      "password": null
+    },
+    {
+      "name": "refusal-effective-empty",
+      "master": "fictional violet river lantern",
+      "domain": ".",
+      "label": "",
+      "version": "v1",
+      "effective": {
+        "domain": "",
+        "label": "default",
+        "version": "v1",
+        "master": "fictional violet river lantern"
+      },
+      "salt_utf8_hex": "1f64656661756c741f7631",
+      "argon2id_hex": null,
+      "password": null
+    }
+  ]
+}

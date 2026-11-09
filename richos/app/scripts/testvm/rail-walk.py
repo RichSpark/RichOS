@@ -28,6 +28,8 @@ Exit 0 when every step passes.
 import argparse
 import importlib.util
 import json
+import re
+import shlex
 import subprocess
 import sys
 import time
@@ -256,6 +258,41 @@ class Walk(folders.Walk):
             raise StepFailed('the RichScribe sheet did not open: ' + json.dumps(ev))
         return ev
 
+    def richpass_download(self):
+        """Press the real download button and save the bundled bytes in the guest."""
+        entry_controls = ('setup-close', 'memory-setup-later', 'first-run-later',
+                          'entity-picker-later', 'home-enter')
+        deadline = time.monotonic() + 45
+        while not self.center('nr-pass'):
+            if time.monotonic() >= deadline:
+                self.shot('richpass-entry-failure.png')
+                raise StepFailed('the RichPass rail item did not appear after app startup')
+            control = next((item for item in entry_controls if self.center(item)), None)
+            if control:
+                self.click_id(control)
+            time.sleep(0.5)
+        self.click_id('nr-pass')
+        self.wait_for('Download RichPass')
+
+        directory = self.home + '/RichPass-download-proof'
+        destination = directory + '/RichPass.html'
+        folders.guest(self.vm, 'mkdir ' + shlex.quote(directory))
+        self.click_id('rp-download')
+        if not self.wait_sheet(True):
+            raise StepFailed('Download RichPass did not open the native save panel')
+        self.script('tell application "System Events" to keystroke "g" using {command down, shift down}')
+        self.script('tell application "System Events"\nkeystroke ' + json.dumps(directory)
+                    + '\nkey code 36\nend tell')
+        self.ax('click', '--title', 'Save', '--role', 'AXButton', '--in', 'dialog', '--first')
+        if not self.wait_sheet(False):
+            raise StepFailed('the native save panel did not close')
+
+        digest = folders.guest(self.vm, '/usr/bin/shasum -a 256 ' + shlex.quote(destination)).split()[0]
+        if digest != self.a.expect_richpass_sha256:
+            raise StepFailed('the native save did not write the approved RichPass bytes')
+        self.wait_for('Save RichPass and protect it')
+        return {'sha256': digest, 'file': 'RichPass.html', 'protected': False}
+
     def home_screen(self):  # not `home`: Walk.home is the guest's home folder path
         self.script('tell application "RichOS" to activate')
         time.sleep(1)
@@ -287,11 +324,14 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--expect-sha', required=True)
     p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--expect-richpass-sha256', help='approved HTML checksum for the optional richpass-download step')
     a = p.parse_args()
     steps = a.steps.split(',')
-    bad = [s for s in steps if s not in STEPS]
+    bad = [s for s in steps if s not in [*STEPS, 'richpass-download']]
     if bad:
         p.error('unknown step(s): ' + ', '.join(bad))
+    if 'richpass-download' in steps and not re.fullmatch(r'[a-f0-9]{64}', a.expect_richpass_sha256 or ''):
+        p.error('richpass-download requires --expect-richpass-sha256')
     walk = Walk(a)
     report = {'vm': a.vm, 'expect_sha': a.expect_sha, 'steps': []}
     ok = True

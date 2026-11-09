@@ -14,6 +14,10 @@
   ],
   "unwalkedPanels": [
     {
+      "id": "richpass-page",
+      "why": "The RichPass page (round 58), COVERED SOMEWHERE ELSE: it is shown only after the navigation rail's RichPass item is pressed, which no surface driver here does. tests/nav-rail.js check 12 opens it in both themes and runs this same walk (window.__contrastProbe) over it, failing on any failing or unprovable pair under #richpass-page, and holds every text on it to 16px or more."
+    },
+    {
       "id": "nr-tip",
       "why": "The navigation rail's tooltip (round 58), COVERED SOMEWHERE ELSE: it exists only while a rail item is hovered or has keyboard focus, which no surface driver here does. tests/nav-rail.js check 9 shows it by hover in both themes and holds its 16px text to 4.5:1 (ink on ground, 14.55:1 dark and 14.90:1 light)."
     },

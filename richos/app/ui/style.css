@@ -13970,6 +13970,266 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 .voc-save { background: var(--gold); color: var(--on-gold); border-color: var(--gold); font-weight: 600; }
 .voc-edit-cell { padding: 8px; }
 
+/* ---------------------------------------------------------------------------------------
+   THE RICHPASS PAGE — design round 58, version A's "Document" (richpass-page.js). One calm
+   column under the stage header, in place of the conversation and its composer. Every text is
+   16px or more and in the app's own inks: --ink, --ink-soft and --gold-text on the ground, the
+   card or the soft gold warning, all of them pairs `tests/contrast.js` already holds. */
+body.page-open #conversation,
+body.page-open #composer-zone,
+body.page-open #jump-latest,
+body.page-open #entity-view,
+body.page-open #unbound-view,
+body.page-open #scope-crumb,
+body.page-open #out-top {
+  display: none !important;
+}
+.page-crumb {
+  font-weight: 600;
+  color: var(--ink);
+}
+.page-crumb[hidden] {
+  display: none;
+}
+.rp-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 3rem 3rem 4rem;
+}
+.rp-page[hidden] {
+  display: none;
+}
+.rp-col {
+  max-width: 46rem;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.rp-col p {
+  margin: 0;
+}
+.rp-ttl {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+}
+.rp-mark { flex: none; display: block; height: 3rem; aspect-ratio: 504 / 402; }
+.rp-mark img { display: block; width: 100%; height: 100%; }
+.rp-mark-dark, [data-theme="dark"] .rp-mark-light { display: none !important; }
+[data-theme="dark"] .rp-mark-dark { display: block !important; }
+.rp-more { color: var(--gold-text); font-weight: 600; text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-thickness: 1px; white-space: nowrap; border-radius: 4px; }
+.rp-more:hover { text-decoration-thickness: 2px; }
+.rp-more:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.rp-more svg { width: 1em; height: 1em; vertical-align: -0.125em; margin-left: 0.15em; }
+#rp-title {
+  margin: 0;
+  font: 400 3rem/1 var(--font-serif);
+  color: var(--ink);
+  outline: none;
+}
+.rp-lede {
+  font-size: 1.375rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+.rp-body {
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+.rp-dl {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.rp-dl-cap {
+  color: var(--ink-soft);
+}
+.rp-dl-cap[hidden],
+.rp-btn[hidden] {
+  display: none;
+}
+.rp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+  border: 1px solid var(--chrome-edge);
+  background: none;
+  border-radius: 8px;
+  padding: 0.4375rem 0.875rem;
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.rp-btn:hover {
+  background: var(--tint-weak);
+}
+.rp-btn:focus-visible,
+.rp-sw:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.rp-btn:disabled {
+  cursor: default;
+}
+.rp-btn svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+.rp-btn-gold {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--on-gold);
+  font-weight: 650;
+}
+.rp-btn-gold:hover {
+  background: var(--gold);
+  filter: brightness(1.07);
+}
+.rp-dl .rp-btn-gold {
+  padding: 0.625rem 1.25rem;
+  font-size: 1.0625rem;
+}
+.rp-facts {
+  display: grid;
+}
+.rp-fact {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  gap: 0.875rem;
+  padding: 0.875rem 0;
+  border-top: 1px solid var(--line-soft);
+}
+.rp-fi {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--gold-soft);
+  color: var(--gold-text);
+}
+.rp-fi svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.rp-fact b,
+.rp-state b {
+  display: block;
+  color: var(--ink);
+}
+.rp-fact b {
+  font-size: 1.0625rem;
+}
+.rp-fact span,
+.rp-state span {
+  color: var(--ink-soft);
+}
+.rp-prot {
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--card);
+  padding: 1.125rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+.rp-prot-h {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.rp-prot-h h2 {
+  margin: 0;
+  font-size: 1.1875rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+.rp-prot-p {
+  color: var(--ink-soft);
+}
+.rp-prot-p[hidden],
+#rp-on[hidden],
+.rp-acts[hidden] {
+  display: none;
+}
+.rp-sw {
+  flex: none;
+  margin-left: auto;
+  width: 2.75rem;
+  height: 1.625rem;
+  border-radius: 999px;
+  border: 0;
+  padding: 0;
+  background: var(--line-control);
+  position: relative;
+  cursor: pointer;
+}
+.rp-sw::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  transition: left 0.18s;
+}
+.rp-sw[aria-checked="true"] {
+  background: var(--gold);
+}
+.rp-sw[aria-checked="true"]::after {
+  left: calc(100% - 1.25rem - 3px);
+  background: var(--on-gold);
+}
+.rp-state {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+.rp-state svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  color: var(--success);
+  flex: none;
+}
+.rp-state span {
+  display: block;
+}
+.rp-path {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.rp-acts {
+  display: flex;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+}
+#rp-on .rp-acts {
+  margin-top: 0.875rem;
+}
+.rp-error {
+  color: var(--danger);
+}
+.rp-error[hidden] {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-sw::after {
+    transition: none;
+  }
+}
+
 /* THE RAIL'S FLYOUTS SIT ABOVE EVERY SHEET THE RAIL LEAVES UP (review rv-20261106T173510Z-aa7dd4d6-bca3,
    finding 2): the hover label, the Mac activity card and its Ink/Readout menu are 210, above RichScribe's
    sheet (160) and Token spend (200), below Settings (300). THE FIRST-RUN QUESTION BOUNDARY: while a

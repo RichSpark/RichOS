@@ -1241,7 +1241,7 @@ async function main() {
       // under Connected folders (round 41, CEO 2026-10-25).
       [
         "Theme", "Text size", "Oxford comma: OFF", "Technical view", "Claude Code quota", "Keep the stored output", "Show SwearMeter",
-        "Your instructions", "Rich's model", "How much should Rich interrupt you?", "Use Rich from your phone", "Terminal setup",
+        "Your instructions", "Rich's model", "How much should Rich interrupt you?", "Use Rich from your phone", "RichPass", "Terminal setup",
         "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Start meeting notes", "Claude accounts",
         "Connected folders (repositories)", "Your name in Git", "Memory folder", "Updates",
         "Your name", "Splash screen", "Bust a bug!", "Request a feature",
