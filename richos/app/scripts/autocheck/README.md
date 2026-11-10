@@ -8,6 +8,7 @@ Git runs these itself. Nobody runs them by hand and nobody has to be told to (CE
 | --- | --- | --- | --- |
 | `git commit` | every branch but `main`, in every worktree | `lint.sh --changed --strict`: the lint ratchets for what differs from `HEAD` (static and load rules; Clippy for a Rust set whose inputs changed) and no count may grow, whatever room a ceiling has | refuses the commit, with the lint's reason |
 | `git commit` | every branch but `main`, in every worktree | a branch-changed file that a reviewed check pins by SHA-256 in `docs/development/verification-input-qualifications.json` must have its pin renewed in the same change (the merge would refuse it with `UnqualifiedReader`); read only when a changed path is named there | refuses the commit, naming the file, the unit and the fix |
+| `git commit` and every land and push backstop below | every branch, main included | `first-party-license.py` over what the change adds: a license file, SPDX identifier, manifest license field or license declaration other than the root AGPL-3.0 in material `.richos/vendored-material` does not record as third-party | refuses, naming the file and line and what to do |
 | `git merge` into a branch | every branch but `main` | `lint.sh --changed` (ceilings; what main brings was held to its land) | refuses the merge |
 | `git merge` into `main`, a commit on `main` | the main checkout | the suites that own the changed files (`proof-for.sh --gate`), run by `proof-run.py`, plus `lint.sh --changed` when the land changes something under `richos/app` and that selection does not already include `lint.test.sh`, plus `publication-completeness.sh` over the whole tree being landed (see "What every commit refuses, the merge refuses"); each check capped at 600 s, the gate run in rounds of at most 900 s that keep every pass (at most six) | a failing check refuses the merge before main moves, unless it passes when run again alone, once; nothing else does |
 | `git push` of `main` | wherever main is pushed from | the same land checks (the lint as `--all`: HEAD is already the land), only when main's tip has no land receipt (a fast-forward, a cherry-pick, a `--no-verify` merge) | refuses the push |
@@ -215,6 +216,35 @@ has authorized is added to the list in a land of its own, before the item.
 A tag push is not asked. The `nightly` tag is the update feed and its root has always held
 `latest.json` and `build-info.json`; the check refused nightly 58's feed on 2026-10-15 and the
 CEO: *"since when do I need to authorize every fart like this?"*
+
+## RichOS's own work carries no license but the root AGPL-3.0 (2026-11-10)
+
+RichPass reached public main with its own MIT `LICENSE` file and a comment in `RichPass.html`
+putting its own source under MIT, both copied from the author's PassBooster. The CEO never
+authorized that license for RichPass and nothing refused it. So every branch commit, every
+land (a merge into main or a release branch, a commit on it) and the push backstop run
+`first-party-license.py` (the committed copy, HEAD's, else main's) over what the change adds,
+in about 0.1 s and refuse in first-party material:
+
+- a license file (`LICENSE` in either spelling, `COPYING`, `LICENSE-x.txt`, `x-LICENSE` and the
+  like) anywhere but the root and a root `LICENSE` that is no longer the GNU AGPL-3.0;
+- an SPDX identifier or a `package.json`/`Cargo.toml`/`pyproject.toml` license field, other
+  than `AGPL-3.0-only` or `AGPL-3.0-or-later`;
+- a license tag or a sentence that declares a file to be under another license or in the public
+  domain. A sentence saying something is not licensed that way (the brand exclusion in
+  `docs/legal/BRAND-ASSETS.md`) is not a declaration.
+
+First-party is everything `.richos/vendored-material` does not record with origin `third-party`;
+what it does record keeps its own license and passes, so registering somebody else's work there
+(and in `docs/legal/THIRD-PARTY-NOTICES.md`) in the same change is the way through, never a
+waiver. The notices themselves, the registry and lockfiles are not judged. Inside a RichOS file,
+other people's notices pass between a `BEGIN VENDORED` and an `END VENDORED` line, after a line
+saying the embedded work keeps its own license until that comment closes (RichPass.html's
+opening comment) or on one line carrying `third-party-notice: <whose>` (a script writing a
+bundled program's notice); a line there that names a RichOS product or "first-party" is still
+refused. The refusal names each file and line and says what to do. `--all` judges a whole tree
+as if every line were new: today's tree passes it, which
+`../first-party-license.test.py` proves along with the RichPass case it was built after.
 
 ## A check that fails under the gate's own load runs again alone, once (2026-10-08)
 
@@ -462,6 +492,8 @@ the note names the changed paths and every check that had started by then, inste
 ## Pieces
 
 - `autocheck.py`: the checks, one file, standard library only. Its header is the reference.
+- `first-party-license.py`: the license check above, run from git's object store by
+  `autocheck.py`; `--all` checks a whole tree by hand.
 - `shim.sh`: copied into `<git-common-dir>/hooks/` as `pre-commit`, `commit-msg`, `pre-merge-commit`,
   `post-commit`, `post-merge` and `pre-push`. It runs the committed `autocheck.py` from git's
   object store: main's, which decides whether this is a land and hands anything else to HEAD's
