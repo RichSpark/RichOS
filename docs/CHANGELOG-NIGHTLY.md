@@ -2,6 +2,16 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.1-nightly.20261110.95
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.1-nightly.20261110.95)
+
+- Added Search folders to Settings: choose Off, Chosen folders or All eligible, tick folders in your home folder or on a connected drive, see how many documents RichFinder covers and press Reindex; system folders, app data, hidden folders and code dependencies are never searched and a change works on your next search without a restart
+- Added Rich in each company to Settings, Search folders: limit which of your search folders Rich can search in that company's conversations; Rich can also search only the folders you name
+- Added a Sources list beside RichFinder's results: uncheck a folder to leave it out of this search only, see which folders could not be searched because they are unavailable and open Search folders from there
+- Changed the Super Finder checkbox and status line in RichFinder to say RichFinder
+- Fixed choosing a word-for-word match from a reply Rich gave in several parts opening only the conversation; it now takes you to the part with the match
+
 ## 1.3.0-nightly.20261110.93
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.0-nightly.20261110.93)
