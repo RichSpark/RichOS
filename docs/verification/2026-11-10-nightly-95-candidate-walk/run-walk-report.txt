@@ -1,0 +1,17 @@
+{
+  "vm": "walk-b69010ee7a23",
+  "load": 3.1083984375,
+  "reservation": "<testvm-root>/guest.lock",
+  "resources": {
+    "TESTVM_CPU": "4",
+    "TESTVM_RAM_MB": "5120",
+    "TESTVM_DISPLAY": "1680x1050"
+  },
+  "boot_seconds": 29.008108124980936,
+  "scenario_seconds": 539.3365834580036,
+  "execution": "completed",
+  "scenario_exit": 0,
+  "cleanup_complete": true,
+  "cleanup_seconds": 3.745181832986418,
+  "elapsed_seconds": 572.089909790986
+}
