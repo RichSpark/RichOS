@@ -46,15 +46,18 @@ never committed: they are real people's information, and so are DIR's transcript
               more tabs were open during the turn than before; and the tabs after the turn are
               the user's own, exactly as before
   chrome-read the same with Chrome the default browser
-  control     every Accessibility row deleted, RichOS's too, and tccd restarted: the tool started
-              directly is refused for want of the permission, so RichOS's row is what let it read
-              (the tool is RichOS's own executable, and walk-f8a463e9a58c measured the one started
-              from ssh trusted through that row as well). Then every row is put back
+  control     every Accessibility row deleted, RichOS's too, and tccd restarted: first a plain
+              Python from ssh asks AXIsProcessTrusted. When it is trusted all the same (the
+              cirruslabs image, SIP disabled, measured in walk-4a262a1b1e63 with no MDM override),
+              the guest cannot show that the permission is needed, and the step says NOT PROVABLE
+              HERE. Otherwise the tool started directly must be refused for want of the permission.
+              Then every row is put back
   pull        Claude Code's transcripts, the ledger and the app log into DIR. PASS when Rich made
               one read_profile call per browser, after the other rows were deleted, and each
               returned the profile's, its Show all page's and every company's hidden text
 
-Exit 0 when every step passes. DIR/report.json is the report.
+Exit 0 when every step passes, 3 when none failed and one could not be shown on this guest, 1
+otherwise. DIR/report.json is the report.
 """
 import argparse
 import calendar
@@ -98,8 +101,14 @@ profile_walk = load('linkedin_profile_walk', HERE / 'linkedin-profile-walk.py')
 StepFailed = conversation_walk.StepFailed
 
 
+class NotProvable(Exception):
+    """What a step measures cannot be shown on this guest: neither a pass nor a failure of the app."""
+
+
 def sql(db, statement, sudo):
-    return ('sudo -n ' if sudo else '') + f'sqlite3 {db} ' + shlex.quote(statement)
+    # tccd holds the database while it answers; wait for it rather than fail ("database is
+    # locked", seen right after a guest boots).
+    return ('sudo -n ' if sudo else '') + f"sqlite3 -cmd '.timeout 10000' {db} " + shlex.quote(statement)
 
 
 class Walk(conversation_walk.ConversationWalk):
@@ -291,7 +300,22 @@ class Walk(conversation_walk.ConversationWalk):
 
     def control(self):
         rows = self.set_aside("service='kTCCServiceAccessibility'", 'all')
+        probe = ("python3 -c 'import ctypes; print(ctypes.cdll.LoadLibrary(\"/System/Library/Frameworks/"
+                 "ApplicationServices.framework/ApplicationServices\").AXIsProcessTrusted())'")
         try:
+            # What else could grant it: a plain Python from the same ssh session, the MDM
+            # overrides TCC reads beside its database, and SIP.
+            seen = {'python_from_ssh_trusted': self.g(probe + ' 2>&1 || true'),
+                    'mdm_overrides': self.g('sudo -n test -f "/Library/Application Support/com.apple.TCC/'
+                                            'MDMOverrides.plist" && echo present || echo absent'),
+                    'csrutil': self.g('csrutil status 2>&1 || true')}
+            if seen['python_from_ssh_trusted'].strip() == '1' and not (rows['system'] or rows['user']):
+                # Measured in walk-4a262a1b1e63 (2026-11-10): this image (SIP disabled) answers
+                # AXIsProcessTrusted true to a plain Python with no Accessibility row at all and
+                # no MDM override, so it cannot show the permission is what lets the tool read.
+                raise NotProvable('this guest grants Accessibility with no row at all (a plain Python from ssh is '
+                                  f'trusted; {seen}), so whether RichOS\'s row is needed cannot be shown here. The rounds '
+                                  'show the tool started by the app works with RichOS\'s row the only one in TCC.')
             refused = self.direct_call()
         finally:
             self.put_back('all')
@@ -299,10 +323,11 @@ class Walk(conversation_walk.ConversationWalk):
         if rows['system'] or rows['user']:
             problems.append(f'Accessibility rows were left: {rows}')
         if not refused.get('isError') or 'Accessibility' not in json.dumps(refused):
-            problems.append(f'with no Accessibility row at all the tool was not refused: {json.dumps(refused)[:600]}')
+            problems.append(f'with no Accessibility row at all the tool was not refused: {json.dumps(refused)[:300]}; '
+                            f'seen: {json.dumps(seen)}')
         if problems:
             raise StepFailed('; '.join(problems))
-        return {'accessibility_rows': rows, 'answer': refused['content'][0]['text'], 'after': self.ax_clients()}
+        return {'accessibility_rows': rows, 'answer': refused['content'][0]['text'], 'seen': seen, 'after': self.ax_clients()}
 
     def pull_step(self):
         self.pull()
@@ -375,7 +400,7 @@ def main():
         p.error('unknown step(s): ' + ', '.join(unknown))
     walk = Walk(a)
     report = {'vm': a.vm, 'expect_sha': a.expect_sha, 'steps': []}
-    ok = True
+    ok, provable = True, True
     for step in steps:
         if not ok and step != 'pull':
             continue
@@ -384,6 +409,10 @@ def main():
         try:
             row['evidence'] = (walk.pull_step if step == 'pull' else getattr(walk, step.replace('-', '_')))()
             row['outcome'] = 'PASS'
+        except NotProvable as exc:
+            row['outcome'] = 'NOT PROVABLE HERE'
+            row['detail'] = str(exc)[:4000]
+            provable = False
         except (StepFailed, profile_walk.StepFailed, RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
             row['outcome'] = 'FAIL'
             row['detail'] = str(exc)[:4000]
@@ -393,7 +422,8 @@ def main():
         (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         print(f"{step}: {row['outcome']}" + (f" ({row['seconds']} s)" if row['outcome'] == 'PASS' else f" — {row.get('detail')}"),
               flush=True)
-    return 0 if ok else 1
+    # 3: nothing failed, and a step could not be shown on this guest (said in its row).
+    return 1 if not ok else 0 if provable else 3
 
 
 if __name__ == '__main__':
