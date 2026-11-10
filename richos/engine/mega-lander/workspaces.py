@@ -7970,7 +7970,7 @@ def _codex_dirt(path):
     return ds, other
 
 
-def _codex_delete_one(repo, kind, target, ceo_word, me, roots):
+def _codex_delete_one(repo, kind, target, ceo_word, me, roots, ignored_too=False):
     """('deleted', line) or ('refused', line) for one named target."""
     wl = worktree_list(repo)
     if wl is None:
@@ -8006,9 +8006,13 @@ def _codex_delete_one(repo, kind, target, ceo_word, me, roots):
             ds, other = _codex_dirt(wpath)
         except SpecError as e:
             return "refused", str(e)
+        only_ignored = bool(other) and all(o.endswith(", ignored") for o in other)
+        if ignored_too:
+            other = [o for o in other if not o.endswith(", ignored")]
         if other:
-            return "refused", "its checkout %s has %d uncommitted entr%s (%s); nothing was deleted" % (
-                wpath, len(other), "y" if len(other) == 1 else "ies", ", ".join(other[:3]))
+            return "refused", "its checkout %s has %d uncommitted entr%s (%s)%s; nothing was deleted" % (
+                wpath, len(other), "y" if len(other) == 1 else "ies", ", ".join(other[:3]),
+                "; all are ignored files: --ignored-too deletes them with the checkout" if only_ignored else "")
     rid = "%s-%d-%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), os.getpid(),
                         hashlib.sha256(("%s\0%s\0%s" % (repo, target, tip)).encode()).hexdigest()[:8])
     try:
@@ -8050,7 +8054,7 @@ def _codex_delete_one(repo, kind, target, ceo_word, me, roots):
                                       (" (%d .DS_Store deleted first)" % len(ds)) if ds else "")
 
 
-def codex_delete(repo, targets, ceo_word, me=""):
+def codex_delete(repo, targets, ceo_word, me="", ignored_too=False):
     """`workspaces.sh codex-delete`: [(target, 'deleted'|'refused', line)].
     Refuses everything (SpecError) without his word, for a target that is not a
     literal codex/ branch or absolute path, or for an unreadable repository."""
@@ -8062,7 +8066,7 @@ def codex_delete(repo, targets, ceo_word, me=""):
     if not main:
         raise SpecError("%r is not a git repository" % repo)
     roots = codex_worktree_roots() if any(k == "path" for k, _t in named) else []
-    return [(t,) + _codex_delete_one(main, k, t, ceo_word.strip(), me, roots) for k, t in named]
+    return [(t,) + _codex_delete_one(main, k, t, ceo_word.strip(), me, roots, ignored_too) for k, t in named]
 
 
 def _unlanded(chain, repo, b):
@@ -9754,6 +9758,8 @@ def main(argv):
                                             "checkouts, each named literally, on the CEO's express word")
     x.add_argument("--repo", required=True)
     x.add_argument("--ceo-word", default="")
+    x.add_argument("--ignored-too", action="store_true",
+                   help="git-ignored files (build output) no longer refuse a checkout; untracked and modified files still do")
     x.add_argument("targets", nargs="*")
     x = sub.add_parser("supersede", help="record that a finished agent's unlanded branch was redone by a commit "
                                          "already in its integration branch; its next land counts it as landed")
@@ -9935,7 +9941,7 @@ def main(argv):
             for k in r.get("kept") or []:
                 print("kept: %s holds work not yet landed; it is back on the list to land" % k)
         elif a.cmd == "codex-delete":
-            results = codex_delete(a.repo, a.targets, a.ceo_word, me)
+            results = codex_delete(a.repo, a.targets, a.ceo_word, me, a.ignored_too)
             for target, what, line in results:
                 print("%s: %s - %s" % (what, target, line))
             print("log: %s (restore a deleted branch with the git command on its line)" % codex_deleted_log())
