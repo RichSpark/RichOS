@@ -26,6 +26,17 @@ signed-in"; the user is signed in to every social profile in their default brows
                            assistive client asks; which switch it honors is what is measured).
                            Prints one JSON object.
 
+  serve-site --port P --dir D
+                           the stand-in LinkedIn site linkedin-standin.py built in D (routed by
+                           D/site.json), for linkedin-profile-walk.py: the saved profile, its
+                           /details/experience/ page, company About pages (a numeric company
+                           address redirected to its name, as LinkedIn does), all behind the
+                           cookie /sign-in sets; without it, /authwall.
+
+  default-browser --bundle B
+                           make B the default browser for http and https and press "Use …" in
+                           the confirmation macOS shows. Prints one JSON object.
+
 The reader here is Python over the same three calls the app's reader makes
 (AXUIElementCreateApplication, AXUIElementCopyAttributeValue, AXUIElementSetAttributeValue); it
 measured the exposure before the app's reader was written, as the brief ordered.
@@ -95,6 +106,121 @@ class Site(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *a):
         pass
+
+
+STANDIN_SCRIPT = ('<script>document.addEventListener("click",function(e){var b=e.target.closest("[data-rx-more]");'
+                  'if(!b)return;var t=document.getElementById(b.getAttribute("data-rx-more"));'
+                  'if(t){t.style.display="inline";}b.remove();});</script>')
+
+
+def standin_page(title, body):
+    return ('<!doctype html><html><head><meta charset=utf-8><title>%s</title></head><body><main>%s</main>%s'
+            '</body></html>') % (title, body, STANDIN_SCRIPT)
+
+
+def standin_about(key, hidden):
+    """A company About page for a company the stand-in has no saved page of: a name, an overview and
+    the collapsed sentence the tool must bring back."""
+    return standin_page('Company %s' % key, (
+        '<h1>Company %s</h1><h2>Overview</h2><p>Stand-in About page for company %s.</p>'
+        '<section><p>Visible part of a company overview. <span id="rx-company" style="display:none">'
+        'Hidden company text %s came back after see more.</span></p>'
+        '<button type="button" data-rx-more="rx-company">see more</button></section>') % (key, key, hidden))
+
+
+def serve_site(a):
+    """The stand-in LinkedIn site linkedin-standin.py built (its site.json routes it). Every /in/ and
+    /company/ page needs the cookie /sign-in sets; without it the browser is sent to /authwall, as
+    LinkedIn sends a signed-out visitor."""
+    site = json.load(open(os.path.join(a.dir, 'site.json')))
+    slug, about, expect = site['slug'], site['about'], site['expect']
+    vanity = {row['vanity']: row['file'] for row in about.values()}
+
+    class Handler(Site):
+        def file(self, name):
+            with open(os.path.join(a.dir, name), encoding='utf-8') as f:
+                return self.send(f.read())
+
+        def redirect(self, to):
+            self.send_response(302)
+            self.send_header('Location', to)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+        def do_GET(self):
+            path = self.path.split('?', 1)[0]
+            parts = [p for p in path.split('/') if p]
+            if path == '/sign-in':
+                return self.send('<!doctype html><title>Signed in</title><p>Signed in.</p>',
+                                 [('Set-Cookie', COOKIE + '; Path=/; Max-Age=86400')])
+            if path == '/authwall':
+                return self.send(standin_page('Sign in', '<h1>Join LinkedIn</h1><p>Sign in to see this profile.</p>'))
+            if parts[:1] in (['in'], ['company']) and COOKIE not in (self.headers.get('Cookie') or ''):
+                return self.redirect('/authwall?trk=standin')
+            if parts == ['in', slug]:
+                return self.file('profile.html')
+            if parts == ['in', slug, 'details', 'experience']:
+                return self.file('details-experience.html')
+            if len(parts) == 4 and parts[:3] == ['in', slug, 'details']:
+                return self.send(standin_page(parts[3], '<h2>%s</h2><p>Stand-in %s page.</p>' % (parts[3], parts[3])))
+            if len(parts) == 3 and parts[0] == 'company' and parts[2] == 'about':
+                key = parts[1]
+                if key in about:
+                    return self.redirect('/company/%s/about/' % about[key]['vanity'])
+                if key in vanity:
+                    return self.file(vanity[key])
+                return self.send(standin_about(key, expect['companies'].get(key, 'RX-UNKNOWN')))
+            self.send_response(404)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+    with open(os.path.join(a.dir, 'server.pid'), 'w') as f:
+        f.write(str(os.getpid()))
+    http.server.ThreadingHTTPServer(('127.0.0.1', a.port), Handler).serve_forever()
+
+
+def default_browser(a):
+    """Make bundle id B the default for http and https, the way a browser's own "make default"
+    does (LSSetDefaultHandlerForURLScheme), and press the button of the confirmation macOS shows
+    (CoreServicesUIAgent) through Accessibility. Prints what the default is afterwards."""
+    ax = AX()
+    LS = ctypes.cdll.LoadLibrary('/System/Library/Frameworks/CoreServices.framework/CoreServices')
+    LS.LSSetDefaultHandlerForURLScheme.restype = ctypes.c_int
+    LS.LSSetDefaultHandlerForURLScheme.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    LS.LSCopyDefaultHandlerForURLScheme.restype = ctypes.c_void_p
+    LS.LSCopyDefaultHandlerForURLScheme.argtypes = [ctypes.c_void_p]
+    names = {}
+
+    def cf(s):
+        if s not in names:
+            names[s] = ax.CF.CFStringCreateWithCString(None, s.encode(), ax.UTF8)
+        return names[s]
+
+    def current():
+        return (ax.string(LS.LSCopyDefaultHandlerForURLScheme(cf('https'))) or '').lower()
+
+    result = {'bundle': a.bundle, 'before': current(), 'set': {}, 'pressed': None}
+    if result['before'] != a.bundle.lower():
+        for scheme in ('http', 'https'):
+            result['set'][scheme] = LS.LSSetDefaultHandlerForURLScheme(cf(scheme), cf(a.bundle))
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and current() != a.bundle.lower():
+            pid = pid_of('com.apple.coreservices.uiagent')
+            if pid:
+                app = ax.AS.AXUIElementCreateApplication(pid)
+                stack = list(ax.children(app))
+                while stack:
+                    el = stack.pop()
+                    if ax.text(el, 'AXRole') == 'AXButton' and (ax.text(el, 'AXTitle') or '').startswith('Use'):
+                        result['pressed'] = ax.text(el, 'AXTitle')
+                        ax.AS.AXUIElementPerformAction.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                        ax.AS.AXUIElementPerformAction(el, ax.name('AXPress'))
+                        break
+                    stack.extend(ax.children(el))
+            time.sleep(1)
+    result['after'] = current()
+    print(json.dumps(result))
+    return 0 if result['after'] == a.bundle.lower() else 1
 
 
 def serve(a):
@@ -276,8 +402,13 @@ def main():
     m.add_argument('--manual', action='store_true')
     m.add_argument('--enhanced', action='store_true')
     m.add_argument('--timeout', type=float, default=20)
+    s = sub.add_parser('serve-site')
+    s.add_argument('--port', type=int, required=True)
+    s.add_argument('--dir', required=True)
+    d = sub.add_parser('default-browser')
+    d.add_argument('--bundle', required=True)
     a = p.parse_args()
-    return serve(a) if a.mode == 'serve' else measure(a)
+    return {'serve': serve, 'measure': measure, 'serve-site': serve_site, 'default-browser': default_browser}[a.mode](a)
 
 
 if __name__ == '__main__':
