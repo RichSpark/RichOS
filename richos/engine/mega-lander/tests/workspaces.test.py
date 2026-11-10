@@ -850,6 +850,28 @@ class Point02_CodexDeleteOnTheCeosWord(Base):
         self.assertIn("2 .DS_Store deleted first", r.stdout)
         self.assertNotIn("codex/done", branches(self.other))
 
+    def test_point_02_codex_delete_ignored_too_deletes_ignored_only_checkouts(self):
+        self.commit(self.done, ".gitignore", ".env\n.DS_Store\n")
+        with open(os.path.join(self.done, ".env"), "w") as f:
+            f.write("build output\n")
+        r = self.cli("--ceo-word", self.WORD, "codex/done")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("--ignored-too", r.stdout)
+        # an untracked file still refuses, even with the option
+        with open(os.path.join(self.done, "notes.txt"), "w") as f:
+            f.write("his unfinished thought\n")
+        r = self.cli("--ceo-word", self.WORD, "--ignored-too", "codex/done")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("has 1 uncommitted entry (notes.txt)", r.stdout)
+        self.assertIn("codex/done", branches(self.other))
+        self.assertTrue(os.path.isfile(os.path.join(self.done, ".env")))
+        os.unlink(os.path.join(self.done, "notes.txt"))
+        r = self.cli("--ceo-word", self.WORD, "--ignored-too", "codex/done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("deleted: codex/done", r.stdout)
+        self.assertNotIn("codex/done", branches(self.other))
+        self.assertNotIn(self.done, worktrees(self.other))
+
     def test_point_02_a_codex_branch_deleted_on_his_word_is_not_put_back_by_an_agents_open_call(self):
         """The protected-ref check re-creates a codex/ ref deleted during any
         agent's open call. A deletion codex-delete logged on his word is not
