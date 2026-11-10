@@ -7636,30 +7636,27 @@ function firstRunButtons(disabled) {
 /// nothing is a small untruth in the first sentence of the product — which is a strange place
 /// to spend the trust this whole surface exists to build. Knowing a name is not knowing a
 /// business; the body below enumerates what is actually missing.
-const FIRST_RUN_HEADLINE = "I don't know your business yet.";
+const FIRST_RUN_HEADLINE = "Let's get me up to speed.";
 
-/// THE OFFER, in the register the rest of the app uses: what is missing, what it would take,
-/// and what it buys. Every clause is here for a reason and none of them is decoration.
+/// THE OFFER, as onboarding now works (richos-hq wiki/how-richos-works.md, "Onboarding"): a
+/// few quick details from him, Rich's team finds out what it can, and Rich comes back with only
+/// the questions he alone can answer. Wording approved with the instruction work (the onboarding
+/// recovery's delivery draft, confirmed by Tuner on 2026-11-10).
 ///
-///   * "There's nothing on file" — a fact about this install, not a failure of his.
-///   * "about twenty minutes" — the same words `OFFER_BLOCK` gives Rich, so the screen and
-///     the conversation quote one number.
-///   * "write your answers down, so I use them from then on" — the whole and only promise.
-///     It deliberately says NOTHING about the home screen: what is there is a worked example,
-///     his own corpus compiles to zero on a new install, and any copy implying "answer these
-///     and watch your company appear" is a lie the product cannot cover.
-///   * "You can stop partway, and 'not sure yet' is a real answer" — said before he can
-///     wonder. Alone, nobody is there to tell him deferral is honest, and an unanswered
-///     question otherwise reads as a failure to answer.
+///   * No time is named: the research takes as long as it takes, and the CEO ruled out any
+///     time promise for it (§159). A minutes figure here was also compared against by Rich.
+///   * "You can stop and pick it up later" — said before he can wonder; the saved progress
+///     and the Resume state make it true.
+///   * It still says NOTHING about the home screen: what is there is a worked example, and
+///     copy implying "answer these and watch your company appear" is a lie the product
+///     cannot cover.
 ///
 /// IT SURVIVES BEING SPOKEN. "I" is Rich throughout and "you" is the CEO throughout; the
 /// pronouns never trade places, which is the one thing that breaks when copy written for a
 /// screen is read aloud.
 const FIRST_RUN_BODY =
-  "There's nothing on file about what this company does, who it's for or how you want to " +
-  "work. I can ask you about it (about twenty minutes) and write your answers down, so I " +
-  "use them from then on. You can stop partway and \"not sure yet\" is a real answer to any " +
-  "of it.";
+  "Give me a few quick details and I'll find out what I can about you and your business. " +
+  "Then I'll come back with the questions only you can answer. You can stop and pick it up later.";
 
 /// WHAT THE SECOND BUTTON DOES, stated beside the button rather than crammed into its label.
 /// The write is durable and it stops Rich offering, which "Not now" cannot carry in two
@@ -7667,7 +7664,7 @@ const FIRST_RUN_BODY =
 /// the first without the second reads as a permanent door closing, and the second without the
 /// first reads as a button that does nothing.
 const FIRST_RUN_CONSEQUENCE =
-  '"Not now" means I\'ll stop offering. You can start it any time by asking.';
+  "I'll stop offering onboarding. You can ask to start any time.";
 
 /// THE RECEIPT, and it is deliberately not a celebration. He pressed a button that wrote
 /// something down; a panel that simply vanished would leave him no way to know whether it
@@ -7678,15 +7675,17 @@ const FIRST_RUN_DECLINED_RECEIPT =
 
 /// THE ACCEPTANCE, sent as an ordinary message on the ordinary path.
 ///
-/// It goes through `send()` — the same function the composer uses — so the turn in the record
-/// is a message the CEO sent, because he did send it: he pressed a button that says exactly
-/// this. Nothing here talks to the interview directly. `OFFER_BLOCK` already tells Rich what
-/// to do when the answer is yes, and a second, private route into the same skill would be a
-/// second thing to keep in step with it.
-const FIRST_RUN_ACCEPT_MESSAGE = "Let's do the twenty minutes of questions about my business.";
-const FIRST_RUN_RESUME_MESSAGE = "Let's pick up the questions about my business where we stopped.";
-const FIRST_RUN_PARTIAL_HEADLINE = "Your business notes are started.";
-const FIRST_RUN_PARTIAL_BODY = "Your saved answers are kept. We can pick up the remaining questions where we stopped. Press Resume the questions when you're ready.";
+/// It goes through `send()` — the same function the composer uses — as a pressed button. It
+/// carries only his intent (start, or pick up where he stopped); what Rich then says and asks
+/// is in his instruction files (the onboarding skill), never here (§124). Nothing here talks to
+/// the interview directly: a second, private route into the same skill would be a second thing
+/// to keep in step with it.
+const FIRST_RUN_ACCEPT_MESSAGE = "Let's do the onboarding.";
+const FIRST_RUN_RESUME_MESSAGE = "Let's pick up onboarding where we stopped.";
+const FIRST_RUN_START_LABEL = "Start onboarding";
+const FIRST_RUN_RESUME_LABEL = "Resume onboarding";
+const FIRST_RUN_PARTIAL_HEADLINE = "Your onboarding is started.";
+const FIRST_RUN_PARTIAL_BODY = "What you've shared is kept, so we can pick up where we stopped.";
 
 /// Read where onboarding stands and paint it — or paint nothing, which is the answer in three
 /// of the five states.
@@ -7746,7 +7745,7 @@ async function renderFirstRunNotice() {
   } else {
     el("first-run-headline").textContent = state === "partial" ? FIRST_RUN_PARTIAL_HEADLINE : FIRST_RUN_HEADLINE;
     el("first-run-body").textContent = state === "partial" ? FIRST_RUN_PARTIAL_BODY : FIRST_RUN_BODY;
-    el("first-run-start").textContent = state === "partial" ? "Resume the questions" : "Start the questions";
+    el("first-run-start").textContent = state === "partial" ? FIRST_RUN_RESUME_LABEL : FIRST_RUN_START_LABEL;
     el("first-run-consequence").textContent = FIRST_RUN_CONSEQUENCE;
     el("first-run-consequence").hidden = false;
     el("first-run-actions").hidden = false;
@@ -7767,7 +7766,7 @@ async function startFirstRunInterview() {
   inputEl.focus();
   // Sent as a PRESSED button, not as his message: he never typed these words, so nothing posts
   // them in his name (product hunt 2026-10-15, finding 14).
-  const label = el("first-run-start").textContent.trim() || "Start the questions";
+  const label = el("first-run-start").textContent.trim() || FIRST_RUN_START_LABEL;
   let sent;
   try {
     sent = await send(view.state === "partial" ? FIRST_RUN_RESUME_MESSAGE : FIRST_RUN_ACCEPT_MESSAGE, { pressed: label });

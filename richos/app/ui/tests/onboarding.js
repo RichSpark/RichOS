@@ -6,7 +6,7 @@
 // consequence: *"Rich makes the offer in conversation; a CEO who does not read the first reply
 // never sees it."* Driven on the shipping shell, what a first-run user lands on after the
 // three setup dialogs is an empty conversation pane. Nothing on it says RichOS knows nothing
-// about his business, that there is a twenty-minute interview, or that he may decline.
+// about his business, that onboarding is on offer, or that he may decline.
 //
 // WHAT IT HOLDS, and each is a clause of the contract rather than a nicety:
 //
@@ -145,8 +145,9 @@ async function main() {
       "and nothing was sent — the notice must not depend on a turn"
     );
     const text = await noticeText(page);
-    assert(/twenty minutes/.test(text), "it names the cost in his own units: " + text);
-    assert(/stop partway/.test(text), "and that stopping partway is fine: " + text);
+    assert(/questions only you can answer/.test(text), "it says what Rich comes back with: " + text);
+    assert(!/minute/.test(text), "and it promises no time for the research (§159): " + text);
+    assert(/pick it up later/.test(text), "and that stopping partway is fine: " + text);
     assert(
       await page.isVisible("#first-run-start"),
       "with a control that starts it, or it is a statement rather than an offer"
@@ -252,7 +253,7 @@ async function main() {
       () => window.__calls.filter((c) => c.cmd === "send_message").map((c) => c.args.text)
     );
     assertEqual(sent.length, 1, "one press, one message");
-    assert(/twenty minutes/.test(sent[0]), "and it is the acceptance Rich receives: " + sent[0]);
+    assertEqual(sent[0], "Let's do the onboarding.", "and it is the acceptance Rich receives");
     // NOTHING IS POSTED IN HIS NAME (product hunt 2026-10-15, finding 14). He pressed "Start
     // the questions"; he never typed this sentence, so it is sent as a pressed button and
     // never drawn as his message — while Rich's answer to it is.
@@ -359,7 +360,7 @@ async function main() {
     assert(/Whoever set RichOS up/.test(text), "and whose job the fix is: " + text);
     assert(await page.isHidden("#first-run-actions"), "no control for a thing no control can do");
     assert(
-      !/twenty minutes/.test(text),
+      !/onboarding/i.test(text),
       "and it must not offer an interview over notes it cannot read: " + text
     );
     bump(5);
@@ -395,8 +396,10 @@ async function main() {
       bump(1);
     }
     // WHAT IT DOES PROMISE, stated positively so this check cannot pass by the copy being
-    // empty: the answers get written down and used.
-    assert(/write your answers down/.test(text), "the one promise must be there: " + text);
+    // empty: Rich finds out what he can and comes back with only the questions he alone can
+    // answer (richos-hq wiki/how-richos-works.md, "Onboarding").
+    assert(/find out what I can/.test(text) && /questions only you can answer/.test(text),
+      "the one promise must be there: " + text);
     bump(1);
     await page.close();
     return "no staffing, no corpus, and the one promise it can keep";
@@ -572,7 +575,7 @@ async function main() {
     // AND NOW IT ARRIVES, with no relaunch — the boot-time read found no binding, so this can
     // only come from the company path calling the renderer itself.
     await page.waitForSelector("#first-run:not([hidden])", { timeout: 8000 });
-    assert(/twenty minutes/.test(await noticeText(page)), "and it is the offer");
+    assert(/questions only you can answer/.test(await noticeText(page)), "and it is the offer");
     bump(4);
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     await shot(page, "first-run-after-adding-a-company");
