@@ -105,6 +105,24 @@ class DesktopHooks(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertNotIn("stream-b", result.stdout)
 
+    def test_stu_cannot_read_linkedin_himself_and_rich_still_can(self):
+        reader = "mcp__richos_linkedin__read_profile"
+        read = {"tool_name": reader, "tool_use_id": "read-1", "tool_input": {"url": "https://www.linkedin.com/in/ada-walker/"}}
+        self.assertEqual(self.hook("PreToolUse", **read).returncode, 0, "an unbound session is not refused")
+        (self.root / "state/evidence/fictional-session").mkdir(parents=True, exist_ok=True)
+        binding = self.root / "state/evidence/fictional-session/binding.json"
+        binding.write_text('{"role": "rich"}')
+        rich = self.hook("PreToolUse", **read)
+        self.assertEqual(rich.returncode, 0, rich.stderr + rich.stdout)
+        binding.write_text('{"role": "stu"}')
+        stu = self.hook("PreToolUse", **read)
+        self.assertEqual(stu.returncode, 2, stu.stderr + stu.stdout)
+        self.assertIn("teammate's tool", stu.stderr)
+        self.assertIn("Nothing was opened", stu.stderr)
+        # Stu's other tools are not touched by it.
+        self.assertEqual(self.hook("PreToolUse", tool_name="Read", tool_use_id="read-2",
+                                   tool_input={"file_path": str(self.scope)}).returncode, 0)
+
     def test_native_response_formatting_records_evidence_without_opening_a_work_grant(self):
         self.scope.write_text('{"version":1,"actions_allowed":false}')
         for event in ("PreToolUse", "PostToolUse"):
