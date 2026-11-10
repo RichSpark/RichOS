@@ -678,6 +678,172 @@ class Point02_Codex(Base):
         self.assertIn("codex/other", branches(self.other))
 
 
+class Point02_CodexDeleteOnTheCeosWord(Base):
+    """2. "A codex/ workspace or branch is never deleted without the CEO's
+    express word." With it (2026-11-10: "delete the finished and old Codex
+    branches"), `workspaces.sh codex-delete` deletes each one NAMED LITERALLY,
+    logged with its tip and his words first so it can be restored."""
+
+    WORD = "delete the finished and old Codex branches"
+    SH = os.path.join(HERE, "..", "workspaces.sh")
+
+    def setUp(self):
+        super().setUp()
+        self.saved_roots = os.environ.get("SCRATCH_CODEX_WORKTREE_ROOTS")
+        self.codex_root = os.path.join(self.env.root, "codex-home", "worktrees")
+        os.makedirs(self.codex_root)
+        os.environ["SCRATCH_CODEX_WORKTREE_ROOTS"] = self.codex_root
+        r = self.other
+        # a finished branch with a checkout outside the roots, holding only Finder's strays
+        self.done = os.path.join(self.env.root, "elsewhere", "done")
+        run("git", "-C", r, "worktree", "add", "-q", self.done, "-b", "codex/done")
+        self.commit(self.done, "done.txt")
+        os.makedirs(os.path.join(self.done, "sub"))
+        for rel in (".DS_Store", os.path.join("sub", ".DS_Store")):
+            with open(os.path.join(self.done, rel), "wb") as f:
+                f.write(b"\0Bud1")
+        # an old superseded branch with no checkout, unmerged by design
+        self.oldwt = os.path.join(self.env.root, "old-tmp")
+        run("git", "-C", r, "worktree", "add", "-q", self.oldwt, "-b", "codex/old")
+        self.commit(self.oldwt, "old.txt")
+        run("git", "-C", r, "worktree", "remove", self.oldwt)
+        # a detached checkout under a Codex root
+        self.detached = os.path.join(self.codex_root, "ab12", "other")
+        run("git", "-C", r, "worktree", "add", "-q", "--detach", self.detached, "main")
+        self.tips = {b: run("git", "-C", r, "rev-parse", b).stdout.strip() for b in ("codex/done", "codex/old")}
+
+    def tearDown(self):
+        if self.saved_roots is None:
+            os.environ.pop("SCRATCH_CODEX_WORKTREE_ROOTS", None)
+        else:
+            os.environ["SCRATCH_CODEX_WORKTREE_ROOTS"] = self.saved_roots
+        super().tearDown()
+
+    def cli(self, *args, repo=None):
+        return run("bash", self.SH, "--session", self.sid, "codex-delete", "--repo", repo or self.other,
+                   *args, check=False)
+
+    def log_rows(self):
+        try:
+            with open(ws.codex_deleted_log()) as f:
+                return [json.loads(l) for l in f if l.strip()]
+        except OSError:
+            return []
+
+    def assertUntouched(self):
+        self.assertIn("codex/done", branches(self.other))
+        self.assertIn("codex/old", branches(self.other))
+        self.assertIn(self.done, worktrees(self.other))
+        self.assertIn(self.detached, worktrees(self.other))
+        self.assertTrue(os.path.isfile(os.path.join(self.done, ".DS_Store")))
+
+    def test_point_02_codex_delete_deletes_each_named_branch_and_checkout_logged_first(self):
+        r = self.cli("--ceo-word", self.WORD, "codex/done", "codex/old", self.detached)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([l.split(" - ")[0] for l in r.stdout.splitlines() if not l.startswith("log: ")],
+                         ["deleted: codex/done", "deleted: codex/old", "deleted: " + self.detached])
+        self.assertIn("2 .DS_Store deleted first", r.stdout)
+        self.assertNotIn("codex/done", branches(self.other))
+        self.assertNotIn("codex/old", branches(self.other))
+        self.assertNotIn(self.done, worktrees(self.other))
+        self.assertNotIn(self.detached, worktrees(self.other))
+        self.assertFalse(os.path.exists(self.done))
+        self.assertFalse(os.path.exists(self.detached))
+        # the log carries each branch, its tip, its checkout and his words, written before the deletion
+        rows = self.log_rows()
+        intents = {x["branch"]: x for x in rows if x["phase"] == "deleting" and x["branch"]}
+        self.assertEqual(sorted(intents), ["codex/done", "codex/old"])
+        for b, x in intents.items():
+            self.assertEqual(x["tip"], self.tips[b])
+            self.assertEqual(x["ceo_word"], self.WORD)
+        self.assertEqual(intents["codex/done"]["worktree"], self.done)
+        self.assertEqual([x["worktree"] for x in rows if x["phase"] == "deleting" and not x["branch"]],
+                         [self.detached])
+        ids = [x["id"] for x in rows if x["phase"] == "deleting"]
+        self.assertEqual(sorted(x["id"] for x in rows if x["phase"] == "deleted"), sorted(ids))
+        # and every deleted branch can be restored from it
+        run("git", "-C", self.other, "branch", "codex/old", intents["codex/old"]["tip"])
+        self.assertEqual(run("git", "-C", self.other, "rev-parse", "codex/old").stdout.strip(),
+                         self.tips["codex/old"])
+
+    def test_point_02_codex_delete_refuses_without_his_word(self):
+        for args in (("codex/old",), ("--ceo-word", "  ", "codex/old")):
+            r = self.cli(*args)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("never deleted without the CEO's express word", r.stderr)
+        self.assertUntouched()
+        self.assertEqual(self.log_rows(), [])
+
+    def test_point_02_codex_delete_refuses_a_ref_that_is_not_codex(self):
+        run("git", "-C", self.other, "branch", "cc/someone")
+        for bad in ("cc/someone", "main", "codexx/old"):
+            r = self.cli("--ceo-word", self.WORD, "codex/old", bad)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("is not a codex/ branch", r.stderr)
+        self.assertIn("cc/someone", branches(self.other))
+        self.assertUntouched()
+        self.assertEqual(self.log_rows(), [])
+        # a checkout path on a branch that is not codex/, or detached outside every Codex root
+        plain = os.path.join(self.env.root, "plain")
+        run("git", "-C", self.other, "worktree", "add", "-q", plain, "-b", "human/x")
+        loose = os.path.join(self.env.root, "loose")
+        run("git", "-C", self.other, "worktree", "add", "-q", "--detach", loose, "main")
+        r = self.cli("--ceo-word", self.WORD, plain, loose)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("refused: %s - it is on branch human/x" % plain, r.stdout)
+        self.assertIn("refused: %s - it is not under a declared Codex worktree root" % loose, r.stdout)
+        self.assertIn(plain, worktrees(self.other))
+        self.assertIn(loose, worktrees(self.other))
+        self.assertIn("human/x", branches(self.other))
+
+    def test_point_02_codex_delete_never_takes_a_glob_or_all(self):
+        for bad in ("codex/*", "codex/ol?", "codex/[o]ld", "all", "ALL", "codex/"):
+            r = self.cli("--ceo-word", self.WORD, "codex/old", bad)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("never a pattern or \"all\"", r.stderr)
+        self.assertUntouched()
+        self.assertEqual(self.log_rows(), [])
+
+    def test_point_02_codex_delete_refuses_a_checkout_with_a_real_uncommitted_file(self):
+        with open(os.path.join(self.done, "notes.txt"), "w") as f:
+            f.write("his unfinished thought\n")
+        r = self.cli("--ceo-word", self.WORD, "codex/done", "codex/old")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("refused: codex/done - its checkout %s has 1 uncommitted entry (notes.txt)" % self.done,
+                      r.stdout)
+        self.assertIn("deleted: codex/old", r.stdout)
+        # that branch is left whole: branch, checkout, the file, and even its .DS_Store
+        self.assertIn("codex/done", branches(self.other))
+        self.assertIn(self.done, worktrees(self.other))
+        self.assertTrue(os.path.isfile(os.path.join(self.done, "notes.txt")))
+        self.assertTrue(os.path.isfile(os.path.join(self.done, ".DS_Store")))
+        self.assertNotIn("codex/done", [x.get("branch") for x in self.log_rows()])
+        # a modified tracked file refuses it the same way
+        os.unlink(os.path.join(self.done, "notes.txt"))
+        with open(os.path.join(self.done, "README"), "a") as f:
+            f.write("changed\n")
+        r = self.cli("--ceo-word", self.WORD, "codex/done")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("uncommitted entry (README)", r.stdout)
+        self.assertIn("codex/done", branches(self.other))
+
+    def test_point_02_a_codex_branch_deleted_on_his_word_is_not_put_back_by_an_agents_open_call(self):
+        """The protected-ref check re-creates a codex/ ref deleted during any
+        agent's open call. A deletion codex-delete logged on his word is not
+        undone; any other deletion still is."""
+        run("git", "-C", self.entity, "branch", "codex/gone")
+        run("git", "-C", self.entity, "branch", "codex/rogue")
+        rogue = run("git", "-C", self.entity, "rev-parse", "codex/rogue").stdout.strip()
+        aid, _npath = self.spawn("zach-opus-cdel")
+        self.pre(aid, "tu-1")
+        r = self.cli("--ceo-word", self.WORD, "codex/gone", repo=self.entity)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        run("git", "-C", self.entity, "update-ref", "-d", "refs/heads/codex/rogue")
+        self.post(aid, call="tu-1")
+        self.assertNotIn("codex/gone", branches(self.entity))
+        self.assertEqual(run("git", "-C", self.entity, "rev-parse", "codex/rogue").stdout.strip(), rogue)
+
+
 class Point03_TwoEvents(Base):
     """3. Two events, nothing else."""
 
