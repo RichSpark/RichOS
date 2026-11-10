@@ -483,7 +483,10 @@ candidate in between:
    Missing, mismatched or stale notes refuse before any public version tag or app upload.
    Creates the public version tag and prerelease with those approved notes already
    in its body, then uploads immutable artifacts,
-   provenance and checksums with the manifest last. Downloads them again to verify
+   provenance and checksums with the manifest last. Assets (FFmpeg's corresponding
+   source included) go up five at a time, the number `gh release upload` uses itself;
+   the manifest starts only after every other asset is up and each upload's size and
+   time are in the run log. Downloads them again to verify
    bytes and signatures. The engine URL compiled into the tested app is unchanged;
    an additional engine copy is included on the versioned release for its checksums.
 8. Advances the update channel, in that order: a Git compare-and-swap push moves

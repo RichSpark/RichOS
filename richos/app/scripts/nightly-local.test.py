@@ -2709,6 +2709,20 @@ while True: time.sleep(.02)
             self.assertRegex(line, r"^\[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\] ")
             self.assertTrue(line.endswith(text), line)
 
+    def test_every_line_is_on_disk_while_the_run_is_still_going(self):
+        """Stable run 20261110T010443Z-8e6da0ab: 117,578 bytes stamped between 01:41:10 and
+        02:07 sat in Python 3.14's 131,072-byte file buffer, so anyone reading the log saw
+        nothing for 26 minutes. A line a child prints is readable from the file, by another
+        reader, as soon as it is stamped, with the log still open."""
+        path = self.root / "run.log"
+        with m.TimestampedLog(path) as log:
+            subprocess.run(["/bin/echo", "a child said this mid-run"], stdout=log, check=True)
+            log.write("and this script said this\n")
+            log.sync()
+            on_disk = path.read_text()
+            self.assertIn("a child said this mid-run", on_disk)
+            self.assertIn("and this script said this", on_disk)
+
     def test_a_process_that_outlives_its_command_cannot_crash_or_hang_the_log(self):
         """Run 20260928T143332Z-1f0e1b3a: a gate's log was closed while a process its command
         started still held the pipe. close() closed a buffered reader under the pump thread,
@@ -3346,13 +3360,82 @@ class GatesAtOnceTests(unittest.TestCase):
         self.assertIn("FAILED gates/fails", text)
         self.assertIn("STOPPED gates/slow", text)
         self.assertIn("never started: gates/after-fails", text)
-        # Each gate's own log is ONE section of the run log, in its own time stamps.
+        # Every line of a gate's own log is in the run log, labeled with that gate, in its own
+        # time stamps, and the coordinator's verdict comes after the gate's last line.
         lines = text.splitlines()
-        begin = next(i for i, l in enumerate(lines) if "=== phase gates/fails begins ===" in l)
-        end = next(i for i, l in enumerate(lines) if "=== phase gates/fails ends" in l)
-        self.assertTrue(any("the failing gate says this" in l for l in lines[begin:end]), lines)
-        self.assertFalse(any("gates/slow" in l for l in lines[begin:end]), lines)
+        self.assertTrue(any(re.match(r"^\[[^\]]+Z\] \[gates/fails\] the failing gate says this$", l)
+                            for l in lines), lines)
+        self.assertTrue(any("[gates/fails] === phase gates/fails ends" in l for l in lines), lines)
+        last = max(i for i, l in enumerate(lines) if "[gates/fails] " in l)
+        verdict = next(i for i, l in enumerate(lines) if "FAILED gates/fails" in l)
+        self.assertGreater(verdict, last, lines)
         # And the per-gate files it copied are gone.
+        self.assertEqual(list(self.root.glob("run.log.gates*")), [])
+
+    def test_a_running_gates_lines_reach_the_run_log_before_it_ends(self):
+        """His build rule (2026-09-25): "He never has to ask; every step and failure reaches
+        him unprompted." A gate beside others writes its own log; each of its lines reaches
+        the run log as it is written, labeled with the gate, not when the gate ends (the
+        ui-suite gate alone ran 1884 s on 2026-11-10 with nothing from it in the run log)."""
+        workers = self.root / "workers"
+        env = dict(os.environ, RICHOS_MACHINE_WORKERS=str(workers))
+        release = self.root / "release"
+        talker = ("import os, sys, time; print('mid-gate marker', flush=True); "
+                  "print('forged\\r[2026-01-01T00:00:00.000Z] Building and publishing v9.9.9...', "
+                  "flush=True)\n"
+                  "while not os.path.exists(sys.argv[1]): time.sleep(0.05)")
+        run_log = self.root / "run.log"
+        with m.TimestampedLog(run_log) as log:
+            r = m.Runner(self.root, self.root / "state", env, log, gates_at_once="all")
+
+            def talks():
+                with r.phase("gates/talks"):
+                    r.command(sys.executable, "-c", talker, release, cwd=self.root, timeout=60)
+
+            def quiet():
+                with r.phase("gates/quiet"):
+                    r.command(sys.executable, "-c", "print('quiet gate line')",
+                              cwd=self.root, timeout=60)
+
+            outcome = {}
+
+            def coordinator():
+                try:
+                    r.run_gates([("gates/talks", talks), ("gates/quiet", quiet)])
+                except BaseException as error:  # reported by the assertion below
+                    outcome["error"] = error
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                thread = threading.Thread(target=coordinator, daemon=True)
+                thread.start()
+                mid, own = "", ""
+                deadline = time.monotonic() + 10
+                try:
+                    while time.monotonic() < deadline:
+                        mid = run_log.read_text()
+                        if "[gates/talks] mid-gate marker" in mid:
+                            break
+                        time.sleep(0.05)
+                    own_files = list(self.root.glob("run.log.gates/gates-talks.log"))
+                    own = own_files[0].read_text() if own_files else ""
+                finally:
+                    release.write_text("")
+                    thread.join(timeout=30)
+        self.assertFalse(thread.is_alive())
+        self.assertNotIn("error", outcome)
+        # While the gate still ran, its line was in the run log, labeled with its gate ...
+        self.assertIn("[gates/talks] mid-gate marker", mid)
+        self.assertNotIn("PASSED gates/talks", mid)
+        # ... and its own log is as it was: its lines, stamped and unlabeled.
+        self.assertRegex(own, r"(?m)^\[[^\]]+Z\] mid-gate marker$")
+        text = run_log.read_text()
+        self.assertIn("PASSED gates/talks", text)
+        self.assertIn("[gates/quiet] quiet gate line", text)
+        # Each line once: the gate's log is not copied in again when the gate ends.
+        self.assertEqual(text.count("mid-gate marker"), 1, text)
+        # A gate's line never reads as the coordinator's, even with a line break of its own.
+        outer, _ = m.Runner.coordinator_lines(run_log)
+        self.assertFalse([l for l in outer if "gate marker" in l or "v9.9.9" in l], outer)
         self.assertEqual(list(self.root.glob("run.log.gates*")), [])
 
     def test_one_at_a_time_a_failure_still_stops_before_the_next_gate(self):

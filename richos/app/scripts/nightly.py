@@ -5,6 +5,7 @@ Python 3.11+, git and gh are required. Planning is read-only; build and finish w
 The manual local runner serializes runs; Git ref creation/CAS rejects competing writers.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import contextlib
 from datetime import datetime, timezone
 import functools
@@ -22,6 +23,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import tomllib
 from urllib.parse import quote, urlsplit
 
@@ -1198,14 +1200,14 @@ def attach_gpl_sources(tag, engine):
     if published.get(engine.name) != f"sha256:{sha256_file(engine)}":
         raise ValueError(f"{tag} does not carry this {engine.name}; source is attached only "
                          "beside the engine it belongs to")
-    for row, path in zip(rows, files):
-        if row["asset"] in published:
-            continue
-        try:
-            execute("gh", "release", "upload", tag, "--repo", REPO, str(path))
-        except subprocess.CalledProcessError:
-            if row["asset"] not in digests():
-                raise
+    # Up to UPLOAD_CONCURRENCY at once (upload_candidate_assets says why); each file is named
+    # `cache/<asset>`, so its name is the asset an earlier attempt may already have put up.
+    started = time.monotonic()
+    missing = [path for row, path in zip(rows, files) if row["asset"] not in published]
+    each_at_once(missing, lambda path: upload_asset(tag, path, digests))
+    if missing:
+        print(f"{tag}: {len(missing)} corresponding-source archives uploaded in "
+              f"{time.monotonic() - started:.1f}s, up to {UPLOAD_CONCURRENCY} at once", flush=True)
     published = digests()
     wrong = [row["asset"] for row in rows
              if published.get(row["asset"]) != f"sha256:{row['sha256']}"]
@@ -1433,22 +1435,72 @@ def ensure_nightly_release(info, notes=None):
     return release
 
 
+# HOW MANY RELEASE ASSETS GO UP AT ONCE. A publish carries the app archives, the engine and
+# FFmpeg's corresponding-source archives, close to a gigabyte; one file at a time, a single
+# upload stream left part of the uplink idle and the uploads were most of the publish. Five
+# is the number `gh release upload` itself uses for several files (cli/cli
+# pkg/cmd/release/upload/upload.go: `opts.Concurrency = 5`), so it is a load GitHub already
+# serves from its own client. The uplink stays the floor: the bytes need what they need
+# however they are split. Each upload logs its size and seconds.
+UPLOAD_CONCURRENCY = 5
+
+
+def each_at_once(items, work, limit=UPLOAD_CONCURRENCY):
+    """`work(item)` for every item, at most `limit` at a time.
+
+    Every item is tried even when another fails, so one run says everything that went
+    wrong and leaves every asset it could upload in place for the retry. Then the first
+    failure, in the items' order, is raised as itself, so a caller's refusal is the
+    same as one at a time.
+    """
+    items = list(items)
+    if not items:
+        return
+    with ThreadPoolExecutor(max_workers=min(limit, len(items))) as pool:
+        futures = [pool.submit(work, item) for item in items]
+    errors = [future.exception() for future in futures if future.exception() is not None]
+    for error in errors[1:]:
+        print(f"nightly: also failed: {error}", file=sys.stderr, flush=True)
+    if errors:
+        raise errors[0]
+
+
+def upload_asset(tag, path, existing):
+    """Upload `path` to release `tag` unless a name in `existing()` already holds it. An
+    upload that fails is a success only if those exact bytes are then served; an asset of
+    the same name is never overwritten. Says what it uploaded and how long it took."""
+    started = time.monotonic()
+    try:
+        execute("gh", "release", "upload", tag, "--repo", REPO, str(path))
+    except subprocess.CalledProcessError:
+        if path.name not in existing():
+            raise
+        return False
+    print(f"  uploaded {path.name} ({path.stat().st_size / 1e6:.1f} MB) in "
+          f"{time.monotonic() - started:.1f}s", flush=True)
+    return True
+
+
 def upload_candidate_assets(info, out, assets, notes=None):
     release = ensure_nightly_release(info, notes)
     existing = {a["name"] for a in release_assets(release["id"])}
-    # latest.json is deliberately last. A retry compares existing files and only
-    # uploads missing ones, without overwriting even one tested byte.
-    for path in [*(Path(p) for p in assets), out / "latest.json"]:
+
+    def names():
+        return {a["name"] for a in release_assets(release["id"])}
+
+    def one(path):
         url = f"https://github.com/{REPO}/releases/download/{info['tag']}/{path.name}"
-        if path.name not in existing:
-            try:
-                execute("gh", "release", "upload", info["tag"], "--repo", REPO, str(path))
-            except subprocess.CalledProcessError:
-                if not any(a["name"] == path.name for a in release_assets(release["id"])):
-                    raise
-                verify_served_asset(url, path)
-        else:
+        if path.name in existing or not upload_asset(info["tag"], path, names):
             verify_served_asset(url, path)
+
+    # latest.json is deliberately last, after every other asset is up. A retry compares
+    # existing files and only uploads missing ones, without overwriting even one tested byte.
+    started = time.monotonic()
+    paths = [Path(p) for p in assets]
+    each_at_once(paths, one)
+    one(out / "latest.json")
+    print(f"{info['tag']}: {len(paths) + 1} assets in place in {time.monotonic() - started:.1f}s, "
+          f"up to {UPLOAD_CONCURRENCY} at once", flush=True)
 
 
 def clear_superseded_stable_attempt(info, out):

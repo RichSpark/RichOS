@@ -569,10 +569,25 @@ class TimestampedLog:
     SENTINEL = "richos-nightly-log-sync-"
     # How long close() waits for end of file before it stops reading, and says so.
     CLOSE_WAIT_SECONDS = 30
+    # What str.splitlines() ends a line at besides "\n", which the pump does not split on. A
+    # labeled line carries them escaped, so a gate's output can never start a line of the run
+    # log that is not labeled (Runner.coordinator_lines reads the log with splitlines()).
+    LINE_BREAKS = str.maketrans({c: repr(c)[1:-1] for c in "\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"})
 
-    def __init__(self, path, milestones=()):
+    def __init__(self, path, milestones=(), echo=None):
+        """`echo`, when given, is (run log, label): every line written here is ALSO written
+        into that run log as it is stamped, labeled (write_labeled). That is how a gate
+        running beside others reaches the run log while it runs, not when it ends."""
         self.path = Path(path)
-        self.file = self.path.open("w")
+        self._echo = echo
+        # LINE-BUFFERED, so every line is on disk the moment it is stamped. Fully buffered, a
+        # line sat in Python's buffer until it filled, and Python 3.14's open() buffer is
+        # 131,072 bytes (io.DEFAULT_BUFFER_SIZE, measured 2026-11-10): stable run
+        # 20261110T010443Z-8e6da0ab wrote 117,578 bytes after its last explicit flush (the
+        # lint-tauri gate's merge at 01:41:10), so its build, VM boot proof and new-user walk
+        # reached the file only when the log closed at 02:07, and the run looked dead for 26
+        # minutes while every line was being stamped on time.
+        self.file = self.path.open("w", buffering=1)
         self._read_fd, self._write_fd = os.pipe()
         self._stop = threading.Event()
         self._milestones = list(milestones)
@@ -615,8 +630,23 @@ class TimestampedLog:
                 if re.search(pattern, line):
                     self.seen.append((name, now))
                     self._next += 1
+        self._record(stamp(now), line)
+
+    def _record(self, stamped, line):
         with self._file_lock:
-            self.file.write(f"{stamp(now)} {line}\n")
+            self.file.write(f"{stamped} {line}\n")
+        if self._echo:
+            log, label = self._echo
+            log.write_labeled(stamped, label, line)
+
+    def write_labeled(self, stamped, label, line):
+        """One already-stamped line of a gate running beside others, labeled with the gate.
+
+        Written straight into the file under the file lock, so it is one whole line however
+        many gates write at once, and on disk at once (the file is line-buffered).
+        """
+        with self._file_lock:
+            self.file.write(f"{stamped} [{label}] {line.translate(self.LINE_BREAKS)}\n")
 
     def fileno(self):
         """Every existing `stdout=self.log` / `stderr=self.log` call site keeps working."""
@@ -653,30 +683,17 @@ class TimestampedLog:
         """
         os.write(self._write_fd, text.encode("utf-8", "replace"))
 
-    def append_verbatim(self, text):
-        """Put lines that are ALREADY stamped straight into the file, in one piece.
-
-        A gate that ran beside others wrote its own stamped log (Runner.run_gates); this is
-        how that log becomes one unbroken section of the run log, every line keeping the time
-        it was written rather than the time it was copied. Everything already in the pipe is
-        written first (sync), so the section lands after the lines that announced it.
-        """
-        self.sync()
-        with self._file_lock:
-            self.file.write(text if not text or text.endswith("\n") else text + "\n")
-            self.file.flush()
-
     def close(self):
         os.close(self._write_fd)
         self._thread.join(timeout=self.CLOSE_WAIT_SECONDS)
         if self._thread.is_alive():
             self._stop.set()
             self._thread.join()
-            with self._file_lock:
-                self.file.write(
-                    f"{stamp(time.time())} [log] stopped reading {self.CLOSE_WAIT_SECONDS} s after "
-                    "the last command ended: a process it started still holds this log's pipe, "
-                    "and nothing it writes from here on is recorded\n")
+            self._record(
+                stamp(time.time()),
+                f"[log] stopped reading {self.CLOSE_WAIT_SECONDS} s after the last command "
+                "ended: a process it started still holds this log's pipe, and nothing it writes "
+                "from here on is recorded")
         os.close(self._read_fd)
         self.file.close()
 
@@ -2490,8 +2507,9 @@ class Runner:
 
         More than one: each gate runs in its own thread, as soon as a slot is free and every
         gate GATE_AFTER names for it has passed. Each keeps its own deadline (command()),
-        its own log (a stamped file of its own, copied whole into the run log as one section
-        when it ends) and its own verdict line. The FIRST gate to fail refuses the build:
+        its own log (a stamped file of its own, each line of which also reaches the run log
+        as it is written, labeled `[gates/X]`, so lines of gates side by side stay readable)
+        and its own verdict line. The FIRST gate to fail refuses the build:
         no further gate starts, every running one is stopped through the process groups
         this run owns (OwnedGroups), and once all of them have ended the first failure is
         raised as it would have been one at a time. The wall clock of the whole set is
@@ -2529,13 +2547,17 @@ class Runner:
             folder = main.path.with_name(main.path.name + ".gates")
             folder.mkdir(mode=0o700, exist_ok=True)
             path = folder / (name.replace("/", "-") + ".log")
-            return TimestampedLog(path), path
+            return TimestampedLog(path, echo=(main, name)), path
         return _BufferedGateLog(), None
 
     def _merge_gate_log(self, log, path, verdict):
-        """Copy a finished gate's log into the run log as one section, then drop the copy."""
+        """A finished gate's verdict, and its own log dropped.
+
+        Every line of a stamped gate log is already in the run log, labeled, written as it
+        happened (TimestampedLog echo), so nothing is copied again. A gate log beside a plain
+        stream (tests only; main() always writes a TimestampedLog) is copied in whole here.
+        """
         if path is not None:
-            self._log.append_verbatim(path.read_text(errors="replace"))
             try:
                 path.unlink()
                 path.parent.rmdir()  # Succeeds only once the last gate's file is gone.
@@ -2582,6 +2604,8 @@ class Runner:
                         log, path = self._gate_log(name)
                         where = f" (its log until it ends: {path})" if path else ""
                         self.announce(f"  started {name}{where}")
+                        if path is not None:
+                            self._log.sync()  # "started" is on disk before the gate's first line
                         thread = threading.Thread(target=work, args=(name, body, log),
                                                   name=name, daemon=True)
                         running[name] = (thread, log, path, time.time())
@@ -3072,6 +3096,7 @@ class Runner:
         return source
 
     LOG_LINE = re.compile(r"^\[\d{4}-\d\d-\d\dT[\d:.]+Z\] (.*)$")
+    GATE_LABEL = re.compile(r"^\[gates/[^\]]*\] ")
     GATE_VERDICT = re.compile(r"^ {0,2}(PASSED|FAILED|STOPPED|SKIPPED) (gates/[a-z-]+)\b")
 
     GATE_REUSED = re.compile(r"^ {0,2}REUSED (gates/[a-z-]+): actual pass in \S+ \((/[^()]+\.json)\); ")
@@ -3099,14 +3124,18 @@ class Runner:
     def coordinator_lines(cls, path):
         """A run log's own lines, and the gate sections that ended in it.
 
-        A gate's own output sits between its `=== phase gates/X begins/ends ===` lines
-        (merged whole when it ends); the coordinator's verdict follows the section. Only
-        lines outside every section are the coordinator's, and only those are read: a
-        suite's fixture output can say anything, including "Building and publishing v...".
+        One gate at a time, a gate's own output sits between its `=== phase gates/X
+        begins/ends ===` lines. Gates side by side write each line labeled `[gates/X] `
+        (TimestampedLog.write_labeled), wherever it falls; the coordinator's verdict follows
+        the gate. Only unlabeled lines outside every section are the coordinator's, and only
+        those are read: a suite's fixture output can say anything, including "Building and
+        publishing v...".
         """
         outer, ended, inside = [], set(), []
         for match in map(cls.LOG_LINE.match, path.read_text(errors="replace").splitlines()):
             line = match[1] if match else None
+            if line is not None and cls.GATE_LABEL.match(line):
+                continue
             section = line and re.fullmatch(r"=== phase (gates/[a-z-]+(?:/[a-z-]+)*) (begins ===|ends: [\d.]+s ===)", line)
             if section:
                 if section[2] == "begins ===":
