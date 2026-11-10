@@ -6916,7 +6916,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
                     entity_label: label_of(s.entity_id.as_deref()),
                     thread_id: Some(s.id.clone()),
                     thread_title: Some(display.clone()),
-                    message_source_id: doc_search::exact_message_token(ledger, &s.id, m),
+                    message_source_id: doc_search::exact_message_token(ledger, &s.id, m, at..at + needle.len()),
                     excerpt,
                     at: m.at,
                 });
