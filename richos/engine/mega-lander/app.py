@@ -1769,6 +1769,10 @@ def assignment_notice(payload, text):
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": said}} if said else None
 
 
+# The app's LinkedIn reader (`richos-core` linkedin_tools.rs QUALIFIED_TOOL).
+LINKEDIN_READER = "mcp__richos_linkedin__read_profile"
+
+
 def worker_context(scope, payload):
     """Host context and direct file boundaries derived from an observed Agent ID."""
     aid = payload.get("agent_id")
@@ -1792,6 +1796,11 @@ def worker_context(scope, payload):
             raise ValueError("this worker belongs to another session or conversation")
         # The shared host observation carries no company mutation or orchestration grant.
         if payload.get("tool_name") == "mcp__richos_status__system_resources":
+            return None
+        # Neither does the LinkedIn reader: it reads the user's own browser and changes nothing
+        # in RichOS. It is the named specialist's tool for delegated research, granted by the
+        # teammate's own definition (stock Reed and Clark list it), never by this gate.
+        if payload.get("tool_name") == LINKEDIN_READER:
             return None
         if str(payload.get("tool_name", "")).startswith("mcp__richos_"):
             raise ValueError("CEO-scoped continuity, onboarding and orchestration tools are not worker tools")
