@@ -1377,7 +1377,9 @@ class Reaper(object):
             self.add(path, "claude-orphan", size, KEEP,
                      "younger than the %d min floor" % self.cfg["age_floor_minutes"])
             return
-        refused = walls.check(path, has_git)
+        fixture = bool(has_git and not self.work_proof(path)
+                       and not self.reaches_outside(path, has_git, True))
+        refused = walls.check(path, has_git, git_is_fixture=fixture)
         if refused:
             self.add(path, "claude-orphan", size, INDETERMINATE, refused)
             return
@@ -1654,6 +1656,11 @@ class Reaper(object):
                              "allocation, but %s" % (pid or 0, outside))
                     continue
                 fixture = True
+            elif has_git and self.cfg.get("unknown_git_is_fixture") and not self.work_proof(path):
+                # Not a declared fixture label, but every repository in it is the harness's own
+                # (work_proof), or holds no uncommitted work and nothing no remote has.
+                if not repositories_reach_outside(path):
+                    fixture = True
             refused = walls.check(path, has_git, git_is_fixture=fixture)
             if refused:
                 self.add(path, "scratch-alloc", size, INDETERMINATE, refused)
@@ -2004,6 +2011,96 @@ class Reaper(object):
     # two-hour reclaim for a three-day one on exactly the family that filled the
     # disk. The list stays, and what changes is its JOB: it is no longer the
     # coverage, it is a fast lane on top of the coverage.
+    def work_proof(self, path):
+        """'' when every repository inside `path` is shown to hold no work of anyone's, else why not.
+
+        THE RULE THAT DECIDES OUR OWN TEST-FIXTURE CHECKOUTS (2026-11-10, CEO: none of our own
+        leftovers may end up "undecided"). A checkout in a temp root is disposable only when
+        nothing in it is anyone's work: for each repository found inside (to depth 4)
+
+          * a harness fixture (every commit by a declared fixture identity, or no commit at all)
+            is disposable whatever its working tree holds; any other repository needs:
+          * no tracked file modified, nothing staged, no untracked file that is not ignored;
+          * it has a remote, and no local commit is missing from every remote ref; a repository
+            with NO remote holds its commits nowhere else, so it is never shown disposable here
+            (a declared harness family is, by name, in scan_unknown / scan_legacy_tmp);
+          * it is not a linked worktree or submodule (a `.git` file): that one belongs to
+            another repository, and reaches_outside already refuses it.
+
+        Anything git cannot answer in time is "unknown", which is not disposable.
+        """
+        repos, stack = [], [(path, 0)]
+        while stack:
+            cur, depth = stack.pop()
+            try:
+                names = os.listdir(cur)
+            except OSError:
+                return "%s could not be listed" % cur
+            if ".git" in names:
+                pointer = os.path.join(cur, ".git")
+                if os.path.islink(pointer):
+                    return "%s has a linked repository folder" % cur
+                if not os.path.isdir(pointer):
+                    # A linked worktree is self-contained only when its repository folder is
+                    # inside this same candidate; one that belongs to another repository is
+                    # closed by that repository's owner, never deleted as scratch.
+                    try:
+                        with open(pointer, encoding="utf-8") as fh:
+                            line = fh.readline().strip()
+                    except OSError:
+                        line = ""
+                    target = os.path.realpath(os.path.join(cur, line[len("gitdir:"):].strip())) \
+                        if line.startswith("gitdir:") else ""
+                    if not target or not inside(target, os.path.realpath(path)):
+                        return "%s is a linked worktree or submodule of another repository" % cur
+                repos.append(cur)
+                continue
+            if depth < 4:
+                for name in names:
+                    child = os.path.join(cur, name)
+                    if os.path.isdir(child) and not os.path.islink(child):
+                        stack.append((child, depth + 1))
+        if not repos:
+            return "no repository was found to read"
+        env = dict(_ps_env(), GIT_OPTIONAL_LOCKS="0")
+
+        def ask(repo, *args):
+            try:
+                r = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True,
+                                   timeout=30, env=env)
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            return r.stdout if r.returncode == 0 else None
+
+        fixture_emails = set((getattr(self, "cfg", None) or {}).get("fixture_emails") or [])
+        for repo in repos:
+            check_deadline()
+            # A repository the harness made: every commit is by a declared fixture identity
+            # (SCRATCH_FIXTURE_IDENTITIES), or it has no commit at all, so there is no history to
+            # lose. What is in its working tree is the test's own output, not anyone's work.
+            refs = ask(repo, "for-each-ref", "--count=1")
+            if refs is not None and not refs.strip():
+                continue
+            authors = ask(repo, "log", "--all", "--format=%ae")
+            if authors is not None and fixture_emails and set(authors.split()) <= fixture_emails:
+                continue
+            status = ask(repo, "status", "--porcelain=v1", "--untracked-files=all")
+            if status is None:
+                return "%s: git could not report its status" % repo
+            if status.strip():
+                return "%s has uncommitted work (%d path(s) changed or untracked)" % (repo, len(status.splitlines()))
+            remotes = ask(repo, "remote")
+            if remotes is None:
+                return "%s: git could not list its remotes" % repo
+            if not remotes.strip():
+                return "%s has no remote, so its commits exist nowhere else" % repo
+            ahead = ask(repo, "log", "--branches", "--not", "--remotes", "--oneline", "-n", "1")
+            if ahead is None:
+                return "%s: git could not compare its branches with its remotes" % repo
+            if ahead.strip():
+                return "%s has a commit no remote has: %s" % (repo, ahead.strip()[:80])
+        return ""
+
     def scan_unknown(self, path, walls, root, held):
         """One child of a temp root that no other arm claims. Deny-by-default.
 
@@ -2113,11 +2210,21 @@ class Reaper(object):
         narrowed = self.cfg["unknown_git_is_fixture"] and (
             os.path.realpath(root) not in (self.cfg.get("producer_tmp_roots") or [])
             or any(fnmatch.fnmatch(name, pat) for pat in self.cfg.get("legacy_tmp_patterns") or []))
+        proven, why_not = "", ""
+        if has_git and not narrowed and self.cfg["unknown_git_is_fixture"]:
+            # Not a declared harness family: a checkout is still ours to clear once every
+            # repository in it is shown to hold no work (work_proof). Otherwise it stays undecided.
+            why_not = self.work_proof(path)
+            if not why_not:
+                narrowed = True
+                proven = "; every repository in it has no uncommitted work and nothing no remote has"
         linked = self.reaches_outside(path, has_git, narrowed)
         if linked:
             self.add(path, "tmp-unknown", size, INDETERMINATE, linked)
             return
         refused = walls.check(path, has_git, git_is_fixture=narrowed)
+        if refused and why_not and refused.startswith("wall 2"):
+            refused = Refusal(2, "wall 2: a checkout, and not shown disposable: %s" % why_not)
         if refused:
             self.add(path, "tmp-unknown", size, INDETERMINATE, refused)
             return
@@ -2126,7 +2233,7 @@ class Reaper(object):
                  "no arm declares this name, and nothing needs to: no running "
                  "session process existed when it was last written, nothing "
                  "has touched it for %d h, no process holds a file open inside "
-                 "it, and it is not a registered workspace" % (age // 3600))
+                 "it, and it is not a registered workspace%s" % (age // 3600, proven))
 
     def scan_shared_tmp(self, walls):
         """The DECLARED SHARED TEMP ROOTS — /private/tmp on this machine.
@@ -2207,7 +2314,7 @@ class Reaper(object):
                     self.add(path, "agent-named", 0, KEEP,
                              "named for %s, whose run has not finished" % name)
                     continue
-                size, newest, _has_git = measure(path)
+                size, newest, has_repo = measure(path)
                 # THE CLOCK COMES OFF THE AGENT'S RECORDED END WHEN THE REGISTRY HAS
                 # ONE, and off the newest mtime only when it does not: an orphaned
                 # writer would otherwise keep a stopped agent's scratch inside the
@@ -2226,11 +2333,34 @@ class Reaper(object):
                              "named-agent scratch, and the agent registry cannot be read "
                              "to tell whether %s is still running" % name)
                     continue
+                retention = self.cfg["named_retention_days"] * 86400
+                if age >= retention and not has_repo and not self.holder_named(path):
+                    # NAMED SCRATCH OF AN AGENT THAT IS NOT RUNNING, a declared number of days
+                    # after its end: nobody is going to collect it by a landing, and scratch is
+                    # never the agent's result (that is its commits). A directory holding a
+                    # repository, or one a process holds open, is never taken here.
+                    e = Entry(path, "agent-named", size, DELETE,
+                              "named scratch of %s, which is not running: %s %d d ago, past the declared "
+                              "retention of %d d; no repository in it and nothing holds it open"
+                              % (name, clock, age // 86400, self.cfg["named_retention_days"]))
+                    e.named_ok = True
+                    self.entries.append(e)
+                    continue
+                if age < retention:
+                    # Not undecided: the cleanup WILL take it, on the day the retention ends.
+                    self.add(path, "agent-named", size, KEEP,
+                             "named scratch of %s, which is not running: %s %d d ago; taken after the "
+                             "declared %d d" % (name, clock, age // 86400, self.cfg["named_retention_days"]))
+                    continue
                 self.add(path, "agent-named", size, INDETERMINATE,
-                         "named-agent scratch no running agent carries (%s was stopped, "
-                         "shelved or never landed). Only a land's sweep deletes named "
-                         "scratch, so remove it by hand once nothing needs it" % name,
+                         "named scratch of %s, past its retention, but %s: a person decides what is in it"
+                         % (name, "it holds a repository" if has_repo else "a process holds it open"),
                          condition="agent-ended")
+
+    def holder_named(self, path):
+        """True when a live process holds a file open inside `path`, or that cannot be read."""
+        h = self.holder(path)
+        return h is None or bool(h.strip())
 
     def scan_deferred_unknown(self, walls):
         """THE DEFERRED DENY-BY-DEFAULT PASS, and the ONE arm allowed to be cut
@@ -4390,7 +4520,8 @@ class Reaper(object):
         # kind of log line nobody can act on.
         if self.scope is None:
             for entry in self.entries:
-                if entry.action == DELETE and self.named_scratch(entry.path):
+                if entry.action == DELETE and self.named_scratch(entry.path) \
+                        and not getattr(entry, "named_ok", False):
                     entry.action = KEEP
                     entry.why = "named scratch is collected only by its successful landing"
         order = sorted((e for e in self.entries if e.action == DELETE),
@@ -5189,6 +5320,8 @@ def config_from_env(process_only=False):
         "retired_retention_days": opt_number("SCRATCH_RETIRED_RETENTION_DAYS", 30),
         "sim_idle_days": opt_number("SCRATCH_SIM_IDLE_DAYS", 14),
         "device_support_keep": opt_number("SCRATCH_DEVICE_SUPPORT_KEEP", 2),
+        "named_retention_days": opt_number("SCRATCH_NAMED_RETENTION_DAYS", 3),
+        "fixture_emails": opt("SCRATCH_FIXTURE_IDENTITIES", "").split(),
     }
 
 

@@ -103,5 +103,148 @@ class CargoOutput(unittest.TestCase):
         self.assertEqual([a for _p, _k, a, _w in r.decisions], [reaper.INDETERMINATE], r.decisions)
 
 
+class WorkProof(unittest.TestCase):
+    """Our own test-fixture checkouts are decided; real work is not (2026-11-10)."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="reaper-workproof-test."))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def git(self, repo, *args, email="t@t"):
+        import subprocess
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL=email, GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL=email, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+        subprocess.run(["git", "-C", repo] + list(args), check=True, capture_output=True, env=env)
+
+    def clone(self, name="work"):
+        remote = os.path.join(self.tmp, "remote.git")
+        if not os.path.isdir(remote):
+            os.makedirs(remote)
+            self.git(remote, "init", "--bare", "-b", "main")
+        repo = os.path.join(self.tmp, name)
+        os.makedirs(repo)
+        self.git(repo, "init", "-b", "main")
+        Path(repo, "a.txt").write_text("a\n")
+        self.git(repo, "add", "a.txt")
+        self.git(repo, "commit", "-m", "first")
+        self.git(repo, "remote", "add", "origin", remote)
+        self.git(repo, "push", "origin", "main")
+        return repo
+
+    def proof(self, path):
+        r = object.__new__(reaper.Reaper)
+        with patch.object(reaper, "check_deadline", return_value=None):
+            return r.work_proof(path)
+
+    def test_a_clean_clone_with_nothing_unpushed_is_disposable(self):
+        self.assertEqual(self.proof(self.clone()), "")
+
+    def test_uncommitted_work_is_kept(self):
+        repo = self.clone()
+        Path(repo, "a.txt").write_text("changed\n")
+        self.assertIn("uncommitted work", self.proof(repo))
+
+    def test_an_untracked_file_is_work_too(self):
+        repo = self.clone()
+        Path(repo, "notes.txt").write_text("mine\n")
+        self.assertIn("uncommitted work", self.proof(repo))
+
+    def test_a_commit_no_remote_has_is_kept(self):
+        repo = self.clone()
+        Path(repo, "b.txt").write_text("b\n")
+        self.git(repo, "add", "b.txt")
+        self.git(repo, "commit", "-m", "second")
+        self.assertIn("no remote has", self.proof(repo))
+
+    def test_a_repository_with_no_remote_is_kept(self):
+        repo = os.path.join(self.tmp, "proto")
+        os.makedirs(repo)
+        self.git(repo, "init", "-b", "main")
+        Path(repo, "a.txt").write_text("a\n")
+        self.git(repo, "add", "a.txt")
+        self.git(repo, "commit", "-m", "mine")
+        self.assertIn("no remote", self.proof(repo))
+
+    def test_a_repository_with_no_commit_holds_nothing_to_lose(self):
+        repo = os.path.join(self.tmp, "empty")
+        os.makedirs(repo)
+        self.git(repo, "init", "-b", "main")
+        Path(repo, "worker-output.txt").write_text("test output\n")
+        self.assertEqual(self.proof(repo), "")
+
+    def test_a_harness_made_repository_is_disposable_whatever_its_tree_holds(self):
+        repo = os.path.join(self.tmp, "fx")
+        os.makedirs(repo)
+        self.git(repo, "init", "-b", "main")
+        Path(repo, "a.txt").write_text("a\n")
+        self.git(repo, "add", "a.txt")
+        self.git(repo, "commit", "-m", "Initialize", email="richos@localhost")
+        Path(repo, "loose.txt").write_text("x\n")
+        r = object.__new__(reaper.Reaper)
+        r.cfg = {"fixture_emails": ["richos@localhost"]}
+        with patch.object(reaper, "check_deadline", return_value=None):
+            self.assertEqual(r.work_proof(repo), "")
+        # ...and the same repository without the declared identity is someone's work.
+        r.cfg = {"fixture_emails": []}
+        with patch.object(reaper, "check_deadline", return_value=None):
+            self.assertIn("uncommitted work", r.work_proof(repo))
+
+    def test_every_repository_inside_is_read(self):
+        outer = os.path.join(self.tmp, "outer")
+        os.makedirs(outer)
+        inner = self.clone("outer/inner")
+        Path(inner, "dirty.txt").write_text("x\n")
+        self.assertIn("uncommitted work", self.proof(outer))
+
+
+class NamedScratch(unittest.TestCase):
+    """Scratch of an agent that is not running goes after the declared retention."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="reaper-named-test."))
+        self.root = os.path.join(self.tmp, "agents")
+        os.makedirs(self.root)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def plan(self, name, age_days, holder="", with_repo=False):
+        path = os.path.join(self.root, name)
+        os.makedirs(os.path.join(path, ".git" if with_repo else "x"))
+        Path(path, "f.txt").write_text("scratch")
+        then = time.time() - age_days * 86400
+        for root, _d, files in os.walk(path):
+            for f in files:
+                os.utime(os.path.join(root, f), (then, then))
+            os.utime(root, (then, then))
+        r = object.__new__(reaper.Reaper)
+        r.cfg = {"agent_roots": [self.root], "age_floor_minutes": 30, "named_retention_days": 3}
+        r.floor, r.now, r.roots, r.entries = 1800, time.time(), [], []
+        r.skip_named = False
+        r.live_agent_names = lambda: (set(), {})
+        r.holder = lambda p: holder
+        with patch.object(reaper, "check_deadline", return_value=None):
+            r.scan_named_scratch(FakeWalls())
+        return r.entries
+
+    def test_scratch_of_an_agent_not_running_goes_after_the_retention(self):
+        (e,) = self.plan("zach-old", 5)
+        self.assertEqual((e.action, getattr(e, "named_ok", False)), (reaper.DELETE, True), e.why)
+
+    def test_it_is_kept_inside_the_retention(self):
+        (e,) = self.plan("zach-new", 1)
+        self.assertEqual(e.action, reaper.KEEP, e.why)
+
+    def test_a_directory_holding_a_repository_is_never_taken(self):
+        (e,) = self.plan("zach-repo", 9, with_repo=True)
+        self.assertEqual(e.action, reaper.INDETERMINATE, e.why)
+
+    def test_a_directory_a_process_holds_open_is_never_taken(self):
+        (e,) = self.plan("zach-held", 9, holder="4242")
+        self.assertEqual(e.action, reaper.INDETERMINATE, e.why)
+
+
 if __name__ == "__main__":
     unittest.main()
