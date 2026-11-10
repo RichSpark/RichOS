@@ -484,7 +484,8 @@ impl Meetings {
     /// One calendar pass: `workspace sync <vendor> --once --source calendar` for each connected
     /// vendor (the existing sync and its Keychain grant), then the latest revisions read back.
     /// A failed sync never blocks microphone prompts or capture. The calendar cache can prompt
-    /// only for the most recently confirmed eligible account instances.
+    /// only for the most recently confirmed eligible account instances, with cached calendars
+    /// available before the first status report.
     fn refresh_calendar(&self, known: &mut BTreeMap<String, u64>, instances: &mut BTreeMap<String, Vec<String>>) {
         let zone = meeting_calendar::workspace_zone(&self.corpus_root());
         let vendors = meeting_calendar::connected_vendors(&zone);
@@ -522,7 +523,8 @@ impl Meetings {
             eprintln!("[richos] meeting notes: no calendar sync in this build; keeping the last known calendar status");
         }
         let current = meeting_calendar::meetings(&zone, |vendor, instance| {
-            instances.get(vendor).is_some_and(|ids| ids.iter().any(|id| id == instance))
+            // Before the first status report, retain the existing offline calendar cache.
+            vendors.contains(&vendor) && instances.get(vendor).is_none_or(|ids| ids.iter().any(|id| id == instance))
         });
         let gone = meeting_calendar::withdrawn(known, &current);
         *known = current.iter().map(|m| (m.event_id.clone(), m.starts_at)).collect();
