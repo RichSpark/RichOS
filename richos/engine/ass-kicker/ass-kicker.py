@@ -1300,6 +1300,13 @@ def classify_target(path):
 
 
 APP_REPORT = "mcp__richos_work__report"
+# The app's other save tools. Each answers with its own confirmation, and each
+# is counted only by it: the onboarding notes (`status: saved`, `verified: true`,
+# no path), the user's instructions (`status: saved`) and a registered
+# assignment (`recorded: true`). A refused or unreadable answer counts for nothing.
+APP_SAVE_NOTES = "mcp__richos_onboarding__save_company_notes"
+APP_SAVE_INSTRUCTIONS = "mcp__richos_onboarding__save_your_instructions"
+APP_ASSIGN = "mcp__richos_assignments__record"
 
 
 def _app_answer(block):
@@ -1348,7 +1355,7 @@ def turn_writes(tm, transcript, prompt_id, cwd):
         except OSError as exc:
             return None, "the transcript could not be read (%s)" % exc
     w = {"targets": [], "committed": False, "record_script": False, "record_tokens": [],
-         "ecs": False, "traffic": ""}
+         "ecs": False, "traffic": "", "app_saved": []}
     traffic = []
     for tid, name in calls:
         inp = inputs.get(tid) or {}
@@ -1378,6 +1385,12 @@ def turn_writes(tm, transcript, prompt_id, cwd):
                 w["record_script"] = True
                 if isinstance(inp.get("obligation_id"), str):
                     w["record_tokens"].append(inp["obligation_id"])
+        elif name in (APP_SAVE_NOTES, APP_SAVE_INSTRUCTIONS, APP_ASSIGN):
+            answer = _app_answer(results.get(tid))
+            if (name == APP_SAVE_NOTES and answer.get("status") == "saved" and answer.get("verified") is True) \
+                    or (name == APP_SAVE_INSTRUCTIONS and answer.get("status") == "saved") \
+                    or (name == APP_ASSIGN and answer.get("recorded") is True):
+                w["app_saved"].append(name)
         res = results.get(tid)
         if res is not None:
             traffic.append(tm.flatten(res.get("content")))
@@ -1568,6 +1581,12 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
             parts.append("privately only: " + ", ".join(priv))
         return "; ".join(parts) or "nothing"
 
+    def app_backed(sentence):
+        # An app save tool answered that it saved, this turn, and the claim names
+        # no place of its own: the tool's answer is the place (it returns no path).
+        # A claim that names a file or section is judged as before.
+        return bool(writes.get("app_saved")) and not LOCATION_RE.search(sentence)
+
     for kind, sentence in claims:
         if kind == "note":
             # A promise or follow-up said to be "noted", or "in my notes": only
@@ -1618,7 +1637,7 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
             # and a path three paragraphs down does not change that.
             win = raw_window(raw, sentence)
             here = bool(LOCATION_RE.search(win)) or any(s in win.lower() for s in cited)
-            if not (here or (writes["record_script"] and entry_named)):
+            if not (here or (writes["record_script"] and entry_named) or app_backed(sentence)):
                 failing.append((sentence, "state", "it says the record already exists and names no "
                                                    "place for it: no path, no file, no section, no commit"))
             continue
@@ -1648,6 +1667,8 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
                                                  "private note is not a record and not a rule"
                             % ("what this turn wrote there: " + ", ".join(os.path.basename(p) for p in memory)
                                if memory else "a place this turn did not even write")))
+            continue
+        if app_backed(sentence):
             continue
         if named:
             if any(k == "repo" for _p, k in named) and not cited:
