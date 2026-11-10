@@ -436,8 +436,8 @@ UI_QUARANTINE = ()
 # WHOLE FUCKING MAC IS FREE???" -- and, asked what happens with ten engineers working: the
 # number is chosen when the build is started, from what is running on the Mac at the time.
 # Then: "how do I know that you won't fuck this up next time?" So there is NO DEFAULT for the
-# decision a build actually uses: `build`, `release` and `stable` refuse to start unless
-# --gates-at-once is named on the command line, and the run log's first lines say what was
+# decision a build actually uses: `build`, `release` and `stable --rerun-gates` refuse to start
+# unless --gates-at-once is named on the command line, and the run log's first lines say what was
 # chosen and by whom. A forgotten decision is a refusal nobody can miss, not an hour of a free
 # Mac running things in a line.
 #
@@ -479,6 +479,12 @@ GATE_NAMES = ("gates/release-smoke", LAND_PROVEN_GATE, "gates/updater-tests", "g
               "gates/lint-tauri", WORKSPACE_MUTANTS_GATE, UI_SUITE_GATE, "gates/privacy-sweep")
 
 GATES_AT_ONCE_FLAG = "--gates-at-once"
+# `stable` reuses the passing gates of the run that built the promoted nightly. Running them
+# again takes this flag AND --gates-at-once: --gates-at-once alone, the flag `build` and
+# `release` require, is refused for `stable`, because carried over by habit it reran every gate
+# the promoted nightly's own run had already passed (CEO, 2026-11-10: "why is it taking so long
+# again???").
+RERUN_GATES_FLAG = "--rerun-gates"
 SIMULATED_PHONES_FLAG = "--simulated-phones"
 SIMULATED_PHONES_ENV = "RICHOS_IOS_POOL_LEASES"
 GATE_COMMANDS = ("build", "release", "stable")
@@ -3151,7 +3157,7 @@ class Runner:
             raise ValueError(f"no run log in {logs} says it built {tag}, so there are no passed "
                              "gates to reuse, and `stable` never reruns them without being told. "
                              f"Name the run with {PASSED_GATES_FLAG} RUN, or run every gate again "
-                             f"with {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
+                             f"with {RERUN_GATES_FLAG} {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
         if len(finished) == 1:
             return finished[0]
         if not finished:
@@ -3159,7 +3165,7 @@ class Runner:
                              "them finished building it (no `phase timings for run` after the "
                              "announcement): a failed, stopped or unfinished attempt built nothing, so "
                              f"its gates are not reused. Name the run with {PASSED_GATES_FLAG} RUN, or "
-                             f"run every gate again with {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
+                             f"run every gate again with {RERUN_GATES_FLAG} {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
         raise ValueError(f"{len(found)} runs say they built {tag} ({', '.join(found)}); name "
                          f"the one to reuse with {PASSED_GATES_FLAG} RUN. Nothing was built.")
 
@@ -3322,7 +3328,7 @@ class Runner:
                 self.preflight()
             with self.phase("runtime-verify"):
                 self.runtime(runtime)
-            # EVERY GATE ON THIS COMMIT. Asked with --gates-at-once, every gate runs here.
+            # EVERY GATE ON THIS COMMIT. Asked with --rerun-gates, every gate runs here.
             # Otherwise the run that built the promoted nightly (found by `run_that_built`, or
             # named with --gates-passed-in) already passed every gate on this same source
             # commit against the dependencies installed now (both checked above), so nothing
@@ -3637,8 +3643,12 @@ def main():
                         help="REQUIRED for build and release: how many gates run at the "
                              "same time. 1 runs them one after another; all starts every gate "
                              "whose inputs are ready. Choose it from what else is running on "
-                             "this Mac. Given to stable, it runs every gate again instead of "
-                             "reusing the gates of the run that built the nightly.")
+                             "this Mac. Refused for stable unless --rerun-gates is also given: "
+                             "stable takes the promoted nightly's passing gates.")
+    parser.add_argument(RERUN_GATES_FLAG, action="store_true",
+                        help="stable only, with --gates-at-once N|all: deliberately run every "
+                             "gate fresh instead of reusing the passing gates of the run that "
+                             "built the nightly")
     parser.add_argument(SIMULATED_PHONES_FLAG, type=simulated_phones_value, metavar="N",
                         help="optional for build, release and stable: how many simulated "
                              "iPhones the suites may use at once (one per device type; the "
@@ -3706,13 +3716,22 @@ def main():
     # time?"). A command that runs the gates names how many run at once, or it does not start.
     # It is not made to name a simulated-phone count no gate of the desktop build uses (hunt
     # part 2 v3, R48). A command that reuses a recorded run's gates runs none, so it names neither.
-    # `stable` runs the gates only when asked to with --gates-at-once; otherwise it reuses
+    # `stable` runs the gates only when asked to with --rerun-gates; otherwise it reuses
     # the gates of the run that built the nightly, and never reruns them silently.
+    if args.rerun_gates and args.command != "stable":
+        parser.error(f"{RERUN_GATES_FLAG} is for stable, which otherwise reuses the promoted "
+                     f"nightly's passing gates; {args.command} has no gates to reuse")
+    if (args.command == "stable" and args.gates_at_once is not None and not args.rerun_gates
+            and not args.dry_run and not args.gates_passed_in):
+        parser.error(f"stable takes the promoted nightly's passing gates, so drop "
+                     f"{GATES_AT_ONCE_FLAG}, or add {RERUN_GATES_FLAG} to deliberately execute "
+                     "them fresh")
     runs_gates = (args.command in GATE_COMMANDS and not args.gates_passed_in
                   and not (args.command == "stable"
-                           and (args.dry_run or args.gates_at_once is None)))
+                           and (args.dry_run or not args.rerun_gates)))
     named = [flag for flag, value in ((GATES_AT_ONCE_FLAG, args.gates_at_once),
-                                      (SIMULATED_PHONES_FLAG, args.simulated_phones))
+                                      (SIMULATED_PHONES_FLAG, args.simulated_phones),
+                                      (RERUN_GATES_FLAG, args.rerun_gates or None))
              if value is not None]
     if runs_gates and args.gates_at_once is None:
         parser.error(
@@ -3721,7 +3740,7 @@ def main():
             f"another, all = every gate whose inputs are ready). Choose it from what else is "
             "running on this Mac: all on a free Mac, fewer when engineers are busy.")
     if not runs_gates and named:
-        parser.error(f"{GATES_AT_ONCE_FLAG} and {SIMULATED_PHONES_FLAG} decide how the gates run; "
+        parser.error(f"{' and '.join(named)} decide how the gates run; "
                      f"they mean nothing to {args.command}"
                      + (" --dry-run, which runs no gate" if args.command == "stable" else "")
                      + (f" {PASSED_GATES_FLAG}, which runs no gate" if args.gates_passed_in else ""))
@@ -3754,7 +3773,7 @@ def main():
                             gates_at_once=args.gates_at_once, simulated_phones=args.simulated_phones,
                             chosen_by=chosen_by(), gui_host=gui_host, vm_settings=vm_settings)
             gates_passed_in = args.gates_passed_in
-            if args.command == "stable" and not gates_passed_in and args.gates_at_once is None:
+            if args.command == "stable" and not gates_passed_in and not args.rerun_gates:
                 # Nobody digs the run id out of the logs by hand: the run that built the
                 # nightly is found here, and refused or reused exactly as if it were named.
                 gates_passed_in = runner.run_that_built(args.from_nightly)
