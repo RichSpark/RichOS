@@ -83,6 +83,10 @@ pub const MAX_PAGE_CHARS: usize = 60_000;
 /// How often the browser is read while a page loads, and how many reads at most: 20 s a page.
 pub const POLL: Duration = Duration::from_millis(1000);
 pub const MAX_POLLS: u32 = 20;
+/// How often, and how many times at most, a closed tab is looked for until it has left the tab
+/// bar: 2 s.
+pub const CLOSE_POLL: Duration = Duration::from_millis(250);
+pub const CLOSE_WAITS: u32 = 8;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 const MAX_URL_CHARS: usize = 2048;
 
@@ -646,7 +650,18 @@ impl Visit<'_> {
         // Read or not (a sign-in wall, a page that never came), the tab this open made is closed.
         if let (Some(before), Some(after)) = (tabs_before, self.host.tabs(&self.app)) {
             if let Some(id) = tool_tab(&before, &after) {
-                self.host.close_tab(&self.app, id);
+                if self.host.close_tab(&self.app, id) {
+                    // Chrome animates a closing tab and keeps it in its tab bar meanwhile, so the
+                    // next open's count would hold one tab too many and its own tab would be left
+                    // (walk-02c95b97f3c5: every other tab of eleven left open in Chrome). The
+                    // tab is waited for until it is gone.
+                    for _ in 0..CLOSE_WAITS {
+                        match self.host.tabs(&self.app) {
+                            Some(tabs) if tabs.iter().any(|t| t.id == id) => self.host.sleep(CLOSE_POLL),
+                            _ => break,
+                        }
+                    }
+                }
             }
         }
         result
@@ -910,6 +925,9 @@ mod tests {
         open_reuses_tab: bool,
         /// The user opens a tab of their own while the tool's page loads (at each open).
         user_opens_tab: bool,
+        /// Waits (`sleep`s) a closed tab stays in the tab bar for (Chrome animates its closing).
+        linger: u32,
+        lingering: RefCell<Vec<(u64, u32)>>,
     }
 
     fn safari() -> BrowserApp {
@@ -950,7 +968,8 @@ mod tests {
                     Tab { id: 2, selected: true, url: "https://www.linkedin.com/feed/".into() },
                 ]),
                 tool_tabs: RefCell::default(), next_tab: Cell::new(100), closed: RefCell::default(),
-                tabs_readable: true, open_reuses_tab: false, user_opens_tab: false }
+                tabs_readable: true, open_reuses_tab: false, user_opens_tab: false, linger: 0,
+                lingering: RefCell::default() }
         }
         fn with(mut self, url: &str, states: Vec<Vec<Piece>>) -> Self {
             self.states.insert(url.into(), states.into_iter().map(|p| page(url, p)).collect());
@@ -1021,6 +1040,9 @@ mod tests {
                 let selected = n + 1 == tool.len();
                 out.push(Tab { id: *id, selected, url: if selected { shown.clone() } else { String::new() } });
             }
+            for (id, _) in self.lingering.borrow().iter() {
+                out.insert(out.len() - tool.len(), Tab { id: *id, selected: false, url: String::new() });
+            }
             Some(out)
         }
         fn close_tab(&self, _: &BrowserApp, id: u64) -> bool {
@@ -1029,13 +1051,21 @@ mod tests {
             let mut tool = self.tool_tabs.borrow_mut();
             let had = tool.len();
             tool.retain(|t| *t != id);
+            if had != tool.len() && self.linger > 0 {
+                self.lingering.borrow_mut().push((id, self.linger));
+            }
             had != tool.len()
         }
         fn set_tree_switch(&self, _: &BrowserApp, on: bool) -> Switch {
             self.switches.borrow_mut().push(on);
             Switch::Set { was: self.switch_was }
         }
-        fn sleep(&self, _: Duration) { self.slept.set(self.slept.get() + 1); }
+        fn sleep(&self, _: Duration) {
+            self.slept.set(self.slept.get() + 1);
+            let mut lingering = self.lingering.borrow_mut();
+            lingering.iter_mut().for_each(|(_, left)| *left -= 1);
+            lingering.retain(|(_, left)| *left > 0);
+        }
     }
 
     const PROFILE: &str = "https://www.linkedin.com/in/ada-walker/";
@@ -1147,6 +1177,17 @@ mod tests {
         blind.tabs_readable = false;
         read_profile(&blind, PROFILE).unwrap();
         assert!(blind.closed.borrow().is_empty());
+    }
+
+    /// Chrome keeps a closing tab in its bar while it animates (walk-02c95b97f3c5 left every
+    /// other tab of eleven): the next open is counted only once the closed tab has gone.
+    #[test]
+    fn a_tab_still_closing_is_waited_for_so_the_next_ones_close_too() {
+        let mut fake = ada(chrome());
+        fake.linger = 2;
+        read_profile(&fake, PROFILE).unwrap();
+        assert!(fake.tool_tabs.borrow().is_empty(), "left open: {:?}", fake.tool_tabs.borrow());
+        assert_eq!(fake.closed.borrow().len(), 6);
     }
 
     #[test]
