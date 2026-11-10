@@ -16,8 +16,9 @@
 //!     by the same walk, so the numbering is the one the core saw;
 //!   - Chromium's switch: `AXEnhancedUserInterface` on the application element, what VoiceOver
 //!     sets. The guest walk of 2026-11-10 measured Chrome exposing no page until it was set;
-//!   - the tabs: each window's (`AXWindows`) tab bar, the `AXRadioButton`s inside an
-//!     `AXTabGroup` (never inside the page itself), selected when their `AXValue` is 1, and the
+//!   - the tabs: each window's (`AXWindows`) tab bar, the `AXRadioButton`s whose subrole is
+//!     `AXTabButton` or that sit in an `AXTabGroup` (never inside the page itself), selected
+//!     when their `AXValue` is 1 or true, and the
 //!     page the window shows; a window whose bar shows no tab is one tab. A tab keeps its number
 //!     because the element is kept and compared (`CFEqual`) at every reading;
 //!   - closing a tab: `AXPress` on its close button (the child button whose subrole is
@@ -266,13 +267,16 @@ fn pid_of(bundle_id: &str) -> Option<i32> {
     })
 }
 
-/// The window's tab buttons: the `AXRadioButton`s inside an `AXTabGroup`, never inside a web
-/// page (a page's own tab list is the page's).
+/// The window's tab buttons: `AXRadioButton`s with the subrole `AXTabButton`, or inside an
+/// `AXTabGroup`, never inside a web page (a page's own tab list is the page's). Measured in the
+/// guest (walk-59ad5d5270c7, Safari): the tab bar is an `AXGroup` ("Tab bar, 13 tabs"), each tab
+/// an `AXRadioButton`/`AXTabButton` holding one `AXButton` (its close button, "Close") and an
+/// image, while Safari's `AXTabGroup` holds the page.
 fn tab_buttons(window: &Element) -> Vec<Element> {
     let mut out = Vec::new();
     let mut stack: Vec<(Element, usize, bool)> = children(window).into_iter().rev().map(|c| (c, 1, false)).collect();
     let mut nodes = 0;
-    while let Some((el, depth, in_bar)) = stack.pop() {
+    while let Some((el, depth, in_tab_group)) = stack.pop() {
         nodes += 1;
         if nodes > MAX_CHROME_NODES {
             break;
@@ -280,16 +284,16 @@ fn tab_buttons(window: &Element) -> Vec<Element> {
         let role = text(&el, "AXRole").unwrap_or_default();
         match role.as_str() {
             "AXWebArea" => continue,
-            "AXRadioButton" if in_bar => {
+            "AXRadioButton" if in_tab_group || text(&el, "AXSubrole").as_deref() == Some("AXTabButton") => {
                 out.push(el);
                 continue;
             }
             _ => {}
         }
         if depth < 30 {
-            let in_bar = in_bar || role == "AXTabGroup";
+            let in_tab_group = in_tab_group || role == "AXTabGroup";
             for child in children(&el).into_iter().rev() {
-                stack.push((child, depth + 1, in_bar));
+                stack.push((child, depth + 1, in_tab_group));
             }
         }
     }
