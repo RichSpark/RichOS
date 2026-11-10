@@ -2033,9 +2033,11 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
         });
     }
     // **Reading the user's LinkedIn profile in their own browser, on BOTH leases**
-    // (`linkedin_tools.rs`). Rich talks with the user and hands longer work to Stu
-    // (`engine/app/agents/rich.md`), and the CEO has ruled the onboarding research real work
-    // that takes a while done properly, so Stu does it and needs the tool; Rich keeps it too.
+    // (`linkedin_tools.rs`, "Who calls it"). On the work lease it is there for Stu's named
+    // specialists: Claude Code gives a teammate the MCP tools of the session it runs in, and a
+    // teammate whose definition lists the tool calls it (stock Reed and Clark do; measured on
+    // `claude` 2.1.322). Stu himself coordinates and the app hook refuses his own call. On the
+    // conversation lease it is Rich's for a read the user asks him for directly (§123).
     // It reads the browser and changes nothing in RichOS: no scope.
     config["mcpServers"][crate::linkedin_tools::SERVER_NAME] = json!({
         "type": "stdio", "command": executable, "args": ["--linkedin-mcp"]
@@ -6495,8 +6497,8 @@ exec /bin/sleep 1000
                 "richos_work"],
             "the back end's tool list moved"
         );
-        // The onboarding research is Stu's work (the CEO's ruling), so the back end reads the
-        // user's LinkedIn as the front desk does, with the same server.
+        // The work lease carries the same reader for Stu's named specialists: a teammate gets the
+        // MCP tools of the session it runs in (Stu's own call is refused by the app hook).
         assert_eq!(work["mcpServers"][crate::linkedin_tools::SERVER_NAME], chat["mcpServers"][crate::linkedin_tools::SERVER_NAME]);
         // **The back end holds the work and NOTHING ELSE, and that is the third absence.**
         // The list above read `["richos_onboarding", "richos_work"]` until 2026-09-18. Named

@@ -1,4 +1,4 @@
-//! **RICH READS THE USER'S LINKEDIN PROFILE IN THE USER'S OWN BROWSER** —
+//! **THE TEAM READS THE USER'S LINKEDIN PROFILE IN THE USER'S OWN BROWSER** —
 //! `richos_linkedin.read_profile`.
 //!
 //! The job, as the CEO confirmed it on 2026-11-10 ("Yes, that's the job"): during onboarding,
@@ -54,12 +54,17 @@
 //! (posts), Licenses, Volunteering and the "You might like" side column, so only the Experience
 //! section's count.
 //!
-//! ## Which lease
+//! ## Who calls it
 //!
-//! Both leases (`native.rs` `mcp_config`): Rich talks with the user and hands longer work to Stu,
-//! and the CEO has ruled the onboarding research real work that takes a while done properly, so
-//! Stu does it; Rich keeps the tool too. It changes nothing in RichOS, so it takes no turn scope.
-//! When and how either uses it is their instruction files' business, never code here (§124).
+//! Onboarding's read is delegated work: Rich hands it to Stu, and Stu gives it to a named
+//! specialist who performs it (richos-hq `wiki/how-richos-works.md`, "Onboarding"). So the
+//! caller is the specialist, through its own definition's tools list (stock Reed and Clark,
+//! `engine/agents/`). Claude Code gives a teammate the MCP tools of the session it runs in, so
+//! the server is on Stu's work lease (`native.rs` `mcp_config`); the app's hook refuses Stu's
+//! own call (`engine/scripts/app-engine-hook.py` `refuse_the_leads_own_read`). Rich's
+//! conversation lease keeps it for a read the user asks Rich for directly (§123). It changes
+//! nothing in RichOS, so it takes no turn scope. When and how anyone uses it is their
+//! instruction files' business, never code here (§124).
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
@@ -84,6 +89,11 @@ pub const MAX_PAGE_CHARS: usize = 60_000;
 /// How often the browser is read while a page loads, and how many reads at most: 20 s a page.
 pub const POLL: Duration = Duration::from_millis(1000);
 pub const MAX_POLLS: u32 = 20;
+/// How long a read waits, one [`POLL`] at a time, for the user to allow RichOS in macOS's
+/// Accessibility request before it reports the permission missing. The request appears on
+/// this Mac at the first read; a user who allows it within this minute gets the read done
+/// in the same call, with nothing to repeat.
+pub const PERMISSION_POLLS: u32 = 60;
 /// How often, and how many times at most, a closed tab is looked for until it has left the tab
 /// bar: 2 s.
 pub const CLOSE_POLL: Duration = Duration::from_millis(250);
@@ -761,19 +771,54 @@ fn page_answer(url: &str, read: &Read) -> Value {
 /// Read the profile, its own "Show all" pages and its companies' About pages in the user's
 /// default browser.
 pub fn read_profile(host: &dyn BrowserHost, url: &str) -> Result<Value, String> {
+    read_profile_once_asked(host, url, &std::cell::Cell::new(false))
+}
+
+/// [`read_profile`], remembering in `asked` whether this server has already shown macOS's
+/// Accessibility request, so a second read (a retry, or another teammate of the same session)
+/// waits for the same request rather than raising it again.
+///
+/// **Without the permission** the read shows macOS's request once, then waits up to
+/// [`PERMISSION_POLLS`] seconds for the user to allow RichOS: allowed, the read goes on and
+/// says so in its `note`; not allowed, it opens nothing and says the pages were NOT read, why,
+/// and the one thing that makes the same read work. Never a result that looks like a read.
+pub fn read_profile_once_asked(host: &dyn BrowserHost, url: &str, asked: &std::cell::Cell<bool>) -> Result<Value, String> {
     let url = check_profile_url(url)?;
+    let mut allowed_now = false;
     if !host.trusted() {
-        host.ask_for_permission();
-        return Err("RichOS cannot read pages in the browser yet: macOS has not given it the Accessibility \
-            permission. macOS has been asked to show its request. Once RichOS is allowed under System Settings, \
-            Privacy & Security, Accessibility, ask again. Nothing was opened.".into());
+        let first = !asked.get();
+        if first {
+            host.ask_for_permission();
+            asked.set(true);
+        }
+        allowed_now = (0..PERMISSION_POLLS).any(|_| {
+            host.sleep(POLL);
+            host.trusted()
+        });
+        if !allowed_now {
+            let request = if first { "macOS showed its request for it on this Mac just now" }
+                else { "macOS already showed its request for it on this Mac during an earlier read" };
+            return Err(format!("The LinkedIn pages were NOT read: RichOS does not have the macOS Accessibility \
+                permission it reads the browser with. {request} and it was not allowed within {PERMISSION_POLLS} \
+                seconds. Once the user allows RichOS under System Settings, Privacy & Security, Accessibility, the \
+                same read works. Nothing was opened."));
+        }
     }
     let Some(app) = host.default_browser() else {
         return Err("RichOS could not find the default web browser on this Mac. Nothing was opened.".into());
     };
     let mut visit = Visit { host, app, switched: None };
-    let result = visit_profile(&mut visit, &url);
+    let mut result = visit_profile(&mut visit, &url);
     visit.finish();
+    if allowed_now {
+        if let Ok(out) = result.as_mut() {
+            let said = "The user allowed RichOS's macOS Accessibility permission during this read.";
+            out["note"] = json!(match out.get("note").and_then(Value::as_str) {
+                Some(note) => format!("{said} {note}"),
+                None => said.to_string(),
+            });
+        }
+    }
     result
 }
 
@@ -846,6 +891,11 @@ pub fn tools() -> Value {
 }
 
 pub fn call(host: &dyn BrowserHost, name: &str, args: &Value) -> Result<Value, String> {
+    call_once_asked(host, name, args, &std::cell::Cell::new(false))
+}
+
+/// [`call`], with the server's memory of whether it already raised macOS's request.
+pub fn call_once_asked(host: &dyn BrowserHost, name: &str, args: &Value, asked: &std::cell::Cell<bool>) -> Result<Value, String> {
     if name != TOOL_NAME {
         return Err("Unknown LinkedIn tool.".into());
     }
@@ -853,7 +903,7 @@ pub fn call(host: &dyn BrowserHost, name: &str, args: &Value) -> Result<Value, S
     if keys.keys().any(|k| k != "url") {
         return Err("Give only the profile's address.".into());
     }
-    read_profile(host, args["url"].as_str().ok_or("Give the profile's address.")?)
+    read_profile_once_asked(host, args["url"].as_str().ok_or("Give the profile's address.")?, asked)
 }
 
 /// Entry point used before the desktop shell initializes. Stdout is exclusively MCP frames.
@@ -865,6 +915,9 @@ pub fn run_stdio(host: &dyn BrowserHost) -> io::Result<()> {
 /// oversized message is drained through its newline and refused.
 pub fn serve(host: &dyn BrowserHost, mut reader: impl BufRead, mut writer: impl Write) -> io::Result<()> {
     let mut initialized = false;
+    // One server per session (every teammate of the session reads through it): macOS's
+    // request is raised at most once in its life.
+    let asked = std::cell::Cell::new(false);
     loop {
         let mut frame = Vec::new();
         let mut oversized = false;
@@ -900,7 +953,7 @@ pub fn serve(host: &dyn BrowserHost, mut reader: impl BufRead, mut writer: impl 
                     "ping" => Ok(json!({})),
                     "tools/list" if initialized => Ok(tools()),
                     "tools/call" if initialized => {
-                        let result = call(host, r["params"]["name"].as_str().unwrap_or(""), &r["params"]["arguments"]);
+                        let result = call_once_asked(host, r["params"]["name"].as_str().unwrap_or(""), &r["params"]["arguments"], &asked);
                         let error = result.is_err();
                         let text = match result { Ok(v) => v.to_string(), Err(e) => e };
                         Ok(json!({"isError":error,"content":[{"type":"text","text":text}]}))
@@ -966,6 +1019,8 @@ mod tests {
         /// The user goes back to their own tab while the tool's page loads (at the first wait).
         user_returns: bool,
         tool_selected: Cell<bool>,
+        /// The user allows RichOS once this many waits have passed (`trusted` false before).
+        allowed_after: Option<u32>,
     }
 
     fn safari() -> BrowserApp {
@@ -1007,7 +1062,8 @@ mod tests {
                 ]),
                 tool_tabs: RefCell::default(), next_tab: Cell::new(100), closed: RefCell::default(),
                 tabs_readable: true, open_reuses_tab: false, user_opens_tab: false, linger: 0,
-                lingering: RefCell::default(), hidden_bar: false, user_returns: false, tool_selected: Cell::new(true) }
+                lingering: RefCell::default(), hidden_bar: false, user_returns: false, tool_selected: Cell::new(true),
+                allowed_after: None }
         }
         fn with(mut self, url: &str, states: Vec<Vec<Piece>>) -> Self {
             self.states.insert(url.into(), states.into_iter().map(|p| page(url, p)).collect());
@@ -1020,7 +1076,7 @@ mod tests {
     }
 
     impl BrowserHost for Fake {
-        fn trusted(&self) -> bool { self.trusted }
+        fn trusted(&self) -> bool { self.trusted || self.allowed_after.is_some_and(|n| self.slept.get() >= n) }
         fn ask_for_permission(&self) { self.asked.set(self.asked.get() + 1); }
         fn default_browser(&self) -> Option<BrowserApp> { self.browser.clone() }
         fn open(&self, url: &str, _: &BrowserApp) -> Result<(), String> {
@@ -1332,8 +1388,50 @@ mod tests {
         fake.trusted = false;
         let err = read_profile(&fake, PROFILE).unwrap_err();
         assert!(err.contains("Accessibility") && err.contains("System Settings"), "{err}");
+        assert!(err.contains("NOT read") && err.contains("just now"), "it must never read as a result: {err}");
         assert_eq!(fake.asked.get(), 1);
+        assert_eq!(fake.slept.get(), PERMISSION_POLLS, "it waited its minute for the user's answer");
         assert!(fake.opened.borrow().is_empty(), "a page was opened without the permission");
+    }
+
+    #[test]
+    fn macos_is_asked_once_however_many_reads_follow() {
+        let mut fake = ada(safari());
+        fake.trusted = false;
+        let asked = Cell::new(false);
+        read_profile_once_asked(&fake, PROFILE, &asked).unwrap_err();
+        let again = read_profile_once_asked(&fake, PROFILE, &asked).unwrap_err();
+        assert_eq!(fake.asked.get(), 1, "the second read raised macOS's request again");
+        assert!(again.contains("earlier read") && again.contains("NOT read"), "{again}");
+        assert!(fake.opened.borrow().is_empty());
+    }
+
+    #[test]
+    fn allowed_while_it_waits_the_read_goes_on_and_says_so() {
+        let mut fake = ada(safari());
+        fake.trusted = false;
+        fake.allowed_after = Some(5);
+        let out = read_profile(&fake, PROFILE).unwrap();
+        assert_eq!(fake.asked.get(), 1);
+        assert!(!fake.opened.borrow().is_empty(), "the read did not go on once allowed");
+        assert!(out["note"].as_str().unwrap().contains("allowed RichOS's macOS Accessibility permission during this read"), "{out}");
+        assert!(out["profile"].to_string().contains("Ada"), "{out}");
+    }
+
+    #[test]
+    fn the_server_raises_the_request_once_in_its_life() {
+        let mut fake = ada(safari());
+        fake.trusted = false;
+        let call = |id: u32| json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":TOOL_NAME,"arguments":{"url":PROFILE}}}).to_string();
+        let input = [json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}).to_string(), call(1), call(2)].join("\n") + "\n";
+        let mut out = Vec::new();
+        serve(&fake, io::Cursor::new(input), &mut out).unwrap();
+        assert_eq!(fake.asked.get(), 1);
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        for reply in &replies[1..] {
+            assert_eq!(reply["result"]["isError"], json!(true), "{reply}");
+        }
     }
 
     #[test]
