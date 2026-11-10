@@ -827,6 +827,29 @@ class Point02_CodexDeleteOnTheCeosWord(Base):
         self.assertIn("uncommitted entry (README)", r.stdout)
         self.assertIn("codex/done", branches(self.other))
 
+    def test_point_02_codex_delete_refuses_a_checkout_with_an_ignored_local_file(self):
+        # git worktree remove (no --force) deletes ignored files, so an ignored
+        # .env is uncommitted material like any other and refuses the branch
+        self.commit(self.done, ".gitignore", ".env\n.DS_Store\n")
+        with open(os.path.join(self.done, ".env"), "w") as f:
+            f.write("LOCAL_ONLY=his local material\n")
+        r = self.cli("--ceo-word", self.WORD, "codex/done")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("refused: codex/done - its checkout %s has 1 uncommitted entry (.env, ignored)" % self.done,
+                      r.stdout)
+        self.assertIn("codex/done", branches(self.other))
+        self.assertIn(self.done, worktrees(self.other))
+        self.assertTrue(os.path.isfile(os.path.join(self.done, ".env")))
+        self.assertTrue(os.path.isfile(os.path.join(self.done, ".DS_Store")))
+        self.assertNotIn("codex/done", [x.get("branch") for x in self.log_rows()])
+        # ignored .DS_Store files are still the only thing it may delete
+        os.unlink(os.path.join(self.done, ".env"))
+        r = self.cli("--ceo-word", self.WORD, "codex/done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("deleted: codex/done", r.stdout)
+        self.assertIn("2 .DS_Store deleted first", r.stdout)
+        self.assertNotIn("codex/done", branches(self.other))
+
     def test_point_02_a_codex_branch_deleted_on_his_word_is_not_put_back_by_an_agents_open_call(self):
         """The protected-ref check re-creates a codex/ ref deleted during any
         agent's open call. A deletion codex-delete logged on his word is not

@@ -7945,8 +7945,9 @@ def _codex_targets(targets):
 
 def _codex_dirt(path):
     """([.DS_Store files], [every other uncommitted entry]) of a checkout, or
-    raises SpecError when git cannot say."""
-    rc, out, err = git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    raises SpecError when git cannot say. Ignored files count: `git worktree
+    remove` deletes them without --force, so each is listed as "<path>, ignored"."""
+    rc, out, err = git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored")
     if rc != 0:
         raise SpecError("git status failed in %s: %s" % (path, err.strip()[:200]))
     ds, other = [], []
@@ -7960,8 +7961,10 @@ def _codex_dirt(path):
         code, rel = ent[:2], ent[3:]
         if code[0] in "RC":
             i += 1                              # the rename's source path
-        if code == "??" and os.path.basename(rel) == ".DS_Store":
+        if code in ("??", "!!") and os.path.basename(rel) == ".DS_Store":
             ds.append(rel)
+        elif code == "!!":
+            other.append(rel + ", ignored")
         else:
             other.append(rel)
     return ds, other
