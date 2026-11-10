@@ -4143,6 +4143,7 @@ fn main() {
             meetings::meeting_set_paused,
             meetings::meeting_state,
             meetings::meeting_retry_saved,
+            meetings::meeting_reconnect_calendar,
             // --- the user's own team on the home screen (product hunt 2026-10-15, finding 7)
             // — appended ---
             home_team,

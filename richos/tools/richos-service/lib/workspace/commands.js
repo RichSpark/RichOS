@@ -917,6 +917,7 @@ export async function sync(deps = {}) {
   const many = views.length > 1;
 
   const results = [];
+  const reconnectAccounts = new Set();
   let failures = 0;
   let polled = false;
   let refused = 0; // accounts that could not be polled at all — unconnected, expired, nothing granted
@@ -934,6 +935,7 @@ export async function sync(deps = {}) {
       { adoptLegacyTokens: isFirstAccount(config, account.accountId) });
     const record = tm.load();
     if (!record) {
+      if (account.sources.includes('calendar')) reconnectAccounts.add(account.accountId);
       d.out(`NOT CONNECTED — no grant in the keychain. Run: richos-service workspace connect ${d.vendor}${many ? ` --account ${account.accountId}` : ''}`);
       refused += 1;
       continue;
@@ -942,6 +944,7 @@ export async function sync(deps = {}) {
     const health = tm.health();
     if (health.needsReauth) {
       // NEVER-SILENT: do not poll, do not half-poll, do not log a warning and carry on.
+      if (account.sources.includes('calendar')) reconnectAccounts.add(account.accountId);
       d.out(`AUTH — ${health.message}`);
       d.out(`Re-consent with:  richos-service workspace connect ${d.vendor}${many ? ` --account ${account.accountId}` : ''}`);
       refused += 1;
@@ -981,6 +984,7 @@ export async function sync(deps = {}) {
           ...(d.linkBase ? { repoRoot: d.linkBase } : {}),
         });
       } catch (err) {
+        if (e.source === 'calendar' && err?.needsReauth) reconnectAccounts.add(account.accountId);
         // A stated account condition (`err.unavailable`, e.g. Gmail's "no mailbox on this Google
         // account") is not a failure this loop reports as one: the vocabulary is generic here — any
         // adapter can raise it — so this file never needs to know which vendor's error shape it is.
@@ -1053,7 +1057,8 @@ export async function sync(deps = {}) {
     for (const line of describePromotion(promotion, L)) d.out(line);
   }
 
-  if (!polled) return { exitCode: 1, polled: false, results, promotion };
+  const calendarRecovery = [...reconnectAccounts];
+  if (!polled) return { exitCode: 1, polled: false, results, promotion, calendarRecovery };
   // An account that could not be polled is a non-zero exit even when every account that DID poll
   // succeeded — the CEO asked for all of them. A promotion that FAILED is the same class of problem
   // as a source that failed: the pull worked and the memory it exists to build did not get written.
@@ -1063,6 +1068,7 @@ export async function sync(deps = {}) {
     polled: true,
     results,
     promotion,
+    calendarRecovery,
   };
 }
 

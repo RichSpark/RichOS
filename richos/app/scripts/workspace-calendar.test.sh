@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# run-tests: inputs richos/app/scripts/workspace-calendar.test.sh richos/tools/richos-service/lib richos/tools/richos-service/test/workspace.js richos/tools/richos-service/test/calendar-seed-acceptance.mjs
-# run-tests: covers richos/tools/richos-service/lib/workspace/adapters/google-calendar.js richos/tools/richos-service/lib/workspace/adapters/microsoft-calendar.js richos/tools/richos-service/test/workspace.js
+# run-tests: inputs richos/app/scripts/workspace-calendar.test.sh richos/tools/richos-service/lib richos/tools/richos-service/bin/richos-service.js richos/tools/richos-service/test/workspace.js richos/tools/richos-service/test/calendar-seed-acceptance.mjs
+# run-tests: covers richos/tools/richos-service/bin/richos-service.js richos/tools/richos-service/lib/workspace/commands.js richos/tools/richos-service/lib/workspace/adapters/google-calendar.js richos/tools/richos-service/lib/workspace/adapters/microsoft-calendar.js richos/tools/richos-service/test/workspace.js
 #
 # The workspace service's own pure suite (`tools/richos-service/test/workspace.js`: adapters fed
 # fixtures and injected clients, no network, no account), given a seat in the proof selector for
