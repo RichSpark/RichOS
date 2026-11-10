@@ -822,13 +822,13 @@ const SURFACES = [
   },
   {
     name: "search-unavailable",
-    what: "Super Finder checked while meaning search is unavailable: the truthful fallback line and text matches",
+    what: "RichFinder checked while meaning search is unavailable: the truthful fallback line and text matches",
     preset: { documentSearch: "unavailable" },
     drive: async (p) => {
       await p.keyboard.press("Meta+k");
       await p.waitForSelector("#search-overlay:not([hidden])");
       await p.fill("#search-input", "refund");
-      await p.waitForFunction(() => (document.getElementById("srch-status-text") || {}).textContent === "Super Finder unavailable; showing text matches"
+      await p.waitForFunction(() => (document.getElementById("srch-status-text") || {}).textContent === "RichFinder unavailable; showing text matches"
         && !!document.querySelector("#search-results .srch-doc"));
       await overlaySettled(p, "#search-overlay");
     },

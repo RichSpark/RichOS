@@ -1170,6 +1170,40 @@ const FIXTURES = {
     return page;
   },
 
+  async "search-no-folders"(browser) {
+    const page = await openApp(browser, undefined, { documentSearch: "none" });
+    await page.click("#nav-search");
+    await page.getByText("No folders are available for document search.", { exact: true }).waitFor();
+    return page;
+  },
+
+  async "search-no-sources-selected"(browser) {
+    const page = await openApp(browser);
+    await page.click("#nav-search");
+    await page.fill("#search-input", "refund");
+    await page.locator('#srch-source-options input[value="fixture-docs"]').uncheck();
+    await page.locator('#srch-source-options input[value="fixture-archive"]').uncheck();
+    await page.getByText("No selected folders are available for this search.", { exact: true }).waitFor();
+    return page;
+  },
+
+  async "search-folders-off"(browser) {
+    const page = await openApp(browser);
+    await page.click("#set-btn");
+    await page.click("#set-search-folders-open");
+    await page.waitForSelector(".rf-folder-row input[type=checkbox]:not([disabled])");
+    return page;
+  },
+
+  async "search-folders-chosen"(browser) {
+    const page = await openApp(browser);
+    await page.click("#set-btn");
+    await page.click("#set-search-folders-open");
+    await page.locator('.rf-folder-modes input[value="chosen"]').click();
+    await page.waitForFunction(() => document.querySelector(".rf-folder-tree-caption")?.textContent.includes("Tick what to search."));
+    return page;
+  },
+
   /// The lease is down. The mock's `_notConnected` switch rejects `send_message` before any
   /// turn starts, which is what main.rs does when the spine holds no lease — so this is the
   /// real refusal path through the real send handler, started by typing and pressing Enter.
@@ -1545,6 +1579,10 @@ const TEXT_RENDERING_FIXTURES = new Set([
   "voice-no-audio",
   "not-connected",
   "search-empty",
+  "search-folders-off",
+  "search-no-folders",
+  "search-no-sources-selected",
+  "search-folders-chosen",
   "entity-view",
   "thread-create-refused",
   // The first-run memory dialog renders its own words out of `main.js` constants, with no

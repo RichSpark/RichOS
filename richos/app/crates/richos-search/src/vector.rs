@@ -17,7 +17,7 @@
 //!   never takes the whole Mac, and points visible before optimization
 //!   (`prevent_unoptimized: false`) so a partly built index still answers.
 use qdrant_edge::{
-    Distance, EdgeConfig, EdgeOptimizersConfig, EdgeShard, EdgeVectorParams, NamedQuery, PointId, PointInsertOperations,
+    Condition, Distance, EdgeConfig, EdgeOptimizersConfig, EdgeShard, EdgeVectorParams, Filter, HasIdCondition, NamedQuery, PointId, PointInsertOperations,
     PointOperations, PointStruct, QueryEnum, RetrieveRequestBuilder, SearchRequestBuilder, UpdateOperation, WalOptions, WithPayloadInterface,
     WithVector, DEFAULT_VECTOR_NAME,
 };
@@ -105,14 +105,30 @@ impl VectorIndex {
 
     /// The `limit` nearest passages to `vector`, best first, as `(point id, cosine score)`.
     pub fn nearest(&self, vector: Vec<f32>, limit: usize) -> Result<Vec<(u64, f32)>, String> {
+        self.nearest_in(vector, limit, None)
+    }
+
+    /// Find nearest passages among the already authorized point IDs. The scope is
+    /// applied before the candidate limit: a closer out-of-scope point cannot consume
+    /// a result slot. The index still holds no folder names or text as payload.
+    pub fn nearest_in(&self, vector: Vec<f32>, limit: usize, allowed: Option<&[u64]>) -> Result<Vec<(u64, f32)>, String> {
         if vector.len() != self.dimension {
             return Err(format!("the query vector has {} numbers where the index holds {}", vector.len(), self.dimension));
         }
+        if allowed.is_some_and(<[u64]>::is_empty) {
+            return Ok(Vec::new());
+        }
         let request = SearchRequestBuilder::new(QueryEnum::Nearest(NamedQuery { query: vector.into(), using: None }), limit)
             .with_payload(WithPayloadInterface::Bool(false))
-            .with_vector(WithVector::Bool(false))
-            .build();
-        let points = self.shard.search(request).map_err(|e| format!("the search index could not be searched: {e}"))?;
+            .with_vector(WithVector::Bool(false));
+        let request = match allowed {
+            Some(ids) => {
+                let condition: HasIdCondition = ids.iter().copied().map(PointId::NumId).collect();
+                request.filter(Filter::new_must(Condition::HasId(condition)))
+            }
+            None => request,
+        };
+        let points = self.shard.search(request.build()).map_err(|e| format!("the search index could not be searched: {e}"))?;
         Ok(points
             .into_iter()
             .filter_map(|p| match p.id {
@@ -162,6 +178,9 @@ mod tests {
             index.flush().unwrap();
             let hits = index.nearest(unit(&[1.0, 0.05, 0.0]), 2).unwrap();
             assert_eq!(hits.iter().map(|h| h.0).collect::<Vec<_>>(), vec![1, 3]);
+            let narrowed = index.nearest_in(unit(&[1.0, 0.05, 0.0]), 1, Some(&[2, 999])).unwrap();
+            assert_eq!(narrowed.iter().map(|h| h.0).collect::<Vec<_>>(), vec![2]);
+            assert!(index.nearest_in(unit(&[1.0, 0.05, 0.0]), 1, Some(&[])).unwrap().is_empty());
             // Restricted scoring includes a passage the global top two did not
             // return. Missing IDs yield no score and stored vectors use cosine.
             let query = unit(&[1.0, 1.0, 0.0]);

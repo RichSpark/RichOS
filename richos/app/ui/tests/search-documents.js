@@ -47,22 +47,22 @@ function ratio(colors) {
 }
 
 async function main() {
-  const run = createRun("Search palette: Documents, Super Finder and Require quoted text");
+  const run = createRun("Search palette: Documents, RichFinder and Require quoted text");
   const browser = await loadPlaywright().webkit.launch();
   try {
     const page = await openApp(browser);
 
-    await run.check("the palette opens with Super Finder checked and Require quoted text unchecked", async () => {
+    await run.check("the palette opens with RichFinder checked and Require quoted text unchecked", async () => {
       const state = await page.evaluate(() => ({
         superFinder: document.getElementById("srch-super").checked,
         strict: document.getElementById("srch-strict").checked,
         hint: !document.getElementById("search-hint").hidden,
         status: document.getElementById("srch-status-text").textContent,
       }));
-      assertEqual(state.superFinder, true, "Super Finder");
+      assertEqual(state.superFinder, true, "RichFinder");
       assertEqual(state.strict, false, "Require quoted text");
       assert(state.hint, "the empty palette explains the two boxes");
-      assert(state.status.startsWith("Super Finder ready"), state.status);
+      assert(state.status.startsWith("RichFinder ready"), state.status);
     });
 
     await run.check("a document found only by meaning is marked so, with its passage and Open original", async () => {
@@ -79,7 +79,7 @@ async function main() {
       await page.waitForSelector("#search-results .srch-doc.is-active .srch-open-btn", { state: "visible" });
     });
 
-    await run.check("unchecking Super Finder keeps the query and reruns as text search; checking it brings the match back", async () => {
+    await run.check("unchecking RichFinder keeps the query and reruns as text search; checking it brings the match back", async () => {
       await page.click("label.srch-check:has(#srch-super)");
       await page.waitForFunction(() => document.getElementById("srch-status-text").textContent.startsWith("Text search"));
       await page.waitForFunction(() => !document.querySelector("#search-results .srch-doc"));
@@ -412,7 +412,7 @@ async function main() {
     });
 
     for (const [preset, line, mode] of [
-      ["unavailable", "Super Finder unavailable; showing text matches", "words only, Super Finder unavailable"],
+      ["unavailable", "RichFinder unavailable; showing text matches", "words only, RichFinder unavailable"],
       ["none", "No search folder configured", ""],
     ]) {
       await run.check("status '" + line + "' is said, readable in both themes", async () => {
@@ -423,7 +423,8 @@ async function main() {
         assertEqual(await p.evaluate(() => document.querySelector(".srch-group-mode").textContent), mode, "the Documents heading");
         if (preset === "none") {
           const note = await p.evaluate(() => document.querySelector("#search-results .srch-note").textContent);
-          assert(note.includes("RICHOS_SEARCH_DOCUMENTS_ROOT"), note);
+          assert(note.includes("Companies, threads and conversations are still searched above."), note);
+          assert(await p.locator(".srch-sources").getByRole("button", { name: "Choose folders…" }).isVisible(), "folder settings can be opened from this state");
         }
         const out = [];
         for (const theme of ["light", "dark"]) {
@@ -462,6 +463,114 @@ async function main() {
         return out.join("; ");
       });
     }
+    await run.check("The Sources column narrows the current query and leaves saved folders alone", async () => {
+      const scoped = await openApp(browser);
+      try {
+        const sources = scoped.locator(".srch-sources");
+        const docs = sources.getByRole("checkbox", { name: "Documents" });
+        const archive = sources.getByRole("checkbox", { name: "Archive" });
+        await docs.waitFor();
+        assert(await docs.isChecked() && await archive.isChecked(), "all granted folders start selected");
+        await scoped.fill("#search-input", "refund");
+        await waitFor(scoped, "both folders match the query", () => document.querySelectorAll(".srch-doc").length === 2);
+        await docs.uncheck();
+        await waitFor(scoped, "only the archived draft remains", () => {
+          const rows = document.querySelectorAll(".srch-doc");
+          return rows.length === 1 && rows[0].textContent.includes("Early draft of the refund rule");
+        });
+        await archive.uncheck();
+        await scoped.getByText("No selected folders are available for this search.").waitFor();
+        assertEqual((await docTitles(scoped)).length, 0, "explicit empty scope cannot fall back to all folders");
+        await scoped.keyboard.press("Escape");
+        await scoped.keyboard.press("Meta+k");
+        await docs.waitFor();
+        assert(await docs.isChecked() && await archive.isChecked(), "the next search starts with all granted folders again");
+        assertEqual(scoped.__errors.length, 0, scoped.__errors.join("\n"));
+      } finally {
+        await scoped.close();
+      }
+    });
+    await run.check("Folder map starts off, refuses locked folders and saves a chosen folder without restart", async () => {
+      const folders = await openApp(browser);
+      try {
+        await folders.keyboard.press("Escape");
+        await folders.click("#set-btn");
+        await folders.click("#set-search-folders-open");
+        await folders.waitForSelector(".rf-folders-page");
+        const off = folders.getByRole("radio", { name: "Off", exact: true });
+        await waitFor(folders, "the first-run mode is Off", () => document.querySelector('[name="rf-folder-mode"][value="off"]').checked);
+        await folders.getByRole("button", { name: "Expand Home" }).click();
+        const chosen = folders.getByRole("checkbox", { name: "Search Documents" });
+        await chosen.waitFor();
+        assert(await folders.getByRole("checkbox", { name: "Search Library" }).isDisabled(), "app data stays locked");
+        await chosen.click();
+        await waitFor(folders, "the app saved the folder choice", () => document.getElementById("rf-folder-choice-fixture-docs").checked);
+        await folders.getByRole("button", { name: "Reindex" }).click();
+        await folders.getByText("Reindex started.", { exact: true }).waitFor();
+        await chosen.click();
+        await waitFor(folders, "removing the last folder turns document search off", () => document.querySelector('[name="rf-folder-mode"][value="off"]').checked);
+        assert(await off.isChecked(), "the control reflects the saved Off mode");
+        await folders.keyboard.press("Escape");
+        await folders.waitForSelector(".rf-folders-scrim", { state: "hidden" });
+        assertEqual(folders.__errors.length, 0, folders.__errors.join("\n"));
+      } finally {
+        await folders.close();
+      }
+    });
+    await run.check("Partial coverage and cleared folder choices are visible in the palette", async () => {
+      const page = await openApp(browser, { documentSearch: "partial" });
+      try {
+        const sources = page.locator(".srch-sources");
+        const offline = sources.getByRole("checkbox", { name: /Travel archive.*Offline/ });
+        await page.getByText(/1 folder was not searched/).waitFor();
+        assert(await offline.isDisabled(), "an offline source cannot be searched");
+        assert(await sources.getByRole("checkbox", { name: /Documents\s*\d+/ }).isChecked(), "an available source shows its file count");
+        assert((await sources.boundingBox()).x < (await page.locator(".srch-results-pane").boundingBox()).x,
+          "Sources is to the left of the results");
+        await page.fill("#search-input", "refund");
+        await waitFor(page, "documents are shown before changing folders", () => document.querySelectorAll(".srch-doc").length === 2);
+        await page.click("#srch-source-settings");
+        await page.getByRole("radio", { name: /All eligible/ }).check();
+        await page.locator("#rf-folder-done").click();
+        await page.getByText(/Your search folders changed/).waitFor();
+        assert(await sources.getByRole("checkbox", { name: /Archive\s*\d+/ }).isChecked(), "All eligible still offers individual folders");
+        await page.click("#srch-source-settings");
+        await page.locator("#rf-folder-clear").click();
+        await waitFor(page, "Clear selection switched the folder map off", () => document.getElementById("rf-folder-mode-off").checked);
+        await page.locator("#rf-folder-done").click();
+        await page.getByText("Search folders cleared. Document results were removed.", { exact: true }).waitFor();
+        assertEqual((await docTitles(page)).length, 0, "cleared grants remove stale document results");
+        assertEqual(page.__errors.length, 0, page.__errors.join("\n"));
+      } finally {
+        await page.close();
+      }
+    });
+    await run.check("A company limit narrows Rich without changing the global folder choice", async () => {
+      const page = await openApp(browser);
+      try {
+        await page.keyboard.press("Escape");
+        await page.click("#set-btn");
+        await page.click("#set-search-folders-open");
+        await page.getByRole("button", { name: "Expand Home" }).click();
+        const docs = page.getByRole("checkbox", { name: "Search Documents" });
+        const archive = page.getByRole("checkbox", { name: "Search Archive" });
+        await docs.check();
+        await archive.check();
+        const company = page.locator(".rf-company-row").filter({ hasText: "Northwind Traders" });
+        await company.getByRole("button", { name: "Edit folder limit for Northwind Traders" }).click();
+        const choice = company.getByRole("checkbox", { name: "Documents" });
+        assert(await choice.isChecked(), "Rich inherits the global choice until a limit is saved");
+        await choice.uncheck();
+        await company.getByText("1 folder", { exact: true }).waitFor();
+        assert(await docs.isChecked() && await archive.isChecked(), "the user's global settings stay selected");
+        await company.getByRole("button", { name: "Remove limit" }).click();
+        await company.getByText("All search folders", { exact: true }).waitFor();
+        assert(await choice.isChecked(), "removing the limit restores inheritance");
+        assertEqual(page.__errors.length, 0, page.__errors.join("\n"));
+      } finally {
+        await page.close();
+      }
+    });
   } finally {
     await browser.close();
   }

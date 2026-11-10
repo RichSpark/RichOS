@@ -90,6 +90,8 @@ const ROLES = {
   "swearmeter.js": { role: "ui", why: "maintained local word count, optional settings/home display and coverage/retry text" },
   "cleaner-settings.js":{role:"ui",why:"RichCleaner settings and Inbox-first preference"},
   "cleaner.css":{role:"style",why:"RichCleaner capture, search and details"},
+  "search-folder-settings.js":{role:"ui",why:"RichFinder folder map and coverage settings"},
+  "search-folder-settings.css":{role:"style",why:"RichFinder folder map layout"},
   "index.html": { role: "ui", why: "the shell Tauri loads" },
   "main.js": { role: "ui", why: "the chat surface and the bridge" },
   "attachments.js": {

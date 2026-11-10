@@ -8105,7 +8105,7 @@ window.RichSettings.registerMemory({
 
 // ---------------------------------------------------------------------------------------
 // Search (§3.4) — a command-palette overlay, grouped by entity, fully keyboard-driven, with
-// the Documents section, Super Finder and Require quoted text of the search PRD v3.1, built
+// the Documents section, RichFinder and Require quoted text of the search PRD v3.1, built
 // as the CEO's chosen design shows them (richos-hq `design/mockups/rounds/round-26/`).
 //
 // Two commands answer one query. `search_nav` matches companies, threads and messages and is
@@ -8126,6 +8126,10 @@ const searchStatusEl = el("srch-status");
 const searchStatusTextEl = el("srch-status-text");
 const searchProgressEl = el("srch-progress");
 const searchHintEl = el("search-hint");
+const searchSourceOptionsEl = el("srch-source-options");
+const searchSourceNoteEl = el("srch-source-note");
+const searchSourceSettingsEl = el("srch-source-settings");
+const searchCoverageNoteEl = el("srch-coverage-note");
 
 const SEARCH_PAGE = 12;
 const searchState = {
@@ -8154,6 +8158,11 @@ const searchState = {
   nextOffset: 0,
   /// The index generation the shown list was ranked by (the service's `status.generation`).
   sourceGen: null,
+  sourceEpoch: 0,
+  sources: null,
+  sourceSelection: null,
+  docsPending: false,
+  scopeNotice: "",
 };
 
 function searchReducedMotion() {
@@ -8165,7 +8174,7 @@ function openSearch() {
   searchState.open = true;
   searchState.gen += 1;
   searchInputEl.value = "";
-  // The PRD's initial state, every time the palette opens: Super Finder checked, Require
+  // The PRD's initial state, every time the palette opens: RichFinder checked, Require
   // quoted text unchecked. Kept as chosen while the palette stays open.
   searchSuperEl.checked = true;
   searchStrictEl.checked = false;
@@ -8181,6 +8190,10 @@ function openSearch() {
   searchState.memoryUnavailable = false;
   searchState.docs = [];
   searchState.sourceGen = null;
+  searchState.sources = null;
+  searchState.sourceSelection = null;
+  searchState.docsPending = false;
+  searchState.scopeNotice = "";
   searchState.status = null;
   searchHintEl.hidden = false;
   searchCountEl.textContent = "";
@@ -8188,6 +8201,8 @@ function openSearch() {
   searchInputEl.setAttribute("aria-expanded", "false");
   searchInputEl.removeAttribute("aria-activedescendant");
   searchInputEl.focus();
+  paintSearchSources();
+  void refreshSearchSources();
   refreshSearchStatus();
 }
 
@@ -8197,6 +8212,7 @@ window.RichSearch = { open: () => openSearch() };
 function closeSearch() {
   searchOverlayEl.hidden = true;
   searchState.open = false;
+  searchState.sourceEpoch++;
   invalidateSearch();
   clearTimeout(searchState.timer);
   if (searchState.more) {
@@ -8232,20 +8248,118 @@ function searchNumber(n) {
 
 // ---- the status line ------------------------------------------------------------------
 
+function paintSearchSources() {
+  const sources = searchState.sources;
+  const focused = searchSourceOptionsEl.contains(document.activeElement) ? document.activeElement.value : null;
+  let restore = null;
+  const options = document.createDocumentFragment();
+  const available = (sources || []).filter(source => !source.unavailable).length;
+  for (const { id, name, path, files, unavailable } of sources || []) {
+    const label = searchNode("label", "srch-check");
+    label.title = path;
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = id;
+    box.disabled = !!unavailable;
+    box.checked = !unavailable && (searchState.sourceSelection === null || searchState.sourceSelection.has(id));
+    box.addEventListener("change", () => {
+      const checked = [...searchSourceOptionsEl.querySelectorAll("input:checked")];
+      searchState.sourceSelection = checked.length === available ? null : new Set(checked.map((item) => item.value));
+      paintSearchSourceNote();
+      refreshScopedSearch();
+    });
+    label.append(box, searchNode("span", "srch-source-name", name));
+    label.appendChild(searchNode("span", "srch-source-count", unavailable || searchNumber(files ?? 0)));
+    if (id === focused && !unavailable) restore = box;
+    options.appendChild(label);
+  }
+  searchSourceOptionsEl.replaceChildren(options);
+  if (focused) (restore || searchSourceSettingsEl).focus();
+  paintSearchSourceNote();
+}
+
+function paintSearchCoverage() {
+  const unavailable = (searchState.sources || []).filter(source => source.unavailable);
+  const count = Math.max(searchState.status?.unavailable_folders || 0, unavailable.length);
+  const notes = [searchState.scopeNotice].filter(Boolean);
+  if (count) {
+    const names = unavailable.map(source => source.name + " · " + source.unavailable).join(", ");
+    notes.push(searchNumber(count) + (count === 1 ? " folder was not searched." : " folders were not searched."));
+    if (names) notes.push(names);
+  }
+  searchCoverageNoteEl.textContent = notes.join(" ");
+  searchCoverageNoteEl.hidden = !notes.length;
+}
+
+function paintSearchSourceNote() {
+  const sources = searchState.sources;
+  const folder = searchState.status?.folder?.state;
+  const hasSources = sources?.some(source => !source.unavailable);
+  searchSourceSettingsEl.textContent = hasSources ? "Change saved folders" : "Choose folders…";
+  searchSourceNoteEl.textContent = sources === null || folder === "loading"
+    ? "Reading search folders…"
+    : !hasSources ? "No folders are available for document search."
+    : searchState.sourceSelection?.size === 0 ? "No folders selected for this search."
+    : "Uncheck a folder to narrow this search.";
+  paintSearchCoverage();
+}
+
+async function refreshSearchSources() {
+  const epoch = ++searchState.sourceEpoch;
+  const rows = await Bridge.invoke("search_document_sources").catch(() => []);
+  if (!searchState.open || epoch !== searchState.sourceEpoch) return;
+  searchState.sources = Array.isArray(rows) ? rows : [];
+  paintSearchSources();
+}
+
+function refreshScopedSearch() {
+  clearTimeout(searchState.timer);
+  invalidateSearch();
+  searchState.docs = [];
+  searchState.resp = null;
+  searchState.total = searchState.nextOffset = 0;
+  searchState.sourceGen = null;
+  if (searchInputEl.value.trim()) {
+    searchState.docsPending = true;
+    searchCountEl.classList.add("is-empty");
+    renderSearchResults(null);
+    void runSearch(false);
+  }
+}
+
+searchSourceSettingsEl.addEventListener("click", () => window.RichFinderFolders.open());
+window.addEventListener("richfinder:folders-changed", (event) => {
+  if (!searchState.open) return;
+  const removed = searchState.docs.length;
+  searchState.scopeNotice = event.detail?.mode === "off"
+    ? "Search folders cleared. Document results were removed."
+    : removed ? "Your search folders changed. Previous document results were removed."
+    : "Your search folders changed.";
+  searchState.sources = null;
+  searchState.sourceSelection = null;
+  paintSearchSources();
+  refreshScopedSearch();
+  void refreshSearchSources();
+  void refreshSearchStatus();
+});
+
 async function refreshSearchStatus() {
   clearTimeout(searchState.statusTimer);
+  const sourceEpoch = searchState.sourceEpoch;
   let status = null;
   try {
     status = await Bridge.invoke("search_documents_status");
   } catch (_e) {
     status = null;
   }
-  if (!searchState.open) return;
+  if (!searchState.open || sourceEpoch !== searchState.sourceEpoch) return;
+  const previousFolder = searchState.status?.folder?.state;
   if (status && (!searchState.status || status.generation >= searchState.status.generation)) {
     searchState.status = status;
   }
   status = searchState.status;
   paintSearchStatus();
+  paintSearchSourceNote();
   // Each batch the index completes makes a newer generation, which can rank a newly searchable
   // document first. A list built from an older one is asked again from its first page, never
   // left as it was or extended with the newer ranking (newer only: a status read can lag the
@@ -8256,6 +8370,7 @@ async function refreshSearchStatus() {
   // While the folder is being read or the index built, the counts move: look again.
   const meaning = status && status.meaning && status.meaning.state;
   const folder = status && status.folder && status.folder.state;
+  if (previousFolder === "loading" && folder !== "loading") void refreshSearchSources();
   if (folder === "loading" || meaning === "starting" || meaning === "indexing") {
     searchState.statusTimer = setTimeout(refreshSearchStatus, 1000);
   }
@@ -8288,17 +8403,17 @@ function paintSearchStatus() {
     text = "Text search · " + searchNumber(folder.files) + " files";
   } else if (meaning.state === "unavailable") {
     kind = "is-unavailable";
-    text = "Super Finder unavailable; showing text matches";
+    text = "RichFinder unavailable; showing text matches";
     title = meaning.reason;
   } else if (meaning.state === "indexing") {
     kind = "is-indexing";
-    text = "Super Finder indexing · " + searchNumber(meaning.files_done) + " of " + searchNumber(meaning.files_total) + " files";
+    text = "RichFinder indexing · " + searchNumber(meaning.files_done) + " of " + searchNumber(meaning.files_total) + " files";
     progress = meaning.passages_total ? meaning.passages_done / meaning.passages_total : 0;
   } else if (meaning.state === "starting") {
     kind = "is-indexing";
-    text = "Super Finder starting…";
+    text = "RichFinder starting…";
   } else {
-    text = "Super Finder ready · " + searchNumber(meaning.files) + " files";
+    text = "RichFinder ready · " + searchNumber(meaning.files) + " files";
   }
   searchStatusEl.className = "srch-status" + (kind ? " " + kind : "");
   searchStatusTextEl.textContent = text;
@@ -8311,7 +8426,7 @@ function searchModeLabel(resp) {
   const folder = resp?.status?.folder || searchState.status?.folder;
   if (!resp || (folder && folder.state !== "ready")) return "";
   let m = resp.effective.super_finder ? "meaning and words" : "words only";
-  if (resp.requested.super_finder && !resp.effective.super_finder) m = "words only, Super Finder unavailable";
+  if (resp.requested.super_finder && !resp.effective.super_finder) m = "words only, RichFinder unavailable";
   if (resp.requested.strict) m += " · quoted text required";
   return m;
 }
@@ -8488,13 +8603,10 @@ function searchDocumentsNote(resp) {
   const folder = searchState.status && searchState.status.folder;
   if (!resp || resp.empty === "no_folder" || (folder && folder.state === "none")) {
     if (folder && folder.state === "error") return searchNote(folder.message, "Companies, threads and conversations are still searched above.");
-    const n = searchNote("No search folder configured");
-    const line = searchNode("span", "srch-note-line");
-    line.appendChild(document.createTextNode("Documents come from one folder named in RichOS’s settings ("));
-    line.appendChild(searchNode("code", null, "RICHOS_SEARCH_DOCUMENTS_ROOT"));
-    line.appendChild(document.createTextNode("). Companies, threads and conversations are still searched above."));
-    n.appendChild(line);
-    return n;
+    if (searchState.sourceSelection !== null && folder?.state === "ready") {
+      return searchNote("No selected folders are available for this search.");
+    }
+    return searchNote("No search folder configured", "Companies, threads and conversations are still searched above.");
   }
   if (resp.empty === "quote_mismatch") {
     return searchNote("The quote marks don’t match.", "Close the quote or remove it; with Require quoted text checked, nothing is relaxed on a guess.");
@@ -8509,7 +8621,7 @@ function searchDocumentsNote(resp) {
     "No documents match.",
     resp.effective.super_finder
       ? "Try saying what it was about in other words."
-      : "Text search needs one of your words in the file. Check Super Finder to search by what it is about."
+      : "Text search needs one of your words in the file. Check RichFinder to search by what it is about."
   );
 }
 
@@ -8556,7 +8668,9 @@ function renderSearchResults(before) {
   // A page with no documents whose list goes on (every result on it had left the folder) is not
   // "no documents": the tail loads the rest. Only an empty list that has ended says so.
   const more = !!resp && !resp.empty && searchState.nextOffset < searchState.total;
-  if (!resp || resp.empty || (!searchState.docs.length && !more)) {
+  if (searchState.docsPending) {
+    // Remove old document excerpts at once when the user narrows the search.
+  } else if (!resp || resp.empty || (!searchState.docs.length && !more)) {
     frag.appendChild(searchDocumentsNote(resp));
   } else {
     for (const hit of searchState.docs) frag.appendChild(searchDocRow(hit, resp));
@@ -8681,6 +8795,7 @@ async function runSearch(animate) {
     searchState.more = null;
   }
   if (!query) {
+    searchState.docsPending = false;
     searchHintEl.hidden = false;
     searchResultsEl.textContent = "";
     searchState.items = [];
@@ -8698,9 +8813,10 @@ async function runSearch(animate) {
   searchHeadEl.classList.add("is-searching");
   const started = performance.now();
   const request = { query, super_finder: searchSuperEl.checked, strict: searchStrictEl.checked, offset: 0, limit: SEARCH_PAGE };
+  const sourceIds = searchState.sourceSelection === null ? null : [...searchState.sourceSelection];
   const [nav, docs] = await Promise.all([
     Bridge.invoke("search_nav", { query, limit: 40 }).catch(() => []),
-    Bridge.invoke("search_documents", { request, generation: gen }).catch(() => null),
+    Bridge.invoke("search_documents", { request, generation: gen, sourceIds }).catch(() => null),
   ]);
   if (gen !== searchState.gen || !searchState.open) return;
   const before = animate ? searchSnapshot() : null;
@@ -8710,10 +8826,12 @@ async function runSearch(animate) {
   searchState.memoryDetail = null;
   searchState.memoryUnavailable = false;
   searchState.resp = docs;
+  searchState.docsPending = false;
   searchState.sourceGen = docs && docs.status ? docs.status.generation : null;
-  if (docs?.status && docs.status.generation > (searchState.status?.generation ?? -1)) {
+  if (sourceIds === null && docs?.status && docs.status.generation > (searchState.status?.generation ?? -1)) {
     searchState.status = docs.status;
     paintSearchStatus();
+    paintSearchSourceNote();
     if (docs.status.folder.state === "loading" || ["starting", "indexing"].includes(docs.status.meaning.state)) {
       void refreshSearchStatus();
     }
@@ -8777,9 +8895,10 @@ function watchSearchTail() {
         offset: searchState.nextOffset,
         limit: SEARCH_PAGE,
       };
+      const sourceIds = searchState.sourceSelection === null ? null : [...searchState.sourceSelection];
       let next = null;
       try {
-        next = await Bridge.invoke("search_documents", { request, generation: gen });
+        next = await Bridge.invoke("search_documents", { request, generation: gen, sourceIds });
       } catch (_e) {
         next = null;
       }
@@ -8899,6 +9018,8 @@ function invalidateSearch() {
 
 searchInputEl.addEventListener("input", () => {
   clearTimeout(searchState.timer);
+  searchState.scopeNotice = "";
+  paintSearchCoverage();
   invalidateSearch();
   searchState.timer = setTimeout(() => runSearch(false), 120);
 });

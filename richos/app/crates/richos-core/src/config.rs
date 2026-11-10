@@ -391,6 +391,27 @@ fn config_schema_version_default() -> u32 {
     CONFIG_SCHEMA_VERSION
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchFolderMode {
+    #[default]
+    Off,
+    Chosen,
+    All,
+}
+
+/// Saved user choices, independent of whether a drive is mounted at this moment.
+/// Company limits are keyed by entity ID. An absent key inherits the global grant;
+/// an explicitly empty list gives Rich no folders in that company.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchFolderPreferences {
+    pub mode: SearchFolderMode,
+    #[serde(default)]
+    pub chosen: Vec<PathBuf>,
+    #[serde(default)]
+    pub company_limits: BTreeMap<String, Vec<PathBuf>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredConfig {
     /// See [`CONFIG_SCHEMA_VERSION`] and [`config_schema_version_default`].
@@ -539,6 +560,10 @@ struct StoredConfig {
     cleaner_inbox_first: bool,
     #[serde(default)]
     cleaner_root: Option<String>,
+    /// Decode this separately so an unknown scope written by a later version denies
+    /// document access without disabling unrelated settings or rewriting the scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    search_folders: Option<serde_json::Value>,
     /// HOW LONG ANOTHER CONVERSATION'S RICH STAYS RUNNING WITH NOTHING TO DO, in minutes
     /// (follow-ups, "a nightly's VM boot proof cannot get a guest slot", decision 3). Past it
     /// the conversation's `claude` process is ended; his next message resumes the same session
@@ -588,6 +613,7 @@ impl Default for StoredConfig {
             cleaner_on: false,
             cleaner_inbox_first: false,
             cleaner_root: None,
+            search_folders: None,
             idle_session_minutes: IDLE_SESSION_MINUTES_DEFAULT,
         }
     }
@@ -1122,6 +1148,26 @@ impl ConfigStore {
     /// does not draw.
     pub fn cleaner_inbox_first(&self)->bool {self.config.cleaner_inbox_first}
     pub fn set_cleaner_inbox_first(&mut self,on:bool)->io::Result<()> {self.config.cleaner_inbox_first=on;self.persist()}
+
+    /// `None` means this installation has never saved a folder choice. The shell
+    /// can still honor an explicitly configured pilot folder in that case. An unreadable
+    /// preference cannot restore an old grant.
+    pub fn search_folders(&self) -> io::Result<Option<SearchFolderPreferences>> {
+        if !self.readable {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "The search folder settings could not be read."));
+        }
+        self.config.search_folders.as_ref()
+            .map(|value| serde_json::from_value(value.clone())
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "The search folder settings could not be read.")))
+            .transpose()
+    }
+
+    pub fn set_search_folders(&mut self, preferences: &SearchFolderPreferences) -> io::Result<()> {
+        self.config.search_folders = Some(serde_json::to_value(preferences)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?);
+        self.persist()
+    }
+
     pub fn cleaner(&self)->(bool,Option<&str>){(self.config.cleaner_on,self.config.cleaner_root.as_deref())}
     pub fn set_cleaner(&mut self,on:bool,root:Option<String>)->io::Result<()> {
         self.config.cleaner_on=on;
@@ -1550,6 +1596,42 @@ fn refuse_unknown_model(model: ModelChoice) -> io::Result<()> {
 mod tests {
     use super::*;
     use crate::journal::RetentionLimit;
+
+    #[test]
+    fn search_folder_preferences_distinguish_off_from_unset_and_deny_all_from_inherit() {
+        let path = tmp_path("search-folders");
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.search_folders().unwrap(), None);
+
+        let off = SearchFolderPreferences::default();
+        store.set_search_folders(&off).unwrap();
+        assert_eq!(ConfigStore::open(&path).unwrap().search_folders().unwrap(), Some(off));
+
+        let chosen = SearchFolderPreferences {
+            mode: SearchFolderMode::Chosen,
+            chosen: vec![PathBuf::from("/Volumes/Offline archive"), PathBuf::from("/Documents/Notes")],
+            company_limits: BTreeMap::from([("denied-company".into(), vec![])]),
+        };
+        store.set_search_folders(&chosen).unwrap();
+        let actual = ConfigStore::open(&path).unwrap().search_folders().unwrap().unwrap();
+        assert_eq!(actual, chosen);
+        assert!(actual.company_limits.get("denied-company").is_some_and(Vec::is_empty));
+        assert_eq!(actual.company_limits.get("other-company"), None);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unknown_search_folder_preferences_stay_unreadable_and_survive_other_edits() {
+        let path = tmp_path("unknown-search-folders");
+        let original = serde_json::json!({ "mode": "future", "extension": 17 });
+        fs::write(&path, serde_json::json!({ "search_folders": original }).to_string()).unwrap();
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert!(store.search_folders().is_err());
+        store.set_company_name("Witness").unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["search_folders"], original);
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn each_session_s_model_defaults_to_opus_survives_restart_and_keeps_a_model_it_cannot_name() {

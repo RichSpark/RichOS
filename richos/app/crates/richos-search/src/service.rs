@@ -95,6 +95,15 @@ pub struct Config {
     pub tuning: Tuning,
 }
 
+/// The user-selected folder set. The shell owns authorization and supplies the
+/// current exclusions (for example its own data directory and search cache).
+#[derive(Clone, PartialEq, Eq)]
+pub struct FolderSetConfig {
+    pub selected: Vec<PathBuf>,
+    pub excluded: Vec<PathBuf>,
+    pub automatic: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum FolderStatus {
@@ -121,8 +130,22 @@ pub struct Status {
     pub meaning: MeaningStatus,
     /// Where the index is kept (resolved `search` cache), or why it could not be resolved.
     pub index_location: String,
+    /// Unreachable folders, separate from skipped files that could be counted.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unavailable_folders: usize,
+    /// For a narrowed search, link skips are not attributed to individual folders.
+    #[serde(skip_serializing_if = "is_false")]
+    pub link_count_unknown: bool,
     /// Changes whenever the searchable set changes; part of a result's identity.
     pub generation: u64,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -271,6 +294,7 @@ struct CacheKey {
     super_finder: bool,
     strict: bool,
     generation: u64,
+    scope: Option<corpus::FolderScope>,
 }
 
 struct CachedRanking {
@@ -288,6 +312,7 @@ struct SearchableCorpus {
 
 struct Inner {
     config: Config,
+    folders: Option<FolderSetConfig>,
     projection: Option<ProjectionSource>,
     metadata: Option<MetadataSource>,
     reranker: Option<Reranker>,
@@ -360,25 +385,42 @@ impl SearchService {
         grant: Option<Grant>,
         before_index: impl FnOnce() + Send + 'static,
     ) -> Self {
-        Self::start_source(config, None, metadata, reranker, grant, before_index)
+        Self::start_configured(config, None, None, metadata, reranker, grant, before_index)
+    }
+
+    pub fn start_with_folders(
+        config: Config,
+        mut folders: FolderSetConfig,
+        metadata: Option<MetadataSource>,
+        reranker: Option<Reranker>,
+        grant: Grant,
+        before_index: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        if let Ok(cache) = &config.cache {
+            folders.excluded.push(cache.clone());
+        }
+        Self::start_configured(config, Some(folders), None, metadata, reranker, Some(grant), before_index)
     }
 
     pub fn start_projection(config: Config, source: ProjectionSource, reranker: Option<Reranker>) -> Self {
-        Self::start_source(config, Some(source), None, reranker, None, || {})
+        Self::start_configured(config, None, Some(source), None, reranker, None, || {})
     }
 
-    fn start_source(
+    fn start_configured(
         config: Config,
+        folders: Option<FolderSetConfig>,
         projection: Option<ProjectionSource>,
         metadata: Option<MetadataSource>,
         reranker: Option<Reranker>,
         grant: Option<Grant>,
         before_index: impl FnOnce() + Send + 'static,
     ) -> Self {
-        let loading = config.root.is_some() || projection.is_some();
+        let loading = projection.is_some()
+            || folders.as_ref().map_or(config.root.is_some(), |scope| !scope.selected.is_empty());
         let service = SearchService(Arc::new(Inner {
             folder: RwLock::new(if loading { FolderStatus::Loading } else { FolderStatus::None }),
             config,
+            folders,
             projection,
             metadata,
             reranker,
@@ -430,18 +472,19 @@ impl SearchService {
         self.0.stop.store(true, Ordering::SeqCst);
     }
 
-    /// Explicit Reindex: re-read the folder and rebuild the meaning index from nothing.
+    /// Explicit Reindex: re-read the selected folders and reconcile the index with
+    /// current files. The multi-folder index retains compatible vectors; a single-root rebuild starts fresh.
     pub fn reindex(&self) {
         self.shutdown();
         self.0.stop.store(false, Ordering::SeqCst);
         *self.0.initial.0.lock().unwrap() = false;
         *self.0.corpus.write().unwrap() = None;
         *self.0.meaning_status.write().unwrap() = MeaningStatus::Starting;
-        if self.0.config.root.is_some() {
+        if self.0.folders.as_ref().map_or(self.0.config.root.is_some(), |scope| !scope.selected.is_empty()) {
             *self.0.folder.write().unwrap() = FolderStatus::Loading;
         }
         self.bump();
-        self.spawn(true, || {});
+        self.spawn(self.0.folders.is_none(), || {});
     }
 
     /// Wait (for tests and the harness) until the initial corpus and index have been processed.
@@ -493,10 +536,21 @@ impl SearchService {
             self.run_projection(source);
             return;
         }
-        let Some(root) = self.0.config.root.clone() else { return };
+        let root = self.0.config.root.as_deref();
         let metadata = self.0.metadata.as_ref();
+        if self.0.folders.as_ref().map_or(root.is_none(), |scope| scope.selected.is_empty()) {
+            return;
+        }
         let changes = metadata.map(|source| (source.watch)());
-        let pending = match corpus::load_until_stopped(&root, metadata, || self.background_stopping()) {
+        let stopped = || self.background_stopping();
+        let loaded = match &self.0.folders {
+            Some(scope) => {
+                let selected = if scope.automatic { corpus::automatic_roots(&scope.selected) } else { scope.selected.clone() };
+                Ok(corpus::load_scope_until_stopped(&selected, &scope.excluded, scope.automatic, metadata, stopped))
+            }
+            None => corpus::load_until_stopped(root.expect("a pilot root was configured"), metadata, stopped),
+        };
+        let pending = match loaded {
             Ok(Some(c)) => c,
             Ok(None) => return,
             Err(message) => {
@@ -508,15 +562,19 @@ impl SearchService {
         let base = Arc::new(pending.corpus);
         let Some(lexical) = rank::LexicalIndex::build(&base, || self.background_stopping()) else { return };
         self.publish_corpus(SearchableCorpus { corpus: base.clone(), lexical: Arc::new(lexical), positions: None });
+        if self.0.folders.is_some() && base.roots.is_empty() {
+            self.set_meaning(MeaningStatus::Unavailable { reason: "None of the selected search folders can be read.".into() });
+            return;
+        }
 
         self.0.retry_model_requested.store(false, Ordering::Release);
         let (mut writer, mut retry_after, initial_media) = std::thread::scope(|scope| {
             let reader = metadata.map(|source| {
-                let root = &base.root;
+                let corpus = base.as_ref();
                 let paths = &pending.media;
                 scope.spawn(move || {
                     lower_this_thread();
-                    self.read_media(root, paths, source)
+                    self.read_media(corpus, paths, source)
                 })
             });
             before_index();
@@ -572,9 +630,9 @@ impl SearchService {
                 }
             };
             let paths: BTreeSet<_> = paths.into_iter().chain(receiver.try_iter().flatten())
-                .filter_map(|path| corpus::catalog_relative(&base.root, &root, &path, source)).collect();
+                .filter_map(|path| base.catalog_key(root, &path, source)).collect();
             if !paths.is_empty() {
-                let updates = self.read_media(&base.root, &paths.into_iter().collect::<Vec<_>>(), source);
+                let updates = self.read_media(&base, &paths.into_iter().collect::<Vec<_>>(), source);
                 if let Some(failure) = self.update_media_index(&mut writer, &updates) {
                     retry_after = self.index_failed(failure);
                     self.0.retry_model_requested.store(retry_after.is_some(), Ordering::Release);
@@ -641,11 +699,15 @@ impl SearchService {
 
     fn publish_corpus(&self, snapshot: SearchableCorpus) {
         let corpus = &snapshot.corpus;
-        let status = FolderStatus::Ready {
-            files: corpus.docs.len(),
-            passages: corpus.passage_count(),
-            skipped: corpus.skipped.len(),
-            links_skipped: corpus.links_skipped,
+        let status = if self.0.folders.is_some() && corpus.roots.is_empty() {
+            FolderStatus::Error { message: "None of the selected search folders can be read.".into() }
+        } else {
+            FolderStatus::Ready {
+                files: corpus.docs.len(),
+                passages: corpus.passage_count(),
+                skipped: corpus.skipped.len(),
+                links_skipped: corpus.links_skipped,
+            }
         };
         *self.0.corpus.write().unwrap() = Some(Arc::new(snapshot));
         *self.0.folder.write().unwrap() = status;
@@ -675,7 +737,10 @@ impl SearchService {
             return Ok(None);
         }
         let identity = format!("{}|{}", embedder.identity(), CHUNKER_IDENTITY);
-        let dir = index_dir(&cache, &corpus.root, &identity);
+        // Folder changes reconcile one derived shard, so adding an unrelated root
+        // does not embed every previously included file again.
+        let index_key = if self.0.folders.is_some() { Path::new("richfinder-folder-set-v1") } else { corpus.root.as_path() };
+        let dir = index_dir(&cache, index_key, &identity);
         if *rebuild && dir.exists() {
             std::fs::remove_dir_all(&dir).map_err(|e| format!("The old search index could not be removed: {e}"))?;
         }
@@ -695,6 +760,7 @@ impl SearchService {
             let current = by_id.get(id.as_str()).map(|&i| &corpus.docs[i]);
             match current {
                 Some(doc) if entry.state == SourceState::Complete && entry.hash == doc.hash && entry.points.len() == doc.passages.len() => {
+                    entry.rel_path.clone_from(&doc.rel_path);
                     for (p, point) in entry.points.iter().enumerate() {
                         keep.insert(*point, (doc.clone(), p));
                     }
@@ -795,7 +861,7 @@ impl SearchService {
         Ok(Some(IndexWriter { meaning, manifest, dir }))
     }
 
-    fn read_media(&self, root: &Path, paths: &[String], source: &MetadataSource) -> Vec<MediaUpdate> {
+    fn read_media(&self, corpus: &Corpus, paths: &[String], source: &MetadataSource) -> Vec<MediaUpdate> {
         let mut updates = Vec::new();
         for batch in paths.chunks(8) {
             let start = updates.len();
@@ -803,11 +869,15 @@ impl SearchService {
                 if self.background_stopping() {
                     return updates;
                 }
-                let doc = if root.join(path).exists() {
-                    corpus::read_metadata_document(root, path, source, self.0.config.cache.as_deref().ok())
-                } else {
-                    Ok(None)
-                };
+                let doc = corpus.origin(path).map_or(Ok(None), |(root, relative)| {
+                    if !root.join(relative).exists() { return Ok(None); }
+                    corpus.resolve_key(path)?;
+                    let mut doc = corpus::read_metadata_document(root, relative, source, self.0.config.cache.as_deref().ok())?;
+                    if let Some(doc) = &mut doc {
+                        corpus.key_media_document(path, doc);
+                    }
+                    Ok(doc)
+                });
                 updates.push(MediaUpdate { path: path.clone(), doc });
             }
             let Some(snapshot) = self.0.corpus.read().unwrap().clone() else { break };
@@ -933,6 +1003,7 @@ impl SearchService {
     }
 
     pub fn status(&self) -> Status {
+        let unavailable_folders = self.0.corpus.read().unwrap().as_ref().map_or(0, |s| s.corpus.unavailable.len());
         Status {
             folder: self.0.folder.read().unwrap().clone(),
             meaning: self.0.meaning_status.read().unwrap().clone(),
@@ -940,8 +1011,37 @@ impl SearchService {
                 Ok(p) => p.display().to_string(),
                 Err(e) => e.clone(),
             },
+            unavailable_folders,
+            link_count_unknown: false,
             generation: self.0.generation.load(Ordering::SeqCst),
         }
+    }
+
+    /// The roots in the current corpus. Listing them does not traverse a drive.
+    pub fn searchable_folders(&self) -> Vec<(String, PathBuf)> {
+        if self.0.projection.is_some() { return Vec::new(); }
+        let corpus = self.0.corpus.read().unwrap();
+        let Some(snapshot) = corpus.as_ref() else { return Vec::new() };
+        let corpus = &snapshot.corpus;
+        if self.0.folders.is_none() && !corpus.root.as_os_str().is_empty() {
+            return vec![(corpus::source_id(&corpus.root.to_string_lossy()), corpus.root.clone())];
+        }
+        corpus.roots.iter().map(|(id, root)| (id.clone(), root.clone())).collect()
+    }
+
+    pub fn folder_options(&self) -> Vec<corpus::SearchFolder> {
+        self.0.corpus.read().unwrap().as_ref().map_or_else(Vec::new, |snapshot| snapshot.corpus.folder_options())
+    }
+
+    /// A request can narrow to IDs from this corpus only. Old or invented IDs
+    /// grant nothing, including when a folder setting changes mid-request.
+    pub fn limit_to_folder_ids(&self, ids: &[String]) -> corpus::FolderScope {
+        let ids: std::collections::HashSet<_> = ids.iter().map(String::as_str).collect();
+        let (direct, trees): (Vec<_>, Vec<_>) = self.folder_options().into_iter()
+            .filter(|folder| folder.unavailable.is_none() && ids.contains(folder.id().as_str()))
+            .partition(|folder| folder.direct);
+        corpus::FolderScope::with_direct(trees.into_iter().map(|folder| folder.path).collect(),
+            direct.into_iter().map(|folder| folder.path).collect())
     }
 
     /// The meaning half, when it can answer: a model loaded and at least the reconciled part of
@@ -962,8 +1062,14 @@ impl SearchService {
     }
 
     pub fn search_while_current(&self, request: &SearchRequest, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
-        self.search_checked(request, obsolete, &|root, document| {
-            self.0.projection.is_none() && still_current(root, document)
+        self.search_in_folders_while_current(request, None, obsolete)
+    }
+
+    /// Optional company or request limit, applied before ranking. A supplied
+    /// empty grant searches no files. The shell must use its current verified grant.
+    pub fn search_in_folders_while_current(&self, request: &SearchRequest, scope: Option<&corpus::FolderScope>, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
+        self.search_checked(request, scope, obsolete, &|corpus, document| {
+            self.0.projection.is_none() && still_current(corpus, document)
         })
     }
 
@@ -974,14 +1080,15 @@ impl SearchService {
         current: &dyn Fn(&Document) -> bool,
     ) -> Option<SearchResponse> {
         self.0.projection.as_ref()?;
-        self.search_checked(request, obsolete, &|_, document| current(document))
+        self.search_checked(request, None, obsolete, &|_, document| current(document))
     }
 
     fn search_checked(
         &self,
         request: &SearchRequest,
+        scope: Option<&corpus::FolderScope>,
         obsolete: &dyn Fn() -> bool,
-        current: &dyn Fn(&Path, &Document) -> bool,
+        current: &dyn Fn(&Corpus, &Document) -> bool,
     ) -> Option<SearchResponse> {
         let started = Instant::now();
         if obsolete() { return None; }
@@ -1013,6 +1120,22 @@ impl SearchService {
             return Some(finish(response, started));
         };
         let corpus = snapshot.corpus.as_ref();
+        if self.0.folders.is_some() && corpus.roots.is_empty() {
+            response.empty = Some(Empty::NoFolder);
+            return Some(finish(response, started));
+        }
+        let allowed_points = if let Some(scope) = scope {
+            let status_meaning = meaning.clone().or_else(|| self.meaning_for_query());
+            let points = restrict_status(&mut response.status, corpus, status_meaning.as_deref(), scope);
+            if scope.is_empty() {
+                response.effective.super_finder = false;
+                response.empty = Some(Empty::NoFolder);
+                return Some(finish(response, started));
+            }
+            Some(points)
+        } else {
+            None
+        };
         if parsed.is_empty() {
             response.empty = Some(Empty::NoQuery);
             return Some(finish(response, started));
@@ -1026,6 +1149,7 @@ impl SearchService {
             super_finder: effective.super_finder,
             strict: request.strict,
             generation: response.status.generation,
+            scope: scope.cloned(),
         };
         let cached = self.0.last.lock().unwrap().as_ref()
             .filter(|(k, ranking)| *k == key && Arc::ptr_eq(&ranking.snapshot, &snapshot))
@@ -1034,13 +1158,16 @@ impl SearchService {
             Some(r) => r,
             None => {
                 let phase = Instant::now();
-                let lexical = snapshot.lexical.search(corpus, &parsed, request.strict, snapshot.positions.as_ref());
+                let mut lexical = snapshot.lexical.search(corpus, &parsed, request.strict, snapshot.positions.as_ref());
+                if let Some(scope) = scope {
+                    lexical.retain(|hit| corpus.in_scope(&corpus.docs[hit.doc].rel_path, scope));
+                }
                 trace_query_stage("lexical", phase);
                 if obsolete() { return None; }
-                let semantic = meaning.as_ref().map(|m| semantic_hits(m, corpus, &request.query, &self.0.config.tuning));
+                let semantic = meaning.as_ref().map(|m| semantic_hits(m, corpus, &request.query, &self.0.config.tuning, allowed_points.as_deref()));
                 if obsolete() { return None; }
                 let (semantic, query_vector) = match semantic {
-                    Some(Ok((hits, query_vector))) => (Some(hits), Some(query_vector)),
+                    Some(Ok((hits, query_vector))) => (Some(hits), (!query_vector.is_empty()).then_some(query_vector)),
                     Some(Err(_)) => {
                         // The model failed on this query: answer with text and say so.
                         response.effective.super_finder = false;
@@ -1085,14 +1212,18 @@ impl SearchService {
                 break;
             }
             let doc = &corpus.docs[row.doc];
-            if !current(&corpus.root, doc) {
+            if !current(corpus, doc) {
                 response.dropped += 1;
                 continue;
             }
             let passage = ranked.selected_passages.get(&row.doc).copied().unwrap_or_else(|| {
                 selected_passage(doc, row, &parsed, meaning.as_deref().zip(ranked.query_vector.as_deref())).evidence
             });
-            response.hits.push(hit(doc, row, &parsed, passage));
+            let mut result = hit(doc, row, &parsed, passage);
+            if let Some(path) = corpus.display_key(&doc.rel_path) {
+                result.rel_path = path;
+            }
+            response.hits.push(result);
         }
         (!obsolete()).then(|| finish(response, started))
     }
@@ -1129,7 +1260,7 @@ impl SearchService {
         let snapshot = self.0.corpus.read().unwrap().clone().ok_or("No search folder is configured.")?;
         let corpus = &snapshot.corpus;
         let doc = corpus.docs.iter().find(|d| d.id == source_id).ok_or("That document is not in the search folder.")?;
-        let path = corpus::resolve_inside(&corpus.root, &doc.rel_path)?;
+        let path = corpus.resolve_key(&doc.rel_path)?;
         let current = if let Some(version) = &doc.metadata_version {
             std::fs::metadata(&path).map(|meta| FileVersion::of(&meta) == *version)
         } else {
@@ -1229,13 +1360,55 @@ pub fn embedding_text(title: &str, heading: &str, passage: &str) -> String {
     }
 }
 
-fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning) -> Result<(Vec<SemanticHit>, Vec<f32>), String> {
+fn restrict_status(status: &mut Status, corpus: &Corpus, meaning: Option<&Meaning>, scope: &corpus::FolderScope) -> Vec<u64> {
+    let mut versions = HashMap::new();
+    let mut passages = 0;
+    for doc in &corpus.docs {
+        if corpus.in_scope(&doc.rel_path, scope) {
+            versions.insert(doc.rel_path.as_str(), doc.hash.as_str());
+            passages += doc.passages.len();
+        }
+    }
+    let files = versions.len();
+    let skipped = corpus.skipped.iter().filter(|s| corpus.in_scope(&s.rel_path, scope)).count();
+    status.folder = if scope.is_empty() {
+        FolderStatus::None
+    } else {
+        FolderStatus::Ready { files, passages, skipped, links_skipped: 0 }
+    };
+    status.unavailable_folders = corpus.unavailable.iter().filter(|s| scope.contains_path(Path::new(&s.rel_path))).count();
+    status.link_count_unknown = true;
+    let mut allowed = Vec::new();
+    let files_done = meaning.map_or(0, |m| {
+        let points = m.points.read().unwrap();
+        let mut seen = HashSet::new();
+        for (&point, (doc, _)) in points.iter() {
+            if versions.get(doc.rel_path.as_str()) == Some(&doc.hash.as_str()) {
+                seen.insert(doc.id.as_str());
+                allowed.push(point);
+            }
+        }
+        seen.len()
+    });
+    let passages_done = allowed.len();
+    match status.meaning {
+        MeaningStatus::Ready { .. } => status.meaning = MeaningStatus::Ready { files: files_done, passages: passages_done },
+        MeaningStatus::Indexing { .. } => status.meaning = MeaningStatus::Indexing { files_done, passages_done, files_total: files, passages_total: passages },
+        _ => {}
+    }
+    allowed
+}
+
+fn semantic_hits(meaning: &Meaning, corpus: &Corpus, query: &str, tuning: &Tuning, allowed: Option<&[u64]>) -> Result<(Vec<SemanticHit>, Vec<f32>), String> {
+    if allowed.is_some_and(<[u64]>::is_empty) {
+        return Ok((Vec::new(), Vec::new()));
+    }
     let phase = Instant::now();
     let embedded = meaning.embedder.embed_query(&[query.trim()]);
     trace_query_stage("embedding", phase);
     let mut vector = embedded?.pop().ok_or("no query vector")?;
     let phase = Instant::now();
-    let nearest = meaning.index.nearest(vector.clone(), tuning.semantic_passages)?;
+    let nearest = meaning.index.nearest_in(vector.clone(), tuning.semantic_passages, allowed)?;
     trace_query_stage("nearest", phase);
     crate::embed::normalize(&mut vector);
     let points = meaning.points.read().unwrap();
@@ -1311,8 +1484,8 @@ fn shortlist_passage_scores(
 }
 
 /// Is the file still the one that was read: inside the folder, a regular file, same content?
-fn still_current(root: &Path, doc: &corpus::Document) -> bool {
-    let Ok(path) = corpus::resolve_inside(root, &doc.rel_path) else { return false };
+fn still_current(corpus: &Corpus, doc: &corpus::Document) -> bool {
+    let Ok(path) = corpus.resolve_key(&doc.rel_path) else { return false };
     same_file_version(&path, doc)
 }
 

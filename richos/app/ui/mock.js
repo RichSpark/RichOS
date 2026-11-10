@@ -312,9 +312,18 @@
   };
   const MOCK_STOP = new Set("a an the that this on in of to for and or with it is was felt first".split(" "));
   const mockOpenedDocuments = [];
+  const mockFolderRows = [
+    { id: "fixture-home", name: "Home", path: "/fixture/home", state: "eligible", reason: null },
+    { id: "fixture-docs", name: "Documents", path: "/fixture/home/Documents", state: "eligible", reason: null },
+    { id: "fixture-archive", name: "Archive", path: "/fixture/home/Archive", state: "eligible", reason: null },
+    { id: "fixture-library", name: "Library", path: "/fixture/home/Library", state: "locked", reason: "App data" },
+  ];
+  const mockFolderPreferences = { mode: "off", chosen: [], company_limits: {} };
+  let mockFolderGeneration = 1;
 
   function mockDocStatus() {
-    const preset = (window.__RICHOS_MOCK_PRESET__ || {}).documentSearch || "ready";
+    const preset = mockFolderGeneration > 1 && mockFolderPreferences.mode === "off" ? "none"
+      : (window.__RICHOS_MOCK_PRESET__ || {}).documentSearch || "ready";
     const files = MOCK_DOCS.length;
     const passages = files;
     const folder = preset === "none" ? { state: "none" }
@@ -323,11 +332,25 @@
     const meaning = preset === "indexing" ? { state: "indexing", files_done: 20, files_total: files, passages_done: 20, passages_total: passages }
       : preset === "unavailable" ? { state: "unavailable", reason: "Apple's sentence embedding for 'en' is not available on this Mac." }
       : { state: "ready", files, passages };
-    return { folder, meaning, index_location: "/Users/someone/Library/Caches/RichOS/search", generation: 1 };
+    return { folder, meaning, index_location: "/Users/someone/Library/Caches/RichOS/search",
+      generation: mockFolderGeneration, unavailable_folders: preset === "partial" ? 1 : 0 };
   }
 
-  function mockDocSearch(req) {
+  function mockDocSources() {
+    if (mockDocStatus().folder.state !== "ready") return [];
+    const choices = mockFolderRows.filter(row => ["fixture-docs", "fixture-archive"].includes(row.id)).map(row => ({
+      ...row, files: MOCK_DOCS.filter(doc => doc.path.startsWith("2024/") === (row.id === "fixture-archive")).length,
+    }));
+    if (mockDocStatus().unavailable_folders) choices.push({
+      id: "fixture-offline", name: "Travel archive", path: "/Users/someone/Travel archive", files: 0, unavailable: "Offline",
+    });
+    return mockFolderGeneration === 1 || mockFolderPreferences.mode === "all" ? choices
+      : choices.filter(row => mockFolderPreferences.chosen.includes(row.path));
+  }
+
+  function mockDocSearch(req, sourceIds) {
     const status = mockDocStatus();
+    const sources = mockDocSources().filter(row => sourceIds == null || sourceIds.includes(row.id));
     const query = String(req.query || "");
     const spans = [];
     query.replace(/"([^"]*)"/g, (_, s) => { if (s.trim()) spans.push(s.trim().toLowerCase().replace(/\s+/g, " ")); return " "; });
@@ -339,13 +362,15 @@
     const superOn = !!req.super_finder && (status.meaning.state === "ready" || status.meaning.state === "indexing");
     const base = { requested: { super_finder: !!req.super_finder, strict: !!req.strict }, effective: { super_finder: superOn, strict: !!req.strict },
       status, total: 0, offset: req.offset || 0, hits: [], dropped: 0, empty: null, spans, words, elapsed_ms: 3 };
-    if (status.folder.state !== "ready") return { ...base, empty: "no_folder" };
+    if (status.folder.state !== "ready" || !sources.length) return { ...base, empty: "no_folder" };
     if (!words.length && !spans.length) return { ...base, empty: "no_query" };
     if (req.strict && unmatched) return { ...base, empty: "quote_mismatch" };
     const text = (d) => (d.title + " " + d.passages.map((p) => p.text).join(" ")).toLowerCase();
     const hasWord = (t, w) => new RegExp("(^|[^a-z0-9])" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(s|es)?([^a-z0-9]|$)").test(t);
     const rows = [];
     for (const d of MOCK_DOCS) {
+      const folder = d.path.startsWith("2024/") ? "fixture-archive" : "fixture-docs";
+      if (!sources.some(source => source.id === folder)) continue;
       const t = text(d);
       const sp = spans.filter((s) => t.includes(s));
       if (req.strict && sp.length < spans.length) continue;
@@ -4198,20 +4223,63 @@
         // DOCUMENT SEARCH (search PRD v3.1, design round 26), shaped exactly like
         // `richos_search::service::SearchResponse` and `Status`. A small synthetic folder and
         // the same rules as the real service at a toy scale: the text list matches whole words
-        // (plurals allowed) and quoted spans; Super Finder adds documents found "by meaning"
+        // (plurals allowed) and quoted spans; RichFinder adds documents found "by meaning"
         // through a tiny subject table; Require quoted text needs every span. Nothing about
         // search quality is claimed here, only the shapes the palette draws.
         // `__RICHOS_MOCK_PRESET__.documentSearch` picks the folder state: "ready" (default),
         // "indexing", "unavailable", "none" or "error".
         case "cancel_search_documents": return null;
+        case "search_folder_preferences": return structuredClone(mockFolderPreferences);
+        case "search_folder_tree": return {
+          rows: !args.parent ? mockFolderRows.slice(0, 1) : args.parent === "fixture-home" ? mockFolderRows.slice(1) : [],
+          next_offset: null,
+        };
+        case "search_selected_folders": return mockFolderRows.filter(row => mockFolderPreferences.chosen.includes(row.path));
+        case "search_company_folders": return entities.map(entity => {
+          const paths = mockFolderPreferences.company_limits[entity.id];
+          const saved = mockFolderRows.filter(row => paths?.includes(row.path));
+          return { company_id: entity.id, name: entity.display_name,
+            source_ids: paths ? saved.map(row => row.id) : null, saved_sources: saved };
+        });
+        case "set_search_company_folders": {
+          if (!entities.some(entity => entity.id === args.companyId)) throw "That company is no longer available.";
+          if (args.sourceIds == null) delete mockFolderPreferences.company_limits[args.companyId];
+          else mockFolderPreferences.company_limits[args.companyId] = mockFolderRows
+            .filter(source => args.sourceIds.includes(source.id)).map(source => source.path);
+          return null;
+        }
+        case "set_search_folder_mode": {
+          mockFolderPreferences.mode = args.mode;
+          mockFolderGeneration++;
+          return structuredClone(mockFolderPreferences);
+        }
+        case "clear_search_folders": {
+          mockFolderPreferences.chosen = [];
+          mockFolderPreferences.mode = "off";
+          mockFolderGeneration++;
+          return structuredClone(mockFolderPreferences);
+        }
+        case "set_search_folder_selected": {
+          const row = mockFolderRows.find(item => item.id === args.folderId);
+          if (!row || row.state !== "eligible") throw "That folder is unavailable.";
+          if (args.selected && !mockFolderPreferences.chosen.includes(row.path)) mockFolderPreferences.chosen.push(row.path);
+          if (!args.selected) {
+            mockFolderPreferences.chosen = mockFolderPreferences.chosen.filter(folder => folder !== row.path);
+          }
+          mockFolderPreferences.mode = mockFolderPreferences.chosen.length ? "chosen" : "off";
+          mockFolderGeneration++;
+          return structuredClone(mockFolderPreferences);
+        }
+        case "reindex_search_folders": mockFolderGeneration++; return mockDocStatus();
         case "search_company_memory": return null;
         case "search_conversations": return null;
         case "search_documents_status": {
           return mockDocStatus();
         }
+        case "search_document_sources": return mockDocSources();
         case "search_documents": {
           const req = (args && args.request) || {};
-          return mockDocSearch(req);
+          return mockDocSearch(req, args?.sourceIds);
         }
         case "open_search_document": {
           const doc = MOCK_DOCS.find((d) => d.id === (args && args.sourceId));

@@ -23,6 +23,7 @@
     <link rel="stylesheet" href="fonts/fonts.css" />
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="cleaner.css" />
+    <link rel="stylesheet" href="search-folder-settings.css" />
     <!-- The speckled ground's CSS half, from the design system, unedited. The app's own rules for
          it (which planes are ground, and the splash/home exclusion) are in style.css. -->
     <link rel="stylesheet" href="speckle.css" />
@@ -1090,14 +1091,25 @@
               <span id="srch-count" class="srch-count is-empty" aria-live="polite"></span>
             </div>
             <div class="srch-modes">
-              <label class="srch-check" title="Meaning search with Qdrant, combined with the ordinary text search. Unchecked: text search only."><input type="checkbox" id="srch-super" checked /><img class="feature-icon feature-icon--inline" src="assets/app-icons/richfinder-128.png" alt="" /><span>Super Finder</span></label>
+              <label class="srch-check" title="Meaning search with Qdrant, combined with the ordinary text search. Unchecked: text search only."><input type="checkbox" id="srch-super" checked /><img class="feature-icon feature-icon--inline" src="assets/app-icons/richfinder-128.png" alt="" /><span>RichFinder</span></label>
               <label class="srch-check" title="Text in double quotes must be present, word for word. Unchecked: quoted text is preferred, related wording still allowed."><input type="checkbox" id="srch-strict" /><span>Require quoted text</span></label>
               <span class="srch-status" id="srch-status" role="status"><i class="srch-status-dot" aria-hidden="true"></i><span id="srch-status-text"></span></span>
             </div>
             <div class="srch-life" aria-hidden="true"><b id="srch-progress"></b><i></i></div>
           </div>
-          <div id="search-results" class="overlay-results srch-results" role="listbox" aria-label="Search results"></div>
-          <p id="search-hint" class="srch-hint">Type what you remember, not the exact words. With <b>Super Finder</b> on, a document is found by what it is about; put text in double quotes and check <b>Require quoted text</b> when it has to be there word for word.</p>
+          <div class="srch-body">
+            <fieldset class="srch-sources">
+              <legend>Sources · this search</legend>
+              <div id="srch-source-options" class="srch-source-options"></div>
+              <p id="srch-source-note" class="srch-source-note" aria-live="polite"></p>
+              <button id="srch-source-settings" class="srch-source-settings" type="button">Choose folders…</button>
+            </fieldset>
+            <div class="srch-results-pane">
+              <div id="srch-coverage-note" class="srch-coverage-note" role="status" hidden></div>
+              <div id="search-results" class="overlay-results srch-results" role="listbox" aria-label="Search results"></div>
+              <p id="search-hint" class="srch-hint">Type what you remember, not the exact words. With <b>RichFinder</b> on, a document is found by what it is about; put text in double quotes and check <b>Require quoted text</b> when it has to be there word for word.</p>
+            </div>
+          </div>
           <div class="srch-foot" aria-hidden="true"><span><kbd>↑↓</kbd>move</span><span><kbd>⏎</kbd>open</span><span><kbd>esc</kbd>close</span></div>
         </div>
       </div>
@@ -1640,6 +1652,7 @@
     <script src="repositories.js"></script>
     <!-- Your instructions: the Settings row, the sheet and Rich's card (round 36 screen 1). -->
     <script src="your-instructions.js"></script>
+    <script src="search-folder-settings.js"></script>
     <script src="quota.js"></script>
     <script src="accounts.js"></script>
     <!-- Dictation's Settings row and sheet (round 19; dictation plan slice 2). AFTER accounts.js,

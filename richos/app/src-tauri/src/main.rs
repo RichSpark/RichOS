@@ -3467,9 +3467,9 @@ fn main() {
             let search = {
                 let busy_control = control.clone();
                 let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
-                doc_search::start(&home, &data_dir, std::sync::Arc::new(move || busy_control.has_active_turns()))
+                doc_search::start(&home, &data_dir, std::sync::Arc::new(move || busy_control.has_active_turns()), config.search_folders())
             };
-            let search_socket = doc_search::serve_tool(&search, &data_dir);
+            let search_socket = doc_search::serve_tool(&search, &data_dir, spine.reader());
 
             // WHAT HE ASKED FOR AND THIS BUILD COULD NOT READ, ON THE BOOT LINE.
             //
@@ -4115,6 +4115,7 @@ fn main() {
             search_company_memory,
             resolve_search_memory,
             search_documents_status,
+            search_document_sources,
             cancel_search_documents,
             open_search_document,
             // --- Meeting notes (Granola PRD V4) — appended ---
@@ -4179,6 +4180,15 @@ fn main() {
             git_name_host::git_name_save,
             git_name_host::git_name_use_richos,
             git_name_host::git_name_open_file,
+            search_folder_preferences,
+            set_search_folder_mode,
+            clear_search_folders,
+            reindex_search_folders,
+            search_folder_tree,
+            search_selected_folders,
+            set_search_folder_selected,
+            search_company_folders,
+            set_search_company_folders,
             richpass_host::richpass_status,
             richpass_host::richpass_save,
             richpass_host::richpass_choose,
@@ -6932,8 +6942,8 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
 /// One page of the palette's Documents section (`doc_search.rs`). Navigation hits stay with
 /// `search_nav`, unchanged by either checkbox.
 #[richos_command::command]
-fn search_documents(state: State<AppState>, request: richos_search::SearchRequest, generation: Option<u64>) -> Option<richos_search::SearchResponse> {
-    doc_search::search_palette(&state.search, request, generation)
+fn search_documents(state: State<AppState>, request: richos_search::SearchRequest, generation: Option<u64>, source_ids: Option<Vec<String>>) -> Option<richos_search::SearchResponse> {
+    doc_search::search_palette(&state.search, request, generation, source_ids.as_deref())
 }
 
 #[richos_command::command]
@@ -6967,6 +6977,130 @@ fn cancel_search_documents(state: State<AppState>, generation: u64) {
 #[richos_command::command]
 fn search_documents_status(state: State<AppState>) -> richos_search::Status {
     doc_search::status(&state.search)
+}
+
+#[richos_command::command]
+fn search_document_sources(state: State<AppState>) -> Vec<doc_search::SearchSource> {
+    doc_search::search_sources(&state.search)
+}
+
+#[richos_command::command]
+fn search_folder_preferences(state: State<AppState>) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    let preferences = state.config.lock().unwrap().search_folders().map_err(|e| e.to_string())?;
+    Ok(state.search.current_folder_preferences(preferences))
+}
+
+#[richos_command::command]
+fn set_search_folder_mode(state: State<AppState>, mode: richos_core::config::SearchFolderMode) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    update_search_folder_preferences(&state, |preferences| {
+        preferences.mode = mode;
+        Ok(())
+    })
+}
+
+#[richos_command::command]
+fn clear_search_folders(state: State<AppState>) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    update_search_folder_preferences(&state, |preferences| {
+        preferences.chosen.clear();
+        preferences.mode = richos_core::config::SearchFolderMode::Off;
+        Ok(())
+    })
+}
+
+fn update_search_folder_preferences(
+    state: &AppState,
+    change: impl FnOnce(&mut richos_core::config::SearchFolderPreferences) -> Result<(), String>,
+) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    let mut config = state.config.lock().unwrap();
+    let saved = config.search_folders().map_err(|e| e.to_string())?;
+    let mut preferences = state.search.current_folder_preferences(saved);
+    change(&mut preferences)?;
+    config.set_search_folders(&preferences).map_err(|e| e.to_string())?;
+    state.search.apply_folder_preferences(preferences.clone());
+    Ok(preferences)
+}
+
+#[richos_command::command]
+fn reindex_search_folders(state: State<AppState>) -> richos_search::Status {
+    state.search.reindex_folders()
+}
+
+#[richos_command::command]
+fn search_folder_tree(state: State<AppState>, parent: Option<String>, offset: Option<usize>) -> Result<doc_search::FolderPage, String> {
+    state.search.folder_tree(parent.as_deref(), offset.unwrap_or(0))
+}
+
+#[richos_command::command]
+fn search_selected_folders(state: State<AppState>) -> Result<Vec<doc_search::FolderRow>, String> {
+    let saved = state.config.lock().unwrap().search_folders().map_err(|e| e.to_string())?;
+    let preferences = state.search.current_folder_preferences(saved);
+    state.search.selected_folder_rows(&preferences)
+}
+
+#[richos_command::command]
+fn set_search_folder_selected(state: State<AppState>, folder_id: String, selected: bool) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    use richos_core::config::SearchFolderMode;
+    let path = state.search.folder_path_for_selection(&folder_id, selected)?;
+    update_search_folder_preferences(&state, |preferences| {
+        if preferences.mode == SearchFolderMode::All {
+            return Err("Switch to Chosen folders to edit individual folders.".into());
+        }
+        if selected {
+            if !preferences.chosen.contains(&path) {
+                preferences.chosen.push(path);
+                preferences.chosen.sort_unstable();
+            }
+            preferences.mode = SearchFolderMode::Chosen;
+        } else {
+            preferences.chosen.retain(|folder| folder != &path);
+            if preferences.chosen.is_empty() {
+                preferences.mode = SearchFolderMode::Off;
+            }
+        }
+        Ok(())
+    })
+}
+
+#[derive(serde::Serialize)]
+struct SearchCompanyFolders {
+    company_id: String,
+    name: String,
+    // Absent inherits the global list. An empty limit gives Rich no files.
+    source_ids: Option<Vec<String>>,
+    saved_sources: Vec<doc_search::SearchSource>,
+}
+
+#[richos_command::command]
+fn search_company_folders(state: State<AppState>) -> Result<Vec<SearchCompanyFolders>, String> {
+    let saved = state.config.lock().unwrap().search_folders().map_err(|e| e.to_string())?;
+    let preferences = state.search.current_folder_preferences(saved);
+    let snapshot = state.reader.snapshot();
+    Ok(snapshot.entity_registry().entities().iter().map(|entity| {
+        let company_id = entity.id.to_string();
+        let limit = preferences.company_limits.get(&company_id);
+        let source_ids = limit.map(|paths| paths.iter()
+            .map(|path| richos_search::corpus::source_id(&path.to_string_lossy())).collect());
+        let saved_sources = limit.map_or_else(Vec::new, |paths| doc_search::saved_company_sources(&state.search, paths));
+        SearchCompanyFolders { company_id, name: entity.display_name.clone(), source_ids, saved_sources }
+    }).collect())
+}
+
+#[richos_command::command]
+fn set_search_company_folders(state: State<AppState>, company_id: String, source_ids: Option<Vec<String>>) -> Result<(), String> {
+    let id = richos_core::entity::EntityId::parse(&company_id).map_err(|error| error.to_string())?;
+    if state.reader.snapshot().entity_registry().get(&id).is_none() {
+        return Err("That company is no longer available.".into());
+    }
+    update_search_folder_preferences(&state, |preferences| {
+        if let Some(ids) = source_ids {
+            let retained = preferences.company_limits.get(id.as_str()).map(Vec::as_slice).unwrap_or_default();
+            let paths = doc_search::company_limit_paths(&state.search, &ids, retained)?;
+            let _previous = preferences.company_limits.insert(id.to_string(), paths);
+        } else {
+            let _previous = preferences.company_limits.remove(id.as_str());
+        }
+        Ok(())
+    }).map(|_| ())
 }
 
 /// **Open original**: a source ID from the renderer, resolved and revalidated by the host, and
