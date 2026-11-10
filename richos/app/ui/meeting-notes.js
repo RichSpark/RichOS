@@ -163,6 +163,7 @@
       error.hidden = !notice.failed && !notice.authorizationUrl;
       if (notice.authorizationUrl) {
         error.style.userSelect = "text";
+        error.style.webkitUserSelect = "text";
         error.style.overflowWrap = "anywhere";
         error.textContent = "Couldn’t open your browser. Open this address to sign in: " + notice.authorizationUrl;
       } else if (notice.failed) {

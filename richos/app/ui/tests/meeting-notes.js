@@ -133,7 +133,11 @@ async function main() {
       { ...notice, reconnecting: true, authorizationUrl });
     const fallback = page.locator("#mn-calendar-recovery [role=status]").last();
     assert((await fallback.textContent()).includes(authorizationUrl));
-    assertEqual(await fallback.evaluate(el => getComputedStyle(el).userSelect), "text");
+    assertEqual(await fallback.evaluate(el => getComputedStyle(el).getPropertyValue("-webkit-user-select")), "text");
+    await fallback.dblclick();
+    const selected = await page.evaluate(() => String(window.getSelection()).trim());
+    assert(selected.length > 0 && (await fallback.textContent()).includes(selected),
+      "the sign-in text can be selected with the mouse");
     await page.evaluate(notice => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [{ ...notice, failed: true }] }), notice);
     assert(!(await fallback.textContent()).includes(authorizationUrl));
     assert((await text(page, "#mn-calendar-recovery")).includes("Calendar sign-in didn't finish."));
