@@ -148,6 +148,22 @@ async function main() {
     await page.close();
   });
 
+  await run.check("another calendar waits visibly until the current sign-in finishes", async () => {
+    const current = { vendor: "google", account: "first@example.com", reconnecting: true };
+    const other = { vendor: "microsoft", account: "second@example.com" };
+    const page = await open("dark", { calendarRecovery: [current, other] });
+    const otherButton = page.getByRole("button", { name: "Reconnect Microsoft Calendar (second@example.com)", exact: true, includeHidden: true });
+    assert(await otherButton.isHidden());
+    assert((await text(page, "#mn-calendar-recovery")).includes("Finish signing in to the other calendar first."));
+    assertEqual(await page.locator("#mn-calendar-recovery button:visible").count(), 1);
+    await page.evaluate(other => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [other] }), other);
+    assert(await otherButton.isVisible() && await otherButton.isEnabled());
+    await otherButton.click();
+    assertEqual((await calls(page)).filter(c => c.cmd === "meeting_reconnect_calendar"),
+      [{ cmd: "meeting_reconnect_calendar", vendor: "microsoft", account: "second@example.com" }]);
+    await page.close();
+  });
+
   await run.check("a build without meeting notes shows no rows and no chip", async () => {
     const page = await open("dark", { available: false, paused: true });
     await page.click("#set-btn");

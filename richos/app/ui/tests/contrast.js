@@ -801,7 +801,7 @@ const SURFACES = [
         calendarRecovery: [{
           vendor: "google", account: "ceo@example.test", reconnecting: true,
           authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth?state=example",
-        }],
+        }, { vendor: "microsoft", account: "other@example.test" }],
       },
     },
     drive: async (p) => {
