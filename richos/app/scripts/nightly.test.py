@@ -801,6 +801,90 @@ class GitTests(GitFixture):
             n.cached_gpl_source(wrong, empty)
         self.assertEqual(list(empty.iterdir()), [])
 
+    def test_release_assets_go_up_several_at_once_and_the_manifest_last(self):
+        """Uploaded one file at a time, a publish's assets were most of its time. The
+        candidate's assets and the FFmpeg sources go up UPLOAD_CONCURRENCY at once, never
+        more; latest.json still starts only after every other asset of the release is up, and
+        every check after the uploads is unchanged."""
+        upstream = {f"https://upstream.invalid/lib{i}-1.0.tar.gz": f"source {i}".encode()
+                    for i in range(8)}
+        rows = [{"name": f"lib{i}", "version": "1.0", "url": url,
+                 "sha256": hashlib.sha256(body).hexdigest()}
+                for i, (url, body) in enumerate(upstream.items())]
+        self.engine_files = {"engine/runtime/bin/ffmpeg": b"a GPL program",
+                             "engine/runtime/runtime-sources.json": json.dumps(
+                                 {"sources": {"ffmpeg": {"corresponding_source": rows}}}).encode()}
+        info = self.reserve()
+        out = Path(self.temp.name) / "at-once"
+        lock = threading.Condition()
+        state = {"now": 0, "most": 0, "first": True}
+        events = []
+
+        def fake(*args, **kwargs):
+            if args[:4] != ("gh", "release", "upload", info["tag"]):
+                return self.fake_external(*args, **kwargs)
+            name = Path(args[-1]).name
+            with lock:
+                events.append(("start", name))
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+                lock.notify_all()
+                first, state["first"] = state["first"], False
+                if first:
+                    # The first upload is held until a second one is in flight, which only an
+                    # uploader running several at once can do; one at a time, it never comes.
+                    # load-bound: a hang catcher only; the verdict is state["most"], never the clock
+                    lock.wait_for(lambda: state["now"] >= 2, timeout=30)
+            self.fake_external(*args, **kwargs)
+            with lock:
+                state["now"] -= 1
+                events.append(("end", name))
+                lock.notify_all()
+
+        with patch.dict(os.environ, {"RICHOS_GPL_SOURCE_CACHE": str(Path(self.temp.name) / "cache")}), \
+                patch.object(n, "fetch_source_archive",
+                             side_effect=lambda url, path: Path(path).write_bytes(upstream[url])), \
+                patch.object(n, "source_mirrors", return_value={}):
+            n.build(info, out)
+            with patch.object(n, "execute", side_effect=fake), \
+                    contextlib.redirect_stdout(io.StringIO()) as said:
+                n.finish(info, out)
+        self.assertGreaterEqual(state["most"], 2, "the assets were uploaded one at a time")
+        self.assertLessEqual(state["most"], n.UPLOAD_CONCURRENCY)
+        manifest = events.index(("start", "latest.json"))
+        app_assets = {Path(p).name for p in out.iterdir()} - {
+            "latest.json", "engine-pin.env", "engine-published.ok", n.CANDIDATE_MANIFEST}
+        ended_before = {name for kind, name in events[:manifest] if kind == "end"}
+        self.assertLessEqual(app_assets, ended_before)
+        published = {name: body for (tag, name), body in self.asset_bytes.items() if tag == info["tag"]}
+        for row in rows:
+            self.assertEqual(published[f"ffmpeg-source-{row['name']}-1.0.tar.gz"],
+                             upstream[row["url"]])
+        self.assertEqual(n.channel()[1], info)
+        self.assertRegex(said.getvalue(), r"uploaded latest\.json \(0\.0 MB\) in \d+\.\ds")
+
+    def test_one_failed_upload_still_tries_the_rest_and_refuses_as_before(self):
+        info = self.reserve()
+        out = Path(self.temp.name) / "one-fails"
+        n.build(info, out)
+
+        def fake(*args, **kwargs):
+            if args[:4] == ("gh", "release", "upload", info["tag"]) and args[-1].endswith("RichOS.app.tar.gz.sig"):
+                raise subprocess.CalledProcessError(1, args)
+            return self.fake_external(*args, **kwargs)
+        sig = out / "RichOS.app.tar.gz.sig"
+        sig.write_bytes(b"signature")
+        n.write_candidate_manifest(info, out)
+        with patch.object(n, "execute", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(subprocess.CalledProcessError):
+            n.finish(info, out)
+        uploaded = {name for tag, name in self.asset_bytes if tag == info["tag"]}
+        self.assertNotIn("RichOS.app.tar.gz.sig", uploaded)
+        self.assertNotIn("latest.json", uploaded)
+        self.assertIn("build-info.json", uploaded)
+        self.assertEqual(n.channel(), (None, None))
+
     def test_the_committed_recipe_names_the_assets_the_publish_step_uploads(self):
         """FFMPEG-SOURCE.txt prints each row's `asset`; the publish step derives the name.
         They must agree, or the directions inside the runtime point at files nobody uploads."""
