@@ -550,7 +550,13 @@ pub fn experience_companies(page: &Page, profile_url: &str) -> Vec<String> {
         // link or by coming before Activity. Review rv-20261110T145902Z-456e9251-a616, finding 1.
         let start = merged.iter().rposition(|s| s.links.iter()
             .any(|l| own_section(l, &profile).as_deref() == Some("recent-activity"))).map_or(0, |i| i + 1);
-        let first = merged[start..].iter().find(|s| s.links.iter().any(|l| company_key(l, &profile).is_some())
+        // And it has a position's shape: a company linked twice in a row's worth, its logo and
+        // its name. Read on the saved profiles: Experience 8 links to 4 companies, 4/2, 6/3, 10/4,
+        // 12/4; Licenses 1/1 and 2/2. So a student's lone certification issuer is never taken for
+        // an employer (review rv-20261110T160355Z-e985a6ec-fed7, finding 2).
+        let positions = |links: &[&str]| links.iter().filter_map(|l| company_key(l, &profile)).enumerate()
+            .any(|(n, key)| links.iter().filter_map(|l| company_key(l, &profile)).skip(n + 1).any(|k| k == key));
+        let first = merged[start..].iter().find(|s| positions(&s.links)
             && !s.links.iter().any(|l| own_section(l, &profile).is_some_and(|o| o != "experience")));
         if let Some(section) = first {
             add_companies(&mut keys, section.links.iter().copied(), &profile);
@@ -1446,7 +1452,19 @@ mod tests {
             h("Berufserfahrung"), link("https://www.linkedin.com/company/one/", "One"),
             h("Ehrenamt"), link("https://www.linkedin.com/company/charity/", "Charity"),
         ]);
-        assert_eq!(experience_companies(&quiet, PROFILE), vec!["one"]);
+        assert_eq!(experience_companies(&quiet, PROFILE).len(), 0, "a company linked once is not a position");
+        let positions = page(PROFILE, vec![
+            h("Berufserfahrung"), link("https://www.linkedin.com/company/one/", ""), link("https://www.linkedin.com/company/one/", "One"),
+            h("Ehrenamt"), link("https://www.linkedin.com/company/charity/", "Charity"),
+        ]);
+        assert_eq!(experience_companies(&positions, PROFILE), vec!["one"]);
+        // Review rv-20261110T160355Z-e985a6ec-fed7, finding 2: a student with no Experience and
+        // one certification, without its "Show all": the issuer is not an employer.
+        let student = page(PROFILE, vec![
+            h("Aktivität"), link("https://www.linkedin.com/in/ada-walker/recent-activity/all/", "Alle Beiträge"),
+            h("Bescheinigungen"), link("https://www.linkedin.com/company/certification-issuer/", "Issuer"),
+        ]);
+        assert!(experience_companies(&student, PROFILE).is_empty());
     }
 
     /// Review rv-20261110T145902Z-456e9251-a616, finding 2: a country host's profile link
