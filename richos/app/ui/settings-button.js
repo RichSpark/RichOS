@@ -571,6 +571,7 @@ window.RichSettings = (function () {
         instructions.open();
       }, "set-instructions-state"));
     }
+    if (instructions && searchFolders) rich.push(divider());
     if (searchFolders) {
       rich.push(buildDisclosureRow("set-search-folders-open", "Search folders", function () {
         searchFolders.open();
@@ -578,7 +579,7 @@ window.RichSettings = (function () {
     }
     var model = part("model");
     if (model) {
-      if (rich.length) rich.push(divider());
+      if (rich.length && !(instructions && searchFolders)) rich.push(divider());
       rich.push(model);
     }
     var interrupt = part("interrupt");

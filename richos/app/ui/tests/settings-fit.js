@@ -360,7 +360,7 @@ async function main() {
     assertEqual(
       disclosures.map((r) => r.id).sort(),
       // Round 41 added two: Your name in Git (set-git-open) and Terminal setup (set-terminal-open).
-      ["set-accounts-open", "set-git-open", "set-instructions-open", "set-memory-open", "set-phone-open", "set-quota-open", "set-repositories-open", "set-richpass-open", "set-terminal-open"],
+      ["set-accounts-open", "set-git-open", "set-instructions-open", "set-memory-open", "set-phone-open", "set-quota-open", "set-repositories-open", "set-richpass-open", "set-search-folders-open", "set-terminal-open"],
       "THE DEFECT: the rows that open a sheet are not marked as disclosures"
     );
     for (const r of disclosures) {
@@ -602,10 +602,9 @@ async function main() {
           line: n ? n.textContent.trim() : null,
           px: cs ? Math.round(parseFloat(cs.fontSize)) : null,
           theme: document.documentElement.getAttribute("data-theme") || document.body.getAttribute("data-theme"),
-          rowInWindow: (() => {
-            const r = row.getBoundingClientRect();
-            return r.top >= 0 && r.bottom <= window.innerHeight;
-          })(),
+          rowTop: row.getBoundingClientRect().top,
+          rowBottom: row.getBoundingClientRect().bottom,
+          windowHeight: window.innerHeight,
         };
       });
       const errs = p.__errors;
@@ -619,7 +618,8 @@ async function main() {
       );
       // §15's floor for text meant to be read. 14px is the "skippable" tier and this is not that.
       assert(m.px >= 16, `the state line is ${m.px}px in ${theme}; §15's floor for readable text is 16px`);
-      assert(m.rowInWindow, `the phone row itself left the window in ${theme}`);
+      assert(m.rowTop >= 0 && m.rowBottom <= m.windowHeight,
+        `the phone row is at ${m.rowTop}..${m.rowBottom} in a ${m.windowHeight}px window (${theme})`);
       assertEqual(errs, [], `the menu reported page errors (${theme})`);
       seen.push(`${theme}: ${JSON.stringify(m.line)} at ${m.px}px`);
     }

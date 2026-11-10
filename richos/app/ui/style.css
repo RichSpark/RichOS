@@ -8208,6 +8208,11 @@ body.home-open {
   margin: 10px 0;
   background: var(--line-soft);
 }
+/* Keep the live phone-pairing row visible in a short window after adding Search folders. */
+@media (max-height: 760px) {
+  .sm-col[aria-labelledby="set-group-rich"] { padding-block: 8px; }
+  .sm-col[aria-labelledby="set-group-rich"] .sm-divider { margin-block: 3px; }
+}
 
 /* The rows sit on the column's text edge; a row that can be pressed keeps its hover tint by
    reaching 8px past that edge on both sides. */
