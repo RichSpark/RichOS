@@ -50,7 +50,6 @@
     sheet.hidden = true;
     const page = element("section", "rf-folders-page");
     page.setAttribute("role", "dialog");
-    page.setAttribute("aria-modal", "true");
     page.setAttribute("aria-labelledby", "rf-folders-title");
     const header = element("header", "rf-folders-header");
     const back = button("‹ Settings", "rf-folders-back", () => close(true));

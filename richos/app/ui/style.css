@@ -13424,7 +13424,16 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 }
 .srch-source-settings {
   align-self: flex-start;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--gold-text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
+.srch-source-settings:focus-visible { outline: 2px solid var(--gold-text); outline-offset: 2px; }
 @media (max-width: 660px) {
   .srch-body { flex-direction: column; }
   .srch-sources { flex: 0 0 auto; margin: 4px 12px 8px; }

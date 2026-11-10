@@ -1,5 +1,5 @@
 .rf-folders-scrim {
-  position: fixed; inset: 0; z-index: 950;
+  position: fixed; inset: 0; z-index: 250;
   display: grid; place-items: center; padding: 24px;
   background: rgb(0 0 0 / .55);
 }
