@@ -12,8 +12,9 @@ WHAT IS REFUSED, in first-party material (anything not registered as third-party
 
   - a license file (LICENSE in either spelling, COPYING, UNLICENSE, LICENSE-x.txt, x-LICENSE
     and the like) anywhere but the root, and a root LICENSE that is no longer the GNU AGPL-3.0;
-  - an SPDX identifier other than AGPL-3.0-only or AGPL-3.0-or-later;
-  - a manifest license field (package.json, Cargo.toml, pyproject.toml) other than those two
+  - an SPDX identifier other than AGPL-3.0-only (docs/legal/LICENSING.md grants version 3 and
+    no later version, so AGPL-3.0-or-later is refused);
+  - a manifest license field (package.json, Cargo.toml, pyproject.toml) other than AGPL-3.0-only
     (or npm's "SEE LICENSE IN ..." and "UNLICENSED", which grant no other license);
   - a license tag (@license, License:) or a sentence that declares a file is licensed,
     released or distributed under another license (MIT, BSD, Apache, GPL, MPL, CC and the
@@ -51,7 +52,7 @@ ROOT_LICENSE = "LICENSE"
 AGPL_TITLE = "GNU AFFERO GENERAL PUBLIC LICENSE"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SELF = "richos/app/scripts/autocheck/first-party-license.py"
-ALLOWED_IDS = {"agpl-3.0-only", "agpl-3.0-or-later", "agpl-3.0"}
+ALLOWED_IDS = {"agpl-3.0-only"}  # docs/legal/LICENSING.md: "version 3 and no later version"
 
 # Files that record other people's licenses by design.
 LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
@@ -225,12 +226,12 @@ def judge_line(path, line):
         expression = SPDX_EXPRESSION.match(found.group(1))
         value = expression.group(0) if expression else ""
         if value.lower() not in ALLOWED_IDS:
-            return f"an SPDX identifier other than AGPL-3.0 ({value or 'empty'})"
+            return f"an SPDX identifier other than AGPL-3.0-only ({value or 'empty'})"
     field = MANIFEST_FIELD.get(name)
     if field and (found := field.search(line)):
         value = found.group(1).strip()
         if value.lower() not in ALLOWED_IDS and value != "UNLICENSED" and not value.startswith("SEE LICENSE IN"):
-            return f"a {name} license field other than AGPL-3.0 ({value})"
+            return f"a {name} license field other than AGPL-3.0-only ({value})"
     for pattern in DECLARATIONS:
         for found in pattern.finditer(line):
             if not NEGATED.search(found.group(0)):

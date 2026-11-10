@@ -14,7 +14,8 @@ itself declare anything.
            in RichPass.html putting its first-party source under MIT, also inside a vendored
            region; an SPDX identifier, a manifest field, a license header and a public-domain
            dedication in RichOS files; a root LICENSE that is no longer the AGPL; a Gradle
-           wrapper nobody registered; a file whose name holds a space; `commit -a`; a land of a commit that skipped the hooks,
+           wrapper nobody registered; AGPL-3.0-or-later; a file whose name holds a space;
+           `commit -a`; a land of a commit that skipped the hooks,
            before main moves; the push backstop of a merge that skipped them
   PASSES   registered third-party material with its own license (the RichPass vendor packages);
            a Gradle wrapper registered in the same change; the brand exclusion ("not licensed",
@@ -171,18 +172,28 @@ class Refused(Fixture):
         self.write("richos/tools/five/index.js", f"/*! {TAG} */\n")
         self.write("richos/tools/six/Cargo.toml", '[package]\nname = "six"\nlic' + 'ense = "BSD-3-Clause"\n')
         out = self.commit("four ways to say it", expect=1)
-        self.refused(out, "richos/tools/one/tool.sh:2: an SPDX identifier other than AGPL-3.0 (MIT)",
-                     "richos/tools/two/package.json:3: a package.json license field other than AGPL-3.0 (MIT)",
+        self.refused(out, "richos/tools/one/tool.sh:2: an SPDX identifier other than AGPL-3.0-only (MIT)",
+                     "richos/tools/two/package.json:3: a package.json license field other than AGPL-3.0-only (MIT)",
                      "richos/tools/three/main.js:2:", "richos/tools/four/README.md:3:",
                      "richos/tools/five/index.js:1:",
-                     "richos/tools/six/Cargo.toml:3: a Cargo.toml license field other than AGPL-3.0 (BSD-3-Clause)")
+                     "richos/tools/six/Cargo.toml:3: a Cargo.toml license field other than AGPL-3.0-only (BSD-3-Clause)")
+
+    def test_agpl_or_later_is_refused(self):
+        # Review P2: LICENSING.md grants version 3 and no later version; only AGPL-3.0-only is ours.
+        self.make()
+        self.write("richos/tools/example/main.js", f"// {SPDX}AGPL-3.0-or-later\n")
+        self.write("richos/tools/example/package.json", '{\n  "lic' + 'ense": "AGPL-3.0-or-later"\n}\n')
+        out = self.commit("a later version", expect=1)
+        self.refused(out, "richos/tools/example/main.js:1: an SPDX identifier other than AGPL-3.0-only (AGPL-3.0-or-later)",
+                     "richos/tools/example/package.json:2: a package.json license field other than AGPL-3.0-only "
+                     "(AGPL-3.0-or-later)")
 
     def test_a_file_whose_name_has_a_space_is_judged(self):
         # Review P2: git ends the +++ header of such a path with a tab, which hid the file.
         self.make()
         self.write("richos/tools/example/My Tool.js", f"// {SPDX}MIT\n")
         self.refused(self.commit("a spaced name", expect=1),
-                     "richos/tools/example/My Tool.js:1: an SPDX identifier other than AGPL-3.0 (MIT)")
+                     "richos/tools/example/My Tool.js:1: an SPDX identifier other than AGPL-3.0-only (MIT)")
         self.commit("a spaced name, unchecked", "--no-verify")
         out = self.run_(["python3", CHECK, "--range", "HEAD~1..HEAD", "--what", "check"])
         self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
@@ -199,7 +210,7 @@ class Refused(Fixture):
         shutil.copy(self.repo / "richos/mobile/native-android/gradlew", self.repo / "richos/tools/sample/gradlew")
         self.write("richos/tools/seven/notice.py", f'TEXT = "jq is distributed under the {MIT}"  # third-party-notice:\n')
         out = self.commit("an unregistered wrapper", expect=1)
-        self.refused(out, "richos/tools/sample/gradlew:18: an SPDX identifier other than AGPL-3.0 (Apache-2.0)",
+        self.refused(out, "richos/tools/sample/gradlew:18: an SPDX identifier other than AGPL-3.0-only (Apache-2.0)",
                      "richos/tools/seven/notice.py:1:")
 
     def test_commit_a_is_judged_on_what_it_commits(self):

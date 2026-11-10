@@ -229,7 +229,7 @@ in about 0.1 s and refuse in first-party material:
 - a license file (`LICENSE` in either spelling, `COPYING`, `LICENSE-x.txt`, `x-LICENSE` and the
   like) anywhere but the root and a root `LICENSE` that is no longer the GNU AGPL-3.0;
 - an SPDX identifier or a `package.json`/`Cargo.toml`/`pyproject.toml` license field, other
-  than `AGPL-3.0-only` or `AGPL-3.0-or-later`;
+  than `AGPL-3.0-only` (`docs/legal/LICENSING.md` grants version 3 and no later version);
 - a license tag or a sentence that declares a file to be under another license or in the public
   domain. A sentence saying something is not licensed that way (the brand exclusion in
   `docs/legal/BRAND-ASSETS.md`) is not a declaration.
