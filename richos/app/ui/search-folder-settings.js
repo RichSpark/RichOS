@@ -336,6 +336,7 @@
     paint();
     try {
       const next = await invoke(command, args);
+      window.dispatchEvent(new CustomEvent("richfinder:folders-changed", { detail: { mode: next.mode } }));
       const [nextStatus, selected, companies, sources] = await Promise.all([
         invoke("search_documents_status"), invoke("search_selected_folders"),
         invoke("search_company_folders"), invoke("search_document_sources")
@@ -347,7 +348,6 @@
       companyRows = companies;
       companySources = sources;
       setFeedback("Saved. Applies to the next search, no restart.");
-      window.dispatchEvent(new CustomEvent("richfinder:folders-changed", { detail: { mode: preferences.mode } }));
     } catch (error) {
       if (token === epoch) setFeedback(String(error));
     } finally {
