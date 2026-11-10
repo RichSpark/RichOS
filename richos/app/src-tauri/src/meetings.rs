@@ -1415,7 +1415,10 @@ impl Meetings {
     fn write_brief_once(&self, dir: &Path, facts: &MeetingFacts, transcript: &str) -> Result<(), String> {
         let state = self.app.state::<crate::AppState>();
         let (bin, folder) = crate::bug_report::claude_for(&state);
-        let input = richos_core::bug_report::writer_input(&meeting_notes::writer_prompt(facts, transcript), None);
+        let engine = state.engine_dir.lock().unwrap().clone();
+        let prompt = meeting_notes::writer_prompt(&engine, facts, transcript)
+            .map_err(|err| format!("meeting writer instructions could not be loaded: {err}"))?;
+        let input = richos_core::bug_report::writer_input(&prompt, None);
         let answer = crate::bug_report::ask_rich_within(&self.app, &bin, folder.as_deref(), dir, &input, BRIEF_DEADLINE)?;
         let brief = meeting_notes::accept_brief(&answer)?;
         meeting_notes::write_brief(dir, &brief).map(|_| ()).map_err(|e| format!("brief.md could not be written: {e}"))
