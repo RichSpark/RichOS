@@ -665,6 +665,97 @@ if printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
     ok "R58. a team save the app REFUSED backs nothing: 'I saved Norm' still alerts"
 else bad "R58. refused app save" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
 
+# R59-R65: ARM 3 over the app's onboarding save tools (Tuner's test-VM walk of the new
+# onboarding, 2026-11-10: both "your notes are saved" replies ended with the alert answered
+# aloud to the user). save_company_notes answers {"status":"saved","entityId":...,"verified":true}
+# and no path; the reply cannot name one, so the tool's answer is the place.
+python3 - "$APP_SPECS" <<'PY2'
+import json, os, sys
+out = sys.argv[1]
+notes_in = {"notes": "Northwind sells roofing.", "progress": "complete"}
+ok_answer = {"status": "saved", "entityId": "northwind", "progress": "complete", "bytes": 24, "verified": True}
+instr_ok = {"status": "saved", "rules": ["Keep it short"], "path": "/x/instructions.md"}
+specs = {
+    "notes-saved": [{"app": ["mcp__richos_onboarding__save_company_notes", notes_in, ok_answer]}],
+    "notes-refused": [{"app": ["mcp__richos_onboarding__save_company_notes", notes_in,
+                               "Use only notes and progress. Nothing was saved.", True]}],
+    "notes-unverified": [{"app": ["mcp__richos_onboarding__save_company_notes", notes_in,
+                                  {"status": "saved", "verified": False}]}],
+    "instr-saved": [{"app": ["mcp__richos_onboarding__save_your_instructions", {"rules": ["Keep it short"]}, instr_ok]}],
+    "assign-recorded": [{"app": ["mcp__richos_assignments__record", {"assignment": "x"},
+                                 {"recorded": True, "assignment_id": "a1", "state": "registered"}]}],
+    "none": [],
+}
+for name, spec in specs.items():
+    with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as fh:
+        json.dump([{"prompt": "go"}] + spec, fh)
+PY2
+for s in notes-saved notes-refused notes-unverified instr-saved assign-recorded none; do
+    mk_tr "$SANDBOX/appsave-$s.jsonl" "$(cat "$APP_SPECS/$s.json")"
+done
+NOTES_SAID="I've saved your notes. Everything you told me about Northwind is recorded, and I'll use it from here on."
+NOTES_STATE="Your notes are saved."
+run_hook "$SANDBOX/appsave-notes-saved.jsonl" "$NOTES_SAID" true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R59. save_company_notes answered status saved, verified: 'I've saved your notes' raises no alert"
+else bad "R59. notes saved" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+run_hook "$SANDBOX/appsave-notes-saved.jsonl" "$NOTES_STATE" true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R60. the same turn, said as a state ('Your notes are saved.'): no alert"
+else bad "R60. notes saved, state" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+run_hook "$SANDBOX/appsave-none.jsonl" "$NOTES_SAID" true
+if printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R61. the same claim in a turn that never called the tool still alerts"
+else bad "R61. notes claimed, no call" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+for s in notes-refused notes-unverified; do
+    run_hook "$SANDBOX/appsave-$s.jsonl" "$NOTES_SAID" true
+    if printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+        ok "R62. $s: a save the app refused, or did not verify, backs nothing"
+    else bad "R62. $s" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+done
+run_hook "$SANDBOX/appsave-instr-saved.jsonl" "I saved your instructions. They apply from your next new conversation." true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R63. save_your_instructions answered saved: 'I saved your instructions' raises no alert"
+else bad "R63. instructions saved" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+run_hook "$SANDBOX/appsave-assign-recorded.jsonl" "I've recorded that assignment for Stu." true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R64. assignments record answered recorded: true: 'I've recorded that assignment' raises no alert"
+else bad "R64. assignment recorded" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+run_hook "$SANDBOX/appsave-notes-saved.jsonl" "I've recorded the rule in ceo-decisions.md." true
+if printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R65. a claim naming a file the save tool never wrote still alerts (the tool backs only a claim with no place of its own)"
+else bad "R65. named file" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+
+# R66-R68: ordinary onboarding sentences after a confirmed app save (second review of d7e541851).
+run_hook "$SANDBOX/appsave-notes-saved.jsonl" "I've saved your company notes, including https://37signals.com/ as your website." true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R66. a website inside saved content is not a record destination: no alert"
+else bad "R66. website in notes" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+run_hook "$SANDBOX/appsave-instr-saved.jsonl" "I've saved your rule in instructions.md." true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R67. the instructions path the save tool confirmed backs a claim naming that file: no alert"
+else bad "R67. instructions.md named" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+run_hook "$SANDBOX/appsave-notes-saved.jsonl" "I've saved your answers in the notes." true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R68. after a verified company-notes save, 'saved your answers in the notes' is not private memory: no alert"
+else bad "R68. answers in the notes" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+
+# R69-R73: the one rule (a confirmed app save, no memory/ECS write, no file the turn did not write).
+for pair in \
+    "R69|I've saved your company notes, including 37signals.com/about as your website." \
+    "R70|I've saved your answers. They're in the notes." \
+    "R71|Noted, I've written that down." \
+    "R72|Got it, it's saved."; do
+    run_hook "$SANDBOX/appsave-notes-saved.jsonl" "${pair#*|}" true
+    if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+        ok "${pair%%|*}. after a verified notes save, '${pair#*|}' raises no alert"
+    else bad "${pair%%|*}" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+done
+run_hook "$SANDBOX/appsave-none.jsonl" "Noted, I've written that down." true
+if printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R73. 'Noted, I've written that down.' with no app save behind it still alerts"
+else bad "R73. noted, no save" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+
 # ---------------------------------------------------------------------------
 # ARM 3 — RECORDED, NOT WRITTEN
 # The R cases are the real claims the CEO answered with "recorded WHERE?" (or
