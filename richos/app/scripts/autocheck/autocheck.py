@@ -33,7 +33,8 @@ engineer in a worktree, Codex, Rich in the main checkout.
   A check that did not reach a verdict is NOT RUN, which is never a pass: it is named in the
   verdict and in the receipt, and the nightly runs it (README.md, "NOT RUN"). Before all of
   it, and at every push of any branch, a tree whose root holds an entry the CEO has not
-  authorized is refused (root_entries_gate).
+  authorized is refused (root_entries_gate). Every branch commit and every land also refuses a
+  license other than the AGPL-3.0 in RichOS's own material (first_party_license_gate).
 
   THE ONE ESCAPE is git's own `--no-verify`. It cannot be prevented; it is recorded. After
   the fact (post-commit, post-merge) a commit whose tree this check never passed, or a main
@@ -437,6 +438,8 @@ def commit_check(repo, what):
     # call for a lint nor answer for one (see StagedOnly).
     staged = git("diff", "--cached", "--name-only", "--no-renames").splitlines()
     app = sorted({p for p in staged if p.startswith("richos/app/")})
+    if what == "commit" and first_party_license_gate(repo, what):
+        return 1
     if what == "commit" and (stale_pins(repo) or subprocess.run("{ git show HEAD:richos/app/scripts/autocheck/dependency-pins.py || git show refs/heads/main:richos/app/scripts/autocheck/dependency-pins.py; } 2>/dev/null | python3 -", shell=True, cwd=repo.top, stdin=subprocess.DEVNULL).returncode):
         return 1
     if not app:
@@ -1495,6 +1498,39 @@ def root_entries_gate(repo, what, tree, where=LAND_BRANCH):
     return 1
 
 
+# RICHOS'S OWN WORK IS UNDER THE ROOT AGPL-3.0 AND NO OTHER LICENSE (2026-11-10). RichPass reached
+# public main with its own MIT `LICENSE` and a line putting its source under MIT, copied from the
+# author's PassBooster; the CEO never authorized that license and nothing refused it. So every
+# branch commit, every land (merge into main or a release branch, a commit on it) and the push
+# backstop run first-party-license.py over what the change adds: a license file, an SPDX
+# identifier, a manifest license field or a license declaration other than the AGPL-3.0 in
+# anything `.richos/vendored-material` does not record as third-party is refused, naming the file
+# and line. The copy that runs is the committed one (HEAD's, else main's), as for
+# dependency-pins.py, so a change cannot loosen the check that judges it; with neither, the tree
+# predates the check and nothing runs.
+FIRST_PARTY_LICENSE = "richos/app/scripts/autocheck/first-party-license.py"
+
+
+def first_party_license_gate(repo, what, args=()):
+    """0, or 1 after the check printed its refusal: the change adds a license other than the
+    AGPL-3.0 to RichOS's own material. `args`: the check's mode (default: the index against HEAD)."""
+    for rev in ("HEAD", f"refs/heads/{LAND_BRANCH}"):
+        source = subprocess.run(["git", "show", f"{rev}:{FIRST_PARTY_LICENSE}"], cwd=repo.top, env=repo.env,
+                                capture_output=True, stdin=subprocess.DEVNULL)
+        if source.returncode == 0:
+            break
+    else:
+        return 0
+    try:
+        result = subprocess.run([sys.executable, "-", "--what", what, *args], input=source.stdout, cwd=repo.top,
+                                env=hook_env(repo), timeout=FAST_HANG_SECONDS)
+    except subprocess.TimeoutExpired:
+        banner(f"{what.upper()} REFUSED: the first-party license check did not finish in {FAST_HANG_SECONDS} s",
+               ["It takes well under a second on a commit; a hang is a failure, not a pass."])
+        return 1
+    return 1 if result.returncode else 0
+
+
 def author_checkouts(repo, head):
     """Every other checkout of this repository whose HEAD is exactly `head` (git worktree list)."""
     listed = git("worktree", "list", "--porcelain", check=False, cwd=repo.top, env=repo.env)
@@ -2383,6 +2419,8 @@ def land_from_index(repo, what, receipt=True, target=""):
         return 1
     if root_entries_gate(repo, what, git("write-tree", cwd=repo.top)):
         return 1
+    if first_party_license_gate(repo, what):
+        return 1
     staged = [p for p in git("diff", "--cached", "--name-only", "--no-renames").splitlines() if p]
     heads = merge_heads(repo)
     if receipt and heads:
@@ -2575,6 +2613,8 @@ def pre_push(repo, stdin_text):
             return 1
         if base is None:
             base = git("rev-list", "--max-parents=0", local_sha, cwd=repo.top).split()[0]
+        if first_party_license_gate(repo, "push", ["--range", f"{base}..{local_sha}"]):
+            return 1
         if land_check(repo, "push", [], [f"{base}..{local_sha}"], changed_lint=False):
             return 1
     return 0

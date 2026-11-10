@@ -218,7 +218,7 @@ def ffmpeg_source_directions(source):
         "bin/ffmpeg and bin/ffprobe are the unmodified static macOS arm64 build of FFmpeg "
         f"{source['version']} published by Martin Riedl at {source['url'].rsplit('/', 1)[0]}/ "
         "(signed with Developer ID team KU3N25YGLU). It is configured with --enable-gpl and "
-        "--enable-version3, so the programs are distributed under the GNU General Public License "
+        "--enable-version3, so the programs are distributed under the GNU General Public License "  # third-party-notice: FFmpeg's GPLv3, in its bundled notice
         "version 3 or later; the full text is FFMPEG-COPYING.GPLv3 beside this file. `ffmpeg -version` "
         "prints the complete configuration.",
         "",
@@ -551,7 +551,7 @@ def build(destination):
             raise RuntimeError("runtime/bin must hold only Mach-O executables (a #! script there leaks "
                                "kernel memory on every exec): " + ", ".join(scripts))
         # License files from binary upstream distributions are retained in full.
-        (runtime / "sources/README.txt").write_text("Pinned upstream distributions are listed in runtime-sources.json. Git's exact corresponding source and COPYING are included. Python and Node license notices remain in their distributions. jq is distributed under the MIT license; see https://github.com/jqlang/jq/blob/jq-1.8.2/COPYING. whisper-cli is built from the pinned whisper.cpp source and is distributed under the MIT license in WHISPER-CPP-LICENSE. ffmpeg and ffprobe are an unmodified upstream static build distributed under GPLv3 or later in FFMPEG-COPYING.GPLv3; FFMPEG-SOURCE.txt says where their exact corresponding source is. macOS supplies bash and system libraries.\n")
+        (runtime / "sources/README.txt").write_text("Pinned upstream distributions are listed in runtime-sources.json. Git's exact corresponding source and COPYING are included. Python and Node license notices remain in their distributions. jq is distributed under the MIT license; see https://github.com/jqlang/jq/blob/jq-1.8.2/COPYING. whisper-cli is built from the pinned whisper.cpp source and is distributed under the MIT license in WHISPER-CPP-LICENSE. ffmpeg and ffprobe are an unmodified upstream static build distributed under GPLv3 or later in FFMPEG-COPYING.GPLv3; FFMPEG-SOURCE.txt says where their exact corresponding source is. macOS supplies bash and system libraries.\n")  # third-party-notice: jq's and whisper.cpp's licenses, in the runtime's notice
         shutil.copyfile(__file__, runtime / "sources/RICHOS-RUNTIME-BUILDER.py")
         shutil.copyfile(LAUNCHER_SOURCE, runtime / "sources/RICHOS-RUNTIME-LAUNCHER.c")
         shutil.copyfile(Path(__file__).parent / "runtime-sources.json", runtime / "sources/runtime-sources.json")
