@@ -469,8 +469,11 @@ mod tests {
         let mut f = facts();
         f.warnings.extend(warnings);
         let prompt = writer_prompt(&engine(), &f, "Me: hello").unwrap();
-        assert!(prompt.contains(missing) && prompt.contains("instead of reading as a complete record"));
-        assert!(prompt.contains(r#""warnings":["#));
+        let (_, data) = prompt.split_once("<meeting-facts>\n").unwrap();
+        let (data, _) = data.split_once("\n</meeting-facts>").unwrap();
+        let data: serde_json::Value = serde_json::from_str(data).unwrap();
+        assert_eq!(data["warnings"], serde_json::json!([missing]));
+        assert!(prompt.contains("instead of reading as a complete record"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
