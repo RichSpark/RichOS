@@ -496,9 +496,13 @@ pub fn resolve_search_message(reader: &SpineReader, token: &str) -> Option<Messa
     (anchor.current(&view)?.revision == revision).then_some(anchor)
 }
 
-/// An exact legacy hit can share a row with the index only if it has the same
-/// complete visible message. A legacy assistant message may span several items.
-pub fn exact_message_token(ledger: &Ledger, thread_id: &str, message: &Message) -> Option<String> {
+/// Anchor a legacy hit to the committed visible item containing the match.
+pub fn exact_message_token(
+    ledger: &Ledger,
+    thread_id: &str,
+    message: &Message,
+    matched: std::ops::Range<usize>,
+) -> Option<String> {
     let binding = ledger.thread_binding(thread_id).ok()?;
     if binding.person_id() != &PersonId::default_ceo() { return None; }
     let role = match message.role.as_str() {
@@ -506,10 +510,22 @@ pub fn exact_message_token(ledger: &Ledger, thread_id: &str, message: &Message) 
         "assistant" => SearchMessageRole::Assistant,
         _ => return None,
     };
-    let mut matches = Timeline::committed_search_turn(ledger, &binding, &message.turn_id).ok()?
-        .into_iter().filter(|item| item.role == role && item.text == message.text);
-    let item = matches.next()?;
-    if matches.next().is_some() { return None; }
+    let items = Timeline::committed_search_turn(ledger, &binding, &message.turn_id).ok()?;
+    let mut remaining = message.text.as_str();
+    let mut start = 0;
+    let mut matched_item = None;
+    for item in items.into_iter().filter(|item| item.role == role) {
+        // Legacy replies concatenate runs. If the timeline removed any text,
+        // offsets are unsafe. A match across runs has no single visible anchor.
+        remaining = remaining.strip_prefix(&item.text)?;
+        let end = start + item.text.chars().count();
+        if start <= matched.start && matched.end <= end {
+            matched_item = Some(item);
+        }
+        start = end;
+    }
+    if !remaining.is_empty() { return None; }
+    let item = matched_item?;
     let anchor = MessageAnchor { thread_id: thread_id.into(), turn_id: item.turn_id, message_id: item.message_id };
     Some(anchor.token(&richos_search::corpus::record_revision("", &item.text)))
 }
@@ -1363,7 +1379,7 @@ mod tests {
         let binding = ledger.thread_binding(&thread).unwrap();
         let turn = ledger.record_prompt_received(&binding, "A member asked for a refund.", Source::Text).unwrap();
         ledger.complete_turn(&turn, "done").unwrap();
-        let exact = exact_message_token(&ledger, &thread, &ledger.messages(&thread).unwrap()[0]).unwrap();
+        let exact = exact_message_token(&ledger, &thread, &ledger.messages(&thread).unwrap()[0], 19..25).unwrap();
         let distracting_thread = ledger.create_thread("Refund planning", &entity).unwrap();
         let distracting_binding = ledger.thread_binding(&distracting_thread).unwrap();
         for _ in 0..PAGE {
@@ -1409,6 +1425,37 @@ mod tests {
         let current = Spine::new(ledger).reader();
         assert!(resolve_search_message(&current, token).is_none());
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn exact_search_anchors_only_the_matching_visible_reply_run() {
+        use richos_core::{entity::EntityId, ledger::Source};
+        let path = std::env::temp_dir().join(richos_core::util::new_id("search-split-reply"));
+        let mut ledger = Ledger::open(&path).unwrap();
+        let entity = EntityId::parse("fixture").unwrap();
+        let thread = ledger.create_thread("Club notes", &entity).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let turn = ledger.record_prompt_received(&binding, "Check my refund.", Source::Text).unwrap();
+        let first = "✓ Checking. ";
+        let second = "Refund confirmed.";
+        ledger.append_assistant_delta(&turn, first, 1).unwrap();
+        ledger.append_assistant_delta(&turn, second, 3).unwrap();
+        ledger.complete_turn(&turn, "done").unwrap();
+
+        let messages = ledger.messages(&thread).unwrap();
+        let reply = &messages[1];
+        assert_eq!(reply.text, format!("{first}{second}"));
+        let visible = Timeline::committed_search_turn(&ledger, &binding, &turn).unwrap();
+        let anchor = MessageAnchor {
+            thread_id: thread.clone(),
+            turn_id: turn,
+            message_id: visible.iter().find(|item| item.text == second).unwrap().message_id.clone(),
+        };
+        let boundary = first.chars().count();
+        let token = exact_message_token(&ledger, &thread, reply, boundary..boundary + 6);
+        assert_eq!(token, Some(anchor.token(&richos_search::corpus::record_revision("", second))));
+        assert!(exact_message_token(&ledger, &thread, reply, boundary - 2..boundary + 6).is_none());
+        std::fs::remove_file(path).unwrap();
     }
 
     /// The stand-in folder (ten files) plus `extra` more notes that all mention refunds.
