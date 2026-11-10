@@ -2031,6 +2031,12 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             // the user's instructions is shown under (`your_instructions.rs`).
             "args": ["--onboarding-mcp", onboarding_scope, crate::question_tools::path(assignments_scope)]
         });
+        // **Reading the user's LinkedIn profile in their own browser** (`linkedin_tools.rs`):
+        // onboarding is this conversation's, and the back end has no use for the user's
+        // signed-in browser. It reads the browser and changes nothing in RichOS: no scope.
+        config["mcpServers"][crate::linkedin_tools::SERVER_NAME] = json!({
+            "type": "stdio", "command": executable, "args": ["--linkedin-mcp"]
+        });
     }
     if role == LeaseRole::Conversation {
         config["mcpServers"][crate::assignment_tools::SERVER_NAME] = json!({
@@ -6467,9 +6473,13 @@ exec /bin/sleep 1000
             Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Conversation, Path::new("claude"));
         assert_eq!(
             names(&chat),
-            vec!["richos_assignments", "richos_continuity", "richos_files", "richos_onboarding", "richos_questions", "richos_status", "richos_work"],
+            vec!["richos_assignments", "richos_continuity", "richos_files", "richos_linkedin", "richos_onboarding", "richos_questions",
+                "richos_status", "richos_work"],
             "the front desk's tool list moved"
         );
+        // The LinkedIn reader is the app's own executable with nothing but its flag: it reads
+        // the user's browser and no RichOS scope.
+        assert_eq!(chat["mcpServers"][crate::linkedin_tools::SERVER_NAME]["args"], json!(["--linkedin-mcp"]));
         // Named on its own as well, because the list above is the WHAT and this is the WHY.
         assert_eq!(chat["mcpServers"]["richos_work"]["args"].as_array().unwrap().len(), 2);
 
@@ -6490,6 +6500,8 @@ exec /bin/sleep 1000
         // two tools under §5.4's standing grant could rewrite them with no turn at all.
         assert!(work["mcpServers"].get("richos_onboarding").is_none(),
             "the back end can still rewrite the CEO's company notes");
+        assert!(work["mcpServers"].get(crate::linkedin_tools::SERVER_NAME).is_none(),
+            "the back end can open pages in the user's signed-in browser");
         // Nothing here wrote to the root — `mcp_config` builds a value and touches no disk,
         // which is the property that lets this assert the inventory without a child process.
         let _ = std::fs::remove_dir_all(&root);
