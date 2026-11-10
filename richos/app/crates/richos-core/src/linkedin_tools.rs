@@ -548,6 +548,9 @@ impl Visit<'_> {
             }
             let shown = page.url.clone();
             match self.settle(&|u| u == shown, false) {
+                // Nothing changed: what is left only lifts a clamp on text already read (a
+                // post's "…more"), so another round would press the same controls for nothing.
+                Ok((_, t)) if t == text => break,
                 Ok((p, t)) => (page, text) = (p, t),
                 Err(_) => break,
             }
@@ -1057,6 +1060,15 @@ mod tests {
         assert_eq!(companies[0]["text"], "Company 0");
         assert!(out["note"].as_str().unwrap().contains(&format!("lists {} companies", MAX_COMPANIES + 2)), "{out}");
         assert_eq!(fake.opened.borrow().len(), 1 + MAX_COMPANIES);
+    }
+
+    #[test]
+    fn an_expander_that_changes_nothing_is_pressed_once_not_every_round() {
+        // A post's "…more" only lifts a clamp on text Accessibility already reads.
+        let fake = Fake::new(safari()).with(PROFILE, vec![vec![h("Ada Walker"), t("A long post"), button("…more")]]);
+        let out = read_profile(&fake, PROFILE).unwrap();
+        assert_eq!(fake.pressed.borrow().len(), 1, "{:?}", fake.pressed.borrow());
+        assert_eq!(out["profile"]["expanders_pressed"], 1);
     }
 
     #[test]
