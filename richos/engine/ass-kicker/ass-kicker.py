@@ -1391,6 +1391,10 @@ def turn_writes(tm, transcript, prompt_id, cwd):
                     or (name == APP_SAVE_INSTRUCTIONS and answer.get("status") == "saved") \
                     or (name == APP_ASSIGN and answer.get("recorded") is True):
                 w["app_saved"].append(name)
+                # save_your_instructions answers the file it wrote: a confirmed
+                # path is a write target, as the team save's is.
+                if name == APP_SAVE_INSTRUCTIONS and isinstance(answer.get("path"), str):
+                    w["targets"].append(answer["path"])
         res = results.get(tid)
         if res is not None:
             traffic.append(tm.flatten(res.get("content")))
@@ -1406,6 +1410,9 @@ LOCATION_RE = re.compile(
     r"|§\s*\d+"
     r"|\besc-\d{8}T\d{6}Z-[0-9a-f]{4,16}\b"
     r"|\b(?:row|entry|decision|ruling|section|item|point)\s+[A-Z]?\d+(?:\.\d+)*\b", re.I)
+
+
+URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.I)
 
 
 def _named(path, raw):
@@ -1585,7 +1592,14 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
         # An app save tool answered that it saved, this turn, and the claim names
         # no place of its own: the tool's answer is the place (it returns no path).
         # A claim that names a file or section is judged as before.
-        return bool(writes.get("app_saved")) and not LOCATION_RE.search(sentence)
+        # A website inside the saved content is content, not a destination.
+        return bool(writes.get("app_saved")) and not LOCATION_RE.search(URL_RE.sub(" ", sentence))
+
+    def notes_app_owned(sentence):
+        # "saved your answers in the notes" after a verified company-notes save,
+        # with no private memory write: the notes are the app's own record.
+        return APP_SAVE_NOTES in (writes.get("app_saved") or []) and not memory \
+            and not writes.get("ecs") and app_backed(sentence)
 
     for kind, sentence in claims:
         if kind == "note":
@@ -1661,7 +1675,7 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
         # rule in my notes", "recorded in memory as standing doctrine"): that
         # is where it is, whatever else the turn wrote, and it must be said in
         # plain words. Measured: the CEO answered the first with "so what???".
-        if NOTES_POINTER_RE.search(sentence):
+        if NOTES_POINTER_RE.search(sentence) and not notes_app_owned(sentence):
             failing.append((sentence, "private", "the claim points at your notes or memory, which is "
                                                  "%s, and does not say \"in my private notes\". A "
                                                  "private note is not a record and not a rule"

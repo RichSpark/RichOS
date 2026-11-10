@@ -726,6 +726,20 @@ if printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
     ok "R65. a claim naming a file the save tool never wrote still alerts (the tool backs only a claim with no place of its own)"
 else bad "R65. named file" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
 
+# R66-R68: ordinary onboarding sentences after a confirmed app save (second review of d7e541851).
+run_hook "$SANDBOX/appsave-notes-saved.jsonl" "I've saved your company notes, including https://37signals.com/ as your website." true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R66. a website inside saved content is not a record destination: no alert"
+else bad "R66. website in notes" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+run_hook "$SANDBOX/appsave-instr-saved.jsonl" "I've saved your rule in instructions.md." true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R67. the instructions path the save tool confirmed backs a claim naming that file: no alert"
+else bad "R67. instructions.md named" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+run_hook "$SANDBOX/appsave-notes-saved.jsonl" "I've saved your answers in the notes." true
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R68. after a verified company-notes save, 'saved your answers in the notes' is not private memory: no alert"
+else bad "R68. answers in the notes" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+
 # ---------------------------------------------------------------------------
 # ARM 3 — RECORDED, NOT WRITTEN
 # The R cases are the real claims the CEO answered with "recorded WHERE?" (or

@@ -364,7 +364,7 @@ mutant arm3-private-notes-not-honored "R8." "$P" \
     "a private-notes claim is a note claim; only a committed repository file backs it (CEO 2026-10-21)."
 
 mutant arm3-notes-pointer-ignored "R5b." "$P" \
-    '        if NOTES_POINTER_RE.search(sentence):' \
+    '        if NOTES_POINTER_RE.search(sentence) and not notes_app_owned(sentence):' \
     '        if False:' \
     "'saved this as a rule in my notes' was excused by an unrelated commit until this term existed."
 
