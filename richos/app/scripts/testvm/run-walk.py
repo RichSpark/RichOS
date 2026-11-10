@@ -106,6 +106,14 @@ def main():
         validator=importlib.util.module_from_spec(spec);spec.loader.exec_module(validator)
         bad=validator.plan_problems(plan)
         if bad:p.error('the step list is refused before any guest is booted: '+'; '.join(bad))
+    # The same for conversation-walk.py's conversation file: a bad one would cost a boot and a first setup.
+    if Path(command[0]).name=='conversation-walk.py':
+        plan=next((command[i+1] for i,w in enumerate(command[:-1]) if w=='--conversation'),None) or next((w.split('=',1)[1] for w in command if w.startswith('--conversation=')),None)
+        if plan is None:p.error('conversation-walk.py needs --conversation FILE')
+        spec=importlib.util.spec_from_file_location('conversation_walk_validator',HERE/'conversation-walk.py')
+        validator=importlib.util.module_from_spec(spec);spec.loader.exec_module(validator)
+        bad=validator.plan_problems(plan)
+        if bad:p.error('the conversation is refused before any guest is booted: '+'; '.join(bad))
     vm='walk-'+uuid.uuid4().hex[:12]
     root=Path(os.environ.get('TESTVM_ROOT',str(Path.home()/'.richos-testvm')))
     state=root/'run'/vm
