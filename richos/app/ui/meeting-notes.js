@@ -127,8 +127,68 @@
     return slot;
   }
 
+  let lastCalendarRecovery = "";
+  function paintCalendarRecovery() {
+    const host = document.getElementById("mn-calendar-recovery");
+    if (!host) return;
+    const notices = st?.calendarRecovery || [];
+    const key = JSON.stringify(notices);
+    if (lastCalendarRecovery === key) return;
+    lastCalendarRecovery = key;
+    host.replaceChildren();
+    host.hidden = !notices.length;
+    const signingIn = notices.some(notice => notice.reconnecting);
+    for (const notice of notices) {
+      const name = notice.vendor === "google" ? "Google Calendar" : "Microsoft Calendar";
+      const card = document.createElement("div");
+      card.className = "tl-notice";
+      const text = document.createElement("p");
+      text.className = "tl-notice-body";
+      text.setAttribute("role", "status");
+      text.textContent = name + " is disconnected, so meetings on this account won’t prompt from the calendar.";
+      const why = document.createElement("p");
+      why.className = "tl-notice-body";
+      why.textContent = "Calls are still detected from the microphone and Start meeting notes is in Settings.";
+      const actions = document.createElement("div");
+      actions.className = "desk-card-actions";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "desk-btn desk-btn--primary";
+      button.textContent = notice.reconnecting ? "Finish signing in in your browser…" : "Reconnect " + name;
+      button.setAttribute("aria-label", button.textContent + " (" + notice.account + ")");
+      button.disabled = signingIn;
+      const error = document.createElement("p");
+      error.className = "tl-notice-body";
+      error.setAttribute("role", "status");
+      error.hidden = !notice.failed;
+      error.textContent = notice.failed ? "Calendar sign-in didn’t finish. Try reconnecting again." : "";
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        error.hidden = true;
+        try {
+          apply(await bridge.invoke("meeting_reconnect_calendar", { vendor: notice.vendor, account: notice.account }));
+        } catch (e) {
+          error.textContent = String(e);
+          error.hidden = false;
+        } finally {
+          if (button.isConnected) button.disabled = (st?.calendarRecovery || []).some(item => item.reconnecting);
+        }
+      });
+      actions.append(button);
+      if (notices.filter(item => item.vendor === notice.vendor).length > 1) {
+        const account = document.createElement("p");
+        account.className = "tl-notice-body";
+        account.textContent = notice.account;
+        card.append(account);
+      }
+      card.append(text, why, actions, error);
+      host.append(card);
+    }
+  }
+
   function paint() {
     paintRows();
+    paintCalendarRecovery();
     for (const slot of document.querySelectorAll("[data-meeting-retry]")) fillRetry(slot);
     const chip = document.getElementById("mn-paused-chip");
     if (chip) chip.hidden = !(st && st.available && st.paused);

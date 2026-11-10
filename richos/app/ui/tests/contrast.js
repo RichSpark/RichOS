@@ -793,13 +793,21 @@ const SURFACES = [
   },
   {
     name: "meeting-notes-processing",
-    what: "meeting prompts paused and the visible notice while meeting notes are prepared",
-    preset: { meetingNotes: { paused: true, processing: "preparing" } },
+    what: "paused meeting prompts, notes processing and the calendar reconnect notice with its retry message",
+    preset: {
+      meetingNotes: {
+        paused: true,
+        processing: "preparing",
+        calendarRecovery: [{ vendor: "google", account: "ceo@example.test", failed: true }],
+      },
+    },
     drive: async (p) => {
       await p.click('.nav-thread[data-thread-id="hiring"]');
       await atHiringThread(p);
       await p.waitForSelector("#mn-paused-chip:not([hidden])");
       await p.waitForSelector("#mn-status:not([hidden])");
+      await p.waitForSelector("#mn-calendar-recovery:not([hidden]) button:enabled");
+      await p.waitForSelector("#mn-calendar-recovery [role=status]:not([hidden]):last-child");
       await pageSettled(p);
     },
   },

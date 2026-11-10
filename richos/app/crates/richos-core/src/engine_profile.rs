@@ -1016,7 +1016,10 @@ impl EngineProfile {
         // host-selected folders. A path in a model's brief is not a grant.
         command.env("RICHOS_APP_READ_ROOTS", serde_json::to_string(&read_roots).unwrap());
         if let Some(zone) = &meetings {
-            command.arg("--append-system-prompt").arg(crate::meeting_notes::folder_description(zone));
+            match crate::meeting_notes::folder_description(&self.engine, zone) {
+                Ok(instructions) => { command.arg("--append-system-prompt").arg(instructions); }
+                Err(err) => eprintln!("[richos] could not load meeting history instructions: {err}"),
+            }
         }
         command.arg("--plugin-dir").arg(&self.plugin)
             .args(["--permission-mode", "bypassPermissions"])
