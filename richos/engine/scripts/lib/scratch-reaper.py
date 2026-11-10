@@ -988,9 +988,11 @@ class Walls(object):
 # measuring
 # ---------------------------------------------------------------------------
 
-def measure(path):
+def measure(path, until=None):
     """(bytes_on_disk, newest_mtime, contains_git). Errors are skipped, never
-    guessed at: a file that vanished mid-walk was never going to be freed."""
+    guessed at: a file that vanished mid-walk was never going to be freed.
+    With `until` (a time.time() value) a walk still running past it returns None: a partial
+    walk would understate the newest change, so it is never used as an answer."""
     total, newest, has_git = 0, 0.0, False
     try:
         st = os.lstat(path)
@@ -1003,6 +1005,8 @@ def measure(path):
     stack = [path]
     while stack:
         check_deadline()
+        if until is not None and time.time() > until:
+            return None
         cur = stack.pop()
         try:
             entries = list(os.scandir(cur))
@@ -3185,11 +3189,14 @@ class Reaper(object):
         return sorted(r for r in roots if os.path.isdir(r))
 
     @staticmethod
-    def find_cargo_targets(checkout, max_depth=4):
+    def find_cargo_targets(checkout, max_depth=4, until=None):
         """`target` folders Cargo made inside a checkout, found without entering the
-        repository's own metadata folder or node_modules."""
+        repository's own metadata folder or node_modules. Past `until` the search stops with
+        what it found."""
         found, stack = [], [(checkout, 0)]
         while stack:
+            if until is not None and time.time() > until:
+                break
             cur, depth = stack.pop()
             try:
                 names = sorted(os.listdir(cur))
@@ -3228,8 +3235,11 @@ class Reaper(object):
         machine, from ONE lsof read once; None if it could not be trusted to answer."""
         if "_machine_open" not in self.__dict__:
             try:
+                # In the app's sweep the read ends with the planning window, so it cannot use up
+                # the time the ordinary entries need to be applied.
+                limit = 120 if self.app_until is None else max(1, self.app_until - time.time())
                 r = subprocess.run(["lsof", "-w", "-n", "-P", "-F", "pn"], capture_output=True,
-                                   text=True, timeout=120, env=_ps_env())
+                                   text=True, timeout=limit, env=_ps_env())
                 if r.returncode not in (0, 1):
                     raise OSError("lsof exited %d" % r.returncode)
             except (OSError, subprocess.TimeoutExpired):
@@ -3276,9 +3286,20 @@ class Reaper(object):
         # workers build (scan_app). The scheduled sweep passes none and takes its own list.
         for checkout in (checkouts if checkouts is not None else self.checkout_roots()):
             check_deadline()
-            for path in self.find_cargo_targets(checkout):
+            # THE APP'S SWEEP IS BOUNDED, and this arm comes last: it never takes the time the
+            # ordinary entries (sessions, voice, profiles) already planned need to be applied.
+            # Past the planning window a target is left for the next sweep, counted as deferred.
+            if self.app_spent(self.app_until):
+                continue
+            for path in self.find_cargo_targets(checkout, until=self.app_until):
                 klass = "cargo-output"
-                size, newest, _repo = measure(path)
+                if self.app_spent(self.app_until):
+                    continue
+                measured = measure(path, until=self.app_until)
+                if measured is None:
+                    self.app_deferred += 1
+                    continue
+                size, newest, _repo = measured
                 real = os.path.realpath(path)
                 if real in walls.never or not inside(real, checkout) or real == checkout:
                     self.add(path, klass, size, INDETERMINATE,

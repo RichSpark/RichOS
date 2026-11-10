@@ -7,6 +7,7 @@ a `target` folder Cargo made is regenerable wherever it sits, so it is planned D
 build is using it, and the checkout's own files are never planned. State is a temporary directory;
 the reaper only PLANS here, nothing is deleted.
 """
+import contextlib
 import fcntl
 import importlib.util
 import os
@@ -336,6 +337,60 @@ class NamedScratch(unittest.TestCase):
     def test_a_directory_a_process_holds_open_is_never_taken(self):
         (e,) = self.plan("zach-held", 9, holder="4242")
         self.assertEqual(e.action, reaper.INDETERMINATE, e.why)
+
+
+class AppBudget(unittest.TestCase):
+    """The app's bounded sweep: the Cargo arm never takes the time already planned cleanup needs."""
+
+    def run_sweep(self, scan_seconds, budget):
+        clock = [100_000.0]
+        r = object.__new__(reaper.Reaper)
+        r.cfg = {"nightly_dir": "/n", "age_floor_minutes": 60}
+        r.floor, r.now = 3600, clock[0]
+        r.scope, r.unattributed = {"kind": "app"}, 0
+        r.entries = [reaper.Entry("/fixture/ended-app-session", "app-session", 4096,
+                                  reaper.DELETE, "already proved ended and unheld")]
+        r.app_until = clock[0] + budget / 2
+        r.app_apply_until = clock[0] + budget
+        r.app_deferred = 0
+        r.find_cargo_targets = lambda checkout, until=None: ["/p/target"]
+        r.lock_free = lambda path: True
+        r.in_use_under = lambda path: ""
+        r.collect_test_instances = lambda *a: []
+        r._record_failures = lambda *a: None
+
+        def measure(path, until=None):
+            # A real bounded walk stops as soon as it is past `until`.
+            if until is not None and clock[0] + scan_seconds > until:
+                clock[0] = max(clock[0], until) + 0.01
+                return None
+            clock[0] += scan_seconds
+            return 10 * 1024 ** 3, 1.0, False
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(reaper.time, "time", lambda: clock[0]))
+            stack.enter_context(patch.object(reaper, "measure", measure))
+            stack.enter_context(patch.object(reaper, "write_log", lambda *a: None))
+            stack.enter_context(patch.object(reaper.os.path, "lexists", return_value=True))
+            stack.enter_context(patch.object(reaper.os.path, "isdir", return_value=True))
+            stack.enter_context(patch.object(reaper.os.path, "islink", return_value=False))
+            stack.enter_context(patch.object(reaper.glob, "glob", return_value=[]))
+            stack.enter_context(patch.object(shutil, "rmtree"))
+            r.scan_cargo_output(FakeWalls(), ["/p"])
+            result = r.apply("/unused.log")
+        return result[0], r
+
+    def test_a_quick_scan_deletes_both(self):
+        self.assertEqual(self.run_sweep(0, 8)[0], 2)
+
+    def test_a_slow_scan_still_applies_the_ordinary_entry_and_defers_cargo(self):
+        deleted, r = self.run_sweep(9, 8)
+        self.assertEqual(deleted, 1)
+        self.assertGreaterEqual(r.app_deferred, 1)
+        self.assertEqual([e.path for e in r.entries if e.klass == "cargo-output"], [])
+
+    def test_the_wide_budget_deletes_both(self):
+        self.assertEqual(self.run_sweep(9, 540)[0], 2)
 
 
 if __name__ == "__main__":

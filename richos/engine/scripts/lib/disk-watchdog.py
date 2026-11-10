@@ -140,7 +140,7 @@ def top_consumers(candidates, limit=3):
 def on_volume(path, mount):
     """True when `path` is on the same device as `mount`. A folder the disk in alert does not
     hold is never named as a consumer of it (2026-11-10: the internal disk's alert listed
-    /Volumes/E1TB, 363 GB on the external drive, first)."""
+    a folder of the external drive, 363 GB, first)."""
     try:
         return os.stat(path).st_dev == os.stat(mount).st_dev
     except OSError:
@@ -1231,8 +1231,10 @@ def main():
                 last = notified.get(key) or 0
                 if now - last < repeat_h * 3600:
                     continue
+                # ONLY THIS VOLUME'S FOLDERS: another disk's folder never explains this one.
+                mine = [c for c in consumers if c.get("mount") == v["mount"]]
                 top = ", ".join("%s %s" % (c["human"], os.path.basename(c["path"]) or c["path"])
-                                for c in consumers[:3]) or "not measured"
+                                for c in mine[:3]) or "not measured"
                 title = ("RichOS: disk space CRITICAL" if level == "urgent"
                          else "RichOS: disk space low")
                 msg = ("%s free on %s (%.0f%%). Top: %s. %s"
