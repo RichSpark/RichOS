@@ -271,7 +271,8 @@ def added_lines(patch):
     current = None
     for raw in patch.decode("utf-8", errors="surrogateescape").splitlines():
         if raw.startswith("+++ "):
-            target = raw[4:]
+            # git ends the header of an unquoted path holding a space with a tab
+            target = raw[4:].removesuffix("\t")
             current = None if target == "/dev/null" else unquote(target).removeprefix("b/")
             if current is not None:
                 files.setdefault(current, set())

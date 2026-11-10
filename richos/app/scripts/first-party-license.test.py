@@ -14,7 +14,7 @@ itself declare anything.
            in RichPass.html putting its first-party source under MIT, also inside a vendored
            region; an SPDX identifier, a manifest field, a license header and a public-domain
            dedication in RichOS files; a root LICENSE that is no longer the AGPL; a Gradle
-           wrapper nobody registered; `commit -a`; a land of a commit that skipped the hooks,
+           wrapper nobody registered; a file whose name holds a space; `commit -a`; a land of a commit that skipped the hooks,
            before main moves; the push backstop of a merge that skipped them
   PASSES   registered third-party material with its own license (the RichPass vendor packages);
            a Gradle wrapper registered in the same change; the brand exclusion ("not licensed",
@@ -176,6 +176,17 @@ class Refused(Fixture):
                      "richos/tools/three/main.js:2:", "richos/tools/four/README.md:3:",
                      "richos/tools/five/index.js:1:",
                      "richos/tools/six/Cargo.toml:3: a Cargo.toml license field other than AGPL-3.0 (BSD-3-Clause)")
+
+    def test_a_file_whose_name_has_a_space_is_judged(self):
+        # Review P2: git ends the +++ header of such a path with a tab, which hid the file.
+        self.make()
+        self.write("richos/tools/example/My Tool.js", f"// {SPDX}MIT\n")
+        self.refused(self.commit("a spaced name", expect=1),
+                     "richos/tools/example/My Tool.js:1: an SPDX identifier other than AGPL-3.0 (MIT)")
+        self.commit("a spaced name, unchecked", "--no-verify")
+        out = self.run_(["python3", CHECK, "--range", "HEAD~1..HEAD", "--what", "check"])
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.refused(out, "richos/tools/example/My Tool.js:1:")
 
     def test_a_root_license_that_is_no_longer_the_agpl_is_refused(self):
         self.make()
