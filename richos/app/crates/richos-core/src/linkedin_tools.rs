@@ -250,8 +250,15 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// The host without its port, `www.` or the mobile `m.`: the site two addresses must share.
+/// Every LinkedIn host is `linkedin.com`: a profile link a person copies can carry their
+/// country (`uk.linkedin.com/in/…`, `de.linkedin.com/in/…`, LinkedIn's help "Find your
+/// LinkedIn public profile URL") and LinkedIn shows it at `www.linkedin.com`, the host its
+/// company and "Show all" links use (review rv-20261110T145902Z-456e9251-a616, finding 2).
 fn site(host: &str) -> &str {
     let host = host.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map_or(host, |(h, _)| h);
+    if host.ends_with(".linkedin.com") {
+        return "linkedin.com";
+    }
     host.strip_prefix("www.").or_else(|| host.strip_prefix("m.")).unwrap_or(host)
 }
 
@@ -318,6 +325,22 @@ fn details_section(link: &str, profile: &Address) -> Option<String> {
     match address.segments().as_slice() {
         ["in", name, "details", section] if site(&address.host) == site(&profile.host)
             && own.get(1) == Some(name) => Some((*section).to_string()),
+        _ => None,
+    }
+}
+
+/// What a link says about the section it sits in, when it is one of the profile's own pages:
+/// `Some("experience")` for `/in/<name>/details/experience/`, `Some("recent-activity")` for
+/// the Activity section's `/in/<name>/recent-activity/…`, and the section of any other
+/// `/details/<section>/`. Known by the address, never by words, so it holds in every language.
+fn own_section(link: &str, profile: &Address) -> Option<String> {
+    if let Some(section) = details_section(link, profile) {
+        return Some(section);
+    }
+    let address = parse(link)?;
+    match address.segments().as_slice() {
+        ["in", name, "recent-activity", ..] if site(&address.host) == site(&profile.host)
+            && profile.segments().get(1) == Some(name) => Some("recent-activity".into()),
         _ => None,
     }
 }
@@ -436,7 +459,8 @@ pub fn detail_pages(page: &Page, profile_url: &str) -> Vec<String> {
 /// A section is a heading and everything up to the next heading of the same or a higher level.
 /// It is the Experience section when its heading reads "Experience" (LinkedIn's English
 /// interface, the one the saved pages were captured in) or when it holds the profile's own
-/// "Show all" link, `/in/<name>/details/experience/`, which names it in any language.
+/// "Show all" link, `/in/<name>/details/experience/`, which names it in any language; failing
+/// both, by where it sits (below).
 pub fn experience_companies(page: &Page, profile_url: &str) -> Vec<String> {
     let Some(profile) = parse(profile_url) else { return Vec::new() };
     struct Section<'a> {
@@ -461,11 +485,29 @@ pub fn experience_companies(page: &Page, profile_url: &str) -> Vec<String> {
         }
     }
     let mut keys: Vec<String> = Vec::new();
-    for section in merged {
+    let mut identified = false;
+    for section in &merged {
         let named = section.heading.trim().eq_ignore_ascii_case("experience");
         let linked = section.links.iter().any(|l| details_section(l, &profile).as_deref() == Some("experience"));
         if named || linked {
-            add_companies(&mut keys, section.links.into_iter(), &profile);
+            identified = true;
+            add_companies(&mut keys, section.links.iter().copied(), &profile);
+        }
+    }
+    if !identified {
+        // Neither the English heading nor the "Show all" link (LinkedIn shows that link only past
+        // a few positions; three of the six saved profiles with employers have none): the
+        // Experience section in any language is the first section after Activity that links to a
+        // company and to none of the profile's own other sections. Activity is known by its
+        // `/recent-activity/` link, and every section a company link can also sit in on the saved
+        // profiles (Featured, Licenses, Volunteering, Interests) by its own `/details/<section>/`
+        // link or by coming before Activity. Review rv-20261110T145902Z-456e9251-a616, finding 1.
+        let start = merged.iter().rposition(|s| s.links.iter()
+            .any(|l| own_section(l, &profile).as_deref() == Some("recent-activity"))).map_or(0, |i| i + 1);
+        let first = merged[start..].iter().find(|s| s.links.iter().any(|l| company_key(l, &profile).is_some())
+            && !s.links.iter().any(|l| own_section(l, &profile).is_some_and(|o| o != "experience")));
+        if let Some(section) = first {
+            add_companies(&mut keys, section.links.iter().copied(), &profile);
         }
     }
     keys
@@ -627,9 +669,12 @@ pub fn read_profile(host: &dyn BrowserHost, url: &str) -> Result<Value, String> 
     result
 }
 
-fn visit_profile(visit: &mut Visit, url: &str) -> Result<Value, String> {
-    let profile = parse(url).expect("checked above");
-    let main = visit.read(url, &|shown| same_page(url, shown))?;
+fn visit_profile(visit: &mut Visit, requested: &str) -> Result<Value, String> {
+    let main = visit.read(requested, &|shown| same_page(requested, shown))?;
+    // The profile where LinkedIn showed it (a country host's link, `uk.linkedin.com/in/…`, shows
+    // at `www.linkedin.com`): its own pages and its companies are opened on that host.
+    let url = main.page.url.as_str();
+    let profile = parse(url).expect("accepted as the requested page");
     let mut keys = experience_companies(&main.page, url);
     let all_details = detail_pages(&main.page, url);
     let mut details = Vec::new();
@@ -668,7 +713,7 @@ fn visit_profile(visit: &mut Visit, url: &str) -> Result<Value, String> {
     }
     let mut out = json!({
         "browser": visit.app.name,
-        "profile": page_answer(url, &main),
+        "profile": page_answer(requested, &main),
         "profile_details": details,
         "companies": companies,
     });
@@ -1158,6 +1203,51 @@ mod tests {
         assert!(out["profile"]["text"].as_str().unwrap().contains("vollständig"), "{out}");
         assert_eq!(out["profile_details"].as_array().unwrap().len(), 1);
         assert_eq!(out["companies"].as_array().unwrap().len(), 2, "{out}");
+    }
+
+    /// Review rv-20261110T145902Z-456e9251-a616, finding 1: German, no "Show all" link (LinkedIn
+    /// shows it only past a few positions). Activity is known by its `/recent-activity/` link, and
+    /// the sections a company link can also sit in by their own `/details/` links or by coming
+    /// before Activity, so the employers come back and nothing else does.
+    #[test]
+    fn the_experience_section_is_found_in_any_language_without_its_show_all_link() {
+        let p = page(PROFILE, vec![
+            h("Ada Walker"), link("https://www.linkedin.com/in/ada-walker/recent-activity/followers/", "500 Follower"),
+            h("Im Fokus"), link("https://www.linkedin.com/company/featured-co/", "Featured Co"),
+            h("Aktivität"), link("https://www.linkedin.com/company/post-co/", "Post Co"),
+            link("https://www.linkedin.com/in/ada-walker/recent-activity/all/", "Alle Beiträge anzeigen"),
+            h("Berufserfahrung"), link("https://www.linkedin.com/company/1234/", ""),
+            link("https://www.linkedin.com/company/1234/", "Arbeitgeber"),
+            h("Bescheinigungen"), link("https://www.linkedin.com/company/issuer/", "Issuer"),
+            link("https://www.linkedin.com/in/ada-walker/details/certifications/", "Alle anzeigen"),
+            h("Ehrenamt"), link("https://www.linkedin.com/company/charity/", "Charity"),
+        ]);
+        assert_eq!(experience_companies(&p, PROFILE), vec!["1234"]);
+        // With no Activity section, the first section that links to a company and to no other
+        // section of the profile's own.
+        let quiet = page(PROFILE, vec![
+            h("Berufserfahrung"), link("https://www.linkedin.com/company/one/", "One"),
+            h("Ehrenamt"), link("https://www.linkedin.com/company/charity/", "Charity"),
+        ]);
+        assert_eq!(experience_companies(&quiet, PROFILE), vec!["one"]);
+    }
+
+    /// Review rv-20261110T145902Z-456e9251-a616, finding 2: a country host's profile link
+    /// (LinkedIn's help documents `uk.linkedin.com/in/...`) shows at `www.linkedin.com`; that is the
+    /// page, and its companies are opened on the host it showed at.
+    #[test]
+    fn a_country_hosts_profile_link_is_read_where_linkedin_shows_it() {
+        let country = "https://uk.linkedin.com/in/ada-walker";
+        let fake = Fake::new(safari()).redirect(country, PROFILE)
+            .with(PROFILE, vec![vec![h("Experience"), link("https://www.linkedin.com/company/acme/", "Acme")]])
+            .with("https://www.linkedin.com/company/acme/about/", vec![vec![t("Acme makes anvils.")]]);
+        let out = read_profile(&fake, country).unwrap();
+        assert_eq!(out["profile"]["url"], country);
+        assert_eq!(out["profile"]["shown_url"], PROFILE);
+        assert_eq!(out["companies"][0]["text"], "Acme makes anvils.", "{out}");
+        assert_eq!(fake.opened.borrow()[1], "https://www.linkedin.com/company/acme/about/");
+        assert!(same_page("https://de.linkedin.com/in/ada-walker/", PROFILE));
+        assert!(!same_page("https://linkedin.com.evil.example/in/ada-walker/", PROFILE));
     }
 
     #[test]
