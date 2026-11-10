@@ -97,9 +97,11 @@ func runLiveCapture(zone: String, startedAt: Int64, excludePids: [Int32], endWit
         if let said = micSilence.update(micPeak: mp, micRunning: capture.micRunning) {
             let silent = said == MicSilence.silent
             if silent { Notifier.alarm(said) } else { Notifier.info(said) }
-            Notifier.event("channel", [("channel", .string(CaptureChannel.microphone.rawValue)),
-                                       ("stalled", .bool(silent)),
-                                       ("message", .string(said))])
+            var fields: [(String, JSON)] = [("channel", .string(CaptureChannel.microphone.rawValue)),
+                                           ("stalled", .bool(silent)),
+                                           ("message", .string(said))]
+            if !silent { fields.append(("clearsWarning", .string(MicSilence.silent))) }
+            Notifier.event("channel", fields)
         }
         // Sound arrived through the system tap: the System Audio Recording grant exists (macOS
         // has no API to ask). Said once; the app may now show the voice bar's live level.

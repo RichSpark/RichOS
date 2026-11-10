@@ -26,6 +26,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import machine_storage as M
 import github_access
+from source_status import STATUS_ARGS, has_source_changes, is_finder_metadata
 import platform
 import pwd
 import re
@@ -435,8 +436,8 @@ UI_QUARANTINE = ()
 # WHOLE FUCKING MAC IS FREE???" -- and, asked what happens with ten engineers working: the
 # number is chosen when the build is started, from what is running on the Mac at the time.
 # Then: "how do I know that you won't fuck this up next time?" So there is NO DEFAULT for the
-# decision a build actually uses: `build`, `release` and `stable` refuse to start unless
-# --gates-at-once is named on the command line, and the run log's first lines say what was
+# decision a build actually uses: `build`, `release` and `stable --rerun-gates` refuse to start
+# unless --gates-at-once is named on the command line, and the run log's first lines say what was
 # chosen and by whom. A forgotten decision is a refusal nobody can miss, not an hour of a free
 # Mac running things in a line.
 #
@@ -478,6 +479,12 @@ GATE_NAMES = ("gates/release-smoke", LAND_PROVEN_GATE, "gates/updater-tests", "g
               "gates/lint-tauri", WORKSPACE_MUTANTS_GATE, UI_SUITE_GATE, "gates/privacy-sweep")
 
 GATES_AT_ONCE_FLAG = "--gates-at-once"
+# `stable` reuses the passing gates of the run that built the promoted nightly. Running them
+# again takes this flag AND --gates-at-once: --gates-at-once alone, the flag `build` and
+# `release` require, is refused for `stable`, because carried over by habit it reran every gate
+# the promoted nightly's own run had already passed (CEO, 2026-11-10: "why is it taking so long
+# again???").
+RERUN_GATES_FLAG = "--rerun-gates"
 SIMULATED_PHONES_FLAG = "--simulated-phones"
 SIMULATED_PHONES_ENV = "RICHOS_IOS_POOL_LEASES"
 GATE_COMMANDS = ("build", "release", "stable")
@@ -562,10 +569,25 @@ class TimestampedLog:
     SENTINEL = "richos-nightly-log-sync-"
     # How long close() waits for end of file before it stops reading, and says so.
     CLOSE_WAIT_SECONDS = 30
+    # What str.splitlines() ends a line at besides "\n", which the pump does not split on. A
+    # labeled line carries them escaped, so a gate's output can never start a line of the run
+    # log that is not labeled (Runner.coordinator_lines reads the log with splitlines()).
+    LINE_BREAKS = str.maketrans({c: repr(c)[1:-1] for c in "\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"})
 
-    def __init__(self, path, milestones=()):
+    def __init__(self, path, milestones=(), echo=None):
+        """`echo`, when given, is (run log, label): every line written here is ALSO written
+        into that run log as it is stamped, labeled (write_labeled). That is how a gate
+        running beside others reaches the run log while it runs, not when it ends."""
         self.path = Path(path)
-        self.file = self.path.open("w")
+        self._echo = echo
+        # LINE-BUFFERED, so every line is on disk the moment it is stamped. Fully buffered, a
+        # line sat in Python's buffer until it filled, and Python 3.14's open() buffer is
+        # 131,072 bytes (io.DEFAULT_BUFFER_SIZE, measured 2026-11-10): stable run
+        # 20261110T010443Z-8e6da0ab wrote 117,578 bytes after its last explicit flush (the
+        # lint-tauri gate's merge at 01:41:10), so its build, VM boot proof and new-user walk
+        # reached the file only when the log closed at 02:07, and the run looked dead for 26
+        # minutes while every line was being stamped on time.
+        self.file = self.path.open("w", buffering=1)
         self._read_fd, self._write_fd = os.pipe()
         self._stop = threading.Event()
         self._milestones = list(milestones)
@@ -608,8 +630,23 @@ class TimestampedLog:
                 if re.search(pattern, line):
                     self.seen.append((name, now))
                     self._next += 1
+        self._record(stamp(now), line)
+
+    def _record(self, stamped, line):
         with self._file_lock:
-            self.file.write(f"{stamp(now)} {line}\n")
+            self.file.write(f"{stamped} {line}\n")
+        if self._echo:
+            log, label = self._echo
+            log.write_labeled(stamped, label, line)
+
+    def write_labeled(self, stamped, label, line):
+        """One already-stamped line of a gate running beside others, labeled with the gate.
+
+        Written straight into the file under the file lock, so it is one whole line however
+        many gates write at once, and on disk at once (the file is line-buffered).
+        """
+        with self._file_lock:
+            self.file.write(f"{stamped} [{label}] {line.translate(self.LINE_BREAKS)}\n")
 
     def fileno(self):
         """Every existing `stdout=self.log` / `stderr=self.log` call site keeps working."""
@@ -646,30 +683,17 @@ class TimestampedLog:
         """
         os.write(self._write_fd, text.encode("utf-8", "replace"))
 
-    def append_verbatim(self, text):
-        """Put lines that are ALREADY stamped straight into the file, in one piece.
-
-        A gate that ran beside others wrote its own stamped log (Runner.run_gates); this is
-        how that log becomes one unbroken section of the run log, every line keeping the time
-        it was written rather than the time it was copied. Everything already in the pipe is
-        written first (sync), so the section lands after the lines that announced it.
-        """
-        self.sync()
-        with self._file_lock:
-            self.file.write(text if not text or text.endswith("\n") else text + "\n")
-            self.file.flush()
-
     def close(self):
         os.close(self._write_fd)
         self._thread.join(timeout=self.CLOSE_WAIT_SECONDS)
         if self._thread.is_alive():
             self._stop.set()
             self._thread.join()
-            with self._file_lock:
-                self.file.write(
-                    f"{stamp(time.time())} [log] stopped reading {self.CLOSE_WAIT_SECONDS} s after "
-                    "the last command ended: a process it started still holds this log's pipe, "
-                    "and nothing it writes from here on is recorded\n")
+            self._record(
+                stamp(time.time()),
+                f"[log] stopped reading {self.CLOSE_WAIT_SECONDS} s after the last command "
+                "ended: a process it started still holds this log's pipe, and nothing it writes "
+                "from here on is recorded")
         os.close(self._read_fd)
         self.file.close()
 
@@ -1459,14 +1483,13 @@ class Runner:
     def require_clean_dedicated_source(self):
         """Refuse unless `self.source` is this repository's dedicated worktree, unchanged.
 
-        Moving it never discards anything: changes in it are somebody's, so they stop the
-        move and are left where they are.
+        Tracked changes and other untracked files stop the move and are left in place.
         """
         common = self.command("git", "rev-parse", "--path-format=absolute", "--git-common-dir", capture=True)
         expected = self.command("git", "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=self.repo, capture=True)
         if common != expected or Path(self.command("git", "rev-parse", "--show-toplevel", capture=True)) != self.source:
             raise ValueError("nightly source is not the dedicated worktree for this repository")
-        if self.command("git", "status", "--porcelain", capture=True):
+        if has_source_changes(self.source, self.command("git", *STATUS_ARGS, capture=True)):
             raise ValueError("nightly worktree has changes; inspect it before continuing")
 
     def restore_build_commit(self, info):
@@ -2025,6 +2048,10 @@ class Runner:
         # happened. Tidying up is never allowed to become the reported failure.
         tree = tree or self.source
         try:
+            status = self.command("git", *STATUS_ARGS, cwd=tree, capture=True,
+                                  timeout=CLEANUP_TIMEOUT, cleanup=True)
+            if not has_source_changes(tree, status):
+                return
             dirty = self.command("git", "status", "--porcelain", cwd=tree, capture=True,
                                  timeout=CLEANUP_TIMEOUT, cleanup=True)
         except (RuntimeError, OSError) as error:
@@ -2339,7 +2366,8 @@ class Runner:
         for i, model in enumerate(env.get("RICHOS_GUI_SPEECH_MODELS", "").split(os.pathsep)):
             if model:
                 paths[f"speech-model-{i}"] = Path(model)
-        inputs["external"] = {key: proof_evidence.path_identity(path) for key, path in paths.items()}
+        inputs["external"] = {key: (proof_evidence.runtime_identity(path) if key == "runtime"
+                                    else proof_evidence.path_identity(path)) for key, path in paths.items()}
         inputs["python"] = proof_evidence.path_identity(sys.executable)
         inputs["other_tools"] = {}
         for tool in ("cargo", "cc", "xcrun", "codesign"):
@@ -2358,7 +2386,8 @@ class Runner:
             names = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "-z"],
                                    cwd=ui_tree, env=env, capture_output=True, timeout=15, check=True).stdout
             inputs["ui_untracked"] = {os.fsdecode(p): proof_evidence.path_identity(ui_tree / os.fsdecode(p))
-                                      for p in names.split(b"\0") if p}
+                                      for p in names.split(b"\0") if p and
+                                      not is_finder_metadata(ui_tree / os.fsdecode(p))}
         inputs["environment"] = {k: proof_evidence.digest(v) for k, v in env.items()}
         inputs["settings"] = [checks_done_at_land, bool(no_host_screen), self.gates_at_once,
                               self.simulated_phones, GATE_BUDGETS, GATE_AFTER]
@@ -2478,8 +2507,9 @@ class Runner:
 
         More than one: each gate runs in its own thread, as soon as a slot is free and every
         gate GATE_AFTER names for it has passed. Each keeps its own deadline (command()),
-        its own log (a stamped file of its own, copied whole into the run log as one section
-        when it ends) and its own verdict line. The FIRST gate to fail refuses the build:
+        its own log (a stamped file of its own, each line of which also reaches the run log
+        as it is written, labeled `[gates/X]`, so lines of gates side by side stay readable)
+        and its own verdict line. The FIRST gate to fail refuses the build:
         no further gate starts, every running one is stopped through the process groups
         this run owns (OwnedGroups), and once all of them have ended the first failure is
         raised as it would have been one at a time. The wall clock of the whole set is
@@ -2517,13 +2547,17 @@ class Runner:
             folder = main.path.with_name(main.path.name + ".gates")
             folder.mkdir(mode=0o700, exist_ok=True)
             path = folder / (name.replace("/", "-") + ".log")
-            return TimestampedLog(path), path
+            return TimestampedLog(path, echo=(main, name)), path
         return _BufferedGateLog(), None
 
     def _merge_gate_log(self, log, path, verdict):
-        """Copy a finished gate's log into the run log as one section, then drop the copy."""
+        """A finished gate's verdict, and its own log dropped.
+
+        Every line of a stamped gate log is already in the run log, labeled, written as it
+        happened (TimestampedLog echo), so nothing is copied again. A gate log beside a plain
+        stream (tests only; main() always writes a TimestampedLog) is copied in whole here.
+        """
         if path is not None:
-            self._log.append_verbatim(path.read_text(errors="replace"))
             try:
                 path.unlink()
                 path.parent.rmdir()  # Succeeds only once the last gate's file is gone.
@@ -2570,6 +2604,8 @@ class Runner:
                         log, path = self._gate_log(name)
                         where = f" (its log until it ends: {path})" if path else ""
                         self.announce(f"  started {name}{where}")
+                        if path is not None:
+                            self._log.sync()  # "started" is on disk before the gate's first line
                         thread = threading.Thread(target=work, args=(name, body, log),
                                                   name=name, daemon=True)
                         running[name] = (thread, log, path, time.time())
@@ -3060,6 +3096,7 @@ class Runner:
         return source
 
     LOG_LINE = re.compile(r"^\[\d{4}-\d\d-\d\dT[\d:.]+Z\] (.*)$")
+    GATE_LABEL = re.compile(r"^\[gates/[^\]]*\] ")
     GATE_VERDICT = re.compile(r"^ {0,2}(PASSED|FAILED|STOPPED|SKIPPED) (gates/[a-z-]+)\b")
 
     GATE_REUSED = re.compile(r"^ {0,2}REUSED (gates/[a-z-]+): actual pass in \S+ \((/[^()]+\.json)\); ")
@@ -3087,14 +3124,18 @@ class Runner:
     def coordinator_lines(cls, path):
         """A run log's own lines, and the gate sections that ended in it.
 
-        A gate's own output sits between its `=== phase gates/X begins/ends ===` lines
-        (merged whole when it ends); the coordinator's verdict follows the section. Only
-        lines outside every section are the coordinator's, and only those are read: a
-        suite's fixture output can say anything, including "Building and publishing v...".
+        One gate at a time, a gate's own output sits between its `=== phase gates/X
+        begins/ends ===` lines. Gates side by side write each line labeled `[gates/X] `
+        (TimestampedLog.write_labeled), wherever it falls; the coordinator's verdict follows
+        the gate. Only unlabeled lines outside every section are the coordinator's, and only
+        those are read: a suite's fixture output can say anything, including "Building and
+        publishing v...".
         """
         outer, ended, inside = [], set(), []
         for match in map(cls.LOG_LINE.match, path.read_text(errors="replace").splitlines()):
             line = match[1] if match else None
+            if line is not None and cls.GATE_LABEL.match(line):
+                continue
             section = line and re.fullmatch(r"=== phase (gates/[a-z-]+(?:/[a-z-]+)*) (begins ===|ends: [\d.]+s ===)", line)
             if section:
                 if section[2] == "begins ===":
@@ -3145,7 +3186,7 @@ class Runner:
             raise ValueError(f"no run log in {logs} says it built {tag}, so there are no passed "
                              "gates to reuse, and `stable` never reruns them without being told. "
                              f"Name the run with {PASSED_GATES_FLAG} RUN, or run every gate again "
-                             f"with {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
+                             f"with {RERUN_GATES_FLAG} {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
         if len(finished) == 1:
             return finished[0]
         if not finished:
@@ -3153,7 +3194,7 @@ class Runner:
                              "them finished building it (no `phase timings for run` after the "
                              "announcement): a failed, stopped or unfinished attempt built nothing, so "
                              f"its gates are not reused. Name the run with {PASSED_GATES_FLAG} RUN, or "
-                             f"run every gate again with {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
+                             f"run every gate again with {RERUN_GATES_FLAG} {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
         raise ValueError(f"{len(found)} runs say they built {tag} ({', '.join(found)}); name "
                          f"the one to reuse with {PASSED_GATES_FLAG} RUN. Nothing was built.")
 
@@ -3316,7 +3357,7 @@ class Runner:
                 self.preflight()
             with self.phase("runtime-verify"):
                 self.runtime(runtime)
-            # EVERY GATE ON THIS COMMIT. Asked with --gates-at-once, every gate runs here.
+            # EVERY GATE ON THIS COMMIT. Asked with --rerun-gates, every gate runs here.
             # Otherwise the run that built the promoted nightly (found by `run_that_built`, or
             # named with --gates-passed-in) already passed every gate on this same source
             # commit against the dependencies installed now (both checked above), so nothing
@@ -3631,8 +3672,12 @@ def main():
                         help="REQUIRED for build and release: how many gates run at the "
                              "same time. 1 runs them one after another; all starts every gate "
                              "whose inputs are ready. Choose it from what else is running on "
-                             "this Mac. Given to stable, it runs every gate again instead of "
-                             "reusing the gates of the run that built the nightly.")
+                             "this Mac. Refused for stable unless --rerun-gates is also given: "
+                             "stable takes the promoted nightly's passing gates.")
+    parser.add_argument(RERUN_GATES_FLAG, action="store_true",
+                        help="stable only, with --gates-at-once N|all: deliberately run every "
+                             "gate fresh instead of reusing the passing gates of the run that "
+                             "built the nightly")
     parser.add_argument(SIMULATED_PHONES_FLAG, type=simulated_phones_value, metavar="N",
                         help="optional for build, release and stable: how many simulated "
                              "iPhones the suites may use at once (one per device type; the "
@@ -3700,13 +3745,22 @@ def main():
     # time?"). A command that runs the gates names how many run at once, or it does not start.
     # It is not made to name a simulated-phone count no gate of the desktop build uses (hunt
     # part 2 v3, R48). A command that reuses a recorded run's gates runs none, so it names neither.
-    # `stable` runs the gates only when asked to with --gates-at-once; otherwise it reuses
+    # `stable` runs the gates only when asked to with --rerun-gates; otherwise it reuses
     # the gates of the run that built the nightly, and never reruns them silently.
+    if args.rerun_gates and args.command != "stable":
+        parser.error(f"{RERUN_GATES_FLAG} is for stable, which otherwise reuses the promoted "
+                     f"nightly's passing gates; {args.command} has no gates to reuse")
+    if (args.command == "stable" and args.gates_at_once is not None and not args.rerun_gates
+            and not args.dry_run and not args.gates_passed_in):
+        parser.error(f"stable takes the promoted nightly's passing gates, so drop "
+                     f"{GATES_AT_ONCE_FLAG}, or add {RERUN_GATES_FLAG} to deliberately execute "
+                     "them fresh")
     runs_gates = (args.command in GATE_COMMANDS and not args.gates_passed_in
                   and not (args.command == "stable"
-                           and (args.dry_run or args.gates_at_once is None)))
+                           and (args.dry_run or not args.rerun_gates)))
     named = [flag for flag, value in ((GATES_AT_ONCE_FLAG, args.gates_at_once),
-                                      (SIMULATED_PHONES_FLAG, args.simulated_phones))
+                                      (SIMULATED_PHONES_FLAG, args.simulated_phones),
+                                      (RERUN_GATES_FLAG, args.rerun_gates or None))
              if value is not None]
     if runs_gates and args.gates_at_once is None:
         parser.error(
@@ -3715,7 +3769,7 @@ def main():
             f"another, all = every gate whose inputs are ready). Choose it from what else is "
             "running on this Mac: all on a free Mac, fewer when engineers are busy.")
     if not runs_gates and named:
-        parser.error(f"{GATES_AT_ONCE_FLAG} and {SIMULATED_PHONES_FLAG} decide how the gates run; "
+        parser.error(f"{' and '.join(named)} decide how the gates run; "
                      f"they mean nothing to {args.command}"
                      + (" --dry-run, which runs no gate" if args.command == "stable" else "")
                      + (f" {PASSED_GATES_FLAG}, which runs no gate" if args.gates_passed_in else ""))
@@ -3748,7 +3802,7 @@ def main():
                             gates_at_once=args.gates_at_once, simulated_phones=args.simulated_phones,
                             chosen_by=chosen_by(), gui_host=gui_host, vm_settings=vm_settings)
             gates_passed_in = args.gates_passed_in
-            if args.command == "stable" and not gates_passed_in and args.gates_at_once is None:
+            if args.command == "stable" and not gates_passed_in and not args.rerun_gates:
                 # Nobody digs the run id out of the logs by hand: the run that built the
                 # nightly is found here, and refused or reused exactly as if it were named.
                 gates_passed_in = runner.run_that_built(args.from_nightly)

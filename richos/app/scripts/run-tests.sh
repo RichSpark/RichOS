@@ -863,7 +863,7 @@ suite_input_digest() {  # $1 = full path to a suite; prints a sha256, or exits 1
   esac
   paths="$(suite_inputs "$1")" || return 1
   [ -n "$ROOT" ] || return 1
-  dirty="$(git -C "$ROOT" status --porcelain --untracked-files=all -- $paths 2>/dev/null)" || return 1
+  dirty="$(python3 "$DIR/lib/source_status.py" "$ROOT" $paths)" || return 1
   [ -z "$dirty" ] || return 1
   {
     git -C "$ROOT" ls-files -s -- $paths 2>/dev/null || return 1

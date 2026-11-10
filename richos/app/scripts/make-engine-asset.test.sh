@@ -362,7 +362,21 @@ fi
 # opposed, independently of --check. Removing its second build cannot make
 # this test pass over nondeterministic bytes.
 E1="$WORK/real-out"; E2="$WORK/env-b"
-( umask 077; TZ=UTC bash "$SCRIPT" --out "$E2" >/dev/null 2>&1 )
+# Use a private clone for the second build. A nightly may be using the supplied cache.
+RUNTIME_WITH_FINDER="${RICHOS_RUNTIME_DIR:-}"
+if [ -n "$RUNTIME_WITH_FINDER" ]; then
+    RUNTIME_WITH_FINDER="$WORK/runtime-with-finder"
+    # Clone when both are on one volume; a different volume (the nightly) needs a plain copy.
+    if { cp -cR "$RICHOS_RUNTIME_DIR" "$RUNTIME_WITH_FINDER" 2>/dev/null ||
+         { rm -rf "$RUNTIME_WITH_FINDER" && cp -pR "$RICHOS_RUNTIME_DIR" "$RUNTIME_WITH_FINDER"; }; } &&
+       printf 'finder fixture' > "$RUNTIME_WITH_FINDER/.DS_Store" &&
+       printf 'finder fixture' > "$RUNTIME_WITH_FINDER/node/lib/ossl-modules/.DS_Store"; then
+        :
+    else
+        bad "L29 preparing the private runtime fixture" "could not copy runtime or add Finder metadata"
+    fi
+fi
+( umask 077; TZ=UTC RICHOS_RUNTIME_DIR="$RUNTIME_WITH_FINDER" bash "$SCRIPT" --out "$E2" >/dev/null 2>&1 )
 D1="$(/usr/bin/shasum -a 256 "$E1"/richos-engine-*.tar.gz 2>/dev/null | awk '{print $1}')"
 D2="$(/usr/bin/shasum -a 256 "$E2"/richos-engine-*.tar.gz 2>/dev/null | awk '{print $1}')"
 if [ -n "$D1" ] && [ "$D1" = "$D2" ]; then
@@ -372,6 +386,18 @@ else
         "umask 022 TZ=Asia/Tokyo gave ${D1:-<none>}; umask 077 TZ=UTC gave ${D2:-<none>}. The pin
          compiled into the app would be a property of whoever built it, and a customer would
          discover that as a DigestMismatch."
+fi
+
+# L29 checks the archive made with Finder metadata, including Node's empty module directory.
+if [ -n "$RUNTIME_WITH_FINDER" ]; then
+    if /usr/bin/tar -tzf "$E2"/richos-engine-*.tar.gz > "$WORK/finder-members" &&
+       ! grep -Eq '(^|/)\.DS_Store$' "$WORK/finder-members" &&
+       grep -Fxq 'engine/runtime/node/lib/ossl-modules/' "$WORK/finder-members"; then
+        ok "L29 runtime archive keeps the OpenSSL directory and excludes Finder metadata"
+    else
+        bad "L29 runtime archive keeps the OpenSSL directory and excludes Finder metadata" \
+            "could not list the archive, found Finder metadata or the OpenSSL directory was missing"
+    fi
 fi
 
 # ---------------------------------------------------------------------------------------

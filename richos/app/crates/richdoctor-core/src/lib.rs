@@ -82,3 +82,5 @@ mod tests {
         assert_eq!(crate::report::footer_for("1.3.2", "RD-7K3M-Q9VX"), "Sent with RichDoctor 1.3.2 · Report ID RD-7K3M-Q9VX");
     }
 }
+
+pub mod richpass_log;

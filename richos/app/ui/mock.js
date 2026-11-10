@@ -3794,6 +3794,17 @@
           dictationOfferCalls.push("dictation_offer");
           return { ready: setupDictationOn, offered: dictationOffered, key: preset.dictationKey || 1 };
         // THE DICTATION SHEET (`dictation_app.rs`): the same facts and the same refusals.
+        case "richpass_status":
+        case "richpass_check":
+        case "richpass_stop":
+        case "richpass_acknowledge":
+          return {phase:"idle",message:"",path:null,release:null,lastChecked:null,notice:null,newerAvailable:false,downloadUrl:null,supported:true,folderPermissions:true,problem:null};
+        case "richpass_save":
+        case "richpass_choose":
+        case "richpass_show":
+          throw new Error("File selection and saving require the installed RichOS app. This browser preview has not protected or changed any file.");
+        case "richpass_permissions":
+          throw new Error("Folder permissions are available in the installed RichOS app.");
         case "cleaner_status":
           return {enabled:false,root:null,scribeOn:dictationView.on,key:dictationView.key,inboxFirst:false,operation:{stage:"idle"}};
         // RichCleaner's own window (`cleaner_host.rs`), opened by the navigation rail (round 58).
@@ -3921,6 +3932,11 @@
         case "meeting_state":
           meetingCalls.push({ cmd });
           return structuredClone(meetingNotes);
+        case "meeting_retry_saved":
+          meetingCalls.push({ cmd, turnId: args.turnId });
+          meetingNotes.retryTurns = (meetingNotes.retryTurns || []).filter(id => id !== args.turnId);
+          emit("meeting-state", structuredClone(meetingNotes));
+          return null;
         case "meeting_start_or_stop":
           meetingCalls.push({ cmd });
           if (meetingNotes.recording) Object.assign(meetingNotes, { recording: false, startedAt: null });
@@ -4245,6 +4261,8 @@
           return structuredClone(mockFolderPreferences);
         }
         case "reindex_search_folders": mockFolderGeneration++; return mockDocStatus();
+        case "search_company_memory": return null;
+        case "search_conversations": return null;
         case "search_documents_status": {
           return mockDocStatus();
         }
@@ -5607,6 +5625,7 @@
 
   // --- dev-only test hooks, exercised by a headless check, never by real users ----------
   window.__RICHOS_MOCK__ = {
+    richpassChanged(view) { emit("rich://richpass", view); },
     // ---- a file Rich put in front of the user (round 36 screen 3) --------------------------
     /// What the cards asked the shell to open or show in Finder, oldest first.
     richFileActions() { return richFileActions.slice(); },

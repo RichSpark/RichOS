@@ -298,6 +298,21 @@ def main():
             n = self.by_id(dom_id)
             return None if n is None else {k: n.get(k) for k in ('x', 'y', 'w', 'h')}
 
+        def scroll_into_view(self, dom_id, footer_top=770):
+            """The Settings panel scrolls under a fixed footer (Your name, Splash screen): a row whose
+            bottom edge is below `footer_top` is under it. Page Down in the panel, as a hand scrolls,
+            until the row is clear of the footer (the Show SwearMeter row comes up half
+            under the footer at the guest's 1680x1050)."""
+            for _ in range(8):
+                r = self.rect(dom_id)
+                if r and r['y'] + r['h'] < footer_top:
+                    return r
+                pt = '%d,%d' % (520, 182)  # the panel's own title: a click there takes focus, presses nothing
+                command([here / 'pointer-drag.sh', self.vm, pt, pt], 60)
+                self.osa('tell application "System Events" to key code 121')
+                time.sleep(1)
+            return self.rect(dom_id)
+
         def mouse_click(self, node_rect):
             # The row spans the panel column; the switch is at its right end (the label's click area is
             # only its words), so the press lands 20 px in from the right edge, on the row's middle.
@@ -323,8 +338,16 @@ def main():
 
         def swearmeter(self):
             self.decline_sheets(15)
+            # The count is drawn on the home screen: a home with no company opens on a conversation, so
+            # go Home first by the rail's own Home button, as a person does.
+            home = self.rect('nr-home')
+            if home and not self.rect('home-swearmeter-host'):
+                self.mouse_click_center(home)
+                time.sleep(3)
             self.open_settings()
             box = self.until(lambda: self.rect('set-swearmeter'), 15, 'no Show SwearMeter control')
+            self.shot('swear-0-before-scroll.png')
+            box = self.scroll_into_view('set-swearmeter') or box
             node = self.by_id('set-swearmeter')
             self.shot('swear-0-default.png')
             if str(node.get('value')) not in ('0', 'False', 'false', ''):
@@ -350,7 +373,7 @@ def main():
                 problems.append('the count line in settings is not visible in the frame (covered or off the panel)')
             if not retention_seen:
                 problems.append('the history retention line is not fully visible with SwearMeter on')
-            self.mouse_click(self.rect('set-swearmeter'))
+            self.mouse_click(self.scroll_into_view('set-swearmeter') or self.rect('set-swearmeter'))
             end = time.monotonic() + 10
             while self.rect('home-swearmeter') and time.monotonic() < end:
                 time.sleep(.5)

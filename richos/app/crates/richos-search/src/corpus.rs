@@ -101,6 +101,16 @@ pub struct Document {
 }
 
 impl Document {
+    /// A ledger or memory record already has a stable identity and display title.
+    pub fn from_record(key: &str, title: &str, text: String, at: u64) -> Self {
+        let hash = record_revision(title, &text);
+        let size = text.len() as u64;
+        let mut document = Self::from_text(key, text, at, size, hash);
+        document.title = title.to_owned();
+        document.folded_title = fold(title);
+        document
+    }
+
     pub fn from_text(rel_path: &str, text: String, modified_ms: u64, size: u64, hash: String) -> Self {
         let stem = Path::new(rel_path).file_stem().and_then(|s| s.to_str()).unwrap_or(rel_path);
         let title = chunk::title(&text, stem);
@@ -121,6 +131,14 @@ impl Document {
             metadata_version: None,
         }
     }
+}
+
+pub fn record_revision(title: &str, text: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(title.len().to_le_bytes());
+    hash.update(title);
+    hash.update(text);
+    hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

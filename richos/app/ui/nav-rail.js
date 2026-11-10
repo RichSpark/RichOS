@@ -60,6 +60,7 @@
   }
   const OPEN = {
     home() {
+      showPage("chats");
       if (window.RichHome && window.RichHome.show) window.RichHome.show("nav-rail");
     },
     chats() {
@@ -113,6 +114,9 @@
       return all.filter((o) => o.classList.contains("overlay") && !o.hidden && !keep(o));
     };
     let closed = 0;
+    // Token spend is a screen of its own, not an `.overlay`, and the rail stays on it: a place or a
+    // tool steps it aside by `RichSpend.leave` (Home, if it was beneath, is not brought back).
+    if (document.body.classList.contains("spend-open") && window.RichSpend) { window.RichSpend.leave(); closed++; }
     for (let tries = 0; tries < 12; tries++) {
       const top = open()[0];
       if (!top) break;
@@ -216,6 +220,13 @@
     attributeFilter: ["hidden"],
   });
   new ResizeObserver(schedule).observe(nav);
+
+  // A chat or company chosen anywhere — the sidebar, a new chat, a RichFinder result — is the
+  // conversation, so a page steps aside for it.
+  document.addEventListener("click", (e) => {
+    if (page === "chats" || !e.target.closest) return;
+    if (e.target.closest("#rail-nav, #rail-new-thread, #new-chat-menu, #search-results, #rail-wordmark")) showPage("chats");
+  }, true);
 
   // ---- the tooltip -----------------------------------------------------------------------------
   let tipFor = null;

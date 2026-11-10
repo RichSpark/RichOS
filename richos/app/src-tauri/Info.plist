@@ -37,6 +37,14 @@
       <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string></array>
       <key>NSReturnTypes</key><array/>
     </dict></array>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>RichOS uses your Desktop for file tasks such as saving output, organizing files and protecting RichPass.html.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>RichOS uses your Documents folder for document search and file tasks you set up, including protecting RichPass.html.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>RichOS uses your Downloads folder for file tasks you request, including saving and protecting RichPass.html.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>RichOS uses removable drives for file tasks you request, including saving and protecting RichPass.html.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>So you can talk instead of typing. I listen only when you ask me to.</string>
     <!-- System Audio Recording for meeting notes (Granola PRD V4: "Add the installed system-audio

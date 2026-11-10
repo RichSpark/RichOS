@@ -1,4 +1,4 @@
-//! **OPENING ONE OF EIGHT KNOWN THINGS, AND NOTHING ELSE.**
+//! **OPENING ONLY KNOWN DESTINATIONS.**
 //!
 //! CEO §61.1, from his own evening: Tailscale's own screens never say that the account IS the
 //! network, and he could not find the macOS download from `tailscale.com`'s home page or from the
@@ -10,7 +10,7 @@
 //! A general "open this URL" command is a hole with a button on it: anything that can reach the
 //! webview can then ask the Mac to open `file:///`, a `mailto:` that sends, a custom scheme
 //! registered by some other application, or a link that looks like ours with a different host.
-//! The screens need **eight** destinations (the changelog under two keys, its address before and
+//! The screens need a fixed set of destinations (the changelog under two keys, its address before and
 //! after the GitHub move), all of them fixed at build time, so the command takes
 //! the address as a **key into a table** rather than as data to act on. Anything not in the table
 //! is refused by name.
@@ -38,7 +38,7 @@ pub enum Target {
     App,
 }
 
-/// **Every destination the how-to, quota, setup and update screens name.** Eight, and the key is the address exactly as the
+/// **Every fixed destination the app screens name.** The key is the address exactly as the
 /// screen prints it — so a reader of `phone.js` and a reader of this file see the same string.
 ///
 /// The two Apple identifiers are different and must not be swapped: `1470499037` is the iPhone and
@@ -72,6 +72,10 @@ const ALLOWED: &[(&str, Target)] = &[
     (
         "github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md",
         Target::Page("https://github.com/WebDevBooster/richos/blob/main/docs/CHANGELOG.md"),
+    ),
+    (
+        "github.com/RichSpark/RichOS/tree/main/richos/tools/richpass",
+        Target::Page("https://github.com/RichSpark/RichOS/tree/main/richos/tools/richpass"),
     ),
     // NOT a URL. Screen 3 says "Open Tailscale", and what that has to do is bring the app the user
     // already installed to the front — sending them to a web page there would be telling somebody
@@ -252,14 +256,19 @@ mod tests {
         );
         // Writing consent discloses the fixed privacy-policy destination.
         assert_eq!(resolve("www.anthropic.com/legal/privacy"), Some(Target::Page("https://www.anthropic.com/legal/privacy")));
-        // Nine destinations, the changelog under both of its addresses.
-        assert_eq!(ALLOWED.len(), 10, "the allowlist grew or shrank without this test being told");
+        let richpass = "github.com/RichSpark/RichOS/tree/main/richos/tools/richpass";
+        let richpass_page = include_str!("../../ui/richpass-page.js");
+        let html = include_str!("../../ui/index.html");
+        assert!(richpass_page.contains(&format!("target: \"{richpass}\"")));
+        assert!(html.contains(&format!("title=\"{richpass}\" data-rp=\"why\"")));
+        assert_eq!(resolve(richpass), Some(Target::Page("https://github.com/RichSpark/RichOS/tree/main/richos/tools/richpass")));
+        assert_eq!(ALLOWED.len(), 11, "the allowlist grew or shrank without this test being told");
     }
 
     /// **AN ADDRESS OUTSIDE THE LIST IS REFUSED** — the check the brief asks for, over the near
     /// misses that a prefix test, a suffix test or a `contains` would each have let through.
     #[test]
-    fn anything_that_is_not_exactly_one_of_the_eight_is_refused() {
+    fn anything_outside_the_allowlist_is_refused() {
         for asked in [
             // The classic host-suffix trick: it ENDS with nothing of ours and BEGINS with all of it.
             "tailscale.com.evil.example/download/mac",

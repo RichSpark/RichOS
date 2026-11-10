@@ -94,8 +94,29 @@ async function main() {
     assertEqual(await text(page, "#mn-status"), "Preparing your meeting notes…");
     const after = await page.evaluate(() => document.getElementById("mn-status").previousElementSibling.id);
     assertEqual(after, "messages", "it follows the conversation's messages");
+    await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ processing: "waiting-model" }));
+    assertEqual(await text(page, "#mn-status"), "Recording saved. Finishing setup for your notes…");
     await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ processing: null }));
     await page.waitForSelector("#mn-status[hidden]", { state: "attached" });
+    await page.close();
+  });
+
+  await run.check("only the saved meeting's failure message can retry its notes", async () => {
+    const page = await open("dark", {});
+    const failed = await page.evaluate(() => {
+      const mock = window.__RICHOS_MOCK__;
+      mock.simulateAccountNote("other", "An unrelated proactive message.", "acme");
+      const id = mock.simulateAccountNote("other", "Your transcript is saved. I couldn't prepare the notes.", "acme");
+      mock.meetingSet({ retryTurns: [id] });
+      return id;
+    });
+    const button = page.locator("[data-meeting-retry]:visible button");
+    await button.waitFor();
+    assertEqual(await button.count(), 1);
+    await button.click();
+    await page.locator("[data-meeting-retry]:visible").waitFor({ state: "hidden" });
+    assertEqual((await calls(page)).filter(c => c.cmd === "meeting_retry_saved"), [{ cmd: "meeting_retry_saved", turnId: failed }]);
+    assertEqual((await calls(page)).filter(c => c.cmd === "meeting_start_or_stop"), []);
     await page.close();
   });
 

@@ -5,6 +5,7 @@ Python 3.11+, git and gh are required. Planning is read-only; build and finish w
 The manual local runner serializes runs; Git ref creation/CAS rejects competing writers.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import contextlib
 from datetime import datetime, timezone
 import functools
@@ -16,11 +17,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import machine_storage as M
 import github_access
+from source_status import STATUS_ARGS, has_source_changes, is_finder_metadata
 import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import tomllib
 from urllib.parse import quote, urlsplit
 
@@ -504,7 +507,7 @@ def identity():
 
 def plan(force=False, now=None):
     now = now or utc_now()
-    if git("status", "--porcelain", "--untracked-files=all"):
+    if has_source_changes(ROOT, git(*STATUS_ARGS)):
         raise ValueError("nightly builds require a clean checkout")
     # Refuse here rather than at the tag push, which is forty minutes of gates later.
     identity()
@@ -758,7 +761,7 @@ def commit_files(files, parent, message, repo=None):
 
 def prepare(info):
     version = info["version"]
-    if git("rev-parse", "HEAD") != info["source_commit"] or git("status", "--porcelain"):
+    if git("rev-parse", "HEAD") != info["source_commit"] or has_source_changes(ROOT, git(*STATUS_ARGS)):
         raise ValueError("source changed after planning")
     tags = remote_tags()
     base = version.split("-", 1)[0]
@@ -905,10 +908,16 @@ def serve_channel_manifest(manifest):
                 str(path))
 
 
-def _candidate_files(out):
-    """Every file under `out`, `candidate.json` itself excepted, as {relative path: sha256}."""
-    return {str(p.relative_to(out)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(out.rglob("*")) if p.is_file() and p.name != CANDIDATE_MANIFEST}
+def _candidate_files(out, recorded=()):
+    """Hash candidate files, preserving checks for every previously recorded file."""
+    files = {}
+    for path in sorted(out.rglob("*")):
+        if not path.is_file() or path.name == CANDIDATE_MANIFEST:
+            continue
+        relative = str(path.relative_to(out))
+        if relative in recorded or not is_finder_metadata(path):
+            files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return files
 
 
 @release_step
@@ -931,7 +940,7 @@ def verify_candidate_manifest(info, out):
     recorded = json.loads(path.read_text())
     if recorded["info"] != info:
         raise ValueError("candidate was built for a different plan than the one given to publish")
-    actual = _candidate_files(out)
+    actual = _candidate_files(out, recorded["files"])
     mismatched = [f"{rel}: recorded {recorded['files'].get(rel, 'UNRECORDED')}, "
                   f"now {actual.get(rel, 'MISSING')}"
                   for rel in recorded["files"].keys() | actual.keys()
@@ -1191,14 +1200,14 @@ def attach_gpl_sources(tag, engine):
     if published.get(engine.name) != f"sha256:{sha256_file(engine)}":
         raise ValueError(f"{tag} does not carry this {engine.name}; source is attached only "
                          "beside the engine it belongs to")
-    for row, path in zip(rows, files):
-        if row["asset"] in published:
-            continue
-        try:
-            execute("gh", "release", "upload", tag, "--repo", REPO, str(path))
-        except subprocess.CalledProcessError:
-            if row["asset"] not in digests():
-                raise
+    # Up to UPLOAD_CONCURRENCY at once (upload_candidate_assets says why); each file is named
+    # `cache/<asset>`, so its name is the asset an earlier attempt may already have put up.
+    started = time.monotonic()
+    missing = [path for row, path in zip(rows, files) if row["asset"] not in published]
+    each_at_once(missing, lambda path: upload_asset(tag, path, digests))
+    if missing:
+        print(f"{tag}: {len(missing)} corresponding-source archives uploaded in "
+              f"{time.monotonic() - started:.1f}s, up to {UPLOAD_CONCURRENCY} at once", flush=True)
     published = digests()
     wrong = [row["asset"] for row in rows
              if published.get(row["asset"]) != f"sha256:{row['sha256']}"]
@@ -1426,22 +1435,72 @@ def ensure_nightly_release(info, notes=None):
     return release
 
 
+# HOW MANY RELEASE ASSETS GO UP AT ONCE. A publish carries the app archives, the engine and
+# FFmpeg's corresponding-source archives, close to a gigabyte; one file at a time, a single
+# upload stream left part of the uplink idle and the uploads were most of the publish. Five
+# is the number `gh release upload` itself uses for several files (cli/cli
+# pkg/cmd/release/upload/upload.go: `opts.Concurrency = 5`), so it is a load GitHub already
+# serves from its own client. The uplink stays the floor: the bytes need what they need
+# however they are split. Each upload logs its size and seconds.
+UPLOAD_CONCURRENCY = 5
+
+
+def each_at_once(items, work, limit=UPLOAD_CONCURRENCY):
+    """`work(item)` for every item, at most `limit` at a time.
+
+    Every item is tried even when another fails, so one run says everything that went
+    wrong and leaves every asset it could upload in place for the retry. Then the first
+    failure, in the items' order, is raised as itself, so a caller's refusal is the
+    same as one at a time.
+    """
+    items = list(items)
+    if not items:
+        return
+    with ThreadPoolExecutor(max_workers=min(limit, len(items))) as pool:
+        futures = [pool.submit(work, item) for item in items]
+    errors = [future.exception() for future in futures if future.exception() is not None]
+    for error in errors[1:]:
+        print(f"nightly: also failed: {error}", file=sys.stderr, flush=True)
+    if errors:
+        raise errors[0]
+
+
+def upload_asset(tag, path, existing):
+    """Upload `path` to release `tag` unless a name in `existing()` already holds it. An
+    upload that fails is a success only if those exact bytes are then served; an asset of
+    the same name is never overwritten. Says what it uploaded and how long it took."""
+    started = time.monotonic()
+    try:
+        execute("gh", "release", "upload", tag, "--repo", REPO, str(path))
+    except subprocess.CalledProcessError:
+        if path.name not in existing():
+            raise
+        return False
+    print(f"  uploaded {path.name} ({path.stat().st_size / 1e6:.1f} MB) in "
+          f"{time.monotonic() - started:.1f}s", flush=True)
+    return True
+
+
 def upload_candidate_assets(info, out, assets, notes=None):
     release = ensure_nightly_release(info, notes)
     existing = {a["name"] for a in release_assets(release["id"])}
-    # latest.json is deliberately last. A retry compares existing files and only
-    # uploads missing ones, without overwriting even one tested byte.
-    for path in [*(Path(p) for p in assets), out / "latest.json"]:
+
+    def names():
+        return {a["name"] for a in release_assets(release["id"])}
+
+    def one(path):
         url = f"https://github.com/{REPO}/releases/download/{info['tag']}/{path.name}"
-        if path.name not in existing:
-            try:
-                execute("gh", "release", "upload", info["tag"], "--repo", REPO, str(path))
-            except subprocess.CalledProcessError:
-                if not any(a["name"] == path.name for a in release_assets(release["id"])):
-                    raise
-                verify_served_asset(url, path)
-        else:
+        if path.name in existing or not upload_asset(info["tag"], path, names):
             verify_served_asset(url, path)
+
+    # latest.json is deliberately last, after every other asset is up. A retry compares
+    # existing files and only uploads missing ones, without overwriting even one tested byte.
+    started = time.monotonic()
+    paths = [Path(p) for p in assets]
+    each_at_once(paths, one)
+    one(out / "latest.json")
+    print(f"{info['tag']}: {len(paths) + 1} assets in place in {time.monotonic() - started:.1f}s, "
+          f"up to {UPLOAD_CONCURRENCY} at once", flush=True)
 
 
 def clear_superseded_stable_attempt(info, out):
@@ -1508,7 +1567,7 @@ def build(info, out):
                 str(out / f"richos-engine-{engine_version}.tar.gz"))
     execute("bash", release, "verify-engine", "--out", str(out))
     execute("bash", release, "app", "--out", str(out), "--notes", label)
-    if git("rev-parse", "HEAD") != info["build_commit"] or git("status", "--porcelain"):
+    if git("rev-parse", "HEAD") != info["build_commit"] or has_source_changes(ROOT, git(*STATUS_ARGS)):
         raise ValueError("build changed the tagged source tree; refusing artifact publication")
     write_candidate_manifest(info, out)
 
@@ -1531,7 +1590,7 @@ def finish(info, out):
     # (verify_candidate_manifest) and the build commit is immutable, so a moved checkout
     # is repaired by putting that commit back, never by a second build and a second walk
     # (hunt part 2, section 16). `nightly-local.py publish` does that before it runs this.
-    if git("status", "--porcelain"):
+    if has_source_changes(ROOT, git(*STATUS_ARGS)):
         raise ValueError("the source worktree has uncommitted changes, so it is not this "
                          "candidate's build commit; inspect them before publishing (nothing "
                          "was discarded)")
@@ -1571,7 +1630,8 @@ def finish(info, out):
     excluded = {"engine-pin.env", "engine-published.ok", "latest.json", CANDIDATE_MANIFEST}
     if not hidden:
         excluded.add(f"richos-engine-{engine_version}.tar.gz")
-    assets = [str(p) for p in sorted(out.iterdir()) if p.is_file() and p.name not in excluded]
+    assets = [str(p) for p in sorted(out.iterdir())
+              if p.is_file() and p.name not in excluded and not is_finder_metadata(p)]
     if hidden:
         # THE PUBLISH STEP, and the first moment the version exists publicly. The tag is
         # created with an empty lease, so of two builds only one can ever publish it.

@@ -63,8 +63,8 @@ public struct MicActivityFilter: Equatable {
 public enum MicActivityChange: Equatable {
     /// The process began running input (or was already running it at the first reading).
     case started(AudioProcess)
-    /// The process stopped running input. `exited` is true when it left Core Audio's process list
-    /// altogether (quit or crashed) rather than closing its input stream.
+    /// The process released its call audio. `exited` is true when it left Core Audio's process list
+    /// altogether (quit or crashed).
     case stopped(AudioProcess, exited: Bool)
 }
 
@@ -73,17 +73,37 @@ public enum MicActivityChange: Equatable {
 /// longer than the next reading: there is no inference from the ABSENCE of a callback.
 public struct MicActivityTracker {
     public let filter: MicActivityFilter
-    /// The processes running input at the last reading, by pid.
+    /// Processes that opened input and whose call audio has not ended, by PID.
     public private(set) var active: [Int32: AudioProcess] = [:]
+    private var chromeJoinStarted: [Int32: Int64] = [:]
+
+    /// A live Chrome Zoom join reopened its input six seconds after first opening it, while
+    /// playback stayed open. Follow playback only during that initial input reset. Chrome uses
+    /// one audio process across tabs, so playback cannot tell when an established call ends.
+    private static let chromeJoinWindowMs: Int64 = 8_000
 
     public init(filter: MicActivityFilter) { self.filter = filter }
 
-    public mutating func update(_ reading: [AudioProcess]) -> [MicActivityChange] {
+    public mutating func update(_ reading: [AudioProcess], at ms: Int64) -> [MicActivityChange] {
         var now: [Int32: AudioProcess] = [:]
         var present = Set<Int32>()
         for p in reading where !filter.excludes(p) {
             present.insert(p.pid)
-            if p.runningInput { now[p.pid] = p }
+            let isChrome = p.family == "com.google.Chrome"
+            if p.runningInput {
+                now[p.pid] = p
+                if isChrome, active[p.pid] == nil {
+                    chromeJoinStarted[p.pid] = ms
+                } else if isChrome, active[p.pid]?.runningInput == false {
+                    chromeJoinStarted.removeValue(forKey: p.pid)
+                }
+            } else if isChrome, p.runningOutput, let began = chromeJoinStarted[p.pid],
+                      ms - began < Self.chromeJoinWindowMs {
+                now[p.pid] = p
+            }
+        }
+        chromeJoinStarted = chromeJoinStarted.filter { pid, began in
+            now[pid] != nil && ms - began < Self.chromeJoinWindowMs
         }
         var changes: [MicActivityChange] = []
         // Stopped first, in pid order, so the output is deterministic.

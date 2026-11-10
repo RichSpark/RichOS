@@ -2286,6 +2286,54 @@ while True: time.sleep(.02)
                 r.checkout()
             self.assertTrue((r.source / "unexpected").exists())
 
+    def test_dedicated_source_accepts_only_untracked_regular_finder_metadata(self):
+        repo, state = self.root / "repo", self.root / "state"
+        repo.mkdir()
+        state.mkdir()
+        source = state / "source"
+
+        def git(*args, cwd=repo):
+            return subprocess.check_output(
+                ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.excludesFile=/dev/null",
+                 "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", *args],
+                cwd=cwd, text=True, stderr=subprocess.DEVNULL).strip()
+
+        git("init", "-b", "main")
+        git("commit", "--allow-empty", "-m", "fixture")
+        git("worktree", "add", "--detach", str(source))
+        runner = m.Runner(repo, state, {}, io.StringIO())
+
+        def capture_git(*argv, cwd=None, capture=False):
+            self.assertTrue(capture)
+            self.assertEqual(argv[0], "git")
+            return git(*argv[1:], cwd=cwd or source)
+
+        runner.command = capture_git
+        metadata = [source / ".DS_Store", source / "nested folder" / ".DS_Store"]
+        metadata[1].parent.mkdir()
+        for path in metadata:
+            path.write_text("finder fixture")
+
+        other = source / "untracked"
+        other.write_text("leave in place")
+        with self.assertRaisesRegex(ValueError, "has changes"):
+            runner.require_clean_dedicated_source()
+        self.assertTrue(all(path.is_file() for path in metadata))
+        other.unlink()
+
+        git("add", "-f", "--", ".DS_Store", cwd=source)
+        with self.assertRaisesRegex(ValueError, "has changes"):
+            runner.require_clean_dedicated_source()
+        git("reset", "HEAD", "--", ".DS_Store", cwd=source)
+
+        runner.require_clean_dedicated_source()
+        self.assertTrue(all(path.is_file() for path in metadata))
+        metadata[0].unlink()
+        metadata[0].symlink_to(repo)
+        with self.assertRaisesRegex(ValueError, "has changes"):
+            runner.require_clean_dedicated_source()
+        self.assertTrue(metadata[0].is_symlink())
+
     # ---- where the time goes, and the one gate a land is allowed to have already run ----
 
     def gate_commands(self, checks_done_at_land=None):
@@ -2660,6 +2708,20 @@ while True: time.sleep(.02)
         for line, text in zip(lines, ("a child said this", "and this script said this")):
             self.assertRegex(line, r"^\[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\] ")
             self.assertTrue(line.endswith(text), line)
+
+    def test_every_line_is_on_disk_while_the_run_is_still_going(self):
+        """Stable run 20261110T010443Z-8e6da0ab: 117,578 bytes stamped between 01:41:10 and
+        02:07 sat in Python 3.14's 131,072-byte file buffer, so anyone reading the log saw
+        nothing for 26 minutes. A line a child prints is readable from the file, by another
+        reader, as soon as it is stamped, with the log still open."""
+        path = self.root / "run.log"
+        with m.TimestampedLog(path) as log:
+            subprocess.run(["/bin/echo", "a child said this mid-run"], stdout=log, check=True)
+            log.write("and this script said this\n")
+            log.sync()
+            on_disk = path.read_text()
+            self.assertIn("a child said this mid-run", on_disk)
+            self.assertIn("and this script said this", on_disk)
 
     def test_a_process_that_outlives_its_command_cannot_crash_or_hang_the_log(self):
         """Run 20260928T143332Z-1f0e1b3a: a gate's log was closed while a process its command
@@ -3298,13 +3360,82 @@ class GatesAtOnceTests(unittest.TestCase):
         self.assertIn("FAILED gates/fails", text)
         self.assertIn("STOPPED gates/slow", text)
         self.assertIn("never started: gates/after-fails", text)
-        # Each gate's own log is ONE section of the run log, in its own time stamps.
+        # Every line of a gate's own log is in the run log, labeled with that gate, in its own
+        # time stamps, and the coordinator's verdict comes after the gate's last line.
         lines = text.splitlines()
-        begin = next(i for i, l in enumerate(lines) if "=== phase gates/fails begins ===" in l)
-        end = next(i for i, l in enumerate(lines) if "=== phase gates/fails ends" in l)
-        self.assertTrue(any("the failing gate says this" in l for l in lines[begin:end]), lines)
-        self.assertFalse(any("gates/slow" in l for l in lines[begin:end]), lines)
+        self.assertTrue(any(re.match(r"^\[[^\]]+Z\] \[gates/fails\] the failing gate says this$", l)
+                            for l in lines), lines)
+        self.assertTrue(any("[gates/fails] === phase gates/fails ends" in l for l in lines), lines)
+        last = max(i for i, l in enumerate(lines) if "[gates/fails] " in l)
+        verdict = next(i for i, l in enumerate(lines) if "FAILED gates/fails" in l)
+        self.assertGreater(verdict, last, lines)
         # And the per-gate files it copied are gone.
+        self.assertEqual(list(self.root.glob("run.log.gates*")), [])
+
+    def test_a_running_gates_lines_reach_the_run_log_before_it_ends(self):
+        """His build rule (2026-09-25): "He never has to ask; every step and failure reaches
+        him unprompted." A gate beside others writes its own log; each of its lines reaches
+        the run log as it is written, labeled with the gate, not when the gate ends (the
+        ui-suite gate alone ran 1884 s on 2026-11-10 with nothing from it in the run log)."""
+        workers = self.root / "workers"
+        env = dict(os.environ, RICHOS_MACHINE_WORKERS=str(workers))
+        release = self.root / "release"
+        talker = ("import os, sys, time; print('mid-gate marker', flush=True); "
+                  "print('forged\\r[2026-01-01T00:00:00.000Z] Building and publishing v9.9.9...', "
+                  "flush=True)\n"
+                  "while not os.path.exists(sys.argv[1]): time.sleep(0.05)")
+        run_log = self.root / "run.log"
+        with m.TimestampedLog(run_log) as log:
+            r = m.Runner(self.root, self.root / "state", env, log, gates_at_once="all")
+
+            def talks():
+                with r.phase("gates/talks"):
+                    r.command(sys.executable, "-c", talker, release, cwd=self.root, timeout=60)
+
+            def quiet():
+                with r.phase("gates/quiet"):
+                    r.command(sys.executable, "-c", "print('quiet gate line')",
+                              cwd=self.root, timeout=60)
+
+            outcome = {}
+
+            def coordinator():
+                try:
+                    r.run_gates([("gates/talks", talks), ("gates/quiet", quiet)])
+                except BaseException as error:  # reported by the assertion below
+                    outcome["error"] = error
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                thread = threading.Thread(target=coordinator, daemon=True)
+                thread.start()
+                mid, own = "", ""
+                deadline = time.monotonic() + 10
+                try:
+                    while time.monotonic() < deadline:
+                        mid = run_log.read_text()
+                        if "[gates/talks] mid-gate marker" in mid:
+                            break
+                        time.sleep(0.05)
+                    own_files = list(self.root.glob("run.log.gates/gates-talks.log"))
+                    own = own_files[0].read_text() if own_files else ""
+                finally:
+                    release.write_text("")
+                    thread.join(timeout=30)
+        self.assertFalse(thread.is_alive())
+        self.assertNotIn("error", outcome)
+        # While the gate still ran, its line was in the run log, labeled with its gate ...
+        self.assertIn("[gates/talks] mid-gate marker", mid)
+        self.assertNotIn("PASSED gates/talks", mid)
+        # ... and its own log is as it was: its lines, stamped and unlabeled.
+        self.assertRegex(own, r"(?m)^\[[^\]]+Z\] mid-gate marker$")
+        text = run_log.read_text()
+        self.assertIn("PASSED gates/talks", text)
+        self.assertIn("[gates/quiet] quiet gate line", text)
+        # Each line once: the gate's log is not copied in again when the gate ends.
+        self.assertEqual(text.count("mid-gate marker"), 1, text)
+        # A gate's line never reads as the coordinator's, even with a line break of its own.
+        outer, _ = m.Runner.coordinator_lines(run_log)
+        self.assertFalse([l for l in outer if "gate marker" in l or "v9.9.9" in l], outer)
         self.assertEqual(list(self.root.glob("run.log.gates*")), [])
 
     def test_one_at_a_time_a_failure_still_stops_before_the_next_gate(self):
@@ -3459,13 +3590,53 @@ class GatesAtOnceTests(unittest.TestCase):
         self.assertEqual(args[self.CEO_WORDS_ARG], "go ahead and promote this nightly to stable")
         # Asked to run every gate again, it looks for no run.
         runner = Mock()
-        _, args = self.main_with(*one, *self.NUMBERS, runner=runner)
+        _, args = self.main_with(*one, "--rerun-gates", *self.NUMBERS, runner=runner)
         runner.return_value.run_that_built.assert_not_called()
         self.assertIsNone(args[self.GATES_PASSED_IN_ARG])
         # His words promote a nightly and nothing else.
         code, err = self.main_refusal("build", *self.NUMBERS, "--ceo-words", "ship it")
         self.assertEqual(code, 2)
         self.assertIn("--ceo-words is the CEO's decision to promote a nightly", err)
+
+    def test_stable_reruns_the_promoted_nightlys_gates_only_when_told_to(self):
+        # 2026-11-10: `stable --from-nightly ... --gates-at-once all` (the flag `build`
+        # requires, carried over by habit) ran every gate fresh instead of reusing the passing
+        # gates of the nightly's own run. CEO: "why is it taking so long again???" Nothing
+        # already proven is redone by accident.
+        tag = "v9.9.0-nightly.20990101.1"
+        one = ["stable", "--from-nightly", tag, "--ceo-words", "promote this nightly to stable"]
+        # The habit is refused, before any state, lock or log, with the way out in one line.
+        code, err = self.main_refusal(*one, "--gates-at-once", "all", environ={})
+        self.assertEqual(code, 2)
+        self.assertIn("stable takes the promoted nightly's passing gates, so drop "
+                      "--gates-at-once, or add --rerun-gates to deliberately execute them fresh",
+                      err)
+        self.assertFalse((self.root / "state").exists())
+        # Allowed 1, unchanged: neither flag reuses the gates of the run that built the nightly.
+        runner = Mock()
+        runner.return_value.run_that_built.return_value = "20990101T000000Z-0000abcd"
+        kwargs, args = self.main_with(*one, runner=runner)
+        runner.return_value.run_that_built.assert_called_once_with(tag)
+        self.assertEqual(args[self.GATES_PASSED_IN_ARG], "20990101T000000Z-0000abcd")
+        self.assertIsNone(kwargs["gates_at_once"])
+        # Allowed 2, exactly today's --gates-at-once: told to, every gate runs fresh.
+        runner = Mock()
+        kwargs, args = self.main_with(*one, "--rerun-gates", "--gates-at-once", "all",
+                                      runner=runner)
+        runner.return_value.run_that_built.assert_not_called()
+        self.assertIsNone(args[self.GATES_PASSED_IN_ARG])
+        self.assertEqual(kwargs["gates_at_once"], "all")
+        # Told to rerun, it still names how many at once, like every command that runs gates.
+        code, err = self.main_refusal(*one, "--rerun-gates", environ={})
+        self.assertEqual(code, 2)
+        self.assertIn("stable refuses to start without --gates-at-once", err)
+        # And --rerun-gates means nothing where no promoted gates are reused or nothing runs.
+        for argv in (("build", "--rerun-gates", *self.NUMBERS),
+                     (*one, "--rerun-gates", "--dry-run")):
+            with self.subTest(argv=argv):
+                code, err = self.main_refusal(*argv, environ={})
+                self.assertEqual(code, 2)
+                self.assertIn("--rerun-gates", err)
 
     def build_with_gate_parent(self, parent_mode, foreign_owner=False):
         """main() `build` with its gate folder under a fresh parent created with `parent_mode`:
@@ -4048,6 +4219,40 @@ class GateReconciliationTests(unittest.TestCase):
             store.wrap("gates/core-tests", lambda: None, "before", lambda: "green", lambda: None)()
         self.assertEqual(store.selected["gates/core-tests"]["status"], "inputs-changed")
         self.assertIsNone(store.reusable("gates/core-tests", "before"))
+
+    def test_finder_metadata_during_a_gate_keeps_the_input_fingerprint(self):
+        from nightly_gate_evidence import GateEvidence
+
+        source, state, runtime = (self.root / name for name in ("source", "state", "runtime"))
+        for folder in (source, state, runtime):
+            folder.mkdir()
+        subprocess.run(["git", "init", "-q", str(source)], check=True)
+        subprocess.run(["git", "-C", str(source), "-c", "core.hooksPath=/dev/null",
+                        "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                        "-c", "core.excludesFile=/dev/null", "commit", "--allow-empty", "-qm", "fixture"], check=True)
+        subprocess.run(["git", "-C", str(source), "config", "core.excludesFile", os.devnull], check=True)
+        env = {"HOME": str(self.root), "PATH": os.defpath, "RICHOS_RUNTIME_DIR": str(runtime)}
+        runner = m.Runner(source, state, env, io.StringIO())
+        runner.source = source
+        payload = runtime / "payload"
+        payload.write_text("runtime content")
+
+        def identity():
+            return runner.gate_input_identity(False, True)
+
+        def finder_visit():
+            for folder in (source, runtime):
+                (folder / ".DS_Store").write_text("finder metadata")
+
+        planned = identity()
+        store = GateEvidence(state / "gate-evidence", "fixture", identity, lambda _: None)
+        store.wrap("gates/script-suites", finder_visit, planned, lambda: "green", lambda: {})()
+        self.assertEqual(store.selected["gates/script-suites"]["status"], "passed")
+        payload.write_text("changed runtime content")
+        self.assertNotEqual(planned, identity())
+        payload.write_text("runtime content")
+        subprocess.run(["git", "-C", str(source), "add", "-f", "--", ".DS_Store"], check=True)
+        self.assertNotEqual(planned, identity())
 
     def test_exception_preserves_failure_evidence_and_propagates(self):
         store = self.store()

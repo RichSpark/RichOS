@@ -20,11 +20,11 @@
 use richos_search::corpus::{FolderScope, MetadataSource};
 use richos_search::embed::Embedder;
 use richos_core::config::{SearchFolderMode, SearchFolderPreferences};
+use richos_core::{entity::PersonId, ledger::{Ledger, Message}, read_view::{ReadView, SpineReader, SpineView}, timeline::{SearchMessageRole, Timeline}};
 use richos_search::service::{Busy, Config, FolderSetConfig, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
-use richos_core::read_view::{SpineReader, SpineView};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod folder_map;
@@ -177,6 +177,8 @@ pub struct DocumentSearch {
     retire: mpsc::Sender<RetiredService>,
     closed: std::sync::atomic::AtomicBool,
     palette_generation: std::sync::atomic::AtomicU64,
+    conversations: OnceLock<SearchService>,
+    memory: OnceLock<MemoryPool>,
 }
 
 impl DocumentSearch {
@@ -215,6 +217,8 @@ impl DocumentSearch {
             retire,
             closed: std::sync::atomic::AtomicBool::new(false),
             palette_generation: std::sync::atomic::AtomicU64::new(0),
+            conversations: OnceLock::new(),
+            memory: OnceLock::new(),
         })
     }
 
@@ -359,6 +363,12 @@ impl DocumentSearch {
         let active = self.active.lock().unwrap();
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
         active.service.request_stop();
+        if let Some(service) = self.conversations.get() {
+            service.shutdown();
+        }
+        if let Some(pool) = self.memory.get() {
+            pool.index.shutdown();
+        }
         let (done, retired) = mpsc::channel();
         if self.retire.send((active.service.clone(), done)).is_ok() {
             drop(active);
@@ -444,6 +454,400 @@ fn make_embedder() -> Result<Box<dyn Embedder>, String> {
 /// The most results one palette request returns; the palette asks for twelve at a time as the
 /// list scrolls (design round 26), never with page controls.
 pub const PAGE: usize = 12;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct MessageAnchor {
+    thread_id: String,
+    turn_id: String,
+    message_id: String,
+}
+
+struct CurrentMessage<'a> {
+    revision: String,
+    created_title: &'a str,
+    entity_label: &'a str,
+}
+
+impl MessageAnchor {
+    fn current<'a>(&self, view: &'a ReadView) -> Option<CurrentMessage<'a>> {
+        let ledger = view.ledger();
+        let binding = ledger.thread_binding(&self.thread_id).ok()?;
+        if binding.person_id() != &PersonId::default_ceo() { return None; }
+        let thread = ledger.threads().iter().find(|thread| thread.id == self.thread_id)?;
+        let message = Timeline::committed_search_turn(ledger, &binding, &self.turn_id).ok()?
+            .into_iter().find(|message| message.message_id == self.message_id)?;
+        let entity_label = view.entity_registry().get(binding.entity_id())
+            .map(|entity| entity.display_name.as_str()).unwrap_or_default();
+        Some(CurrentMessage {
+            revision: richos_search::corpus::record_revision("", &message.text),
+            created_title: &thread.title,
+            entity_label,
+        })
+    }
+
+    fn token(&self, revision: &str) -> String {
+        serde_json::to_string(&(self, revision)).expect("serializing a search result")
+    }
+}
+
+pub fn resolve_search_message(reader: &SpineReader, token: &str) -> Option<MessageAnchor> {
+    let (anchor, revision): (MessageAnchor, String) = serde_json::from_str(token).ok()?;
+    let view = reader.snapshot();
+    (anchor.current(&view)?.revision == revision).then_some(anchor)
+}
+
+/// An exact legacy hit can share a row with the index only if it has the same
+/// complete visible message. A legacy assistant message may span several items.
+pub fn exact_message_token(ledger: &Ledger, thread_id: &str, message: &Message) -> Option<String> {
+    let binding = ledger.thread_binding(thread_id).ok()?;
+    if binding.person_id() != &PersonId::default_ceo() { return None; }
+    let role = match message.role.as_str() {
+        "user" => SearchMessageRole::User,
+        "assistant" => SearchMessageRole::Assistant,
+        _ => return None,
+    };
+    let mut matches = Timeline::committed_search_turn(ledger, &binding, &message.turn_id).ok()?
+        .into_iter().filter(|item| item.role == role && item.text == message.text);
+    let item = matches.next()?;
+    if matches.next().is_some() { return None; }
+    let anchor = MessageAnchor { thread_id: thread_id.into(), turn_id: item.turn_id, message_id: item.message_id };
+    Some(anchor.token(&richos_search::corpus::record_revision("", &item.text)))
+}
+
+fn conversation_projection(reader: SpineReader) -> richos_search::service::ProjectionSource {
+    let changes = Mutex::new(reader.watch_search_turns());
+    richos_search::service::ProjectionSource {
+        index_key: PathBuf::from("richfinder-native-conversations-v1"),
+        read: Box::new(move |stopped| {
+            use richos_search::corpus::Document;
+            let view = reader.snapshot();
+            let mut documents = Vec::new();
+            Timeline::visit_committed_search_messages(view.ledger(), &PersonId::default_ceo(), None, |binding, _, message| {
+                if stopped() { return false; }
+                let anchor = MessageAnchor {
+                    thread_id: binding.thread_id().into(),
+                    turn_id: message.turn_id,
+                    message_id: message.message_id,
+                };
+                let key = serde_json::to_string(&anchor).expect("serializing a search anchor");
+                // A thread title is a navigation hit. Rank each message by its own text.
+                documents.push(Arc::new(Document::from_record(&key, "", message.text, message.at)));
+                true
+            });
+            Ok(documents)
+        }),
+        wait_for_change: Box::new(move |timeout| {
+            let changes = changes.lock().unwrap();
+            let received = changes.events.recv_timeout(timeout).is_ok();
+            let drained = changes.events.try_iter().count() != 0;
+            let overflow = changes.take_rescan();
+            received || drained || overflow
+        }),
+    }
+}
+
+impl DocumentSearch {
+    fn project(&self, source: richos_search::service::ProjectionSource) -> SearchService {
+        let factory = self.make_embedder.clone();
+        SearchService::start_projection(Config {
+            root: None,
+            cache: (self.location)().cache,
+            make_embedder: Box::new(move || factory()),
+            busy: self.busy.clone(),
+            tuning: Tuning::default(),
+        }, source, self.reranker.clone())
+    }
+
+    fn palette_obsolete(&self, generation: u64) -> bool {
+        use std::sync::atomic::Ordering;
+        self.closed.load(Ordering::Acquire) || self.palette_generation.load(Ordering::Relaxed) > generation
+    }
+}
+
+pub fn search_conversations(
+    service: &DocumentSearch, reader: &SpineReader, mut request: SearchRequest, generation: u64,
+    display_title: &dyn Fn(&str, &str) -> String,
+) -> Option<SearchResponse> {
+    let started = std::time::Instant::now();
+    cancel_palette(service, generation);
+    let obsolete = || service.palette_obsolete(generation);
+    if obsolete() { return None; }
+    let pool = service.conversations.get_or_init(|| service.project(conversation_projection(reader.clone())));
+    if obsolete() {
+        if service.closed.load(std::sync::atomic::Ordering::Acquire) { pool.request_stop(); }
+        return None;
+    }
+    request.offset = 0;
+    request.limit = request.limit.clamp(1, PAGE);
+    let (response, mut stages) = richos_search::service::capture_query_stages(|| {
+        let mut response = pool.search_projection(&request, &obsolete, &|document| {
+            serde_json::from_str::<MessageAnchor>(&document.rel_path).ok()
+                .is_some_and(|anchor| anchor.current(&reader.snapshot()).is_some_and(|current| current.revision == document.hash))
+        })?;
+        let view = reader.snapshot();
+        response.hits.retain_mut(|hit| {
+            let Ok(anchor) = serde_json::from_str::<MessageAnchor>(&hit.rel_path) else { return false };
+            let Some(current) = anchor.current(&view) else { return false };
+            if current.revision != hit.revision { return false; }
+            hit.source_id = anchor.token(&current.revision);
+            hit.title = display_title(&anchor.thread_id, current.created_title);
+            hit.rel_path = current.entity_label.to_owned();
+            true
+        });
+        (!obsolete()).then_some(response)
+    });
+    stages.push(("conversations", started.elapsed().as_secs_f64() * 1_000.0));
+    crate::search_diagnostics::record(request.super_finder, response.as_ref(), started.elapsed(), &stages);
+    response
+}
+
+const LORO_READ: &str = r#"
+import { pathToFileURL } from 'node:url';
+const [module, kind, directory, scope] = process.argv.slice(1);
+const { loadSearchProjection } = await import(pathToFileURL(module).href);
+const projection = loadSearchProjection({ [kind]: directory, grant: JSON.parse(scope) });
+process.stdout.write(JSON.stringify(projection));
+"#;
+
+#[derive(PartialEq, Eq)]
+struct MemoryGrant {
+    root: richos_core::loro::LoroRoot,
+    tools: richos_core::loro::LoroTools,
+    companies: Vec<String>,
+    repo_owner: Option<String>,
+}
+
+impl MemoryGrant {
+    fn current(reader: &SpineReader, install: &Mutex<Option<richos_core::loro::LoroInstall>>) -> Option<Self> {
+        use richos_core::{entity::EntityStatus, loro::{LaneMap, LoroRoot}};
+        let install = install.lock().ok()?.clone()?;
+        let view = reader.snapshot();
+        let registry = view.entity_registry();
+        let lanes = LaneMap::from_env(registry).ok()?;
+        lanes.validate_against(registry).ok()?;
+        let mut companies: Vec<_> = registry.entities().iter()
+            .filter(|entity| entity.status == EntityStatus::Active)
+            .filter_map(|entity| lanes.lane_for(entity.id.as_str()).map(str::to_owned)).collect();
+        companies.sort_unstable();
+        companies.dedup();
+        let repo_owner = match install.root() {
+            LoroRoot::Root(path) if path.join("wiki").is_dir() && path.join("loro").is_dir() => {
+                let root = path.canonicalize().ok()?;
+                registry.resolve_root(&root).ok().filter(|owner| owner.status == EntityStatus::Active)
+                    .map(|owner| owner.id.to_string())
+            }
+            _ => None,
+        };
+        Some(Self { root: install.root().clone(), tools: install.tools().clone(), companies, repo_owner })
+    }
+
+    fn read(&self, obsolete: &dyn Fn() -> bool) -> Option<MemoryProjection> {
+        use richos_core::owned_process::OwnedChild;
+        use std::{io::Read, process::{Command, Stdio}, time::{Duration, Instant}};
+        const OUTPUT_LIMIT: u64 = 32 * 1024 * 1024;
+        let (flag, directory) = self.root.args();
+        let mut grant = serde_json::json!({"audience": "rich", "includeCeo": true, "companyIds": self.companies});
+        if let Some(owner) = &self.repo_owner { grant["repoOwner"] = serde_json::json!(owner); }
+        let mut command = Command::new(self.tools.node());
+        command.args(["--input-type=module", "-e", LORO_READ, "--"])
+            .arg(self.tools.dir().join("lib/search.js"))
+            .arg(if flag == "--corpus" { "corpusRoot" } else { "root" }).arg(directory)
+            .arg(grant.to_string()).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        OwnedChild::configure(&mut command);
+        let mut child = command.spawn().ok()?;
+        let stdout = child.stdout.take().expect("piped Loro output");
+        let mut owned = OwnedChild::new(child);
+        let output = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(OUTPUT_LIMIT + 1).read_to_end(&mut bytes).ok()?;
+            (bytes.len() as u64 <= OUTPUT_LIMIT).then_some(bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let succeeded = loop {
+            if obsolete() || Instant::now() >= deadline { break false; }
+            match owned.try_wait() {
+                Ok(Some(status)) => break status.success(),
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                Err(_) => break false,
+            }
+        };
+        drop(owned);
+        let bytes = output.join().ok()??;
+        if !succeeded || obsolete() { return None; }
+        let projection: MemoryProjection = serde_json::from_slice(&bytes).ok()?;
+        (projection.schema_version == 1).then_some(projection)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryProjection {
+    schema_version: u32,
+    records: Vec<MemoryRecord>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MemoryRecord {
+    #[serde(rename = "ref")]
+    reference: String,
+    company: Option<String>,
+    scope: String,
+    title: String,
+    text: String,
+    provenance: MemoryProvenance,
+    supersedes: Option<String>,
+    #[serde(rename = "validUntil")]
+    valid_until: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MemoryProvenance {
+    source: String,
+    path: Option<String>,
+    anchor: Option<String>,
+    origin: Option<String>,
+}
+
+impl MemoryRecord {
+    fn key(&self) -> String {
+        serde_json::to_string(&(&self.company, &self.reference, &self.provenance.source, &self.provenance.path))
+            .expect("serializing a memory reference")
+    }
+
+    fn revision(&self) -> String {
+        richos_search::corpus::content_hash(&serde_json::to_vec(self).expect("serializing a memory record"))
+    }
+
+    fn citation(&self) -> String {
+        let location = self.provenance.path.as_deref().unwrap_or(&self.reference);
+        match &self.provenance.anchor {
+            Some(anchor) => format!("{location} · {anchor}"),
+            None => location.to_owned(),
+        }
+    }
+}
+
+type MemoryDocuments = std::collections::BTreeMap<String, Arc<richos_search::corpus::Document>>;
+type MemoryRows<'a> = std::collections::BTreeMap<String, (String, &'a MemoryRecord)>;
+
+struct MemoryPool {
+    index: SearchService,
+    snapshot: Arc<Mutex<MemoryDocuments>>,
+    refresh: mpsc::SyncSender<()>,
+}
+
+impl MemoryPool {
+    fn new(service: &DocumentSearch, records: &MemoryRows<'_>) -> Self {
+        let (refresh, pending) = mpsc::sync_channel(1);
+        let pending = Mutex::new(pending);
+        let snapshot = Arc::new(Mutex::new(Self::documents(records, &MemoryDocuments::new())));
+        let input = snapshot.clone();
+        let index = service.project(richos_search::service::ProjectionSource {
+            index_key: PathBuf::from("richfinder-company-memory-v1"),
+            read: Box::new(move |_| Ok(input.lock().unwrap().values().cloned().collect())),
+            wait_for_change: Box::new(move |timeout| pending.lock().unwrap().recv_timeout(timeout).is_ok()),
+        });
+        Self { index, snapshot, refresh }
+    }
+
+    fn documents(records: &MemoryRows<'_>, prior: &MemoryDocuments) -> MemoryDocuments {
+        use richos_search::corpus::Document;
+        records.iter().map(|(key, (revision, record))| {
+            let document = prior.get(key).filter(|document| document.hash == *revision).cloned().unwrap_or_else(|| {
+                let mut document = Document::from_record(key, &record.title, record.text.clone(), 0);
+                document.hash.clone_from(revision);
+                Arc::new(document)
+            });
+            (key.clone(), document)
+        }).collect()
+    }
+
+    fn publish(&self, records: &MemoryRows<'_>, obsolete: &dyn Fn() -> bool) -> bool {
+        let mut prior = self.snapshot.lock().unwrap();
+        if obsolete() { return false; }
+        let next = Self::documents(records, &prior);
+        if next.len() == prior.len() && next.iter().zip(prior.iter()).all(|((a, x), (b, y))| a == b && Arc::ptr_eq(x, y)) {
+            return false;
+        }
+        *prior = next;
+        let _queued = self.refresh.try_send(());
+        true
+    }
+}
+
+pub fn search_company_memory(
+    service: &DocumentSearch,
+    reader: &SpineReader,
+    install: &Mutex<Option<richos_core::loro::LoroInstall>>,
+    mut request: SearchRequest,
+    generation: u64,
+) -> Result<Option<SearchResponse>, &'static str> {
+    let started = std::time::Instant::now();
+    cancel_palette(service, generation);
+    let obsolete = || service.palette_obsolete(generation);
+    if obsolete() || install.lock().unwrap().is_none() { return Ok(None); }
+    let unavailable = "Company memory is unavailable.";
+    let Some(grant) = MemoryGrant::current(reader, install) else { return Err(unavailable) };
+    let projection_started = std::time::Instant::now();
+    let projection = grant.read(&obsolete);
+    let projection_ms = projection_started.elapsed().as_secs_f64() * 1_000.0;
+    if obsolete() || MemoryGrant::current(reader, install).as_ref() != Some(&grant) { return Ok(None); }
+    let Some(projection) = projection else {
+        crate::search_diagnostics::record_unavailable(started.elapsed(), &[("memory_projection", projection_ms)]);
+        return Err(unavailable);
+    };
+    let (result, mut stages) = richos_search::service::capture_query_stages(|| {
+        let authorized: MemoryRows<'_> = projection.records.iter()
+            .map(|record| (record.key(), (record.revision(), record))).collect();
+        let pool = service.memory.get_or_init(|| MemoryPool::new(service, &authorized));
+        if service.closed.load(std::sync::atomic::Ordering::Acquire) {
+            pool.index.request_stop();
+            return None;
+        }
+        let generation_before_refresh = pool.index.status().generation;
+        let changed = pool.publish(&authorized, &obsolete);
+        request.offset = 0;
+        request.limit = request.limit.clamp(1, PAGE);
+        let mut response = pool.index.search_projection(&request, &obsolete, &|document| {
+            authorized.get(&document.rel_path).is_some_and(|(revision, _)| revision == &document.hash)
+        })?;
+        if changed && response.status.generation == generation_before_refresh {
+            response.status.folder = richos_search::service::FolderStatus::Loading;
+        }
+        response.hits.retain_mut(|hit| {
+            let Some((revision, record)) = authorized.get(&hit.rel_path) else { return false };
+            if revision != &hit.revision { return false; }
+            hit.source_id = serde_json::to_string(&(&hit.rel_path, revision)).expect("serializing a memory result");
+            hit.rel_path = record.citation();
+            true
+        });
+        (!obsolete() && MemoryGrant::current(reader, install).as_ref() == Some(&grant)).then_some(response)
+    });
+    stages.push(("memory_projection", projection_ms));
+    stages.push(("company_memory", started.elapsed().as_secs_f64() * 1_000.0));
+    crate::search_diagnostics::record(request.super_finder, result.as_ref(), started.elapsed(), &stages);
+    Ok(result)
+}
+
+#[derive(serde::Serialize)]
+pub struct MemoryDetail {
+    title: String,
+    citation: String,
+    text: String,
+    supersedes: Option<String>,
+}
+
+pub fn resolve_search_memory(
+    reader: &SpineReader, install: &Mutex<Option<richos_core::loro::LoroInstall>>, token: &str,
+) -> Option<MemoryDetail> {
+    let (key, revision): (String, String) = serde_json::from_str(token).ok()?;
+    let grant = MemoryGrant::current(reader, install)?;
+    let records = grant.read(&|| false)?.records;
+    if MemoryGrant::current(reader, install).as_ref() != Some(&grant) { return None; }
+    let record = records.into_iter().find(|record| record.key() == key && record.revision() == revision)?;
+    let citation = record.citation();
+    Some(MemoryDetail { title: record.title, citation, text: record.text.chars().take(6_000).collect(), supersedes: record.supersedes })
+}
 
 #[cfg(test)]
 pub fn search(service: &DocumentSearch, request: SearchRequest) -> SearchResponse {
@@ -891,6 +1295,119 @@ mod tests {
         assert_eq!(find(2, true)["results"].as_array().unwrap().len(), 2);
         service.shutdown();
         drop(spine);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn company_memory_search_uses_current_grant_and_provenance() {
+        use richos_core::{entity::{Entity, EntityRegistry}, ledger::Ledger, loro::{CorpusPaths, LoroInstall}, spine::Spine};
+        let base = std::env::temp_dir().join(richos_core::util::new_id("search-company-memory"));
+        let corpus = base.join("corpus");
+        std::fs::create_dir_all(corpus.join("ceo")).unwrap();
+        let write_company = |company: &str, body: &str| {
+            let path = corpus.join("companies").join(company);
+            std::fs::create_dir_all(path.join("records")).unwrap();
+            std::fs::write(path.join("company.yaml"), format!("id: {company}\nname: {company}\nrole: owner\nstatus: active\n")).unwrap();
+            std::fs::write(path.join("records/refund.md"), body).unwrap();
+        };
+        write_company("northwind", "---\nkind: decision\nscope: org-shared\n---\n\nA member asked for a refund.\n");
+        write_company("rival", "---\nkind: decision\nscope: org-shared\n---\n\nA customer asked for a refund.\n");
+        let engine = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../engine");
+        let paths = CorpusPaths {
+            env_corpus: Some(corpus.to_string_lossy().into_owned()),
+            engine_dir: Some(engine),
+            env_node: Some("node".into()),
+            env_tools: None,
+            env_root: None,
+            ..CorpusPaths::from_process()
+        };
+        let install = Mutex::new(LoroInstall::locate(&paths).unwrap().0);
+        let mut spine = Spine::new(Ledger::open(base.join("ledger.jsonl")).unwrap());
+        spine.set_entity_registry(EntityRegistry::new(vec![Entity::new("northwind", "Northwind", &["/fixture/northwind"]).unwrap()]).unwrap());
+        let reader = spine.reader();
+        let cache = base.join("cache");
+        let service = DocumentSearch::new(
+            move || Location { root: Ok(None), cache: Ok(cache.clone()), folders: None, reindex: 0 },
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None, None, None, None,
+        );
+        let query = SearchRequest { query: "chargeback".into(), super_finder: true, strict: false, offset: 0, limit: 6 };
+        let _initial = search_company_memory(&service, &reader, &install, query.clone(), 1).unwrap();
+        service.memory.get().unwrap().index.wait_idle();
+        let response = search_company_memory(&service, &reader, &install, query.clone(), 2).unwrap().unwrap();
+        assert!(response.effective.super_finder);
+        assert_eq!(response.hits.len(), 1);
+        let hit = &response.hits[0];
+        assert_eq!(hit.rel_path, "companies/northwind/records/refund.md");
+        let detail = resolve_search_memory(&reader, &install, &hit.source_id).unwrap();
+        assert!(detail.text.contains("member asked for a refund"));
+        write_company("northwind", "---\nkind: decision\nscope: org-shared\nsupersededBy: rec:companies/northwind/records/replacement\n---\n\nA member asked for a refund.\n");
+        assert!(resolve_search_memory(&reader, &install, &hit.source_id).is_none());
+        assert!(search_company_memory(&service, &reader, &install, query, 3).unwrap().unwrap().hits.is_empty());
+        service.shutdown();
+        drop(spine);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+
+
+    #[test]
+    fn conversation_search_finds_the_committed_message_by_meaning_and_refuses_a_superseded_anchor() {
+        use richos_core::{entity::EntityId, ledger::{Ledger, Source}, spine::Spine};
+        let base = std::env::temp_dir().join(richos_core::util::new_id("search-conversations"));
+        std::fs::create_dir_all(&base).unwrap();
+        let ledger_path = base.join("ledger.jsonl");
+        let mut ledger = Ledger::open(&ledger_path).unwrap();
+        let entity = EntityId::parse("fixture").unwrap();
+        let thread = ledger.create_thread("Club notes", &entity).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let turn = ledger.record_prompt_received(&binding, "A member asked for a refund.", Source::Text).unwrap();
+        ledger.complete_turn(&turn, "done").unwrap();
+        let exact = exact_message_token(&ledger, &thread, &ledger.messages(&thread).unwrap()[0]).unwrap();
+        let distracting_thread = ledger.create_thread("Refund planning", &entity).unwrap();
+        let distracting_binding = ledger.thread_binding(&distracting_thread).unwrap();
+        for _ in 0..PAGE {
+            let other = ledger.record_prompt_received(&distracting_binding, "The new office has bicycle parking.", Source::Text).unwrap();
+            ledger.complete_turn(&other, "done").unwrap();
+        }
+        let mut spine = Spine::new(ledger);
+        let reader = spine.reader();
+        let cache = base.join("cache");
+        let service = DocumentSearch::new(
+            move || Location { root: Ok(None), cache: Ok(cache.clone()), folders: None, reindex: 0 },
+            || Ok(Box::new(ConceptEmbedder::stand_in())),
+            None, None, None, None,
+        );
+        let mut nav = crate::nav::NavState::default();
+        nav.auto_titles.insert(thread.clone(), "Member support".into());
+        let display = |id: &str, title: &str| nav.display_title(id, title);
+        let request = SearchRequest { query: "chargeback".into(), super_finder: true, strict: false, offset: 0, limit: 6 };
+        let _initial = search_conversations(&service, &reader, request.clone(), 1, &display);
+        service.conversations.get().unwrap().wait_idle();
+        let results = search_conversations(&service, &reader, request.clone(), 2, &display).unwrap();
+        assert!(results.effective.super_finder);
+        assert_eq!(results.hits.len(), 1);
+        assert!(results.hits[0].passage.text.contains("refund"));
+        let token = &results.hits[0].source_id;
+        assert_eq!(token, &exact);
+        assert_eq!(results.hits[0].title, "Member support");
+        assert_eq!(resolve_search_message(&reader, token).unwrap().turn_id, turn);
+        let words = SearchRequest { super_finder: false, ..request };
+        assert!(search_conversations(&service, &reader, words.clone(), 3, &display).unwrap().hits.is_empty());
+        nav.renamed_threads.insert(thread.clone(), "Refund decision".into());
+        let display = |id: &str, title: &str| nav.display_title(id, title);
+        let results = search_conversations(&service, &reader, SearchRequest { query: "refund".into(), ..words }, 4, &display).unwrap();
+        assert_eq!(results.hits.len(), 1);
+        assert_eq!(results.hits[0].source_id, exact);
+        assert_eq!(results.hits[0].title, "Refund decision");
+        service.shutdown();
+        drop(spine);
+        let mut ledger = Ledger::open(ledger_path).unwrap();
+        let revised = ledger.record_prompt_received(&binding, "I withdrew the request.", Source::Text).unwrap();
+        ledger.complete_turn(&revised, "done").unwrap();
+        ledger.mark_turn_superseded(&turn, &revised).unwrap();
+        let current = Spine::new(ledger).reader();
+        assert!(resolve_search_message(&current, token).is_none());
         std::fs::remove_dir_all(base).unwrap();
     }
 

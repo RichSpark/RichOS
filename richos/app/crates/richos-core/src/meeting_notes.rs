@@ -205,6 +205,13 @@ pub fn write_brief(session: &Path, brief: &str) -> std::io::Result<PathBuf> {
     Ok(target)
 }
 
+/// The existing failure message that owns a retry for this saved recording.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedRetry {
+    pub turn: String,
+    pub thread: String,
+}
+
 /// Where a session's notes stand. Kept beside the transcript.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -219,6 +226,8 @@ pub struct BriefState {
     /// for the app, and anything more is a request to Rich (never said twice).
     #[serde(default)]
     pub failure_said: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<SavedRetry>,
     /// A rejoin's recording: the meeting's notes have been rewritten from every recording so far
     /// (the brief is the first recording's, so its presence does not say this one is in it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -230,6 +239,18 @@ impl BriefState {
     pub fn finished(&self) -> bool {
         self.delivered || self.failure_said
     }
+
+    /// Restart only the failed work. An existing transcript or written brief is still reusable.
+    pub fn begin_retry(&mut self, retry: &SavedRetry) -> bool {
+        if self.delivered || !self.failure_said || self.retry.as_ref() != Some(retry) {
+            return false;
+        }
+        self.attempts = 0;
+        self.last_error = None;
+        self.failure_said = false;
+        self.retry = None;
+        true
+    }
 }
 
 /// Every recorded meeting whose notes were never finished, oldest first: the recording closed (the
@@ -238,6 +259,40 @@ impl BriefState {
 /// (handover review rv-20261013T141401Z-390d6bea-2e23 #2). Looked for in every meeting zone of the
 /// corpus ([`meeting_zone`]): each company's, and the unfiled one.
 pub fn unfinished_sessions(corpus: &Path) -> Vec<PathBuf> {
+    recorded_sessions(corpus).into_iter().filter(|s| !read_state(s).finished()).collect()
+}
+
+/// Saved recovery controls survive reopening RichOS along with their conversation messages.
+pub fn saved_retries(corpus: &Path) -> Vec<(String, PathBuf)> {
+    recorded_sessions(corpus).into_iter().filter_map(|dir| {
+        let state = read_state(&dir);
+        if !state.failure_said || state.delivered { return None; }
+        Some((state.retry?.turn, dir))
+    }).collect()
+}
+
+/// Verify the saved request against the active conversation and its real capture directory.
+/// A renderer supplies a message ID, never a file path or a new delivery destination.
+pub fn retry_facts(corpus: &Path, dir: &Path, entity: Option<&str>, retry: &SavedRetry) -> Option<MeetingFacts> {
+    let mut facts = read_facts(dir)?;
+    if facts.ended_at == 0
+        || facts.thread.as_ref().is_some_and(|t| t != &retry.thread)
+        || facts.entity.as_deref().is_some_and(|e| Some(e) != entity)
+        || dir.parent()? != meeting_zone(corpus, facts.entity.as_deref())
+        || dir.canonicalize().ok()? != corpus.canonicalize().ok()?.join(dir.strip_prefix(corpus).ok()?)
+        || !dir.join("session.json").is_file()
+        || facts.continues.as_deref().is_some_and(|name| {
+            Path::new(name).file_name().and_then(|n| n.to_str()) != Some(name)
+                || dir.parent().is_none_or(|zone| zone.join(name).is_symlink())
+        })
+    {
+        return None;
+    }
+    facts.thread = Some(retry.thread.clone());
+    Some(facts)
+}
+
+fn recorded_sessions(corpus: &Path) -> Vec<PathBuf> {
     let mut zones = vec![meeting_zone(corpus, None)];
     if let Ok(companies) = std::fs::read_dir(corpus.join("companies")) {
         let mut ids: Vec<String> = companies.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
@@ -248,7 +303,7 @@ pub fn unfinished_sessions(corpus: &Path) -> Vec<PathBuf> {
         .iter()
         .filter_map(|zone| std::fs::read_dir(zone).ok())
         .flat_map(|sessions| sessions.flatten().map(|e| e.path()))
-        .filter(|s| s.join(MEETING_FILE).is_file() && !read_state(s).finished())
+        .filter(|s| !s.is_symlink() && s.join(MEETING_FILE).is_file())
         .collect();
     // Session folders are named by their UTC start time, so the name orders them.
     out.sort_by_key(|s| s.file_name().map(|n| n.to_os_string()));
@@ -306,7 +361,7 @@ pub fn segments(first: &Path) -> Vec<PathBuf> {
         .and_then(|zone| std::fs::read_dir(zone).ok())
         .into_iter()
         .flat_map(|entries| entries.flatten().map(|e| e.path()))
-        .filter(|s| s != first && name.is_some() && read_facts(s).is_some_and(|f| f.continues == name))
+        .filter(|s| s != first && !s.is_symlink() && name.is_some() && read_facts(s).is_some_and(|f| f.continues == name))
         .collect();
     // Session folders are named by their UTC start time, so the name orders them.
     rejoins.sort_by_key(|s| s.file_name().map(|n| n.to_os_string()));
@@ -606,6 +661,35 @@ mod tests {
         assert_eq!(notes.warnings, vec![gap], "the middle recording's warning is gone from the meeting's notes");
         assert_eq!((notes.entity.as_deref(), notes.thread.as_deref(), notes.ended_at, notes.continues), (Some("acme"), Some("t1"), 9_000, None));
         std::fs::remove_dir_all(&zone).unwrap();
+    }
+
+    #[test]
+    fn a_failed_saved_meeting_retries_only_in_its_own_conversation_and_reuses_its_transcript() {
+        let corpus = std::env::temp_dir().join(format!("richos-notes-retry-{}", std::process::id()));
+        let dir = meeting_zone(&corpus, Some("acme")).join("2026-10-13T10-00-00Z--system--call");
+        std::fs::create_dir_all(&dir).unwrap();
+        let saved = MeetingFacts { entity: Some("acme".into()), thread: Some("t1".into()), ended_at: 2_000, ..facts() };
+        write_facts(&dir, &saved).unwrap();
+        std::fs::write(dir.join("session.json"), b"{}").unwrap();
+        std::fs::write(dir.join(TRANSCRIPT_FILE), b"Me: saved audio transcript").unwrap();
+        let retry = SavedRetry { turn: "failed-turn".into(), thread: "t1".into() };
+        write_state(&dir, &BriefState { failure_said: true, attempts: MAX_ATTEMPTS, retry: Some(retry.clone()), ..Default::default() }).unwrap();
+        assert_eq!(saved_retries(&corpus), vec![(retry.turn.clone(), dir.clone())]);
+        assert!(unfinished_sessions(&corpus).is_empty());
+        let other = SavedRetry { thread: "t2".into(), ..retry.clone() };
+        assert!(retry_facts(&corpus, &dir, Some("acme"), &other).is_none());
+        assert!(retry_facts(&corpus, &dir, Some("other"), &retry).is_none());
+        assert_eq!(retry_facts(&corpus, &dir, Some("acme"), &retry), Some(saved));
+        let mut state = read_state(&dir);
+        assert!(!state.begin_retry(&other));
+        assert!(state.begin_retry(&retry));
+        assert!(!state.begin_retry(&retry), "a consumed action cannot run again");
+        write_state(&dir, &state).unwrap();
+        assert!(saved_retries(&corpus).is_empty());
+        assert_eq!(unfinished_sessions(&corpus), vec![dir.clone()]);
+        assert_eq!(next_step(&dir, &state), NextStep::Write(1));
+        assert_eq!(std::fs::read(dir.join(TRANSCRIPT_FILE)).unwrap(), b"Me: saved audio transcript");
+        std::fs::remove_dir_all(corpus).unwrap();
     }
 
     #[test]

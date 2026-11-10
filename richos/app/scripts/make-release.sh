@@ -466,7 +466,8 @@ cmd_app() {
   local head_sha tag_sha dirty
   head_sha="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
   if [ -n "$head_sha" ]; then
-    dirty="$(git -C "$repo_root" status --porcelain 2>/dev/null)"
+    dirty="$(python3 "$here/lib/source_status.py" "$repo_root")" \
+      || die "could not check the release source worktree" 1
     [ -z "$dirty" ] || die "the working tree has uncommitted changes, so the binary would not
   correspond to the source published beside it. AGPL aside, nobody can reconstruct what
   shipped from a tree that was never committed.

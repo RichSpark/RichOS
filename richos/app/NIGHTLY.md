@@ -19,8 +19,8 @@ after QA and Newt’s completed notes:
 python3 richos/app/scripts/nightly-local.py release --gates-at-once all --simulated-phones 2
 ```
 
-`build`, `release` and `stable` refuse to start unless `--gates-at-once` is on the
-command line, because nobody should wait an hour on a free Mac for a default nobody
+`build` and `release` (and `stable --rerun-gates`) refuse to start unless
+`--gates-at-once` is on the command line, because nobody should wait an hour on a free Mac for a default nobody
 chose (CEO, 2026-09-25). The run log's first lines record the values and who chose them.
 
 - `--gates-at-once N|all` -- how many gates run at the same time. `1` is the old
@@ -241,7 +241,9 @@ dependencies). When an attempt failed and its retry built the same tag, the run 
 finished (its `phase timings` summary follows the line) is the one. If no single run
 says it built the tag, the command says so and stops;
 it never reruns the gates on its own. `--gates-passed-in RUN` names the run explicitly;
-`--gates-at-once N|all` runs every gate again instead.
+`--rerun-gates --gates-at-once N|all` runs every gate again instead. `--gates-at-once`
+alone, the flag `build` and `release` require, is refused for `stable`, so the habit
+cannot rerun about 40 minutes of gates the nightly already passed.
 
 The rebuilt bundle is a new artifact (another version, signed again), so it is booted in
 the test VM exactly as a nightly candidate is (`gui-proof-in-vm.sh`, never on this Mac's
@@ -481,7 +483,10 @@ candidate in between:
    Missing, mismatched or stale notes refuse before any public version tag or app upload.
    Creates the public version tag and prerelease with those approved notes already
    in its body, then uploads immutable artifacts,
-   provenance and checksums with the manifest last. Downloads them again to verify
+   provenance and checksums with the manifest last. Assets (FFmpeg's corresponding
+   source included) go up five at a time, the number `gh release upload` uses itself;
+   the manifest starts only after every other asset is up and each upload's size and
+   time are in the run log. Downloads them again to verify
    bytes and signatures. The engine URL compiled into the tested app is unchanged;
    an additional engine copy is included on the versioned release for its checksums.
 8. Advances the update channel, in that order: a Git compare-and-swap push moves

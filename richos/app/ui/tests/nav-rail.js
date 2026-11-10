@@ -26,6 +26,12 @@
 //       rail's painted pixels; the tooltip names each item to its right at 16 px and 4.5:1
 //   10  Up and Down move along the rail
 //   11  the rail photographed in both themes (shots-nav-rail/)
+//       RichPass opens its page under the
+//       header, selected, the themed RichPass mark before its title, round 65.1 copy; Chats and a chat
+//       chosen in the sidebar leave it; the page photographed in both themes
+//   12  the rail stays on Token spend (review rv-20261106T173510Z-aa7dd4d6-bca3, finding 1), and with
+//       RichScribe open its hover label and the activity square's Ink/Readout menu sit above the
+//       sheet and a choice can be clicked (finding 2)
 //
 // Run: node nav-rail.js            (RICHOS_SHOTS_REGENERATE=shots-nav-rail to rewrite shots)
 
@@ -44,7 +50,7 @@ const APP = "file://" + path.join(UI_DIR, "index.html");
 const SHOTS = path.join(__dirname, "shots-nav-rail");
 const GLYPH_FLOOR = 3;
 const TEXT_FLOOR = 4.5;
-const ITEMS = ["home", "chats", "finder", "cleaner", "scribe", "bug"];
+const ITEMS = ["home", "chats", "finder", "cleaner", "scribe", "pass", "bug"];
 
 async function newContext(browser, theme, opts) {
   opts = opts || {};
@@ -423,6 +429,74 @@ async function main() {
       return seen.join(" → ");
     });
 
+    await run.check(`RichPass ${theme}  opens its page under the header, selected, its icon before its title; Chats and a chat in the sidebar leave it`, async () => {
+      await page.click("#nr-pass");
+      await page.waitForSelector("#richpass-page", { state: "visible" });
+      await flushFrames(page);
+      const f = await railFacts(page);
+      assertEqual(f.selected, ["pass"], "RichPass is selected while its page is shown");
+      assert(f.barBesideSelected, "the bar slid to RichPass");
+      const p = await page.evaluate(() => {
+        const ttl = document.querySelector("#richpass-page .rp-ttl");
+        const mark = ttl.querySelector(".rp-mark");
+        const img = [...mark.querySelectorAll("img")].find((node) => node.getClientRects().length);
+        const body = document.querySelector("#richpass-page .rp-body");
+        return {
+          icon: img?.getAttribute("src") || "",
+          iconBeforeTitle: mark.nextElementSibling.id === "rp-title",
+          bodyFormatting: [body.querySelector("i").textContent, body.querySelector("b").textContent, body.querySelectorAll("br").length],
+          facts: [...document.querySelectorAll("#richpass-page .rp-fact b")].map((node) => node.textContent),
+          caption: document.getElementById("rp-download-cap").textContent,
+          protection: document.getElementById("rp-prot-t").textContent,
+          warning: !!document.querySelector("#richpass-page .rp-warn"),
+          title: document.getElementById("rp-title").textContent,
+          lede: document.querySelector("#richpass-page .rp-lede").textContent,
+          crumb: document.getElementById("page-crumb").textContent,
+          conversation: getComputedStyle(document.getElementById("conversation")).display,
+          composer: getComputedStyle(document.getElementById("composer-zone")).display,
+          smallest: Math.min(...Array.from(document.querySelectorAll("#richpass-page p, #richpass-page span, #richpass-page b, #richpass-page button")).filter((n) => n.getClientRects().length && n.textContent.trim()).map((n) => parseFloat(getComputedStyle(n).fontSize))),
+        };
+      });
+      assert(p.iconBeforeTitle && p.icon.endsWith(`richpass-mark-${theme}.svg`), "the matching themed mark is in front of the title");
+      assertEqual(p.bodyFormatting, ["without saving any", "never saves generated passwords!", 4], "the approved emphasis and line breaks");
+      assertEqual(p.facts, ["Works offline, in your browser", "Ready when you return", "Re-generate instead of saving"], "the three approved facts");
+      assertEqual([p.caption, p.protection, p.warning], ["RichPass.html · free · open-source · one file", "Enable protection", false], "approved caption and protection block");
+      await page.locator("#rp-more").press("Enter");
+      const sourceFolder = "github.com/RichSpark/RichOS/tree/main/richos/tools/richpass";
+      await page.waitForFunction((target) => window.__RICHOS_OPENED__?.at(-1) === target, sourceFolder);
+      assertEqual(await page.locator("#rp-more").getAttribute("title"), sourceFolder, "the disclosed and opened destination match");
+      await page.click("#rp-download");
+      await page.waitForFunction(() => document.getElementById("rp-error").textContent.includes("File selection and saving require the installed RichOS app."));
+      await page.locator("#rp-more").press("Enter");
+      await page.waitForFunction(() => document.getElementById("rp-error").hidden);
+      await page.locator("#rp-title").focus();
+      await page.mouse.move(700, 80);
+      assertEqual([p.title, p.crumb], ["RichPass", "RichPass"], "the title and the header name the page");
+      assertEqual(p.lede, "Safer Than Any Password Manager", "the approved lede");
+      assertEqual([p.conversation, p.composer], ["none", "none"], "the page takes the conversation's place");
+      assert(p.smallest >= 16, "every text on the page is 16px or more: " + p.smallest);
+      // The repository's own walk: nothing on the page fails or is unprovable.
+      await page.evaluate(C.pageScript());
+      const walk = await page.evaluate((t) => window.__contrastProbe({ surface: "richpass-page", theme: t }), theme);
+      const mine = (o) => Object.values(o || {}).filter((x) => /rp-|richpass-page/.test(x.selector || x.path || ""));
+      assertEqual(mine(walk.failures), [], "the contrast walk found a failing pair on the RichPass page");
+      assertEqual(mine(walk.unresolvable), [], "the contrast walk could not prove a pair on the RichPass page");
+      const buf = await captureSettled(page, { parkPointer: true });
+      fs.mkdirSync(SHOTS, { recursive: true });
+      publishShot(buf, path.join(SHOTS, `richpass-page-${theme}.png`));
+      await page.click("#nr-chats");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      assertEqual((await railFacts(page)).selected, ["chats"], "Chats leaves the page");
+      await page.click("#nr-pass");
+      await page.waitForSelector("#richpass-page", { state: "visible" });
+      await page.click("#rail-nav .nav-thread");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      await flushFrames(page);
+      assertEqual((await railFacts(page)).selected, ["chats"], "a chat chosen in the sidebar leaves the page");
+      return `page with themed mark and round 65.1 copy, smallest text ${p.smallest}px; Chats and a sidebar chat leave it; shots-nav-rail/richpass-page-${theme}.png`;
+    });
+
+    // Photograph the established chat before case 13 creates its temporary new chat.
     await run.check(`11 ${theme}  the rail photographed (shots-nav-rail/)`, async () => {
       await page.mouse.move(700, 450);
       const buf = await captureSettled(page, { screenshot: { clip: { x: 0, y: 0, width: 420, height: 900 } } });
@@ -432,9 +506,138 @@ async function main() {
       return `shots-nav-rail/rail-${theme}.png`;
     });
 
+    await run.check(`RichPass ${theme}  from the page the keyboard leaves it too: Enter on a RichFinder chat result, and Command+N`, async () => {
+      const onPage = async () => {
+        await page.click("#nr-pass");
+        await page.waitForSelector("#richpass-page", { state: "visible" });
+      };
+      await onPage();
+      await page.keyboard.press("Meta+k");
+      await page.waitForSelector("#search-overlay", { state: "visible" });
+      await page.fill("#search-input", "a");
+      await page.waitForSelector("#search-results .srch-hit", { state: "visible" });
+      await page.keyboard.press("Enter");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      await flushFrames(page);
+      assertEqual((await railFacts(page)).selected, ["chats"], "Enter on a chat result leaves the page");
+      await onPage();
+      await page.evaluate(() => document.activeElement && document.activeElement.blur());
+      await page.keyboard.press("Meta+n");
+      // With several companies Command+N opens the menu with its first company focused, and
+      // Enter on that is the chat; with one company it is the chat at once.
+      if (await page.evaluate(() => !document.getElementById("new-chat-menu").hidden)) await page.keyboard.press("Enter");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      await flushFrames(page);
+      assertEqual((await railFacts(page)).selected, ["chats"], "Command+N leaves the page");
+      await page.keyboard.press("Escape");
+      return "Enter on a RichFinder chat result and Command+N both leave the RichPass page";
+    });
+
+    await run.check(`RichPass ${theme}  a past repair does not hide a current protection failure`, async () => {
+      await page.click("#nr-pass");
+      await page.waitForSelector("#richpass-page", { state: "visible" });
+      await flushFrames(page);
+      const repaired = {
+        phase: "verified",
+        path: "/fictional/RichPass.html",
+        notice: { kind: "contents", at: 100 },
+      };
+      const emitStatus = (view) => page.evaluate((status) => window.__RICHOS_MOCK__.richpassChanged(status), view);
+      await emitStatus(repaired);
+      assertEqual(await page.locator("#rp-state-title").innerText(), "Restored", "a verified repair is shown");
+      const message = "Allow folder access, then Check now.";
+      await emitStatus({ ...repaired, phase: "blocked", message });
+      assertEqual(await page.locator("#rp-state-line").innerText(), message, "the current failure is shown");
+      const headline = await page.locator("#rp-state-title").innerText();
+      await page.click("#nr-chats");
+      await page.waitForSelector("#richpass-page", { state: "hidden" });
+      assertEqual(headline, "Protection needs attention", "the current phase controls the headline");
+    });
+
+    await run.check(`12 ${theme}  the rail stays on Token spend; over RichScribe its flyouts sit above the sheet and take a click`, async () => {
+      const topId = (sel) => page.evaluate((s2) => {
+        const r = document.querySelector(s2).getBoundingClientRect();
+        const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const own = el && el.closest(s2);
+        return own ? "self" : (el ? (el.id || el.className || el.tagName) : "nothing");
+      }, sel);
+      await page.click("#set-btn");
+      await page.waitForSelector("#set-menu #set-spend-open");
+      await page.click("#set-spend-open");
+      await page.waitForSelector("#spend-fig .ch");
+      await flushFrames(page);
+      const onSpend = await page.evaluate(() => {
+        const n = document.getElementById("nav-rail");
+        const r = n.getBoundingClientRect();
+        return { shown: getComputedStyle(n).display !== "none" && r.width === 52 && r.height > 0, spendLeft: document.getElementById("spend").getBoundingClientRect().left };
+      });
+      assert(onSpend.shown, "the rail is drawn on Token spend");
+      assertEqual(onSpend.spendLeft, 52, "Token spend starts at the rail's right edge");
+      assertEqual(await topId("#nr-chats"), "self", "a rail item is the topmost thing at its own center on Token spend");
+      await page.click("#spend-back");
+      await page.waitForSelector("#spend", { state: "hidden" });
+      // The other way in: from Home (Settings is over Home too). Home steps aside, the rail is there and
+      // takes a press; Chats leaves Token spend and does not bring Home back.
+      await page.evaluate(() => window.RichHome.show("nav-rail-test"));
+      await page.waitForFunction(() => window.RichHome.isOpen());
+      await page.click("#set-btn");
+      await page.waitForSelector("#set-menu #set-spend-open");
+      await page.click("#set-spend-open");
+      await page.waitForSelector("#spend-fig .ch");
+      await flushFrames(page);
+      assert(!(await page.evaluate(() => window.RichHome.isOpen())), "Home steps aside while Token spend is up");
+      await page.waitForFunction(() => { const r = document.getElementById("nr-chats").getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && !!e.closest("#nr-chats"); });
+      assertEqual(await topId("#nr-chats"), "self", "from Home too, a rail item is the topmost thing at its own center on Token spend");
+      await page.click("#nr-chats");
+      await page.waitForSelector("#spend", { state: "hidden" });
+      assert(!(await page.evaluate(() => window.RichHome.isOpen())), "a rail press leaves Token spend without bringing Home back");
+      await page.click("#nr-scribe");
+      await page.waitForSelector("#dictation-sheet", { state: "visible" });
+      await flushFrames(page);
+      await page.hover("#nr-finder");
+      await page.waitForSelector("#nr-tip", { state: "visible" });
+      // The label takes no pointer (`pointer-events: none`), so it cannot be hit-tested; its stacking can.
+      const z = await page.evaluate(() => ["nr-tip", "dictation-sheet"].map((id) => parseInt(getComputedStyle(document.getElementById(id)).zIndex, 10)));
+      assert(z[0] > z[1], `the hover label (z ${z[0]}) is above the RichScribe sheet (z ${z[1]})`);
+      await page.click("#res-square", { button: "right" });
+      await page.waitForSelector("#res-menu", { state: "visible" });
+      await flushFrames(page);
+      assertEqual(await topId('#res-menu [data-view="readout"]'), "self", "the Readout choice is above the RichScribe sheet");
+      await page.click('#res-menu [data-view="readout"]');
+      await flushFrames(page);
+      assertEqual(await page.getAttribute('#res-menu [data-view="readout"]', "aria-checked"), "true", "the click on the choice took");
+      await page.click("#res-square", { button: "right" });
+      await page.waitForSelector("#res-menu", { state: "visible" });
+      await page.click('#res-menu [data-view="ink"]');
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("#dictation-sheet", { state: "hidden" });
+      // A card pinned from the keyboard does not stay over Home (Home is under the card's z-index now).
+      await page.focus("#res-square");
+      await page.keyboard.press("Space");
+      await page.waitForSelector("#res-card", { state: "visible" });
+      await page.evaluate(() => document.getElementById("nr-home").click());
+      await page.waitForFunction(() => window.RichHome.isOpen());
+      assertEqual(await page.evaluate(() => getComputedStyle(document.getElementById("res-card")).display), "none", "the pinned activity card is hidden once Home is up");
+      assertEqual(page.__errors, [], "no page errors");
+      return "Token spend shows the rail; over RichScribe the label and the menu are on top and a choice was clicked";
+    });
+
     await page.close();
     await context.close();
   }
+
+  // 13: the first click after RichCleaner's window has been opened and closed. macOS gives the
+  // click that makes an inactive window key to the window and not to the page unless the window
+  // accepts the first mouse; the main window did not, so a rail item or Settings needed two
+  // clicks. Every window the main window is built from is
+  // `tauri.conf.json`'s declaration (`from_config`, both the first window and the Dock reopen).
+  await run.check("13  the main window takes the first click while the app is not in front (RichCleaner opened and closed)", async () => {
+    const conf = JSON.parse(fs.readFileSync(path.resolve(UI_DIR, "..", "src-tauri", "tauri.conf.json"), "utf8"));
+    const wins = conf.app.windows;
+    assert(wins.length > 0, "tauri.conf.json declares the main window");
+    for (const w of wins) assertEqual(w.acceptFirstMouse, true, `window "${w.title}" declares acceptFirstMouse: true`);
+    return "the main window accepts the first mouse";
+  });
 
   console.log("\n  measured:\n    " + report.join("\n    "));
   await browser.close();

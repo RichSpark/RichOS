@@ -713,7 +713,7 @@ class Evidence(unittest.TestCase):
                      engine / "scripts/hooks/guard-host-display-power.sh")
         # Every lib/ module proof-run.py imports: rerun_tree.py (write_rerun) and runtime_cache.py
         # (supply_runtime) included.
-        for name in ("proof_evidence.py", "proof_slots.py", "test_results.py", "cargo_identity.py",
+        for name in ("proof_evidence.py", "proof_slots.py", "test_results.py", "cargo_identity.py", "source_status.py",
                      "rerun_tree.py", "runtime_cache.py"):
             shutil.copy2(HERE / "lib" / name, app / "lib" / name)
         shutil.copy2(HERE / "testvm/reserve.py", app / "testvm/reserve.py")
@@ -2295,7 +2295,7 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         crate = app / "crates/richdoctor"
         (crate / "ui").mkdir(parents=True)
         (app / ".gitignore").write_text("crates/richdoctor/ui/fonts/\ncrates/richdoctor/ui/tokens.css\n"
-                                        "crates/richdoctor/gen/\n")
+                                        "crates/richdoctor/gen/\nui-dist/\n")
         (crate / "lib.rs").write_text("fn main() {}\n")
         (crate / "ui" / "index.html").write_text("<p>x</p>\n")
         self.qualification("fixture input contract", paths=["richos/app/crates"])
@@ -2304,6 +2304,8 @@ printf '%s\\n' '{"event":"finished","agent_id":"fixture"}' > "$RC_LEDGER"
         base = evidence.recipe_identity(self.root, recipe, {})
         (crate / "gen").mkdir()
         (crate / "gen" / "a.rs").write_text("generated")
+        (crate / "ui-dist").mkdir()
+        (crate / "ui-dist" / "index.html").write_text("staged")
         (crate / "ui" / "fonts").mkdir()
         (crate / "ui" / "fonts" / "f.woff2").write_text("font")
         (crate / "ui" / "tokens.css").write_text(":root{}")

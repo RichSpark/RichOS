@@ -328,6 +328,7 @@ claim worth being able to check.
 | Pillow | MIT-CMU | `richos/app/scripts/generate-app-icons.sh` and `richos/app/scripts/lib/app_icons.py` — decode, resample, PNG and ICO writing for the application icon set |
 | Apple `iconutil` | Apple system tool | `.icns` assembly, same script |
 | Playwright | Apache-2.0 | `richos/app/ui/tests` — a devDependency of the browser acceptance harness. Not part of any bundle; excluded from the shipped frontend by `richos/app/src-tauri/build.rs` and gated by `richos/app/scripts/frontend-payload.test.sh`. |
+| Gradle wrapper, as Gradle 9.7.1 generates it (copyright "the original authors") | Apache-2.0 | `richos/mobile/native-android/gradlew` and `richos/mobile/native-android/gradle/wrapper/gradle-wrapper.jar` start the Android build with the Gradle distribution pinned by SHA-256 in `gradle/wrapper/gradle-wrapper.properties`. Committed with the Android project (2fe91c5a37), not part of the app. Recorded as third-party in `.richos/vendored-material`. |
 
 ## Compiled dependency inventory — GENERATED and where it lives
 
@@ -501,6 +502,30 @@ check only; release builds contain neither form. `LICENSE` and `RICHOS-PATCH.md`
 `RICHOS-PATCH.md` records the change and says the folder is removed once an upstream release
 builds on the Rust RichOS uses. The Qdrant repository ships no NOTICE file, so there is none to
 carry. Apache-2.0 is compatible with distribution inside the AGPL-3.0-only application.
+
+## RichPass — third-party code and fonts inside `RichPass.html`
+
+RichPass (`richos/tools/richpass/`) is RichOS-authored software under the
+AGPL-3.0-only and its name and artwork are brand material (see
+`docs/legal/BRAND-ASSETS.md`). It is distributed as one self-contained
+`RichPass.html`, so the third-party work it uses is embedded in that file and
+the file's opening comment (`LICENSES AND PROVENANCE`) carries each notice in
+full. The original sources sit under `richos/tools/richpass/vendor/`, pinned
+by SHA-256 in `richos/tools/richpass/vendor/manifest.json` and checked by
+`richos/tools/richpass/scripts/verify-release.py`.
+
+| Work | Upstream | Revision / version | License | Copyright | Full terms | Verified |
+|---|---|---|---|---|---|---|
+| `richos/tools/richpass/vendor/hash-wasm/` (Argon2id with its embedded WebAssembly), embedded in `RichPass.html` as `#vendor-argon2` | hash-wasm on npm (<https://registry.npmjs.org/hash-wasm/-/hash-wasm-4.12.0.tgz>) | 4.12.0 | MIT; its notice adds that embedded C implementations may carry other, similarly permissive licenses, stated at the top of each file under `src/` | 2020 Dani Biró | `richos/tools/richpass/vendor/hash-wasm/LICENSE` | byte-identical (all 60 files, against the npm tarball, 2026-11-09); the embedded copy equals `argon2.umd.min.js` |
+| `richos/tools/richpass/vendor/tldts/`, embedded in `RichPass.html` as `#vendor-domain` (domain parser and its public suffix data) | tldts on npm (<https://registry.npmjs.org/tldts/-/tldts-7.0.12.tgz>) | 7.0.12 | MIT | 2017 Thomas Parisot, 2018 Rémi Berson | `richos/tools/richpass/vendor/tldts/LICENSE` | byte-identical (all 7 files, against the npm tarball, 2026-11-09); the embedded copy equals `index.umd.min.js` without its source-map comment line |
+| `richos/tools/richpass/vendor/tldts-core/` (source of the parser above; not embedded separately) | tldts-core on npm (<https://registry.npmjs.org/tldts-core/-/tldts-core-7.0.12.tgz>) | 7.0.12 | MIT | 2017 Thomas Parisot, 2018 Rémi Berson | `richos/tools/richpass/vendor/tldts-core/LICENSE` | byte-identical (all 14 files, against the npm tarball, 2026-11-09) |
+| `richos/tools/richpass/vendor/bootstrap.scss`, `richos/tools/richpass/vendor/passbooster.css` (PassBooster's original stylesheet: Bootstrap 5.2.3 compiled with PassBooster's own rules), kept as provenance; **not** embedded in `RichPass.html`, which uses no CSS framework | twbs/bootstrap (<https://github.com/twbs/bootstrap/tree/v5.2.3>), as compiled by PassBooster at `e9d95db4e4b13f89d7ab9d907a7d2a96b915205b` | 5.2.3 | Bootstrap: MIT. PassBooster's own rules: the repository owner's own work | Bootstrap: 2011-2022 Twitter, Inc. | `richos/tools/richpass/vendor/bootstrap-LICENSE` | license file byte-identical to Bootstrap's at `v5.2.3` (2026-11-09) |
+
+**Fonts.** `RichPass.html` embeds Inter (`Inter-Variable.woff2`) and Newsreader
+(`Newsreader-Regular.woff2`) as data URLs. They are byte for byte the
+application's files in the fonts table above, under the SIL Open Font License
+1.1 and the file's opening comment reproduces both copyright notices and the
+full license text, as the OFL's second condition asks.
 
 ## Adding something new
 

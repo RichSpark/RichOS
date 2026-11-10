@@ -62,10 +62,21 @@ pub const MAX_PAGE: usize = 50;
 /// running.
 pub const BUSY_YIELD: std::time::Duration = std::time::Duration::from_millis(100);
 const MODEL_RETRY_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+const INDEX_WRITE_BATCH: usize = 32;
 
 pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>, String> + Send + Sync>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type Grant = Box<dyn Fn() -> bool + Send + Sync>;
+type ReadProjection = dyn Fn(&dyn Fn() -> bool) -> Result<Vec<Arc<Document>>, String> + Send + Sync;
+type WaitForProjection = dyn Fn(std::time::Duration) -> bool + Send + Sync;
+
+/// A host-authorized source whose truth is a projection rather than a file tree.
+/// The host revalidates the selected records against its live authority at query time.
+pub struct ProjectionSource {
+    pub index_key: PathBuf,
+    pub read: Box<ReadProjection>,
+    pub wait_for_change: Box<WaitForProjection>,
+}
 /// Local relevance scores for the already retrieved sources, in candidate order.
 pub type Reranker = Arc<ScorePassages>;
 type ScorePassages = dyn Fn(&str, &[String], &dyn Fn() -> bool) -> Option<Vec<f32>> + Send + Sync;
@@ -169,6 +180,8 @@ pub struct PassageView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DocHit {
     pub source_id: String,
+    #[serde(skip_serializing)]
+    pub revision: String,
     pub title: String,
     /// Path inside the search folder, for display.
     pub rel_path: String,
@@ -244,6 +257,32 @@ struct IndexWriter {
     dir: PathBuf,
 }
 
+/// Coalesce small Edge writes without changing the durable publication unit.
+/// A stopped worker drops unwritten vectors and the manifest still says indexing.
+struct IndexWrites<'a> {
+    index: &'a VectorIndex,
+    pending: Vec<(u64, Vec<f32>)>,
+}
+
+impl<'a> IndexWrites<'a> {
+    fn new(index: &'a VectorIndex) -> Self {
+        Self { index, pending: Vec::with_capacity(INDEX_WRITE_BATCH) }
+    }
+
+    fn push(&mut self, id: u64, vector: Vec<f32>) -> Result<(), String> {
+        self.pending.push((id, vector));
+        if self.pending.len() == INDEX_WRITE_BATCH {
+            self.index.upsert(std::mem::replace(&mut self.pending, Vec::with_capacity(INDEX_WRITE_BATCH)))?;
+        }
+        Ok(())
+    }
+
+    fn flush(self) -> Result<(), String> {
+        self.index.upsert(self.pending)?;
+        self.index.flush()
+    }
+}
+
 struct MediaUpdate {
     path: String,
     doc: Result<Option<Arc<Document>>, String>,
@@ -274,6 +313,7 @@ struct SearchableCorpus {
 struct Inner {
     config: Config,
     folders: Option<FolderSetConfig>,
+    projection: Option<ProjectionSource>,
     metadata: Option<MetadataSource>,
     reranker: Option<Reranker>,
     corpus: RwLock<Option<Arc<SearchableCorpus>>>,
@@ -345,7 +385,7 @@ impl SearchService {
         grant: Option<Grant>,
         before_index: impl FnOnce() + Send + 'static,
     ) -> Self {
-        Self::start_configured(config, None, metadata, reranker, grant, before_index)
+        Self::start_configured(config, None, None, metadata, reranker, grant, before_index)
     }
 
     pub fn start_with_folders(
@@ -359,22 +399,29 @@ impl SearchService {
         if let Ok(cache) = &config.cache {
             folders.excluded.push(cache.clone());
         }
-        Self::start_configured(config, Some(folders), metadata, reranker, Some(grant), before_index)
+        Self::start_configured(config, Some(folders), None, metadata, reranker, Some(grant), before_index)
+    }
+
+    pub fn start_projection(config: Config, source: ProjectionSource, reranker: Option<Reranker>) -> Self {
+        Self::start_configured(config, None, Some(source), None, reranker, None, || {})
     }
 
     fn start_configured(
         config: Config,
         folders: Option<FolderSetConfig>,
+        projection: Option<ProjectionSource>,
         metadata: Option<MetadataSource>,
         reranker: Option<Reranker>,
         grant: Option<Grant>,
         before_index: impl FnOnce() + Send + 'static,
     ) -> Self {
-        let loading = folders.as_ref().map_or(config.root.is_some(), |scope| !scope.selected.is_empty());
+        let loading = projection.is_some()
+            || folders.as_ref().map_or(config.root.is_some(), |scope| !scope.selected.is_empty());
         let service = SearchService(Arc::new(Inner {
             folder: RwLock::new(if loading { FolderStatus::Loading } else { FolderStatus::None }),
             config,
             folders,
+            projection,
             metadata,
             reranker,
             corpus: RwLock::new(None),
@@ -468,11 +515,27 @@ impl SearchService {
         self.stopping()
     }
 
+    fn ready_for_background_passage(&self) -> bool {
+        if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
+            std::thread::sleep(BUSY_YIELD);
+        }
+        if self.stopping() { return false; }
+        // Let the current query finish before submitting more inference. Release
+        // the lock before embedding: a new query can always overtake a passage
+        // already in flight on the isolated helper.
+        drop(self.0.access.lock().unwrap());
+        !self.background_stopping()
+    }
+
     fn set_meaning(&self, status: MeaningStatus) {
         *self.0.meaning_status.write().unwrap() = status;
     }
 
     fn run(&self, mut rebuild: bool, before_index: impl FnOnce()) {
+        if let Some(source) = &self.0.projection {
+            self.run_projection(source);
+            return;
+        }
         let root = self.0.config.root.as_deref();
         let metadata = self.0.metadata.as_ref();
         if self.0.folders.as_ref().map_or(root.is_none(), |scope| scope.selected.is_empty()) {
@@ -575,6 +638,62 @@ impl SearchService {
                     self.0.retry_model_requested.store(retry_after.is_some(), Ordering::Release);
                 }
             }
+        }
+    }
+
+    fn run_projection(&self, source: &ProjectionSource) {
+        let stopped = || self.stopping();
+        let mut previous: Option<Arc<Corpus>> = None;
+        let mut writer = None;
+        let mut retry_after = None;
+        let mut refresh = true;
+        while !stopped() {
+            if refresh {
+                match (source.read)(&stopped) {
+                    Ok(mut docs) if !stopped() => {
+                        docs.sort_unstable_by(|a, b| a.rel_path.cmp(&b.rel_path));
+                        let corpus = Arc::new(Corpus { root: source.index_key.clone(), docs, ..Corpus::default() });
+                        if let Some(lexical) = rank::LexicalIndex::build(&corpus, stopped) {
+                            self.publish_corpus(SearchableCorpus { corpus: corpus.clone(), lexical: Arc::new(lexical), positions: None });
+                            if let Some(old) = previous.replace(corpus.clone()) {
+                                let changes = projection_updates(&old, &corpus);
+                                if let Some(failure) = self.update_media_index(&mut writer, &changes) {
+                                    retry_after = self.index_failed(failure);
+                                }
+                            }
+                        }
+                    }
+                    Err(message) if !stopped() => {
+                        writer = None;
+                        previous = None;
+                        *self.0.corpus.write().unwrap() = None;
+                        *self.0.folder.write().unwrap() = FolderStatus::Error { message: message.clone() };
+                        self.meaning_failed(message);
+                    }
+                    _ => break,
+                }
+            }
+            if writer.is_none() && retry_after.is_none_or(|due| Instant::now() >= due) {
+                match previous.as_ref() {
+                    Some(corpus) if corpus.docs.is_empty() => {
+                        self.set_meaning(MeaningStatus::Ready { files: 0, passages: 0 });
+                    }
+                    Some(corpus) => {
+                        let access = self.0.access.lock().unwrap();
+                        *self.0.meaning.write().unwrap() = None;
+                        drop(access);
+                        match self.build_meaning(&mut false, corpus, &HashSet::new()) {
+                            Ok(index) => { writer = index; retry_after = None; }
+                            Err(failure) => {
+                                retry_after = self.index_failed(failure).or_else(|| Some(Instant::now() + MODEL_RETRY_COOLDOWN));
+                            }
+                        }
+                    }
+                    None => {}
+                }
+            }
+            self.0.initial_ready();
+            refresh = (source.wait_for_change)(BUSY_YIELD);
         }
     }
 
@@ -695,13 +814,11 @@ impl SearchService {
                 );
             }
             manifest.save(&dir)?;
+            let mut writes = IndexWrites::new(&meaning.index);
             for &i in batch {
                 let doc = &corpus.docs[i];
                 for (p, passage) in doc.passages.iter().enumerate() {
-                    if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
-                        std::thread::sleep(BUSY_YIELD);
-                    }
-                    if self.background_stopping() {
+                    if !self.ready_for_background_passage() {
                         return Ok(None);
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
@@ -714,10 +831,10 @@ impl SearchService {
                     if self.background_stopping() {
                         return Ok(None);
                     }
-                    meaning.index.upsert(vec![(point_id(&doc.id, &doc.hash, p), vector)])?;
+                    writes.push(point_id(&doc.id, &doc.hash, p), vector)?;
                 }
             }
-            meaning.index.flush()?;
+            writes.flush()?;
             {
                 let mut points = meaning.points.write().unwrap();
                 for &i in batch {
@@ -845,11 +962,9 @@ impl SearchService {
             }
             meaning.index.delete(&stale)?;
             if let Some(doc) = doc {
+                let mut writes = IndexWrites::new(&meaning.index);
                 for (passage, &id) in doc.passages.iter().zip(&fresh) {
-                    if self.0.config.busy.as_ref().is_some_and(|busy| busy()) {
-                        std::thread::sleep(BUSY_YIELD);
-                    }
-                    if self.background_stopping() {
+                    if !self.ready_for_background_passage() {
                         return Ok(());
                     }
                     let text = embedding_text(&doc.title, &passage.heading, passage.text(&doc.text));
@@ -862,9 +977,9 @@ impl SearchService {
                     if self.background_stopping() {
                         return Ok(());
                     }
-                    meaning.index.upsert(vec![(id, vector)])?;
+                    writes.push(id, vector)?;
                 }
-                meaning.index.flush()?;
+                writes.flush()?;
                 if let Some(entry) = manifest.sources.get_mut(&id) {
                     entry.state = SourceState::Complete;
                     entry.points = fresh.clone();
@@ -904,6 +1019,7 @@ impl SearchService {
 
     /// The roots in the current corpus. Listing them does not traverse a drive.
     pub fn searchable_folders(&self) -> Vec<(String, PathBuf)> {
+        if self.0.projection.is_some() { return Vec::new(); }
         let corpus = self.0.corpus.read().unwrap();
         let Some(snapshot) = corpus.as_ref() else { return Vec::new() };
         let corpus = &snapshot.corpus;
@@ -945,6 +1061,28 @@ impl SearchService {
     /// Optional company or request limit, applied before ranking. A supplied
     /// empty grant searches no files. The shell must use its current verified grant.
     pub fn search_in_folders_while_current(&self, request: &SearchRequest, scope: Option<&corpus::FolderScope>, obsolete: &dyn Fn() -> bool) -> Option<SearchResponse> {
+        self.search_checked(request, scope, obsolete, &|corpus, document| {
+            self.0.projection.is_none() && still_current(corpus, document)
+        })
+    }
+
+    pub fn search_projection(
+        &self,
+        request: &SearchRequest,
+        obsolete: &dyn Fn() -> bool,
+        current: &dyn Fn(&Document) -> bool,
+    ) -> Option<SearchResponse> {
+        self.0.projection.as_ref()?;
+        self.search_checked(request, None, obsolete, &|_, document| current(document))
+    }
+
+    fn search_checked(
+        &self,
+        request: &SearchRequest,
+        scope: Option<&corpus::FolderScope>,
+        obsolete: &dyn Fn() -> bool,
+        current: &dyn Fn(&Corpus, &Document) -> bool,
+    ) -> Option<SearchResponse> {
         let started = Instant::now();
         if obsolete() { return None; }
         let _access = self.0.access.lock().unwrap();
@@ -1067,7 +1205,7 @@ impl SearchService {
                 break;
             }
             let doc = &corpus.docs[row.doc];
-            if !still_current(corpus, doc) {
+            if !current(corpus, doc) {
                 response.dropped += 1;
                 continue;
             }
@@ -1126,6 +1264,22 @@ impl SearchService {
         }
         Ok(path)
     }
+}
+
+fn projection_updates(old: &Corpus, new: &Corpus) -> Vec<MediaUpdate> {
+    let mut updates = Vec::new();
+    for doc in &new.docs {
+        let changed = old.position(&doc.rel_path).is_none_or(|i| old.docs[i].hash != doc.hash);
+        if changed {
+            updates.push(MediaUpdate { path: doc.rel_path.clone(), doc: Ok(Some(doc.clone())) });
+        }
+    }
+    for doc in &old.docs {
+        if new.position(&doc.rel_path).is_none() {
+            updates.push(MediaUpdate { path: doc.rel_path.clone(), doc: Ok(None) });
+        }
+    }
+    updates
 }
 
 type QueryStages = Vec<(&'static str, f64)>;
@@ -1289,6 +1443,39 @@ fn passage_scores(meaning: &Meaning, doc: &corpus::Document, query: &[f32]) -> O
     ids.iter().map(|id| by_id.get(id).copied()).collect()
 }
 
+/// Load the shortlist's vectors together, retaining the same exact per-passage
+/// cosine scores. Each Edge read still has a bounded response and gives a
+/// superseded query a chance to stop before asking for the next batch.
+fn shortlist_passage_scores(
+    rows: &[Ranked], corpus: &Corpus, meaning: &Meaning, query: &[f32], obsolete: &dyn Fn() -> bool,
+) -> Option<HashMap<usize, Vec<f32>>> {
+    let mut ids = Vec::new();
+    let mut documents = Vec::new();
+    {
+        let complete = meaning.points.read().unwrap();
+        for row in rows.iter().filter(|row| row.semantic_passage.is_some()) {
+            if obsolete() { return None; }
+            let doc = &corpus.docs[row.doc];
+            if doc.passages.len() < 2 { continue; }
+            let first = point_id(&doc.id, &doc.hash, 0);
+            if !complete.contains_key(&first) { continue; }
+            let start = ids.len();
+            ids.push(first);
+            ids.extend((1..doc.passages.len()).map(|i| point_id(&doc.id, &doc.hash, i)));
+            documents.push((row.doc, start..ids.len()));
+        }
+    }
+    let mut by_id = HashMap::with_capacity(ids.len());
+    for batch in ids.chunks(256) {
+        if obsolete() { return None; }
+        by_id.extend(meaning.index.score_passages(batch, query).ok()?);
+    }
+    Some(documents.into_iter().filter_map(|(doc, positions)| {
+        let scores = ids[positions].iter().map(|id| by_id.get(id).copied()).collect::<Option<Vec<_>>>()?;
+        Some((doc, scores))
+    }).collect())
+}
+
 /// Is the file still the one that was read: inside the folder, a regular file, same content?
 fn still_current(corpus: &Corpus, doc: &corpus::Document) -> bool {
     let Ok(path) = corpus.resolve_key(&doc.rel_path) else { return false };
@@ -1361,10 +1548,18 @@ fn rerank_sources(
     let mut passages = HashMap::with_capacity(count);
     let mut candidates = Vec::with_capacity(count);
     let phase = Instant::now();
+    let scores = if parsed.spans.is_empty() {
+        shortlist_passage_scores(&rows[..count], corpus, meaning.0, meaning.1, obsolete)
+    } else {
+        Some(HashMap::new())
+    };
     for row in &rows[..count] {
         if obsolete() { return passages; }
         let doc = &corpus.docs[row.doc];
-        let passage = selected_passage(doc, row, parsed, Some(meaning));
+        let passage = match &scores {
+            Some(scores) => rank::passage_choices(doc, parsed, row.semantic_passage, scores.get(&row.doc).map(Vec::as_slice)),
+            None => selected_passage(doc, row, parsed, Some(meaning)),
+        };
         passages.insert(row.doc, passage.evidence);
         let text = doc.passages.get(passage.ranking).map_or("", |p| p.text(&doc.text));
         candidates.push(format!("{}\n{}", doc.title, bounded_passage(text)));
@@ -1404,6 +1599,7 @@ fn hit(doc: &corpus::Document, row: &Ranked, parsed: &ParsedQuery, p: usize) -> 
     };
     DocHit {
         source_id: doc.id.clone(),
+        revision: doc.hash.clone(),
         title: doc.title.clone(),
         rel_path: doc.rel_path.clone(),
         modified_ms: doc.modified_ms,

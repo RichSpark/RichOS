@@ -40,6 +40,10 @@ settings file) by relaunch.py; the walk's own first launch has none.
                   notes says nothing about his archive (the harness comparison is for that)
   open            the exact-span note made active and opened with Enter: the palette closes and
                   the guest opens that file (Open original by source ID)
+  history         a message sent in the conversation, then a query sharing no word with it:
+                  the palette's Conversations section lists it by meaning with "Open message", and
+                  opening it goes to that conversation with the message on screen; the Company memory
+                  section is recorded (it appears only with records the user can read)
   tool            Rich's tool exactly as claude reaches it (the app executable's --search-mcp
                   over stdio, to the running app's socket): the four checkbox combinations, the
                   mode that ran, coverage, and a forged `folder` argument refused
@@ -60,7 +64,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 STANDIN = HERE.parents[1] / 'crates' / 'richos-search' / 'tests' / 'fixtures' / 'standin'
-STEPS = ['identity', 'first-run', 'no-folder', 'missing-folder', 'backfill-kill', 'modes', 'open', 'tool']
+# history runs first, with no folder set, so the active row is the conversation's (with 1,500 notes indexed
+# Return opens the first document instead); history-bulk then looks for the section among the documents.
+STEPS = ['identity', 'first-run', 'history', 'no-folder', 'missing-folder', 'backfill-kill', 'modes', 'open', 'history-bulk', 'tool']
 # No note shares a word with it ("the" and "in" are stop words), so anything listed is listed by
 # meaning alone, and nothing is listed with Super Finder off. The harness found Apple's model
 # puts the Lisbon trip first on the stand-in (question s7); recorded here, never required.
@@ -69,6 +75,12 @@ MEANING_NEAREST = 'Planning the Lisbon conference trip'
 STRICT = 'cancel "30 days"'
 STRICT_ANSWER = 'Refund window for annual plans'
 STRICT_RELATED = 'Early draft of the refund rule'
+# Past conversations: a message the walk sends, and a query that shares no word
+# with it, so the Conversations section can only list it by meaning.
+HISTORY_MESSAGE = 'My grandmother never wrote down her pierogi recipe; it used farmer cheese and potatoes.'
+HISTORY_QUERY = 'traditional Eastern European filled dough dish'
+# the same words in another order: no exact phrase, so the conversation section and not the exact-match rows
+HISTORY_WORDS = 'recipe pierogi grandmother'
 
 
 # --- the two halves that run IN THE GUEST (this file is pushed and run there) ------------------
@@ -148,7 +160,7 @@ def build_walk(folders, guest, relaunch):
 
         def first_run(self):
             # The first-run setup sheet can come up after the walk's first look at the screen
-            # (nightly 90: two runs, "Add this company" never appeared with "Set it up" and "Not now"
+            # (two walks: "Add this company" never appeared with "Set it up" and "Not now"
             # on screen), and folders-walk.py answers it only if it is there at that first look.
             try:
                 self.wait_for('Set it up', seconds=40)
@@ -160,10 +172,12 @@ def build_walk(folders, guest, relaunch):
         def key(self, text):
             self.script('tell application "System Events" to ' + text)
 
-        def palette(self, query):
-            """Open the palette fresh (Escape first, so a reopen resets both checkboxes), type."""
-            self.key('key code 53')
-            time.sleep(0.5)
+        def palette(self, query, reset=True):
+            """Open the palette fresh (Escape first, so a reopen resets both checkboxes), type.
+            reset=False: no Escape first (a screen that Escape would leave, Token spend)."""
+            if reset:
+                self.key('key code 53')
+                time.sleep(0.5)
             self.key('keystroke "k" using command down')
             time.sleep(1.5)
             self.key('keystroke ' + json.dumps(query))
@@ -207,8 +221,19 @@ def build_walk(folders, guest, relaunch):
             return started
 
         def manifest(self):
-            text = guest(self.vm, 'cat ' + shlex.quote(self.home) + '/Library/Caches/RichOS/search/index-*/manifest.json 2>/dev/null || true')
-            return json.loads(text) if text.strip() else None
+            """The document index's manifest. With a message in a conversation there is a second index
+            under the same folder (the conversations'), and `cat index-*/manifest.json` printed both as
+            one text ("Extra data"); each is read alone and the one with the most sources,
+            the document index once it is listing files, is the answer."""
+            names = guest(self.vm, 'ls ' + shlex.quote(self.home) + '/Library/Caches/RichOS/search/index-*/manifest.json 2>/dev/null || true').split()
+            found = []
+            for name in names:
+                text = guest(self.vm, 'cat ' + shlex.quote(name) + ' 2>/dev/null || true')
+                try:
+                    found.append(json.loads(text))
+                except ValueError:
+                    pass
+            return max(found, key=lambda m: len(m.get('sources', {}))) if found else None
 
         def completed_turns(self):
             rows = guest(self.vm, 'grep -c TurnCompleted ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' || true')
@@ -290,8 +315,11 @@ def build_walk(folders, guest, relaunch):
         def backfill_kill(self):
             command([HERE / 'guest.sh', self.vm, '--push', STANDIN, self.archive], 120)
             command([HERE / 'guest.sh', self.vm, '--push', Path(__file__).resolve(), self.remote], 60)
-            made = json.loads(guest(self.vm, 'python3 ' + shlex.quote(self.remote) + ' --make-notes '
-                                    + shlex.quote(self.archive) + ' ' + str(self.a.bulk), timeout=120))
+            out = guest(self.vm, 'python3 ' + shlex.quote(self.remote) + ' --make-notes '
+                        + shlex.quote(self.archive) + ' ' + str(self.a.bulk), timeout=120)
+            # the guest's answer can carry other JSON lines (seen twice); the one that counts
+            # is the writer's own
+            made = json.loads(next(l for l in out.splitlines() if l.startswith('{"written"')))
             total = 10 + made['written']
             self.relaunch_with(self.archive)
             seen, killed_at = None, None
@@ -407,6 +435,79 @@ def build_walk(folders, guest, relaunch):
             gone = guest(self.vm, 'ps -axo comm= | sort -u')
             left = [p for p in viewers if p in gone.splitlines()]
             return {'opened_by': viewers, 'windows': windows, 'palette_closed': closed, 'viewer_still_running': left}
+
+        def history(self):
+            """Past conversations from the app's own chat history appear in the palette (no folder is
+            set yet, so they are the whole answer); opening one goes to that conversation."""
+            self.key('key code 53')
+            time.sleep(1)
+            command([HERE / 'ax.sh', self.vm, '--key', '36'])
+            self.wait_for('Message to Rich', 'AXTextArea', seconds=90)
+            self.type_into(HISTORY_MESSAGE, '--role', 'AXTextArea', '--title', 'Message to Rich')
+            self.press('Send')
+            seen = ''
+            end = time.monotonic() + 60
+            while time.monotonic() < end:
+                seen = guest(self.vm, 'grep -c pierogi ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' || true').strip()
+                if seen not in ('', '0'):
+                    break
+                time.sleep(2)
+            ev = {'ledger_has_message': seen not in ('', '0')}
+            if not ev['ledger_has_message']:
+                raise StepFailed("the walk's message never reached the ledger")
+            # leave the conversation for another screen (Token spend), so opening the hit has somewhere to go
+            self.ax('click', '--id', 'set-btn', '--first')
+            time.sleep(1.5)
+            self.ax('click', '--id', 'set-spend-open', '--first')
+            time.sleep(3)
+            ev['on_token_spend'] = bool(self.nodes('--id', 'spend-back'))
+            ev['message_hidden_before'] = not self.text_on_screen('farmer cheese')
+            # by meaning alone first: recorded, never required (the meaning model may not be up with no folder)
+            self.palette(HISTORY_QUERY, reset=False)
+            ev['meaning_only_conversations_section'] = self.says('CONVERSATIONS', 45)
+            self.shot('history-meaning-light.png')
+            self.palette(HISTORY_WORDS)  # Escape closes the palette opened above, not Token spend
+            ev['conversations_section'] = self.says('CONVERSATIONS', 90)
+            ev['open_message_nodes'] = [{k: n.get(k) for k in ('role', 'x', 'y', 'w', 'h')}
+                                        for n in self.nodes('--title', 'Open message', '--contains')]
+            ev['company_memory_section'] = self.text_on_screen('COMPANY MEMORY')
+            self.shot('history-palette-light.png')
+            self.appearance(True)
+            self.shot('history-palette-dark.png')
+            self.appearance(False)
+            if not ev['conversations_section']:
+                raise StepFailed('past conversations are not listed by meaning: ' + json.dumps(ev))
+            if ev['open_message_nodes']:
+                n = ev['open_message_nodes'][0]
+                at = f"{round(n['x'] + n['w'] / 2)},{round(n['y'] + n['h'] / 2)}"
+                command([HERE / 'pointer-drag.sh', self.vm, at, at], 60)
+            else:
+                self.key('key code 36')  # the active row opens with Return
+            time.sleep(4)
+            self.shot('history-opened.png')
+            ev['palette_closed'] = not self.text_on_screen('Require quoted text')
+            ev['conversation_shows_message'] = self.says('farmer cheese', 20)
+            ev['left_token_spend'] = not self.nodes('--id', 'spend-back')
+            self.facts['history'] = ev
+            self.save()
+            if not (ev['palette_closed'] and ev['conversation_shows_message'] and ev['left_token_spend']):
+                raise StepFailed('opening the conversation hit did not go to that conversation: ' + json.dumps(ev))
+            return ev
+
+        def history_bulk(self):
+            """With 1,500 indexed files the same query lists documents first; record where the
+            Conversations section is (evidence for a follow-up, never a failure of its own)."""
+            self.palette(HISTORY_QUERY)
+            ev = {'conversations_section_in_tree': self.says('CONVERSATIONS', 60)}
+            self.shot('history-bulk-top.png')
+            for _ in range(70):
+                self.key('key code 125')  # Down: the active row moves and the list follows it (End moves the caret)
+                time.sleep(0.15)
+            self.shot('history-bulk-end.png')
+            ev['conversations_section_after_end'] = self.text_on_screen('CONVERSATIONS')
+            self.facts['history_bulk'] = ev
+            self.save()
+            return ev
 
         def tool(self):
             command([HERE / 'guest.sh', self.vm, '--push', Path(__file__).resolve(), self.remote], 60)

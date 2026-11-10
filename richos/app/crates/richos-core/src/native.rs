@@ -5988,6 +5988,55 @@ while True:
     }
 
     #[test]
+    fn meeting_history_grants_include_old_sessions_but_exclude_other_companies() {
+        let root = fixture_root().join(format!("meeting-history-{}", uuid::Uuid::new_v4()));
+        let corpus = root.join("corpus");
+        let own = crate::meeting_notes::meeting_zone(&corpus, Some("acme"));
+        let other = crate::meeting_notes::meeting_zone(&corpus, Some("other"));
+        let unfiled = crate::meeting_notes::meeting_zone(&corpus, None);
+        for (zone, day, transcript) in [
+            (&own, "2000-01-01", "Me: The pilot starts in June."),
+            (&own, "2000-02-15", "Them: We moved the pilot to July."),
+            (&other, "2000-01-02", "Me: A different company's plan."),
+            (&unfiled, "2000-01-03", "Me: Private and unfiled."),
+        ] {
+            let dir = zone.join(format!("{day}T10-00-00Z--system--call"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("transcript.md"), transcript).unwrap();
+        }
+        let mut profile = fixture_profile(&root);
+        profile.work_scope = Some(("acme".into(), "review-pilot".into()));
+        profile.meetings_corpus = Some(corpus);
+        let mut command = std::process::Command::new("/fictional/provider");
+        profile.configure(
+            &mut command,
+            Path::new("/fictional/provider"),
+            "session",
+            &root.join("scope.json"),
+        );
+        let args: Vec<_> = command.get_args().map(|arg| arg.to_string_lossy()).collect();
+        assert!(args.iter().any(|arg| arg == &own.to_string_lossy()));
+        assert!(args
+            .iter()
+            .all(|arg| arg != &other.to_string_lossy() && arg != &unfiled.to_string_lossy()));
+        let roots = command
+            .get_envs()
+            .find_map(|(key, value)| (key == "RICHOS_APP_READ_ROOTS").then_some(value).flatten())
+            .unwrap();
+        let roots: Vec<std::path::PathBuf> = serde_json::from_str(roots.to_str().unwrap()).unwrap();
+        assert!(roots.contains(&own));
+        assert!(!roots.iter().any(|p| other.starts_with(p) || unfiled.starts_with(p)));
+        let transcripts: Vec<_> = std::fs::read_dir(&own)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path().join("transcript.md")).unwrap())
+            .collect();
+        assert_eq!(transcripts.len(), 2);
+        assert!(transcripts.iter().any(|text| text.contains("June")));
+        assert!(transcripts.iter().any(|text| text.contains("July")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn native_resume_uses_each_roles_saved_session_and_refuses_missing_history() {
         let root=fixture_root().join(format!("resume-{}",uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();

@@ -6,6 +6,7 @@
 // this file is just the window + the Tauri command bridge to the web UI in ../ui.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod richpass_host;
 mod question_host;
 mod swearmeter_host;
 mod peer_messages;
@@ -3723,6 +3724,7 @@ fn main() {
             // A persisted pairing resumes without opening a new pairing window.
             phone_runtime.resume_if_paired(app.handle().clone());
             app.manage(phone_runtime);
+            richpass_host::start(app.handle().clone());
             question_host::start(app.handle().clone());
             rich_files_host::start(app.handle().clone());
             #[cfg(target_os = "macos")]
@@ -4108,6 +4110,10 @@ fn main() {
             codex_reviews_set,
             // --- document search (search PRD v3.1, 2026-10-13) — appended, never reordered ---
             search_documents,
+            search_conversations,
+            resolve_search_message,
+            search_company_memory,
+            resolve_search_memory,
             search_documents_status,
             search_document_sources,
             cancel_search_documents,
@@ -4120,6 +4126,7 @@ fn main() {
             meetings::meeting_start_or_stop,
             meetings::meeting_set_paused,
             meetings::meeting_state,
+            meetings::meeting_retry_saved,
             // --- the user's own team on the home screen (product hunt 2026-10-15, finding 7)
             // — appended ---
             home_team,
@@ -4181,6 +4188,14 @@ fn main() {
             set_search_folder_selected,
             search_company_folders,
             set_search_company_folders,
+            richpass_host::richpass_status,
+            richpass_host::richpass_save,
+            richpass_host::richpass_choose,
+            richpass_host::richpass_check,
+            richpass_host::richpass_stop,
+            richpass_host::richpass_acknowledge,
+            richpass_host::richpass_show,
+            richpass_host::richpass_permissions,
         ])
         .build(context)
         .expect("error while building RichOS")
@@ -4197,6 +4212,7 @@ fn main() {
         // launch is read as a crash-restart — an undercount by one, no splash once — which
         // is not worth refusing to close the app over.
         .run(|handle, event| {
+            if matches!(&event, tauri::RunEvent::Exit) {richpass_host::shutdown(handle);}
             // =========================================================================
             // ROW 5 — "You close the window. The work keeps going. Quit ends it."
             // =========================================================================
@@ -6761,6 +6777,8 @@ struct SearchHit {
     entity_label: String,
     thread_id: Option<String>,
     thread_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_source_id: Option<String>,
     excerpt: String,
     at: u64,
 }
@@ -6850,6 +6868,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
                 entity_label: e.display_name.clone(),
                 thread_id: None,
                 thread_title: None,
+                message_source_id: None,
                 excerpt: e.display_name.clone(),
                 at: 0,
             });
@@ -6871,6 +6890,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
                 entity_label: label_of(s.entity_id.as_deref()),
                 thread_id: Some(s.id.clone()),
                 thread_title: Some(display),
+                message_source_id: None,
                 excerpt: String::new(),
                 at: s.last_activity,
             });
@@ -6905,6 +6925,7 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
                     entity_label: label_of(s.entity_id.as_deref()),
                     thread_id: Some(s.id.clone()),
                     thread_title: Some(display.clone()),
+                    message_source_id: doc_search::exact_message_token(ledger, &s.id, m),
                     excerpt,
                     at: m.at,
                 });
@@ -6922,6 +6943,28 @@ fn run_search(spine: &dyn SpineView, nav_state: &nav::NavState, query: &str, lim
 #[richos_command::command]
 fn search_documents(state: State<AppState>, request: richos_search::SearchRequest, generation: Option<u64>, source_ids: Option<Vec<String>>) -> Option<richos_search::SearchResponse> {
     doc_search::search_palette(&state.search, request, generation, source_ids.as_deref())
+}
+
+#[richos_command::command]
+fn search_conversations(state: State<AppState>, request: richos_search::SearchRequest, generation: u64) -> Option<richos_search::SearchResponse> {
+    doc_search::search_conversations(&state.search, &state.reader, request, generation, &|thread_id, created_title| {
+        state.nav.lock().unwrap().state().display_title(thread_id, created_title)
+    })
+}
+
+#[richos_command::command]
+fn resolve_search_message(state: State<AppState>, source_id: String) -> Option<doc_search::MessageAnchor> {
+    doc_search::resolve_search_message(&state.reader, &source_id)
+}
+
+#[richos_command::command]
+fn search_company_memory(state: State<AppState>, request: richos_search::SearchRequest, generation: u64) -> Result<Option<richos_search::SearchResponse>, &'static str> {
+    doc_search::search_company_memory(&state.search, &state.reader, &state.loro_install, request, generation)
+}
+
+#[richos_command::command]
+fn resolve_search_memory(state: State<AppState>, source_id: String) -> Option<doc_search::MemoryDetail> {
+    doc_search::resolve_search_memory(&state.reader, &state.loro_install, &source_id)
 }
 
 #[richos_command::command]

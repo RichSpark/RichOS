@@ -1,16 +1,14 @@
-//! Copy the RichOS app's own faces into RichDoctor's frontend before Tauri embeds it.
-//!
-//! Round 39 (README, "For whoever builds it"): "Tokens and faces are the app's files, not
-//! copies". The faces are `richos/app/ui/fonts/` (the only place RichOS names a typeface); they
-//! are copied into `ui/fonts/` (ignored by git) at every build, so RichDoctor ships exactly the
-//! app's files and nothing here can drift from them.
-use std::path::Path;
+//! Stage the RichDoctor frontend before Tauri embeds it. The product files and shared
+//! fonts are copied explicitly so Finder files cannot enter the signed app.
+use std::{fs, io, path::Path};
 
 fn main() {
+    let dist = Path::new("ui-dist");
+    stage_frontend(Path::new("ui"), dist).expect("stage RichDoctor frontend");
     let src = Path::new("../../ui/fonts");
-    let dst = Path::new("ui/fonts");
+    let dst = dist.join("fonts");
     println!("cargo:rerun-if-changed=../../ui/fonts");
-    std::fs::create_dir_all(dst).expect("ui/fonts");
+    fs::create_dir_all(&dst).expect("ui-dist/fonts");
     for entry in std::fs::read_dir(src).expect("the app's fonts folder") {
         let entry = entry.expect("entry");
         let name = entry.file_name();
@@ -23,14 +21,29 @@ fn main() {
             }
         }
     }
-    tokens();
+    tokens(&dist.join("tokens.css"));
     tauri_build::build();
 }
 
+fn stage_frontend(source: &Path, dist: &Path) -> io::Result<()> {
+    // Use a fresh directory so an asset removed from the product stops shipping.
+    match fs::remove_dir_all(dist) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::create_dir_all(dist)?;
+    for name in ["index.html", "doctor.js", "doctor.css", "icon-128.png"] {
+        println!("cargo:rerun-if-changed={}", source.join(name).display());
+        fs::copy(source.join(name), dist.join(name))?;
+    }
+    Ok(())
+}
+
 /// The app's two token blocks, `:root { … }` and `:root[data-theme="light"] { … }`, taken from
-/// `richos/app/ui/style.css` as they are and written to `ui/tokens.css` (ignored by git): the
+/// `richos/app/ui/style.css` as they are and written to `ui-dist/tokens.css` (ignored by git): the
 /// same palettes in both themes, never a second copy to keep in step.
-fn tokens() {
+fn tokens(path: &Path) {
     println!("cargo:rerun-if-changed=../../ui/style.css");
     let css = std::fs::read_to_string("../../ui/style.css").expect("the app's style.css");
     let block = |head: &str| -> String {
@@ -44,7 +57,7 @@ fn tokens() {
         block(":root {"),
         block(":root[data-theme=\"light\"] {")
     );
-    if std::fs::read_to_string("ui/tokens.css").ok().as_deref() != Some(out.as_str()) {
-        std::fs::write("ui/tokens.css", out).expect("write tokens.css");
+    if std::fs::read_to_string(path).ok().as_deref() != Some(out.as_str()) {
+        std::fs::write(path, out).expect("write tokens.css");
     }
 }

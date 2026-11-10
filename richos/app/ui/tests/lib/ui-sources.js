@@ -83,6 +83,7 @@ const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html", "meeting-pan
 ///   "style"         a stylesheet. No string inventory; read by the contrast gate for
 ///                   declared exemptions and color literals.
 const ROLES = {
+  "richpass.js": {role:"ui", why:"RichPass native file protection status, explicit consent entry points and repair notices; no secret entry"},
   "cleaner.html":{role:"ui",why:"RichCleaner capture and personal library windows"},
   "cleaner.js":{role:"ui",why:"RichCleaner owner-driven capture and retrieval"},
   "authored-input.js": { role: "ui", why: "numeric authorship for edited attachment drafts, without retaining another text corpus" },
@@ -120,6 +121,7 @@ const ROLES = {
   "updates.js": { role: "ui", why: "the update surface — CEO ruling §26" },
   "quota.js": { role: "ui", why: "Claude Code quota and weekly reset controls in Technical Settings" },
   "resources.js": { role: "ui", why: "the live Mac resources square on the navigation rail (round 47, moved there by round 58), its card and its Ink/Readout view menu" },
+  "richpass-page.js": { role: "ui", why: "the RichPass page (round 58): the download, the facts and Keep your copy safe, reached from the navigation rail" },
   "nav-rail.js": { role: "ui", why: "the navigation rail (round 58): what each item opens, what is selected, its tooltips, the initials circle and RichScribe's dot" },
   "accounts.js": { role: "ui", why: "Claude accounts for everyone (round 18): the Settings row, the account cards, adding a second account and the buttons under Rich's lines about accounts" },
   "bug-report.js": { role: "ui", why: "Bust a bug (round 21): Rich's question, the report card with Send report, Change it and Cancel, the stand-in tooltip, Rich's lines about sending, and the Rich panel beside a window" },

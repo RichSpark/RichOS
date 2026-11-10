@@ -147,7 +147,7 @@ if [ "$VERSION" = "1.2.0" ]; then
 fi
 if [ -n "$RUNTIME_DIR" ]; then
     RUNTIME_DIR="$(cd "$RUNTIME_DIR" && pwd)" || die "runtime directory is missing"
-    python3 "$SELF_DIR/verify-runtime.py" "$RUNTIME_DIR" "$SELF_DIR/runtime-sources.json" \
+    RUNTIME_MEMBERS="$(python3 "$SELF_DIR/verify-runtime.py" "$RUNTIME_DIR" "$SELF_DIR/runtime-sources.json" --list)" \
         || die "runtime verification failed"
 fi
 
@@ -262,11 +262,16 @@ build_into() {
     cp "$LICENSE_SRC" "$staging/engine/LICENSE" || return 1
     cp "$NOTICES_SRC" "$staging/engine/THIRD-PARTY-NOTICES.md" || return 1
     if [ -n "$RUNTIME_DIR" ]; then
-        # This directory was produced from pinned public distributions and checked
-        # against its complete file/link inventory. It is the only generated payload.
+        # Stage only the verified inventory. Finder metadata in the cache stays there.
+        local runtime_members="$staging/runtime.z"
+        printf '%s\n' "$RUNTIME_MEMBERS" | sed 's|^runtime/|./|' | tr '\n' '\0' > "$runtime_members" || return 1
         mkdir "$staging/engine/runtime" || return 1
-        ( cd "$RUNTIME_DIR" && /usr/bin/tar -cf - . ) \
+        ( cd "$RUNTIME_DIR" && /usr/bin/tar -cf - --null -T "$runtime_members" ) \
             | ( cd "$staging/engine/runtime" && /usr/bin/tar -xf - ) || return 1
+        # The Node launcher points OPENSSL_MODULES here even when the directory is empty.
+        if [ -d "$RUNTIME_DIR/node/lib/ossl-modules" ] && [ ! -L "$RUNTIME_DIR/node/lib/ossl-modules" ]; then
+            mkdir -p "$staging/engine/runtime/node/lib/ossl-modules" || return 1
+        fi
     fi
     # The meeting-notes service, its product layout under engine/service (see SERVICE_SOURCES).
     mkdir "$staging/engine/service" || return 1

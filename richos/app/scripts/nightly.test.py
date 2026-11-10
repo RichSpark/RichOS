@@ -704,6 +704,43 @@ class GitTests(GitFixture):
         self.assertEqual(current, info)
         self.assertEqual(json.loads(n.git("show", f"{oid}:latest.json")), self.manifest(info))
 
+    def test_publish_from_same_commit_with_finder_metadata_added_during_qa(self):
+        local_spec = importlib.util.spec_from_file_location(
+            "nightly_local", Path(__file__).with_name("nightly-local.py"))
+        local = importlib.util.module_from_spec(local_spec)
+        local_spec.loader.exec_module(local)
+        n.git("config", "core.excludesFile", os.devnull)
+        metadata = self.repo / ".DS_Store"
+        metadata.write_text("before plan")
+        info = self.reserve()
+        metadata.unlink()
+        out = Path(self.temp.name) / "with-finder-metadata"
+        fake, _ = self.fake_execute(out)
+
+        def execute(*args, **kwargs):
+            fake(*args, **kwargs)
+            if args[:1] == ("bash",) and args[2] == "app":
+                metadata.write_text("during build")
+
+        with patch.object(n, "execute", side_effect=execute):
+            n.build(info, out)
+        metadata.write_text("during QA")
+        candidate_metadata = [out / ".DS_Store", out / "inspection" / ".DS_Store"]
+        candidate_metadata[1].parent.mkdir()
+        for path in candidate_metadata:
+            path.write_text("after candidate hashing")
+        runner = local.Runner(self.repo, self.repo.parent, {}, io.StringIO())
+        runner.source = self.repo
+        with patch.object(runner, "command", side_effect=lambda *argv, **_: n.git(*argv[1:])) as git:
+            runner.restore_build_commit(info)
+        git.assert_called_once_with("git", "rev-parse", "HEAD", capture=True)
+        with patch.object(n, "execute", side_effect=fake):
+            n.finish(info, out)
+        self.assertEqual(n.channel()[1], info)
+        self.assertEqual(metadata.read_text(), "during QA")
+        self.assertTrue(all(path.is_file() for path in candidate_metadata))
+        self.assertNotIn((info["tag"], ".DS_Store"), self.asset_bytes)
+
     def test_an_engine_carrying_ffmpeg_is_published_with_its_corresponding_source(self):
         """GPLv3: the release carries every archive the engine's own runtime lists.
 
@@ -763,6 +800,90 @@ class GitTests(GitFixture):
                 self.assertRaisesRegex(ValueError, "not the pinned"):
             n.cached_gpl_source(wrong, empty)
         self.assertEqual(list(empty.iterdir()), [])
+
+    def test_release_assets_go_up_several_at_once_and_the_manifest_last(self):
+        """Uploaded one file at a time, a publish's assets were most of its time. The
+        candidate's assets and the FFmpeg sources go up UPLOAD_CONCURRENCY at once, never
+        more; latest.json still starts only after every other asset of the release is up, and
+        every check after the uploads is unchanged."""
+        upstream = {f"https://upstream.invalid/lib{i}-1.0.tar.gz": f"source {i}".encode()
+                    for i in range(8)}
+        rows = [{"name": f"lib{i}", "version": "1.0", "url": url,
+                 "sha256": hashlib.sha256(body).hexdigest()}
+                for i, (url, body) in enumerate(upstream.items())]
+        self.engine_files = {"engine/runtime/bin/ffmpeg": b"a GPL program",
+                             "engine/runtime/runtime-sources.json": json.dumps(
+                                 {"sources": {"ffmpeg": {"corresponding_source": rows}}}).encode()}
+        info = self.reserve()
+        out = Path(self.temp.name) / "at-once"
+        lock = threading.Condition()
+        state = {"now": 0, "most": 0, "first": True}
+        events = []
+
+        def fake(*args, **kwargs):
+            if args[:4] != ("gh", "release", "upload", info["tag"]):
+                return self.fake_external(*args, **kwargs)
+            name = Path(args[-1]).name
+            with lock:
+                events.append(("start", name))
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+                lock.notify_all()
+                first, state["first"] = state["first"], False
+                if first:
+                    # The first upload is held until a second one is in flight, which only an
+                    # uploader running several at once can do; one at a time, it never comes.
+                    # load-bound: a hang catcher only; the verdict is state["most"], never the clock
+                    lock.wait_for(lambda: state["now"] >= 2, timeout=30)
+            self.fake_external(*args, **kwargs)
+            with lock:
+                state["now"] -= 1
+                events.append(("end", name))
+                lock.notify_all()
+
+        with patch.dict(os.environ, {"RICHOS_GPL_SOURCE_CACHE": str(Path(self.temp.name) / "cache")}), \
+                patch.object(n, "fetch_source_archive",
+                             side_effect=lambda url, path: Path(path).write_bytes(upstream[url])), \
+                patch.object(n, "source_mirrors", return_value={}):
+            n.build(info, out)
+            with patch.object(n, "execute", side_effect=fake), \
+                    contextlib.redirect_stdout(io.StringIO()) as said:
+                n.finish(info, out)
+        self.assertGreaterEqual(state["most"], 2, "the assets were uploaded one at a time")
+        self.assertLessEqual(state["most"], n.UPLOAD_CONCURRENCY)
+        manifest = events.index(("start", "latest.json"))
+        app_assets = {Path(p).name for p in out.iterdir()} - {
+            "latest.json", "engine-pin.env", "engine-published.ok", n.CANDIDATE_MANIFEST}
+        ended_before = {name for kind, name in events[:manifest] if kind == "end"}
+        self.assertLessEqual(app_assets, ended_before)
+        published = {name: body for (tag, name), body in self.asset_bytes.items() if tag == info["tag"]}
+        for row in rows:
+            self.assertEqual(published[f"ffmpeg-source-{row['name']}-1.0.tar.gz"],
+                             upstream[row["url"]])
+        self.assertEqual(n.channel()[1], info)
+        self.assertRegex(said.getvalue(), r"uploaded latest\.json \(0\.0 MB\) in \d+\.\ds")
+
+    def test_one_failed_upload_still_tries_the_rest_and_refuses_as_before(self):
+        info = self.reserve()
+        out = Path(self.temp.name) / "one-fails"
+        n.build(info, out)
+
+        def fake(*args, **kwargs):
+            if args[:4] == ("gh", "release", "upload", info["tag"]) and args[-1].endswith("RichOS.app.tar.gz.sig"):
+                raise subprocess.CalledProcessError(1, args)
+            return self.fake_external(*args, **kwargs)
+        sig = out / "RichOS.app.tar.gz.sig"
+        sig.write_bytes(b"signature")
+        n.write_candidate_manifest(info, out)
+        with patch.object(n, "execute", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(subprocess.CalledProcessError):
+            n.finish(info, out)
+        uploaded = {name for tag, name in self.asset_bytes if tag == info["tag"]}
+        self.assertNotIn("RichOS.app.tar.gz.sig", uploaded)
+        self.assertNotIn("latest.json", uploaded)
+        self.assertIn("build-info.json", uploaded)
+        self.assertEqual(n.channel(), (None, None))
 
     def test_the_committed_recipe_names_the_assets_the_publish_step_uploads(self):
         """FFMPEG-SOURCE.txt prints each row's `asset`; the publish step derives the name.
@@ -1848,7 +1969,7 @@ class ReleaseScriptTests(unittest.TestCase):
         # directory through ../bin/cargo (lib/cargo_identity.py). Without them the output
         # lock resolves to "/release" and `app` refuses before packaging.
         for rel in ('lib/cargo-cache-env.sh', 'lib/cargo_identity.py', 'lib/machine_storage.py',
-                    'lib/github_access.py', 'bin/cargo'):
+                    'lib/github_access.py', 'lib/source_status.py', 'bin/cargo'):
             (self.scripts / rel).parent.mkdir(exist_ok=True)
             shutil.copy2(Path(__file__).parent / rel, self.scripts / rel)
         self.config = root / n.CONFIG
@@ -2059,6 +2180,16 @@ EOF
         result = self.call('app')
         self.assertIn('fixture reached packaging', result.stderr)
         self.assertIn('does not exist locally yet', result.stdout)
+
+    def test_app_reaches_packaging_with_untracked_finder_metadata(self):
+        root, git = self.app_source_fixture()
+        git('config', 'core.excludesFile', os.devnull)
+        metadata = root / '.DS_Store'
+        metadata.write_text('finder fixture')
+        self.assertEqual(git('status', '--porcelain'), '?? .DS_Store')
+        result = self.call('app')
+        self.assertIn('fixture reached packaging', result.stderr)
+        self.assertEqual(metadata.read_text(), 'finder fixture')
 
     def test_app_still_refuses_uncommitted_source(self):
         root, _ = self.app_source_fixture()

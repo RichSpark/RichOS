@@ -46,7 +46,9 @@ conf = json.loads((rd / "tauri.conf.json").read_text())
 assert conf["identifier"] == "com.richos.richdoctor", conf["identifier"]
 assert conf["productName"] == "RichDoctor"
 assert conf["bundle"]["macOS"]["minimumSystemVersion"] == "13.0"
-assert conf["build"]["frontendDist"] == "ui"
+assert conf["build"]["frontendDist"] == "ui-dist"
+dist = rd / conf["build"]["frontendDist"]
+assert not list(dist.rglob(".DS_Store")), "Finder metadata must stay out of the embedded frontend"
 assert conf["app"]["windows"] == [], "the window is made in code, never at launch (a quiet login launch shows none)"
 plist = plistlib.loads((rd / "Info.plist").read_bytes())
 assert plist.get("LSUIElement") is True, "menu bar only"
@@ -56,8 +58,8 @@ assert cap["permissions"] == ["core:default", "core:window:allow-start-dragging"
 for icon in conf["bundle"]["icon"]:
     assert (rd / icon).is_file(), icon
 for f in ("tokens.css", "fonts/fonts.css", "fonts/Inter-Variable.woff2"):
-    assert (rd / "ui" / f).is_file(), f"build.rs did not generate {f}"
-tokens = (rd / "ui" / "tokens.css").read_text()
+    assert (dist / f).is_file(), f"build.rs did not generate {f}"
+tokens = (dist / "tokens.css").read_text()
 assert ":root {" in tokens and ':root[data-theme="light"] {' in tokens and "--gold:" in tokens
 print("identity, floor, menu bar, capability, icons and generated files: ok")
 PY

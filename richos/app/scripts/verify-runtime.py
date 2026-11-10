@@ -4,7 +4,11 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from source_status import is_finder_metadata
 
 
 def recipe_mismatch(root, built, recipe, sources):
@@ -44,7 +48,16 @@ def verify(root, sources):
     if set(identity["files"]) & set(identity["links"]):
         raise ValueError("duplicate runtime member")
     expected = set(identity["files"]) | set(identity["links"]) | {"delivery.json"}
-    actual = {str(p.relative_to(root)) for p in root.rglob("*") if not p.is_dir() or p.is_symlink()}
+    actual = set()
+    for path in root.rglob("*"):
+        symlink = path.is_symlink()
+        if not symlink and path.is_dir():
+            continue
+        name = str(path.relative_to(root))
+        # Finder metadata added after preparation is outside the delivery inventory.
+        if name not in expected and is_finder_metadata(path):
+            continue
+        actual.add(name)
     if expected != actual:
         raise ValueError(f"runtime inventory mismatch: {len(actual - expected)} unexpected and {len(expected - actual)} missing files")
     for name, wanted in identity["files"].items():

@@ -322,3 +322,6 @@ pub mod system_resources;
 
 /// Host-scoped acceptance of dedicated engine channels.
 pub mod codex_bridge;
+
+/// Offline RichPass file authentication and bounded, anchored restoration.
+pub mod richpass;

@@ -9,6 +9,7 @@ use crate::{entity::{EntityRegistry, ThreadBinding}, journal::MachineryJournal,
     spine::{Spine, SpineError, WorkerEventsSource}, steering::ConversationControl,
     thread::{summaries, ThreadSummary}, timeline::Timeline};
 use std::{path::PathBuf, sync::{Arc, RwLock}};
+use std::sync::{Mutex, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender, TrySendError}};
 
 /// Read capabilities shared by the live spine and its published view.
 pub trait SpineView {
@@ -113,28 +114,83 @@ impl ReadView {
     }
 }
 
+/// Index work carries identity only. The consumer must re-read the current
+/// scoped projection before indexing or deleting any passage.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SearchTurnChange {
+    Turn(String),
+    ThreadBindingChanged(String),
+}
+
+pub struct SearchTurnChanges {
+    pub events: Receiver<SearchTurnChange>,
+    rescan: Arc<AtomicBool>,
+}
+
+impl SearchTurnChanges {
+    /// If the consumer fell behind, reconcile from a fresh published snapshot.
+    pub fn take_rescan(&self) -> bool { self.rescan.swap(false, Ordering::AcqRel) }
+}
+
+struct SearchTurnPublisher {
+    events: SyncSender<SearchTurnChange>,
+    rescan: Arc<AtomicBool>,
+}
+
 #[derive(Clone)]
-pub struct SpineReader(Arc<RwLock<Arc<ReadView>>>);
+pub struct SpineReader {
+    view: Arc<RwLock<Arc<ReadView>>>,
+    search: Arc<Mutex<Option<SearchTurnPublisher>>>,
+}
 
 impl SpineReader {
     pub(crate) fn new(spine: &Spine) -> Self {
         let metadata = spine.read_metadata();
         let journal = metadata.machinery_root.as_ref().map(MachineryJournal::new);
-        Self(Arc::new(RwLock::new(Arc::new(ReadView {
-            ledger: spine.ledger().read_copy(), metadata, journal,
-        }))))
+        Self {
+            view: Arc::new(RwLock::new(Arc::new(ReadView {
+                ledger: spine.ledger().read_copy(), metadata, journal,
+            }))),
+            search: Arc::default(),
+        }
     }
 
     /// The lock protects only publication. Projection, serialization and file reads happen
     /// after it is released, so a slow window cannot hold up the writer's next event.
-    pub fn snapshot(&self) -> Arc<ReadView> { self.0.read().unwrap().clone() }
+    pub fn snapshot(&self) -> Arc<ReadView> { self.view.read().unwrap().clone() }
+
+    /// Subscribe before taking the initial snapshot. The app owns one consumer.
+    pub fn watch_search_turns(&self) -> SearchTurnChanges {
+        let (send, events) = mpsc::sync_channel(128);
+        let rescan = Arc::new(AtomicBool::new(false));
+        *self.search.lock().unwrap() = Some(SearchTurnPublisher { events: send, rescan: rescan.clone() });
+        SearchTurnChanges { events, rescan }
+    }
 
     pub(crate) fn apply(&self, event: Event) {
-        Arc::make_mut(&mut self.0.write().unwrap()).ledger.apply_read_event(event);
+        let change = match &event {
+            Event::TurnCompleted { turn_id, .. } | Event::TurnInterrupted { turn_id, .. }
+            | Event::TurnStopped { turn_id, .. } | Event::TurnSuperseded { turn_id, .. }
+            | Event::TurnReplayed { turn_id, .. } | Event::UpstreamFailure { turn_id, .. }
+            | Event::ProactiveMessage { turn_id, .. } => Some(SearchTurnChange::Turn(turn_id.clone())),
+            Event::ThreadEntityBound { thread_id, .. } => Some(SearchTurnChange::ThreadBindingChanged(thread_id.clone())),
+            _ => None,
+        };
+        Arc::make_mut(&mut self.view.write().unwrap()).ledger.apply_read_event(event);
+        if let Some(change) = change {
+            let mut search = self.search.lock().unwrap();
+            if let Some(publisher) = search.as_ref() {
+                match publisher.events.try_send(change) {
+                    Ok(()) => (),
+                    Err(TrySendError::Full(_)) => publisher.rescan.store(true, Ordering::Release),
+                    Err(TrySendError::Disconnected(_)) => *search = None,
+                }
+            }
+        }
     }
 
     pub(crate) fn refresh(&self, spine: &Spine) {
-        let mut published = self.0.write().unwrap();
+        let mut published = self.view.write().unwrap();
         let view = Arc::make_mut(&mut published);
         view.metadata = spine.read_metadata();
         view.journal = view.metadata.machinery_root.as_ref().map(MachineryJournal::new);
@@ -178,6 +234,34 @@ mod tests {
             spine.timeline(&b).unwrap().view(crate::timeline::ViewMode::Ceo).payload());
         assert_eq!(first.messages(&a).unwrap().len(), 0);
         assert!(second.messages("missing").is_err());
+        drop(spine);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn search_turn_changes_follow_publication_and_signal_overflow() {
+        let path = std::env::temp_dir().join(crate::util::new_id("search-turn-feed"));
+        let mut spine = Spine::new(Ledger::open(&path).unwrap());
+        spine.set_entity_registry(EntityRegistry::new(vec![
+            Entity::new("alpha", "Alpha", &["/fixture/alpha"]).unwrap(),
+        ]).unwrap());
+        let thread = spine.create_thread("First", &EntityId::parse("alpha").unwrap()).unwrap();
+        let reader = spine.reader();
+        let changes = reader.watch_search_turns();
+        spine.attach_lease(Box::new(MockCognition::new("search-turn-feed", vec!["Committed answer"])));
+        spine.submit_prompt("Visible question", Source::Text).unwrap();
+        let SearchTurnChange::Turn(turn) = changes.events.try_recv().unwrap() else { panic!("no committed turn") };
+        let snapshot = reader.snapshot();
+        let binding = snapshot.ledger().thread_binding(&thread).unwrap();
+        assert_eq!(Timeline::committed_search_turn(snapshot.ledger(), &binding, &turn).unwrap().len(), 2);
+        assert!(matches!(changes.events.try_recv(), Err(mpsc::TryRecvError::Empty)), "streamed text did not wake the indexer");
+
+        for _ in 0..129 {
+            reader.apply(Event::TurnCompleted { turn_id: turn.clone(), stop_reason: "done".into(), at: 1 });
+        }
+        assert_eq!(changes.events.try_iter().count(), 128);
+        assert!(changes.take_rescan());
+        assert!(!changes.take_rescan());
         drop(spine);
         std::fs::remove_file(path).unwrap();
     }

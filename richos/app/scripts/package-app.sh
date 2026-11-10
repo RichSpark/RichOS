@@ -1445,6 +1445,8 @@ if [ "${RICHOS_WITHOUT_RICHDOCTOR:-}" = "1" ]; then
 else
   say ""
   say "building RichDoctor, the separate support app this RichOS installs beside itself..."
+  # The Tauri CLI checks for this directory before build.rs stages the filtered assets.
+  mkdir -p "$richdoctor_dir/ui-dist" || exit 4
   if ! (cd "$richdoctor_dir" && RICHDOCTOR_VERSION="$target_version" ${build_launch[@]+"${build_launch[@]}"} cargo tauri build --no-sign --bundles app --config "{\"version\":\"$target_version\"}"); then
     warn ""
     warn "RichDoctor did not build — nothing was packaged. The output above is the reason."
@@ -1512,7 +1514,9 @@ source_sha="$(git -C "$app_dir" rev-parse HEAD 2>/dev/null || true)"
 source_dirty=""
 if [ -n "$source_sha" ]; then
   source_root="$(git -C "$app_dir" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [ -n "$(git -C "$source_root" status --porcelain --untracked-files=all 2>/dev/null || true)" ]; then
+  source_status="$(python3 "$here/lib/source_status.py" "$source_root")" \
+    || { warn "could not check the source worktree"; exit 4; }
+  if [ -n "$source_status" ]; then
     source_dirty="-dirty"
   fi
 fi

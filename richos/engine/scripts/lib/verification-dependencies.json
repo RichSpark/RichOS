@@ -14138,12 +14138,33 @@
       "keys": [],
       "edges": []
     },
+    "loro/lib/search.js": {
+      "source": "loro/lib/search.js",
+      "sha256": "f63fa24f017b57bc21bc682460329e8b1224c30e957b19e442bb6d47ebe407ea",
+      "evidence": "RichFinder projection reads the caller's explicit corpus through the reviewed Loro layout, audience and store modules. No environment or execution access.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "loro/lib/layout.js"
+        },
+        {
+          "to": "loro/lib/privacy.js"
+        },
+        {
+          "to": "loro/lib/store.js"
+        }
+      ]
+    },
     "loro/tests/run.js": {
       "source": "loro/tests/run.js",
-      "sha256": "8d2176eb1e0c7b05ab6c265aac83e9b54713d60129f5c159b74df3689af71720",
+      "sha256": "d8d135871f41af43edced05753079101f2e2a4b3a518d04bf74db020111bbbc4",
       "evidence": "Bound member of the reviewed Loro fixture component: fixed local modules and Node builtins only. Corpus data is parsed as Markdown/JSON/YAML; source-scan inputs are read as text. No orchestration setting or shell execution. The suite binds the complete transitive component set.",
       "keys": [],
-      "edges": []
+      "edges": [
+        {
+          "to": "loro/lib/search.js"
+        }
+      ]
     },
     "loro/tests/relocation.js": {
       "source": "loro/tests/relocation.js",
@@ -15404,7 +15425,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "47fd2f98201d53542b350cebaf5d3a0b9ef4e6f4215cf5f5418bdb8693c4d2d1",
+          "sha256": "8dc95f42643a7f6d94b9dd3c04c49fe68dbe1c63571e12ab049714f9a78dc1be",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15440,7 +15461,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/run-tests.sh",
-          "sha256": "4a558a7d5a4ade72138d48aa8f2d27f8bce9911c669f13f91c9533efef8d27be",
+          "sha256": "bf740fc01d916e5a99b5f2b15d4038ab51b5d2de9f711661c27ec63d36893cf0",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15494,7 +15515,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "84ce7c71e65c706904da6e1324caf2377eb4f55098d59a86c1461c64b94e5283",
+          "sha256": "c751a832c7c50a8c492958ab43c585b7508b324f6ccbc1a5e62cedaaf168d18e",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {
@@ -15530,7 +15551,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "47fd2f98201d53542b350cebaf5d3a0b9ef4e6f4215cf5f5418bdb8693c4d2d1",
+          "sha256": "8dc95f42643a7f6d94b9dd3c04c49fe68dbe1c63571e12ab049714f9a78dc1be",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15542,7 +15563,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "e7850387f384e3f2858c565a16dccaf76f7e7dc8fb5b642d202dde3e5db446ee",
+          "sha256": "f9837cabc40d5e87b64f91578cefa5d3e1ccc863781cc09d75d86293c375b978",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         }
       ]
@@ -15665,13 +15686,13 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/proof-run.py",
-          "sha256": "e7850387f384e3f2858c565a16dccaf76f7e7dc8fb5b642d202dde3e5db446ee",
+          "sha256": "f9837cabc40d5e87b64f91578cefa5d3e1ccc863781cc09d75d86293c375b978",
           "evidence": "Reviewed runner import for controlled admission/pressure fixture items. The native-ios-ui-only toolchain reader is not entered by these fixtures; no new configuration or external dependency is read in this node."
         },
         {
           "root": "repository",
           "path": "richos/app/scripts/lib/proof_evidence.py",
-          "sha256": "84ce7c71e65c706904da6e1324caf2377eb4f55098d59a86c1461c64b94e5283",
+          "sha256": "c751a832c7c50a8c492958ab43c585b7508b324f6ccbc1a5e62cedaaf168d18e",
           "evidence": "Reviewed fixed fixture import or source-data input; bind against the current repository, never another worktree."
         },
         {

@@ -243,7 +243,8 @@ async function main() {
     const col = await column(page, "set-terminal-open");
     assertEqual(col.group, "Working with Rich");
     assertEqual(col.rows[col.rows.length - 1], "set-terminal-open", "last in its column: " + col.rows);
-    assertEqual(col.rows[col.rows.length - 2], "set-phone-open", "under Use Rich from your phone");
+    assertEqual(col.rows[col.rows.length - 2], "set-richpass-open", "under RichPass");
+    assertEqual(col.rows[col.rows.length - 3], "set-phone-open", "RichPass follows Use Rich from your phone");
     assertEqual(col.state, "Read at " + START + ", when RichOS started");
     assertEqual(page.__errors, [], "the page reported errors");
     await page.context().close();

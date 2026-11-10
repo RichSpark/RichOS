@@ -618,7 +618,7 @@ button {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 80;
+  z-index: 210;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -936,7 +936,7 @@ button {
    `aria-describedby` still reads it. */
 .res-card {
   position: fixed;
-  z-index: 85;
+  z-index: 210;
   width: 300px;
   box-sizing: border-box;
   padding: 14px 16px 12px;
@@ -1117,8 +1117,9 @@ button {
 
 /* The view menu (right-click, the context-menu key, Shift+F10): the app's own menu, with the
    current view checked. */
-.res-menu {
-  z-index: 90;
+/* `.menu` (z 70) is declared further down and, at one class, beat this rule's z-index; two classes win. */
+.menu.res-menu {
+  z-index: 210;
   min-width: 150px;
 }
 .res-menu-item {
@@ -12015,7 +12016,7 @@ body.panel-full .op-body {
 
 /* Rich's lines about accounts: the buttons round 18 puts under them */
 .acc-note-slot:empty { display: none; }
-.acc-note-acts { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.acc-note-acts, [data-meeting-retry] { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 .acc-after { font-size: 1rem; color: var(--ink-soft); margin: 12px 0 0; }
 @media (prefers-reduced-motion: reduce) { #accounts-sheet, #accounts-sheet * { animation: none !important; transition: none !important; } }
 
@@ -12981,7 +12982,19 @@ body.bug-dock-open .overlay-panel--desk {
    =========================================================================== */
 :root { --m-fable: #E8CC7E; --m-opus: #8E7437; --m-sonnet: #7E92B8; }   /* model marks, each 3:1 or more on the ground (round 22) */
 :root[data-theme="light"] { --m-fable: #5A4410; --m-opus: #8F7030; --m-sonnet: #44567A; }
-body.spend-open #app { display: none; }
+/* THE RAIL STAYS ON THIS SCREEN (review rv-20261106T173510Z-aa7dd4d6-bca3, finding 1; the CEO's
+   round-58 pick: "Nav rail everywhere else but not on the home screen"). The rail is a child of #app,
+   so hiding #app hid it. Everything in #app but the rail and its tooltip is hidden instead, and this
+   screen starts at the rail's right edge, as an overlay does. Opened over Home, Home steps
+   aside while this screen is up (spend.js `open`), so the rail is there too. */
+body.spend-open #app > :not(#nav-rail):not(#nr-tip) { display: none; }
+body.spend-open #spend { left: 3.25rem; }
+/* The rail takes 52px of this screen's width (tests/spend.js measures every fit). Docked beside the Rich
+   panel the column is that much narrower: the tokens line drops to the 16px floor (its second sentence
+   is 883px at 18px, 785px at 16px) and the four periods wrap to a second row of two instead of
+   squeezing a word onto two lines. */
+body.bug-dock-open .sp-tokens { font-size: 1rem; }
+body.bug-dock-open .sp-period { flex-wrap: wrap; border-radius: 22px; }
 #spend { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; background: var(--ground); color: var(--ink);
   font-family: var(--font); animation: fadein .35s ease both; }
 #spend[hidden] { display: none; }
@@ -14007,3 +14020,275 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 .voc-list .voc-opt:hover, .voc-list .voc-opt:focus-visible { background: var(--gold-soft); }
 .voc-save { background: var(--gold); color: var(--on-gold); border-color: var(--gold); font-weight: 600; }
 .voc-edit-cell { padding: 8px; }
+
+/* ---------------------------------------------------------------------------------------
+   THE RICHPASS PAGE — design round 58, version A's "Document" (richpass-page.js). One calm
+   column under the stage header, in place of the conversation and its composer. Every text is
+   16px or more and in the app's own inks: --ink, --ink-soft and --gold-text on the ground, the
+   card or the soft gold warning, all of them pairs `tests/contrast.js` already holds. */
+body.page-open #conversation,
+body.page-open #composer-zone,
+body.page-open #jump-latest,
+body.page-open #entity-view,
+body.page-open #unbound-view,
+body.page-open #scope-crumb,
+body.page-open #out-top {
+  display: none !important;
+}
+.page-crumb {
+  font-weight: 600;
+  color: var(--ink);
+}
+.page-crumb[hidden] {
+  display: none;
+}
+.rp-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 3rem 3rem 4rem;
+}
+.rp-page[hidden] {
+  display: none;
+}
+.rp-col {
+  max-width: 46rem;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.rp-col p {
+  margin: 0;
+}
+.rp-ttl {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+}
+.rp-mark { flex: none; display: block; height: 3rem; aspect-ratio: 504 / 402; }
+.rp-mark img { display: block; width: 100%; height: 100%; }
+.rp-mark-dark, [data-theme="dark"] .rp-mark-light { display: none !important; }
+[data-theme="dark"] .rp-mark-dark { display: block !important; }
+.rp-more { color: var(--gold-text); font-weight: 600; text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-thickness: 1px; white-space: nowrap; border-radius: 4px; }
+.rp-more:hover { text-decoration-thickness: 2px; }
+.rp-more:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.rp-more svg { width: 1em; height: 1em; vertical-align: -0.125em; margin-left: 0.15em; }
+#rp-title {
+  margin: 0;
+  font: 400 3rem/1 var(--font-serif);
+  color: var(--ink);
+  outline: none;
+}
+.rp-lede {
+  font-size: 1.375rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+.rp-body {
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+.rp-dl {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.rp-dl-cap {
+  color: var(--ink-soft);
+}
+.rp-dl-cap[hidden],
+.rp-btn[hidden] {
+  display: none;
+}
+.rp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+  border: 1px solid var(--chrome-edge);
+  background: none;
+  border-radius: 8px;
+  padding: 0.4375rem 0.875rem;
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.rp-btn:hover {
+  background: var(--tint-weak);
+}
+.rp-btn:focus-visible,
+.rp-sw:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.rp-btn:disabled {
+  cursor: default;
+}
+.rp-btn svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+.rp-btn-gold {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--on-gold);
+  font-weight: 650;
+}
+.rp-btn-gold:hover {
+  background: var(--gold);
+  filter: brightness(1.07);
+}
+.rp-dl .rp-btn-gold {
+  padding: 0.625rem 1.25rem;
+  font-size: 1.0625rem;
+}
+.rp-facts {
+  display: grid;
+}
+.rp-fact {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  gap: 0.875rem;
+  padding: 0.875rem 0;
+  border-top: 1px solid var(--line-soft);
+}
+.rp-fi {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--gold-soft);
+  color: var(--gold-text);
+}
+.rp-fi svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.rp-fact b,
+.rp-state b {
+  display: block;
+  color: var(--ink);
+}
+.rp-fact b {
+  font-size: 1.0625rem;
+}
+.rp-fact span,
+.rp-state span {
+  color: var(--ink-soft);
+}
+.rp-prot {
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--card);
+  padding: 1.125rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+.rp-prot-h {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.rp-prot-h h2 {
+  margin: 0;
+  font-size: 1.1875rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+.rp-prot-p {
+  color: var(--ink-soft);
+}
+.rp-prot-p[hidden],
+#rp-on[hidden],
+.rp-acts[hidden] {
+  display: none;
+}
+.rp-sw {
+  flex: none;
+  margin-left: auto;
+  width: 2.75rem;
+  height: 1.625rem;
+  border-radius: 999px;
+  border: 0;
+  padding: 0;
+  background: var(--line-control);
+  position: relative;
+  cursor: pointer;
+}
+.rp-sw::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  transition: left 0.18s;
+}
+.rp-sw[aria-checked="true"] {
+  background: var(--gold);
+}
+.rp-sw[aria-checked="true"]::after {
+  left: calc(100% - 1.25rem - 3px);
+  background: var(--on-gold);
+}
+.rp-state {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+.rp-state svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  color: var(--success);
+  flex: none;
+}
+.rp-state span {
+  display: block;
+}
+.rp-path {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.rp-acts {
+  display: flex;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+}
+#rp-on .rp-acts {
+  margin-top: 0.875rem;
+}
+.rp-error {
+  color: var(--danger);
+}
+.rp-error[hidden] {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-sw::after {
+    transition: none;
+  }
+}
+
+/* THE RAIL'S FLYOUTS SIT ABOVE EVERY SHEET THE RAIL LEAVES UP (review rv-20261106T173510Z-aa7dd4d6-bca3,
+   finding 2): the hover label, the Mac activity card and its Ink/Readout menu are 210, above RichScribe's
+   sheet (160) and Token spend (200), below Settings (300). THE FIRST-RUN QUESTION BOUNDARY: while a
+   first-run question is up (QUESTION_SELECTOR in main.js) it owns the window, the rail is inert, and
+   none of these may be painted over it, so they are not shown at all. */
+:root:has(.overlay[aria-modal="true"][data-dismiss^="control:"]:not([hidden])) :is(#nr-tip, .res-card, .res-menu),
+/* Home (150) has no rail: a card pinned from the keyboard (Space on the square, then Up to Home and Enter
+   raises no pointer press to unpin it) must not stay painted over it (review rv-20261106T215921Z-fae9a28f-30ee). */
+body.home-open :is(#nr-tip, .res-card, .res-menu) {
+  display: none !important;
+}

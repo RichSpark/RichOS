@@ -315,6 +315,102 @@ async function main() {
       return "12 documents after a gone first page; an all-gone list says No documents match.";
     });
 
+    await run.check("a conversation result opens the exact message in its own thread", async () => {
+      const p = await openApp(browser, { documentSearch: "none" });
+      await p.evaluate(async () => {
+        const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+        const timeline = await invoke("get_timeline", { threadId: "acme" });
+        const target = timeline.items.find((item) => item.kind === "rich_message" && item.text.includes("holding at list"));
+        if (!target) throw new Error("The Acme search fixture has no target message");
+        const anchor = { thread_id: "acme", turn_id: target.turnId, message_id: target.id };
+        const locate = window.RichTimeline.searchMessageAnchor;
+        window.RichTimeline.searchMessageAnchor = (container, turnId, messageId) => {
+          const node = locate(container, turnId, messageId);
+          if (node && turnId === anchor.turn_id && messageId === anchor.message_id) {
+            document.documentElement.dataset.searchJump = node.dataset.messageId;
+          }
+          return node;
+        };
+        window.RichBridge.invoke = async (cmd, args) => {
+          if (cmd === "resolve_search_message") return args.sourceId === target.id ? anchor : null;
+          if (cmd === "search_nav") return [
+            { kind: "message", thread_id: "acme", thread_title: "Indexed exact match", entity_label: "Acme",
+              at: 1, excerpt: "An exact match already in the navigation rows.", message_source_id: "exact-match" },
+            { kind: "message", thread_id: "acme", thread_title: "Unindexed substring", entity_label: "Acme",
+              at: 2, excerpt: "The exact fragment can still be found." },
+          ];
+          if (cmd === "search_documents") return {
+            requested: args.request, effective: args.request, words: [], spans: [], offset: 0, dropped: 0, total: 1,
+            status: { generation: 2, folder: { state: "ready", files: 1 }, meaning: { state: "ready", files: 1 } },
+            hits: [{ source_id: "document", title: "Price sheet", rel_path: "pricing.md", why: "meaning", exact: [],
+              passage: { heading: "", text: "The contract lists annual pricing.", line: 1 } }],
+          };
+          if (cmd !== "search_conversations") return invoke(cmd, args);
+          await new Promise((resolve) => { window.__deliverConversation = resolve; });
+          return {
+            requested: args.request, effective: args.request, words: [], spans: [],
+            status: { folder: { state: "ready" }, meaning: { state: "ready" } },
+            hits: [
+              { source_id: target.id, title: "Acme", rel_path: "Acme", why: "meaning", exact: [],
+                passage: { heading: "", text: target.text, line: 1 } },
+              { source_id: "exact-match", title: "Duplicate indexed row", rel_path: "Acme", why: "words", exact: [],
+                passage: { heading: "", text: "An exact match already in the navigation rows.", line: 1 } },
+            ],
+          };
+        };
+      });
+      await p.fill("#search-input", "negotiated discount");
+      await p.waitForSelector(".srch-doc");
+      await p.evaluate(() => {
+        window.__documentSearchRow = document.querySelector(".srch-doc");
+        window.__deliverConversation();
+      });
+      await p.waitForSelector(".srch-message");
+      assert(await p.evaluate(() => document.querySelector(".srch-doc") === window.__documentSearchRow),
+        "the original document row stays mounted when the conversation result arrives");
+      assertEqual(await p.getByText("Unindexed substring", { exact: true }).count(), 1, "keep an exact legacy match without an indexed replacement");
+      assertEqual(await p.getByText("Indexed exact match", { exact: true }).count(), 1, "keep the exact row in its original place");
+      assertEqual(await p.getByText("Duplicate indexed row", { exact: true }).count(), 0, "deduplicate the same indexed message");
+      await p.locator(".srch-message").dblclick();
+      await waitFor(p, "the Acme message was never located", () => !!document.documentElement.dataset.searchJump);
+      assertEqual(p.__errors.length, 0, p.__errors.join("\n"));
+      await p.close();
+    });
+
+    await run.check("Company memory opens a verified record with its citation and predecessor", async () => {
+      const p = await openApp(browser, { documentSearch: "none" });
+      await p.evaluate(() => {
+        const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+        const text = "The refund deadline was moved to the end of the month.";
+        window.RichBridge.invoke = async (cmd, args) => {
+          if (cmd === "resolve_search_memory") {
+            if (args.sourceId !== "fixture-record-revision") return null;
+            return { citation: "companies/acme/records/refund.md", text, supersedes: "refund-v1" };
+          }
+          if (cmd !== "search_company_memory") return invoke(cmd, args);
+          if (args.request.query === "unavailable") throw new Error("The memory projection could not be read");
+          return {
+            requested: args.request, effective: args.request, words: [], spans: [],
+            status: { folder: { state: "ready" }, meaning: { state: "ready" } },
+            hits: [{ source_id: "fixture-record-revision", title: "Refund decision", rel_path: "Acme", why: "meaning", exact: [],
+              passage: { heading: "", text, line: 1 } }],
+          };
+        };
+      });
+      await p.fill("#search-input", "return the money");
+      await p.waitForSelector(".srch-memory");
+      await p.locator(".srch-memory").dblclick();
+      const record = await p.locator(".srch-memory .srch-note").textContent();
+      assert(record.includes("companies/acme/records/refund.md"), record);
+      assert(record.includes("refund-v1"), record);
+      await p.fill("#search-input", "unavailable");
+      await waitFor(p, "the unavailable memory state never arrived", () =>
+        document.querySelector("#search-results").textContent.includes("Company memory is unavailable."));
+      assertEqual(await p.locator(".srch-memory").count(), 0, "the earlier result was cleared");
+      assertEqual(p.__errors.length, 0, p.__errors.join("\n"));
+      await p.close();
+    });
+
     for (const [preset, line, mode] of [
       ["unavailable", "RichFinder unavailable; showing text matches", "words only, RichFinder unavailable"],
       ["none", "No search folder configured", ""],
