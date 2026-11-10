@@ -740,6 +740,22 @@ if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
     ok "R68. after a verified company-notes save, 'saved your answers in the notes' is not private memory: no alert"
 else bad "R68. answers in the notes" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
 
+# R69-R73: the one rule (a confirmed app save, no memory/ECS write, no file the turn did not write).
+for pair in \
+    "R69|I've saved your company notes, including 37signals.com/about as your website." \
+    "R70|I've saved your answers. They're in the notes." \
+    "R71|Noted, I've written that down." \
+    "R72|Got it, it's saved."; do
+    run_hook "$SANDBOX/appsave-notes-saved.jsonl" "${pair#*|}" true
+    if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+        ok "${pair%%|*}. after a verified notes save, '${pair#*|}' raises no alert"
+    else bad "${pair%%|*}" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+done
+run_hook "$SANDBOX/appsave-none.jsonl" "Noted, I've written that down." true
+if printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
+    ok "R73. 'Noted, I've written that down.' with no app save behind it still alerts"
+else bad "R73. noted, no save" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
+
 # ---------------------------------------------------------------------------
 # ARM 3 — RECORDED, NOT WRITTEN
 # The R cases are the real claims the CEO answered with "recorded WHERE?" (or

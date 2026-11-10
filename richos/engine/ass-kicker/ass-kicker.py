@@ -1413,6 +1413,8 @@ LOCATION_RE = re.compile(
 
 
 URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.I)
+# A bare domain, with or without a path ("37signals.com/about"): a website, not a file.
+WEBSITE_RE = re.compile(r"\b[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|co|ai|app|dev|us|edu|gov|biz|info|me|xyz|uk|ca)\b(?:/\S*)?", re.I)
 
 
 def _named(path, raw):
@@ -1589,19 +1591,20 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
         return "; ".join(parts) or "nothing"
 
     def app_backed(sentence):
-        # An app save tool answered that it saved, this turn, and the claim names
-        # no place of its own: the tool's answer is the place (it returns no path).
-        # A claim that names a file or section is judged as before.
-        # A website inside the saved content is content, not a destination.
-        return bool(writes.get("app_saved")) and not LOCATION_RE.search(URL_RE.sub(" ", sentence))
-
-    def notes_app_owned(sentence):
-        # "saved your answers in the notes" after a verified company-notes save,
-        # with no private memory write: the notes are the app's own record.
-        return APP_SAVE_NOTES in (writes.get("app_saved") or []) and not memory \
-            and not writes.get("ecs") and app_backed(sentence)
+        # One rule: an app save tool confirmed a save this turn, the turn wrote no
+        # private memory or ECS, and the claim names no local file path or
+        # repository file the turn did not write. The tool's answer is the place
+        # (it returns no path). A website in the sentence is content, not a file.
+        if not writes.get("app_saved") or memory or writes.get("ecs"):
+            return False
+        rest = WEBSITE_RE.sub(" ", URL_RE.sub(" ", sentence))
+        for p, _k in targets:
+            rest = re.sub(re.escape(p) + "|" + re.escape(os.path.basename(p)), " ", rest, flags=re.I)
+        return not LOCATION_RE.search(rest)
 
     for kind, sentence in claims:
+        if app_backed(sentence):
+            continue
         if kind == "note":
             # A promise or follow-up said to be "noted", or "in my notes": only
             # a committed repository file the reply names backs it. The
@@ -1651,7 +1654,7 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
             # and a path three paragraphs down does not change that.
             win = raw_window(raw, sentence)
             here = bool(LOCATION_RE.search(win)) or any(s in win.lower() for s in cited)
-            if not (here or (writes["record_script"] and entry_named) or app_backed(sentence)):
+            if not (here or (writes["record_script"] and entry_named)):
                 failing.append((sentence, "state", "it says the record already exists and names no "
                                                    "place for it: no path, no file, no section, no commit"))
             continue
@@ -1675,14 +1678,12 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
         # rule in my notes", "recorded in memory as standing doctrine"): that
         # is where it is, whatever else the turn wrote, and it must be said in
         # plain words. Measured: the CEO answered the first with "so what???".
-        if NOTES_POINTER_RE.search(sentence) and not notes_app_owned(sentence):
+        if NOTES_POINTER_RE.search(sentence):
             failing.append((sentence, "private", "the claim points at your notes or memory, which is "
                                                  "%s, and does not say \"in my private notes\". A "
                                                  "private note is not a record and not a rule"
                             % ("what this turn wrote there: " + ", ".join(os.path.basename(p) for p in memory)
                                if memory else "a place this turn did not even write")))
-            continue
-        if app_backed(sentence):
             continue
         if named:
             if any(k == "repo" for _p, k in named) and not cited:
