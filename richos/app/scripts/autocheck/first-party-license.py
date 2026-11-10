@@ -105,7 +105,7 @@ DECLARATIONS = [
     # a header that starts with it: "Licensed under the <other> License, Version 2.0"
     re.compile(r"^[\W_]*(?:dual[- ]?|also\s+)?licen[cs]ed" + UNDER + OTHER, re.I | re.M),
     # "<it> is <other> licensed", "is BSD-3-Clause licensed"
-    re.compile(COPULA + r"(?:an?\s+)?" + OTHER + r"[\w.+-]*[- ]licen[cs]ed\b", re.I),
+    re.compile(COPULA + r"(?:an?\s+)?" + OTHER + r"[\w.+-]*[-\s]licen[cs]ed\b", re.I),
     # tags and fields: @license <other>, License: <other>, "license": "<other>", license = "<other>"
     re.compile(r"(?:@licen[cs]e\b|\blicen[cs]e\s*[:=]|\"license\"\s*:)\s*[{\[(]?\s*(?:text\s*=\s*)?[\"'`]?\s*" + OTHER,
                re.I),
@@ -123,7 +123,8 @@ MANIFEST_FIELD = {
     "Cargo.toml": re.compile(r"^[ \t]*license[ \t]*=[ \t]*\"([^\"]*)\"", re.M),
     "pyproject.toml": re.compile(r"^[ \t]*license[ \t]*=[ \t]*\"([^\"]*)\"", re.M),
 }
-CANDIDATE = re.compile(r"licen[cs]|public\s+domain|SPDX", re.I)
+# A line naming a license, a word of one wrapped onto its own line ("licensed.", "domain.") included.
+CANDIDATE = re.compile(r"licen[cs]|\bdomain\b|SPDX", re.I)
 # What starts a continuation line of a comment or a quote, read past when lines are joined. A
 # leader is followed by a space, so Markdown's **bold** at the start of a line stays as it is.
 LEADER = re.compile(r"^[ \t]*(?:<!--|/\*+|(?:\*+|//+|#+|;+|--|>+)(?=[ \t]|$))?[ \t]*")

@@ -14,7 +14,8 @@ itself declare anything.
            in RichPass.html putting its first-party source under MIT, also inside a vendored
            region; an SPDX identifier, a manifest field, a license header and a public-domain
            dedication in RichOS files; a root LICENSE that is no longer the AGPL; a Gradle
-           wrapper nobody registered; a declaration or manifest field wrapped across lines;
+           wrapper nobody registered; a declaration or manifest field wrapped across lines,
+           a dedication or a "<license> licensed" included;
            AGPL-3.0-or-later; an SPDX expression with an alternative in parentheses; a file
            whose name holds a space; `commit -a`; a land of a commit that skipped the hooks,
            before main moves; the push backstop of a merge that skipped them
@@ -195,6 +196,28 @@ class Refused(Fixture):
                      "richos/tools/richpass/README.md:3: a license declaration other than AGPL-3.0",
                      "richos/tools/example/package.json:1: a package.json license field other than AGPL-3.0-only (MIT)",
                      "richos/tools/eleven/main.js:2:")
+
+    def test_a_wrapped_dedication_and_a_wrapped_licensed_adjective_are_refused(self):
+        # Review rv-20261110T024437Z-88a8b0b8-c063, finding 1 still open: no line of the first held
+        # a word the joining looked for, and the second wanted a space or hyphen, not a newline.
+        self.make()
+        self.write("richos/tools/richpass/README.md",
+                   "# RichPass\n\nRichPass is released into the public\ndomain.\n\nRichPass is MIT\nlicensed.\n")
+        self.write("richos/tools/sixteen/NOTES.md", "Sixteen is BSD-\nlicensed.\n")
+        out = self.commit("wrap a dedication", expect=1)
+        self.refused(out, "richos/tools/richpass/README.md:3: a license declaration other than AGPL-3.0",
+                     "richos/tools/richpass/README.md:6:", "richos/tools/sixteen/NOTES.md:1:")
+        # changing only the last line of each is still refused
+        self.write("richos/tools/richpass/README.md", "# RichPass\n\nRichPass is released into the public\n"
+                   "\nRichPass is MIT\n\n")
+        self.write("richos/tools/sixteen/NOTES.md", "Sixteen is BSD-\n\n")
+        self.commit("the first lines alone")
+        self.write("richos/tools/richpass/README.md", "# RichPass\n\nRichPass is released into the public\ndomain.\n"
+                   "RichPass is MIT\nlicensed.\n")
+        self.write("richos/tools/sixteen/NOTES.md", "Sixteen is BSD-\nlicensed.\n")
+        out = self.commit("finish the sentences", expect=1)
+        self.refused(out, "richos/tools/richpass/README.md:3:", "richos/tools/richpass/README.md:5:",
+                     "richos/tools/sixteen/NOTES.md:1:")
 
     def test_agpl_or_later_is_refused(self):
         # Review P2: LICENSING.md grants version 3 and no later version; only AGPL-3.0-only is ours.
