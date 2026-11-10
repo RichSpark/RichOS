@@ -12,7 +12,8 @@ into that site, and adds what the proof needs on top:
   - every https://www.linkedin.com/ link becomes a path on the stand-in host, so the profile's
     Experience links lead to the stand-in company pages;
   - a collapsed section on every page, its text hidden (display:none, so Accessibility cannot read
-    it) behind a "see more"-style button: the text comes back only if the tool presses it;
+    it) behind a "see more"-style button: the text comes back only if the tool presses it (on the
+    details page the button reads "…mehr anzeigen": no English word to go by);
   - on the profile, a "Show all N experiences" link to its own /details/experience/ page (whose
     extra position is on that page only) and a "Show all N recommendations" link the tool must
     never open;
@@ -123,7 +124,9 @@ def main():
     details = ('<h2>Experience</h2><ul>%s<li><p>Stand-in position only on the details page %s.</p></li></ul>' % (
         rows, expect['details_only'])
         + collapsed('rx-details', 'Visible part of a position description.',
-                    'Hidden position text %s came back after show more.' % expect['details_hidden'], 'Show more'))
+                    'Hidden position text %s came back after show more.' % expect['details_hidden'],
+                    # German words, as LinkedIn shows a German profile: pressed for its ellipsis.
+                    '…mehr anzeigen'))
     (a.out / 'details-experience.html').write_text(page('Experience', details), encoding='utf-8')
 
     about = {}

@@ -168,7 +168,8 @@ fn walk(area: &Element) -> (Vec<Piece>, Vec<Element>) {
                 descend = false;
             }
             "AXLink" => {
-                pieces.push(Piece { block: Block::Control { labels: labels(&el), url: text(&el, "AXURL") }, region: region.clone() });
+                pieces.push(Piece { block: Block::Control { labels: labels(&el), url: text(&el, "AXURL") },
+                    region: region.clone() });
                 controls.push(el.clone());
             }
             "AXButton" | "AXDisclosureTriangle" => {
@@ -309,6 +310,11 @@ impl BrowserHost for MacBrowser {
     fn pages(&self, app: &BrowserApp) -> Vec<Page> {
         let Some(element) = app_element(app) else { return Vec::new() };
         web_areas(&element).into_iter().map(|(area, url)| Page { url, pieces: walk(&area).0 }).collect()
+    }
+
+    fn addresses(&self, app: &BrowserApp) -> Vec<String> {
+        let Some(element) = app_element(app) else { return Vec::new() };
+        web_areas(&element).into_iter().map(|(_, url)| url).collect()
     }
 
     fn press(&self, app: &BrowserApp, url: &str, controls: &[usize]) -> usize {

@@ -151,6 +151,8 @@ pub trait BrowserHost {
     /// The page each of the app's windows shows now (its selected tab). Empty when it is not
     /// running or exposes no page.
     fn pages(&self, app: &BrowserApp) -> Vec<Page>;
+    /// The address each of the app's windows shows now, without reading the pages.
+    fn addresses(&self, app: &BrowserApp) -> Vec<String>;
     /// Press (`AXPress`) the controls numbered `controls` (document order, counting every
     /// [`Block::Control`] as [`BrowserHost::pages`] reports them) on the page at `url`. How many
     /// were pressed.
@@ -166,9 +168,9 @@ pub fn needs_tree_switch(app: &BrowserApp) -> bool {
     !app.bundle_id.starts_with("com.apple.Safari")
 }
 
-/// Whether a control's accessible name looks like one of LinkedIn's expanders: it starts,
-/// after any leading dots or ellipsis, with "see more", "show more", "show all" or "see full",
-/// or it is "more" right after an ellipsis ("…more"). Case and spacing are ignored.
+/// Whether a control's accessible name looks like one of LinkedIn's expanders: it starts with
+/// an ellipsis ("…more", and the same clamp in any language: "…mehr anzeigen", "…voir plus"),
+/// or with "see more", "show more", "show all" or "see full". Case and spacing are ignored.
 ///
 /// Loose on purpose. The CEO's extension lists exact strings (`content-linkedin.js`
 /// `isSeeMoreText`: "see more", "…more", "see full description", "show more", "show all",
@@ -181,8 +183,8 @@ pub fn is_expander_label(raw: &str) -> bool {
     let text = raw.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
     let after_dots = text.trim_start_matches(['…', '.', ' ']);
     let had_dots = after_dots.len() < text.len();
-    ["see more", "show more", "show all", "see full"].iter().any(|start| after_dots.starts_with(start))
-        || (had_dots && after_dots.starts_with("more"))
+    (had_dots && !after_dots.is_empty())
+        || ["see more", "show more", "show all", "see full"].iter().any(|start| after_dots.starts_with(start))
 }
 
 /// An address split into the parts that decide which page it is.
@@ -370,34 +372,51 @@ pub fn page_text(page: &Page) -> String {
 
 /// Every control of the page with its number (document order over ALL pieces, the numbering
 /// [`BrowserHost::press`] uses), and whether it sits in the page's content.
-fn controls(page: &Page) -> Vec<(usize, &[String], Option<&str>, bool)> {
+struct Ctl<'a> {
+    n: usize,
+    labels: &'a [String],
+    url: Option<&'a str>,
+    inside: bool,
+}
+
+fn controls(page: &Page) -> Vec<Ctl<'_>> {
     let all = keeps_everything(page);
     page.pieces.iter().filter_map(|p| match &p.block {
         Block::Control { labels, url } => Some((labels.as_slice(), url.as_deref(), all || !is_side(p))),
         _ => None,
-    }).enumerate().map(|(n, (labels, url, inside))| (n, labels, url, inside)).collect()
+    }).enumerate().map(|(n, (labels, url, inside))| Ctl { n, labels, url, inside }).collect()
 }
 
 /// The numbers of the page's content expanders that stay on the page: a button, or a link to
-/// this same page, named by an expander text. A "Show all" link to another page is never
-/// pressed here; the profile's own ones are opened as pages ([`detail_pages`]).
+/// this same page, whose name looks like an expander ([`is_expander_label`]). A "Show all" link
+/// to another page is never pressed here; the profile's own ones are opened as pages
+/// ([`detail_pages`]).
+///
+/// Not by Accessibility's collapsed state (`AXExpanded` false), although that would be free of
+/// any language: measured on the saved profile, the controls LinkedIn marks collapsed are its
+/// menus ("Open reactions menu", "Repost", "More", "Open control menu for post", 53 of them,
+/// none marked as opening a popup), and pressing "Repost" twice would publish a post in the
+/// user's name. The guest walk pressed 40 of them on one profile and the page's own expander
+/// went unread.
 pub fn in_page_expanders(page: &Page) -> Vec<usize> {
     controls(page).into_iter()
-        .filter(|(_, labels, url, inside)| *inside && labels.iter().any(|l| is_expander_label(l))
-            && url.is_none_or(|u| u.trim().is_empty() || u.starts_with('#') || same_page(&page.url, u)))
-        .map(|(n, ..)| n)
+        .filter(|c| c.inside && c.labels.iter().any(|l| is_expander_label(l))
+            && c.url.is_none_or(|u| u.trim().is_empty() || u.starts_with('#') || same_page(&page.url, u)))
+        .map(|c| c.n)
         .take(MAX_PRESSES_PER_ROUND)
         .collect()
 }
 
 /// The profile's own "Show all" pages its content links to, in page order, each once, minus
-/// the ones that are not about the person.
+/// the ones that are not about the person. Known by their address,
+/// `/in/<this profile>/details/<section>/`, never by their words, so a profile LinkedIn shows
+/// in German ("Alle anzeigen") opens the same pages as one in English.
 pub fn detail_pages(page: &Page, profile_url: &str) -> Vec<String> {
     let Some(profile) = parse(profile_url) else { return Vec::new() };
     let mut out: Vec<String> = Vec::new();
-    for (_, labels, url, inside) in controls(page) {
-        let Some(url) = url else { continue };
-        if !inside || !labels.iter().any(|l| is_expander_label(l)) {
+    for c in controls(page) {
+        let Some(url) = c.url else { continue };
+        if !c.inside {
             continue;
         }
         let Some(section) = details_section(url, &profile) else { continue };
@@ -483,18 +502,17 @@ struct Read {
     pressed: usize,
 }
 
-/// One call: the browser, whether its switch was set by us, and the pages already read.
+/// One call: the browser, and whether its switch was set by us.
 struct Visit<'a> {
     host: &'a dyn BrowserHost,
     app: BrowserApp,
     switched: Option<Option<bool>>,
-    read: Vec<String>,
 }
 
 impl Visit<'_> {
-    /// Wait for a tab whose address `accept` takes (and, when `fresh`, not one already read)
+    /// Wait for a window whose page `accept` takes (given its address and every window's page)
     /// until its text is the same on two reads a second apart. Every refusal is a sentence.
-    fn settle(&mut self, accept: &dyn Fn(&str) -> bool, fresh: bool) -> Result<(Page, String), String> {
+    fn settle(&mut self, accept: &dyn Fn(&str, &[Page]) -> bool) -> Result<(Page, String), String> {
         let mut previous: Option<(Page, String)> = None;
         let mut others: Vec<String> = Vec::new();
         for _ in 0..MAX_POLLS {
@@ -505,10 +523,10 @@ impl Visit<'_> {
                 }
             }
             let pages = self.host.pages(&self.app);
-            others = pages.iter().filter(|p| !accept(&p.url)).map(|p| p.url.clone()).filter(|u| !u.is_empty()).collect();
-            let found = pages.into_iter()
-                .filter(|p| accept(&p.url) && !(fresh && self.read.contains(&p.url)))
-                .map(|p| { let text = page_text(&p); (p, text) })
+            others = pages.iter().filter(|p| !accept(&p.url, &pages)).map(|p| p.url.clone()).filter(|u| !u.is_empty()).collect();
+            let found = pages.iter()
+                .filter(|p| accept(&p.url, &pages))
+                .map(|p| (p.clone(), page_text(p)))
                 .find(|(_, text)| !text.is_empty());
             match (found, previous.take()) {
                 (Some(now), Some(before)) if now.0.url == before.0.url && now.1 == before.1 => return Ok(now),
@@ -530,11 +548,21 @@ impl Visit<'_> {
             self.app.name, others.join(", ")))
     }
 
-    /// Open `url`, wait for the page `accept` takes, press its expanders until none is left
-    /// (or [`MAX_EXPAND_ROUNDS`]), and read it as it then is.
+    /// Open `url`, wait for the page this navigation shows, press its expanders until none is
+    /// left (or [`MAX_EXPAND_ROUNDS`]), and read it as it then is.
+    ///
+    /// The page this navigation shows: one `accept` takes (the requested address, or where
+    /// LinkedIn redirects it, like a numeric company address to the company's name) that is the
+    /// requested address itself, or that more windows show now than before the open (so the
+    /// employer's page the user already had open still counts when it opens again). A company
+    /// About page the user already had open in another window is never read as the one asked
+    /// for (review rv-20261110T142525Z-76462643-2965, finding 1).
     fn read(&mut self, url: &str, accept: &dyn Fn(&str) -> bool) -> Result<Read, String> {
+        let before = self.host.addresses(&self.app);
         self.host.open(url, &self.app).map_err(|e| format!("{} could not be asked to open {url}: {e}", self.app.name))?;
-        let (mut page, mut text) = self.settle(accept, true)?;
+        let ours = |shown: &str, now: &[Page]| accept(shown) && (same_page(url, shown)
+            || now.iter().filter(|p| p.url == shown).count() > before.iter().filter(|b| *b == shown).count());
+        let (mut page, mut text) = self.settle(&ours)?;
         let mut pressed = 0;
         for _ in 0..MAX_EXPAND_ROUNDS {
             let targets = in_page_expanders(&page);
@@ -547,7 +575,7 @@ impl Visit<'_> {
                 break;
             }
             let shown = page.url.clone();
-            match self.settle(&|u| u == shown, false) {
+            match self.settle(&|u, _| u == shown) {
                 // Nothing changed: what is left only lifts a clamp on text already read (a
                 // post's "…more"), so another round would press the same controls for nothing.
                 Ok((_, t)) if t == text => break,
@@ -555,7 +583,6 @@ impl Visit<'_> {
                 Err(_) => break,
             }
         }
-        self.read.push(page.url.clone());
         Ok(Read { page, text, pressed })
     }
 
@@ -594,7 +621,7 @@ pub fn read_profile(host: &dyn BrowserHost, url: &str) -> Result<Value, String> 
     let Some(app) = host.default_browser() else {
         return Err("RichOS could not find the default web browser on this Mac. Nothing was opened.".into());
     };
-    let mut visit = Visit { host, app, switched: None, read: Vec::new() };
+    let mut visit = Visit { host, app, switched: None };
     let result = visit_profile(&mut visit, &url);
     visit.finish();
     result
@@ -763,6 +790,8 @@ mod tests {
         switches: RefCell<Vec<bool>>,
         asked: Cell<u32>,
         slept: Cell<u32>,
+        /// Windows the user already had open, listed before the one the tool opens.
+        other: Vec<Page>,
     }
 
     fn safari() -> BrowserApp {
@@ -797,7 +826,7 @@ mod tests {
         fn new(app: BrowserApp) -> Self {
             Fake { trusted: true, browser: Some(app), states: HashMap::new(), redirects: HashMap::new(), delay: 0,
                 shown: RefCell::new(None), opened: RefCell::default(), pressed: RefCell::default(), switch_was: Some(false),
-                switches: RefCell::default(), asked: Cell::new(0), slept: Cell::new(0) }
+                switches: RefCell::default(), asked: Cell::new(0), slept: Cell::new(0), other: Vec::new() }
         }
         fn with(mut self, url: &str, states: Vec<Vec<Piece>>) -> Self {
             self.states.insert(url.into(), states.into_iter().map(|p| page(url, p)).collect());
@@ -820,13 +849,21 @@ mod tests {
             Ok(())
         }
         fn pages(&self, _: &BrowserApp) -> Vec<Page> {
+            let mut out = self.other.clone();
             let mut shown = self.shown.borrow_mut();
-            let Some((url, state, wait)) = shown.as_mut() else { return Vec::new() };
+            let Some((url, state, wait)) = shown.as_mut() else { return out };
             if *wait > 0 {
                 *wait -= 1;
-                return vec![page("about:blank", vec![])];
+                out.push(page("about:blank", vec![]));
+                return out;
             }
-            self.states.get(url.as_str()).map(|s| vec![s[(*state).min(s.len() - 1)].clone()]).unwrap_or_default()
+            out.extend(self.states.get(url.as_str()).map(|s| s[(*state).min(s.len() - 1)].clone()));
+            out
+        }
+        fn addresses(&self, _: &BrowserApp) -> Vec<String> {
+            let mut out: Vec<String> = self.other.iter().map(|p| p.url.clone()).collect();
+            out.extend(self.shown.borrow().as_ref().map(|(url, ..)| url.clone()));
+            out
         }
         fn press(&self, _: &BrowserApp, url: &str, controls: &[usize]) -> usize {
             self.pressed.borrow_mut().push((url.into(), controls.to_vec()));
@@ -997,7 +1034,10 @@ mod tests {
             "See full post", "Show all 40 skills"] {
             assert!(is_expander_label(yes), "{yes}");
         }
-        for no in ["More", "more", "see less", "Show less", "Message", "Learn more", ""] {
+        for yes in ["…mehr anzeigen", "… voir plus", "...ver más"] {
+        assert!(is_expander_label(yes), "{yes}");
+    }
+    for no in ["More", "more", "see less", "Show less", "Message", "Learn more", "Repost", "Mehr", "…", "", "Open reactions menu"] {
             assert!(!is_expander_label(no), "{no}");
         }
     }
@@ -1026,9 +1066,11 @@ mod tests {
             link("https://www.linkedin.com/in/ada-walker/recent-activity/all/", "Show all"),
             link("https://www.linkedin.com/in/ada-walker/details/education/", "Show all education"),
             link("https://www.linkedin.com/in/ada-walker/details/education/", "Show all 2 educations"),
-            link("https://www.linkedin.com/in/ada-walker/details/languages/", "Languages"),
+            // Known by its address, whatever its words.
+            link("https://www.linkedin.com/in/ada-walker/details/languages/", "Sprachen"),
         ]);
-        assert_eq!(detail_pages(&p, PROFILE), vec!["https://www.linkedin.com/in/ada-walker/details/education/"]);
+        assert_eq!(detail_pages(&p, PROFILE), vec!["https://www.linkedin.com/in/ada-walker/details/education/",
+            "https://www.linkedin.com/in/ada-walker/details/languages/"]);
     }
 
     #[test]
@@ -1069,6 +1111,53 @@ mod tests {
         let out = read_profile(&fake, PROFILE).unwrap();
         assert_eq!(fake.pressed.borrow().len(), 1, "{:?}", fake.pressed.borrow());
         assert_eq!(out["profile"]["expanders_pressed"], 1);
+    }
+
+    /// Review rv-20261110T142525Z-76462643-2965, finding 1: another company's About page open
+    /// in a window the user had before, listed first, is never read as the employer's.
+    #[test]
+    fn a_company_page_already_open_in_another_window_is_never_read_as_the_one_asked_for() {
+        let mut fake = Fake::new(safari())
+            .with(PROFILE, vec![vec![h("Experience"), link("https://www.linkedin.com/company/1234/", "Employer")]])
+            .redirect("https://www.linkedin.com/company/1234/about/", "https://www.linkedin.com/company/employer/about/")
+            .with("https://www.linkedin.com/company/employer/about/", vec![vec![t("Employer builds browsers.")]]);
+        fake.other = vec![page("https://www.linkedin.com/company/unrelated/about/", vec![t("Wrong industry and headquarters")])];
+        let out = read_profile(&fake, PROFILE).unwrap();
+        let company = &out["companies"][0];
+        assert_eq!(company["shown_url"], "https://www.linkedin.com/company/employer/about/", "{company}");
+        assert_eq!(company["text"], "Employer builds browsers.");
+    }
+
+    /// Review finding 2: LinkedIn in German. The "Show all" page is known by its address and
+    /// the clamp expander by its leading ellipsis, neither by English words; the collapsed
+    /// "Repost" menu is never pressed.
+    #[test]
+    fn a_profile_in_german_opens_its_show_all_pages_and_presses_its_expanders() {
+        let collapsed = button("…mehr anzeigen");
+        let menu = button("Erneut posten");
+        let before = vec![
+            h("Info"), t("Kurz"), collapsed.clone(), menu.clone(),
+            h("Berufserfahrung"), link("https://www.linkedin.com/company/one/", "One"),
+            link("https://www.linkedin.com/in/ada-walker/details/experience/", "Alle anzeigen"),
+        ];
+        let after = vec![
+            h("Info"), t("Kurz und vollständig"), menu,
+            h("Berufserfahrung"), link("https://www.linkedin.com/company/one/", "One"),
+            link("https://www.linkedin.com/in/ada-walker/details/experience/", "Alle anzeigen"),
+        ];
+        let p = page(PROFILE, before.clone());
+        assert_eq!(in_page_expanders(&p), vec![0], "the ellipsis expander, never the repost menu");
+        assert_eq!(detail_pages(&p, PROFILE), vec!["https://www.linkedin.com/in/ada-walker/details/experience/"]);
+        let fake = Fake::new(safari())
+            .with(PROFILE, vec![before, after])
+            .with("https://www.linkedin.com/in/ada-walker/details/experience/", vec![vec![h("Berufserfahrung"),
+                link("https://www.linkedin.com/company/one/", "One"), link("https://www.linkedin.com/company/two/", "Two")]])
+            .with("https://www.linkedin.com/company/one/about/", vec![vec![t("One GmbH")]])
+            .with("https://www.linkedin.com/company/two/about/", vec![vec![t("Two AG")]]);
+        let out = read_profile(&fake, PROFILE).unwrap();
+        assert!(out["profile"]["text"].as_str().unwrap().contains("vollständig"), "{out}");
+        assert_eq!(out["profile_details"].as_array().unwrap().len(), 1);
+        assert_eq!(out["companies"].as_array().unwrap().len(), 2, "{out}");
     }
 
     #[test]
