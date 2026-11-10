@@ -610,6 +610,9 @@ function main() {
         schedulerFlags: process.argv.slice(3).filter((a) => a.startsWith('--')).map((a) => a.replace(/^--/, '').split('=')[0]),
         deps: {
           ...(desktopCalendar ? { out: () => {} } : {}),
+          ...(desktopCalendar && sub === 'connect' ? {
+            onBrowserUnavailable: (authorizationUrl) => process.stdout.write(JSON.stringify({ authorizationUrl }) + '\n'),
+          } : {}),
           ...(vendorArg ? { vendor: vendorArg } : {}),
           ...(flag('client-file') ? { clientFile: String(flag('client-file')) } : {}),
           ...(flag('client-id') ? { clientId: String(flag('client-id')) } : {}),

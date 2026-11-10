@@ -6222,6 +6222,7 @@ module.exports = [
   {"s": "This Mac would not open it: {e}", "c": "INFORMATIONAL", "why": "Meeting progress, calendar timing or a failed operation reported without a separate user instruction. Transcription failures accompany the saved-recording message; search open failures appear on the result row."},
   {"s": "it exited with {status}", "c": "NOT-RENDERED", "why": "A watcher or calendar-sync diagnostic returned to the monitor thread and logged on stderr. It is not shown in a window."},
   {"s": "Calendar sign-in didn’t finish. Try reconnecting again.", "c": "ACTIONABLE", "control": "#mn-calendar-recovery button", "why": "The same account's reconnect button becomes available again. The meeting-notes suite drives this recovery."},
+  {"s": "Couldn’t open your browser. Open this address to sign in:", "c": "INFORMATIONAL", "why": "The active provider sign-in address is selectable in the existing calendar recovery notice."},
   {"s": "Calls are still detected from the microphone and Start meeting notes is in Settings.", "c": "INFORMATIONAL", "why": "The calendar warning explains what is still available while sign-in is interrupted."},
   {"s": "Finish signing in in your browser…", "c": "CONTROL", "why": "Temporary label of the disabled reconnect button while the existing provider consent is open."},
   {"s": "Finish signing in to the other calendar first.", "c": "INFORMATIONAL", "why": "A concurrent request is refused while the already-open sign-in owns calendar recovery."},

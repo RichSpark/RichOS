@@ -160,8 +160,14 @@
       const error = document.createElement("p");
       error.className = "tl-notice-body";
       error.setAttribute("role", "status");
-      error.hidden = !notice.failed;
-      error.textContent = notice.failed ? "Calendar sign-in didn’t finish. Try reconnecting again." : "";
+      error.hidden = !notice.failed && !notice.authorizationUrl;
+      if (notice.authorizationUrl) {
+        error.style.userSelect = "text";
+        error.style.overflowWrap = "anywhere";
+        error.textContent = "Couldn’t open your browser. Open this address to sign in: " + notice.authorizationUrl;
+      } else if (notice.failed) {
+        error.textContent = "Calendar sign-in didn’t finish. Try reconnecting again.";
+      }
       button.addEventListener("click", async () => {
         button.disabled = true;
         error.hidden = true;

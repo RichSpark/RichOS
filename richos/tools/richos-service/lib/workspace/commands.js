@@ -108,6 +108,7 @@ function resolve(deps = {}) {
     http: deps.http || ((url, init) => globalThis.fetch(url, init)),
     awaitCode: deps.awaitCode || awaitAuthorizationCode,
     openBrowser: deps.openBrowser || openInBrowser,
+    onBrowserUnavailable: deps.onBrowserUnavailable,
     pkce: deps.pkce || pkcePair,
     makeState: deps.makeState || consentState,
     now: deps.now || (() => Date.now()),
@@ -593,6 +594,7 @@ export async function connect(deps = {}) {
       ? `Opened ${d.words.label}'s consent screen in your browser. Approve it there and come back.`
       : 'Could not open a browser. Open this URL yourself:');
     if (!opened) {
+      d.onBrowserUnavailable?.(authUrl);
       d.out('');
       d.out(`  ${authUrl}`);
       d.out('');

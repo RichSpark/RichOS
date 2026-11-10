@@ -793,12 +793,15 @@ const SURFACES = [
   },
   {
     name: "meeting-notes-processing",
-    what: "paused meeting prompts, notes processing and the calendar reconnect notice with its retry message",
+    what: "paused meeting prompts, notes processing and the calendar reconnect notice with its manual sign-in address",
     preset: {
       meetingNotes: {
         paused: true,
         processing: "preparing",
-        calendarRecovery: [{ vendor: "google", account: "ceo@example.test", failed: true }],
+        calendarRecovery: [{
+          vendor: "google", account: "ceo@example.test", reconnecting: true,
+          authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth?state=example",
+        }],
       },
     },
     drive: async (p) => {
@@ -806,7 +809,7 @@ const SURFACES = [
       await atHiringThread(p);
       await p.waitForSelector("#mn-paused-chip:not([hidden])");
       await p.waitForSelector("#mn-status:not([hidden])");
-      await p.waitForSelector("#mn-calendar-recovery:not([hidden]) button:enabled");
+      await p.waitForSelector("#mn-calendar-recovery:not([hidden]) button:disabled");
       await p.waitForSelector("#mn-calendar-recovery [role=status]:not([hidden]):last-child");
       await pageSettled(p);
     },

@@ -3535,6 +3535,29 @@ function connectStubs(mock, extra = {}) {
   };
 }
 
+await atest('connect offers a manual address while browser launch fails and the consent listener is still waiting', async () => {
+  const f = wsFixture();
+  try {
+    let offeredAddress;
+    let openedAddress;
+    const result = await connect(f.deps(connectStubs(googleHttpMock(), {
+      openBrowser: async (url) => { openedAddress = url; return false; },
+      onBrowserUnavailable: (url) => {
+        assert.equal(f.record(), null, 'the fallback is offered before consent is exchanged');
+        offeredAddress = url;
+      },
+    })));
+    assert.equal(result.exitCode, 0);
+    assert.equal(offeredAddress, openedAddress);
+    const parsed = new URL(offeredAddress);
+    assert.equal(parsed.origin, 'https://accounts.google.com');
+    assert.equal(parsed.searchParams.get('redirect_uri'), DEFAULT_REDIRECT_URI);
+    assert.ok(f.record(), 'manual browser consent uses the same grant exchange');
+  } finally {
+    f.cleanup();
+  }
+});
+
 await atest('connect REFUSES before the CEO has done Step 5, and prints the file to create', async () => {
   const f = wsFixture({ config: false });
   try {
