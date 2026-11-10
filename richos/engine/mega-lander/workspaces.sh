@@ -23,6 +23,12 @@
 #   workspaces.sh discard <agent> --reason '<why>' (--ceo-word '<his words>' | --not-ceo-ordered '<why>')
 #       work that must not go into main: every workspace and branch deleted,
 #       the reason and the branch tips recorded (point 7)
+#   workspaces.sh codex-delete --repo <repo> --ceo-word '<his words, verbatim>' <codex/branch|checkout path> ...
+#       point 2's exception: each codex/ branch, or detached checkout under a
+#       Codex worktree root, NAMED LITERALLY (never a pattern or "all"), logged
+#       with its tip and his words before anything is deleted, then its checkout
+#       removed (git worktree remove, no --force; only stray .DS_Store files may
+#       be deleted first) and the branch deleted. One line per target.
 #   workspaces.sh supersede <agent> --by <commit> --reason '<why>'
 #       a finished agent's unlanded branch was redone by <commit>, already in its
 #       integration branch: its next land counts that tip as landed and records it

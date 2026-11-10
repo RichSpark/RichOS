@@ -147,6 +147,11 @@ def claude_home():
     app gave this lease). Never for Claude Code's own records (sessions/,
     projects/), which follow the account's CLAUDE_CONFIG_DIR. Loaded by its path rather than by
     moving sys.path, because this module runs in a hook on every tool call."""
+    return _machine_settings().claude_home()
+
+
+def _machine_settings():
+    """scripts/lib/machine_settings.py, loaded once by its path."""
     mod = sys.modules.get("machine_settings")
     if mod is None or not hasattr(mod, "claude_home"):
         import importlib.util
@@ -156,7 +161,7 @@ def claude_home():
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         sys.modules.setdefault("machine_settings", mod)
-    return mod.claude_home()
+    return mod
 
 
 def state_dir():
@@ -5741,6 +5746,14 @@ def _restore_protected_refs(rec, priors, latest):
                     event("protected-ref-moved", key=rec["key"], repo=repo, branch=b, tip=old,
                           found=cur, why=why, action="reported: the engine does not move a ref back")
                     continue
+                # EXCEPT A codex/ BRANCH DELETED ON THE CEO'S EXPRESS WORD
+                # (`workspaces.sh codex-delete`, which logs its tip and his words
+                # before it deletes anything): point 2's exception, not a
+                # deletion to undo. Without this, any agent with a call open in
+                # the same repository put his deletion back.
+                if b.startswith(CODEX_PREFIX) and codex_deleted_on_his_word(repo, b, old):
+                    event("protected-ref-deleted-on-ceo-word", key=rec["key"], repo=repo, branch=b, tip=old)
+                    continue
                 # A DELETION, AND ONLY A DELETION, IS PUT BACK — by the
                 # create-only, attributed write above, which cannot clobber, move
                 # or oscillate.
@@ -7815,6 +7828,243 @@ def discard(ref, reason, ceo_word="", not_ceo_ordered="", me=""):
     return {"discarded": True, "tips": tips, "kept": sorted(r.get("name") or r["key"] for r in reopen)}
 
 
+# ---------------------------------------------------------------------------
+# POINT 2'S EXCEPTION: codex/ BRANCHES DELETED ON THE CEO'S EXPRESS WORD
+# ---------------------------------------------------------------------------
+# "A codex/ workspace or branch is never deleted without the CEO's express
+# word." Everything else in the engine refuses codex/ outright, so his word had
+# no way to be carried out (2026-11-10: "delete the finished and old Codex
+# branches"). `workspaces.sh codex-delete` is that way: each branch or detached
+# Codex checkout NAMED LITERALLY, with his words, logged with its tip before
+# anything is deleted, so every deleted branch can be restored with
+# `git branch <name> <tip>`.
+
+CODEX_DELETED_LOG = "codex-deleted.jsonl"
+_GLOB_CHARS = frozenset("*?[]{}")
+
+
+def codex_deleted_log():
+    """The restore log: machine-wide, outside every repository, session and
+    per-conversation partition (the same home as land_locks_dir), so an app
+    conversation's protected-ref check reads the record a terminal wrote."""
+    return os.path.join(realpath(claude_home()), "state", CODEX_DELETED_LOG)
+
+
+def _codex_log_rows():
+    try:
+        with open(codex_deleted_log(), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict):
+            rows.append(r)
+    return rows
+
+
+def codex_deleted_on_his_word(repo, branch, tip):
+    """True when codex-delete logged deleting `branch` of `repo` at exactly
+    `tip` and git did not refuse it."""
+    rows = _codex_log_rows()
+    refused = {r.get("id") for r in rows if r.get("phase") == "refused"}
+    key = realpath(repo)
+    return any(r.get("phase") == "deleting" and r.get("id") not in refused and r.get("branch") == branch
+               and r.get("tip") == tip and realpath(r.get("repo") or "") == key for r in rows)
+
+
+def _append_codex_log(row):
+    path = codex_deleted_log()
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, sort_keys=True) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def codex_worktree_roots():
+    """The declared Codex worktree roots (SCRATCH_CODEX_WORKTREE_ROOTS: from the
+    environment, else this engine's orchestration.config), each absolute or
+    relative to RICHOS_BULK_ROOT, exactly as the scratch reaper reads them."""
+    v = os.environ.get("SCRATCH_CODEX_WORKTREE_ROOTS")
+    if v is None:
+        cfg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestration.config")
+        try:
+            with open(cfg, encoding="utf-8") as f:
+                m = re.search(r'^SCRATCH_CODEX_WORKTREE_ROOTS="([^"]*)"', f.read(), re.M)
+            v = m.group(1) if m else ""
+        except OSError:
+            v = ""
+    roots, bulk = [], None
+    for entry in v.split():
+        entry = os.path.expanduser(os.path.expandvars(entry))
+        if not os.path.isabs(entry):
+            if bulk is None:
+                try:
+                    bulk = _machine_settings().load().get("RICHOS_BULK_ROOT") or ""
+                except ValueError:
+                    bulk = ""
+            if not bulk:
+                continue
+            entry = os.path.join(bulk, entry)
+        roots.append(realpath(entry))
+    return roots
+
+
+def _codex_targets(targets):
+    """The named targets, each a literal codex/ branch or an absolute checkout
+    path. Anything else refuses the whole command before anything is read."""
+    out = []
+    for t in targets:
+        t = (t or "").strip()
+        if not t:
+            continue
+        if _GLOB_CHARS & set(t) or t.lower() in ("all", "codex/", "codex"):
+            raise SpecError("%r is not one named branch: codex-delete takes each branch or checkout "
+                            "literally, never a pattern or \"all\" (point 2)" % t)
+        if os.path.isabs(t):
+            kind = "path"
+        elif t.startswith(CODEX_PREFIX):
+            rc, _o, _e = git("/", "check-ref-format", "refs/heads/" + t)
+            if rc != 0:
+                raise SpecError("%r is not a valid branch name" % t)
+            kind = "branch"
+        else:
+            raise SpecError("%r is not a codex/ branch; codex-delete deletes only codex/ branches and "
+                            "detached Codex checkouts, by absolute path (point 2)" % t)
+        if (kind, t) not in out:
+            out.append((kind, t))
+    if not out:
+        raise SpecError("name each codex/ branch (or detached Codex checkout path) to delete")
+    return out
+
+
+def _codex_dirt(path):
+    """([.DS_Store files], [every other uncommitted entry]) of a checkout, or
+    raises SpecError when git cannot say. Ignored files count: `git worktree
+    remove` deletes them without --force, so each is listed as "<path>, ignored"."""
+    rc, out, err = git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored")
+    if rc != 0:
+        raise SpecError("git status failed in %s: %s" % (path, err.strip()[:200]))
+    ds, other = [], []
+    fields = out.split("\0")
+    i = 0
+    while i < len(fields):
+        ent = fields[i]
+        i += 1
+        if not ent:
+            continue
+        code, rel = ent[:2], ent[3:]
+        if code[0] in "RC":
+            i += 1                              # the rename's source path
+        if code in ("??", "!!") and os.path.basename(rel) == ".DS_Store":
+            ds.append(rel)
+        elif code == "!!":
+            other.append(rel + ", ignored")
+        else:
+            other.append(rel)
+    return ds, other
+
+
+def _codex_delete_one(repo, kind, target, ceo_word, me, roots):
+    """('deleted', line) or ('refused', line) for one named target."""
+    wl = worktree_list(repo)
+    if wl is None:
+        return "refused", "git cannot list the worktrees of %s" % repo
+    entry, branch, tip = None, "", ""
+    if kind == "branch":
+        branch = target
+        tip, unread = branch_tip_read(repo, branch)
+        if unread:
+            return "refused", unread
+        if not tip:
+            return "refused", "%s has no branch %s" % (repo, branch)
+        entry = next((e for e in wl if e["branch"] == branch), None)
+    else:
+        real = realpath(target)
+        entry = next((e for e in wl if e["path"] == real), None)
+        if entry is None:
+            return "refused", "%s does not register %s as a worktree" % (repo, real)
+        if entry["branch"]:
+            return "refused", "it is on branch %s: %s" % (
+                entry["branch"], "name the branch instead" if entry["branch"].startswith(CODEX_PREFIX)
+                else "it is not a Codex checkout")
+        if not any((real + os.sep).startswith(r.rstrip(os.sep) + os.sep) for r in roots):
+            return "refused", "it is not under a declared Codex worktree root (%s)" % (
+                ", ".join(roots) or "none declared")
+        tip = entry["head"]
+    if entry is not None and entry is wl[0]:
+        return "refused", "it is the main checkout of %s" % repo
+    wpath = entry["path"] if entry else ""
+    ds = []
+    if wpath:
+        try:
+            ds, other = _codex_dirt(wpath)
+        except SpecError as e:
+            return "refused", str(e)
+        if other:
+            return "refused", "its checkout %s has %d uncommitted entr%s (%s); nothing was deleted" % (
+                wpath, len(other), "y" if len(other) == 1 else "ies", ", ".join(other[:3]))
+    rid = "%s-%d-%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), os.getpid(),
+                        hashlib.sha256(("%s\0%s\0%s" % (repo, target, tip)).encode()).hexdigest()[:8])
+    try:
+        _append_codex_log({"id": rid, "phase": "deleting", "at": iso(), "repo": repo, "branch": branch,
+                           "tip": tip, "worktree": wpath, "ceo_word": ceo_word, "by_session": me,
+                           "restore": ("git -C %s branch %s %s" % (shlex.quote(repo), shlex.quote(branch), tip))
+                           if branch else ("git -C %s worktree add --detach <path> %s" % (shlex.quote(repo), tip))})
+    except OSError as e:
+        return "refused", "the restore log %s could not be written (%s); nothing was deleted" % (
+            codex_deleted_log(), e)
+
+    def refuse(why):
+        try:
+            _append_codex_log({"id": rid, "phase": "refused", "at": iso(), "why": why})
+        except OSError:
+            pass
+        return "refused", why
+
+    for rel in ds:
+        try:
+            os.unlink(os.path.join(wpath, rel))
+        except OSError as e:
+            return refuse("%s could not be deleted: %s" % (os.path.join(wpath, rel), e))
+    if wpath:
+        rc, _o, err = git(repo, "worktree", "remove", wpath)
+        if rc != 0:
+            return refuse("git worktree remove refused %s: %s" % (wpath, err.strip()[:200]))
+    if branch:
+        rc, _o, err = git(repo, "branch", "-D", branch)
+        if rc != 0:
+            return refuse("%sgit branch -D refused: %s" % (
+                "its checkout was removed, but " if wpath else "", err.strip()[:200]))
+    try:
+        _append_codex_log({"id": rid, "phase": "deleted", "at": iso()})
+    except OSError:
+        pass
+    event("codex-deleted", repo=repo, branch=branch, tip=tip, worktree=wpath, ceo_word=ceo_word, by_session=me)
+    return "deleted", "tip %s%s%s" % (tip[:12], (", checkout %s removed" % wpath) if wpath else "",
+                                      (" (%d .DS_Store deleted first)" % len(ds)) if ds else "")
+
+
+def codex_delete(repo, targets, ceo_word, me=""):
+    """`workspaces.sh codex-delete`: [(target, 'deleted'|'refused', line)].
+    Refuses everything (SpecError) without his word, for a target that is not a
+    literal codex/ branch or absolute path, or for an unreadable repository."""
+    if not (ceo_word or "").strip():
+        raise SpecError("a codex/ branch is never deleted without the CEO's express word (point 2): "
+                        "pass --ceo-word '<his words, verbatim>'")
+    named = _codex_targets(targets)
+    main = main_checkout(repo)
+    if not main:
+        raise SpecError("%r is not a git repository" % repo)
+    roots = codex_worktree_roots() if any(k == "path" for k, _t in named) else []
+    return [(t,) + _codex_delete_one(main, k, t, ceo_word.strip(), me, roots) for k, t in named]
+
+
 def _unlanded(chain, repo, b):
     """True unless branch `b` of `repo` is absent or already in the branch this
     work integrates on; an answer that cannot be read counts as unlanded."""
@@ -9500,6 +9750,11 @@ def main(argv):
     x.add_argument("--reason", required=True)
     x.add_argument("--ceo-word", default="")
     x.add_argument("--not-ceo-ordered", default="")
+    x = sub.add_parser("codex-delete", help="delete codex/ branches (and their checkouts) or detached Codex "
+                                            "checkouts, each named literally, on the CEO's express word")
+    x.add_argument("--repo", required=True)
+    x.add_argument("--ceo-word", default="")
+    x.add_argument("targets", nargs="*")
     x = sub.add_parser("supersede", help="record that a finished agent's unlanded branch was redone by a commit "
                                          "already in its integration branch; its next land counts it as landed")
     x.add_argument("agent")
@@ -9679,6 +9934,12 @@ def main(argv):
             print("discarded: %s — tips recorded: %s" % (a.agent, json.dumps(r["tips"])))
             for k in r.get("kept") or []:
                 print("kept: %s holds work not yet landed; it is back on the list to land" % k)
+        elif a.cmd == "codex-delete":
+            results = codex_delete(a.repo, a.targets, a.ceo_word, me)
+            for target, what, line in results:
+                print("%s: %s - %s" % (what, target, line))
+            print("log: %s (restore a deleted branch with the git command on its line)" % codex_deleted_log())
+            return 1 if any(what != "deleted" for _t, what, _l in results) else 0
         elif a.cmd == "supersede":
             r = supersede(a.agent, a.by, a.reason, me)
             for ref, link in sorted(r["superseded"].items()):
