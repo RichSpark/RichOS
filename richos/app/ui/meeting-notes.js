@@ -165,7 +165,13 @@
         error.style.userSelect = "text";
         error.style.webkitUserSelect = "text";
         error.style.overflowWrap = "anywhere";
-        error.textContent = "Couldn’t open your browser. Open this address to sign in: " + notice.authorizationUrl;
+        error.textContent = "Couldn’t open your browser. Open this address to sign in:";
+        const address = document.createElement("span");
+        address.style.display = "block";
+        address.style.userSelect = "all";
+        address.style.webkitUserSelect = "all";
+        address.textContent = notice.authorizationUrl;
+        error.append(address);
       } else if (notice.failed) {
         error.textContent = "Calendar sign-in didn’t finish. Try reconnecting again.";
       }
