@@ -68,8 +68,8 @@ impl CalendarMeeting {
     }
 }
 
-/// Every meeting in the zone that may prompt, earliest first.
-pub fn meetings(zone: &Path) -> Vec<CalendarMeeting> {
+/// Every meeting in the zone from an eligible source instance, earliest first.
+pub fn meetings(zone: &Path, eligible: impl Fn(&str, &str) -> bool) -> Vec<CalendarMeeting> {
     let mut latest: BTreeMap<PathBuf, (u64, serde_json::Value, PathBuf)> = BTreeMap::new();
     for (vendor, _) in VENDORS {
         let Ok(events) = std::fs::read_dir(zone.join(vendor).join("calendar")) else { continue };
@@ -78,6 +78,8 @@ pub fn meetings(zone: &Path) -> Vec<CalendarMeeting> {
             for revision in revisions.flatten() {
                 let Ok(text) = std::fs::read_to_string(revision.path().join("item.json")) else { continue };
                 let Ok(item) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+                let Some(instance) = item["sourceItemId"].as_str().and_then(|id| id.split(':').nth(2)) else { continue };
+                if !eligible(vendor, instance) { continue; }
                 let fetched = item["provenance"]["fetchedAt"].as_u64().unwrap_or(0);
                 let newer = latest.get(&event.path()).is_none_or(|(at, _, _)| fetched >= *at);
                 if newer {
@@ -233,11 +235,23 @@ mod tests {
             "content": {"title": "Partner sync", "text": "Join: https://teams.microsoft.com/l/meetup-join/x",
                         "structured": {"location": "Microsoft Teams Meeting", "isAllDay": false, "withdrawn": false}}
         }));
-        let found = meetings(&z.0);
+        let found = meetings(&z.0, |_, _| true);
         let titles: Vec<(&str, u64)> = found.iter().map(|m| (m.title.as_str(), m.starts_at)).collect();
         assert_eq!(titles, vec![("Acme pricing review", 4_600_000), ("Partner sync", 5_000_000)]);
         // The meeting link's app, from the location or else the invite text.
         assert_eq!(found.iter().map(|m| m.app).collect::<Vec<_>>(), vec![Some(MeetingApp::Zoom), Some(MeetingApp::Teams)]);
+    }
+
+    #[test]
+    fn only_eligible_calendar_accounts_can_prompt_from_the_cache() {
+        let z = Zone::new("eligible");
+        let event = |id, title| google(id, title, 1_000_000, 1, false, &["other@example.com"]);
+        z.revision("google", "a", "rev-1", event("google:calendar:expired:a", "Canceled while disconnected"));
+        z.revision("google", "b", "rev-1", event("google:calendar:expired:b", "Shared invite"));
+        z.revision("google", "c", "rev-1", event("google:calendar:healthy:c", "Shared invite"));
+        let found = meetings(&z.0, |vendor, instance| vendor == "google" && instance == "healthy");
+        assert_eq!(found.iter().map(|m| m.event_id.as_str()).collect::<Vec<_>>(), ["google:calendar:healthy:c"]);
+        assert!(meetings(&z.0, |_, _| false).is_empty());
     }
 
     #[test]
@@ -260,7 +274,7 @@ mod tests {
                         "structured": {"location": "Microsoft Teams Meeting", "isAllDay": false, "withdrawn": false,
                                        "meetingLinks": ["https://teams.microsoft.com/l/meetup-join/fixture"]}}
         }));
-        let found = meetings(&z.0);
+        let found = meetings(&z.0, |_, _| true);
         assert_eq!(found.iter().map(|m| (m.title.as_str(), m.app)).collect::<Vec<_>>(), vec![("Google Meet A", Some(MeetingApp::Meet)), ("Teams B", Some(MeetingApp::Teams))]);
     }
 
@@ -276,7 +290,7 @@ mod tests {
         z.revision("google", "z", "rev-1", zoom);
         let dir = z.0.join("google").join("calendar").join("z").join("rev-1");
         std::fs::write(dir.join("content.txt"), "<a href=\"https://us02web.zoom.us/j/123\">Join Zoom</a>").unwrap();
-        let found = meetings(&z.0);
+        let found = meetings(&z.0, |_, _| true);
         assert_eq!(found.iter().map(|m| (m.title.as_str(), m.app)).collect::<Vec<_>>(), vec![("Google HTML Zoom invite", Some(MeetingApp::Zoom))]);
     }
 

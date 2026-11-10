@@ -154,14 +154,33 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "desk-btn desk-btn--primary";
+      // Its disabled label carries the current sign-in status.
+      button.style.opacity = notice.reconnecting ? "1" : "";
       button.textContent = notice.reconnecting ? "Finish signing in in your browser…" : "Reconnect " + name;
       button.setAttribute("aria-label", button.textContent + " (" + notice.account + ")");
       button.disabled = signingIn;
+      const waitingForOther = signingIn && !notice.reconnecting;
+      button.hidden = waitingForOther;
       const error = document.createElement("p");
       error.className = "tl-notice-body";
       error.setAttribute("role", "status");
-      error.hidden = !notice.failed;
-      error.textContent = notice.failed ? "Calendar sign-in didn’t finish. Try reconnecting again." : "";
+      error.hidden = !notice.failed && !notice.authorizationUrl && !waitingForOther;
+      if (notice.authorizationUrl) {
+        error.style.userSelect = "text";
+        error.style.webkitUserSelect = "text";
+        error.style.overflowWrap = "anywhere";
+        error.textContent = "Couldn’t open your browser. Open this address to sign in:";
+        const address = document.createElement("span");
+        address.style.display = "block";
+        address.style.userSelect = "all";
+        address.style.webkitUserSelect = "all";
+        address.textContent = notice.authorizationUrl;
+        error.append(address);
+      } else if (notice.failed) {
+        error.textContent = "Calendar sign-in didn’t finish. Try reconnecting again.";
+      } else if (waitingForOther) {
+        error.textContent = "Finish signing in to the other calendar first.";
+      }
       button.addEventListener("click", async () => {
         button.disabled = true;
         error.hidden = true;

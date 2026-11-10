@@ -610,6 +610,9 @@ function main() {
         schedulerFlags: process.argv.slice(3).filter((a) => a.startsWith('--')).map((a) => a.replace(/^--/, '').split('=')[0]),
         deps: {
           ...(desktopCalendar ? { out: () => {} } : {}),
+          ...(desktopCalendar && sub === 'connect' ? {
+            onBrowserUnavailable: (authorizationUrl) => process.stdout.write(JSON.stringify({ authorizationUrl }) + '\n'),
+          } : {}),
           ...(vendorArg ? { vendor: vendorArg } : {}),
           ...(flag('client-file') ? { clientFile: String(flag('client-file')) } : {}),
           ...(flag('client-id') ? { clientId: String(flag('client-id')) } : {}),
@@ -642,7 +645,10 @@ function main() {
         .then((r) => {
           if (desktopCalendar && sub === 'sync') {
             // A null result means the pass could not check account health. An empty list clears it.
-            const status = { calendarRecovery: r.calendarRecovery ?? null };
+            const status = {
+              calendarRecovery: r.calendarRecovery ?? null,
+              calendarInstances: r.calendarInstances ?? null,
+            };
             process.stdout.write(JSON.stringify(status) + '\n', () => process.exit(r.exitCode));
           } else {
             process.exit(r.exitCode);

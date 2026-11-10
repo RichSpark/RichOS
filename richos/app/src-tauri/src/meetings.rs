@@ -124,20 +124,52 @@ pub struct CalendarNotice {
     account: CalendarAccount,
     reconnecting: bool,
     failed: bool,
+    #[serde(rename = "authorizationUrl", skip_serializing_if = "Option::is_none")]
+    authorization_url: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CalendarSyncStatus {
     calendar_recovery: Option<Vec<String>>,
+    calendar_instances: Option<Vec<String>>,
 }
 
-/// Drain the bounded desktop status while the child runs. Holding stdin ties its life to the app.
-fn run_calendar(mut command: Command, deadline: Duration) -> Result<(ExitStatus, Vec<u8>), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CalendarConsentStatus {
+    authorization_url: String,
+}
+
+fn calendar_sign_in_address(vendor: &str, line: &[u8]) -> Option<String> {
+    let report = serde_json::from_slice::<CalendarConsentStatus>(line).ok()?;
+    let url = tauri::Url::parse(&report.authorization_url).ok()?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
+        return None;
+    }
+    let trusted = match (vendor, url.host_str()) {
+        ("google", Some("accounts.google.com")) => url.path() == "/o/oauth2/v2/auth",
+        ("microsoft", Some("login.microsoftonline.com")) => {
+            url.path().trim_start_matches('/').split_once('/')
+                .is_some_and(|(tenant, route)| !tenant.is_empty() && route == "oauth2/v2.0/authorize")
+        }
+        _ => false,
+    };
+    trusted.then_some(report.authorization_url)
+}
+
+/// Read one bounded status line as soon as the child writes it. Stdin ties its life to the app.
+fn run_calendar(
+    mut command: Command,
+    deadline: Duration,
+    on_status: impl FnOnce(&[u8]) + Send + 'static,
+) -> Result<(ExitStatus, Vec<u8>), String> {
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let output = child.stdout.take().map(|stdout| std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        stdout.take(64 * 1024).read_to_end(&mut bytes).map(|_| bytes)
+        BufReader::new(stdout.take(64 * 1024)).read_until(b'\n', &mut bytes)?;
+        on_status(&bytes);
+        Ok::<_, std::io::Error>(bytes)
     }));
     let started = std::time::Instant::now();
     let result = loop {
@@ -315,6 +347,7 @@ struct Inner {
     calendar_recovery: BTreeMap<String, Vec<String>>,
     calendar_reconnecting: Option<CalendarAccount>,
     calendar_reconnect_failed: Option<CalendarAccount>,
+    calendar_sign_in_address: Option<String>,
     /// The panel's last reported size, so the log says a size once, not every frame of a fold.
     last_layout: Option<(i64, i64, bool)>,
     /// Each calendar meeting recorded this launch, by event id: where its first recording went.
@@ -385,6 +418,7 @@ pub fn start(app: &AppHandle) {
             calendar_recovery: BTreeMap::new(),
             calendar_reconnecting: None,
             calendar_reconnect_failed: None,
+            calendar_sign_in_address: None,
             last_layout: None,
             continued: BTreeMap::new(),
         }),
@@ -424,8 +458,9 @@ pub fn start(app: &AppHandle) {
         .name("meeting-calendar".into())
         .spawn(move || {
             let mut known = BTreeMap::new();
+            let mut instances = BTreeMap::new();
             loop {
-                calendar.refresh_calendar(&mut known);
+                calendar.refresh_calendar(&mut known, &mut instances);
                 match calendar_replies.recv_timeout(Duration::from_millis(meeting_calendar::REFRESH_MS)) {
                     Ok(account) => calendar.reconnect_calendar(account),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -448,23 +483,28 @@ impl Meetings {
 
     /// One calendar pass: `workspace sync <vendor> --once --source calendar` for each connected
     /// vendor (the existing sync and its Keychain grant), then the latest revisions read back.
-    /// A failed or unconnected sync is logged and never blocks microphone prompts or capture; the
-    /// meetings already synced still prompt. A canceled or moved meeting's prompt is withdrawn.
-    fn refresh_calendar(&self, known: &mut BTreeMap<String, u64>) {
+    /// A failed sync never blocks microphone prompts or capture. The calendar cache can prompt
+    /// only for the most recently confirmed eligible account instances, with cached calendars
+    /// available before the first status report.
+    fn refresh_calendar(&self, known: &mut BTreeMap<String, u64>, instances: &mut BTreeMap<String, Vec<String>>) {
         let zone = meeting_calendar::workspace_zone(&self.corpus_root());
         let vendors = meeting_calendar::connected_vendors(&zone);
         let mut recovery = self.inner.lock().unwrap().calendar_recovery.clone();
         recovery.retain(|vendor, _| vendors.contains(&vendor.as_str()));
+        instances.retain(|vendor, _| vendors.contains(&vendor.as_str()));
         if let Some(service) = service_cli() {
             for &vendor in &vendors {
                 let mut command = self.calendar_command(&service);
                 command.args(["workspace", "sync", vendor, "--once", "--source", "calendar", "--desktop-calendar"])
                     .stdout(Stdio::piped());
-                match run_calendar(command, CALENDAR_SYNC_DEADLINE) {
+                match run_calendar(command, CALENDAR_SYNC_DEADLINE, |_| {}) {
                     Ok((status, output)) => {
                         let report = serde_json::from_slice::<CalendarSyncStatus>(&output);
                         match report {
-                            Ok(CalendarSyncStatus { calendar_recovery: Some(accounts) }) => {
+                            Ok(CalendarSyncStatus { calendar_recovery: Some(accounts), calendar_instances }) => {
+                                if let Some(ids) = calendar_instances {
+                                    instances.insert(vendor.to_owned(), ids);
+                                }
                                 if recovery.get(vendor) != Some(&accounts) {
                                     eprintln!("[richos] meeting notes: calendar recovery ({vendor}): {} accounts need sign-in", accounts.len());
                                 }
@@ -480,9 +520,12 @@ impl Meetings {
                 }
             }
         } else if !vendors.is_empty() {
-            eprintln!("[richos] meeting notes: no calendar sync in this build; using what was synced before");
+            eprintln!("[richos] meeting notes: no calendar sync in this build; keeping the last known calendar status");
         }
-        let current = if vendors.is_empty() { Vec::new() } else { meeting_calendar::meetings(&zone) };
+        let current = meeting_calendar::meetings(&zone, |vendor, instance| {
+            // Before the first status report, retain the existing offline calendar cache.
+            vendors.contains(&vendor) && instances.get(vendor).is_none_or(|ids| ids.iter().any(|id| id == instance))
+        });
         let gone = meeting_calendar::withdrawn(known, &current);
         *known = current.iter().map(|m| (m.event_id.clone(), m.starts_at)).collect();
         let (actions, recovery_changed) = {
@@ -514,15 +557,24 @@ impl Meetings {
         command
     }
 
-    fn reconnect_calendar(&self, account: CalendarAccount) {
+    fn reconnect_calendar(self: &Arc<Self>, account: CalendarAccount) {
         let still_needed = self.inner.lock().unwrap().calendar_recovery
             .get(&account.vendor).is_some_and(|accounts| accounts.contains(&account.account));
         let result = if still_needed {
             service_cli().ok_or_else(|| "the installed calendar service is unavailable".to_string()).and_then(|service| {
                 let mut command = self.calendar_command(&service);
                 // Keep the existing account's source selection. --source on connect would replace it.
-                command.args(["workspace", "connect", &account.vendor, "--account", &account.account, "--desktop-calendar"]);
-                let (status, _) = run_calendar(command, CALENDAR_RECONNECT_DEADLINE)?;
+                command.args(["workspace", "connect", &account.vendor, "--account", &account.account, "--desktop-calendar"])
+                    .stdout(Stdio::piped());
+                let meetings = self.clone();
+                let vendor = account.vendor.clone();
+                let (status, _) = run_calendar(command, CALENDAR_RECONNECT_DEADLINE, move |line| {
+                    if let Some(address) = calendar_sign_in_address(&vendor, line) {
+                        eprintln!("[richos] meeting notes: calendar reconnect ({vendor}) browser did not open");
+                        meetings.inner.lock().unwrap().calendar_sign_in_address = Some(address);
+                        meetings.publish_state();
+                    }
+                })?;
                 if status.success() { Ok(()) } else { Err(status.to_string()) }
             })
         } else {
@@ -534,6 +586,7 @@ impl Meetings {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.calendar_reconnecting = None;
+            inner.calendar_sign_in_address = None;
             if result.is_ok() {
                 if let Some(accounts) = inner.calendar_recovery.get_mut(&account.vendor) {
                     accounts.retain(|a| a != &account.account);
@@ -660,8 +713,10 @@ impl Meetings {
             calendar_recovery: inner.calendar_recovery.iter().flat_map(|(vendor, accounts)| {
                 accounts.iter().map(|account| {
                     let account = CalendarAccount { vendor: vendor.clone(), account: account.clone() };
+                    let reconnecting = inner.calendar_reconnecting.as_ref() == Some(&account);
                     CalendarNotice {
-                        reconnecting: inner.calendar_reconnecting.as_ref() == Some(&account),
+                        reconnecting,
+                        authorization_url: if reconnecting { inner.calendar_sign_in_address.clone() } else { None },
                         failed: inner.calendar_reconnect_failed.as_ref() == Some(&account),
                         account,
                     }
@@ -1743,6 +1798,21 @@ pub fn meeting_state(app: AppHandle) -> MeetingState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calendar_reconnect_accepts_only_the_selected_providers_sign_in_endpoint() {
+        let address = |vendor, url| {
+            let line = serde_json::to_vec(&serde_json::json!({"authorizationUrl": url})).unwrap();
+            calendar_sign_in_address(vendor, &line)
+        };
+        let google = "https://accounts.google.com/o/oauth2/v2/auth?state=example";
+        let microsoft = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?state=example";
+        assert_eq!(address("google", google).as_deref(), Some(google));
+        assert_eq!(address("microsoft", microsoft).as_deref(), Some(microsoft));
+        assert!(address("microsoft", google).is_none());
+        assert!(address("google", "https://accounts.google.com.example.test/o/oauth2/v2/auth").is_none());
+        assert!(address("google", "https://accounts.google.com@elsewhere.example.test/o/oauth2/v2/auth").is_none());
+    }
 
     fn run(pid: u32) -> CaptureRun {
         CaptureRun {

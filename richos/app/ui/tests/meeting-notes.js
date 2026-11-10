@@ -128,13 +128,39 @@ async function main() {
     await page.waitForFunction(() => document.querySelector("#mn-calendar-recovery button")?.disabled === true);
     assertEqual((await calls(page)).filter(c => c.cmd === "meeting_reconnect_calendar"),
       [{ cmd: "meeting_reconnect_calendar", vendor: "google", account: "calendar@example.com" }]);
+    const authorizationUrl = "https://accounts.google.com/o/oauth2/v2/auth?state=example";
+    await page.evaluate(next => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [next] }),
+      { ...notice, reconnecting: true, authorizationUrl });
+    const fallback = page.locator("#mn-calendar-recovery [role=status]").last();
+    assert((await fallback.textContent()).includes(authorizationUrl));
+    assertEqual(await fallback.evaluate(el => getComputedStyle(el).getPropertyValue("-webkit-user-select")), "text");
+    await fallback.locator("span").dblclick();
+    const selected = await page.evaluate(() => String(window.getSelection()).trim());
+    assertEqual(selected, authorizationUrl, "selection copies the address without its explanatory sentence");
     await page.evaluate(notice => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [{ ...notice, failed: true }] }), notice);
+    assert(!(await fallback.textContent()).includes(authorizationUrl));
     assert((await text(page, "#mn-calendar-recovery")).includes("Calendar sign-in didn't finish."));
     assert(await reconnect.isEnabled());
     await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [] }));
     assert(await page.locator("#mn-calendar-recovery").isHidden());
     await menu(page);
     assertEqual(await text(page, "#mn-start-name"), "Stop meeting notes");
+    await page.close();
+  });
+
+  await run.check("another calendar waits visibly until the current sign-in finishes", async () => {
+    const current = { vendor: "google", account: "first@example.com", reconnecting: true };
+    const other = { vendor: "microsoft", account: "second@example.com" };
+    const page = await open("dark", { calendarRecovery: [current, other] });
+    const otherButton = page.getByRole("button", { name: "Reconnect Microsoft Calendar (second@example.com)", exact: true, includeHidden: true });
+    assert(await otherButton.isHidden());
+    assert((await text(page, "#mn-calendar-recovery")).includes("Finish signing in to the other calendar first."));
+    assertEqual(await page.locator("#mn-calendar-recovery button:visible").count(), 1);
+    await page.evaluate(other => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [other] }), other);
+    assert(await otherButton.isVisible() && await otherButton.isEnabled());
+    await otherButton.click();
+    assertEqual((await calls(page)).filter(c => c.cmd === "meeting_reconnect_calendar"),
+      [{ cmd: "meeting_reconnect_calendar", vendor: "microsoft", account: "second@example.com" }]);
     await page.close();
   });
 
