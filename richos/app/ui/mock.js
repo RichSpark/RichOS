@@ -342,7 +342,7 @@
       ...row, files: MOCK_DOCS.filter(doc => doc.path.startsWith("2024/") === (row.id === "fixture-archive")).length,
     }));
     if (mockDocStatus().unavailable_folders) choices.push({
-      id: "fixture-offline", name: "Travel archive", path: "/Volumes/Travel archive", files: 0, unavailable: "Offline",
+      id: "fixture-offline", name: "Travel archive", path: "/Users/someone/Travel archive", files: 0, unavailable: "Offline",
     });
     return mockFolderGeneration === 1 || mockFolderPreferences.mode === "all" ? choices
       : choices.filter(row => mockFolderPreferences.chosen.includes(row.path));
