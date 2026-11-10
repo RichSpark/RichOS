@@ -5845,8 +5845,6 @@ module.exports = [
   {"s":"Search folders cleared. Document results were removed.","c":"INFORMATIONAL","why":"Confirms the scope was cleared and old document results were removed."},
   {"s":"Your search folders changed. Previous document results were removed.","c":"INFORMATIONAL","why":"Confirms that documents shown under the previous scope were removed."},
   {"s":"Your search folders changed.","c":"INFORMATIONAL","why":"Confirms that the new folder scope applies to the current search."},
-  {"s":"Clear selection","c":"CONTROL","why":"The Folder Map button turns document search off and clears the global selections."},
-  {"s":"Done","c":"CONTROL","why":"The Folder Map button returns to the view that opened it."},
   {"s":"No folders are available for document search.","c":"ACTIONABLE","control":"#srch-source-settings","fixture":"search-no-folders","why":"Choose folders opens the folder map next to the state."},
   {"s":"No folders selected for this search.","c":"ACTIONABLE","control":"#srch-source-options input[type=checkbox]","fixture":"search-no-sources-selected","why":"The folder checkboxes widen the current query without saving new grants."},
   {"s":"No selected folders are available for this search.","c":"ACTIONABLE","control":"#srch-source-options input[type=checkbox]","fixture":"search-no-sources-selected","why":"The available folders can be selected in the column alongside the results."},
