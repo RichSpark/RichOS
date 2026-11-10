@@ -18,6 +18,8 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { buildSourceItem, dedupKey, validateSourceItem, toActor, SOURCE_ITEM_SCHEMA_VERSION } from '../lib/workspace/source-item.js';
 import { ceoIdentity, resolveOrgRelation, resolveActors, classifyScope, deriveAuthority, governanceMetadata } from '../lib/workspace/governance.js';
@@ -3934,12 +3936,53 @@ await atest('sync REFUSES to poll when the grant needs re-consent — loud, and 
     const r = await sync(f.deps({ http: mock.http, now: () => NOW + 8 * 24 * 3600 * 1000 }));
     assert.equal(r.exitCode, 1);
     assert.equal(r.polled, false);
+    assert.deepEqual(r.calendarRecovery, ['ceo@acme.com']);
     assert.match(f.text(), /AUTH —/);
     assert.equal(mock.calls.length, 0, 'not one request was made');
+    const revoked = await sync(f.deps({
+      http: googleHttpMock({ tokenStatus: 400 }).http,
+      now: () => NOW + 2 * 3600 * 1000,
+      only: ['calendar'],
+    }));
+    assert.deepEqual(revoked.calendarRecovery, ['ceo@acme.com'], 'a revoked refresh token also needs recovery');
     // PROBE: the same call inside the window polls.
     f.lines.length = 0;
-    assert.equal((await sync(f.deps({ http: googleHttpMock().http }))).polled, true);
+    const healthy = await sync(f.deps({ http: googleHttpMock().http }));
+    assert.equal(healthy.polled, true);
+    assert.deepEqual(healthy.calendarRecovery, []);
   } finally { f.cleanup(); }
+});
+
+await atest('desktop calendar sync reports the saved account with no grant as a single JSON line', async () => {
+  const zone = tmp();
+  const accountId = `richbrief-${path.basename(zone).toLowerCase()}@example.invalid`;
+  try {
+    saveClientConfig({
+      clientId: FAKE_CLIENT_ID,
+      accountId,
+      redirectUri: DEFAULT_REDIRECT_URI,
+      scopes: [GOOGLE_SCOPES.calendar],
+    }, path.join(zone, '_oauth_client.json'));
+    const cli = fileURLToPath(new URL('../bin/richos-service.js', import.meta.url));
+    const child = spawn(process.execPath, [cli, 'workspace', 'sync', 'google', '--once',
+      '--source', 'calendar', '--desktop-calendar'], {
+      env: { ...process.env, RICHOS_WORKSPACE_ZONE: zone },
+      stdio: ['pipe', 'pipe', 'ignore'],
+      timeout: 10000,
+    });
+    // Keep stdin open until exit, just as the app does. The unique fixture account has no token.
+    let out = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { out += chunk; });
+    const [exitCode, signal] = await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (...result) => resolve(result));
+    });
+    assert.equal(signal, null);
+    assert.equal(exitCode, 1);
+    assert.equal(out, JSON.stringify({ calendarRecovery: [accountId] }) + '\n');
+  } finally {
+    fs.rmSync(zone, { recursive: true, force: true });
+  }
 });
 
 /** The full grant, read off the scope registry rather than spelled out — §40 may re-rule Drive's width. */

@@ -120,6 +120,24 @@ async function main() {
     await page.close();
   });
 
+  await run.check("a disconnected calendar can reconnect its saved account without changing recording", async () => {
+    const notice = { vendor: "google", account: "calendar@example.com", reconnecting: false, failed: false };
+    const page = await open("dark", { calendarRecovery: [notice], recording: true });
+    const reconnect = page.getByRole("button", { name: "Reconnect Google Calendar (calendar@example.com)", exact: true });
+    await reconnect.click();
+    await page.waitForFunction(() => document.querySelector("#mn-calendar-recovery button")?.disabled === true);
+    assertEqual((await calls(page)).filter(c => c.cmd === "meeting_reconnect_calendar"),
+      [{ cmd: "meeting_reconnect_calendar", vendor: "google", account: "calendar@example.com" }]);
+    await page.evaluate(notice => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [{ ...notice, failed: true }] }), notice);
+    assert((await text(page, "#mn-calendar-recovery")).includes("Calendar sign-in didn't finish."));
+    assert(await reconnect.isEnabled());
+    await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [] }));
+    assert(await page.locator("#mn-calendar-recovery").isHidden());
+    await menu(page);
+    assertEqual(await text(page, "#mn-start-name"), "Stop meeting notes");
+    await page.close();
+  });
+
   await run.check("a build without meeting notes shows no rows and no chip", async () => {
     const page = await open("dark", { available: false, paused: true });
     await page.click("#set-btn");

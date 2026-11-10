@@ -598,11 +598,18 @@ function main() {
       const sub = process.argv[3];
       const vendorArg = process.argv[4] && !process.argv[4].startsWith('--') ? process.argv[4] : null;
       const sources = flags('source');
+      const desktopCalendar = flag('desktop-calendar') === true && ['sync', 'connect'].includes(sub);
+      if (desktopCalendar) {
+        // The app holds this pipe while it owns the sync or consent window.
+        process.stdin.resume();
+        process.stdin.once('end', () => process.exit(1));
+      }
       runWorkspace({
         sub,
         // Every `--name` actually present, so a scheduler flag is refused BY NAME rather than ignored.
         schedulerFlags: process.argv.slice(3).filter((a) => a.startsWith('--')).map((a) => a.replace(/^--/, '').split('=')[0]),
         deps: {
+          ...(desktopCalendar ? { out: () => {} } : {}),
           ...(vendorArg ? { vendor: vendorArg } : {}),
           ...(flag('client-file') ? { clientFile: String(flag('client-file')) } : {}),
           ...(flag('client-id') ? { clientId: String(flag('client-id')) } : {}),
@@ -632,9 +639,17 @@ function main() {
           ...(flag('set') ? { setId: String(flag('set')) } : {}),
         },
       })
-        .then((r) => process.exit(r.exitCode))
+        .then((r) => {
+          if (desktopCalendar && sub === 'sync') {
+            // A null result means the pass could not check account health. An empty list clears it.
+            const status = { calendarRecovery: r.calendarRecovery ?? null };
+            process.stdout.write(JSON.stringify(status) + '\n', () => process.exit(r.exitCode));
+          } else {
+            process.exit(r.exitCode);
+          }
+        })
         .catch((err) => {
-          console.error(String(err.message || err));
+          if (!desktopCalendar) console.error(String(err.message || err));
           process.exit(1);
         });
       break;

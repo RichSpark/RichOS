@@ -3938,6 +3938,13 @@
         case "meeting_state":
           meetingCalls.push({ cmd });
           return structuredClone(meetingNotes);
+        case "meeting_reconnect_calendar":
+          meetingCalls.push({ cmd, vendor: args.vendor, account: args.account });
+          meetingNotes.calendarRecovery = (meetingNotes.calendarRecovery || []).map(notice =>
+            notice.vendor === args.vendor && notice.account === args.account
+              ? { ...notice, reconnecting: true, failed: false } : notice);
+          emit("meeting-state", structuredClone(meetingNotes));
+          return structuredClone(meetingNotes);
         case "meeting_retry_saved":
           meetingCalls.push({ cmd, turnId: args.turnId });
           meetingNotes.retryTurns = (meetingNotes.retryTurns || []).filter(id => id !== args.turnId);
