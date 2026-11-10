@@ -22,6 +22,14 @@ is how a branch's instruction files (rich.md, the bootstrap-interview skill) rea
       --out OUT_DIR [--within 300]
   #    (the walk is given as a path: run-walk.py refuses a bare name that is not on PATH)
 
+  #    With --site SITE (a stand-in LinkedIn built by linkedin-standin.py from saved pages in
+  #    scratch, never committed; see linkedin-app-walk.py) the guest's default browser (Safari)
+  #    is also signed in to the stand-in before the conversation, as linkedin-profile-walk.py's
+  #    steps do it, and RichOS is given Accessibility as linkedin-app-walk.py's `tcc` step does
+  #    (without that row the guest refuses the tool), so Rich's read_profile reads it. The profile is
+  #    http://127.0.0.1:18766/in/SLUG/ (SLUG is linkedin-standin.py's --slug; the walk prints it).
+  #    Add `--site SITE` after conversation-walk.py. Without it, nothing LinkedIn is set up.
+
   # 3. Read what Rich did, with the committed readers, unchanged:
   richos/app/scripts/qa/native-transcript.py OUT_DIR/native-projects --text
   richos/app/scripts/qa/ledger-timeline.py OUT_DIR/ledger.jsonl --turns
@@ -32,7 +40,11 @@ type, `{"say": "Alex"}` (a bare string is the same), or a button to press by its
 no turn is open on the app's ledger. A message must get a reply (its turn ends with text from
 Rich) or the walk fails. A press waits --press-grace seconds for a turn to start and, if one does,
 for its reply; a press that starts no turn is reported as such and passes, unless the item says
-`"expect_reply": true`, which makes a reply required. A list is checked without a guest, and
+`"expect_reply": true`, which makes a reply required. A step `{"wait_for_rich": 900}` sends
+nothing and waits up to that many seconds for the next turn Rich starts by himself (Stu's research
+coming back to him); its reply is recorded like any other step's, and no turn within the time fails
+the walk. With --site, a message may say {linkedin_profile} and the walk puts the stand-in profile's
+address there. A list is checked without a guest, and
 run-walk.py checks it before a guest is booted: `conversation-walk.py --check FILE...`.
 
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
@@ -47,9 +59,10 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
                native-projects/   Claude Code's own transcripts (the guest's ~/.claude/projects):
                                   Rich's, Stu's and every worker's
                ledger.jsonl       the app's conversation-ledger.jsonl
+               companies/         the guest's ~/myrichos/companies (the company notes)
                app.log, final.png, turns.json (one record per step, with Rich's reply text)
 
-OUTPUT: one line per step on stdout: `<n> say|press "<what>": reply yes|NO|none (<state>), <s> s,
+OUTPUT: one line per step on stdout: `<n> say|press|wait_for_rich "<what>": reply yes|NO|none (<state>), <s> s,
 <chars> chars`, then the exit code: 0 only when every step passed.
 """
 import argparse
@@ -67,7 +80,8 @@ sys.path.insert(0, str(HERE))
 
 RETURN_KEY = '36'
 CLOSED = ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed')
-ITEM_KEYS = {'say': {'say'}, 'press': {'press', 'expect_reply'}}
+ITEM_KEYS = {'say': {'say'}, 'press': {'press', 'expect_reply'}, 'wait_for_rich': {'wait_for_rich'}}
+PROFILE_PLACEHOLDER = '{linkedin_profile}'
 
 
 def load(name, path):
@@ -99,7 +113,10 @@ def plan_problems(path):
         extra = sorted(set(item) - ITEM_KEYS[kinds[0]])
         if extra:
             bad.append('step %d: unknown key(s) %s for "%s"' % (n, ', '.join(extra), kinds[0]))
-        if not isinstance(item[kinds[0]], str) or not item[kinds[0]].strip():
+        if kinds[0] == 'wait_for_rich':
+            if isinstance(item[kinds[0]], bool) or not isinstance(item[kinds[0]], (int, float)) or item[kinds[0]] <= 0:
+                bad.append('step %d: "wait_for_rich" must be a number of seconds above 0' % n)
+        elif not isinstance(item[kinds[0]], str) or not item[kinds[0]].strip():
             bad.append('step %d: "%s" must be a non-empty string' % (n, kinds[0]))
         if 'expect_reply' in item and not isinstance(item['expect_reply'], bool):
             bad.append('step %d: "expect_reply" must be true or false' % n)
@@ -112,8 +129,8 @@ def steps_of(path):
     for item in json.loads(Path(path).read_text()):
         if isinstance(item, str):
             item = {'say': item}
-        kind = 'say' if 'say' in item else 'press'
-        out.append({'kind': kind, 'text': item[kind], 'expect_reply': True if kind == 'say' else bool(item.get('expect_reply'))})
+        kind = next(k for k in ITEM_KEYS if k in item)
+        out.append({'kind': kind, 'text': item[kind], 'expect_reply': kind != 'press' or bool(item.get('expect_reply'))})
     return out
 
 
@@ -209,6 +226,51 @@ class ConversationWalk(adopt_walk.Walk):
             time.sleep(1)
         raise StepFailed('no conversation was created after the company was added')
 
+    def prepare_site(self):
+        """--site: the guest's default browser signed in to the stand-in LinkedIn, by
+        linkedin-profile-walk.py's own steps (loaded, never copied): its `site` step serves SITE in
+        the guest; its `default` makes Safari the default browser; and the browser's sign-in is the
+        stand-in's /sign-in, opened as that walk's `judged` does. Returns the profile's address."""
+        profile_walk = load('linkedin_profile_walk', HERE / 'linkedin-profile-walk.py')
+        li = profile_walk.Walk(argparse.Namespace(vm=self.vm, out=self.out, site=self.a.site, exe=Path('/dev/null')))
+        try:
+            li.site()
+            li.default(profile_walk.SAFARI)
+        except profile_walk.StepFailed as exc:
+            raise StepFailed('the stand-in site: %s' % str(exc)[:500])
+        self.grant_accessibility()
+        adopt_walk.guest(self.vm, 'open -g -b %s %s/sign-in' % (profile_walk.SAFARI, li.base), 60)
+        time.sleep(4)
+        self.allow_local_network()
+        return li.profile
+
+    def grant_accessibility(self):
+        """Accessibility for com.richos.app in the guest's TCC database, by linkedin-app-walk.py's
+        own `tcc` step (loaded, never copied; its methods run on a stand-in carrying the three it
+        uses). Needed on this guest image: without the row the app's read_profile answered that the
+        Mac had not given RichOS Accessibility (walk-63b0ad52b8e4)."""
+        import types
+        app_walk = load('linkedin_app_walk', HERE / 'linkedin-app-walk.py')
+        shim = types.SimpleNamespace(g=lambda cmd, timeout=60: adopt_walk.guest(self.vm, cmd, timeout))
+        shim.flush_tcc = lambda: app_walk.Walk.flush_tcc(shim)
+        shim.ax_clients = lambda: app_walk.Walk.ax_clients(shim)
+        app_walk.Walk.tcc(shim)
+
+    def allow_local_network(self):
+        """macOS asks 'Allow "Python" to find devices on local networks?' once the stand-in's server
+        is used, a sheet that takes the keyboard from the composer (walk-62ef6dacabd8: the next
+        message was refused focusfailed). Allowed when it is there, in the guest only, so the
+        conversation can type. Best effort: no sheet is not a failure."""
+        script = ('tell application "System Events" to tell process "UserNotificationCenter" to '
+                  'click button "Allow" of window 1')
+        for _ in range(5):
+            r = subprocess.run([str(HERE / 'ax.sh'), self.vm, script], capture_output=True, text=True, timeout=60)
+            if not r.returncode:
+                print('local-network sheet allowed', flush=True)
+                return
+            time.sleep(2)
+        print('no local-network sheet to allow: %s' % (r.stderr or r.stdout).strip()[-200:], file=sys.stderr)
+
     def wait_idle(self, seconds):
         """Until no turn on the ledger is open: the previous reply has finished."""
         end = time.monotonic() + seconds
@@ -221,6 +283,8 @@ class ConversationWalk(adopt_walk.Walk):
             time.sleep(2)
 
     def act(self, step):
+        if step['kind'] == 'wait_for_rich':
+            return  # sends nothing: the next turn is Rich's own
         if step['kind'] == 'say':
             # ax.sh `type` focuses the composer and verifies it before anything is sent.
             self.type_into(step['text'], '--role', 'AXTextArea', '--title', 'Message to Rich')
@@ -233,7 +297,8 @@ class ConversationWalk(adopt_walk.Walk):
         self.wait_idle(self.a.within)
         sent = self.clock()
         self.act(step)
-        grace = self.a.within if step['expect_reply'] else self.a.press_grace
+        grace = float(step['text']) if step['kind'] == 'wait_for_rich' else \
+            self.a.within if step['expect_reply'] else self.a.press_grace
         begun = time.monotonic()
         tid, record = None, {'waited_s': grace}
         while time.monotonic() - begun < grace:
@@ -242,7 +307,9 @@ class ConversationWalk(adopt_walk.Walk):
                 break
             time.sleep(2)
         if tid:
-            end = begun + self.a.within
+            # The reply budget starts when the turn does: a wait_for_rich turn that begins late in
+            # its wait still gets the whole --within to finish.
+            end = (time.monotonic() if step['kind'] == 'wait_for_rich' else begun) + self.a.within
             while True:
                 rows = self.ledger_rows()
                 record = turn_record(rows, tid)
@@ -263,7 +330,11 @@ class ConversationWalk(adopt_walk.Walk):
         shutil.rmtree(native, ignore_errors=True)  # scp -r nests into a directory that exists
         for remote, local in ((self.home + '/.claude/projects', native),
                               (self.data + '/conversation-ledger.jsonl', self.out / 'ledger.jsonl'),
-                              (self.payload + '/app.log', self.out / 'app.log')):
+                              (self.payload + '/app.log', self.out / 'app.log'),
+                              (self.home + '/myrichos/companies', self.out / 'companies')):
+            if remote.endswith('/myrichos/companies') and \
+                    adopt_walk.guest(self.vm, 'test -d %s && echo yes || echo no' % shlex.quote(remote), 60).strip() != 'yes':
+                continue  # Rich saved no company notes: nothing to pull, nothing to say
             r = subprocess.run([str(HERE / 'guest.sh'), self.vm, '--pull', remote, str(local)],
                                capture_output=True, text=True, timeout=300)
             if r.returncode:
@@ -282,6 +353,8 @@ def main():
     p.add_argument('--company', default='Acme', help='the company the first run adds (default Acme)')
     p.add_argument('--within', type=float, default=300, help='seconds for a reply, and for the previous reply to finish (default 300)')
     p.add_argument('--press-grace', type=float, default=20, help='seconds a press waits for a turn to start (default 20)')
+    p.add_argument('--site', type=Path, help='the stand-in LinkedIn site linkedin-standin.py built: served in the guest, the '
+                   "default browser (Safari) signed in to it before the conversation, so Rich's LinkedIn tool can read it")
     p.add_argument('--check', nargs='+', type=Path, metavar='FILE', help='check conversation files without a guest')
     a = p.parse_args()
     if a.check:
@@ -294,9 +367,17 @@ def main():
     if bad:
         p.error('; '.join(bad))
     walk = ConversationWalk(a)
+    if not a.site and any(PROFILE_PLACEHOLDER in st['text'] for st in walk.steps if st['kind'] == 'say'):
+        p.error('%s is in a message but there is no --site to name it' % PROFILE_PLACEHOLDER)
     ok = True
     try:
         walk.setup()
+        if a.site:
+            profile = walk.prepare_site()
+            print('stand-in profile: %s' % profile, flush=True)
+            for step in walk.steps:
+                if step['kind'] == 'say':
+                    step['text'] = step['text'].replace(PROFILE_PLACEHOLDER, profile)
         for n, step in enumerate(walk.steps, 1):
             try:
                 record = walk.run_step(n, step)
