@@ -307,7 +307,9 @@ class ConversationWalk(adopt_walk.Walk):
                 break
             time.sleep(2)
         if tid:
-            end = begun + self.a.within
+            # The reply budget starts when the turn does: a wait_for_rich turn that begins late in
+            # its wait still gets the whole --within to finish.
+            end = (time.monotonic() if step['kind'] == 'wait_for_rich' else begun) + self.a.within
             while True:
                 rows = self.ledger_rows()
                 record = turn_record(rows, tid)
@@ -330,6 +332,9 @@ class ConversationWalk(adopt_walk.Walk):
                               (self.data + '/conversation-ledger.jsonl', self.out / 'ledger.jsonl'),
                               (self.payload + '/app.log', self.out / 'app.log'),
                               (self.home + '/myrichos/companies', self.out / 'companies')):
+            if remote.endswith('/myrichos/companies') and \
+                    adopt_walk.guest(self.vm, 'test -d %s && echo yes || echo no' % shlex.quote(remote), 60).strip() != 'yes':
+                continue  # Rich saved no company notes: nothing to pull, nothing to say
             r = subprocess.run([str(HERE / 'guest.sh'), self.vm, '--pull', remote, str(local)],
                                capture_output=True, text=True, timeout=300)
             if r.returncode:
