@@ -118,11 +118,12 @@
 
 use crate::entity::{EntityId, PersonId, ThreadBinding};
 use crate::worker_events::{ObservedWorkerState, SessionScope, WorkerEventRow};
-use crate::ledger::{AttentionTier, Ledger, LedgerError, Source, Turn, TurnState};
+use crate::ledger::{AttentionTier, Ledger, LedgerError, Message, Source, Turn, TurnState};
 use crate::machinery::{MachineryKind, MachineryRecord, ToolStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::ops::Range;
 
 // ---------------------------------------------------------------------------
 // VISIBILITY — the gate
@@ -1048,6 +1049,43 @@ impl Timeline {
             .flat_map(|turn| Self::searchable_turn(turn, binding)).collect())
     }
 
+    /// Map a legacy match's character offsets to one visible committed message.
+    pub fn committed_search_match(
+        ledger: &Ledger,
+        binding: &ThreadBinding,
+        message: &Message,
+        matched: Range<usize>,
+    ) -> Result<Option<CommittedSearchMessage>, LedgerError> {
+        let Some(turn) = ledger.thread_turn_scoped(binding, &message.turn_id)? else { return Ok(None) };
+        if matched.is_empty() { return Ok(None); }
+        if message.role == "user" {
+            if matched.end > message.text.chars().count() { return Ok(None); }
+            return Ok(Self::searchable_turn(turn, binding)
+                .find(|item| item.role == SearchMessageRole::User && item.text == message.text));
+        }
+        if message.role != "assistant" || message.text != turn.assistant_text { return Ok(None); }
+
+        let mut remaining = message.text.as_str();
+        let mut start = 0;
+        for (index, run) in turn.text_runs.iter().enumerate() {
+            // Even runs the timeline hides contribute to offsets in the legacy reply.
+            let Some(rest) = remaining.strip_prefix(&run.text) else { return Ok(None) };
+            remaining = rest;
+            let end = start + run.text.chars().count();
+            if start <= matched.start && matched.end <= end {
+                let id = rich_message_id(&turn.id, index);
+                return Ok(Self::searchable_turn(turn, binding).find(|item| {
+                    item.role == SearchMessageRole::Assistant
+                        && item.message_id == id
+                        && run.text.starts_with(&item.text)
+                        && matched.end - start <= item.text.chars().count()
+                }));
+            }
+            start = end;
+        }
+        Ok(None)
+    }
+
     /// Seed or reconcile a person's search index from one published ledger view. Each
     /// message carries the same binding and title as its thread. A company restriction
     /// must be supplied by the host; it is never obtained from the query text.
@@ -1437,6 +1475,10 @@ impl TimelineView {
 // TURN -> ITEMS
 // ---------------------------------------------------------------------------
 
+fn rich_message_id(turn_id: &str, index: usize) -> String {
+    format!("{turn_id}:text:{index}")
+}
+
 /// Every non-machinery item one turn contributes.
 fn turn_items(turn: &Turn, entity: &EntityId, revision: u64) -> Vec<TimelineItem> {
     // THE TWO WHOLE-TURN DEMOTIONS.
@@ -1570,7 +1612,7 @@ fn turn_items(turn: &Turn, entity: &EntityId, revision: u64) -> Vec<TimelineItem
         if !kept.trim().is_empty() {
             out.push(TimelineItem::RichMessage {
                 base: base(
-                    format!("{}:text:{idx}", turn.id),
+                    rich_message_id(&turn.id, idx),
                     run.start_seq,
                     slot,
                     run.at,
