@@ -37,6 +37,11 @@ signed-in"; the user is signed in to every social profile in their default brows
                            make B the default browser for http and https and press "Use …" in
                            the confirmation macOS shows. Prints one JSON object.
 
+  tab-bar --bundle B [--depth N] [--max N]
+                           every window of B as Accessibility shows it outside its web pages
+                           (role, subrole, title, description, value by depth): what the tab bar
+                           looked like when linkedin-app-walk.py finds a tab left open.
+
 The reader here is Python over the same three calls the app's reader makes
 (AXUIElementCreateApplication, AXUIElementCopyAttributeValue, AXUIElementSetAttributeValue); it
 measured the exposure before the app's reader was written, as the brief ordered.
@@ -247,6 +252,8 @@ class AX:
             ('CFStringGetMaximumSizeForEncoding', c_long, [c_long, ctypes.c_uint32]),
             ('CFStringGetCString', ctypes.c_bool, [vp, ctypes.c_char_p, c_long, ctypes.c_uint32]),
             ('CFRelease', None, [vp]),
+            ('CFNumberGetTypeID', ctypes.c_ulong, []), ('CFNumberGetValue', ctypes.c_bool, [vp, ctypes.c_int, vp]),
+            ('CFBooleanGetTypeID', ctypes.c_ulong, []), ('CFBooleanGetValue', ctypes.c_bool, [vp]),
         ):
             f = getattr(CF, fn)
             f.restype, f.argtypes = res, args
@@ -389,6 +396,38 @@ def measure(a):
     return 0
 
 
+def tab_bar(a):
+    """Each window of the app as Accessibility shows it outside its web pages (never walked):
+    role, subrole, title, description and value of every element, indented by depth, so a walk
+    that finds a tab left open can say what the browser's tab bar looked like."""
+    ax = AX()
+    pid = pid_of(a.bundle)
+    if not pid:
+        print(json.dumps({'bundle': a.bundle, 'error': 'not running'}))
+        return 1
+    lines = []
+    stack = [(w, 0) for w in reversed(ax.children(ax.AS.AXUIElementCreateApplication(pid)))]
+    while stack and len(lines) < a.max:
+        el, depth = stack.pop()
+        role = ax.text(el, 'AXRole') or ''
+        value = ax.raw(el, 'AXValue')
+        shown = ax.string(value) if value else None
+        if value and shown is None and ax.CF.CFGetTypeID(value) == ax.CF.CFNumberGetTypeID():
+            n = ctypes.c_long()
+            # kCFNumberSInt64Type
+            if ax.CF.CFNumberGetValue(value, 4, ctypes.byref(n)):
+                shown = n.value
+        elif value and shown is None and ax.CF.CFGetTypeID(value) == ax.CF.CFBooleanGetTypeID():
+            shown = bool(ax.CF.CFBooleanGetValue(value))
+        row = {'d': depth, 'role': role, 'subrole': ax.text(el, 'AXSubrole'), 'title': ax.text(el, 'AXTitle'),
+               'desc': ax.text(el, 'AXDescription'), 'value': shown}
+        lines.append({k: v for k, v in row.items() if v not in (None, '')})
+        if role != 'AXWebArea' and depth < a.depth:
+            stack.extend((c, depth + 1) for c in reversed(ax.children(el)))
+    print(json.dumps({'bundle': a.bundle, 'trusted': bool(ax.AS.AXIsProcessTrusted()), 'elements': lines}))
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='mode', required=True)
@@ -407,8 +446,13 @@ def main():
     s.add_argument('--dir', required=True)
     d = sub.add_parser('default-browser')
     d.add_argument('--bundle', required=True)
+    t = sub.add_parser('tab-bar')
+    t.add_argument('--bundle', required=True)
+    t.add_argument('--depth', type=int, default=12)
+    t.add_argument('--max', type=int, default=600)
     a = p.parse_args()
-    return {'serve': serve, 'measure': measure, 'serve-site': serve_site, 'default-browser': default_browser}[a.mode](a)
+    return {'serve': serve, 'measure': measure, 'serve-site': serve_site, 'default-browser': default_browser,
+            'tab-bar': tab_bar}[a.mode](a)
 
 
 if __name__ == '__main__':
