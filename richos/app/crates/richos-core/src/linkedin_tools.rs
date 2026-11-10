@@ -56,9 +56,10 @@
 //!
 //! ## Which lease
 //!
-//! The conversation lease only (`native.rs` `mcp_config`): onboarding is Rich's conversation
-//! with the user. It changes nothing in RichOS, so it takes no turn scope. When and how Rich uses
-//! it is his instruction file's business, never code here (§124).
+//! Both leases (`native.rs` `mcp_config`): Rich talks with the user and hands longer work to Stu,
+//! and the CEO has ruled the onboarding research real work that takes a while done properly, so
+//! Stu does it; Rich keeps the tool too. It changes nothing in RichOS, so it takes no turn scope.
+//! When and how either uses it is their instruction files' business, never code here (§124).
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use std::time::Duration;

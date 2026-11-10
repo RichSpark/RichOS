@@ -2031,13 +2031,15 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
             // the user's instructions is shown under (`your_instructions.rs`).
             "args": ["--onboarding-mcp", onboarding_scope, crate::question_tools::path(assignments_scope)]
         });
-        // **Reading the user's LinkedIn profile in their own browser** (`linkedin_tools.rs`):
-        // onboarding is this conversation's, and the back end has no use for the user's
-        // signed-in browser. It reads the browser and changes nothing in RichOS: no scope.
-        config["mcpServers"][crate::linkedin_tools::SERVER_NAME] = json!({
-            "type": "stdio", "command": executable, "args": ["--linkedin-mcp"]
-        });
     }
+    // **Reading the user's LinkedIn profile in their own browser, on BOTH leases**
+    // (`linkedin_tools.rs`). Rich talks with the user and hands longer work to Stu
+    // (`engine/app/agents/rich.md`), and the CEO has ruled the onboarding research real work
+    // that takes a while done properly, so Stu does it and needs the tool; Rich keeps it too.
+    // It reads the browser and changes nothing in RichOS: no scope.
+    config["mcpServers"][crate::linkedin_tools::SERVER_NAME] = json!({
+        "type": "stdio", "command": executable, "args": ["--linkedin-mcp"]
+    });
     if role == LeaseRole::Conversation {
         config["mcpServers"][crate::assignment_tools::SERVER_NAME] = json!({
             "type":"stdio","command":executable,"args":["--assignments-mcp",assignments_scope]
@@ -6489,9 +6491,13 @@ exec /bin/sleep 1000
             Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Work, Path::new("claude"));
         assert_eq!(
             names(&work),
-            vec!["richos_continuity", "richos_files", "richos_questions", "richos_quota", "richos_status", "richos_work"],
+            vec!["richos_continuity", "richos_files", "richos_linkedin", "richos_questions", "richos_quota", "richos_status",
+                "richos_work"],
             "the back end's tool list moved"
         );
+        // The onboarding research is Stu's work (the CEO's ruling), so the back end reads the
+        // user's LinkedIn as the front desk does, with the same server.
+        assert_eq!(work["mcpServers"][crate::linkedin_tools::SERVER_NAME], chat["mcpServers"][crate::linkedin_tools::SERVER_NAME]);
         // **The back end holds the work and NOTHING ELSE, and that is the third absence.**
         // The list above read `["richos_onboarding", "richos_work"]` until 2026-09-18. Named
         // on its own for the same reason `richos_work`'s absence is named above the
@@ -6500,8 +6506,6 @@ exec /bin/sleep 1000
         // two tools under §5.4's standing grant could rewrite them with no turn at all.
         assert!(work["mcpServers"].get("richos_onboarding").is_none(),
             "the back end can still rewrite the CEO's company notes");
-        assert!(work["mcpServers"].get(crate::linkedin_tools::SERVER_NAME).is_none(),
-            "the back end can open pages in the user's signed-in browser");
         // Nothing here wrote to the root — `mcp_config` builds a value and touches no disk,
         // which is the property that lets this assert the inventory without a child process.
         let _ = std::fs::remove_dir_all(&root);
