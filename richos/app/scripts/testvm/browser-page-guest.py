@@ -248,7 +248,9 @@ def measure(a):
                 'expected': len(expected), 'found': found, 'hidden_read': HIDDEN in text,
                 'signed_in_text': SIGNED_IN in text, 'signed_out_text': SIGNED_OUT in text,
                 'walk_seconds': round(walked - pass_began, 2),
-                'marker_chars': len(marker), 'marker_found': marker_found, 'marker_hidden_read': HIDDEN in flat,
+                'marker_chars': len(marker), 'marker_found': marker_found,
+                'marker_missed': [x for x in expected if x not in flat][:8],
+                'walk_missed': [x for x in expected if x not in text][:8], 'marker_hidden_read': HIDDEN in flat,
                 'marker_seconds': round(time.monotonic() - walked, 2),
                 'head': text[:300], 'tail': text[-300:], 'marker_head': marker[:300], 'marker_tail': marker[-300:]}
         done = found == len(expected) and marker_found == len(expected)
