@@ -175,6 +175,7 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240
         return out
 
     def walk(path, depth):
+        """[(bytes, folder)] for the big folders found BELOW `path`, each counted once."""
         big = []
         for child in listing(path):
             if time.time() > deadline:
@@ -182,23 +183,24 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240
             kb = du_kb(child)
             if kb is not None and kb * 1024 >= min_bytes:
                 big.append((kb * 1024, child))
+        out = []
         for size, child in big:
             sub = []
             if depth < max_depth and time.time() <= deadline:
                 sub = walk(child, depth + 1)
             if not sub:
-                found.append((size, child))
+                out.append((size, child))
             else:
                 covered = sum(b for b, _p in sub)
-                found.extend(sub)
+                out.extend(sub)
                 if size - covered >= min_bytes:
-                    found.append((size - covered, child + "  (files directly in it)"))
-        return [(b, p) for b, p in found if p.startswith(path + os.sep)]
+                    out.append((size - covered, child + "  (files directly in it)"))
+        return out
 
     for root in roots:
         root = expand(root)
         if root and os.path.isdir(root) and on_volume(root, mount):
-            walk(root, 0)
+            found.extend(walk(root, 0))
     found = sorted(set(found), reverse=True)
     return found[:limit]
 

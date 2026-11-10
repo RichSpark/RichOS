@@ -222,6 +222,12 @@ impl Sweeper {
         if moment == Moment::Quit {
             command.arg("--app-exiting").arg(std::process::id().to_string());
         }
+        if moment == Moment::DiskLow {
+            // The reaper's own budget (past half no new candidate is weighed, past all no deletion
+            // starts) matches this sweep's bound, less a margin to finish: its default is seconds,
+            // and a build output folder takes longer than that to measure.
+            command.arg("--app-budget").arg((DISK_LOW_BOUND.as_secs() - 60).to_string());
+        }
         command
             .env_clear()
             .envs(&self.env)
@@ -231,10 +237,33 @@ impl Sweeper {
         command
     }
 
-    /// Sweep now, waiting at most [`BOUND`]; one line to the app's log either way.
+    /// Sweep now, waiting at most the moment's bound for the sweep ahead of it and then running at
+    /// most that long itself; one line to the app's log either way.
     pub fn run(&self, moment: Moment) -> Result<Outcome, String> {
-        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let result = self.run_bounded(moment, moment.bound());
+        self.run_within(moment, moment.bound())
+    }
+
+    /// [`Self::run`] with an explicit bound. A sweep waits for the one ahead of it for at most the
+    /// bound; **a quit never waits at all**: it must not be held up behind a low-disk sweep that is
+    /// deleting build output for minutes, so it is skipped when one is running (the sweep ahead is
+    /// already doing the same work, and the next start takes what is left).
+    pub(crate) fn run_within(&self, moment: Moment, bound: Duration) -> Result<Outcome, String> {
+        let wait = if moment == Moment::Quit { Duration::ZERO } else { bound };
+        let waited = Instant::now();
+        let _turn = loop {
+            match ONE_AT_A_TIME.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) if waited.elapsed() >= wait => {
+                    let result = Err(format!("another sweep was still running (waited {} ms); this one is skipped",
+                                             wait.as_millis()));
+                    eprintln!("{}", log_line(moment, &result));
+                    return result;
+                }
+                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        let result = self.run_bounded(moment, bound);
         eprintln!("{}", log_line(moment, &result));
         result
     }
@@ -522,6 +551,21 @@ mod tests {
         assert!(open.exists() && foreign.exists(), "{quit:?}");
     }
 
+    /// A quit never waits behind a long low-disk sweep; the other moments wait only their own bound.
+    #[test]
+    fn a_quit_never_waits_for_the_sweep_ahead_and_the_others_wait_only_their_bound() {
+        let s = Sweeper::new(Path::new("/E"), "/R/bin", Path::new("/D/com.richos.app"));
+        let ahead = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+        // The facts, not the clock: each skip says how long it was allowed to wait.
+        let quit = s.run_within(Moment::Quit, Duration::from_secs(10));
+        let other = s.run_within(Moment::Settled, Duration::from_millis(150));
+        drop(ahead);
+        assert!(quit.as_ref().is_err_and(|e| e.contains("skipped") && e.contains("waited 0 ms")),
+                "a quit never waits: {quit:?}");
+        assert!(other.as_ref().is_err_and(|e| e.contains("skipped") && e.contains("waited 150 ms")),
+                "another moment waits for its bound: {other:?}");
+    }
+
     /// A low disk is judged on the fraction free, an unreadable disk is never low, and the disk-low
     /// sweep gets minutes where the others get seconds (a `target` folder takes minutes to delete).
     #[test]
@@ -533,7 +577,8 @@ mod tests {
         assert_eq!(Moment::DiskLow.as_str(), "disk-low");
         let s = Sweeper::new(Path::new("/E"), "/R/bin", Path::new("/D/com.richos.app"));
         let args = s.command(Moment::DiskLow).get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
-        assert_eq!(args, ["/E/scripts/scratch-reaper.sh", "--apply", "--app", "/D/com.richos.app"]);
+        assert_eq!(args, ["/E/scripts/scratch-reaper.sh", "--apply", "--app", "/D/com.richos.app",
+                          "--app-budget", "540"], "the reaper is given the same longer budget");
         #[cfg(unix)]
         assert!(disk_space(Path::new("/")).is_some_and(|(free, capacity)| capacity > 0 && free <= capacity));
     }

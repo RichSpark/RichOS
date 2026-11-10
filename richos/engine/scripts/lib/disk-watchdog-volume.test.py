@@ -40,6 +40,16 @@ class Consumers(unittest.TestCase):
             found = wd.volume_consumers(self.tmp, [self.root], 1024 * 1024)
         self.assertEqual([p for _b, p in found], [self.deep], found)
 
+    def test_a_folder_found_below_another_is_counted_once(self):
+        """10 GB in a nested target and 90 GB directly in its parent is two rows of 10 and 90, never 80."""
+        parent = os.path.join(self.root, "big")
+        nested = os.path.join(parent, "target")
+        os.makedirs(nested)
+        sizes = {parent: 100, nested: 10}
+        with patch.object(wd, "du_kb", side_effect=lambda p: sizes.get(p, 0) * 1024 * 1024):
+            found = wd.volume_consumers(self.tmp, [self.root], 1024 * 1024 * 1024 * 3 // 1024)
+        self.assertEqual(sorted(b for b, _p in found), [10 * 1024 ** 3, 90 * 1024 ** 3], found)
+
     def test_another_device_is_never_listed(self):
         with patch.object(wd, "du_kb", return_value=10 * 1024), patch.object(wd, "on_volume", return_value=False):
             self.assertEqual(wd.volume_consumers(self.tmp, [self.root], 1024), [])
