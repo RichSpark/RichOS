@@ -88,6 +88,8 @@ pub const MAX_POLLS: u32 = 20;
 /// bar: 2 s.
 pub const CLOSE_POLL: Duration = Duration::from_millis(250);
 pub const CLOSE_WAITS: u32 = 8;
+/// Reads of the tabs right after an open, CLOSE_POLL apart, until the new tab shows: 2.5 s.
+pub const OPEN_WAITS: u32 = 10;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 const MAX_URL_CHARS: usize = 2048;
 
@@ -212,21 +214,30 @@ pub fn is_expander_label(raw: &str) -> bool {
         || ["see more", "show more", "show all", "see full"].iter().any(|start| after_dots.starts_with(start))
 }
 
-/// **The tab this open made, when it is beyond doubt; `None` leaves every tab as it is.**
+/// **The tab an open made, read the moment it appears; `None` leaves every tab as it is.**
 ///
 /// The tool opens each page in a new tab of the user's browser, and closes it once it has read
-/// it, so a call leaves the browser as the user had it. Only that tab: it is the tool's when the
-/// browser has exactly one tab more than before the open, exactly one tab that did not exist
-/// then is a selected one showing a LinkedIn address (or the stand-in's, [`accepted_site`]), and
-/// that is it. Anything else is left open, never guessed at: the user opened or closed a tab
-/// meanwhile, the browser started and restored its windows, it showed the page in a tab it
-/// already had, or the tabs could not be read.
+/// it, so a call leaves the browser as the user had it. Only that tab, and it is named the moment
+/// the browser shows it ([`Visit::read`] reads the tabs right after the open until their number
+/// changes), while it is certainly the selected one: the browser has exactly one tab more than
+/// before the open and exactly one tab that did not exist then is selected. It is not a tab
+/// showing another site's page (LinkedIn's, the stand-in's [`accepted_site`], or a page still
+/// loading, blank, only). Anything else is left open, never guessed at: the user opened or closed
+/// a tab in that instant, the browser started and restored its windows, it showed the page in a
+/// tab it already had (Safari does, for an address it already shows), or the tabs could not be
+/// read.
+///
+/// Named then and closed by that name, whatever is selected by the time the page has been read:
+/// Safari's tab bar appears when a one-tab window gets its second tab, so the user's own tab is
+/// new to the reading as well, and a user who goes back to it while the page loads must never
+/// have it taken for the tool's (review rv-20261110T160355Z-e985a6ec-fed7, finding 1).
 pub fn tool_tab(before: &[Tab], after: &[Tab]) -> Option<u64> {
     if after.len() != before.len() + 1 {
         return None;
     }
-    let fresh: Vec<&Tab> = after.iter().filter(|t| !before.iter().any(|b| b.id == t.id) && t.selected
-        && parse(&t.url).is_some_and(|a| accepted_site(&a.host))).collect();
+    let other_site = |url: &str| parse(url).is_some_and(|a| !accepted_site(&a.host));
+    let fresh: Vec<&Tab> = after.iter()
+        .filter(|t| !before.iter().any(|b| b.id == t.id) && t.selected && !other_site(&t.url)).collect();
     match fresh.as_slice() {
         [tab] => Some(tab.id),
         _ => None,
@@ -653,21 +664,21 @@ impl Visit<'_> {
         // are counted, so the count after the open is of the same tree.
         self.switch_on();
         let tabs_before = self.host.tabs(&self.app);
-        let result = self.open_and_read(url, accept);
-        // Read or not (a sign-in wall, a page that never came), the tab this open made is closed.
-        if let (Some(before), Some(after)) = (tabs_before, self.host.tabs(&self.app)) {
-            if let Some(id) = tool_tab(&before, &after) {
-                if self.host.close_tab(&self.app, id) {
-                    // Chrome animates a closing tab and keeps it in its tab bar meanwhile, so the
-                    // next open's count would hold one tab too many and its own tab would be left
-                    // (walk-02c95b97f3c5: every other tab of eleven left open in Chrome). The
-                    // tab is waited for until it is gone.
-                    for _ in 0..CLOSE_WAITS {
-                        match self.host.tabs(&self.app) {
-                            Some(tabs) if tabs.iter().any(|t| t.id == id) => self.host.sleep(CLOSE_POLL),
-                            _ => break,
-                        }
-                    }
+        let mut ours = None;
+        let result = self.open_and_read(url, accept, tabs_before.as_deref(), &mut ours);
+        // Read or not (a sign-in wall, a page that never came), the tab this open made is closed,
+        // if it is still there.
+        let open_now = |id: &u64| self.host.tabs(&self.app).is_some_and(|tabs| tabs.iter().any(|t| t.id == *id));
+        let closed = ours.filter(open_now).filter(|id| self.host.close_tab(&self.app, *id));
+        if let Some(id) = closed {
+            // Chrome animates a closing tab and keeps it in its tab bar meanwhile, so the next
+            // open's count would hold one tab too many and its own tab would be left
+            // (walk-02c95b97f3c5: every other tab of eleven left open in Chrome). The tab is
+            // waited for until it is gone.
+            for _ in 0..CLOSE_WAITS {
+                match self.host.tabs(&self.app) {
+                    Some(tabs) if tabs.iter().any(|t| t.id == id) => self.host.sleep(CLOSE_POLL),
+                    _ => break,
                 }
             }
         }
@@ -682,9 +693,23 @@ impl Visit<'_> {
         }
     }
 
-    fn open_and_read(&mut self, url: &str, accept: &dyn Fn(&str) -> bool) -> Result<Read, String> {
+    /// The tab the open just made ([`tool_tab`]): the tabs read until their number changes.
+    fn new_tab(&self, before: &[Tab]) -> Option<u64> {
+        for _ in 0..OPEN_WAITS {
+            match self.host.tabs(&self.app) {
+                Some(now) if now.len() != before.len() => return tool_tab(before, &now),
+                None => return None,
+                _ => self.host.sleep(CLOSE_POLL),
+            }
+        }
+        None
+    }
+
+    fn open_and_read(&mut self, url: &str, accept: &dyn Fn(&str) -> bool, tabs_before: Option<&[Tab]>,
+        ours: &mut Option<u64>) -> Result<Read, String> {
         let before = self.host.addresses(&self.app);
         self.host.open(url, &self.app).map_err(|e| format!("{} could not be asked to open {url}: {e}", self.app.name))?;
+        *ours = tabs_before.and_then(|before| self.new_tab(before));
         let ours = |shown: &str, now: &[Page]| accept(shown) && (same_page(url, shown)
             || now.iter().filter(|p| p.url == shown).count() > before.iter().filter(|b| *b == shown).count());
         let (mut page, mut text) = self.settle(&ours)?;
@@ -935,6 +960,12 @@ mod tests {
         /// Waits (`sleep`s) a closed tab stays in the tab bar for (Chrome animates its closing).
         linger: u32,
         lingering: RefCell<Vec<(u64, u32)>>,
+        /// Safari's one-tab window: no tab bar until the open adds a tab, and then both tabs are
+        /// new buttons (the user's becomes 10).
+        hidden_bar: bool,
+        /// The user goes back to their own tab while the tool's page loads (at the first wait).
+        user_returns: bool,
+        tool_selected: Cell<bool>,
     }
 
     fn safari() -> BrowserApp {
@@ -976,7 +1007,7 @@ mod tests {
                 ]),
                 tool_tabs: RefCell::default(), next_tab: Cell::new(100), closed: RefCell::default(),
                 tabs_readable: true, open_reuses_tab: false, user_opens_tab: false, linger: 0,
-                lingering: RefCell::default() }
+                lingering: RefCell::default(), hidden_bar: false, user_returns: false, tool_selected: Cell::new(true) }
         }
         fn with(mut self, url: &str, states: Vec<Vec<Piece>>) -> Self {
             self.states.insert(url.into(), states.into_iter().map(|p| page(url, p)).collect());
@@ -994,9 +1025,13 @@ mod tests {
         fn default_browser(&self) -> Option<BrowserApp> { self.browser.clone() }
         fn open(&self, url: &str, _: &BrowserApp) -> Result<(), String> {
             self.opened.borrow_mut().push(url.into());
+            if self.hidden_bar && self.user_tabs.borrow().iter().any(|t| t.id == 9) {
+                *self.user_tabs.borrow_mut() = vec![Tab { id: 10, selected: false, url: String::new() }];
+            }
             if !self.open_reuses_tab {
                 self.next_tab.set(self.next_tab.get() + 1);
                 self.tool_tabs.borrow_mut().push(self.next_tab.get());
+                self.tool_selected.set(true);
             }
             if self.user_opens_tab {
                 self.next_tab.set(self.next_tab.get() + 1);
@@ -1044,7 +1079,7 @@ mod tests {
             let tool = self.tool_tabs.borrow();
             let shown = self.shown.borrow().as_ref().map(|(url, ..)| url.clone()).unwrap_or_default();
             for (n, id) in tool.iter().enumerate() {
-                let selected = n + 1 == tool.len();
+                let selected = n + 1 == tool.len() && self.tool_selected.get();
                 out.push(Tab { id: *id, selected, url: if selected { shown.clone() } else { String::new() } });
             }
             for (id, _) in self.lingering.borrow().iter() {
@@ -1069,6 +1104,15 @@ mod tests {
         }
         fn sleep(&self, _: Duration) {
             self.slept.set(self.slept.get() + 1);
+            if self.user_returns && self.tool_selected.get() && !self.tool_tabs.borrow().is_empty() {
+                self.tool_selected.set(false);
+                for tab in self.user_tabs.borrow_mut().iter_mut() {
+                    tab.selected = tab.id == 10 || tab.id == 2;
+                    if tab.selected {
+                        tab.url = "https://www.linkedin.com/feed/".into();
+                    }
+                }
+            }
             let mut lingering = self.lingering.borrow_mut();
             lingering.iter_mut().for_each(|(_, left)| *left -= 1);
             lingering.retain(|(_, left)| *left > 0);
@@ -1205,6 +1249,21 @@ mod tests {
         assert_eq!(fake.closed.borrow().as_slice(), &[101], "the sign-in wall's tab was left open");
     }
 
+    /// Review rv-20261110T160355Z-e985a6ec-fed7, finding 1: a Safari window with one tab of the
+    /// user's (LinkedIn, no tab bar) gets its bar at the open, so both tabs are new buttons, and
+    /// the user goes back to their own while the page loads. The tool's tab is the one it named
+    /// at the open; the user's is never closed.
+    #[test]
+    fn the_users_own_tab_is_never_closed_when_safaris_tab_bar_appears_and_they_go_back_to_it() {
+        let mut fake = Fake::new(safari()).with(PROFILE, vec![vec![h("Ada Walker")]]);
+        *fake.user_tabs.borrow_mut() = vec![Tab { id: 9, selected: true, url: "https://www.linkedin.com/feed/".into() }];
+        fake.hidden_bar = true;
+        fake.user_returns = true;
+        read_profile(&fake, PROFILE).unwrap();
+        assert_eq!(fake.closed.borrow().as_slice(), &[101], "closed the user's tab, or not the tool's");
+        assert_eq!(fake.user_tabs.borrow().iter().map(|t| t.id).collect::<Vec<_>>(), vec![10]);
+    }
+
     /// The shapes of a real tab bar, rule by rule.
     #[test]
     fn the_tools_tab_is_the_one_new_selected_linkedin_tab() {
@@ -1218,9 +1277,11 @@ mod tests {
         assert_eq!(tool_tab(&[], &[tab(5, true, page)]), Some(5));
         // The browser started and restored the user's windows: more than one tab more.
         assert_eq!(tool_tab(&[], &[tab(5, false, ""), tab(6, true, page)]), None);
-        // The one new tab is not on LinkedIn (the user's own, while ours never appeared).
+        // The one new tab is another site's page (the user's own, while ours never appeared).
         assert_eq!(tool_tab(&[tab(1, true, page)], &[tab(1, true, page), tab(2, true, "https://news.example/")]), None);
-        // The new tab is not selected any more: what it shows cannot be read.
+        // Read the instant it appears, still blank or loading: it is the tool's.
+        assert_eq!(tool_tab(&[tab(1, true, page)], &[tab(1, false, ""), tab(2, true, "")]), Some(2));
+        // The new tab is not the selected one: the user's, in another window.
         assert_eq!(tool_tab(&[tab(1, true, page)], &[tab(1, true, page), tab(2, false, "")]), None);
         // The user's own LinkedIn tab, already open, is never the new one.
         assert_eq!(tool_tab(&[tab(1, true, page)], &[tab(1, true, page)]), None);
