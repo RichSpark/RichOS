@@ -30,6 +30,12 @@ is how a branch's instruction files (rich.md, the bootstrap-interview skill) rea
   #    http://127.0.0.1:18766/in/SLUG/ (SLUG is linkedin-standin.py's --slug; the walk prints it).
   #    Add `--site SITE` after conversation-walk.py. Without it, nothing LinkedIn is set up.
 
+  #    With --action NAME=TOOL[~TEXT] and --expect NAME=ROLE (native-transcript.py --actors's own
+  #    arguments, repeatable), the walk also says WHO performed each declared action from the
+  #    pulled transcripts, into OUT_DIR/actors.json, and fails when an expectation fails. The
+  #    onboarding reads: --action linkedin=mcp__richos_linkedin__read_profile
+  #    --action website=WebFetch~<company host> --expect linkedin=specialist --expect website=specialist
+
   # 3. Read what Rich did, with the committed readers, unchanged:
   richos/app/scripts/qa/native-transcript.py OUT_DIR/native-projects --text
   richos/app/scripts/qa/ledger-timeline.py OUT_DIR/ledger.jsonl --turns
@@ -61,6 +67,8 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
                ledger.jsonl       the app's conversation-ledger.jsonl
                companies/         the guest's ~/myrichos/companies (the company notes)
                app.log, final.png, turns.json (one record per step, with Rich's reply text)
+               actors.json        with --action: native-transcript.py --actors --json over
+                                  native-projects (who performed each action, and the verdicts)
 
 OUTPUT: one line per step on stdout: `<n> say|press|wait_for_rich "<what>": reply yes|NO|none (<state>), <s> s,
 <chars> chars`, then the exit code: 0 only when every step passed.
@@ -345,6 +353,24 @@ class ConversationWalk(adopt_walk.Walk):
             print('final screenshot failed: %s' % str(exc)[-200:], file=sys.stderr)
 
 
+def actors(a):
+    """Who performed each declared action, from the pulled transcripts, by the committed reader.
+    Saved as actors.json; its PASS/FAIL lines are printed. True when every expectation passed."""
+    args = [sys.executable, str(HERE.parent / 'qa' / 'native-transcript.py'), str(a.out / 'native-projects'), '--actors', '--json']
+    for spec in a.action:
+        args += ['--action', spec]
+    for spec in a.expect:
+        args += ['--expect', spec]
+    r = subprocess.run(args, capture_output=True, text=True, timeout=300)
+    if r.returncode not in (0, 1) or not r.stdout.strip():
+        print('actors: the transcript reader could not judge (%d): %s' % (r.returncode, (r.stderr or r.stdout).strip()[-300:]), flush=True)
+        return False
+    (a.out / 'actors.json').write_text(r.stdout)
+    for name, v in json.loads(r.stdout)['verdicts'].items():
+        print('actor %s: %s (%s)' % (name, v['verdict'], v['why']), flush=True)
+    return r.returncode == 0
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('vm', nargs='?')
@@ -356,6 +382,10 @@ def main():
     p.add_argument('--site', type=Path, help='the stand-in LinkedIn site linkedin-standin.py built: served in the guest, the '
                    "default browser (Safari) signed in to it before the conversation, so Rich's LinkedIn tool can read it")
     p.add_argument('--check', nargs='+', type=Path, metavar='FILE', help='check conversation files without a guest')
+    p.add_argument('--action', action='append', default=[], help='NAME=TOOL[~TEXT]: an action whose actor is reported '
+                   '(native-transcript.py --actors)')
+    p.add_argument('--expect', action='append', default=[], help='NAME=ROLE[|ROLE]: who may perform it; a failed '
+                   'expectation fails the walk')
     a = p.parse_args()
     if a.check:
         found = [sentence for f in a.check for sentence in plan_problems(f)]
@@ -400,6 +430,8 @@ def main():
     finally:
         (a.out / 'turns.json').write_text(json.dumps(walk.records, indent=2) + '\n')
         walk.pull()
+    if a.action and not actors(a):
+        ok = False
     print('exit %d' % (0 if ok else 1), flush=True)
     return 0 if ok else 1
 

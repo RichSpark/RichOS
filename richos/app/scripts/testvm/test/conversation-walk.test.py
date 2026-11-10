@@ -78,5 +78,39 @@ class Verdict(unittest.TestCase):
         self.assertIn('no text', walk.verdict(self.say, dict(turn='t', state='completed', reply=' ', waited_s=5)))
 
 
+class Actors(unittest.TestCase):
+    """The walk's actor step runs the committed reader over what it pulled and keeps its record."""
+    def walk_out(self, d, helper_reads):
+        out = Path(d)
+        native = out / 'native-projects' / 'p'
+        (native / 's1' / 'subagents').mkdir(parents=True)
+        use = lambda cid, name, inp: {'timestamp': '2026-11-10T10:00:00Z', 'agentSetting': 'rich-skills:stu',
+            'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': cid, 'name': name, 'input': inp}]}}
+        res = lambda cid: {'timestamp': '2026-11-10T10:00:05Z', 'message': {'role': 'user', 'content': [
+            {'type': 'tool_result', 'tool_use_id': cid, 'content': 'text'}]}}
+        li = ('l1', 'mcp__richos_linkedin__read_profile', {'url': 'https://www.linkedin.com/in/ada/'})
+        lead = [use('a1', 'Agent', {'subagent_type': 'richos-app-engine:reed'}), res('a1')]
+        helper = [use(*li), res('l1')] if helper_reads else []
+        if not helper_reads:
+            lead += [use(*li), res('l1')]
+        (native / 's1.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in lead))
+        (native / 's1' / 'subagents' / 'agent-x.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in helper))
+        (native / 's1' / 'subagents' / 'agent-x.meta.json').write_text(json.dumps({'agentType': 'richos-app-engine:reed', 'toolUseId': 'a1'}))
+        return type('A', (), {'out': out, 'action': ['linkedin=mcp__richos_linkedin__read_profile'],
+                              'expect': ['linkedin=specialist']})()
+
+    def test_a_specialists_read_passes_and_is_kept_beside_the_walk(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self.walk_out(d, helper_reads=True)
+            self.assertTrue(walk.actors(a))
+            record = json.loads((a.out / 'actors.json').read_text())
+            self.assertEqual(record['verdicts']['linkedin']['verdict'], 'PASS')
+            self.assertEqual(record['records'][0]['actor'], 'reed')
+
+    def test_stu_reading_it_himself_fails_the_walk(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(walk.actors(self.walk_out(d, helper_reads=False)))
+
+
 if __name__ == '__main__':
     unittest.main()
