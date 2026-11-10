@@ -33,6 +33,11 @@ mod window_geometry;
 // the test suite does. Same split `work_gate.rs` documents for the update gate.
 mod screen;
 
+// RICH READS THE USER'S LINKEDIN PROFILE IN THEIR OWN BROWSER — the Accessibility and Launch
+// Services half of `richos_core::linkedin_tools`, started as `--linkedin-mcp` below.
+#[cfg(target_os = "macos")]
+mod linkedin_host;
+
 use richos_core::read_view::{SpineReader, SpineView};
 use richos_core::native::{resolve_claude_bin, resolve_claude_bin_checked, NativeCognition};
 use richos_core::cognition::{Cognition, CognitionError, LeaseFactory};
@@ -2328,6 +2333,17 @@ fn main() {
         let result=args.next().ok_or_else(||"Missing file scope".to_string())
             .and_then(|scope|richos_core::rich_files::run_stdio(Path::new(&scope)).map_err(|e|e.to_string()));
         if let Err(error)=result {eprintln!("File tool server: {error}");std::process::exit(1);}
+        return;
+    }
+    // RICH READS THE USER'S LINKEDIN PROFILE (`richos-core`'s `linkedin_tools.rs`): the same
+    // executable, reading the user's default browser through Accessibility. No scope: it
+    // changes nothing in RichOS. A failure is stderr for the parent lease, like the file tool's.
+    if first.as_deref() == Some(std::ffi::OsStr::new("--linkedin-mcp")) {
+        #[cfg(target_os = "macos")]
+        let result = richos_core::linkedin_tools::run_stdio(&linkedin_host::MacBrowser::default()).map_err(|e| e.to_string());
+        #[cfg(not(target_os = "macos"))]
+        let result: Result<(), String> = Err("reading the browser needs macOS Accessibility".into());
+        if let Err(error) = result {eprintln!("LinkedIn tool server: {error}");std::process::exit(1);}
         return;
     }
     if first.as_deref() == Some(std::ffi::OsStr::new("--assignments-mcp")) {
