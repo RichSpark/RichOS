@@ -2,6 +2,29 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.3.0
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.0)
+
+- Added RichBrief meeting notes: when another app such as Zoom or Microsoft Teams starts using your microphone or a meeting on your connected Google or Microsoft calendar is a minute away, RichBrief offers Take Notes at the top right of your screen; nothing is recorded until you press it, the recording of both sides stops by itself when the call ends and Rich then posts the summary, decisions, your actions, other people's commitments and open questions in the conversation you had open, with the transcript in the Output panel
+- Added Start meeting notes and Pause meeting prompts to Settings: record a conversation in person until you press Stop or stop RichBrief offering notes until you press Resume
+- Added Try again when RichBrief could not prepare your meeting notes: it makes them again from the saved recording without recording anything new
+- Added asking Rich about past meetings: in a company's conversations he can read that company's meeting notes and transcripts
+- Added a navigation rail along the left edge of the window with Home, Chats, RichFinder (the search ⌘K opens), RichCleaner, RichScribe, RichPass and Bust a bug; your Mac's resources square and your initials, which open Settings, moved onto it from the bottom of the sidebar and stay in view when you hide the sidebar
+- Added documents to RichFinder: name one folder in RichOS's settings file and RichFinder finds its Markdown notes on your Mac by what they are about with Super Finder or word for word with Require quoted text and its pictures, PDFs, Office documents, audio and video by the notes and labels RichCleaner gave them; Open original opens the file and Rich can search the same folder for you
+- Added Conversations and Company memory to RichFinder: it finds your messages and Rich's replies in all your conversations by what they are about and choosing a message takes you to that exact message; where your team keeps company memory, View record shows the matching record and where it came from
+- Added RichPass on the navigation rail: a free password maker that makes the same strong password for each website again from your master passphrase every time and never saves it; Download RichPass saves it as one file you open in Safari, Chrome or Firefox, even offline
+- Added protection for your copy of RichPass on its page and in Settings: while RichOS is open it puts back the exact original if anything changes, renames or removes the file and tells you to reopen it
+- Changed RichCleaner's window to say when RichCleaner is off and offer Turn on RichCleaner instead of showing filing steps that cannot work yet
+- Changed the Bust a bug panel to mention that RichDoctor in your menu bar can file the same report if RichOS ever won't open
+- Changed your Mac's request for access to your Desktop, Documents, Downloads or a removable drive to say what RichOS uses it for
+- Changed the RichScribe and RichCleaner settings to show their icons beside their names
+- Fixed the first click in the RichOS window doing nothing when RichOS was not the app in front, such as right after you closed RichCleaner's window
+- Fixed the tooltip on the message box's work status staying on screen after you moved the pointer away when that status updated
+- Fixed the SwearMeter count in Settings being partly hidden under the bottom of the menu when you turned on Show SwearMeter
+- [technical] Added RichFinder's timings, without your search words, to Bust a bug reports and RichDoctor's reports and RichPass's protection checks, without file names or contents, to RichDoctor's reports
+- [technical] Fixed a ready-to-land handover from Codex being skipped without a review when it listed its repositories one per line; one naming no repository RichOS can review now gets a reply saying so
+
 ## 1.2.9
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.2.9)
