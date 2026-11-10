@@ -1300,6 +1300,13 @@ def classify_target(path):
 
 
 APP_REPORT = "mcp__richos_work__report"
+# The app's other save tools. Each answers with its own confirmation, and each
+# is counted only by it: the onboarding notes (`status: saved`, `verified: true`,
+# no path), the user's instructions (`status: saved`) and a registered
+# assignment (`recorded: true`). A refused or unreadable answer counts for nothing.
+APP_SAVE_NOTES = "mcp__richos_onboarding__save_company_notes"
+APP_SAVE_INSTRUCTIONS = "mcp__richos_onboarding__save_your_instructions"
+APP_ASSIGN = "mcp__richos_assignments__record"
 
 
 def _app_answer(block):
@@ -1348,7 +1355,7 @@ def turn_writes(tm, transcript, prompt_id, cwd):
         except OSError as exc:
             return None, "the transcript could not be read (%s)" % exc
     w = {"targets": [], "committed": False, "record_script": False, "record_tokens": [],
-         "ecs": False, "traffic": ""}
+         "ecs": False, "traffic": "", "app_saved": []}
     traffic = []
     for tid, name in calls:
         inp = inputs.get(tid) or {}
@@ -1378,6 +1385,16 @@ def turn_writes(tm, transcript, prompt_id, cwd):
                 w["record_script"] = True
                 if isinstance(inp.get("obligation_id"), str):
                     w["record_tokens"].append(inp["obligation_id"])
+        elif name in (APP_SAVE_NOTES, APP_SAVE_INSTRUCTIONS, APP_ASSIGN):
+            answer = _app_answer(results.get(tid))
+            if (name == APP_SAVE_NOTES and answer.get("status") == "saved" and answer.get("verified") is True) \
+                    or (name == APP_SAVE_INSTRUCTIONS and answer.get("status") == "saved") \
+                    or (name == APP_ASSIGN and answer.get("recorded") is True):
+                w["app_saved"].append(name)
+                # save_your_instructions answers the file it wrote: a confirmed
+                # path is a write target, as the team save's is.
+                if name == APP_SAVE_INSTRUCTIONS and isinstance(answer.get("path"), str):
+                    w["targets"].append(answer["path"])
         res = results.get(tid)
         if res is not None:
             traffic.append(tm.flatten(res.get("content")))
@@ -1393,6 +1410,11 @@ LOCATION_RE = re.compile(
     r"|§\s*\d+"
     r"|\besc-\d{8}T\d{6}Z-[0-9a-f]{4,16}\b"
     r"|\b(?:row|entry|decision|ruling|section|item|point)\s+[A-Z]?\d+(?:\.\d+)*\b", re.I)
+
+
+URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.I)
+# A bare domain, with or without a path ("37signals.com/about"): a website, not a file.
+WEBSITE_RE = re.compile(r"\b[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|co|ai|app|dev|us|edu|gov|biz|info|me|xyz|uk|ca)\b(?:/\S*)?", re.I)
 
 
 def _named(path, raw):
@@ -1568,7 +1590,21 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
             parts.append("privately only: " + ", ".join(priv))
         return "; ".join(parts) or "nothing"
 
+    def app_backed(sentence):
+        # One rule: an app save tool confirmed a save this turn, the turn wrote no
+        # private memory or ECS, and the claim names no local file path or
+        # repository file the turn did not write. The tool's answer is the place
+        # (it returns no path). A website in the sentence is content, not a file.
+        if not writes.get("app_saved") or memory or writes.get("ecs"):
+            return False
+        rest = WEBSITE_RE.sub(" ", URL_RE.sub(" ", sentence))
+        for p, _k in targets:
+            rest = re.sub(re.escape(p) + "|" + re.escape(os.path.basename(p)), " ", rest, flags=re.I)
+        return not LOCATION_RE.search(rest)
+
     for kind, sentence in claims:
+        if app_backed(sentence):
+            continue
         if kind == "note":
             # A promise or follow-up said to be "noted", or "in my notes": only
             # a committed repository file the reply names backs it. The
