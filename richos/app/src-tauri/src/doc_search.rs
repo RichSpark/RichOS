@@ -20,7 +20,7 @@
 use richos_search::corpus::{FolderScope, MetadataSource};
 use richos_search::embed::Embedder;
 use richos_core::config::{SearchFolderMode, SearchFolderPreferences};
-use richos_core::{entity::PersonId, ledger::{Ledger, Message}, read_view::{ReadView, SpineReader, SpineView}, timeline::{SearchMessageRole, Timeline}};
+use richos_core::{entity::PersonId, ledger::{Ledger, Message}, read_view::{ReadView, SpineReader, SpineView}, timeline::Timeline};
 use richos_search::service::{Busy, Config, FolderSetConfig, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -505,27 +505,7 @@ pub fn exact_message_token(
 ) -> Option<String> {
     let binding = ledger.thread_binding(thread_id).ok()?;
     if binding.person_id() != &PersonId::default_ceo() { return None; }
-    let role = match message.role.as_str() {
-        "user" => SearchMessageRole::User,
-        "assistant" => SearchMessageRole::Assistant,
-        _ => return None,
-    };
-    let items = Timeline::committed_search_turn(ledger, &binding, &message.turn_id).ok()?;
-    let mut remaining = message.text.as_str();
-    let mut start = 0;
-    let mut matched_item = None;
-    for item in items.into_iter().filter(|item| item.role == role) {
-        // Legacy replies concatenate runs. If the timeline removed any text,
-        // offsets are unsafe. A match across runs has no single visible anchor.
-        remaining = remaining.strip_prefix(&item.text)?;
-        let end = start + item.text.chars().count();
-        if start <= matched.start && matched.end <= end {
-            matched_item = Some(item);
-        }
-        start = end;
-    }
-    if !remaining.is_empty() { return None; }
-    let item = matched_item?;
+    let item = Timeline::committed_search_match(ledger, &binding, message, matched).ok()??;
     let anchor = MessageAnchor { thread_id: thread_id.into(), turn_id: item.turn_id, message_id: item.message_id };
     Some(anchor.token(&richos_search::corpus::record_revision("", &item.text)))
 }
@@ -1437,24 +1417,33 @@ mod tests {
         let binding = ledger.thread_binding(&thread).unwrap();
         let turn = ledger.record_prompt_received(&binding, "Check my refund.", Source::Text).unwrap();
         let first = "✓ Checking. ";
-        let second = "Refund confirmed.";
+        let separator = "  ";
+        let second = "Refund confirmed.\n";
+        let diagnostic = "API Error: 529 Overloaded.";
         ledger.append_assistant_delta(&turn, first, 1).unwrap();
-        ledger.append_assistant_delta(&turn, second, 3).unwrap();
+        ledger.append_assistant_delta(&turn, separator, 3).unwrap();
+        ledger.append_assistant_delta(&turn, first, 5).unwrap();
+        ledger.append_assistant_delta(&turn, second, 7).unwrap();
+        ledger.append_assistant_delta(&turn, diagnostic, 8).unwrap();
         ledger.complete_turn(&turn, "done").unwrap();
 
         let messages = ledger.messages(&thread).unwrap();
         let reply = &messages[1];
-        assert_eq!(reply.text, format!("{first}{second}"));
+        assert_eq!(reply.text, format!("{first}{separator}{first}{second}{diagnostic}"));
         let visible = Timeline::committed_search_turn(&ledger, &binding, &turn).unwrap();
         let anchor = MessageAnchor {
             thread_id: thread.clone(),
             turn_id: turn,
             message_id: visible.iter().find(|item| item.text == second).unwrap().message_id.clone(),
         };
-        let boundary = first.chars().count();
+        let hidden = first.chars().count() + separator.chars().count();
+        let boundary = hidden + first.chars().count();
         let token = exact_message_token(&ledger, &thread, reply, boundary..boundary + 6);
         assert_eq!(token, Some(anchor.token(&richos_search::corpus::record_revision("", second))));
+        assert!(exact_message_token(&ledger, &thread, reply, hidden..hidden + 3).is_none());
         assert!(exact_message_token(&ledger, &thread, reply, boundary - 2..boundary + 6).is_none());
+        let diagnostic_start = boundary + second.chars().count();
+        assert!(exact_message_token(&ledger, &thread, reply, diagnostic_start..diagnostic_start + 3).is_none());
         std::fs::remove_file(path).unwrap();
     }
 
