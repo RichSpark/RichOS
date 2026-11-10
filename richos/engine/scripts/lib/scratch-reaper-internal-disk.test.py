@@ -189,6 +189,16 @@ class WorkProof(unittest.TestCase):
         self.git(repo, "commit", "-m", "second")
         self.assertIn("no remote has", self.proof(repo))
 
+    def test_a_commit_only_a_local_tag_holds_is_kept(self):
+        repo = self.clone()
+        self.git(repo, "checkout", "--detach")
+        Path(repo, "b.txt").write_text("b\n")
+        self.git(repo, "add", "b.txt")
+        self.git(repo, "commit", "-m", "tagged work")
+        self.git(repo, "tag", "save-work")
+        self.git(repo, "checkout", "main")
+        self.assertIn("local reference", self.proof(repo))
+
     def test_stashed_work_is_kept(self):
         repo = self.clone()
         Path(repo, "a.txt").write_text("changed\n")

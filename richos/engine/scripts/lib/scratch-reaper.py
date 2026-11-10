@@ -2128,6 +2128,12 @@ class Reaper(object):
                 return "%s: git could not compare HEAD with its remotes" % repo
             if head.strip():
                 return "%s has a commit on HEAD no remote has: %s" % (repo, head.strip()[:80])
+            # And every other reference: a commit held only by a local tag (or any ref) is work.
+            anyref = ask(repo, "log", "--all", "--not", "--remotes", "--oneline", "-n", "1")
+            if anyref is None:
+                return "%s: git could not compare all its references with its remotes" % repo
+            if anyref.strip():
+                return "%s has a commit only a local reference holds: %s" % (repo, anyref.strip()[:80])
         return ""
 
     def scan_unknown(self, path, walls, root, held):
@@ -2362,7 +2368,7 @@ class Reaper(object):
                              "named-agent scratch, and the agent registry cannot be read "
                              "to tell whether %s is still running" % name)
                     continue
-                retention = self.cfg["named_retention_days"] * 86400
+                retention = self.cfg.get("named_retention_days", 3) * 86400
                 if age >= retention and not has_repo and not self.holder_named(path):
                     # NAMED SCRATCH OF AN AGENT THAT IS NOT RUNNING, a declared number of days
                     # after its end: nobody is going to collect it by a landing, and scratch is
@@ -2371,7 +2377,7 @@ class Reaper(object):
                     e = Entry(path, "agent-named", size, DELETE,
                               "named scratch of %s, which is not running: %s %d d ago, past the declared "
                               "retention of %d d; no repository in it and nothing holds it open"
-                              % (name, clock, age // 86400, self.cfg["named_retention_days"]))
+                              % (name, clock, age // 86400, self.cfg.get("named_retention_days", 3)))
                     e.named_ok = True
                     self.entries.append(e)
                     continue
@@ -2379,7 +2385,7 @@ class Reaper(object):
                     # Not undecided: the cleanup WILL take it, on the day the retention ends.
                     self.add(path, "agent-named", size, KEEP,
                              "named scratch of %s, which is not running: %s %d d ago; taken after the "
-                             "declared %d d" % (name, clock, age // 86400, self.cfg["named_retention_days"]))
+                             "declared %d d" % (name, clock, age // 86400, self.cfg.get("named_retention_days", 3)))
                     continue
                 self.add(path, "agent-named", size, INDETERMINATE,
                          "named scratch of %s, past its retention, but %s: a person decides what is in it"
@@ -3408,10 +3414,10 @@ class Reaper(object):
         xcode = os.path.join(home, "Library", "Developer", "Xcode")
         running = self.developer_tool_running()
         self._folder_children(os.path.join(xcode, "DerivedData"), "xcode-derived",
-                              self.cfg["derived_data_idle_days"],
+                              self.cfg.get("derived_data_idle_days", 7),
                               "Xcode build products Xcode regenerates", running=running)
-        self._folder_children(self.cfg["retired_dir"], "retired-state",
-                              self.cfg["retired_retention_days"],
+        self._folder_children(self.cfg.get("retired_dir", ""), "retired-state",
+                              self.cfg.get("retired_retention_days", 30),
                               "preserved copy of a retired workspace past its retention")
         devices = self.sim_devices()
         if devices is not None:
@@ -3430,7 +3436,7 @@ class Reaper(object):
                     self.add(data, "sim-device", size, KEEP, "%s is %s" % (name, state))
                 elif lines is None or any(udid in line for line in lines):
                     self.add(data, "sim-device", size, KEEP, "a process names %s" % udid)
-                elif age < self.cfg["sim_idle_days"] * 86400:
+                elif age < self.cfg.get("sim_idle_days", 14) * 86400:
                     self.add(data, "sim-device", size, KEEP, "%s used %d d ago" % (name, age // 86400))
                 else:
                     e = Entry(data, "sim-device", size, DELETE,
@@ -3449,7 +3455,7 @@ class Reaper(object):
             kids.sort(reverse=True)
             for i, (_m, path) in enumerate(kids):
                 size, _n, _r = measure(path)
-                keep = self.cfg["device_support_keep"]
+                keep = self.cfg.get("device_support_keep", 2)
                 if i < keep:
                     self.add(path, "device-support", size, KEEP, "one of the %d newest kept" % keep)
                 else:

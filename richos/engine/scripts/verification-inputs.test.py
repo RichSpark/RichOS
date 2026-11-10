@@ -63,7 +63,9 @@ class Inputs(unittest.TestCase):
                     "SCRATCH_REAPER_STATE", "APP_INSTANCE_FAILURES_STATE", "TEST_DEVICE_FAILURES_STATE",
                     "DISK_STATE_JSON", "SCRATCH_KEPT_DIR",
                     # The two Codex worktree keys (2026-10-23, cleanup PRD A6) take $HOME too.
-                    "SCRATCH_CODEX_HOME", "SCRATCH_CODEX_WORKTREE_ROOTS"}
+                    "SCRATCH_CODEX_HOME", "SCRATCH_CODEX_WORKTREE_ROOTS",
+                    # The retired-workspace copies' folder (2026-11-10, internal-disk cleanup) too.
+                    "SCRATCH_RETIRED_DIR"}
         actual = {key for key, row in parsed.items() if any(part[0] == "parameter" for part in row["value"])}
         self.assertEqual(actual, expected)
         # 105 since 0ba40e59 added CHECK_RESOURCE_WAITS and RESOURCE_WAIT_MINUTES;
@@ -75,7 +77,10 @@ class Inputs(unittest.TestCase):
         # 112 since SCRATCH_CODEX_HOME and SCRATCH_CODEX_WORKTREE_ROOTS (2026-10-23, cleanup PRD A6).
         # 114 since LAUNCHD_APPLY_WAIT_MAX_SECONDS and _POLL_SECONDS (2026-10-25, a changed
         # scheduled job found running is applied when the run ends).
-        self.assertEqual(len(parsed), 114)
+        # 125 since the internal-disk cleanup (2026-11-10): SCRATCH_DERIVED_DATA_IDLE_DAYS, _RETIRED_DIR,
+        # _RETIRED_RETENTION_DAYS, _SIM_IDLE_DAYS, _DEVICE_SUPPORT_KEEP, _NAMED_RETENTION_DAYS,
+        # _FIXTURE_IDENTITIES, _FIXTURE_FILES, and DISK_RECLAIM_ENABLE, _MIN_GAP_MINUTES, DISK_CONSUMER_MIN_GB.
+        self.assertEqual(len(parsed), 125)
         self.assertIsNone(inputs.config_change("", (HERE.parent / "orchestration.config").read_text())["fallback"])
 
     def test_semantic_values_ignore_comments_spacing_and_equivalent_quotes(self):
