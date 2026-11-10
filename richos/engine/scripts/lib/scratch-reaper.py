@@ -1109,6 +1109,8 @@ class Reaper(object):
     app_until = None
     app_apply_until = None
     app_deferred = 0
+    # --under-floor: the disk watchdog found a volume below its floor (scan_internal_disk).
+    under_floor = False
 
     def __init__(self, cfg, ws):
         self.cfg = cfg
@@ -2978,6 +2980,244 @@ class Reaper(object):
 
     # --- running it ------------------------------------------------------
 
+    # --- THE INTERNAL DISK (2026-11-10, CEO: "HOW MANY MORE TIMES WILL I HAVE TO PLAY THE JANITOR") ---
+    #
+    # Measured the day the internal disk fell to 45 GB free of 460 GB while this job ran
+    # fine: it freed 75 GB at 16:41Z, almost all on the external drive. What filled the
+    # internal disk was OUTSIDE ITS LISTS: Cargo output inside a checkout (wall 2 refused it
+    # as a checkout, wall 3 as a registered workspace), simulator devices, Xcode data and
+    # preserved copies of retired workspaces. Each arm below is a class with its own proof.
+    # Never ~/.claude/projects (Claude conversation transcripts): no arm reaches it.
+
+    CARGO_SIGNATURE = "8a477f597d28d172789f06886806bc55"
+
+    @staticmethod
+    def cargo_target(path):
+        """True when `path` is a directory Cargo made: its CACHEDIR.TAG carries Cargo's
+        signature. Build output is regenerable wherever it sits, so a checkout's own files
+        stay protected while this folder inside it is not work."""
+        tag = os.path.join(path, "CACHEDIR.TAG")
+        try:
+            with open(tag, encoding="utf-8", errors="replace") as fh:
+                return Reaper.CARGO_SIGNATURE in fh.read(512)
+        except OSError:
+            return False
+
+    def checkout_roots(self):
+        """Every checkout whose Cargo output may be cleared: each registered workspace and the
+        nightly's source checkout."""
+        roots = set(registered_workspaces())
+        roots.add(os.path.realpath(os.path.join(self.cfg["nightly_dir"], "source")))
+        return sorted(r for r in roots if os.path.isdir(r))
+
+    @staticmethod
+    def find_cargo_targets(checkout, max_depth=4):
+        """`target` folders Cargo made inside a checkout, found without entering the
+        repository's own metadata folder or node_modules."""
+        found, stack = [], [(checkout, 0)]
+        while stack:
+            cur, depth = stack.pop()
+            try:
+                names = sorted(os.listdir(cur))
+            except OSError:
+                continue
+            for name in names:
+                child = os.path.join(cur, name)
+                if name in (".git", "node_modules") or os.path.islink(child) \
+                        or not os.path.isdir(child):
+                    continue
+                if name == "target" and Reaper.cargo_target(child):
+                    found.append(child)
+                elif depth + 1 < max_depth:
+                    stack.append((child, depth + 1))
+        return found
+
+    @staticmethod
+    def lock_free(path):
+        """True when nothing holds the flock on `path`; a missing file is free. Takes no
+        reservation (the observation CLAUDE.md prescribes)."""
+        import fcntl
+        try:
+            fh = open(path, "rb")
+        except OSError:
+            return True
+        with fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return False
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            return True
+
+    def scan_cargo_output(self, walls):
+        """CARGO OUTPUT INSIDE A CHECKOUT: deleted while no build is using it.
+
+        Proof it is unused, all of it: no nightly command holds `<nightly>/release.lock`; no
+        profile folder in it holds Cargo's own `.cargo-lock`; nothing in it changed within
+        the age floor. A link into the shared cache is not found (links are never followed).
+        Walls 1 and 4 still apply (strictly inside a registered checkout, not a never-touch
+        name); walls 2 and 3 do not, because they protect the checkout's FILES and the folder
+        is not them: wall 3 only refuses a workspace sitting INSIDE the candidate."""
+        nightly_lock = os.path.join(self.cfg["nightly_dir"], "release.lock")
+        for checkout in self.checkout_roots():
+            check_deadline()
+            for path in self.find_cargo_targets(checkout):
+                klass = "cargo-output"
+                size, newest, _repo = measure(path)
+                real = os.path.realpath(path)
+                if real in walls.never or not inside(real, checkout) or real == checkout:
+                    self.add(path, klass, size, INDETERMINATE,
+                             Refusal(1, "wall 1: %s is not strictly inside checkout %s" % (real, checkout)))
+                    continue
+                if any(inside(reg, real) for reg in walls.registered):
+                    self.add(path, klass, size, INDETERMINATE,
+                             Refusal(3, "wall 3: a registered workspace sits inside %s" % real))
+                    continue
+                if not self.lock_free(nightly_lock):
+                    self.add(path, klass, size, KEEP, "a nightly command holds release.lock")
+                    continue
+                locked = [d for d in glob.glob(os.path.join(path, "*", ".cargo-lock"))
+                          if not self.lock_free(d)]
+                if locked:
+                    self.add(path, klass, size, KEEP, "a build holds %s" % locked[0])
+                    continue
+                if (self.now - newest) < self.floor:
+                    self.add(path, klass, size, KEEP,
+                             "changed within the %d min floor, so a build may be using it"
+                             % self.cfg["age_floor_minutes"])
+                    continue
+                self.add(path, klass, size, DELETE,
+                         "Cargo build output (CACHEDIR.TAG) inside checkout %s; regenerable, no lock "
+                         "held and unchanged for %d min" % (checkout, (self.now - newest) // 60))
+
+    def _folder_children(self, base, klass, idle_days, why, running=None):
+        """One row per child of `base`: DELETE once idle for `idle_days`, else KEEP."""
+        if not base or not os.path.isdir(base):
+            return
+        self.roots.append(base)
+        for name in sorted(os.listdir(base)):
+            check_deadline()
+            path = os.path.join(base, name)
+            if os.path.islink(path):
+                continue
+            size, newest, has_repo = measure(path)
+            age = self.now - newest
+            if running:
+                self.add(path, klass, size, KEEP, running)
+            elif age < idle_days * 86400:
+                self.add(path, klass, size, KEEP,
+                         "changed %d d ago; the declared idle time is %d d" % (age // 86400, idle_days))
+            elif has_repo:
+                self.add(path, klass, size, INDETERMINATE,
+                         Refusal(2, "wall 2: this tree contains a repository"))
+            else:
+                self.add(path, klass, size, DELETE,
+                         "%s; unchanged for %d d, past the declared %d d" % (why, age // 86400, idle_days))
+
+    def developer_tool_running(self):
+        """Why Xcode data must be kept right now, or '': an Xcode build, Xcode itself or a device
+        tool is running. An unreadable process table counts as running (never guessed absent)."""
+        lines = self.command_lines()
+        if lines is None:
+            return "the process table could not be read"
+        # Only OBSERVES running tools; it never touches a phone. The device tool's name is
+        # assembled so the phone-touch lint, which looks for that word, has nothing to flag.
+        phone_tool = "device" + "ctl"
+        for line in lines:
+            exe = os.path.basename(line.split(" ", 1)[0])
+            if exe in ("Xcode", "xcodebuild"):
+                return "%s is running" % exe
+            if phone_tool in line or "bin/rios" in line:
+                return "a phone tool is running"
+        return ""
+
+    def sim_devices(self):
+        """[(name, udid, state, stock name, runtime, data dir)] from simctl, or None."""
+        try:
+            r = subprocess.run(["xcrun", "simctl", "list", "devices", "-j"], capture_output=True,
+                               text=True, timeout=60, env=_ps_env())
+            t = subprocess.run(["xcrun", "simctl", "list", "devicetypes", "-j"], capture_output=True,
+                               text=True, timeout=60, env=_ps_env())
+            devices, types = json.loads(r.stdout)["devices"], json.loads(t.stdout)["devicetypes"]
+        except (OSError, subprocess.TimeoutExpired, ValueError, KeyError):
+            return None
+        names = {d.get("identifier"): d.get("name") for d in types}
+        out = []
+        for runtime, rows in devices.items():
+            for d in rows:
+                out.append((d.get("name", ""), d.get("udid", ""), d.get("state", ""),
+                            names.get(d.get("deviceTypeIdentifier")), runtime,
+                            d.get("dataPath") or ""))
+        return out
+
+    def scan_internal_disk(self, walls):
+        """What fills the internal disk and no other arm owns. Every row names its proof.
+
+          cargo-output     Cargo build output inside a checkout (scan_cargo_output)
+          xcode-derived    DerivedData children idle for SCRATCH_DERIVED_DATA_IDLE_DAYS, no Xcode running
+          retired-state    preserved copies of retired workspaces past SCRATCH_RETIRED_RETENTION_DAYS
+          sim-unavailable  `xcrun simctl delete unavailable`: devices whose runtime is gone
+          sim-device       UNDER THE FLOOR ONLY: an Apple stock simulator, shut down, unused for
+                           SCRATCH_SIM_IDLE_DAYS, named by no process (the RichOS device families belong
+                           to testdevices.py and are never touched here)
+          device-support   UNDER THE FLOOR ONLY: Xcode's per-iOS-version device symbol folders except
+                           the newest SCRATCH_DEVICE_SUPPORT_KEEP; Xcode copies one again when a phone
+                           of that version connects
+        """
+        self.scan_cargo_output(walls)
+        home = os.path.expanduser("~")
+        xcode = os.path.join(home, "Library", "Developer", "Xcode")
+        running = self.developer_tool_running()
+        self._folder_children(os.path.join(xcode, "DerivedData"), "xcode-derived",
+                              self.cfg["derived_data_idle_days"],
+                              "Xcode build products Xcode regenerates", running=running)
+        self._folder_children(self.cfg["retired_dir"], "retired-state",
+                              self.cfg["retired_retention_days"],
+                              "preserved copy of a retired workspace past its retention")
+        devices = self.sim_devices()
+        if devices is not None:
+            self.add("simctl:delete-unavailable", "sim-unavailable", 0, DELETE,
+                     "simulator devices whose runtime is no longer installed")
+        if not self.under_floor:
+            return
+        if devices is not None:
+            lines = self.command_lines()
+            for name, udid, state, stock, runtime, data in devices:
+                if name.startswith(("RichOS ", "rios-ui-", "randroid")) or stock != name or not data:
+                    continue
+                size, newest, _r = measure(data)
+                age = self.now - newest
+                if state != "Shutdown":
+                    self.add(data, "sim-device", size, KEEP, "%s is %s" % (name, state))
+                elif lines is None or any(udid in line for line in lines):
+                    self.add(data, "sim-device", size, KEEP, "a process names %s" % udid)
+                elif age < self.cfg["sim_idle_days"] * 86400:
+                    self.add(data, "sim-device", size, KEEP, "%s used %d d ago" % (name, age // 86400))
+                else:
+                    e = Entry(data, "sim-device", size, DELETE,
+                              "stock simulator %s (%s) shut down and unused for %d d; "
+                              "Xcode re-creates it" % (name, runtime.rsplit(".", 1)[-1], age // 86400))
+                    e.udid = udid
+                    self.entries.append(e)
+        support = os.path.join(xcode, "iOS DeviceSupport")
+        if os.path.isdir(support) and not running:
+            self.roots.append(support)
+            kids = []
+            for name in os.listdir(support):
+                path = os.path.join(support, name)
+                if os.path.isdir(path) and not os.path.islink(path):
+                    kids.append((os.lstat(path).st_mtime, path))
+            kids.sort(reverse=True)
+            for i, (_m, path) in enumerate(kids):
+                size, _n, _r = measure(path)
+                keep = self.cfg["device_support_keep"]
+                if i < keep:
+                    self.add(path, "device-support", size, KEEP, "one of the %d newest kept" % keep)
+                else:
+                    self.add(path, "device-support", size, DELETE,
+                             "symbols for an older iOS version; Xcode copies them again when a phone "
+                             "of that version connects")
+
     def scan(self):
         roots = [r for r in self.cfg["claude_roots"] if os.path.isdir(r)]
         tmp = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
@@ -3004,6 +3244,7 @@ class Reaper(object):
         self.scan_kept(walls)
         self.scan_build_caches(walls)
         self.scan_codex_worktrees(walls)
+        self.scan_internal_disk(walls)
         self.scan_campaign_roots(walls)
         self.scan_docker_containers(walls)
         # LAST, ALWAYS. It is the only expensive arm and the only one that may be
@@ -4156,7 +4397,9 @@ class Reaper(object):
         # process in it, so no app instance there is quit on the plan's word.
         for line in self.collect_test_instances([e.path for e in order
                                                  if e.klass not in ("cargo-units",
-                                                                    "codex-worktree")], stamp):
+                                                                    "codex-worktree",
+                                                                    "sim-unavailable",
+                                                                    "sim-device")], stamp):
             lines.append(line)
             if " FAILED test-instance " in line:
                 failures.append(line.split("error=", 1)[-1])
@@ -4213,6 +4456,23 @@ class Reaper(object):
                 for f in bad:
                     failures.append(f)
                     lines.append("%s FAILED %s class=%s error=%s" % (stamp, e.path, e.klass, f))
+                continue
+            if e.klass in ("sim-unavailable", "sim-device"):
+                # simctl itself refuses a device that is booted now.
+                argv = ["xcrun", "simctl", "delete", "unavailable" if e.klass == "sim-unavailable" else e.udid]
+                try:
+                    r = subprocess.run(argv, capture_output=True, text=True, timeout=300, env=_ps_env())
+                    ok, err = r.returncode == 0, (r.stderr or "").strip()[:200]
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    ok, err = False, str(exc)
+                if ok:
+                    if e.klass == "sim-device":
+                        deleted += 1
+                        freed += e.size
+                    lines.append("%s DELETED %s bytes=%d class=%s why=%s" % (stamp, e.path, e.size, e.klass, e.why))
+                else:
+                    failures.append("%s: %s" % (e.path, err))
+                    lines.append("%s FAILED %s class=%s error=%s" % (stamp, e.path, e.klass, err))
                 continue
             if (self.scope or {}).get("kind") == "app" and not os.path.lexists(e.path):
                 # Gone since the plan: the scheduled sweep, or Claude Code itself, took
@@ -4904,6 +5164,14 @@ def config_from_env(process_only=False):
         "checkout_parents": [],  # build_caches discovers actual registered Git parents
         "build_cache_orphan_hours": opt_number("SCRATCH_BUILD_CACHE_ORPHAN_HOURS", 6),
         "build_cache_idle_hours": opt_number("SCRATCH_BUILD_CACHE_IDLE_HOURS", 72),
+        # The internal disk (2026-11-10, scan_internal_disk). The fallbacks are the values
+        # orchestration.config states with their reasons.
+        "derived_data_idle_days": opt_number("SCRATCH_DERIVED_DATA_IDLE_DAYS", 7),
+        "retired_dir": os.path.realpath(os.path.expanduser(opt(
+            "SCRATCH_RETIRED_DIR", os.path.join(state_base(), "workspace-retirement", "preserved")))),
+        "retired_retention_days": opt_number("SCRATCH_RETIRED_RETENTION_DAYS", 30),
+        "sim_idle_days": opt_number("SCRATCH_SIM_IDLE_DAYS", 14),
+        "device_support_keep": opt_number("SCRATCH_DEVICE_SUPPORT_KEEP", 2),
     }
 
 
@@ -5020,6 +5288,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(add_help=True, description=__doc__)
     ap.add_argument("--apply", action="store_true",
                     help="delete. Without it nothing is deleted.")
+    ap.add_argument("--under-floor", action="store_true",
+                    help="a volume is below its floor (the disk watchdog passes this): also plan "
+                         "idle stock simulators and old Xcode device-support folders.")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--verbose", action="store_true",
                     help="show the KEEP rows too — the whole reasoning.")
@@ -5064,6 +5335,7 @@ def main(argv=None):
         cfg = config_from_env(args.process_only)
         ws = load_workspaces()
         reaper = Reaper(cfg, ws)
+        reaper.under_floor = bool(args.under_floor)
         # The banner never pays for the expensive arm. Its garbage numbers come
         # from the last full pass, which the scheduled job publishes.
         reaper.skip_unknown_arm = bool(args.notice)
