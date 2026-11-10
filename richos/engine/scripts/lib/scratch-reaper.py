@@ -2099,6 +2099,18 @@ class Reaper(object):
                 return "%s: git could not compare its branches with its remotes" % repo
             if ahead.strip():
                 return "%s has a commit no remote has: %s" % (repo, ahead.strip()[:80])
+            # Work that lives outside the branches: a stash, and commits reachable only from a
+            # detached HEAD. Both are real work however clean the tree and the branches are.
+            stash = ask(repo, "stash", "list")
+            if stash is None:
+                return "%s: git could not list its stash" % repo
+            if stash.strip():
+                return "%s has stashed work: %s" % (repo, stash.strip().splitlines()[0][:80])
+            head = ask(repo, "log", "HEAD", "--not", "--remotes", "--oneline", "-n", "1")
+            if head is None:
+                return "%s: git could not compare HEAD with its remotes" % repo
+            if head.strip():
+                return "%s has a commit on HEAD no remote has: %s" % (repo, head.strip()[:80])
         return ""
 
     def scan_unknown(self, path, walls, root, held):
@@ -3272,8 +3284,25 @@ class Reaper(object):
                 return "a phone tool is running"
         return ""
 
+    @staticmethod
+    def simulator_toolchain():
+        """True only when Xcode's simulator tool is installed, found by looking at the disk.
+
+        NEVER `xcrun` TO FIND OUT: on a Mac without developer tools `xcrun` opens Apple's
+        "install the command line developer tools" dialog, which a regular user must never see
+        because of a cleanup. The simulator tool ships only with a full Xcode, so a missing one
+        means no simulators and no Xcode data to clear, and the arm is skipped silently."""
+        candidates = []
+        if os.environ.get("DEVELOPER_DIR"):
+            candidates.append(os.environ["DEVELOPER_DIR"])
+        candidates += ["/Applications/Xcode.app/Contents/Developer"]
+        return any(os.access(os.path.join(c, "usr", "bin", "simctl"), os.X_OK) for c in candidates)
+
     def sim_devices(self):
         """[(name, udid, state, stock name, runtime, data dir)] from simctl, or None."""
+        if getattr(self, "skip_build_caches", False) or not self.simulator_toolchain():
+            # --notice (a session start) never runs developer tools; and no Xcode, no simulators.
+            return None
         try:
             r = subprocess.run(["xcrun", "simctl", "list", "devices", "-j"], capture_output=True,
                                text=True, timeout=60, env=_ps_env())

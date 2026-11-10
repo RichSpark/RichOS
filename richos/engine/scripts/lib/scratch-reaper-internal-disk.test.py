@@ -158,6 +158,20 @@ class WorkProof(unittest.TestCase):
         self.git(repo, "commit", "-m", "second")
         self.assertIn("no remote has", self.proof(repo))
 
+    def test_stashed_work_is_kept(self):
+        repo = self.clone()
+        Path(repo, "a.txt").write_text("changed\n")
+        self.git(repo, "stash")
+        self.assertIn("stashed work", self.proof(repo))
+
+    def test_a_commit_only_a_detached_head_holds_is_kept(self):
+        repo = self.clone()
+        self.git(repo, "checkout", "--detach")
+        Path(repo, "b.txt").write_text("b\n")
+        self.git(repo, "add", "b.txt")
+        self.git(repo, "commit", "-m", "detached work")
+        self.assertIn("no remote has", self.proof(repo))
+
     def test_a_repository_with_no_remote_is_kept(self):
         repo = os.path.join(self.tmp, "proto")
         os.makedirs(repo)
@@ -197,6 +211,29 @@ class WorkProof(unittest.TestCase):
         inner = self.clone("outer/inner")
         Path(inner, "dirty.txt").write_text("x\n")
         self.assertIn("uncommitted work", self.proof(outer))
+
+
+class Toolchain(unittest.TestCase):
+    """The cleanup never starts developer tools to find out whether they exist."""
+
+    def test_no_xcode_no_process_and_no_simulator_work(self):
+        r = object.__new__(reaper.Reaper)
+        r.skip_build_caches = False
+        with patch.object(reaper.Reaper, "simulator_toolchain", return_value=False), \
+                patch.object(reaper.subprocess, "run", side_effect=AssertionError("a process was started")):
+            self.assertIsNone(r.sim_devices())
+
+    def test_a_notice_never_runs_developer_tools_even_where_they_exist(self):
+        r = object.__new__(reaper.Reaper)
+        r.skip_build_caches = True
+        with patch.object(reaper.Reaper, "simulator_toolchain", return_value=True), \
+                patch.object(reaper.subprocess, "run", side_effect=AssertionError("a process was started")):
+            self.assertIsNone(r.sim_devices())
+
+    def test_the_toolchain_is_looked_for_on_disk_only(self):
+        with patch.object(reaper.subprocess, "run", side_effect=AssertionError("a process was started")), \
+                patch.dict(os.environ, {"DEVELOPER_DIR": "/nonexistent-developer-dir"}):
+            self.assertIsInstance(reaper.Reaper.simulator_toolchain(), bool)
 
 
 class NamedScratch(unittest.TestCase):
