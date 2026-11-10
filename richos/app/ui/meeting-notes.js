@@ -154,6 +154,8 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "desk-btn desk-btn--primary";
+      // Its disabled label carries the current sign-in status.
+      button.style.opacity = "1";
       button.textContent = notice.reconnecting ? "Finish signing in in your browser…" : "Reconnect " + name;
       button.setAttribute("aria-label", button.textContent + " (" + notice.account + ")");
       button.disabled = signingIn;
