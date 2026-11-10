@@ -2709,6 +2709,20 @@ while True: time.sleep(.02)
             self.assertRegex(line, r"^\[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\] ")
             self.assertTrue(line.endswith(text), line)
 
+    def test_every_line_is_on_disk_while_the_run_is_still_going(self):
+        """Stable run 20261110T010443Z-8e6da0ab: 117,578 bytes stamped between 01:41:10 and
+        02:07 sat in Python 3.14's 131,072-byte file buffer, so anyone reading the log saw
+        nothing for 26 minutes. A line a child prints is readable from the file, by another
+        reader, as soon as it is stamped, with the log still open."""
+        path = self.root / "run.log"
+        with m.TimestampedLog(path) as log:
+            subprocess.run(["/bin/echo", "a child said this mid-run"], stdout=log, check=True)
+            log.write("and this script said this\n")
+            log.sync()
+            on_disk = path.read_text()
+            self.assertIn("a child said this mid-run", on_disk)
+            self.assertIn("and this script said this", on_disk)
+
     def test_a_process_that_outlives_its_command_cannot_crash_or_hang_the_log(self):
         """Run 20260928T143332Z-1f0e1b3a: a gate's log was closed while a process its command
         started still held the pipe. close() closed a buffered reader under the pump thread,

@@ -572,7 +572,14 @@ class TimestampedLog:
 
     def __init__(self, path, milestones=()):
         self.path = Path(path)
-        self.file = self.path.open("w")
+        # LINE-BUFFERED, so every line is on disk the moment it is stamped. Fully buffered, a
+        # line sat in Python's buffer until it filled, and Python 3.14's open() buffer is
+        # 131,072 bytes (io.DEFAULT_BUFFER_SIZE, measured 2026-11-10): stable run
+        # 20261110T010443Z-8e6da0ab wrote 117,578 bytes after its last explicit flush (the
+        # lint-tauri gate's merge at 01:41:10), so its build, VM boot proof and new-user walk
+        # reached the file only when the log closed at 02:07, and the run looked dead for 26
+        # minutes while every line was being stamped on time.
+        self.file = self.path.open("w", buffering=1)
         self._read_fd, self._write_fd = os.pipe()
         self._stop = threading.Event()
         self._milestones = list(milestones)
