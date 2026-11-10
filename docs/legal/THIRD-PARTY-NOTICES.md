@@ -328,6 +328,7 @@ claim worth being able to check.
 | Pillow | MIT-CMU | `richos/app/scripts/generate-app-icons.sh` and `richos/app/scripts/lib/app_icons.py` — decode, resample, PNG and ICO writing for the application icon set |
 | Apple `iconutil` | Apple system tool | `.icns` assembly, same script |
 | Playwright | Apache-2.0 | `richos/app/ui/tests` — a devDependency of the browser acceptance harness. Not part of any bundle; excluded from the shipped frontend by `richos/app/src-tauri/build.rs` and gated by `richos/app/scripts/frontend-payload.test.sh`. |
+| Gradle wrapper, as Gradle 9.7.1 generates it (copyright "the original authors") | Apache-2.0 | `richos/mobile/native-android/gradlew` and `richos/mobile/native-android/gradle/wrapper/gradle-wrapper.jar` start the Android build with the Gradle distribution pinned by SHA-256 in `gradle/wrapper/gradle-wrapper.properties`. Committed with the Android project (2fe91c5a37), not part of the app. Recorded as third-party in `.richos/vendored-material`. |
 
 ## Compiled dependency inventory — GENERATED and where it lives
 
