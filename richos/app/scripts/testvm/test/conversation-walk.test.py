@@ -51,6 +51,12 @@ class Turns(unittest.TestCase):
         self.assertIsNone(walk.find_turn(ROWS, 'say', 'Alex', 100))  # the same words sent earlier
         self.assertIsNone(walk.find_turn(ROWS, 'say', 'Bob', 50))
 
+    def test_waiting_for_rich_skips_an_app_notice_that_has_no_prompt(self):
+        rows = ROWS + [row('ProactiveMessage', 'n1', 300, text='Your account has used 90% of this week.'),
+                       row('PromptReceived', 't2', 400, text='{"from":"stu","text":"done"}'),
+                       row('AssistantDelta', 't2', 450, text='Here is what we learned.'), row('TurnCompleted', 't2', 500)]
+        self.assertEqual(walk.find_turn(rows, 'wait_for_rich', '900', 250), 't2')
+
     def test_a_press_takes_the_first_turn_that_started_after_it(self):
         self.assertEqual(walk.find_turn(ROWS, 'press', 'Start the questions', 50), 't1')
 

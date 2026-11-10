@@ -151,6 +151,11 @@ def find_turn(rows, kind, text, after_ms):
             continue
         if kind == 'say' and t['prompt'].strip() != text.strip():
             continue
+        # Rich's own turn is started by a delivered prompt (Stu's report). An app notice the
+        # ledger files under its own turn id (a ProactiveMessage, such as the weekly quota
+        # digest) has no prompt and never closes: waiting on it failed the 2026-11-10 walk.
+        if kind == 'wait_for_rich' and not t['prompt'].strip():
+            continue
         return tid
     return None
 
