@@ -56,6 +56,8 @@ class CargoOutput(unittest.TestCase):
         r.now = time.time()
         r.decisions = []
         r.add = lambda path, klass, size, action, why, **_k: r.decisions.append((path, klass, action, str(why)))
+        r.command_lines = lambda: []
+        r.machine_open_paths = lambda: []
         with patch.object(reaper, "registered_workspaces", return_value=set()), \
                 patch.object(reaper, "check_deadline", return_value=None):
             r.scan_cargo_output(FakeWalls())
@@ -90,6 +92,33 @@ class CargoOutput(unittest.TestCase):
         rows = self.plan()
         self.assertEqual([a for _p, _k, a, _w in rows], [reaper.KEEP], rows)
 
+    def test_output_a_running_process_uses_is_kept(self):
+        for who, lines, opened in (
+                ("command line", [self.target + "/release/service"], []),
+                ("open file or working directory", [], [("4242", self.target + "/release")])):
+            r = object.__new__(reaper.Reaper)
+            r.cfg = {"nightly_dir": self.nightly, "age_floor_minutes": 30}
+            r.floor, r.now, r.entries = 1800, time.time(), []
+            r.command_lines = lambda lines=lines: lines
+            r.machine_open_paths = lambda opened=opened: opened
+            r.add = lambda path, klass, size, action, why, **_k: r.entries.append((action, str(why)))
+            with patch.object(reaper, "registered_workspaces", return_value=set()), \
+                    patch.object(reaper, "check_deadline", return_value=None):
+                r.scan_cargo_output(FakeWalls())
+            self.assertEqual([a for a, _w in r.entries], [reaper.KEEP], (who, r.entries))
+
+    def test_output_is_not_deleted_when_the_tables_cannot_be_read(self):
+        r = object.__new__(reaper.Reaper)
+        r.cfg = {"nightly_dir": self.nightly, "age_floor_minutes": 30}
+        r.floor, r.now, r.entries = 1800, time.time(), []
+        r.command_lines = lambda: []
+        r.machine_open_paths = lambda: None
+        r.add = lambda path, klass, size, action, why, **_k: r.entries.append((action, str(why)))
+        with patch.object(reaper, "registered_workspaces", return_value=set()), \
+                patch.object(reaper, "check_deadline", return_value=None):
+            r.scan_cargo_output(FakeWalls())
+        self.assertEqual([a for a, _w in r.entries], [reaper.INDETERMINATE], r.entries)
+
     def test_a_registered_workspace_inside_the_candidate_is_refused(self):
         r = object.__new__(reaper.Reaper)
         r.cfg = {"nightly_dir": self.nightly, "age_floor_minutes": 30}
@@ -97,6 +126,8 @@ class CargoOutput(unittest.TestCase):
         r.add = lambda path, klass, size, action, why, **_k: r.decisions.append((path, klass, action, str(why)))
         walls = FakeWalls()
         walls.registered = {os.path.join(self.target, "debug")}
+        r.command_lines = lambda: []
+        r.machine_open_paths = lambda: []
         with patch.object(reaper, "registered_workspaces", return_value=set()), \
                 patch.object(reaper, "check_deadline", return_value=None):
             r.scan_cargo_output(walls)
@@ -181,12 +212,26 @@ class WorkProof(unittest.TestCase):
         self.git(repo, "commit", "-m", "mine")
         self.assertIn("no remote", self.proof(repo))
 
-    def test_a_repository_with_no_commit_holds_nothing_to_lose(self):
-        repo = os.path.join(self.tmp, "empty")
+    def unborn(self, name, files):
+        repo = os.path.join(self.tmp, name)
         os.makedirs(repo)
         self.git(repo, "init", "-b", "main")
-        Path(repo, "worker-output.txt").write_text("test output\n")
-        self.assertEqual(self.proof(repo), "")
+        for f in files:
+            Path(repo, f).write_text("x\n")
+        r = object.__new__(reaper.Reaper)
+        r.cfg = {"fixture_files": ["worker-output.txt"]}
+        with patch.object(reaper, "check_deadline", return_value=None):
+            return r.work_proof(repo)
+
+    def test_an_empty_repository_with_no_commit_is_disposable(self):
+        self.assertEqual(self.unborn("empty", []), "")
+
+    def test_a_repository_with_no_commit_holding_only_harness_files_is_disposable(self):
+        self.assertEqual(self.unborn("harness", ["worker-output.txt"]), "")
+
+    def test_a_new_project_with_no_commit_and_real_files_is_kept(self):
+        self.assertIn("no commit yet", self.unborn("project", ["source.py"]))
+        self.assertIn("no commit yet", self.unborn("mixed", ["worker-output.txt", "main.rs"]))
 
     def test_a_harness_made_repository_is_disposable_whatever_its_tree_holds(self):
         repo = os.path.join(self.tmp, "fx")

@@ -2080,6 +2080,23 @@ class Reaper(object):
             # lose. What is in its working tree is the test's own output, not anyone's work.
             refs = ask(repo, "for-each-ref", "--count=1")
             if refs is not None and not refs.strip():
+                # NO COMMIT YET: nothing in history to lose, but a freshly started project keeps its
+                # work in the working tree. Disposable only when that tree is empty or holds only
+                # files a declared harness writes (SCRATCH_FIXTURE_FILES).
+                allowed = (getattr(self, "cfg", None) or {}).get("fixture_files") or []
+                stray, unreadable = [], []
+                for dirpath, dirnames, filenames in os.walk(repo, onerror=unreadable.append):
+                    dirnames[:] = [d for d in dirnames if d != ".git"]
+                    for f in filenames:
+                        if not any(fnmatch.fnmatch(f, pat) for pat in allowed):
+                            stray.append(os.path.join(dirpath, f))
+                    if len(stray) > 5:
+                        break
+                if unreadable:
+                    return "%s has no commit yet and its working tree could not be read" % repo
+                if stray:
+                    return "%s has no commit yet and its working tree holds files no harness wrote (%s)" % (
+                        repo, os.path.relpath(stray[0], repo))
                 continue
             authors = ask(repo, "log", "--all", "--format=%ae")
             if authors is not None and fixture_emails and set(authors.split()) <= fixture_emails:
@@ -3200,6 +3217,45 @@ class Reaper(object):
             fcntl.flock(fh, fcntl.LOCK_UN)
             return True
 
+    def machine_open_paths(self):
+        """[(pid, path)] for every open file, working directory and running executable on the
+        machine, from ONE lsof read once; None if it could not be trusted to answer."""
+        if "_machine_open" not in self.__dict__:
+            try:
+                r = subprocess.run(["lsof", "-w", "-n", "-P", "-F", "pn"], capture_output=True,
+                                   text=True, timeout=120, env=_ps_env())
+                if r.returncode not in (0, 1):
+                    raise OSError("lsof exited %d" % r.returncode)
+            except (OSError, subprocess.TimeoutExpired):
+                self.__dict__["_machine_open"] = None
+            else:
+                out, pid = [], None
+                for line in r.stdout.splitlines():
+                    if line.startswith("p"):
+                        pid = line[1:]
+                    elif line.startswith("n") and pid is not None:
+                        out.append((pid, line[1:]))
+                self.__dict__["_machine_open"] = out
+        return self.__dict__["_machine_open"]
+
+    def in_use_under(self, path):
+        """'' when no running process uses anything under `path`; else who; None when unknown."""
+        prefix = path.rstrip("/") + "/"
+        lines = self.command_lines()
+        if lines is None:
+            return None
+        for line in lines:
+            if prefix in line:
+                return "its command line names %s" % path
+        opened = self.machine_open_paths()
+        if opened is None:
+            return None
+        mine = {str(os.getpid()), str(os.getppid())}
+        for pid, p in opened:
+            if pid not in mine and (p == path or p.startswith(prefix)):
+                return "pid %s has %s open" % (pid, p)
+        return ""
+
     def scan_cargo_output(self, walls, checkouts=None):
         """CARGO OUTPUT INSIDE A CHECKOUT: deleted while no build is using it.
 
@@ -3238,6 +3294,19 @@ class Reaper(object):
                     self.add(path, klass, size, KEEP,
                              "changed within the %d min floor, so a build may be using it"
                              % self.cfg["age_floor_minutes"])
+                    continue
+                # NO RUNNING PROCESS USES IT: a service launched straight from target/release keeps
+                # running after Cargo's lock is released, and deleting its binary and resources under
+                # it is the one way this arm could break something in use. Command lines, open files,
+                # working directories and executables (one whole-machine lsof, read once) are checked.
+                using = self.in_use_under(real)
+                if using is None:
+                    self.add(path, klass, size, INDETERMINATE,
+                             "the process table or the open-file table could not be read, so it cannot "
+                             "be shown that nothing is using this build output")
+                    continue
+                if using:
+                    self.add(path, klass, size, KEEP, "a running process uses it: %s" % using)
                     continue
                 self.add(path, klass, size, DELETE,
                          "Cargo build output (CACHEDIR.TAG) inside checkout %s; regenerable, no lock "
@@ -5350,6 +5419,7 @@ def config_from_env(process_only=False):
         "sim_idle_days": opt_number("SCRATCH_SIM_IDLE_DAYS", 14),
         "device_support_keep": opt_number("SCRATCH_DEVICE_SUPPORT_KEEP", 2),
         "named_retention_days": opt_number("SCRATCH_NAMED_RETENTION_DAYS", 3),
+        "fixture_files": opt("SCRATCH_FIXTURE_FILES", "").split(),
         "fixture_emails": opt("SCRATCH_FIXTURE_IDENTITIES", "").split(),
     }
 
