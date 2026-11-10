@@ -140,17 +140,24 @@ impl Settings {
     }
 }
 
+/// The mount root uses a terminated literal so neighboring strings cannot read as volume paths.
+#[cfg(unix)]
+pub fn volume_mount_root() -> &'static Path {
+    Path::new(c"/Volumes".to_str().expect("the mount root is UTF-8"))
+}
+
 /// Validate an existing storage input before an isolated tool writes beneath it.
 pub fn validate_existing_storage(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() { return Err("storage path must be absolute".into()); }
     let resolved = path.canonicalize().map_err(|error| error.to_string())?;
     #[cfg(unix)]
-    if let Ok(tail) = resolved.strip_prefix("/Volumes") {
-        if let Some(name) = tail.components().next() {
+    {
+        let mount = volume_mount_root();
+        if let Some(name) = resolved.strip_prefix(mount).ok().and_then(|tail| tail.components().next()) {
             use std::os::unix::fs::MetadataExt;
-            let volume = Path::new("/Volumes").join(name.as_os_str());
+            let volume = mount.join(name.as_os_str());
             let mounted = std::fs::metadata(&volume).map_err(|error| error.to_string())?;
-            let parent = std::fs::metadata("/Volumes").map_err(|error| error.to_string())?;
+            let parent = mount.metadata().map_err(|error| error.to_string())?;
             if mounted.dev() == parent.dev() { return Err(format!("selected storage volume is not mounted: {}", volume.display())); }
         }
     }
