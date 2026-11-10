@@ -1,0 +1,957 @@
+{
+  "vm": "walk-b69010ee7a23",
+  "expect_sha": "41fdb912dec34d263b20f82ad456904cdab32209",
+  "steps": [
+    {
+      "step": "identity",
+      "evidence": {
+        "built_from": "41fdb912dec34d263b20f82ad456904cdab32209"
+      },
+      "outcome": "PASS",
+      "seconds": 0.1
+    },
+    {
+      "step": "first-run",
+      "evidence": {
+        "field": {
+          "x": 673,
+          "y": 539,
+          "w": 386,
+          "h": 39,
+          "value": ""
+        },
+        "placeholder_on_frame": true,
+        "old_placeholder_on_frame": false,
+        "clicks": [
+          {
+            "clicked_at": [
+              684,
+              558
+            ],
+            "chooser_opened": true,
+            "cancel_closed_it": true,
+            "field_after_cancel": ""
+          },
+          {
+            "clicked_at": [
+              866,
+              558
+            ],
+            "chooser_opened": true,
+            "cancel_closed_it": true,
+            "field_after_cancel": ""
+          },
+          {
+            "clicked_at": [
+              1047,
+              558
+            ],
+            "chooser_opened": true,
+            "open_closed_it": true,
+            "field_after_open": "/Users/admin/testvm/walk-b69010ee7a23/home/Acme"
+          }
+        ],
+        "company_folder_registered": true
+      },
+      "outcome": "PASS",
+      "seconds": 50.2
+    },
+    {
+      "step": "second-company",
+      "evidence": {
+        "entities": [
+          "acme",
+          "beta"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 14.7
+    },
+    {
+      "step": "fixtures",
+      "evidence": {
+        "files": [
+          "/Users/admin/testvm/walk-b69010ee7a23/home/Docs/.stash/stash.md",
+          "/Users/admin/testvm/walk-b69010ee7a23/home/Docs/Alpha/alpha.md",
+          "/Users/admin/testvm/walk-b69010ee7a23/home/Docs/Bravo/beta.md",
+          "/Users/admin/testvm/walk-b69010ee7a23/home/Docs/node_modules/gen.md"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 0.2
+    },
+    {
+      "step": "modes",
+      "evidence": {
+        "first_open_modes": {
+          "Off": "1",
+          "Chosen folders": "0",
+          "All eligible": "0"
+        },
+        "settings_row_off": null,
+        "off": {
+          "document_search_off_text": true
+        },
+        "chosen_modes": {
+          "Off": "0",
+          "Chosen folders": "1",
+          "All eligible": "0"
+        },
+        "tree_rows": [
+          "Output",
+          "Talk to Rich",
+          "Output",
+          "Search home",
+          "Search .claude",
+          "Search .config",
+          "Search .richos-coordination",
+          "Search Acme",
+          "Search Applications",
+          "Search Beta",
+          "Search Docs",
+          "Search .stash",
+          "Search Alpha",
+          "Search Bravo",
+          "Search node_modules",
+          "Search Library",
+          "Search myrichos",
+          "Search System",
+          "Search Applications",
+          "Search Library"
+        ],
+        "alpha_tick": {
+          "before": "0",
+          "after": "1"
+        },
+        "coverage_documents_text": true,
+        "coverage_says_richfinder": true,
+        "coverage_says_super_finder": false,
+        "locked_rows": {
+          ".stash": {
+            "listed": true,
+            "enabled": false,
+            "value": "0"
+          },
+          "node_modules": {
+            "listed": true,
+            "enabled": false,
+            "value": "0"
+          },
+          "note_hidden": true,
+          "note_generated": true
+        },
+        "tick_hidden_error": "command failed (1): <worktree>/richos/app/scripts/testvm/ax.sh walk-b69010ee7a23 click --title Search .stash --role AXCheckBox --first --json\n{\"error\": \"disabled\", \"detai",
+        "hidden_after_click": "0",
+        "settings_json_chosen": "",
+        "texts_on_page": 22,
+        "contrast": [
+          {
+            "theme": "light",
+            "measured": 22,
+            "lowest": [
+              {
+                "text": "Rich in each company",
+                "ratio": 1.41,
+                "box": [
+                  938,
+                  532,
+                  198,
+                  23
+                ]
+              },
+              {
+                "text": "Edit",
+                "ratio": 4.06,
+                "box": [
+                  1221,
+                  565,
+                  59,
+                  34
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Hidden folders",
+                "ratio": 5.98,
+                "box": [
+                  650,
+                  318,
+                  243,
+                  20
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Hidden folders",
+                "ratio": 5.98,
+                "box": [
+                  650,
+                  348,
+                  243,
+                  20
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Hidden folders",
+                "ratio": 5.98,
+                "box": [
+                  650,
+                  378,
+                  243,
+                  20
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Hidden folders",
+                "ratio": 5.98,
+                "box": [
+                  650,
+                  591,
+                  243,
+                  20
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Code dependencies or generated output",
+                "ratio": 5.98,
+                "box": [
+                  490,
+                  809,
+                  384,
+                  40
+                ]
+              },
+              {
+                "text": "All search folders",
+                "ratio": 6.33,
+                "box": [
+                  1083,
+                  616,
+                  131,
+                  20
+                ]
+              }
+            ],
+            "under_4_5": [
+              {
+                "text": "Rich in each company",
+                "ratio": 1.41,
+                "box": [
+                  938,
+                  532,
+                  198,
+                  23
+                ]
+              },
+              {
+                "text": "Edit",
+                "ratio": 4.06,
+                "box": [
+                  1221,
+                  565,
+                  59,
+                  34
+                ]
+              }
+            ]
+          },
+          {
+            "theme": "dark",
+            "measured": 22,
+            "lowest": [
+              {
+                "text": "All search folders",
+                "ratio": 5.78,
+                "box": [
+                  1083,
+                  572,
+                  131,
+                  20
+                ]
+              },
+              {
+                "text": "All search folders",
+                "ratio": 5.78,
+                "box": [
+                  1083,
+                  616,
+                  131,
+                  20
+                ]
+              },
+              {
+                "text": "1 documents",
+                "ratio": 6.36,
+                "box": [
+                  938,
+                  265,
+                  149,
+                  30
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Hidden folders",
+                "ratio": 6.51,
+                "box": [
+                  650,
+                  318,
+                  243,
+                  20
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Hidden folders",
+                "ratio": 6.51,
+                "box": [
+                  650,
+                  348,
+                  243,
+                  20
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Hidden folders",
+                "ratio": 6.51,
+                "box": [
+                  650,
+                  378,
+                  243,
+                  20
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Hidden folders",
+                "ratio": 6.51,
+                "box": [
+                  650,
+                  591,
+                  243,
+                  20
+                ]
+              },
+              {
+                "text": "Never searched \u00b7 Code dependencies or generated output",
+                "ratio": 6.51,
+                "box": [
+                  490,
+                  809,
+                  384,
+                  40
+                ]
+              }
+            ],
+            "under_4_5": []
+          }
+        ],
+        "reindex_feedback": true,
+        "all_modes": {
+          "Off": "0",
+          "Chosen folders": "0",
+          "All eligible": "1"
+        },
+        "all_caption": true,
+        "all_coverage": true,
+        "off_modes_again": {
+          "Off": "1",
+          "Chosen folders": "0",
+          "All eligible": "0"
+        },
+        "off_text_again": true,
+        "settings_row": {
+          "one_search_folder": true,
+          "search_off": false,
+          "row_title": true
+        }
+      },
+      "outcome": "PASS",
+      "seconds": 146.7
+    },
+    {
+      "step": "company-limit",
+      "evidence": {
+        "alpha": "already",
+        "beta": {
+          "before": "0",
+          "after": "1"
+        },
+        "pane_shown": true,
+        "beta_options": [
+          {
+            "value": "1",
+            "x": 938,
+            "y": 657
+          },
+          {
+            "value": "1",
+            "x": 938,
+            "y": 689
+          }
+        ],
+        "static_names_near_options": [
+          "Beta",
+          "Beta",
+          "Alpha",
+          "Beta",
+          "Beta",
+          "Beta",
+          "Alpha",
+          "Alpha",
+          "Beta"
+        ],
+        "state_after_limit": true,
+        "says_all_search_folders_beta": true,
+        "limit_files": "",
+        "docs_tick": {
+          "before": "0",
+          "after": "1"
+        },
+        "after_parent_tick_1_folder": true,
+        "after_parent_all_search_folders_rows": 1,
+        "after_all_1_folder": false,
+        "after_all_no_folders_text": true,
+        "after_all_remove_limit_button": true,
+        "after_all_all_search_folders_rows": 1,
+        "after_all_outside_note": true,
+        "company_contrast": [
+          {
+            "theme": "light",
+            "measured": 10,
+            "lowest": [
+              {
+                "text": "No folders",
+                "ratio": 6.33,
+                "box": [
+                  1131,
+                  616,
+                  79,
+                  20
+                ]
+              },
+              {
+                "text": "Outside current search folders",
+                "ratio": 6.33,
+                "box": [
+                  1011,
+                  661,
+                  229,
+                  20
+                ]
+              },
+              {
+                "text": "All search folders",
+                "ratio": 6.33,
+                "box": [
+                  1083,
+                  572,
+                  131,
+                  20
+                ]
+              },
+              {
+                "text": "Rich in each company",
+                "ratio": 18.07,
+                "box": [
+                  938,
+                  532,
+                  198,
+                  23
+                ]
+              },
+              {
+                "text": "A company limit only narrows your search folders.",
+                "ratio": 18.07,
+                "box": [
+                  938,
+                  807,
+                  315,
+                  40
+                ]
+              },
+              {
+                "text": "Alpha",
+                "ratio": 18.07,
+                "box": [
+                  961,
+                  661,
+                  44,
+                  20
+                ]
+              },
+              {
+                "text": "Docs",
+                "ratio": 18.07,
+                "box": [
+                  961,
+                  693,
+                  40,
+                  20
+                ]
+              },
+              {
+                "text": "myrichos",
+                "ratio": 18.07,
+                "box": [
+                  961,
+                  725,
+                  70,
+                  20
+                ]
+              }
+            ],
+            "under_4_5": []
+          },
+          {
+            "theme": "dark",
+            "measured": 10,
+            "lowest": [
+              {
+                "text": "No folders",
+                "ratio": 5.78,
+                "box": [
+                  1131,
+                  616,
+                  79,
+                  20
+                ]
+              },
+              {
+                "text": "Outside current search folders",
+                "ratio": 5.78,
+                "box": [
+                  1011,
+                  661,
+                  229,
+                  20
+                ]
+              },
+              {
+                "text": "All search folders",
+                "ratio": 5.78,
+                "box": [
+                  1083,
+                  572,
+                  131,
+                  20
+                ]
+              },
+              {
+                "text": "Rich in each company",
+                "ratio": 12.06,
+                "box": [
+                  938,
+                  532,
+                  198,
+                  23
+                ]
+              },
+              {
+                "text": "A company limit only narrows your search folders.",
+                "ratio": 12.06,
+                "box": [
+                  938,
+                  807,
+                  315,
+                  40
+                ]
+              },
+              {
+                "text": "Alpha",
+                "ratio": 12.06,
+                "box": [
+                  961,
+                  661,
+                  44,
+                  20
+                ]
+              },
+              {
+                "text": "Docs",
+                "ratio": 12.06,
+                "box": [
+                  961,
+                  693,
+                  40,
+                  20
+                ]
+              },
+              {
+                "text": "myrichos",
+                "ratio": 12.06,
+                "box": [
+                  961,
+                  725,
+                  70,
+                  20
+                ]
+              }
+            ],
+            "under_4_5": []
+          }
+        ],
+        "all_search_folders_text_present": true,
+        "after_back_chosen_1_folder": false
+      },
+      "outcome": "PASS",
+      "seconds": 109.0
+    },
+    {
+      "step": "finder-sources",
+      "evidence": {
+        "chosen": {
+          "Alpha": {
+            "before": "0",
+            "after": "1"
+          },
+          "Bravo": {
+            "before": "0",
+            "after": "1"
+          }
+        },
+        "checkbox_says_richfinder": true,
+        "says_super_finder_anywhere": false,
+        "sources_legend": true,
+        "status_line": true,
+        "source_boxes": [
+          {
+            "name": "Output",
+            "value": "0",
+            "x": 492,
+            "y": 105,
+            "w": 1048,
+            "h": 10
+          },
+          {
+            "name": "Talk to Rich",
+            "value": "0",
+            "x": 529,
+            "y": 845,
+            "w": 36,
+            "h": 37
+          },
+          {
+            "name": "Output",
+            "value": "0",
+            "x": 521,
+            "y": 873,
+            "w": 990,
+            "h": 10
+          },
+          {
+            "name": "RichFinder",
+            "value": "1",
+            "x": 459,
+            "y": 246,
+            "w": 138,
+            "h": 21
+          },
+          {
+            "name": "Require quoted text",
+            "value": "0",
+            "x": 619,
+            "y": 246,
+            "w": 175,
+            "h": 21
+          },
+          {
+            "name": "Alpha",
+            "value": "1",
+            "x": 462,
+            "y": 314,
+            "w": 254,
+            "h": 31
+          },
+          {
+            "name": "Bravo",
+            "value": "1",
+            "x": 462,
+            "y": 344,
+            "w": 254,
+            "h": 31
+          }
+        ],
+        "before_hits": {
+          "alpha": true,
+          "beta": true,
+          "stash": false,
+          "generated": false,
+          "count_line": [
+            "2 results \u00b7 33 ms"
+          ]
+        },
+        "contrast": [
+          {
+            "theme": "light",
+            "measured": 12,
+            "lowest": [
+              {
+                "text": "meaning and words",
+                "ratio": 5.37,
+                "box": [
+                  1120,
+                  296,
+                  151,
+                  18
+                ]
+              },
+              {
+                "text": "Uncheck a folder to narrow this search.",
+                "ratio": 6.33,
+                "box": [
+                  462,
+                  380,
+                  235,
+                  41
+                ]
+              },
+              {
+                "text": "RichFinder ready \u00b7 2 files",
+                "ratio": 6.33,
+                "box": [
+                  1087,
+                  246,
+                  186,
+                  21
+                ]
+              },
+              {
+                "text": "Require quoted text",
+                "ratio": 6.33,
+                "box": [
+                  646,
+                  246,
+                  148,
+                  21
+                ]
+              },
+              {
+                "text": "2 results \u00b7 33 ms",
+                "ratio": 6.33,
+                "box": [
+                  1147,
+                  207,
+                  126,
+                  21
+                ]
+              },
+              {
+                "text": "DOCUMENTS",
+                "ratio": 7.16,
+                "box": [
+                  753,
+                  296,
+                  105,
+                  18
+                ]
+              },
+              {
+                "text": "Sources \u00b7 this search",
+                "ratio": 18.07,
+                "box": [
+                  466,
+                  290,
+                  161,
+                  21
+                ]
+              },
+              {
+                "text": "RichFinder",
+                "ratio": 18.07,
+                "box": [
+                  515,
+                  246,
+                  83,
+                  21
+                ]
+              }
+            ],
+            "under_4_5": []
+          },
+          {
+            "theme": "dark",
+            "measured": 12,
+            "lowest": [
+              {
+                "text": "DOCUMENTS",
+                "ratio": 4.9,
+                "box": [
+                  753,
+                  296,
+                  105,
+                  18
+                ]
+              },
+              {
+                "text": "meaning and words",
+                "ratio": 5.51,
+                "box": [
+                  1120,
+                  296,
+                  151,
+                  18
+                ]
+              },
+              {
+                "text": "Uncheck a folder to narrow this search.",
+                "ratio": 5.78,
+                "box": [
+                  462,
+                  380,
+                  235,
+                  41
+                ]
+              },
+              {
+                "text": "RichFinder ready \u00b7 2 files",
+                "ratio": 5.78,
+                "box": [
+                  1087,
+                  246,
+                  186,
+                  21
+                ]
+              },
+              {
+                "text": "Require quoted text",
+                "ratio": 5.78,
+                "box": [
+                  646,
+                  246,
+                  148,
+                  21
+                ]
+              },
+              {
+                "text": "2 results \u00b7 33 ms",
+                "ratio": 5.78,
+                "box": [
+                  1147,
+                  207,
+                  126,
+                  21
+                ]
+              },
+              {
+                "text": "Sources \u00b7 this search",
+                "ratio": 12.06,
+                "box": [
+                  466,
+                  290,
+                  161,
+                  21
+                ]
+              },
+              {
+                "text": "RichFinder",
+                "ratio": 12.06,
+                "box": [
+                  515,
+                  246,
+                  83,
+                  21
+                ]
+              }
+            ],
+            "under_4_5": []
+          }
+        ],
+        "after_uncheck_boxes": [
+          {
+            "name": "Output",
+            "value": "0",
+            "x": 492,
+            "y": 105,
+            "w": 1048,
+            "h": 10
+          },
+          {
+            "name": "Talk to Rich",
+            "value": "0",
+            "x": 529,
+            "y": 845,
+            "w": 36,
+            "h": 37
+          },
+          {
+            "name": "Output",
+            "value": "0",
+            "x": 521,
+            "y": 873,
+            "w": 990,
+            "h": 10
+          },
+          {
+            "name": "RichFinder",
+            "value": "1",
+            "x": 459,
+            "y": 246,
+            "w": 138,
+            "h": 21
+          },
+          {
+            "name": "Require quoted text",
+            "value": "0",
+            "x": 619,
+            "y": 246,
+            "w": 175,
+            "h": 21
+          },
+          {
+            "name": "Alpha",
+            "value": "0",
+            "x": 462,
+            "y": 314,
+            "w": 254,
+            "h": 31
+          },
+          {
+            "name": "Bravo",
+            "value": "1",
+            "x": 462,
+            "y": 344,
+            "w": 254,
+            "h": 31
+          }
+        ],
+        "after_hits": {
+          "alpha": false,
+          "beta": true,
+          "count_line": [
+            "1 result \u00b7 7 ms"
+          ]
+        },
+        "note_after": true
+      },
+      "outcome": "PASS",
+      "seconds": 132.8
+    },
+    {
+      "step": "split-reply",
+      "evidence": {
+        "seeded": "{\"thread\": \"thr_a345061cbc3048ab8d7438c104128b80\", \"rev\": 1, \"turn\": \"turn_ffffffffffffffffffffffffffffff01\"}",
+        "text_hidden_before": true,
+        "conversations_section": true,
+        "open_message_nodes": [],
+        "palette_closed": true,
+        "second_part_on_screen": true,
+        "first_part_on_screen": true
+      },
+      "outcome": "PASS",
+      "seconds": 39.8
+    },
+    {
+      "step": "smoke",
+      "evidence": {
+        "reply_completed": true,
+        "assistant_rows": 3,
+        "settings_open": true,
+        "updates_row": false,
+        "update_buttons": [
+          "Check for updates"
+        ],
+        "update_check_words": [
+          "up to date"
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 45.7
+    }
+  ]
+}
