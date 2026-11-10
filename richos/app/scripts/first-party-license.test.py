@@ -14,8 +14,8 @@ itself declare anything.
            in RichPass.html putting its first-party source under MIT, also inside a vendored
            region; an SPDX identifier, a manifest field, a license header and a public-domain
            dedication in RichOS files; a root LICENSE that is no longer the AGPL; a Gradle
-           wrapper nobody registered; AGPL-3.0-or-later; a file whose name holds a space;
-           `commit -a`; a land of a commit that skipped the hooks,
+           wrapper nobody registered; AGPL-3.0-or-later; an SPDX expression with an
+           alternative in parentheses; a file whose name holds a space; `commit -a`; a land of a commit that skipped the hooks,
            before main moves; the push backstop of a merge that skipped them
   PASSES   registered third-party material with its own license (the RichPass vendor packages);
            a Gradle wrapper registered in the same change; the brand exclusion ("not licensed",
@@ -187,6 +187,17 @@ class Refused(Fixture):
         self.refused(out, "richos/tools/example/main.js:1: an SPDX identifier other than AGPL-3.0-only (AGPL-3.0-or-later)",
                      "richos/tools/example/package.json:2: a package.json license field other than AGPL-3.0-only "
                      "(AGPL-3.0-or-later)")
+
+    def test_an_spdx_expression_is_judged_whole(self):
+        # Review P2: a prefix match let a parenthesized alternative through.
+        self.make()
+        self.write("richos/tools/example/main.js", f"// {SPDX}AGPL-3.0-only OR (MIT OR Apache-2.0)\n")
+        self.write("richos/tools/example/extra.js", f"// {SPDX}AGPL-3.0-only WITH Classpath-exception-2.0\n")
+        self.write("richos/tools/example/open.js", f"// {SPDX}(AGPL-3.0-only OR\n")
+        out = self.commit("an alternative", expect=1)
+        self.refused(out, "richos/tools/example/main.js:1: an SPDX identifier other than AGPL-3.0-only "
+                          "(AGPL-3.0-only OR (MIT OR Apache-2.0))",
+                     "richos/tools/example/extra.js:1:", "richos/tools/example/open.js:1:")
 
     def test_a_file_whose_name_has_a_space_is_judged(self):
         # Review P2: git ends the +++ header of such a path with a tab, which hid the file.

@@ -12,8 +12,9 @@ WHAT IS REFUSED, in first-party material (anything not registered as third-party
 
   - a license file (LICENSE in either spelling, COPYING, UNLICENSE, LICENSE-x.txt, x-LICENSE
     and the like) anywhere but the root, and a root LICENSE that is no longer the GNU AGPL-3.0;
-  - an SPDX identifier other than AGPL-3.0-only (docs/legal/LICENSING.md grants version 3 and
-    no later version, so AGPL-3.0-or-later is refused);
+  - an SPDX expression that is anything but AGPL-3.0-only alone (docs/legal/LICENSING.md grants
+    version 3 and no later version, so AGPL-3.0-or-later is refused, and so is any OR, AND or
+    WITH, in parentheses or not);
   - a manifest license field (package.json, Cargo.toml, pyproject.toml) other than AGPL-3.0-only
     (or npm's "SEE LICENSE IN ..." and "UNLICENSED", which grant no other license);
   - a license tag (@license, License:) or a sentence that declares a file is licensed,
@@ -106,8 +107,11 @@ DECLARATIONS = [
     re.compile(COPULA + r"(?:released\s+|dedicated\s+|placed\s+)?(?:in|into|to)\s+the\s+public\s+domain\b", re.I),
 ]
 NEGATED = re.compile(r"\b(?:not|never|neither|nor)\b|n't\b", re.I)
-SPDX = re.compile(r"SPDX-License-Identifier[:]\s*(.*)", re.I)
-SPDX_EXPRESSION = re.compile(r"[A-Za-z0-9.+-]+(?:\s+(?:OR|AND|WITH)\s+[A-Za-z0-9.+-]+)*")
+SPDX = re.compile(r"SPDX-License-Identifier[:][ \t]*(.*)", re.I)
+# One token of an SPDX expression: a parenthesis, or an identifier/operator. An identifier ends
+# on a letter, digit or "+", so a sentence's full stop or a comment's "-->" is not part of it.
+SPDX_TOKEN = re.compile(r"[ \t]*(\(|\)|[A-Za-z0-9](?:[A-Za-z0-9.+:-]*[A-Za-z0-9+])?)")
+SPDX_OPERATORS = {"or", "and", "with"}
 MANIFEST_FIELD = {
     "package.json": re.compile(r"\"license\"\s*:\s*\"([^\"]*)\""),
     "Cargo.toml": re.compile(r"^\s*license\s*=\s*\"([^\"]*)\""),
@@ -218,14 +222,40 @@ def regions(lines):
     return inside
 
 
+def spdx_expression(text):
+    """(the SPDX expression `text` starts with, True when it is AGPL-3.0-only alone).
+
+    Read token by token up to the first character no expression holds (a comment's close, a
+    quote, a full stop), so the whole expression is judged, never a prefix of it. Anything
+    malformed (two identifiers in a row, a stray or unclosed parenthesis, a trailing operator)
+    is not RichOS's license either."""
+    at, depth, want_id, ids, operators = 0, 0, True, [], 0
+    while token := SPDX_TOKEN.match(text, at):
+        word, at = token.group(1), token.end()
+        operator = word.lower() in SPDX_OPERATORS
+        if want_id and word == "(":
+            depth += 1
+        elif want_id and word != ")" and not operator:
+            ids.append(word)
+            want_id = False
+        elif not want_id and word == ")" and depth:
+            depth -= 1
+        elif not want_id and operator:
+            operators += 1
+            want_id = True
+        else:
+            return text[:at].strip(), False
+    ours = not want_id and not depth and not operators and len(ids) == 1 and ids[0].lower() in ALLOWED_IDS
+    return text[:at].strip(), ours
+
+
 def judge_line(path, line):
     """What this line declares, or None."""
     name = path.rsplit("/", 1)[-1]
     found = SPDX.search(line)
     if found:
-        expression = SPDX_EXPRESSION.match(found.group(1))
-        value = expression.group(0) if expression else ""
-        if value.lower() not in ALLOWED_IDS:
+        value, ours = spdx_expression(found.group(1))
+        if not ours:
             return f"an SPDX identifier other than AGPL-3.0-only ({value or 'empty'})"
     field = MANIFEST_FIELD.get(name)
     if field and (found := field.search(line)):
