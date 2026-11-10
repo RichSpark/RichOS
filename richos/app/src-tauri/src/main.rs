@@ -2340,7 +2340,7 @@ fn main() {
     // changes nothing in RichOS. A failure is stderr for the parent lease, like the file tool's.
     if first.as_deref() == Some(std::ffi::OsStr::new("--linkedin-mcp")) {
         #[cfg(target_os = "macos")]
-        let result = richos_core::linkedin_tools::run_stdio(&linkedin_host::MacBrowser).map_err(|e| e.to_string());
+        let result = richos_core::linkedin_tools::run_stdio(&linkedin_host::MacBrowser::default()).map_err(|e| e.to_string());
         #[cfg(not(target_os = "macos"))]
         let result: Result<(), String> = Err("reading the browser needs macOS Accessibility".into());
         if let Err(error) = result {eprintln!("LinkedIn tool server: {error}");std::process::exit(1);}

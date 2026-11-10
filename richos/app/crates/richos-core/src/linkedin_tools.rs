@@ -130,6 +130,20 @@ pub struct Page {
     pub pieces: Vec<Piece>,
 }
 
+/// One tab of one of the browser's windows, as the shell reads its tab bar.
+///
+/// `id` names the same tab on every reading (the shell keeps the Accessibility element and
+/// compares elements, so a tab keeps its number while it exists and a new tab gets a new one).
+/// A window whose tab bar shows no tabs (Safari hides it for a window with one tab) is one tab,
+/// named by the window. `url` is the address the window shows when this is its selected tab,
+/// and empty otherwise: a browser exposes only the selected tab's page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tab {
+    pub id: u64,
+    pub selected: bool,
+    pub url: String,
+}
+
 /// What setting the browser's accessibility switch found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Switch {
@@ -157,6 +171,12 @@ pub trait BrowserHost {
     /// [`Block::Control`] as [`BrowserHost::pages`] reports them) on the page at `url`. How many
     /// were pressed.
     fn press(&self, app: &BrowserApp, url: &str, controls: &[usize]) -> usize;
+    /// Every tab of every window of the app, or `None` when they cannot be read. Empty when it
+    /// is not running.
+    fn tabs(&self, app: &BrowserApp) -> Option<Vec<Tab>>;
+    /// Close the tab [`BrowserHost::tabs`] numbered `id` (its close button, or a one-tab
+    /// window's), if it still exists. Whether it was pressed.
+    fn close_tab(&self, app: &BrowserApp, id: u64) -> bool;
     /// Set the app's `AXEnhancedUserInterface`, the switch an assistive app sets.
     fn set_tree_switch(&self, app: &BrowserApp, on: bool) -> Switch;
     fn sleep(&self, how_long: Duration);
@@ -185,6 +205,27 @@ pub fn is_expander_label(raw: &str) -> bool {
     let had_dots = after_dots.len() < text.len();
     (had_dots && !after_dots.is_empty())
         || ["see more", "show more", "show all", "see full"].iter().any(|start| after_dots.starts_with(start))
+}
+
+/// **The tab this open made, when it is beyond doubt; `None` leaves every tab as it is.**
+///
+/// The tool opens each page in a new tab of the user's browser, and closes it once it has read
+/// it, so a call leaves the browser as the user had it. Only that tab: it is the tool's when the
+/// browser has exactly one tab more than before the open, exactly one tab that did not exist
+/// then is a selected one showing a LinkedIn address (or the stand-in's, [`accepted_site`]), and
+/// that is it. Anything else is left open, never guessed at: the user opened or closed a tab
+/// meanwhile, the browser started and restored its windows, it showed the page in a tab it
+/// already had, or the tabs could not be read.
+pub fn tool_tab(before: &[Tab], after: &[Tab]) -> Option<u64> {
+    if after.len() != before.len() + 1 {
+        return None;
+    }
+    let fresh: Vec<&Tab> = after.iter().filter(|t| !before.iter().any(|b| b.id == t.id) && t.selected
+        && parse(&t.url).is_some_and(|a| accepted_site(&a.host))).collect();
+    match fresh.as_slice() {
+        [tab] => Some(tab.id),
+        _ => None,
+    }
 }
 
 /// An address split into the parts that decide which page it is.
@@ -559,11 +600,8 @@ impl Visit<'_> {
         let mut others: Vec<String> = Vec::new();
         for _ in 0..MAX_POLLS {
             self.host.sleep(POLL);
-            if self.switched.is_none() && needs_tree_switch(&self.app) {
-                if let Switch::Set { was } = self.host.set_tree_switch(&self.app, true) {
-                    self.switched = Some(was);
-                }
-            }
+            // A browser that was not running had no switch to set before the open.
+            self.switch_on();
             let pages = self.host.pages(&self.app);
             others = pages.iter().filter(|p| !accept(&p.url, &pages)).map(|p| p.url.clone()).filter(|u| !u.is_empty()).collect();
             let found = pages.iter()
@@ -600,6 +638,29 @@ impl Visit<'_> {
     /// About page the user already had open in another window is never read as the one asked
     /// for (review rv-20261110T142525Z-76462643-2965, finding 1).
     fn read(&mut self, url: &str, accept: &dyn Fn(&str) -> bool) -> Result<Read, String> {
+        // Chromium shows its tab bar to Accessibility once the switch is on: set before the tabs
+        // are counted, so the count after the open is of the same tree.
+        self.switch_on();
+        let tabs_before = self.host.tabs(&self.app);
+        let result = self.open_and_read(url, accept);
+        // Read or not (a sign-in wall, a page that never came), the tab this open made is closed.
+        if let (Some(before), Some(after)) = (tabs_before, self.host.tabs(&self.app)) {
+            if let Some(id) = tool_tab(&before, &after) {
+                self.host.close_tab(&self.app, id);
+            }
+        }
+        result
+    }
+
+    fn switch_on(&mut self) {
+        if self.switched.is_none() && needs_tree_switch(&self.app) {
+            if let Switch::Set { was } = self.host.set_tree_switch(&self.app, true) {
+                self.switched = Some(was);
+            }
+        }
+    }
+
+    fn open_and_read(&mut self, url: &str, accept: &dyn Fn(&str) -> bool) -> Result<Read, String> {
         let before = self.host.addresses(&self.app);
         self.host.open(url, &self.app).map_err(|e| format!("{} could not be asked to open {url}: {e}", self.app.name))?;
         let ours = |shown: &str, now: &[Page]| accept(shown) && (same_page(url, shown)
@@ -837,6 +898,18 @@ mod tests {
         slept: Cell<u32>,
         /// Windows the user already had open, listed before the one the tool opens.
         other: Vec<Page>,
+        /// The user's own tabs, as the tab bar shows them.
+        user_tabs: RefCell<Vec<Tab>>,
+        /// The tabs the tool's opens made and that are still open, oldest first.
+        tool_tabs: RefCell<Vec<u64>>,
+        next_tab: Cell<u64>,
+        closed: RefCell<Vec<u64>>,
+        /// `false`: the tab bar cannot be read.
+        tabs_readable: bool,
+        /// A browser that shows an opened address in a tab it already had.
+        open_reuses_tab: bool,
+        /// The user opens a tab of their own while the tool's page loads (at each open).
+        user_opens_tab: bool,
     }
 
     fn safari() -> BrowserApp {
@@ -871,7 +944,13 @@ mod tests {
         fn new(app: BrowserApp) -> Self {
             Fake { trusted: true, browser: Some(app), states: HashMap::new(), redirects: HashMap::new(), delay: 0,
                 shown: RefCell::new(None), opened: RefCell::default(), pressed: RefCell::default(), switch_was: Some(false),
-                switches: RefCell::default(), asked: Cell::new(0), slept: Cell::new(0), other: Vec::new() }
+                switches: RefCell::default(), asked: Cell::new(0), slept: Cell::new(0), other: Vec::new(),
+                user_tabs: RefCell::new(vec![
+                    Tab { id: 1, selected: false, url: String::new() },
+                    Tab { id: 2, selected: true, url: "https://www.linkedin.com/feed/".into() },
+                ]),
+                tool_tabs: RefCell::default(), next_tab: Cell::new(100), closed: RefCell::default(),
+                tabs_readable: true, open_reuses_tab: false, user_opens_tab: false }
         }
         fn with(mut self, url: &str, states: Vec<Vec<Piece>>) -> Self {
             self.states.insert(url.into(), states.into_iter().map(|p| page(url, p)).collect());
@@ -889,6 +968,16 @@ mod tests {
         fn default_browser(&self) -> Option<BrowserApp> { self.browser.clone() }
         fn open(&self, url: &str, _: &BrowserApp) -> Result<(), String> {
             self.opened.borrow_mut().push(url.into());
+            if !self.open_reuses_tab {
+                self.next_tab.set(self.next_tab.get() + 1);
+                self.tool_tabs.borrow_mut().push(self.next_tab.get());
+            }
+            if self.user_opens_tab {
+                self.next_tab.set(self.next_tab.get() + 1);
+                // Opened in another window, on a LinkedIn page, and selected there.
+                self.user_tabs.borrow_mut().push(Tab { id: self.next_tab.get(), selected: true,
+                    url: "https://www.linkedin.com/messaging/".into() });
+            }
             let shown = self.redirects.get(url).cloned().unwrap_or_else(|| url.to_string());
             *self.shown.borrow_mut() = Some((shown, 0, self.delay));
             Ok(())
@@ -920,6 +1009,27 @@ mod tests {
                 }
                 _ => 0,
             }
+        }
+        fn tabs(&self, _: &BrowserApp) -> Option<Vec<Tab>> {
+            if !self.tabs_readable {
+                return None;
+            }
+            let mut out = self.user_tabs.borrow().clone();
+            let tool = self.tool_tabs.borrow();
+            let shown = self.shown.borrow().as_ref().map(|(url, ..)| url.clone()).unwrap_or_default();
+            for (n, id) in tool.iter().enumerate() {
+                let selected = n + 1 == tool.len();
+                out.push(Tab { id: *id, selected, url: if selected { shown.clone() } else { String::new() } });
+            }
+            Some(out)
+        }
+        fn close_tab(&self, _: &BrowserApp, id: u64) -> bool {
+            self.closed.borrow_mut().push(id);
+            self.user_tabs.borrow_mut().retain(|t| t.id != id);
+            let mut tool = self.tool_tabs.borrow_mut();
+            let had = tool.len();
+            tool.retain(|t| *t != id);
+            had != tool.len()
         }
         fn set_tree_switch(&self, _: &BrowserApp, on: bool) -> Switch {
             self.switches.borrow_mut().push(on);
@@ -1001,6 +1111,71 @@ mod tests {
         // Pressed on the profile: the About button only (number 0 of its controls), never the side column's.
         assert_eq!(fake.pressed.borrow()[0], (PROFILE.to_string(), vec![0]));
         assert!(fake.switches.borrow().is_empty(), "Safari's switch was touched");
+    }
+
+    /// The CEO's brief, 2026-11-10: "Close the tabs the tool itself opened, and only those ...
+    /// never a tab the user had. If a tab cannot be identified as the tool's own beyond doubt,
+    /// leave it." Every page the call opens (the profile, its Show all pages, its companies,
+    /// six here) is closed once read; the user's two tabs, one of them on LinkedIn and
+    /// selected, are never touched.
+    #[test]
+    fn every_tab_the_call_opened_is_closed_and_none_of_the_users() {
+        for app in [safari(), chrome()] {
+            let fake = ada(app);
+            read_profile(&fake, PROFILE).unwrap();
+            assert_eq!(fake.opened.borrow().len(), 6);
+            assert!(fake.tool_tabs.borrow().is_empty(), "left open: {:?}", fake.tool_tabs.borrow());
+            assert_eq!(fake.closed.borrow().as_slice(), &[101, 102, 103, 104, 105, 106]);
+            assert_eq!(fake.user_tabs.borrow().iter().map(|t| t.id).collect::<Vec<_>>(), vec![1, 2]);
+        }
+    }
+
+    #[test]
+    fn a_tab_that_is_not_beyond_doubt_the_tools_is_left_open() {
+        // The user opens a LinkedIn tab of their own while each page loads: two new tabs, neither closed.
+        let mut busy = ada(safari());
+        busy.user_opens_tab = true;
+        read_profile(&busy, PROFILE).unwrap();
+        assert!(busy.closed.borrow().is_empty(), "closed {:?}", busy.closed.borrow());
+        // The browser showed the page in a tab it already had: no tab more, none closed.
+        let mut reused = ada(safari());
+        reused.open_reuses_tab = true;
+        read_profile(&reused, PROFILE).unwrap();
+        assert!(reused.closed.borrow().is_empty());
+        // The tab bar cannot be read.
+        let mut blind = ada(chrome());
+        blind.tabs_readable = false;
+        read_profile(&blind, PROFILE).unwrap();
+        assert!(blind.closed.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_tab_of_a_page_that_was_not_read_is_closed_too() {
+        let wall = "https://www.linkedin.com/authwall?trk=x";
+        let fake = Fake::new(safari()).redirect(PROFILE, wall).with(wall, vec![vec![t("Join LinkedIn")]]);
+        assert!(read_profile(&fake, PROFILE).is_err());
+        assert_eq!(fake.closed.borrow().as_slice(), &[101], "the sign-in wall's tab was left open");
+    }
+
+    /// The shapes of a real tab bar, rule by rule.
+    #[test]
+    fn the_tools_tab_is_the_one_new_selected_linkedin_tab() {
+        let tab = |id, selected, url: &str| Tab { id, selected, url: url.into() };
+        let page = "https://www.linkedin.com/in/ada-walker/";
+        // Safari hides the tab bar of a one-tab window, so that window is one tab named by the
+        // window (9); the open shows the bar, and both of its tabs are new to the reading.
+        assert_eq!(tool_tab(&[tab(9, true, "https://example.com/")],
+            &[tab(10, false, ""), tab(11, true, page)]), Some(11));
+        // A new window of its own (the browser had none open).
+        assert_eq!(tool_tab(&[], &[tab(5, true, page)]), Some(5));
+        // The browser started and restored the user's windows: more than one tab more.
+        assert_eq!(tool_tab(&[], &[tab(5, false, ""), tab(6, true, page)]), None);
+        // The one new tab is not on LinkedIn (the user's own, while ours never appeared).
+        assert_eq!(tool_tab(&[tab(1, true, page)], &[tab(1, true, page), tab(2, true, "https://news.example/")]), None);
+        // The new tab is not selected any more: what it shows cannot be read.
+        assert_eq!(tool_tab(&[tab(1, true, page)], &[tab(1, true, page), tab(2, false, "")]), None);
+        // The user's own LinkedIn tab, already open, is never the new one.
+        assert_eq!(tool_tab(&[tab(1, true, page)], &[tab(1, true, page)]), None);
     }
 
     #[test]

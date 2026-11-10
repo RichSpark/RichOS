@@ -15,7 +15,13 @@
 //!   - a press: `AXUIElementPerformAction(…, "AXPress")` on the controls the core names, found
 //!     by the same walk, so the numbering is the one the core saw;
 //!   - Chromium's switch: `AXEnhancedUserInterface` on the application element, what VoiceOver
-//!     sets. The guest walk of 2026-11-10 measured Chrome exposing no page until it was set.
+//!     sets. The guest walk of 2026-11-10 measured Chrome exposing no page until it was set;
+//!   - the tabs: each window's (`AXWindows`) tab bar, the `AXRadioButton`s inside an
+//!     `AXTabGroup` (never inside the page itself), selected when their `AXValue` is 1, and the
+//!     page the window shows; a window whose bar shows no tab is one tab. A tab keeps its number
+//!     because the element is kept and compared (`CFEqual`) at every reading;
+//!   - closing a tab: `AXPress` on its close button (the child button whose subrole is
+//!     `AXCloseButton`, or its only button), or on a one-tab window's own close button.
 //!
 //! No cookie, password, keychain item or browser file is read. The permission is the
 //! Accessibility one RichScribe already asks for (`dictation_app::mac::prompt_accessibility`).
@@ -31,8 +37,9 @@ use core_foundation::string::CFString;
 use core_foundation::url::{CFURLRef, CFURL};
 use objc2::msg_send;
 use objc2::runtime::{AnyClass, AnyObject};
-use richos_core::linkedin_tools::{Block, BrowserApp, BrowserHost, Page, Piece, Switch};
+use richos_core::linkedin_tools::{Block, BrowserApp, BrowserHost, Page, Piece, Switch, Tab};
 use std::ffi::c_void;
+use std::sync::Mutex;
 use std::time::Duration;
 
 type AXUIElementRef = *const c_void;
@@ -66,8 +73,15 @@ const MAX_DEPTH: usize = 200;
 /// Nodes walked per page at most: a saved profile is a few thousand.
 const MAX_NODES: usize = 60_000;
 
-/// The Mac's browsers through Accessibility.
-pub struct MacBrowser;
+/// Nodes walked per window looking for its tab bar (the page itself is never walked).
+const MAX_CHROME_NODES: usize = 5_000;
+
+/// The Mac's browsers through Accessibility. `seen` is every tab and window element read so far
+/// in this process; a tab's number is its place here.
+#[derive(Default)]
+pub struct MacBrowser {
+    seen: Mutex<Vec<Element>>,
+}
 
 /// An Accessibility element or CF value we own.
 type Element = CFType;
@@ -252,6 +266,100 @@ fn pid_of(bundle_id: &str) -> Option<i32> {
     })
 }
 
+/// The window's tab buttons: the `AXRadioButton`s inside an `AXTabGroup`, never inside a web
+/// page (a page's own tab list is the page's).
+fn tab_buttons(window: &Element) -> Vec<Element> {
+    let mut out = Vec::new();
+    let mut stack: Vec<(Element, usize, bool)> = children(window).into_iter().rev().map(|c| (c, 1, false)).collect();
+    let mut nodes = 0;
+    while let Some((el, depth, in_bar)) = stack.pop() {
+        nodes += 1;
+        if nodes > MAX_CHROME_NODES {
+            break;
+        }
+        let role = text(&el, "AXRole").unwrap_or_default();
+        match role.as_str() {
+            "AXWebArea" => continue,
+            "AXRadioButton" if in_bar => {
+                out.push(el);
+                continue;
+            }
+            _ => {}
+        }
+        if depth < 30 {
+            let in_bar = in_bar || role == "AXTabGroup";
+            for child in children(&el).into_iter().rev() {
+                stack.push((child, depth + 1, in_bar));
+            }
+        }
+    }
+    out
+}
+
+/// The address of the page a window shows: its first `AXWebArea` (a frame inside it is not walked).
+fn window_url(window: &Element) -> String {
+    let mut stack: Vec<(Element, usize)> = children(window).into_iter().map(|c| (c, 1)).collect();
+    let mut nodes = 0;
+    while let Some((el, depth)) = stack.pop() {
+        nodes += 1;
+        if nodes > MAX_CHROME_NODES {
+            break;
+        }
+        if text(&el, "AXRole").as_deref() == Some("AXWebArea") {
+            return text(&el, "AXURL").unwrap_or_default();
+        }
+        if depth < 30 {
+            stack.extend(children(&el).into_iter().map(|c| (c, depth + 1)));
+        }
+    }
+    String::new()
+}
+
+fn is_selected(tab: &Element) -> bool {
+    let Some(value) = attribute(tab, "AXValue") else { return false };
+    if let Some(n) = value.downcast::<CFNumber>() {
+        return n.to_i64() == Some(1);
+    }
+    value.downcast::<CFBoolean>().map(bool::from).unwrap_or(false)
+}
+
+/// A tab's close button: its child (or grandchild) button whose subrole is `AXCloseButton`, or
+/// its only button. None when there are several and none says it closes: nothing is guessed.
+fn close_button(tab: &Element) -> Option<Element> {
+    let mut buttons = Vec::new();
+    for child in children(tab) {
+        for el in std::iter::once(child.clone()).chain(children(&child)) {
+            if text(&el, "AXRole").as_deref() == Some("AXButton") {
+                buttons.push(el);
+            }
+        }
+    }
+    if let Some(close) = buttons.iter().find(|b| text(b, "AXSubrole").as_deref() == Some("AXCloseButton")) {
+        return Some(close.clone());
+    }
+    (buttons.len() == 1).then(|| buttons.remove(0))
+}
+
+fn press_element(element: &Element) -> bool {
+    let action = CFString::from_static_string("AXPress");
+    // SAFETY: a live element and a CFString action name.
+    unsafe { AXUIElementPerformAction(element.as_CFTypeRef(), action.as_CFTypeRef()) == 0 }
+}
+
+impl MacBrowser {
+    /// The number of `element`: where it sits in `seen`, added at the end when it is new.
+    fn id_of(&self, element: &Element) -> u64 {
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        // CFType's equality is CFEqual, which compares two Accessibility elements by the process
+        // and the element they name.
+        if let Some(n) = seen.iter().position(|e| e == element) {
+            return n as u64;
+        }
+        seen.push(element.clone());
+        (seen.len() - 1) as u64
+    }
+}
+
 fn app_element(app: &BrowserApp) -> Option<Element> {
     let pid = pid_of(&app.bundle_id)?;
     // SAFETY: AXUIElementCreateApplication returns a +1 element, wrapped once.
@@ -328,6 +436,39 @@ impl BrowserHost for MacBrowser {
             .count()
     }
 
+    fn tabs(&self, app: &BrowserApp) -> Option<Vec<Tab>> {
+        let Some(element) = app_element(app) else { return Some(Vec::new()) };
+        let windows = attribute(&element, "AXWindows")?.downcast::<CFArray<*const c_void>>()?;
+        // SAFETY: each item is a live element the array holds; the get rule retains it.
+        let windows: Vec<Element> = windows.iter().filter(|w| !w.is_null())
+            .map(|w| unsafe { CFType::wrap_under_get_rule(*w) }).collect();
+        let mut out = Vec::new();
+        for window in windows {
+            let url = window_url(&window);
+            let buttons = tab_buttons(&window);
+            if buttons.is_empty() {
+                out.push(Tab { id: self.id_of(&window), selected: true, url });
+                continue;
+            }
+            for button in buttons {
+                let selected = is_selected(&button);
+                out.push(Tab { id: self.id_of(&button), selected, url: if selected { url.clone() } else { String::new() } });
+            }
+        }
+        Some(out)
+    }
+
+    fn close_tab(&self, _: &BrowserApp, id: u64) -> bool {
+        let Some(element) = self.seen.lock().unwrap_or_else(|e| e.into_inner()).get(id as usize).cloned() else { return false };
+        match text(&element, "AXRole").as_deref() {
+            Some("AXWindow") => attribute(&element, "AXCloseButton")
+                .filter(|b| b.type_of() == element.type_of()).is_some_and(|b| press_element(&b)),
+            Some("AXRadioButton") => close_button(&element).is_some_and(|b| press_element(&b)),
+            // Gone, or no longer a tab: nothing to close.
+            _ => false,
+        }
+    }
+
     fn set_tree_switch(&self, app: &BrowserApp, on: bool) -> Switch {
         let Some(element) = app_element(app) else { return Switch::NotRunning };
         let was = attribute(&element, "AXEnhancedUserInterface").and_then(|v| v.downcast::<CFBoolean>()).map(bool::from);
@@ -353,19 +494,22 @@ mod tests {
     /// question opens nothing and needs no permission.
     #[test]
     fn the_default_browser_is_named_by_its_bundle_identifier() {
-        let app = MacBrowser.default_browser().expect("this Mac names no default browser");
+        let app = MacBrowser::default().default_browser().expect("this Mac names no default browser");
         assert!(app.bundle_id.contains('.'), "{app:?}");
         assert!(!app.name.trim().is_empty(), "{app:?}");
     }
 
-    /// A browser that is not running has no page, nothing to press and no switch to set, and
-    /// nothing is started to find that out.
+    /// A browser that is not running has no page, no tab, nothing to press or close and no
+    /// switch to set, and nothing is started to find that out.
     #[test]
     fn a_browser_that_is_not_running_answers_nothing_and_is_not_started() {
         let absent = BrowserApp { bundle_id: "com.richos.no-such-browser".into(), name: "None".into() };
-        assert!(MacBrowser.pages(&absent).is_empty());
-        assert_eq!(MacBrowser.press(&absent, "https://www.linkedin.com/in/x/", &[0]), 0);
-        assert_eq!(MacBrowser.set_tree_switch(&absent, true), Switch::NotRunning);
+        let host = MacBrowser::default();
+        assert!(host.pages(&absent).is_empty());
+        assert_eq!(host.press(&absent, "https://www.linkedin.com/in/x/", &[0]), 0);
+        assert_eq!(host.set_tree_switch(&absent, true), Switch::NotRunning);
+        assert_eq!(host.tabs(&absent), Some(Vec::new()));
+        assert!(!host.close_tab(&absent, 0), "a tab never read is never closed");
         assert_eq!(pid_of("com.richos.no-such-browser"), None);
     }
 }
