@@ -254,8 +254,7 @@ impl Corpus {
         options.extend(self.unavailable.iter().filter_map(|skipped| {
             let path = PathBuf::from(&skipped.rel_path);
             let path = if path.is_absolute() { path } else if self.root.is_absolute() { self.root.join(path) } else { return None };
-            let on_volume = path.strip_prefix("/").is_ok_and(|relative| relative.starts_with("Volumes"));
-            let unavailable = if on_volume && matches!(path.try_exists(), Ok(false)) { "Offline" } else { "No access" };
+            let unavailable = if path.starts_with(volume_mount_root()) && matches!(path.try_exists(), Ok(false)) { "Offline" } else { "No access" };
             Some(SearchFolder { path, files: 0, direct: false, unavailable: Some(unavailable) })
         }));
         options
@@ -581,6 +580,11 @@ pub fn load_scope(configured: &[PathBuf], excluded: &[PathBuf]) -> Corpus {
         .expect("no cancellation requested").corpus
 }
 
+fn volume_mount_root() -> &'static Path {
+    // The terminator prevents adjacent binary strings being read as a mounted volume path.
+    Path::new(c"/Volumes".to_str().expect("the mount root is UTF-8"))
+}
+
 /// Discover mounted volumes on the search worker. The desktop does not touch
 /// removable storage while opening a conversation or starting the app.
 pub(crate) fn automatic_roots(home: &[PathBuf]) -> Vec<PathBuf> {
@@ -588,8 +592,8 @@ pub(crate) fn automatic_roots(home: &[PathBuf]) -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::fs::MetadataExt;
-        let mount = Path::new("/").join("Volumes");
-        if let (Ok(parent), Ok(entries)) = (mount.metadata(), std::fs::read_dir(&mount)) {
+        let mount = volume_mount_root();
+        if let (Ok(parent), Ok(entries)) = (mount.metadata(), std::fs::read_dir(mount)) {
             roots.extend(entries.flatten().filter_map(|entry| {
                 let path = entry.path();
                 let meta = path.symlink_metadata().ok()?;

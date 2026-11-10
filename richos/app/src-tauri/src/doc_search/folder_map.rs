@@ -90,7 +90,7 @@ impl FolderMap {
         let mut paths = vec![home.to_path_buf()];
         #[cfg(target_os = "macos")]
         {
-            if let Ok(volumes) = std::fs::read_dir(Path::new("/").join("Volumes")) {
+            if let Ok(volumes) = std::fs::read_dir(richos_core::machine_settings::volume_mount_root()) {
                 paths.extend(volumes.flatten().filter_map(|entry| {
                     if !entry.file_type().ok()?.is_dir() { return None; }
                     let path = entry.path();
