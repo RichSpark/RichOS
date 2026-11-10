@@ -1,10 +1,11 @@
 """The archive-search harness, driven as a program (search-harness.test.sh builds it and says why).
 
-Every run gets its own temporary index folder; the folder searched is the crate's synthetic
-stand-in, and the embedder is the stand-in one, so nothing here needs a model or the archive.
+Each test copies the crate's synthetic stand-in outside the checkout and builds a temporary index.
+The stand-in embedder needs neither a model nor the archive.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,13 +25,15 @@ def harness(*args):
 
 class Harness(unittest.TestCase):
     def setUp(self):
-        self.scratch = Path(tempfile.mkdtemp(prefix="search-harness-")).resolve()
-
-    def tearDown(self):
-        subprocess.run(["rm", "-rf", str(self.scratch)], check=True)
+        temp = tempfile.TemporaryDirectory(prefix="search-harness-")
+        self.addCleanup(temp.cleanup)
+        self.scratch = Path(temp.name).resolve()
+        # A hidden checkout such as the nightly's source tree cannot be a search grant.
+        self.standin = self.scratch / "standin"
+        shutil.copytree(STANDIN, self.standin)
 
     def test_inventory_counts_the_folder_and_names_a_long_file(self):
-        r = harness("inventory", "--root", STANDIN)
+        r = harness("inventory", "--root", self.standin)
         self.assertEqual(r.returncode, 0, r.stderr)
         inv = json.loads(r.stdout)
         self.assertEqual(inv["files"], 10)
@@ -40,7 +43,7 @@ class Harness(unittest.TestCase):
 
     def test_query_finds_by_meaning_only_with_super_finder_on(self):
         index = self.scratch / "index"
-        query = ["query", "--root", STANDIN, "--index", index, "--embedder", "stand-in", "the app felt slow on first open"]
+        query = ["query", "--root", self.standin, "--index", index, "--embedder", "stand-in", "the app felt slow on first open"]
         on = harness(*query)
         self.assertEqual(on.returncode, 0, on.stderr)
         on = json.loads(on.stdout)
@@ -54,7 +57,7 @@ class Harness(unittest.TestCase):
 
     def test_compare_scores_the_committed_questions_in_both_modes(self):
         out = self.scratch / "compare.json"
-        r = harness("compare", "--root", STANDIN, "--index", self.scratch / "index", "--embedder", "stand-in",
+        r = harness("compare", "--root", self.standin, "--index", self.scratch / "index", "--embedder", "stand-in",
                     "--questions", QUESTIONS, "--out", out)
         self.assertEqual(r.returncode, 0, r.stderr)
         report = json.loads(out.read_text())
@@ -79,7 +82,7 @@ class Harness(unittest.TestCase):
 
     def test_compare_refuses_an_output_inside_the_published_repository(self):
         inside = APP / "target-search-harness-test" / "compare.json"
-        r = harness("compare", "--root", STANDIN, "--index", self.scratch / "index", "--embedder", "stand-in",
+        r = harness("compare", "--root", self.standin, "--index", self.scratch / "index", "--embedder", "stand-in",
                     "--questions", QUESTIONS, "--out", inside)
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("refusing --out inside", r.stderr)
