@@ -3507,13 +3507,53 @@ class GatesAtOnceTests(unittest.TestCase):
         self.assertEqual(args[self.CEO_WORDS_ARG], "go ahead and promote this nightly to stable")
         # Asked to run every gate again, it looks for no run.
         runner = Mock()
-        _, args = self.main_with(*one, *self.NUMBERS, runner=runner)
+        _, args = self.main_with(*one, "--rerun-gates", *self.NUMBERS, runner=runner)
         runner.return_value.run_that_built.assert_not_called()
         self.assertIsNone(args[self.GATES_PASSED_IN_ARG])
         # His words promote a nightly and nothing else.
         code, err = self.main_refusal("build", *self.NUMBERS, "--ceo-words", "ship it")
         self.assertEqual(code, 2)
         self.assertIn("--ceo-words is the CEO's decision to promote a nightly", err)
+
+    def test_stable_reruns_the_promoted_nightlys_gates_only_when_told_to(self):
+        # 2026-11-10: `stable --from-nightly ... --gates-at-once all` (the flag `build`
+        # requires, carried over by habit) ran every gate fresh instead of reusing the passing
+        # gates of the nightly's own run. CEO: "why is it taking so long again???" Nothing
+        # already proven is redone by accident.
+        tag = "v9.9.0-nightly.20990101.1"
+        one = ["stable", "--from-nightly", tag, "--ceo-words", "promote this nightly to stable"]
+        # The habit is refused, before any state, lock or log, with the way out in one line.
+        code, err = self.main_refusal(*one, "--gates-at-once", "all", environ={})
+        self.assertEqual(code, 2)
+        self.assertIn("stable takes the promoted nightly's passing gates, so drop "
+                      "--gates-at-once, or add --rerun-gates to deliberately execute them fresh",
+                      err)
+        self.assertFalse((self.root / "state").exists())
+        # Allowed 1, unchanged: neither flag reuses the gates of the run that built the nightly.
+        runner = Mock()
+        runner.return_value.run_that_built.return_value = "20990101T000000Z-0000abcd"
+        kwargs, args = self.main_with(*one, runner=runner)
+        runner.return_value.run_that_built.assert_called_once_with(tag)
+        self.assertEqual(args[self.GATES_PASSED_IN_ARG], "20990101T000000Z-0000abcd")
+        self.assertIsNone(kwargs["gates_at_once"])
+        # Allowed 2, exactly today's --gates-at-once: told to, every gate runs fresh.
+        runner = Mock()
+        kwargs, args = self.main_with(*one, "--rerun-gates", "--gates-at-once", "all",
+                                      runner=runner)
+        runner.return_value.run_that_built.assert_not_called()
+        self.assertIsNone(args[self.GATES_PASSED_IN_ARG])
+        self.assertEqual(kwargs["gates_at_once"], "all")
+        # Told to rerun, it still names how many at once, like every command that runs gates.
+        code, err = self.main_refusal(*one, "--rerun-gates", environ={})
+        self.assertEqual(code, 2)
+        self.assertIn("stable refuses to start without --gates-at-once", err)
+        # And --rerun-gates means nothing where no promoted gates are reused or nothing runs.
+        for argv in (("build", "--rerun-gates", *self.NUMBERS),
+                     (*one, "--rerun-gates", "--dry-run")):
+            with self.subTest(argv=argv):
+                code, err = self.main_refusal(*argv, environ={})
+                self.assertEqual(code, 2)
+                self.assertIn("--rerun-gates", err)
 
     def build_with_gate_parent(self, parent_mode, foreign_owner=False):
         """main() `build` with its gate folder under a fresh parent created with `parent_mode`:
