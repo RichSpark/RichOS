@@ -4182,6 +4182,7 @@ fn main() {
             git_name_host::git_name_open_file,
             search_folder_preferences,
             set_search_folder_mode,
+            clear_search_folders,
             reindex_search_folders,
             search_folder_tree,
             search_selected_folders,
@@ -6997,6 +6998,15 @@ fn set_search_folder_mode(state: State<AppState>, mode: richos_core::config::Sea
     })
 }
 
+#[richos_command::command]
+fn clear_search_folders(state: State<AppState>) -> Result<richos_core::config::SearchFolderPreferences, String> {
+    update_search_folder_preferences(&state, |preferences| {
+        preferences.chosen.clear();
+        preferences.mode = richos_core::config::SearchFolderMode::Off;
+        Ok(())
+    })
+}
+
 fn update_search_folder_preferences(
     state: &AppState,
     change: impl FnOnce(&mut richos_core::config::SearchFolderPreferences) -> Result<(), String>,
@@ -7043,9 +7053,6 @@ fn set_search_folder_selected(state: State<AppState>, folder_id: String, selecte
             preferences.mode = SearchFolderMode::Chosen;
         } else {
             preferences.chosen.retain(|folder| folder != &path);
-            for folders in preferences.company_limits.values_mut() {
-                folders.retain(|folder| folder != &path);
-            }
             if preferences.chosen.is_empty() {
                 preferences.mode = SearchFolderMode::Off;
             }
@@ -7060,6 +7067,7 @@ struct SearchCompanyFolders {
     name: String,
     // Absent inherits the global list. An empty limit gives Rich no files.
     source_ids: Option<Vec<String>>,
+    saved_sources: Vec<doc_search::SearchSource>,
 }
 
 #[richos_command::command]
@@ -7069,9 +7077,11 @@ fn search_company_folders(state: State<AppState>) -> Result<Vec<SearchCompanyFol
     let snapshot = state.reader.snapshot();
     Ok(snapshot.entity_registry().entities().iter().map(|entity| {
         let company_id = entity.id.to_string();
-        let source_ids = preferences.company_limits.get(&company_id).map(|paths| paths.iter()
+        let limit = preferences.company_limits.get(&company_id);
+        let source_ids = limit.map(|paths| paths.iter()
             .map(|path| richos_search::corpus::source_id(&path.to_string_lossy())).collect());
-        SearchCompanyFolders { company_id, name: entity.display_name.clone(), source_ids }
+        let saved_sources = limit.map_or_else(Vec::new, |paths| doc_search::saved_company_sources(&state.search, paths));
+        SearchCompanyFolders { company_id, name: entity.display_name.clone(), source_ids, saved_sources }
     }).collect())
 }
 
@@ -7083,7 +7093,8 @@ fn set_search_company_folders(state: State<AppState>, company_id: String, source
     }
     update_search_folder_preferences(&state, |preferences| {
         if let Some(ids) = source_ids {
-            let paths = doc_search::company_limit_paths(&state.search, &ids)?;
+            let retained = preferences.company_limits.get(id.as_str()).map(Vec::as_slice).unwrap_or_default();
+            let paths = doc_search::company_limit_paths(&state.search, &ids, retained)?;
             let _previous = preferences.company_limits.insert(id.to_string(), paths);
         } else {
             let _previous = preferences.company_limits.remove(id.as_str());

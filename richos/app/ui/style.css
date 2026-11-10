@@ -13387,10 +13387,10 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 .srch-sources {
   display: flex;
   flex-direction: column;
-  flex: 0 0 min(220px, 28vw);
+  flex: 0 0 min(280px, 28vw);
   min-width: 0;
   min-height: 0;
-  margin: 10px 12px 8px 0;
+  margin: 10px 0 8px 12px;
   padding: 4px 12px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -13410,6 +13410,13 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
   display: flex;
   min-height: 30px;
   overflow-wrap: anywhere;
+}
+.srch-source-name { flex: 1; }
+.srch-source-count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.srch-source-options .srch-check:has(input:disabled) { color: var(--ink-soft); }
+.srch-coverage-note {
+  margin: 10px 12px 0; padding: 8px 10px;
+  border-left: 3px solid var(--gold-text); color: var(--ink-soft);
 }
 .srch-source-note {
   margin: 6px 0;

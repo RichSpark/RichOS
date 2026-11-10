@@ -20,6 +20,7 @@
 use richos_search::corpus::{FolderScope, MetadataSource};
 use richos_search::embed::Embedder;
 use richos_core::config::{SearchFolderMode, SearchFolderPreferences};
+use richos_core::machine_settings::Settings;
 use richos_core::{entity::PersonId, ledger::{Ledger, Message}, read_view::{ReadView, SpineReader, SpineView}, timeline::Timeline};
 use richos_search::service::{Busy, Config, FolderSetConfig, Grant, Reranker, SearchRequest, SearchResponse, SearchService, Status, Tuning};
 use std::collections::BTreeMap;
@@ -58,6 +59,62 @@ struct FolderControls {
 struct FolderAccess {
     choice: FolderChoice,
     company_limits: BTreeMap<String, Vec<PathBuf>>,
+}
+
+#[derive(PartialEq, Eq)]
+struct SettingsStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+struct SearchSettings {
+    file: PathBuf,
+    saved: Mutex<Option<CachedSettings>>,
+}
+
+struct CachedSettings {
+    stamp: Option<SettingsStamp>,
+    value: Result<Settings, String>,
+}
+
+impl SearchSettings {
+    fn new(home: &Path) -> Self {
+        let file = std::env::var_os("RICHOS_ENV_FILE").map(PathBuf::from)
+            .unwrap_or_else(|| richos_core::machine_settings::file(home));
+        Self { file, saved: Mutex::new(None) }
+    }
+
+    /// The launch environment is fixed. Stat the live settings file before
+    /// reading another entry, and only parse again when that file changes.
+    fn current(&self) -> Result<Settings, String> {
+        self.current_with(Settings::current)
+    }
+
+    fn current_with(&self, load: impl FnOnce() -> Result<Settings, String>) -> Result<Settings, String> {
+        let mut saved = self.saved.lock().unwrap();
+        let stamp = match self.file.metadata() {
+            Ok(meta) => {
+                #[cfg(unix)]
+                use std::os::unix::fs::MetadataExt;
+                Some(SettingsStamp {
+                    len: meta.len(),
+                    modified: meta.modified().ok(),
+                    #[cfg(unix)]
+                    identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+                })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return load(),
+        };
+        if let Some(settings) = saved.as_ref().filter(|prior| prior.stamp == stamp) {
+            return settings.value.clone();
+        }
+        let settings = load();
+        *saved = Some(CachedSettings { stamp, value: settings.clone() });
+        settings
+    }
 }
 
 impl FolderAccess {
@@ -397,6 +454,7 @@ pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy, p
     crate::search_diagnostics::init(data_dir);
     let controls = Arc::new(FolderControls::new(home, data_dir, preferences));
     let source = controls.clone();
+    let settings = SearchSettings::new(home);
     #[cfg(target_os = "macos")]
     let metadata = {
         let catalog = data_dir.join("RichCleaner/library.sqlite");
@@ -410,7 +468,7 @@ pub fn start(home: &Path, data_dir: &Path, busy: richos_search::service::Busy, p
     #[cfg(not(target_os = "macos"))]
     let (metadata, reranker) = { let _ = data_dir; (None, None) };
     DocumentSearch::new(
-        move || source.locate(richos_core::machine_settings::Settings::current()),
+        move || source.locate(settings.current()),
         make_embedder,
         Some(busy),
         metadata,
@@ -886,6 +944,13 @@ pub struct SearchSource {
     id: String,
     name: String,
     path: String,
+    files: usize,
+    direct: bool,
+    unavailable: Option<&'static str>,
+}
+
+fn folder_name(path: &Path) -> String {
+    path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned()
 }
 
 /// Palette options come from the active corpus. Settings can show other folders
@@ -893,10 +958,13 @@ pub struct SearchSource {
 pub fn search_sources(service: &DocumentSearch) -> Vec<SearchSource> {
     service.read(|active, revoked| {
         if revoked { return Vec::new(); }
-        let mut roots: Vec<_> = active.service.searchable_folders().into_iter().map(|(id, root)| {
-            let path = root.to_string_lossy().into_owned();
-            let name = root.file_name().map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
-            SearchSource { id, name, path }
+        let mut roots: Vec<_> = active.service.folder_options().into_iter().map(|folder| {
+            let name = folder_name(&folder.path);
+            let name = if folder.direct { format!("Files in {name}") } else { name };
+            SearchSource {
+                id: folder.id(), name, path: folder.path.to_string_lossy().into_owned(),
+                files: folder.files, direct: folder.direct, unavailable: folder.unavailable,
+            }
         }).collect();
         roots.sort_unstable_by(|a, b| (&a.name, &a.path).cmp(&(&b.name, &b.path)));
         roots
@@ -905,14 +973,34 @@ pub fn search_sources(service: &DocumentSearch) -> Vec<SearchSource> {
 
 /// Unlike a one-time filter, a saved limit must not silently ignore an unknown
 /// ID. The user may be looking at the previous folder grant and should reload it.
-pub fn company_limit_paths(service: &DocumentSearch, ids: &[String]) -> Result<Vec<PathBuf>, String> {
+pub fn company_limit_paths(service: &DocumentSearch, ids: &[String], retained: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     service.read(|active, revoked| {
         let unavailable = || "A selected search folder is no longer available.".to_string();
         if revoked { return Err(unavailable()); }
-        let active: std::collections::HashMap<_, _> = active.service.searchable_folders().into_iter().collect();
-        ids.iter().map(|id| active.get(id).cloned().ok_or_else(&unavailable))
+        let mut options: BTreeMap<_, _> = active.service.folder_options().into_iter()
+            .filter(|folder| !folder.direct && folder.unavailable.is_none())
+            .map(|folder| (folder.id(), folder.path)).collect();
+        // An existing narrower or offline choice can be preserved or removed
+        // without granting an arbitrary new path supplied by the renderer.
+        options.extend(retained.iter().map(|path| (richos_search::corpus::source_id(&path.to_string_lossy()), path.clone())));
+        ids.iter().map(|id| options.get(id).cloned().ok_or_else(&unavailable))
             .collect::<Result<std::collections::BTreeSet<_>, _>>()
             .map(|paths| paths.into_iter().collect())
+    })
+}
+
+pub fn saved_company_sources(service: &DocumentSearch, paths: &[PathBuf]) -> Vec<SearchSource> {
+    service.read(|active, revoked| {
+        let roots = active.service.searchable_folders();
+        paths.iter().map(|path| {
+            let available = !revoked && roots.iter().any(|(_, root)| path.starts_with(root) || root.starts_with(path));
+            let path = path.to_string_lossy().into_owned();
+            SearchSource {
+                id: richos_search::corpus::source_id(&path),
+                name: folder_name(Path::new(&path)), path, files: 0, direct: false,
+                unavailable: (!available).then_some("Outside current search folders"),
+            }
+        }).collect()
     })
 }
 
@@ -955,25 +1043,50 @@ struct ScopedToolAnswer {
 
 fn tool_folder_scope(active: &ActiveSearch, company_limit: Option<&[PathBuf]>, requested: Option<&[String]>) -> Result<Option<FolderScope>, &'static str> {
     if company_limit.is_none() && requested.is_none() { return Ok(None); }
-    let authorized: Vec<_> = active.service.searchable_folders().into_iter()
-        .filter(|(_, path)| company_limit.is_none_or(|paths| paths.contains(path))).collect();
-    let ids = if let Some(names) = requested {
-        let mut ids = Vec::with_capacity(names.len());
-        for name in names {
-            let name = name.to_lowercase();
-            let mut matching = authorized.iter().filter(|(_, path)| {
-                path.file_name().and_then(|part| part.to_str()).is_some_and(|part| part.to_lowercase() == name)
-            });
-            match (matching.next(), matching.next()) {
-                (Some((id, _)), None) => ids.push(id.clone()),
-                _ => return Err("A requested folder name does not identify one folder Rich can search in this company."),
-            }
+    let global = FolderScope::normalized(active.service.searchable_folders().into_iter().map(|(_, path)| path).collect());
+    let allowed = company_limit.map_or_else(|| global.clone(), |limit| global.intersect(&FolderScope::normalized(limit.to_vec())));
+    let Some(names) = requested else { return Ok(Some(allowed)) };
+    let mut choices: std::collections::BTreeSet<_> = active.service.folder_options().into_iter()
+        .filter(|folder| !folder.direct && folder.unavailable.is_none())
+        .map(|folder| folder.path).collect();
+    if company_limit.is_some() { choices.extend(allowed.roots().iter().cloned()); }
+    let mut selected = Vec::with_capacity(names.len());
+    for name in names {
+        let name = name.to_lowercase();
+        let mut matching = choices.iter().filter(|path| {
+            folder_name(path).to_lowercase() == name
+                && !allowed.intersect(&FolderScope::normalized(vec![(*path).clone()])).is_empty()
+        });
+        match (matching.next(), matching.next()) {
+            (Some(path), None) => selected.push(path.clone()),
+            _ => return Err("A requested folder name does not identify one folder Rich can search in this company."),
         }
-        ids
-    } else {
-        authorized.into_iter().map(|(id, _)| id).collect()
+    }
+    Ok(Some(allowed.intersect(&FolderScope::normalized(selected))))
+}
+
+fn describe_tool_scope(active: &ActiveSearch, scope: Option<&FolderScope>, company_limited: bool, answer: &mut serde_json::Value) {
+    let options = active.service.folder_options();
+    let available: Vec<_> = options.iter().filter(|folder| folder.unavailable.is_none()).collect();
+    let names = |paths: &[PathBuf]| -> Vec<_> {
+        paths.iter().map(|path| folder_name(path)).collect::<std::collections::BTreeSet<_>>().into_iter().take(32).collect()
     };
-    Ok(Some(active.service.limit_to_folder_ids(&ids)))
+    let (searched, excluded) = match scope {
+        Some(scope) => {
+            let excluded: Vec<_> = available.iter().filter(|folder| scope.intersect(&folder.scope()).is_empty())
+                .map(|folder| folder.path.clone()).collect();
+            if company_limited && scope.is_empty() {
+                answer["folder"] = serde_json::json!("This company's search limit leaves no available folders.");
+            }
+            (names(scope.roots()), names(&excluded))
+        }
+        None => (names(&available.iter().map(|folder| folder.path.clone()).collect::<Vec<_>>()), Vec::new()),
+    };
+    answer["folder_scope"] = serde_json::json!({
+        "company_limited": company_limited,
+        "searched_folders": searched,
+        "excluded_folders": excluded,
+    });
 }
 
 fn refused_tool_search() -> serde_json::Value {
@@ -1006,7 +1119,9 @@ impl ScopedToolAnswer {
                 Ok(scope) => scope,
                 Err(note) => return serde_json::json!({"empty": "no_folder", "results": [], "note": note}),
             };
-            answer_tool_search(active, ask, false, scope.as_ref(), &obsolete)
+            let mut answer = answer_tool_search(active, ask, false, scope.as_ref(), &obsolete);
+            if !obsolete() { describe_tool_scope(active, scope.as_ref(), limit.is_some(), &mut answer); }
+            answer
         });
         if obsolete() || !authorized() { return refused_tool_search(); }
         result
@@ -1159,6 +1274,26 @@ mod tests {
     }
 
     #[test]
+    fn search_settings_reloads_after_replacement_and_removal() {
+        let base = std::env::temp_dir().join(richos_core::util::new_id("search-settings-cache"));
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join(".env");
+        std::fs::write(&file, "RICHOS_SEARCH_DOCUMENTS_ROOT=/old").unwrap();
+        let settings = SearchSettings { file: file.clone(), saved: Mutex::new(None) };
+        let load = || std::fs::read_to_string(&file).map_err(|error| error.to_string())
+            .and_then(|text| richos_core::machine_settings::parse(&text));
+        assert_eq!(settings.current_with(load).unwrap().search_documents_root().as_deref(), Some(Path::new("/old")));
+        assert!(settings.current_with(|| panic!("settings must be cached")).is_ok());
+        let replacement = base.join("replacement");
+        std::fs::write(&replacement, "RICHOS_SEARCH_DOCUMENTS_ROOT=/new").unwrap();
+        std::fs::rename(replacement, &file).unwrap();
+        assert_eq!(settings.current_with(load).unwrap().search_documents_root().as_deref(), Some(Path::new("/new")));
+        std::fs::remove_file(&file).unwrap();
+        assert!(settings.current_with(load).is_err());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn live_folder_controls_reindex_and_revoke_old_result_ids() {
         let base = std::env::temp_dir().join(richos_core::util::new_id("search-controls"));
         let folder = base.join("chosen");
@@ -1221,8 +1356,8 @@ mod tests {
         assert_eq!(sources.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["archive", "notes"]);
         let archive_id = sources[0].id.clone();
         let forged = richos_search::corpus::source_id(&base.join("private").to_string_lossy());
-        assert!(company_limit_paths(&service, std::slice::from_ref(&forged)).is_err());
-        assert_eq!(company_limit_paths(&service, &[archive_id.clone(), archive_id.clone()]).unwrap(), [base.join("archive")]);
+        assert!(company_limit_paths(&service, std::slice::from_ref(&forged), &[]).is_err());
+        assert_eq!(company_limit_paths(&service, &[archive_id.clone(), archive_id.clone()], &[]).unwrap(), [base.join("archive")]);
         let request = SearchRequest { query: "silvercove".into(), super_finder: false, strict: false, offset: 0, limit: PAGE };
         let find = |ids: Option<&[String]>| search_palette(&service, request.clone(), None, ids).unwrap();
         assert_eq!(find(None).hits.len(), 2);
@@ -1230,7 +1365,7 @@ mod tests {
         assert!(find(Some(&[])).hits.is_empty());
         service.apply_folder_preferences(chosen(vec![notes]));
         service.current().service.wait_idle();
-        assert!(company_limit_paths(&service, std::slice::from_ref(&archive_id)).is_err());
+        assert!(company_limit_paths(&service, std::slice::from_ref(&archive_id), &[]).is_err());
         assert!(find(Some(&[archive_id])).hits.is_empty());
         assert_eq!(find(None).hits.len(), 1);
         service.shutdown();
@@ -1277,16 +1412,28 @@ mod tests {
         let tool = ScopedToolAnswer { service: service.clone(), reader: spine.reader() };
         let find = |i, live| tool.answer_scoped(&ask("silvercove", false, false), &bindings[i], &|| live);
         assert_eq!(find(0, true)["results"].as_array().unwrap().len(), 1);
+        assert_eq!(find(0, true)["folder_scope"]["excluded_folders"], serde_json::json!(["archive"]));
         assert_eq!(find(1, true)["results"].as_array().unwrap().len(), 0);
+        assert_eq!(find(1, true)["folder"], "This company's search limit leaves no available folders.");
         assert_eq!(find(2, true)["results"].as_array().unwrap().len(), 2);
         assert_eq!(find(2, false)["results"].as_array().unwrap().len(), 0);
         let mut one_folder = ask("silvercove", false, false);
         one_folder.folders = Some(vec!["Archive".into()]);
         assert_eq!(tool.answer_scoped(&one_folder, &bindings[0], &|| true)["results"].as_array().unwrap().len(), 0);
         assert_eq!(tool.answer_scoped(&one_folder, &bindings[2], &|| true)["results"].as_array().unwrap().len(), 1);
+        let mut parent = preferences.clone();
+        parent.chosen = vec![base.clone()];
+        service.apply_folder_preferences(parent);
+        service.current().service.wait_idle();
+        let result = find(0, true);
+        assert_eq!(result["results"].as_array().unwrap().len(), 1);
+        assert_eq!(result["folder_scope"]["searched_folders"], serde_json::json!(["notes"]));
+        one_folder.folders = Some(vec!["Notes".into()]);
+        assert_eq!(tool.answer_scoped(&one_folder, &bindings[0], &|| true)["results"].as_array().unwrap().len(), 1);
         let mut narrowed = preferences;
         let _previous = narrowed.company_limits.insert("alpha".into(), Vec::new());
         service.apply_folder_preferences(narrowed);
+        service.current().service.wait_idle();
         assert_eq!(find(0, true)["results"].as_array().unwrap().len(), 0);
         assert_eq!(find(2, true)["results"].as_array().unwrap().len(), 2);
         service.shutdown();

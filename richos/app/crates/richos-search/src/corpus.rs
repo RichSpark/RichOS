@@ -165,6 +165,28 @@ pub struct Corpus {
     pub links_skipped: usize,
 }
 
+pub struct SearchFolder {
+    pub path: PathBuf,
+    pub files: usize,
+    pub direct: bool,
+    pub unavailable: Option<&'static str>,
+}
+
+impl SearchFolder {
+    pub fn id(&self) -> String {
+        let path = self.path.to_string_lossy();
+        if self.direct { source_id(&format!("direct:{path}")) } else { source_id(&path) }
+    }
+
+    pub fn scope(&self) -> FolderScope {
+        if self.direct {
+            FolderScope::with_direct(Vec::new(), vec![self.path.clone()])
+        } else {
+            FolderScope::normalized(vec![self.path.clone()])
+        }
+    }
+}
+
 impl Corpus {
     pub fn by_id(&self) -> BTreeMap<&str, usize> {
         self.docs.iter().enumerate().map(|(i, d)| (d.id.as_str(), i)).collect()
@@ -201,9 +223,41 @@ impl Corpus {
     }
 
     pub(crate) fn in_scope(&self, key: &str, scope: &FolderScope) -> bool {
-        self.origin(key).is_some_and(|(root, relative)| scope.roots().iter().any(|allowed|
-            root.starts_with(allowed) || allowed.strip_prefix(root).is_ok_and(|tail| Path::new(relative).starts_with(tail))
-        ))
+        self.origin(key).is_some_and(|(root, relative)| {
+            scope.roots().iter().any(|allowed|
+                root.starts_with(allowed) || allowed.strip_prefix(root).is_ok_and(|tail| Path::new(relative).starts_with(tail)))
+                || scope.direct.iter().any(|dir| dir.strip_prefix(root).is_ok_and(|tail| Path::new(relative).parent() == Some(tail)))
+        })
+    }
+
+    /// Broad discovery presents disjoint child folders. Files directly in a
+    /// root have their own choice so that unchecking a child actually excludes it.
+    pub(crate) fn folder_options(&self) -> Vec<SearchFolder> {
+        let mut counts = BTreeMap::new();
+        if !self.automatic {
+            let roots = self.roots.values().map(PathBuf::as_path)
+                .chain(self.root.is_absolute().then_some(self.root.as_path()));
+            counts.extend(roots.map(|root| ((root.to_owned(), false), 0)));
+        }
+        for doc in &self.docs {
+            let Some((root, relative)) = self.origin(&doc.rel_path) else { continue };
+            let key = match (self.automatic, relative.split_once('/')) {
+                (true, Some((child, _))) => (root.join(child), false),
+                (true, None) => (root.to_owned(), true),
+                (false, _) => (root.to_owned(), false),
+            };
+            *counts.entry(key).or_insert(0) += 1;
+        }
+        let mut options: Vec<_> = counts.into_iter().map(|((path, direct), files)| SearchFolder {
+            path, files, direct, unavailable: None,
+        }).collect();
+        options.extend(self.unavailable.iter().filter_map(|skipped| {
+            let path = PathBuf::from(&skipped.rel_path);
+            let path = if path.is_absolute() { path } else if self.root.is_absolute() { self.root.join(path) } else { return None };
+            let unavailable = if path.starts_with("/Volumes") && matches!(path.try_exists(), Ok(false)) { "Offline" } else { "No access" };
+            Some(SearchFolder { path, files: 0, direct: false, unavailable: Some(unavailable) })
+        }));
+        options
     }
 
     pub(crate) fn display_key(&self, key: &str) -> Option<String> {
@@ -308,7 +362,10 @@ pub fn validate_root(root: &Path) -> Result<PathBuf, String> {
 /// The currently reachable part of a saved folder choice. Roots are canonical
 /// and disjoint, so a parent and child selected together do not index files twice.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FolderScope(Vec<PathBuf>);
+pub struct FolderScope {
+    roots: Vec<PathBuf>,
+    direct: Vec<PathBuf>,
+}
 
 impl FolderScope {
     /// An unavailable folder stays in the caller's saved choices. Returning its
@@ -326,7 +383,7 @@ impl FolderScope {
         (Self::normalized(roots), unavailable)
     }
 
-    pub(crate) fn normalized(mut roots: Vec<PathBuf>) -> Self {
+    pub fn normalized(mut roots: Vec<PathBuf>) -> Self {
         roots.sort_unstable();
         let mut distinct: Vec<PathBuf> = Vec::new();
         for root in roots {
@@ -334,23 +391,36 @@ impl FolderScope {
                 distinct.push(root);
             }
         }
-        Self(distinct)
+        Self { roots: distinct, direct: Vec::new() }
+    }
+
+    pub(crate) fn with_direct(roots: Vec<PathBuf>, mut direct: Vec<PathBuf>) -> Self {
+        let mut scope = Self::normalized(roots);
+        direct.retain(|dir| !scope.contains_path(dir));
+        direct.sort_unstable();
+        direct.dedup();
+        scope.direct = direct;
+        scope
     }
 
     pub fn roots(&self) -> &[PathBuf] {
-        &self.0
+        &self.roots
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty() && self.direct.is_empty()
     }
 
     pub(crate) fn contains_path(&self, path: &Path) -> bool {
-        self.0.iter().any(|root| path.starts_with(root))
+        self.roots.iter().any(|root| path.starts_with(root))
     }
 
     /// Apply a company or request limit without ever granting a new subtree. An
     /// explicit empty limit is an empty grant; inheritance is handled by the caller.
     pub fn intersect(&self, limit: &Self) -> Self {
         let mut roots = Vec::new();
-        for base in &self.0 {
-            for bound in &limit.0 {
+        for base in &self.roots {
+            for bound in &limit.roots {
                 if base.starts_with(bound) {
                     roots.push(base.clone());
                 } else if bound.starts_with(base) {
@@ -358,7 +428,9 @@ impl FolderScope {
                 }
             }
         }
-        Self::normalized(roots)
+        let direct = self.direct.iter().filter(|dir| limit.contains_path(dir) || limit.direct.contains(dir))
+            .chain(limit.direct.iter().filter(|dir| self.contains_path(dir))).cloned().collect();
+        Self::with_direct(roots, direct)
     }
 }
 
@@ -694,6 +766,28 @@ mod tests {
         assert!(validate_root(Path::new("relative/path")).unwrap_err().contains("absolute"));
         let missing = std::env::temp_dir().join("richos-search-definitely-missing-folder");
         assert!(validate_root(&missing).unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn automatic_folder_choices_keep_root_files_and_children_separate() {
+        let root = scratch("automatic-sources");
+        let child = root.join("Contracts");
+        let missing = root.join("Disconnected");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(root.join("direct.md"), "Notes at the root").unwrap();
+        std::fs::write(child.join("agreement.md"), "Notes in Contracts").unwrap();
+        let corpus = load_scope_until_stopped(&[root.clone(), missing.clone()], &[], true, None, || false).unwrap().corpus;
+        let options = corpus.folder_options();
+        let direct = options.iter().find(|folder| folder.direct).unwrap();
+        let contracts = options.iter().find(|folder| folder.path == child).unwrap();
+        assert_eq!(direct.files, 1);
+        assert_eq!(contracts.files, 1);
+        assert_ne!(direct.id(), contracts.id());
+        assert!(direct.scope().intersect(&contracts.scope()).is_empty());
+        assert_eq!(corpus.docs.iter().filter(|doc| corpus.in_scope(&doc.rel_path, &direct.scope())).count(), 1);
+        assert_eq!(corpus.docs.iter().filter(|doc| corpus.in_scope(&doc.rel_path, &contracts.scope())).count(), 1);
+        assert!(options.iter().any(|folder| folder.path == missing && folder.unavailable.is_some()));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

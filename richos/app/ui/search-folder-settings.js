@@ -7,7 +7,7 @@
   const number = new Intl.NumberFormat();
   let preferences, status, savedRows = [], roots = [], epoch = 0, busy = false, timer;
   const branches = new Map();
-  let sheet, tree, coverage, feedback, reindex, companyPane;
+  let sheet, tree, coverage, feedback, reindex, clearSelection, companyPane, openedFrom;
   let companyRows = [], companySources = [], editingCompany = null;
 
   function element(tag, cls, text) {
@@ -40,6 +40,7 @@
     editingCompany = null;
     sheet.hidden = true;
     if (back) window.RichSettings.open();
+    else if (openedFrom?.offsetParent) openedFrom.focus();
     else document.getElementById("set-btn")?.focus();
   }
 
@@ -82,7 +83,13 @@
     feedback = element("p", "", "Changes apply to the next search. No restart needed.");
     feedback.setAttribute("role", "status");
     reindex = button("Reindex", "", refreshIndex);
-    footer.append(feedback, reindex);
+    clearSelection = button("Clear selection", "", () => save("clear_search_folders", {}));
+    clearSelection.id = "rf-folder-clear";
+    const done = button("Done", "", () => close(false));
+    done.id = "rf-folder-done";
+    const actions = element("div", "rf-folder-actions");
+    actions.append(reindex, clearSelection, done);
+    footer.append(feedback, actions);
     page.append(header, columns, footer);
     sheet.appendChild(page);
     document.body.appendChild(sheet);
@@ -160,34 +167,36 @@
     const folder = status?.folder;
     const meaning = status?.meaning;
     const off = preferences?.mode === "off";
+    const unavailable = status?.unavailable_folders || 0;
+    const completed = meaning?.state === "indexing" ? meaning.files_done : meaning?.state === "ready" ? meaning.files : 0;
+    const building = meaning?.state === "indexing" ? meaning.files_total - completed : 0;
+    const skipped = folder?.state === "ready" ? folder.skipped + folder.links_skipped : 0;
     reindex.disabled = busy || !preferences || off;
+    clearSelection.disabled = busy || !preferences || off && !preferences.chosen.length;
     if (off || folder?.state === "none") {
       coverage.append(element("strong", "rf-folder-total", "Off"),
         element("p", "", "Nothing is searched until you choose. You can still find companies and chats."));
     } else if (folder?.state === "ready") {
-      const completed = meaning?.state === "indexing" ? meaning.files_done : meaning?.state === "ready" ? meaning.files : 0;
-      const building = meaning?.state === "indexing" ? meaning.files_total - completed : 0;
       coverage.appendChild(element("strong", "rf-folder-total", number.format(folder.files) + " documents"));
       coverage.appendChild(element("p", "", number.format(completed) + " searchable with RichFinder"));
       if (building > 0) coverage.appendChild(element("p", "", number.format(building) + " indexing · word search works now"));
-      coverage.appendChild(element("p", "", number.format(folder.skipped + folder.links_skipped) + " skipped"));
-      const known = completed + building + folder.skipped + folder.links_skipped;
-      if (known) {
-        const bar = element("div", "rf-folder-progress");
-        bar.setAttribute("aria-hidden", "true");
-        for (const [count, label] of [[completed, "done"], [building, "working"], [folder.skipped + folder.links_skipped, "skipped"]]) {
-          if (!count) continue;
-          const segment = element("span", "rf-folder-progress-" + label);
-          segment.style.width = count / known * 100 + "%";
-          bar.appendChild(segment);
-        }
-        coverage.appendChild(bar);
-      }
+      coverage.appendChild(element("p", "", number.format(skipped) + " skipped"));
     } else {
       coverage.appendChild(element("p", "", folder?.state === "error" ? folder.message : "Reading folders…"));
     }
-    const unavailable = status?.unavailable_folders || 0;
     if (!off && unavailable) coverage.appendChild(element("p", "rf-folder-unavailable", number.format(unavailable) + " unavailable folders"));
+    const known = completed + building + unavailable + skipped;
+    if (!off && known) {
+      const bar = element("div", "rf-folder-progress");
+      bar.setAttribute("aria-hidden", "true");
+      for (const [count, label] of [[completed, "done"], [building, "working"], [unavailable, "unavailable"], [skipped, "skipped"]]) {
+        if (!count) continue;
+        const segment = element("span", "rf-folder-progress-" + label);
+        segment.style.width = count / known * 100 + "%";
+        bar.appendChild(segment);
+      }
+      coverage.appendChild(bar);
+    }
     for (const row of savedRows.filter(item => preferences?.mode === "chosen" && item.state !== "eligible")) {
       const line = element("div", "rf-folder-unavailable");
       line.append(element("span", "", row.name + " · " + (row.reason || "Unavailable")),
@@ -207,8 +216,13 @@
     for (const company of companyRows) {
       const id = company.company_id;
       const expanded = id === editingCompany;
-      const allowed = new Set(company.source_ids ?? companySources.map((source) => source.id));
-      const count = companySources.filter((source) => allowed.has(source.id)).length;
+      const choices = new Map((company.saved_sources || []).map(source => [source.id, source]));
+      for (const source of companySources) {
+        if (!source.direct) choices.set(source.id, source);
+      }
+      const sources = [...choices.values()];
+      const allowed = new Set(company.source_ids ?? sources.filter(source => !source.unavailable).map(source => source.id));
+      const count = sources.filter(source => !source.unavailable && allowed.has(source.id)).length;
       const row = element("div", "rf-company-row");
       const toggle = button(expanded ? "Done" : company.source_ids === null ? "Limit" : "Edit", "", () => {
         editingCompany = expanded ? null : id;
@@ -225,17 +239,18 @@
         const options = element("div", "rf-company-options");
         options.setAttribute("role", "group");
         options.setAttribute("aria-label", "Folders Rich can search in " + company.name);
-        for (const source of companySources) {
+        for (const source of sources) {
           const choice = element("input");
           choice.type = "checkbox";
           choice.id = "rf-company-" + id + "-" + source.id;
           choice.checked = allowed.has(source.id);
-          choice.disabled = busy;
+          choice.disabled = busy || !!source.unavailable && !choice.checked;
           const label = element("label");
           label.title = source.path;
           label.append(choice, element("span", "", source.name));
+          if (source.unavailable) label.appendChild(element("span", "rf-folder-row-note", source.unavailable));
           choice.addEventListener("change", () => {
-            const next = companySources.filter((item) => item.id === source.id ? choice.checked : allowed.has(item.id));
+            const next = sources.filter((item) => item.id === source.id ? choice.checked : allowed.has(item.id));
             void saveCompany(id, next.map((item) => item.id));
           });
           options.appendChild(label);
@@ -332,7 +347,7 @@
       companyRows = companies;
       companySources = sources;
       setFeedback("Saved. Applies to the next search, no restart.");
-      window.dispatchEvent(new Event("richfinder:folders-changed"));
+      window.dispatchEvent(new CustomEvent("richfinder:folders-changed", { detail: { mode: preferences.mode } }));
     } catch (error) {
       if (token === epoch) setFeedback(String(error));
     } finally {
@@ -361,6 +376,7 @@
   }
 
   async function open() {
+    openedFrom = document.activeElement;
     window.RichSettings.close(false);
     build();
     const token = ++epoch;

@@ -1029,12 +1029,19 @@ impl SearchService {
         corpus.roots.iter().map(|(id, root)| (id.clone(), root.clone())).collect()
     }
 
+    pub fn folder_options(&self) -> Vec<corpus::SearchFolder> {
+        self.0.corpus.read().unwrap().as_ref().map_or_else(Vec::new, |snapshot| snapshot.corpus.folder_options())
+    }
+
     /// A request can narrow to IDs from this corpus only. Old or invented IDs
     /// grant nothing, including when a folder setting changes mid-request.
     pub fn limit_to_folder_ids(&self, ids: &[String]) -> corpus::FolderScope {
         let ids: std::collections::HashSet<_> = ids.iter().map(String::as_str).collect();
-        corpus::FolderScope::normalized(self.searchable_folders().into_iter()
-            .filter_map(|(id, path)| ids.contains(id.as_str()).then_some(path)).collect())
+        let (direct, trees): (Vec<_>, Vec<_>) = self.folder_options().into_iter()
+            .filter(|folder| folder.unavailable.is_none() && ids.contains(folder.id().as_str()))
+            .partition(|folder| folder.direct);
+        corpus::FolderScope::with_direct(trees.into_iter().map(|folder| folder.path).collect(),
+            direct.into_iter().map(|folder| folder.path).collect())
     }
 
     /// The meaning half, when it can answer: a model loaded and at least the reconciled part of
@@ -1120,7 +1127,7 @@ impl SearchService {
         let allowed_points = if let Some(scope) = scope {
             let status_meaning = meaning.clone().or_else(|| self.meaning_for_query());
             let points = restrict_status(&mut response.status, corpus, status_meaning.as_deref(), scope);
-            if scope.roots().is_empty() {
+            if scope.is_empty() {
                 response.effective.super_finder = false;
                 response.empty = Some(Empty::NoFolder);
                 return Some(finish(response, started));
@@ -1364,7 +1371,7 @@ fn restrict_status(status: &mut Status, corpus: &Corpus, meaning: Option<&Meanin
     }
     let files = versions.len();
     let skipped = corpus.skipped.iter().filter(|s| corpus.in_scope(&s.rel_path, scope)).count();
-    status.folder = if scope.roots().is_empty() {
+    status.folder = if scope.is_empty() {
         FolderStatus::None
     } else {
         FolderStatus::Ready { files, passages, skipped, links_skipped: 0 }

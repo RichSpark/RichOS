@@ -517,6 +517,34 @@ async function main() {
         await folders.close();
       }
     });
+    await run.check("Partial coverage and cleared folder choices are visible in the palette", async () => {
+      const page = await openApp(browser, { documentSearch: "partial" });
+      try {
+        const sources = page.locator(".srch-sources");
+        const offline = sources.getByRole("checkbox", { name: /Travel archive.*Offline/ });
+        await page.getByText(/1 folder was not searched/).waitFor();
+        assert(await offline.isDisabled(), "an offline source cannot be searched");
+        assert(await sources.getByRole("checkbox", { name: /Documents\s*\d+/ }).isChecked(), "an available source shows its file count");
+        assert((await sources.boundingBox()).x < (await page.locator(".srch-results-pane").boundingBox()).x,
+          "Sources is to the left of the results");
+        await page.fill("#search-input", "refund");
+        await waitFor(page, "documents are shown before changing folders", () => document.querySelectorAll(".srch-doc").length === 2);
+        await page.click("#srch-source-settings");
+        await page.getByRole("radio", { name: /All eligible/ }).check();
+        await page.locator("#rf-folder-done").click();
+        await page.getByText(/Your search folders changed/).waitFor();
+        assert(await sources.getByRole("checkbox", { name: /Archive\s*\d+/ }).isChecked(), "All eligible still offers individual folders");
+        await page.click("#srch-source-settings");
+        await page.locator("#rf-folder-clear").click();
+        await waitFor(page, "Clear selection switched the folder map off", () => document.getElementById("rf-folder-mode-off").checked);
+        await page.locator("#rf-folder-done").click();
+        await page.getByText("Search folders cleared. Document results were removed.", { exact: true }).waitFor();
+        assertEqual((await docTitles(page)).length, 0, "cleared grants remove stale document results");
+        assertEqual(page.__errors.length, 0, page.__errors.join("\n"));
+      } finally {
+        await page.close();
+      }
+    });
     await run.check("A company limit narrows Rich without changing the global folder choice", async () => {
       const page = await openApp(browser);
       try {

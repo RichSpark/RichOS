@@ -8129,6 +8129,7 @@ const searchHintEl = el("search-hint");
 const searchSourceOptionsEl = el("srch-source-options");
 const searchSourceNoteEl = el("srch-source-note");
 const searchSourceSettingsEl = el("srch-source-settings");
+const searchCoverageNoteEl = el("srch-coverage-note");
 
 const SEARCH_PAGE = 12;
 const searchState = {
@@ -8161,6 +8162,7 @@ const searchState = {
   sources: null,
   sourceSelection: null,
   docsPending: false,
+  scopeNotice: "",
 };
 
 function searchReducedMotion() {
@@ -8191,6 +8193,7 @@ function openSearch() {
   searchState.sources = null;
   searchState.sourceSelection = null;
   searchState.docsPending = false;
+  searchState.scopeNotice = "";
   searchState.status = null;
   searchHintEl.hidden = false;
   searchCountEl.textContent = "";
@@ -8250,21 +8253,24 @@ function paintSearchSources() {
   const focused = searchSourceOptionsEl.contains(document.activeElement) ? document.activeElement.value : null;
   let restore = null;
   const options = document.createDocumentFragment();
-  for (const { id, name, path } of sources || []) {
+  const available = (sources || []).filter(source => !source.unavailable).length;
+  for (const { id, name, path, files, unavailable } of sources || []) {
     const label = searchNode("label", "srch-check");
     label.title = path;
     const box = document.createElement("input");
     box.type = "checkbox";
     box.value = id;
-    box.checked = searchState.sourceSelection === null || searchState.sourceSelection.has(id);
+    box.disabled = !!unavailable;
+    box.checked = !unavailable && (searchState.sourceSelection === null || searchState.sourceSelection.has(id));
     box.addEventListener("change", () => {
       const checked = [...searchSourceOptionsEl.querySelectorAll("input:checked")];
-      searchState.sourceSelection = checked.length === sources.length ? null : new Set(checked.map((item) => item.value));
+      searchState.sourceSelection = checked.length === available ? null : new Set(checked.map((item) => item.value));
       paintSearchSourceNote();
       refreshScopedSearch();
     });
-    label.append(box, searchNode("span", null, name));
-    if (id === focused) restore = box;
+    label.append(box, searchNode("span", "srch-source-name", name));
+    label.appendChild(searchNode("span", "srch-source-count", unavailable || searchNumber(files ?? 0)));
+    if (id === focused && !unavailable) restore = box;
     options.appendChild(label);
   }
   searchSourceOptionsEl.replaceChildren(options);
@@ -8272,16 +8278,30 @@ function paintSearchSources() {
   paintSearchSourceNote();
 }
 
+function paintSearchCoverage() {
+  const unavailable = (searchState.sources || []).filter(source => source.unavailable);
+  const count = Math.max(searchState.status?.unavailable_folders || 0, unavailable.length);
+  const notes = [searchState.scopeNotice].filter(Boolean);
+  if (count) {
+    const names = unavailable.map(source => source.name + " · " + source.unavailable).join(", ");
+    notes.push(searchNumber(count) + (count === 1 ? " folder was not searched." : " folders were not searched."));
+    if (names) notes.push(names);
+  }
+  searchCoverageNoteEl.textContent = notes.join(" ");
+  searchCoverageNoteEl.hidden = !notes.length;
+}
+
 function paintSearchSourceNote() {
   const sources = searchState.sources;
   const folder = searchState.status?.folder?.state;
-  const hasSources = !!sources?.length;
+  const hasSources = sources?.some(source => !source.unavailable);
   searchSourceSettingsEl.textContent = hasSources ? "Change saved folders" : "Choose folders…";
   searchSourceNoteEl.textContent = sources === null || folder === "loading"
     ? "Reading search folders…"
     : !hasSources ? "No folders are available for document search."
     : searchState.sourceSelection?.size === 0 ? "No folders selected for this search."
     : "Uncheck a folder to narrow this search.";
+  paintSearchCoverage();
 }
 
 async function refreshSearchSources() {
@@ -8308,9 +8328,15 @@ function refreshScopedSearch() {
 }
 
 searchSourceSettingsEl.addEventListener("click", () => window.RichFinderFolders.open());
-window.addEventListener("richfinder:folders-changed", () => {
+window.addEventListener("richfinder:folders-changed", (event) => {
   if (!searchState.open) return;
+  const removed = searchState.docs.length;
+  searchState.scopeNotice = event.detail?.mode === "off"
+    ? "Search folders cleared. Document results were removed."
+    : removed ? "Your search folders changed. Previous document results were removed."
+    : "Your search folders changed.";
   searchState.sources = null;
+  searchState.sourceSelection = null;
   paintSearchSources();
   refreshScopedSearch();
   void refreshSearchSources();
@@ -8992,6 +9018,8 @@ function invalidateSearch() {
 
 searchInputEl.addEventListener("input", () => {
   clearTimeout(searchState.timer);
+  searchState.scopeNotice = "";
+  paintSearchCoverage();
   invalidateSearch();
   searchState.timer = setTimeout(() => runSearch(false), 120);
 });

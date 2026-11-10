@@ -332,12 +332,18 @@
     const meaning = preset === "indexing" ? { state: "indexing", files_done: 20, files_total: files, passages_done: 20, passages_total: passages }
       : preset === "unavailable" ? { state: "unavailable", reason: "Apple's sentence embedding for 'en' is not available on this Mac." }
       : { state: "ready", files, passages };
-    return { folder, meaning, index_location: "/Users/someone/Library/Caches/RichOS/search", generation: mockFolderGeneration };
+    return { folder, meaning, index_location: "/Users/someone/Library/Caches/RichOS/search",
+      generation: mockFolderGeneration, unavailable_folders: preset === "partial" ? 1 : 0 };
   }
 
   function mockDocSources() {
     if (mockDocStatus().folder.state !== "ready") return [];
-    const choices = mockFolderRows.filter(row => ["fixture-docs", "fixture-archive"].includes(row.id));
+    const choices = mockFolderRows.filter(row => ["fixture-docs", "fixture-archive"].includes(row.id)).map(row => ({
+      ...row, files: MOCK_DOCS.filter(doc => doc.path.startsWith("2024/") === (row.id === "fixture-archive")).length,
+    }));
+    if (mockDocStatus().unavailable_folders) choices.push({
+      id: "fixture-offline", name: "Travel archive", path: "/Volumes/Travel archive", files: 0, unavailable: "Offline",
+    });
     return mockFolderGeneration === 1 || mockFolderPreferences.mode === "all" ? choices
       : choices.filter(row => mockFolderPreferences.chosen.includes(row.path));
   }
@@ -4231,18 +4237,25 @@
         case "search_selected_folders": return mockFolderRows.filter(row => mockFolderPreferences.chosen.includes(row.path));
         case "search_company_folders": return entities.map(entity => {
           const paths = mockFolderPreferences.company_limits[entity.id];
+          const saved = mockFolderRows.filter(row => paths?.includes(row.path));
           return { company_id: entity.id, name: entity.display_name,
-            source_ids: paths ? mockFolderRows.filter(row => paths.includes(row.path)).map(row => row.id) : null };
+            source_ids: paths ? saved.map(row => row.id) : null, saved_sources: saved };
         });
         case "set_search_company_folders": {
           if (!entities.some(entity => entity.id === args.companyId)) throw "That company is no longer available.";
           if (args.sourceIds == null) delete mockFolderPreferences.company_limits[args.companyId];
-          else mockFolderPreferences.company_limits[args.companyId] = mockDocSources()
+          else mockFolderPreferences.company_limits[args.companyId] = mockFolderRows
             .filter(source => args.sourceIds.includes(source.id)).map(source => source.path);
           return null;
         }
         case "set_search_folder_mode": {
           mockFolderPreferences.mode = args.mode;
+          mockFolderGeneration++;
+          return structuredClone(mockFolderPreferences);
+        }
+        case "clear_search_folders": {
+          mockFolderPreferences.chosen = [];
+          mockFolderPreferences.mode = "off";
           mockFolderGeneration++;
           return structuredClone(mockFolderPreferences);
         }
@@ -4252,9 +4265,6 @@
           if (args.selected && !mockFolderPreferences.chosen.includes(row.path)) mockFolderPreferences.chosen.push(row.path);
           if (!args.selected) {
             mockFolderPreferences.chosen = mockFolderPreferences.chosen.filter(folder => folder !== row.path);
-            for (const [company, folders] of Object.entries(mockFolderPreferences.company_limits)) {
-              mockFolderPreferences.company_limits[company] = folders.filter(path => path !== row.path);
-            }
           }
           mockFolderPreferences.mode = mockFolderPreferences.chosen.length ? "chosen" : "off";
           mockFolderGeneration++;
