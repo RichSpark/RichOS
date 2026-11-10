@@ -2533,7 +2533,7 @@ class Reaper(object):
         if "app_repos" in self.__dict__:
             return self.__dict__["app_repos"]
         out = set()
-        rel = self.cfg["app_registry_relpath"]
+        rel = self.cfg.get("app_registry_relpath") or ""
         files = []
         home = os.path.expanduser("~")
         if home and rel:
@@ -3007,7 +3007,16 @@ class Reaper(object):
         """Every checkout whose Cargo output may be cleared: each registered workspace and the
         nightly's source checkout."""
         roots = set(registered_workspaces())
-        roots.add(os.path.realpath(os.path.join(self.cfg["nightly_dir"], "source")))
+        # Every checkout the nightly keeps (`source`, `ui-checkout`, ...), never its logs or releases.
+        nightly = self.cfg["nightly_dir"]
+        try:
+            for name in sorted(os.listdir(nightly)):
+                path = os.path.join(nightly, name)
+                if name not in ("logs", "releases", "runtime") and os.path.isdir(path) \
+                        and not os.path.islink(path):
+                    roots.add(os.path.realpath(path))
+        except OSError:
+            pass
         return sorted(r for r in roots if os.path.isdir(r))
 
     @staticmethod
@@ -3049,7 +3058,7 @@ class Reaper(object):
             fcntl.flock(fh, fcntl.LOCK_UN)
             return True
 
-    def scan_cargo_output(self, walls):
+    def scan_cargo_output(self, walls, checkouts=None):
         """CARGO OUTPUT INSIDE A CHECKOUT: deleted while no build is using it.
 
         Proof it is unused, all of it: no nightly command holds `<nightly>/release.lock`; no
@@ -3058,8 +3067,10 @@ class Reaper(object):
         Walls 1 and 4 still apply (strictly inside a registered checkout, not a never-touch
         name); walls 2 and 3 do not, because they protect the checkout's FILES and the folder
         is not them: wall 3 only refuses a workspace sitting INSIDE the candidate."""
-        nightly_lock = os.path.join(self.cfg["nightly_dir"], "release.lock")
-        for checkout in self.checkout_roots():
+        nightly_lock = os.path.join(self.cfg.get("nightly_dir") or os.sep, "release.lock")
+        # `checkouts` is the APP's scope: the repositories the user connected to the app, where its
+        # workers build (scan_app). The scheduled sweep passes none and takes its own list.
+        for checkout in (checkouts if checkouts is not None else self.checkout_roots()):
             check_deadline()
             for path in self.find_cargo_targets(checkout):
                 klass = "cargo-output"
@@ -3581,6 +3592,12 @@ class Reaper(object):
         self.scan_app_voice(data, scope.get("exiting") or 0, held)
         self.scan_app_dictation(data, held)
         self.scan_app_mcp_logs(data)
+        # BUILD OUTPUT IN THE USER'S PROJECTS (2026-11-10): the app's workers build in the
+        # repositories the user connected, and Cargo's `target` folder grows there until the disk
+        # is full. Regenerable and proven unused by the same lock and age checks as the scheduled
+        # sweep (scan_cargo_output); the project's own files are never touched.
+        walls = Walls(claude_roots)
+        self.scan_cargo_output(walls, sorted(r for r in self.app_repositories() if os.path.isdir(r)))
         self.entries.sort(key=Entry.key)
         return self.entries
 

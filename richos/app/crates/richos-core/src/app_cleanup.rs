@@ -34,6 +34,9 @@ pub enum Moment {
     Start,
     Settled,
     Quit,
+    /// The user's disk is low ([`disk_is_low`]): the same sweep, with the time deleting build
+    /// output takes ([`DISK_LOW_BOUND`]); never at quit, which cannot wait that long.
+    DiskLow,
 }
 
 impl Moment {
@@ -42,7 +45,68 @@ impl Moment {
             Moment::Start => "start",
             Moment::Settled => "settled",
             Moment::Quit => "quit",
+            Moment::DiskLow => "disk-low",
         }
+    }
+
+    /// How long this moment's sweep may run before it is ended.
+    pub fn bound(self) -> Duration {
+        match self {
+            Moment::DiskLow => DISK_LOW_BOUND,
+            _ => BOUND,
+        }
+    }
+}
+
+/// A disk-low sweep deletes build output (a Cargo `target` folder is tens of gigabytes and
+/// millions of files), which takes minutes; the other moments' [`BOUND`] would end it half done.
+pub const DISK_LOW_BOUND: Duration = Duration::from_secs(600);
+/// The user's disk is low below this fraction free: on a 460 GB disk, 69 GB.
+pub const LOW_FREE_FRACTION: f64 = 0.15;
+/// How often the app looks at its disk while it runs.
+pub const DISK_CHECK_EVERY: Duration = Duration::from_secs(15 * 60);
+
+/// True when `free` bytes of `capacity` is under [`LOW_FREE_FRACTION`]. An unreadable disk
+/// (capacity 0) is never "low": nothing is deleted on a guess.
+pub fn disk_is_low(free: u64, capacity: u64) -> bool {
+    capacity > 0 && (free as f64) < (capacity as f64) * LOW_FREE_FRACTION
+}
+
+/// (free bytes an ordinary write can reach, capacity) of the volume holding `path`.
+#[cfg(unix)]
+pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let block = st.f_frsize as u64;
+    Some((block * st.f_bavail as u64, block * st.f_blocks as u64))
+}
+
+#[cfg(not(unix))]
+pub fn disk_space(_path: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+/// **The app starts the cleanup itself when the user's disk drops low** (CEO 2026-11-10: a user
+/// must never be the hard-drive janitor). Every [`DISK_CHECK_EVERY`], and once right away, the
+/// volume holding the app's data folder is read; below [`LOW_FREE_FRACTION`] free, `hook` is
+/// called with [`Moment::DiskLow`], which runs the same app-scoped sweep as start and settled.
+pub fn watch_disk(data_dir: PathBuf, hook: Hook) {
+    let spawned = std::thread::Builder::new().name("richos-disk-watch".into()).spawn(move || loop {
+        if let Some((free, capacity)) = disk_space(&data_dir) {
+            if disk_is_low(free, capacity) {
+                eprintln!("[richos] disk low ({} of {} GB free): starting the cleanup",
+                          free / 1_000_000_000, capacity / 1_000_000_000);
+                hook(Moment::DiskLow);
+            }
+        }
+        std::thread::sleep(DISK_CHECK_EVERY);
+    });
+    if let Err(error) = spawned {
+        eprintln!("[richos] disk watch: could not start ({error})");
     }
 }
 
@@ -170,7 +234,7 @@ impl Sweeper {
     /// Sweep now, waiting at most [`BOUND`]; one line to the app's log either way.
     pub fn run(&self, moment: Moment) -> Result<Outcome, String> {
         let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let result = self.run_bounded(moment, BOUND);
+        let result = self.run_bounded(moment, moment.bound());
         eprintln!("{}", log_line(moment, &result));
         result
     }
@@ -456,6 +520,22 @@ mod tests {
         assert!(!running.exists(), "a session that ended is gone at quit: {quit:?}");
         assert!(!mine.exists() && !mine_standing.exists(), "the quitting app's own profile is gone at quit: {quit:?}");
         assert!(open.exists() && foreign.exists(), "{quit:?}");
+    }
+
+    /// A low disk is judged on the fraction free, an unreadable disk is never low, and the disk-low
+    /// sweep gets minutes where the others get seconds (a `target` folder takes minutes to delete).
+    #[test]
+    fn a_low_disk_starts_the_sweep_and_it_gets_the_time_deleting_build_output_takes() {
+        assert!(disk_is_low(60_000_000_000, 460_000_000_000));
+        assert!(!disk_is_low(100_000_000_000, 460_000_000_000));
+        assert!(!disk_is_low(0, 0), "an unreadable disk is never low");
+        assert!(Moment::DiskLow.bound() > Moment::Quit.bound());
+        assert_eq!(Moment::DiskLow.as_str(), "disk-low");
+        let s = Sweeper::new(Path::new("/E"), "/R/bin", Path::new("/D/com.richos.app"));
+        let args = s.command(Moment::DiskLow).get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(args, ["/E/scripts/scratch-reaper.sh", "--apply", "--app", "/D/com.richos.app"]);
+        #[cfg(unix)]
+        assert!(disk_space(Path::new("/")).is_some_and(|(free, capacity)| capacity > 0 && free <= capacity));
     }
 
     #[test]
