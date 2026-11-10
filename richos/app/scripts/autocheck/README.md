@@ -236,6 +236,9 @@ in about 0.1 s and refuse in first-party material:
   domain. A sentence saying something is not licensed that way (the brand exclusion in
   `docs/legal/BRAND-ASSETS.md`) is not a declaration.
 
+A sentence, tag or manifest field wrapped across lines is judged whole and reported at the line it
+starts on.
+
 First-party is everything `.richos/vendored-material` does not record with origin `third-party`;
 what it does record keeps its own license and passes, so registering somebody else's work there
 (and in `docs/legal/THIRD-PARTY-NOTICES.md`) in the same change is the way through, never a

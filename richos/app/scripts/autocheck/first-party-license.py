@@ -22,6 +22,10 @@ WHAT IS REFUSED, in first-party material (anything not registered as third-party
     like) or put in the public domain. A sentence that says something is NOT licensed that way
     (the brand exclusion in docs/legal/BRAND-ASSETS.md) is not a declaration.
 
+A declaration or field wrapped across lines is judged whole (a comment's leading `*`, `//`, `#`
+on the next line is read past) and reported at the line it starts on; it counts when any line it
+spans is new.
+
 WHAT PASSES: everything under a path `.richos/vendored-material` records with origin
 `third-party`, which keeps its own license; the third-party notices themselves
 (docs/legal/THIRD-PARTY-*.md, docs/legal/*PROVENANCE*.md and the registry), whose job is to
@@ -44,6 +48,7 @@ Exit 0: nothing refused. Exit 1: refused, each finding named by file and line wi
 Exit 2: the check could not run (an unreadable registry, a git failure); a caller refuses.
 Standard library only; it reads git, never the working tree.
 """
+import bisect
 import re
 import subprocess
 import sys
@@ -54,6 +59,7 @@ AGPL_TITLE = "GNU AFFERO GENERAL PUBLIC LICENSE"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 SELF = "richos/app/scripts/autocheck/first-party-license.py"
 ALLOWED_IDS = {"agpl-3.0-only"}  # docs/legal/LICENSING.md: "version 3 and no later version"
+REACH = 3  # lines either side of a line naming a license that a wrapped declaration can span
 
 # Files that record other people's licenses by design.
 LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
@@ -97,7 +103,7 @@ DECLARATIONS = [
     re.compile(COPULA + r"(?:re-?)?(?:licen[cs]ed|released|distributed|made\s+available|available|published"
                r"|offered|provided|covered)" + UNDER + OTHER, re.I),
     # a header that starts with it: "Licensed under the <other> License, Version 2.0"
-    re.compile(r"^[\W_]*(?:dual[- ]?|also\s+)?licen[cs]ed" + UNDER + OTHER, re.I),
+    re.compile(r"^[\W_]*(?:dual[- ]?|also\s+)?licen[cs]ed" + UNDER + OTHER, re.I | re.M),
     # "<it> is <other> licensed", "is BSD-3-Clause licensed"
     re.compile(COPULA + r"(?:an?\s+)?" + OTHER + r"[\w.+-]*[- ]licen[cs]ed\b", re.I),
     # tags and fields: @license <other>, License: <other>, "license": "<other>", license = "<other>"
@@ -114,10 +120,13 @@ SPDX_TOKEN = re.compile(r"[ \t]*(\(|\)|[A-Za-z0-9](?:[A-Za-z0-9.+:-]*[A-Za-z0-9+
 SPDX_OPERATORS = {"or", "and", "with"}
 MANIFEST_FIELD = {
     "package.json": re.compile(r"\"license\"\s*:\s*\"([^\"]*)\""),
-    "Cargo.toml": re.compile(r"^\s*license\s*=\s*\"([^\"]*)\""),
-    "pyproject.toml": re.compile(r"^\s*license\s*=\s*\"([^\"]*)\""),
+    "Cargo.toml": re.compile(r"^[ \t]*license[ \t]*=[ \t]*\"([^\"]*)\"", re.M),
+    "pyproject.toml": re.compile(r"^[ \t]*license[ \t]*=[ \t]*\"([^\"]*)\"", re.M),
 }
 CANDIDATE = re.compile(r"licen[cs]|public\s+domain|SPDX", re.I)
+# What starts a continuation line of a comment or a quote, read past when lines are joined. A
+# leader is followed by a space, so Markdown's **bold** at the start of a line stays as it is.
+LEADER = re.compile(r"^[ \t]*(?:<!--|/\*+|(?:\*+|//+|#+|;+|--|>+)(?=[ \t]|$))?[ \t]*")
 
 # A RichOS file reproducing other people's notices says where they are.
 VENDORED_BEGIN = re.compile(r"\bBEGIN VENDORED\b")
@@ -249,28 +258,45 @@ def spdx_expression(text):
     return text[:at].strip(), ours
 
 
-def judge_line(path, line):
-    """What this line declares, or None."""
-    name = path.rsplit("/", 1)[-1]
-    found = SPDX.search(line)
-    if found:
-        value, ours = spdx_expression(found.group(1))
+def declarations(name, text):
+    """(start, end, what) for each declaration in `text`, whose lines are joined by newlines.
+    In the order a line's finding is named by: SPDX, manifest field, sentence or tag."""
+    found = []
+    for tag in SPDX.finditer(text):
+        value, ours = spdx_expression(tag.group(1))
         if not ours:
-            return f"an SPDX identifier other than AGPL-3.0-only ({value or 'empty'})"
+            found.append((tag.start(), tag.end(), f"an SPDX identifier other than AGPL-3.0-only ({value or 'empty'})"))
     field = MANIFEST_FIELD.get(name)
-    if field and (found := field.search(line)):
-        value = found.group(1).strip()
+    for hit in field.finditer(text) if field else ():
+        value = hit.group(1).strip()
         if value.lower() not in ALLOWED_IDS and value != "UNLICENSED" and not value.startswith("SEE LICENSE IN"):
-            return f"a {name} license field other than AGPL-3.0-only ({value})"
+            found.append((hit.start(), hit.end(), f"a {name} license field other than AGPL-3.0-only ({value})"))
     for pattern in DECLARATIONS:
-        for found in pattern.finditer(line):
-            if not NEGATED.search(found.group(0)):
-                return "a license declaration other than AGPL-3.0"
-    return None
+        for hit in pattern.finditer(text):
+            if not NEGATED.search(hit.group(0)):
+                found.append((hit.start(), hit.end(), "a license declaration other than AGPL-3.0"))
+    return found
+
+
+WORD = re.compile(r"[^\W_]")
+
+
+def blocks(candidates, count):
+    """Runs of line numbers (first, last) within REACH of a candidate line, merged."""
+    runs = []
+    for number in candidates:
+        first, last = max(1, number - REACH), min(count, number + REACH)
+        if runs and first <= runs[-1][1] + 1:
+            runs[-1][1] = max(runs[-1][1], last)
+        else:
+            runs.append([first, last])
+    return runs
 
 
 def judge_file(path, data, added):
-    """Findings for one file's new content; `added` is the set of added line numbers, or None for all."""
+    """Findings for one file's new content; `added` is the set of added line numbers, or None for all.
+    Lines are joined around each line naming a license, so a declaration wrapped across lines is
+    judged whole; it is reported at the line it starts on and counts when a line it spans is new."""
     if data is None or b"\0" in data[:8192]:
         return []
     text = data.decode("utf-8", errors="replace")
@@ -280,20 +306,34 @@ def judge_file(path, data, added):
             return [(path, 1, "the root LICENSE is no longer the GNU AGPL-3.0", first)]
         return []
     lines = text.splitlines()
-    hits = []
-    for number, line in enumerate(lines, 1):
-        if added is not None and number not in added:
-            continue
-        if not CANDIDATE.search(line):
-            continue
-        why = judge_line(path, line[:4000])
-        if why:
-            hits.append((number, why, line))
+    cleaned = [LEADER.sub("", line[:4000], count=1) for line in lines]
+    candidates = [n for n, line in enumerate(cleaned, 1) if CANDIDATE.search(line)
+                  and (added is None or any(k in added for k in range(n - REACH, n + REACH + 1)))]
+    name = path.rsplit("/", 1)[-1]
+    hits = {}
+    for first, last in blocks(candidates, len(lines)):
+        joined = "\n".join(cleaned[first - 1:last])
+        starts = [0]
+        for line in cleaned[first - 1:last - 1]:
+            starts.append(starts[-1] + len(line) + 1)
+        for start, end, why in declarations(name, joined):
+            word = WORD.search(joined, start, end)
+            start = word.start() if word else start
+            end = start + max(len(joined[start:end].rstrip()) - 1, 0)
+            span = range(first + bisect.bisect_right(starts, start) - 1, first + bisect.bisect_right(starts, end))
+            if added is None or any(k in added for k in span):
+                hits.setdefault(span[0], (why, span))
     if not hits:
         return []
     exempt = regions(lines)
-    return [(path, number, why, line) for number, why, line in hits
-            if OURS.search(line) or (number not in exempt and not NOTICE_MARK.search(line))]
+    findings = []
+    for number in sorted(hits):
+        why, span = hits[number]
+        spanned = [lines[k - 1] for k in span]
+        if any(OURS.search(line) for line in spanned) or \
+                not all(k in exempt or NOTICE_MARK.search(lines[k - 1]) for k in span):
+            findings.append((path, number, why, " ".join(line.strip() for line in spanned)))
+    return findings
 
 
 def added_lines(patch):

@@ -14,8 +14,9 @@ itself declare anything.
            in RichPass.html putting its first-party source under MIT, also inside a vendored
            region; an SPDX identifier, a manifest field, a license header and a public-domain
            dedication in RichOS files; a root LICENSE that is no longer the AGPL; a Gradle
-           wrapper nobody registered; AGPL-3.0-or-later; an SPDX expression with an
-           alternative in parentheses; a file whose name holds a space; `commit -a`; a land of a commit that skipped the hooks,
+           wrapper nobody registered; a declaration or manifest field wrapped across lines;
+           AGPL-3.0-or-later; an SPDX expression with an alternative in parentheses; a file
+           whose name holds a space; `commit -a`; a land of a commit that skipped the hooks,
            before main moves; the push backstop of a merge that skipped them
   PASSES   registered third-party material with its own license (the RichPass vendor packages);
            a Gradle wrapper registered in the same change; the brand exclusion ("not licensed",
@@ -178,6 +179,23 @@ class Refused(Fixture):
                      "richos/tools/five/index.js:1:",
                      "richos/tools/six/Cargo.toml:3: a Cargo.toml license field other than AGPL-3.0-only (BSD-3-Clause)")
 
+    def test_a_declaration_wrapped_across_lines_is_refused(self):
+        # Review rv-20261110T021817Z-d00aad23-a8a2 P1: each line was judged alone, so ordinary
+        # wrapping let a sentence or a manifest field through. Reported at the line it starts on.
+        self.make()
+        self.write("richos/tools/twelve/NOTES.md", "Twelve is licensed under the\nGNU Affero General Public License.\n")
+        self.commit("an AGPL sentence")
+        self.write("richos/tools/twelve/NOTES.md", f"Twelve is licensed under the\n{MIT}.\n")  # only line 2 changes
+        self.write("richos/tools/richpass/README.md",
+                   f"# RichPass\n\nRichPass first-party source is licensed under the\n{MIT}.\n")
+        self.write("richos/tools/example/package.json", '{"name": "example", "lic' + 'ense":\n"MIT"}\n')
+        self.write("richos/tools/eleven/main.js", f"/*\n * This tool is distributed under the terms of the\n * {MIT}.\n */\n")
+        out = self.commit("wrap it", expect=1)
+        self.refused(out, "richos/tools/twelve/NOTES.md:1: a license declaration other than AGPL-3.0",
+                     "richos/tools/richpass/README.md:3: a license declaration other than AGPL-3.0",
+                     "richos/tools/example/package.json:1: a package.json license field other than AGPL-3.0-only (MIT)",
+                     "richos/tools/eleven/main.js:2:")
+
     def test_agpl_or_later_is_refused(self):
         # Review P2: LICENSING.md grants version 3 and no later version; only AGPL-3.0-only is ours.
         self.make()
@@ -283,6 +301,16 @@ class Passes(Fixture):
                    f"// {SPDX}AGPL-3.0-only\n")
         self.write("richos/tools/eight/package.json", '{\n  "lic' + 'ense": "AGPL-3.0-only"\n}\n')
         self.commit("brand wording")
+
+    def test_wrapped_agpl_statements_negations_and_closed_comments_pass(self):
+        self.make()
+        self.write("richos/tools/thirteen/README.md",
+                   f"The RichPass logo is not licensed under the\n{MIT}.\nRichPass is licensed under the\n"
+                   "GNU Affero General Public License v3.0.\n")
+        self.write("richos/tools/thirteen/main.css", f"/* {SPDX}AGPL-3.0-only */\n")
+        self.write("richos/tools/thirteen/page.html", f"<!-- {SPDX}AGPL-3.0-only -->\n")
+        self.write("richos/tools/thirteen/package.json", '{\n  "lic' + 'ense":\n    "AGPL-3.0-only"\n}\n')
+        self.commit("wrapped statements of our own license")
 
     def test_notices_reproduced_in_a_richos_file_pass(self):
         self.make()
