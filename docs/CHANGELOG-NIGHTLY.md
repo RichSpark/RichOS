@@ -2,6 +2,16 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.0-nightly.20261110.93
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.0-nightly.20261110.93)
+
+- Added RichPass on the navigation rail: a free password maker that makes the same strong password for each website again from your master passphrase every time and never saves it; Download RichPass saves it as one file you open in Safari, Chrome or Firefox, even offline
+- Added protection for your copy of RichPass on its page and in Settings: while RichOS is open it puts back the exact original if anything changes, renames or removes the file and tells you to reopen it
+- Changed your Mac's request for access to your Desktop, Documents, Downloads or a removable drive to say what RichOS uses it for
+- Fixed the first click in the RichOS window doing nothing when RichOS was not the app in front, such as right after you closed RichCleaner's window
+- [technical] Added RichPass's protection checks, without file names or contents, to RichDoctor's reports
+
 ## 1.3.0-nightly.20261107.91
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.0-nightly.20261107.91)
