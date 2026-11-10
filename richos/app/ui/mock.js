@@ -3796,6 +3796,10 @@
         // THE DICTATION SHEET (`dictation_app.rs`): the same facts and the same refusals.
         case "cleaner_status":
           return {enabled:false,root:null,scribeOn:dictationView.on,key:dictationView.key,inboxFirst:false,operation:{stage:"idle"}};
+        // RichCleaner's own window (`cleaner_host.rs`), opened by the navigation rail (round 58).
+        // A browser preview has no second window to bring forward, so the call is answered.
+        case "cleaner_open_window":
+          return null;
         case "dictation_status":
           dictationCalls.push({ cmd });
           return structuredClone(dictationView);

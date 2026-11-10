@@ -31,12 +31,13 @@ pub enum Category {
     ConversationFailure,
     Configuration,
     Richscribe,
+    RichFinder,
     ClaudeAvailability,
 }
 
 impl Category {
-    pub const ALL: [Category; 6] =
-        [Category::Installation, Category::StartupCrash, Category::ConversationFailure, Category::Configuration, Category::Richscribe, Category::ClaudeAvailability];
+    pub const ALL: [Category; 7] =
+        [Category::Installation, Category::StartupCrash, Category::ConversationFailure, Category::Configuration, Category::Richscribe, Category::RichFinder, Category::ClaudeAvailability];
 
     pub fn parse(s: &str) -> Option<Category> {
         Category::ALL.into_iter().find(|c| c.as_str() == s)
@@ -48,6 +49,7 @@ impl Category {
             Category::ConversationFailure => "conversation_failure",
             Category::Configuration => "configuration",
             Category::Richscribe => "richscribe",
+            Category::RichFinder => "richfinder",
             Category::ClaudeAvailability => "claude_availability",
         }
     }
@@ -59,6 +61,7 @@ impl Category {
             Category::ConversationFailure => "Checking what happened in the conversation that stopped…",
             Category::Configuration => "Checking a few RichOS settings…",
             Category::Richscribe => "Checking what RichScribe recorded…",
+            Category::RichFinder => "Checking RichFinder timings…",
             Category::ClaudeAvailability => "Checking whether Claude Code is working…",
         }
     }
@@ -70,6 +73,7 @@ impl Category {
             Category::ConversationFailure => "Checked the conversation that stopped",
             Category::Configuration => "Checked a few RichOS settings",
             Category::Richscribe => "Checked what RichScribe recorded",
+            Category::RichFinder => "Checked RichFinder timings",
             Category::ClaudeAvailability => "Checked whether Claude Code is working",
         }
     }
@@ -216,9 +220,10 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
     match category {
         Category::Installation => vec![installation(scope, ctx)],
         Category::StartupCrash => startup_crash(scope, ctx, &mut budget),
-        Category::ConversationFailure => vec![conversation_failure(scope, ctx, &mut budget), richfinder_timing(scope, ctx, &mut budget)],
+        Category::ConversationFailure => vec![conversation_failure(scope, ctx, &mut budget)],
         Category::Configuration => vec![configuration(scope, ctx, &mut budget)],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
+        Category::RichFinder => vec![richfinder_timing(scope, ctx, &mut budget)],
         Category::ClaudeAvailability => vec![claude_availability(scope)],
     }
 }
@@ -668,7 +673,7 @@ pub fn search_timing_lines(text: &str) -> Vec<(u64, String)> {
 fn richfinder_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     let root = scope.data_root();
     let source = "RichFinder timing log";
-    let category = Category::ConversationFailure;
+    let category = Category::RichFinder;
     let reads: Vec<_> = [format!("{SEARCH_TIMING_LOG}.1"), SEARCH_TIMING_LOG.to_string()]
         .iter().map(|name| read_source(&root, &root.join(name), scope, budget, true)).collect();
     if reads.iter().all(Result::is_err) {
@@ -855,7 +860,7 @@ mod tests {
             "stages": [["embedding", 10.2], ["private-stage-label", 8.1]]
         });
         write(&scope.data_root().join(SEARCH_TIMING_LOG), &record.to_string());
-        let items = collect(Category::ConversationFailure, &scope, &Context::default(), 0);
+        let items = collect(Category::RichFinder, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFinder timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
         assert_eq!(timing.coverage, Coverage::InWindow);

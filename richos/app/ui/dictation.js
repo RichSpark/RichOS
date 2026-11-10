@@ -165,7 +165,7 @@
   function build() {
     if (sheet.isConnected) return;
     sheet.innerHTML = `<section class="overlay-panel dict-panel">
-    <header class="dict-heading"><div><p class="dict-eyebrow">Settings</p><h2 id="dict-title">RichScribe</h2>
+    <header class="dict-heading"><div><p class="dict-eyebrow">Settings</p><h2 id="dict-title" class="feature-title"><img class="feature-icon" src="assets/app-icons/richscribe-128.png" alt="" />RichScribe</h2>
       <p class="dict-lede">Type with your voice in any app on your Mac. Your words appear where your cursor is.</p></div>
       <button id="dict-close" type="button" aria-label="Close RichScribe">${ICON.close}</button></header>
     <div class="dict-body"><div id="dict-col" class="dict-col"></div>
@@ -478,6 +478,16 @@
   function paint() {
     paintRow();
     paintSheet();
+    paintRail();
+  }
+  /// The navigation rail's RichScribe item (round 58): shown where RichScribe is in this build,
+  /// with its gold dot while RichScribe is on and waits on a Mac permission.
+  function paintRail() {
+    if (!window.RichNavRail || !view) return;
+    window.RichNavRail.setScribe({
+      available: !!view.ready,
+      needsPermission: !!view.on && !elsewhere() && (mic() !== "allowed" || ax() !== "allowed"),
+    });
   }
 
   // ---- the sample bar breathes, while the sheet shows and motion is welcome ---------------

@@ -448,6 +448,7 @@ function readSidebar(page) {
       railRight: Math.round(rr.right),
       railDisplay: rs.display,
       stageLeft: Math.round(stage.getBoundingClientRect().left),
+      navRight: Math.round(document.getElementById("nav-rail").getBoundingClientRect().right),
       btnShown: !btn.hidden && getComputedStyle(btn).display !== "none" && br.width >= 24 && br.height >= 24,
       btnFromHeaderLeft: Math.round(br.left - hr.left),
       btnFirstInHeader: document.getElementById("stage-header").firstElementChild === btn,
@@ -475,10 +476,13 @@ async function railSettles(page, shown) {
         const r = document.getElementById("rail");
         const cs = getComputedStyle(r);
         const rect = r.getBoundingClientRect();
+        // The sidebar's edge is the navigation rail's right edge (round 58), which never moves.
+        const nav = document.getElementById("nav-rail");
+        const edge = nav ? nav.getBoundingClientRect().right : 0;
         // Away is the END of the slide: hidden (which `visibility` becomes only when the slide
         // ends) and out of the row. A rail a pixel short of the edge is still moving.
-        if (!want) return cs.display === "none" || (cs.visibility === "hidden" && rect.right <= 0.5);
-        return cs.display !== "none" && cs.visibility !== "hidden" && Math.round(rect.left) === 0;
+        if (!want) return cs.display === "none" || (cs.visibility === "hidden" && rect.right <= edge + 0.5);
+        return cs.display !== "none" && cs.visibility !== "hidden" && Math.round(rect.left) === Math.round(edge);
       },
       shown,
       { timeout: 60000 }
@@ -517,7 +521,7 @@ async function sidebarToggleChecks(browser, run) {
     await page.click("#rail-toggle");
     await railSettles(page, false);
     const s = await readSidebar(page);
-    assertEqual(s.stageLeft, 0, "the conversation takes the room");
+    assertEqual(s.stageLeft, s.navRight, "the conversation takes the room up to the navigation rail, which stays");
     assertEqual(s.expanded, "false");
     assertEqual(s.label, "Show the sidebar");
     assertEqual(s.title, "Show the sidebar (⌘⇧S)");

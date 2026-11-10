@@ -1,12 +1,14 @@
 "use strict";
-// The live Mac resources square at the foot of the sidebar, opposite the name.
-// Ink is the default; the context menu offers the persisted Readout view.
+// The live Mac resources square on the navigation rail, above the initials circle (moved there
+// from the sidebar's foot by design round 58, CEO 2026-11-06: "the 2 items at the very bottom of
+// the left sidebar should move into the nav rail"). Ink is the default; the context menu offers
+// the persisted Readout view.
 //
 //   Ink      a smooth CPU area gliding between one-second samples, user (green) over system
 //            (red), and RAM as its own column at the right that turns amber under memory
 //            pressure (red at critical).
-//   Readout  Ink plus the live CPU % and RAM % beside it, each with a small key in the square's
-//            own paints instead of the words.
+//   Readout  Ink plus the live CPU % and RAM % stacked under it, each with a small key in the
+//            square's own paints instead of the words.
 //
 // THE DATA IS THE APP'S OWN SAMPLER and nothing else: `system_resources` reads the one-second
 // native sampler's cache (`crates/richos-core/src/system_resources.rs`), the same snapshot every
@@ -28,8 +30,8 @@
 // choice is saved in the app's settings store (`config.rs` `resources_view`).
 (function () {
   const bridge = window.RichBridge;
-  const footer = document.getElementById("rail-footer");
-  if (!bridge || !footer) return;
+  const slot = document.getElementById("nr-res");
+  if (!bridge || !slot) return;
 
   const HIST = 60;
   const POLL_MS = 500;
@@ -42,11 +44,9 @@
   // square says Measuring, not Unavailable (system_resources.rs, the sampler loop).
   const FRESH_INTERVAL = /first CPU interval|fresh CPU interval/;
   const AFTER_SLEEP = /after sleep/;
-  // Match both the live rail state and the pre-paint durable mirror. The narrow drawer
-  // ignores the docked mirror, just as the shell's stylesheet does.
-  const railVisible = () => !document.body.classList.contains("rail-closed") &&
-    (document.body.classList.contains("bp-narrow") || document.documentElement.dataset.sidebar !== "hidden");
-  const visible = () => !document.hidden && railVisible();
+  // The navigation rail never collapses (hiding the sidebar leaves it), so the square is shown
+  // whenever the window is, and its reads pause only while the window is hidden.
+  const visible = () => !document.hidden;
   const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // ---- state --------------------------------------------------------------------------------
@@ -81,7 +81,7 @@
     '<span class="res-num"><i class="res-key ram"><i></i></i><b id="res-ram">…</b></span>' +
     "</span>" +
     '<span class="res-tile"><canvas aria-hidden="true"></canvas></span>';
-  footer.appendChild(btn);
+  slot.appendChild(btn);
   const tileCanvas = btn.querySelector(".res-tile canvas");
   const cpuNum = btn.querySelector("#res-cpu");
   const ramNum = btn.querySelector("#res-ram");
@@ -591,13 +591,17 @@
   // and comes back.
   let focusDismissed = false;
 
+  /// To the right of the rail, never over it, its foot level with the square's and its arrow on
+  /// the square's middle (round 58). Anchored by its FOOT, so a card whose content grows or
+  /// shrinks (Live to Measuring, a sentence added) keeps its arrow on the square without being
+  /// placed again.
   function place() {
     const r = btn.querySelector(".res-tile").getBoundingClientRect();
-    const cw = card.offsetWidth || 300;
-    const left = Math.max(8, Math.min(window.innerWidth - cw - 8, r.right + 8 - cw));
-    card.style.left = left + "px";
-    card.style.bottom = window.innerHeight - r.top + 12 + "px";
-    card.style.setProperty("--res-arrow", Math.max(12, left + cw - (r.left + r.width / 2) - 7) + "px");
+    const foot = Math.min(window.innerHeight - 10, r.bottom + 14);
+    card.style.left = Math.round(r.right + 14) + "px";
+    card.style.top = "auto";
+    card.style.bottom = Math.round(window.innerHeight - foot) + "px";
+    card.style.setProperty("--res-arrow", Math.round(Math.max(10, foot - (r.top + r.height / 2) - 6)) + "px");
   }
   function focusShowsCard() {
     return !focusDismissed && btn.matches(":focus-visible");
@@ -693,12 +697,12 @@
     if (!menu.hidden) closeMenu(false);
   });
 
-  // Name wrapping and the user's type size can change the footer's height without a
-  // window resize. Keep an open card anchored to the square as that layout changes.
-  const footerWatch = new ResizeObserver(() => {
+  // The user's type size moves the square on the rail without a window resize. Keep an open card
+  // anchored to the square as that layout changes.
+  const railWatch = new ResizeObserver(() => {
     if (isOpen()) place();
   });
-  footerWatch.observe(footer);
+  railWatch.observe(slot);
 
   // ---- the view menu ----------------------------------------------------------------------------
   function items() {
@@ -718,10 +722,10 @@
       left = at.x;
       top = at.y - mh;
     } else {
-      // From the keyboard: above the square, its right edge on the square's.
+      // From the keyboard: to the right of the rail, beside the square (round 58).
       const r = btn.querySelector(".res-tile").getBoundingClientRect();
-      left = r.right - mw;
-      top = r.top - mh - 6;
+      left = r.right + 14;
+      top = r.top - 10;
     }
     menu.style.left = Math.round(Math.max(4, Math.min(left, window.innerWidth - mw - 4))) + "px";
     menu.style.top = Math.round(Math.max(4, Math.min(top, window.innerHeight - mh - 4))) + "px";
@@ -840,26 +844,15 @@
     syncVisibility();
   }
   let wasVisible = null;
-  let wasRailVisible = null;
   function syncVisibility() {
     if (!S.started) return;
-    const railShown = railVisible();
     const shown = visible();
-    if (shown === wasVisible && railShown === wasRailVisible) return;
+    if (shown === wasVisible) return;
     wasVisible = shown;
-    wasRailVisible = railShown;
     clearTimeout(pollTimer);
-    if (!railShown) {
-      const focusInWidget = btn.contains(document.activeElement) || menu.contains(document.activeElement);
-      pinned = false;
-      hovering = false;
-      clearTimeout(hideTimer);
-      closeMenu(false);
-      sync();
-      if (focusInWidget && !document.hidden) document.getElementById("rail-toggle").focus();
-    } else if (!shown) {
+    if (!shown) {
       // A covered or minimized window pauses work without discarding the user's pin or
-      // focused view menu. Only a collapsed rail makes those overlays detached.
+      // focused view menu.
       scheduleGlide();
     } else {
       // Age the held reading before painting, then ask the existing native cache for a fresh
@@ -870,9 +863,6 @@
     }
   }
   document.addEventListener("visibilitychange", syncVisibility);
-  const railWatch = new MutationObserver(syncVisibility);
-  railWatch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-  railWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-sidebar"] });
   const themeWatch = new MutationObserver(() => {
     lastRows = "";
     render();

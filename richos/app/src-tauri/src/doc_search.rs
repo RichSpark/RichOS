@@ -464,6 +464,8 @@ pub fn search_palette(service: &DocumentSearch, mut request: SearchRequest, gene
         crate::search_diagnostics::record(request.super_finder, None, started.elapsed(), &[]);
         return None;
     }
+    #[cfg(target_os = "macos")]
+    let _priority = generation.map(|_| crate::search_rerank::QueryPriority::begin());
     request.limit = request.limit.clamp(1, PAGE);
     let (response, stages) = richos_search::service::capture_query_stages(|| service.read(|active, revoked| {
         let scope = source_ids.map(|ids| active.service.limit_to_folder_ids(ids));
