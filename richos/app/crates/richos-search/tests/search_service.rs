@@ -74,6 +74,7 @@ fn files(r: &richos_search::SearchResponse) -> Vec<String> {
 #[test]
 fn selected_folders_share_results_and_reindex_keeps_unchanged_embeddings() {
     let (first, cache) = fixture_copy("scope-service");
+    let first = first.canonicalize().unwrap();
     let second = first.with_file_name("second");
     let missing = first.with_file_name("disconnected");
     std::fs::create_dir_all(&second).unwrap();
