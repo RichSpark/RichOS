@@ -15,13 +15,14 @@ itself declare anything.
            region; an SPDX identifier, a manifest field, a license header and a public-domain
            dedication in RichOS files; a root LICENSE that is no longer the AGPL; a Gradle
            wrapper nobody registered; a declaration or manifest field wrapped across lines,
-           a dedication or a "<license> licensed" included;
-           AGPL-3.0-or-later; an SPDX expression with an alternative in parentheses; a file
-           whose name holds a space; `commit -a`; a land of a commit that skipped the hooks,
+           a dedication or a "<license> licensed" included; a declaration whose license name
+           is in Markdown bold, italics, backticks or a link; AGPL-3.0-or-later; an SPDX
+           expression with an alternative in parentheses; a file whose name holds a space; `commit -a`; a land of a commit that skipped the hooks,
            before main moves; the push backstop of a merge that skipped them
   PASSES   registered third-party material with its own license (the RichPass vendor packages);
            a Gradle wrapper registered in the same change; the brand exclusion ("not licensed",
-           "All rights ... reserved") and AGPL statements; third-party notices reproduced in a
+           "All rights ... reserved") and AGPL statements, formatted too; the parakeet brief's
+           third-party models "published under **cc-by-4.0**"; third-party notices reproduced in a
            RichOS file the three declared ways; the notices page; descriptive mentions
   TREE     --all over the copied real files passes (no false refusal on them)
 """
@@ -219,6 +220,23 @@ class Refused(Fixture):
         self.refused(out, "richos/tools/richpass/README.md:3:", "richos/tools/richpass/README.md:5:",
                      "richos/tools/sixteen/NOTES.md:1:")
 
+    def test_a_declaration_with_inline_formatting_is_refused(self):
+        # licguard2's remaining gap: Markdown formatting between "the" and the license name hid
+        # the sentence. A README is exactly where it would be written.
+        self.make()
+        self.write("richos/tools/richpass/README.md",
+                   "# RichPass\n\nRichPass is licensed under " + "the **MIT** License.\n\n"
+                   "Its source is released under " + "the `MIT` license.\n\n"
+                   "The code is distributed under " + "the [MIT license](https://opensource.org/license/mit).\n\n"
+                   "This tool is licensed under " + "the *Apache License, Version 2.0*.\n\n"
+                   "Lic" + "ense: __BSD-3-Clause__\n")
+        self.write("richos/tools/fourteen/NOTES.md", "Fourteen is published under the\n**MIT** License.\n")
+        out = self.commit("format the license name", expect=1)
+        self.refused(out, "richos/tools/richpass/README.md:3: a license declaration other than AGPL-3.0",
+                     "richos/tools/richpass/README.md:5:", "richos/tools/richpass/README.md:7:",
+                     "richos/tools/richpass/README.md:9:", "richos/tools/richpass/README.md:11:",
+                     "richos/tools/fourteen/NOTES.md:1:")
+
     def test_agpl_or_later_is_refused(self):
         # Review P2: LICENSING.md grants version 3 and no later version; only AGPL-3.0-only is ours.
         self.make()
@@ -334,6 +352,20 @@ class Passes(Fixture):
         self.write("richos/tools/thirteen/page.html", f"<!-- {SPDX}AGPL-3.0-only -->\n")
         self.write("richos/tools/thirteen/package.json", '{\n  "lic' + 'ense":\n    "AGPL-3.0-only"\n}\n')
         self.commit("wrapped statements of our own license")
+
+    def test_formatted_agpl_statements_and_the_parakeet_brief_pass(self):
+        # docs/briefs/clark-brief-parakeet-viability-2026-08-29.md:415-417, verbatim: third-party
+        # models said to be "published under" a bolded CC-BY. It must not be refused.
+        self.make()
+        self.write("docs/briefs/clark-brief-parakeet.md",
+                   "**Conversions inherit correctly.** `mlx-community/parakeet-tdt-0.6b-v3`,\n"
+                   "`FluidInference/parakeet-tdt-0.6b-v3-coreml` and `mudler/parakeet-cpp-gguf` are all published under\n"
+                   "**cc-by-4.0** — I checked each repo's license field directly.\n")
+        self.write("richos/tools/fifteen/README.md",
+                   "RichPass is licensed under the **GNU Affero General Public License v3.0** (`AGPL-3.0-only`).\n"
+                   "The RichPass logo is **not** licensed under the `MIT` license.\n"
+                   "See [LICENSE](../../LICENSE) and `snake_case_names` for how_this_reads.\n")
+        self.commit("formatted statements of our own license")
 
     def test_notices_reproduced_in_a_richos_file_pass(self):
         self.make()

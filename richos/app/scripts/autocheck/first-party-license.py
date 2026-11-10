@@ -26,6 +26,12 @@ A declaration or field wrapped across lines is judged whole (a comment's leading
 on the next line is read past) and reported at the line it starts on; it counts when any line it
 spans is new.
 
+A sentence or tag is judged again with each line's inline Markdown formatting removed (`**`, `*`,
+`_`, backticks, a link keeping its text), so "licensed under the **MIT** License" is refused. In
+that reading a verb that only says where something was put (published, made available, offered)
+counts with "the" before the license name: "<somebody's models> are all published under
+**cc-by-4.0**" describes their release, not RichOS's license.
+
 WHAT PASSES: everything under a path `.richos/vendored-material` records with origin
 `third-party`, which keeps its own license; the third-party notices themselves
 (docs/legal/THIRD-PARTY-*.md, docs/legal/*PROVENANCE*.md and the registry), whose job is to
@@ -98,10 +104,12 @@ OTHER = (r"(?:MIT|X11|ISC|0BSD|BSD|Apache|L?GPL|GPLv?\d|MPL|Mozilla\s+Public|Unl
          r"|(?:GNU\s+)?(?:Lesser\s+|Library\s+)?General\s+Public)\b")
 COPULA = r"\b(?:is|are|be|been|being|was|were|remains?|stays?)\s+(?:[\w-]+[\s,]+){0,3}?"
 UNDER = r"\s+under\s+(?:the\s+)?(?:terms\s+of\s+(?:the\s+)?)?(?:an?\s+)?(?:GNU\s+)?"
+UNDER_THE = r"\s+under\s+the\s+(?:terms\s+of\s+(?:the\s+)?)?(?:GNU\s+)?"
+GRANTS = r"(?:re-?)?(?:licen[cs]ed|released|distributed)"
+MENTIONS = r"(?:made\s+available|available|published|offered|provided|covered)"
 DECLARATIONS = [
     # "<it> is licensed / released / distributed / made available under the <other> License"
-    re.compile(COPULA + r"(?:re-?)?(?:licen[cs]ed|released|distributed|made\s+available|available|published"
-               r"|offered|provided|covered)" + UNDER + OTHER, re.I),
+    re.compile(COPULA + r"(?:" + GRANTS + "|" + MENTIONS + ")" + UNDER + OTHER, re.I),
     # a header that starts with it: "Licensed under the <other> License, Version 2.0"
     re.compile(r"^[\W_]*(?:dual[- ]?|also\s+)?licen[cs]ed" + UNDER + OTHER, re.I | re.M),
     # "<it> is <other> licensed", "is BSD-3-Clause licensed"
@@ -112,6 +120,13 @@ DECLARATIONS = [
     # "<it> is released into the public domain"
     re.compile(COPULA + r"(?:released\s+|dedicated\s+|placed\s+)?(?:in|into|to)\s+the\s+public\s+domain\b", re.I),
 ]
+# The same, judged again with a line's inline formatting removed ("licensed under the **MIT**
+# License", "the `MIT` license", "the [MIT license](...)"). A verb that only says where something
+# was put (published, made available) counts there with "the" before the license name: "<third
+# party models> are all published under **cc-by-4.0**" describes somebody else's release
+# (docs/briefs/clark-brief-parakeet-viability-2026-08-29.md:416-417), and is not refused.
+FORMATTED = [re.compile(COPULA + GRANTS + UNDER + OTHER, re.I),
+             re.compile(COPULA + MENTIONS + UNDER_THE + OTHER, re.I)] + DECLARATIONS[1:]
 NEGATED = re.compile(r"\b(?:not|never|neither|nor)\b|n't\b", re.I)
 SPDX = re.compile(r"SPDX-License-Identifier[:][ \t]*(.*)", re.I)
 # One token of an SPDX expression: a parenthesis, or an identifier/operator. An identifier ends
@@ -128,6 +143,17 @@ CANDIDATE = re.compile(r"licen[cs]|\bdomain\b|SPDX", re.I)
 # What starts a continuation line of a comment or a quote, read past when lines are joined. A
 # leader is followed by a space, so Markdown's **bold** at the start of a line stays as it is.
 LEADER = re.compile(r"^[ \t]*(?:<!--|/\*+|(?:\*+|//+|#+|;+|--|>+)(?=[ \t]|$))?[ \t]*")
+# Inline Markdown formatting, removed from a line before its sentences are judged, so "licensed
+# under the **MIT** License", "the `MIT` license" and "the [MIT license](...)" read as written
+# out: a link keeps its text; emphasis and code marks go; an underscore or asterisk inside a word
+# (snake_case) stays.
+LINK = re.compile(r"!?\[([^\]\n]*)\](?:\([^)\n]*\)|\[[^\]\n]*\])")
+MARKS = re.compile(r"`+|(?<![^\W_])[*_]+|[*_]+(?![^\W_])")
+
+
+def unformat(line):
+    return MARKS.sub("", LINK.sub(r"\1", line))
+
 
 # A RichOS file reproducing other people's notices says where they are.
 VENDORED_BEGIN = re.compile(r"\bBEGIN VENDORED\b")
@@ -259,9 +285,9 @@ def spdx_expression(text):
     return text[:at].strip(), ours
 
 
-def declarations(name, text):
-    """(start, end, what) for each declaration in `text`, whose lines are joined by newlines.
-    In the order a line's finding is named by: SPDX, manifest field, sentence or tag."""
+def fields(name, text):
+    """(start, end, what) for each SPDX expression and manifest license field in `text`, whose
+    lines are joined by newlines, read as written."""
     found = []
     for tag in SPDX.finditer(text):
         value, ours = spdx_expression(tag.group(1))
@@ -272,7 +298,13 @@ def declarations(name, text):
         value = hit.group(1).strip()
         if value.lower() not in ALLOWED_IDS and value != "UNLICENSED" and not value.startswith("SEE LICENSE IN"):
             found.append((hit.start(), hit.end(), f"a {name} license field other than AGPL-3.0-only ({value})"))
-    for pattern in DECLARATIONS:
+    return found
+
+
+def sentences(text, patterns):
+    """(start, end, what) for each license sentence or tag in `text` that one of `patterns` finds."""
+    found = []
+    for pattern in patterns:
         for hit in pattern.finditer(text):
             if not NEGATED.search(hit.group(0)):
                 found.append((hit.start(), hit.end(), "a license declaration other than AGPL-3.0"))
@@ -312,18 +344,23 @@ def judge_file(path, data, added):
                   and (added is None or any(k in added for k in range(n - REACH, n + REACH + 1)))]
     name = path.rsplit("/", 1)[-1]
     hits = {}
+    plain = [unformat(line) for line in cleaned]
+    views = ((lambda text: fields(name, text), cleaned), (lambda text: sentences(text, DECLARATIONS), cleaned),
+             (lambda text: sentences(text, FORMATTED), plain))
     for first, last in blocks(candidates, len(lines)):
-        joined = "\n".join(cleaned[first - 1:last])
-        starts = [0]
-        for line in cleaned[first - 1:last - 1]:
-            starts.append(starts[-1] + len(line) + 1)
-        for start, end, why in declarations(name, joined):
-            word = WORD.search(joined, start, end)
-            start = word.start() if word else start
-            end = start + max(len(joined[start:end].rstrip()) - 1, 0)
-            span = range(first + bisect.bisect_right(starts, start) - 1, first + bisect.bisect_right(starts, end))
-            if added is None or any(k in added for k in span):
-                hits.setdefault(span[0], (why, span))
+        for judge, view in views:  # in the order a line's finding is named by
+            joined = "\n".join(view[first - 1:last])
+            starts = [0]
+            for line in view[first - 1:last - 1]:
+                starts.append(starts[-1] + len(line) + 1)
+            for start, end, why in judge(joined):
+                word = WORD.search(joined, start, end)
+                start = word.start() if word else start
+                end = start + max(len(joined[start:end].rstrip()) - 1, 0)
+                span = range(first + bisect.bisect_right(starts, start) - 1,
+                             first + bisect.bisect_right(starts, end))
+                if added is None or any(k in added for k in span):
+                    hits.setdefault(span[0], (why, span))
     if not hits:
         return []
     exempt = regions(lines)

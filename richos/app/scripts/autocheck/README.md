@@ -237,7 +237,11 @@ in about 0.1 s and refuse in first-party material:
   `docs/legal/BRAND-ASSETS.md`) is not a declaration.
 
 A sentence, tag or manifest field wrapped across lines is judged whole and reported at the line it
-starts on.
+starts on. A sentence or tag is judged again with its inline Markdown formatting removed (`**`, `*`,
+`_`, backticks, a link keeping its text), so "licensed under the **MIT** License" is refused too;
+there, a verb that only says where something was put (published, made available) counts with
+"the" before the license name, so a brief's "these models are all published under **cc-by-4.0**"
+passes.
 
 First-party is everything `.richos/vendored-material` does not record with origin `third-party`;
 what it does record keeps its own license and passes, so registering somebody else's work there
