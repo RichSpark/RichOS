@@ -130,6 +130,7 @@ pub struct CalendarNotice {
 #[serde(rename_all = "camelCase")]
 struct CalendarSyncStatus {
     calendar_recovery: Option<Vec<String>>,
+    calendar_instances: Option<Vec<String>>,
 }
 
 /// Drain the bounded desktop status while the child runs. Holding stdin ties its life to the app.
@@ -424,8 +425,9 @@ pub fn start(app: &AppHandle) {
         .name("meeting-calendar".into())
         .spawn(move || {
             let mut known = BTreeMap::new();
+            let mut instances = BTreeMap::new();
             loop {
-                calendar.refresh_calendar(&mut known);
+                calendar.refresh_calendar(&mut known, &mut instances);
                 match calendar_replies.recv_timeout(Duration::from_millis(meeting_calendar::REFRESH_MS)) {
                     Ok(account) => calendar.reconnect_calendar(account),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -448,13 +450,14 @@ impl Meetings {
 
     /// One calendar pass: `workspace sync <vendor> --once --source calendar` for each connected
     /// vendor (the existing sync and its Keychain grant), then the latest revisions read back.
-    /// A failed or unconnected sync is logged and never blocks microphone prompts or capture; the
-    /// meetings already synced still prompt. A canceled or moved meeting's prompt is withdrawn.
-    fn refresh_calendar(&self, known: &mut BTreeMap<String, u64>) {
+    /// A failed sync never blocks microphone prompts or capture. The calendar cache can prompt
+    /// only for the most recently confirmed eligible account instances.
+    fn refresh_calendar(&self, known: &mut BTreeMap<String, u64>, instances: &mut BTreeMap<String, Vec<String>>) {
         let zone = meeting_calendar::workspace_zone(&self.corpus_root());
         let vendors = meeting_calendar::connected_vendors(&zone);
         let mut recovery = self.inner.lock().unwrap().calendar_recovery.clone();
         recovery.retain(|vendor, _| vendors.contains(&vendor.as_str()));
+        instances.retain(|vendor, _| vendors.contains(&vendor.as_str()));
         if let Some(service) = service_cli() {
             for &vendor in &vendors {
                 let mut command = self.calendar_command(&service);
@@ -464,7 +467,10 @@ impl Meetings {
                     Ok((status, output)) => {
                         let report = serde_json::from_slice::<CalendarSyncStatus>(&output);
                         match report {
-                            Ok(CalendarSyncStatus { calendar_recovery: Some(accounts) }) => {
+                            Ok(CalendarSyncStatus { calendar_recovery: Some(accounts), calendar_instances }) => {
+                                if let Some(ids) = calendar_instances {
+                                    instances.insert(vendor.to_owned(), ids);
+                                }
                                 if recovery.get(vendor) != Some(&accounts) {
                                     eprintln!("[richos] meeting notes: calendar recovery ({vendor}): {} accounts need sign-in", accounts.len());
                                 }
@@ -480,9 +486,11 @@ impl Meetings {
                 }
             }
         } else if !vendors.is_empty() {
-            eprintln!("[richos] meeting notes: no calendar sync in this build; using what was synced before");
+            eprintln!("[richos] meeting notes: no calendar sync in this build; keeping the last known calendar status");
         }
-        let current = if vendors.is_empty() { Vec::new() } else { meeting_calendar::meetings(&zone) };
+        let current = meeting_calendar::meetings(&zone, |vendor, instance| {
+            instances.get(vendor).is_some_and(|ids| ids.iter().any(|id| id == instance))
+        });
         let gone = meeting_calendar::withdrawn(known, &current);
         *known = current.iter().map(|m| (m.event_id.clone(), m.starts_at)).collect();
         let (actions, recovery_changed) = {

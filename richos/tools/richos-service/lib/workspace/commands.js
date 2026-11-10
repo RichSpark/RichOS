@@ -918,6 +918,7 @@ export async function sync(deps = {}) {
 
   const results = [];
   const reconnectAccounts = new Set();
+  const calendarInstances = [];
   let failures = 0;
   let polled = false;
   let refused = 0; // accounts that could not be polled at all — unconnected, expired, nothing granted
@@ -1030,6 +1031,9 @@ export async function sync(deps = {}) {
           d.out(`            candidates: ${summary.events.length} event, ${summary.commitments.length} commitment, ${summary.entityCandidates.length} entity`);
         }
       }
+      if (e.source === 'calendar' && !reconnectAccounts.has(account.accountId)) {
+        calendarInstances.push(e.adapter.sourceInstanceId);
+      }
       results.push({ account: account.accountId, source: e.source, summary, error, unavailable });
     }
   }
@@ -1058,7 +1062,7 @@ export async function sync(deps = {}) {
   }
 
   const calendarRecovery = [...reconnectAccounts];
-  if (!polled) return { exitCode: 1, polled: false, results, promotion, calendarRecovery };
+  if (!polled) return { exitCode: 1, polled: false, results, promotion, calendarRecovery, calendarInstances };
   // An account that could not be polled is a non-zero exit even when every account that DID poll
   // succeeded — the CEO asked for all of them. A promotion that FAILED is the same class of problem
   // as a source that failed: the pull worked and the memory it exists to build did not get written.
@@ -1069,6 +1073,7 @@ export async function sync(deps = {}) {
     results,
     promotion,
     calendarRecovery,
+    calendarInstances,
   };
 }
 

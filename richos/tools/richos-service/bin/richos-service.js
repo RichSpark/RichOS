@@ -642,7 +642,10 @@ function main() {
         .then((r) => {
           if (desktopCalendar && sub === 'sync') {
             // A null result means the pass could not check account health. An empty list clears it.
-            const status = { calendarRecovery: r.calendarRecovery ?? null };
+            const status = {
+              calendarRecovery: r.calendarRecovery ?? null,
+              calendarInstances: r.calendarInstances ?? null,
+            };
             process.stdout.write(JSON.stringify(status) + '\n', () => process.exit(r.exitCode));
           } else {
             process.exit(r.exitCode);
