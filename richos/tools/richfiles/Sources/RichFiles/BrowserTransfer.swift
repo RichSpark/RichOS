@@ -18,6 +18,18 @@ struct BrowserTransferIssue: Identifiable, Sendable {
     let name: String
     let message: String
     let kind: Kind
+    var conflict: BrowserFileConflict? = nil
+}
+
+struct BrowserFileConflict: Sendable {
+    let incoming: FileEntry
+    let existing: FileEntry
+    let reviewed: Replacement?
+
+    struct Replacement: Sendable {
+        let incoming: ReviewedFile
+        let existing: ReviewedFile
+    }
 }
 
 struct BrowserTransfer: Sendable {
@@ -196,10 +208,13 @@ enum BrowserTransferJob {
                 result.retry.append(contentsOf: request.sources.dropFirst(index + 1))
                 break
             } catch FileOperationError.destinationExists(let occupied) where request.conflict == .skip {
+                let conflict = retrySource.flatMap {
+                    describeConflict($0, existing: occupied, allowReplace: !request.move)
+                }
                 result.progress.issues.append(BrowserTransferIssue(
                     name: name,
                     message: "Skipped because \(occupied.lastPathComponent) already exists.",
-                    kind: .skipped
+                    kind: .skipped, conflict: conflict
                 ))
                 if let retrySource { result.retry.append(retrySource) }
             } catch {
@@ -219,10 +234,27 @@ enum BrowserTransferJob {
         return result
     }
 
+    private static func describeConflict(
+        _ source: BrowserTransferSource, existing: URL, allowReplace: Bool
+    ) -> BrowserFileConflict? {
+        guard let incoming = try? source.reference(), let occupant = try? FileReference(url: existing),
+              let first = try? FileEntry(url: incoming.url), let second = try? FileEntry(url: occupant.url) else {
+            return nil
+        }
+        let reviewed: BrowserFileConflict.Replacement?
+        if allowReplace, let a = try? ReviewedFile(incoming), let b = try? ReviewedFile(occupant),
+           incoming.identity != occupant.identity {
+            reviewed = .init(incoming: a, existing: b)
+        } else {
+            reviewed = nil
+        }
+        return BrowserFileConflict(incoming: first, existing: second, reviewed: reviewed)
+    }
+
     private static func isRetryable(_ error: Error) -> Bool {
         guard let error = error as? FileOperationError else { return true }
         switch error {
-        case .moveNeedsReview, .sourceChanged, .folderChanged, .crossVolumeMove,
+        case .moveNeedsReview, .replacementNeedsReview, .sourceChanged, .folderChanged, .crossVolumeMove,
              .destinationInsideSource, .stagingCleanupFailed:
             return false
         default:

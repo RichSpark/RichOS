@@ -100,6 +100,9 @@ final class BrowserActionsTests: XCTestCase {
             XCTAssertEqual(actions.transfer?.succeeded, 0)
             XCTAssertTrue(actions.canRetryTransfer)
             XCTAssertTrue(actions.isCut(source.url))
+            XCTAssertEqual(actions.transfer?.issues.first?.conflict?.incoming.size, Int64("selected".utf8.count))
+            XCTAssertEqual(actions.transfer?.issues.first?.conflict?.existing.size, Int64("already here".utf8.count))
+            XCTAssertNil(actions.transfer?.issues.first?.conflict?.reviewed)
 
             try await perform(actions) { actions.retryTransfer(conflict: .keepBoth) }
             let movedURL = destination.appendingPathComponent("Report (2).txt")
@@ -131,6 +134,22 @@ final class BrowserActionsTests: XCTestCase {
             XCTAssertEqual(try contents(movedURL), "selected")
             XCTAssertEqual(try contents(occupant.url), "already here")
             XCTAssertFalse(FileManager.default.fileExists(atPath: source.url.path))
+        }
+    }
+
+    @MainActor
+    func testCopyConflictOffersTheExactReviewedFilesWithoutReplacingThem() async throws {
+        try await withFixture { root, destination, board in
+            let incoming = try write("new", named: "Report.txt", in: root)
+            let existing = try write("prior version", named: "Report.txt", in: destination)
+            let actions = BrowserActions(pasteboard: board)
+            actions.copy([incoming])
+            try await perform(actions) { actions.paste(into: destination) }
+            let reviewed = try XCTUnwrap(actions.transfer?.issues.first?.conflict?.reviewed)
+            XCTAssertEqual(reviewed.incoming.reference, incoming)
+            XCTAssertEqual(reviewed.existing.reference, existing)
+            XCTAssertEqual(try contents(incoming.url), "new")
+            XCTAssertEqual(try contents(existing.url), "prior version")
         }
     }
 

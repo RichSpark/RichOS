@@ -162,6 +162,39 @@ final class BrowserActions: ObservableObject {
         canRetryTransfer = false
     }
 
+    func replaceConflict(_ issue: BrowserTransferIssue) {
+        guard let current = transfer, !current.running, current.issues.contains(where: { $0.id == issue.id }),
+              let reviewed = issue.conflict?.reviewed, let destination = retryRequest?.destination else { return }
+        runMutation(title: "Replace", onSuccess: { [weak self] in
+            self?.resolveConflict(issue, transferID: current.id, source: reviewed.incoming.reference.url)
+        }) {
+            try destination.verify()
+            let receipt = try FileOperations.replaceCopy(reviewed.incoming, replacing: reviewed.existing)
+            let previous = BrowserTrashItem(receipt: receipt.previous)
+            let warnings = receipt.remainingStagingFolder.map {
+                ["Temporary cleanup failed at \($0.path)."]
+            } ?? []
+            return MutationResult(message: "Replaced \(receipt.installed.reference.url.lastPathComponent). The previous file is in Trash.",
+                                  issues: warnings, changed: true,
+                                  undo: [.replacement(receipt.installed, previous)], trashChanges: [.add(previous)])
+        }
+    }
+
+    private func resolveConflict(_ issue: BrowserTransferIssue, transferID: UUID, source: URL) {
+        guard var current = transfer, current.id == transferID else { return }
+        current.issues.removeAll { $0.id == issue.id }
+        current.succeeded += 1
+        transfer = current
+        if let request = retryRequest {
+            let remaining = request.sources.filter { $0.url.path != source.path }
+            retryRequest = remaining.isEmpty ? nil : BrowserTransferRequest(
+                sources: remaining, folder: request.folder, move: request.move, conflict: request.conflict,
+                clipboardGeneration: request.clipboardGeneration, destination: request.destination
+            )
+            canRetryTransfer = retryRequest != nil
+        }
+    }
+
     private func setClipboard(_ sources: [FileReference], cut: Bool, generation: Int) {
         clipboard = ClipboardSelection(sources: sources, cut: cut, generation: generation)
         cutURLs = cut ? Set(sources.map(\.url)) : []
@@ -332,7 +365,7 @@ final class BrowserActions: ObservableObject {
     func redo() { replay(undo: false) }
 
     private func runMutation(
-        title: String, _ operation: @escaping @Sendable () throws -> MutationResult
+        title: String, onSuccess: (() -> Void)? = nil, _ operation: @escaping @Sendable () throws -> MutationResult
     ) {
         guard !busy else { return }
         busy = true
@@ -345,6 +378,7 @@ final class BrowserActions: ObservableObject {
             busy = false
             switch result {
             case .success(let mutation):
+                onSuccess?()
                 finishMutation(mutation, title: title)
             case .failure(let error):
                 status = error.localizedDescription
@@ -365,8 +399,10 @@ final class BrowserActions: ObservableObject {
             if !restoredIDs.isEmpty {
                 undoHistory = undoHistory.compactMap { group in
                     let remaining = group.steps.filter { step in
-                        if case .restore(let item) = step { return !restoredIDs.contains(item.id) }
-                        return true
+                        switch step {
+                        case .restore(let item), .replacement(_, let item): return !restoredIDs.contains(item.id)
+                        default: return true
+                        }
                     }
                     return remaining.isEmpty ? nil : HistoryGroup(title: group.title, steps: remaining)
                 }
@@ -472,21 +508,26 @@ private enum HistoryStep: Codable, Sendable {
     case rename(FileReference, String)
     case restore(BrowserTrashItem)
     case trash(FileReference)
+    case replacement(ReviewedFile, BrowserTrashItem)
 
-    func perform() throws -> (inverse: HistoryStep?, trashChange: TrashChange?) {
+    func perform() throws -> (inverse: HistoryStep?, trashChanges: [TrashChange]) {
         switch self {
         case .undoMove(let receipt, let canRedoRename):
             let inverse = try FileOperations.reverse(receipt)
-            return (.undoMove(inverse, canRedoRename: canRedoRename), nil)
+            return (.undoMove(inverse, canRedoRename: canRedoRename), [])
         case .rename(let source, let name):
             let receipt = try FileOperations.rename(source, to: name)
-            return (.undoMove(receipt, canRedoRename: true), nil)
+            return (.undoMove(receipt, canRedoRename: true), [])
         case .restore(let item):
             let restored = try FileOperations.restore(item.receipt)
-            return (.trash(restored), .remove(item.id))
+            return (.trash(restored), [.remove(item.id)])
         case .trash(let source):
             let item = BrowserTrashItem(receipt: try FileOperations.trash(source))
-            return (item.canRestore ? .restore(item) : nil, .add(item))
+            return (item.canRestore ? .restore(item) : nil, [.add(item)])
+        case .replacement(let installed, let displaced):
+            let restored = try FileOperations.restoreReplacedFile(displaced.receipt, replacing: installed)
+            let previous = BrowserTrashItem(receipt: restored.previous)
+            return (.replacement(restored.installed, previous), [.remove(displaced.id), .add(previous)])
         }
     }
 }
@@ -509,14 +550,14 @@ private struct HistoryGroup: Codable, Sendable {
             do {
                 let applied = try step.perform()
                 if let inverse = applied.inverse { result.inverse.append(inverse) }
-                if let change = applied.trashChange { result.trashChanges.append(change) }
+                result.trashChanges.append(contentsOf: applied.trashChanges)
                 result.completed += 1
             } catch {
                 result.issue = error.localizedDescription
-                if let operationError = error as? FileOperationError,
-                   case .moveNeedsReview = operationError {
+                switch error as? FileOperationError {
+                case .moveNeedsReview, .replacementNeedsReview:
                     result.remaining = Array(steps.dropFirst(index + 1))
-                } else {
+                default:
                     result.remaining = Array(steps.dropFirst(index))
                 }
                 break

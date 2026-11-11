@@ -834,6 +834,8 @@ struct TrashSheet: View {
 struct TransferSheet: View {
     @ObservedObject var actions: BrowserActions
     @Environment(\.dismiss) private var dismiss
+    @State private var replacement: BrowserTransferIssue?
+    @State private var confirmingReplacement = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -859,9 +861,21 @@ struct TransferSheet: View {
                 }
                 if transfer.cancelled { Text("Transfer cancelled.") }
                 List(transfer.issues) { issue in
-                    VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 5) {
                         Text(issue.name).font(.body.weight(.medium))
                         Text(issue.message).font(.callout).foregroundStyle(.secondary)
+                        if let conflict = issue.conflict {
+                            HStack(alignment: .top, spacing: 16) {
+                                conflictDetails("Incoming", conflict.incoming)
+                                conflictDetails("Existing", conflict.existing)
+                            }
+                            if conflict.reviewed != nil {
+                                Button("Replace File…") {
+                                    replacement = issue
+                                    confirmingReplacement = true
+                                }.disabled(actions.busy).buttonStyle(.borderless)
+                            }
+                        }
                     }
                 }
                 HStack {
@@ -878,7 +892,21 @@ struct TransferSheet: View {
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-        }.padding(16).frame(width: 545, height: 345)
+        }.padding(16).frame(width: 560, height: 395)
+            .confirmationDialog("Replace the existing file?", isPresented: $confirmingReplacement, presenting: replacement) { issue in
+                Button("Replace File", role: .destructive) { actions.replaceConflict(issue) }
+            } message: { _ in
+                Text("The previous file goes to Trash. You can undo this replacement in RichFiles.")
+            }
+    }
+
+    private func conflictDetails(_ label: String, _ entry: FileEntry) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption.weight(.semibold))
+            Text(entry.name).lineLimit(1).truncationMode(.middle).help(entry.url.path)
+            if let size = entry.size { Text(formattedBytes(size)) }
+            if let modified = entry.modified { Text(formattedDate(modified)) }
+        }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func formattedTransferTime(_ seconds: TimeInterval) -> String {
