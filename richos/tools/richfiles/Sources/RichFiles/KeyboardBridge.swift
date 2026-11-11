@@ -25,9 +25,10 @@ struct KeyboardBridge: NSViewRepresentable {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .otherMouseDown, .swipe]) { [weak self] event in
                 guard let self, let window = self.window, event.window === window,
                       window.attachedSheet == nil else { return event }
+                if event.type != .keyDown { return self.navigate(event) ? nil : event }
                 let editing = window.firstResponder is NSTextView || window.firstResponder is NSTextField
                 return self.handle(event, editing: editing) ? nil : event
             }
@@ -35,6 +36,20 @@ struct KeyboardBridge: NSViewRepresentable {
 
         deinit {
             if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        private func navigate(_ event: NSEvent) -> Bool {
+            switch event.type {
+            case .otherMouseDown:
+                if event.buttonNumber == 3 { return perform?(.back) == true }
+                if event.buttonNumber == 4 { return perform?(.forward) == true }
+            case .swipe:
+                if abs(event.deltaX) > abs(event.deltaY) {
+                    return perform?(event.deltaX < 0 ? .back : .forward) == true
+                }
+            default: break
+            }
+            return false
         }
 
         private func handle(_ event: NSEvent, editing: Bool) -> Bool {

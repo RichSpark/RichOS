@@ -4,6 +4,33 @@ import XCTest
 @testable import RichFiles
 
 final class BrowserModelTests: XCTestCase {
+    func testFolderRevealChoosesNearestRootAndIncludesOnlyTheNeededHiddenChild() async throws {
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("RichFilesTree-\(UUID().uuidString)", isDirectory: true)
+        let project = root.appendingPathComponent("Project", isDirectory: true)
+        let hidden = project.appendingPathComponent(".Private", isDirectory: true)
+        let current = hidden.appendingPathComponent("Notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: current, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for child in [".Other", "Visible"] {
+            try FileManager.default.createDirectory(at: project.appendingPathComponent(child),
+                                                    withIntermediateDirectories: false)
+        }
+
+        let reveal = try XCTUnwrap(FolderTreeReveal(folder: current, roots: [root, project]))
+        XCTAssertEqual(reveal.root, project.path)
+        XCTAssertEqual(reveal.nextChild, [project.path: hidden.lastPathComponent, hidden.path: current.lastPathComponent])
+        let children = try await BrowserModel.folderChildren(of: project, revealing: reveal.nextChild[project.path])
+        XCTAssertEqual(Set(children.map(\.name)), [".Private", "Visible"])
+        let revealed = try XCTUnwrap(children.first { $0.name == hidden.lastPathComponent })
+        let next = reveal.nextChild[revealed.url.standardizedFileURL.path]
+        XCTAssertEqual(next, current.lastPathComponent)
+        let grandchildren = try await BrowserModel.folderChildren(of: revealed.url, revealing: next)
+        XCTAssertEqual(grandchildren.map(\.name), [current.lastPathComponent])
+        let visible = try await BrowserModel.folderChildren(of: project)
+        XCTAssertEqual(visible.map(\.name), ["Visible"])
+    }
+
     @MainActor
     func testListDefaultNavigationSearchAndPreferences() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])

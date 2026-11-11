@@ -30,6 +30,7 @@ struct BrowserView: View {
     @State private var preparingAction = false
     @State private var rowFrames: [URL: CGRect] = [:]
     @State private var selectionRectangle: CGRect?
+    @State private var folderReveal: FolderTreeReveal?
 
     private enum Field: Hashable { case address, search }
 
@@ -161,11 +162,13 @@ struct BrowserView: View {
                     sideHeading("Quick Access")
                     ForEach(model.places) { place in
                         FolderTreeRow(url: place.url, title: place.title, symbol: place.symbol,
-                                      current: model.folder, showHidden: model.showHidden, open: model.openFolder)
+                                      current: model.folder, showHidden: model.showHidden,
+                                      reveal: reveal(for: place.url), open: model.openFolder)
                     }
                     ForEach(Array(model.favorites.enumerated()), id: \.element) { index, url in
                         FolderTreeRow(url: url, title: url.lastPathComponent, symbol: "pin",
-                                      current: model.folder, showHidden: model.showHidden, open: model.openFolder)
+                                      current: model.folder, showHidden: model.showHidden,
+                                      reveal: reveal(for: url), open: model.openFolder)
                             .contextMenu {
                                 Button("Remove from Quick Access") { model.removeFavorite(url) }
                                 Button("Move Up") { model.moveFavorite(from: IndexSet(integer: index), to: index - 1) }
@@ -185,7 +188,8 @@ struct BrowserView: View {
                     ForEach(model.volumes) { volume in
                         FolderTreeRow(url: volume.url, title: volume.name,
                                       symbol: volume.isLocal == false ? "network" : "externaldrive",
-                                      current: model.folder, showHidden: model.showHidden, open: model.openFolder)
+                                      current: model.folder, showHidden: model.showHidden,
+                                      reveal: reveal(for: volume.url), open: model.openFolder)
                             .help(volume.availableBytes.map { "\(formattedBytes($0)) available" } ?? volume.name)
                             .contextMenu {
                                 if volume.isEjectable == true {
@@ -211,6 +215,20 @@ struct BrowserView: View {
         }
         .background(.bar)
         .accessibilityLabel("Folder sidebar")
+    }
+
+    private func reveal(for root: URL) -> FolderTreeReveal? {
+        folderReveal?.root == root.standardizedFileURL.path ? folderReveal : nil
+    }
+
+    private func expandToCurrentFolder() {
+        let roots = model.places.map(\.url) + model.favorites + model.volumes.map(\.url)
+        guard let request = FolderTreeReveal(folder: model.folder, roots: roots) else {
+            feedback = "The current folder is outside the folder tree."
+            return
+        }
+        sidebarVisible = true
+        folderReveal = request
     }
 
     private func sideHeading(_ label: String) -> some View {
@@ -250,9 +268,7 @@ struct BrowserView: View {
     private var commandBar: some View {
         HStack(spacing: 9) {
             Menu {
-                Button("New Folder") { newItem(directory: true, extension: nil) }
-                Button("New Text File") { newItem(directory: false, extension: "txt") }
-                Button("New Markdown File") { newItem(directory: false, extension: "md") }
+                creationMenu
             } label: { Label("New", systemImage: "plus") }
                 .disabled(actions.busy || model.currentVolume?.isReadOnly == true)
             control("Cut", "scissors") { _ = perform(.cut) }.disabled(model.selected.isEmpty || actions.busy)
@@ -263,6 +279,11 @@ struct BrowserView: View {
             } label: { Label("Paste", systemImage: "clipboard") }
                 .disabled(actions.busy || model.currentVolume?.isReadOnly == true)
             control("Move to Trash", "trash") { _ = perform(.trash) }.disabled(model.selected.isEmpty || actions.busy)
+            Menu {
+                folderMenu
+            } label: { Image(systemName: "ellipsis.circle") }
+                .accessibilityLabel("Current folder actions")
+                .help("Current folder actions")
             if let undo = actions.undoName {
                 control("Undo " + undo, "arrow.uturn.backward") { actions.undo() }.disabled(actions.busy)
             }
@@ -364,12 +385,7 @@ struct BrowserView: View {
             }
             .onEnded { _ in selectionRectangle = nil })
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTarget, perform: receiveDrop)
-        .contextMenu {
-            Button("New Folder") { newItem(directory: true, extension: nil) }
-            Button("Paste") { actions.paste(into: model.folder) }.disabled(actions.busy)
-            Button("Copy Current Path") { copyPaths([model.folder]) }
-            Button("Refresh") { model.refresh() }
-        }
+        .contextMenu { folderMenu }
     }
 
     private var details: some View {
@@ -532,10 +548,27 @@ struct BrowserView: View {
                 withReferences(entries) { actions.trash($0) }
             }.disabled(actions.busy)
         } else {
-            Button("New Folder") { newItem(directory: true, extension: nil) }
-            Button("Paste") { actions.paste(into: model.folder) }.disabled(actions.busy)
-            Button("Copy Current Path") { copyPaths([model.folder]) }
+            folderMenu
         }
+    }
+
+    @ViewBuilder
+    private var creationMenu: some View {
+        Group {
+            Button("New Folder") { newItem(directory: true, extension: nil) }
+            Button("New Text File") { newItem(directory: false, extension: "txt") }
+            Button("New Markdown File") { newItem(directory: false, extension: "md") }
+        }.disabled(actions.busy || model.currentVolume?.isReadOnly == true)
+    }
+
+    @ViewBuilder
+    private var folderMenu: some View {
+        creationMenu
+        Divider()
+        Button("Paste") { actions.paste(into: model.folder) }.disabled(actions.busy)
+        Button("Copy Current Path") { copyPaths([model.folder]) }
+        Button("Expand to Current Folder") { expandToCurrentFolder() }
+        Button("Refresh") { _ = perform(.refresh) }
     }
 
     private var inspector: some View {
@@ -619,11 +652,16 @@ struct BrowserView: View {
             if model.tabs.count > 1 { model.closeTab(model.currentTabID) }
             else { NSApp.keyWindow?.performClose(nil) }
         case .selectAll: model.selectAll()
-        case .back: model.goBack()
-        case .forward: model.goForward()
+        case .back:
+            guard model.canGoBack else { return false }
+            model.goBack()
+        case .forward:
+            guard model.canGoForward else { return false }
+            model.goForward()
         case .up: model.goUp()
         case .refresh: model.refreshVolumes(); model.refresh()
         case .address: editAddress()
+        case .revealFolder: expandToCurrentFolder()
         case .search: focus = .search
         case .grid(let dx, let dy, let extend): return moveGrid(dx: dx, dy: dy, extend: extend)
         }
@@ -910,16 +948,25 @@ private struct FolderTreeRow: View {
     let symbol: String
     let current: URL
     let showHidden: Bool
+    let reveal: FolderTreeReveal?
     let open: (URL) -> Void
     @State private var expanded = false
     @State private var children: [FileEntry] = []
     @State private var problem = ""
 
+    private var childToReveal: String? { reveal?.nextChild[url.standardizedFileURL.path] }
+
+    private struct LoadRequest: Hashable {
+        let expanded: Bool
+        let showHidden: Bool
+        let child: String?
+    }
+
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             ForEach(children) { entry in
                 FolderTreeRow(url: entry.url, title: entry.name, symbol: "folder", current: current,
-                              showHidden: showHidden, open: open)
+                              showHidden: showHidden, reveal: reveal, open: open)
             }
             if !problem.isEmpty { Text(problem).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
         } label: {
@@ -928,16 +975,20 @@ private struct FolderTreeRow: View {
                     .lineLimit(1)
                     .padding(.vertical, 3)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(current.path == url.path ? Color.accentColor.opacity(0.15) : Color.clear,
+                    .background(current.standardizedFileURL.path == url.standardizedFileURL.path
+                                ? Color.accentColor.opacity(0.15) : Color.clear,
                                 in: RoundedRectangle(cornerRadius: 4))
             }
             .buttonStyle(.plain)
             .help(url.path)
         }
-        .task(id: "\(expanded):\(showHidden)") {
+        .onAppear { if childToReveal != nil { expanded = true } }
+        .onChange(of: reveal?.id) { _ in if childToReveal != nil { expanded = true } }
+        .task(id: LoadRequest(expanded: expanded, showHidden: showHidden, child: childToReveal)) {
             guard expanded else { return }
             do {
-                let loaded = try await BrowserModel.folderChildren(of: url, showHidden: showHidden)
+                let loaded = try await BrowserModel.folderChildren(of: url, showHidden: showHidden,
+                                                                   revealing: childToReveal)
                 if !Task.isCancelled { children = loaded; problem = "" }
             } catch {
                 if !Task.isCancelled { children = []; problem = error.localizedDescription }

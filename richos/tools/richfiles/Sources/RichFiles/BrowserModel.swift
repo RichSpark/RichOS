@@ -19,6 +19,29 @@ struct BrowserPlace: Identifiable {
     var id: URL { url }
 }
 
+struct FolderTreeReveal: Equatable {
+    let id = UUID()
+    let root: String
+    let nextChild: [String: String]
+
+    init?(folder: URL, roots: [URL]) {
+        let paths = folder.standardizedFileURL.pathComponents
+        guard let root = roots.map(\.standardizedFileURL).filter({
+            paths.starts(with: $0.pathComponents)
+        }).max(by: { $0.pathComponents.count < $1.pathComponents.count }) else { return nil }
+
+        self.root = root.path
+        var parent = root
+        var nextChild: [String: String] = [:]
+        for component in paths.dropFirst(root.pathComponents.count) {
+            let child = parent.appendingPathComponent(component, isDirectory: true)
+            nextChild[parent.path] = component
+            parent = child
+        }
+        self.nextChild = nextChild
+    }
+}
+
 enum BrowserViewMode: String, Codable, CaseIterable, Identifiable {
     case details = "Details"
     case list = "List"
@@ -354,9 +377,13 @@ final class BrowserModel: ObservableObject {
         }
     }
 
-    nonisolated static func folderChildren(of folder: URL, showHidden: Bool = false) async throws -> [FileEntry] {
+    nonisolated static func folderChildren(
+        of folder: URL, showHidden: Bool = false, revealing child: String? = nil
+    ) async throws -> [FileEntry] {
         let worker = Task.detached(priority: .utility) {
-            try readChildFolders(folder, showHidden: showHidden)
+            let entries = try readChildFolders(folder, showHidden: showHidden || child != nil)
+            guard !showHidden, let child else { return entries }
+            return entries.filter { !$0.isHidden || $0.name == child }
         }
         return try await withTaskCancellationHandler {
             try await worker.value
