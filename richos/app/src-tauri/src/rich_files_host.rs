@@ -54,7 +54,6 @@ pub fn with_instruction_cards(view: &dyn SpineView, files_root: &Path, thread_id
     if let Ok(binding) = view.ledger().thread_binding(thread_id) {
         if let Some(items) = payload["items"].as_array_mut() {
             items.extend(richos_core::your_instructions::items(files_root, binding.entity_id().as_str(), thread_id));
-            items.extend(richos_core::media_moments::items(files_root, binding.entity_id().as_str(), thread_id));
             #[cfg(target_os="macos")]
             if let Some(data)=files_root.parent(){match crate::cleaner_host::cards(data,Some(binding.entity_id().as_str()),Some(thread_id)){Ok(cards)=>items.extend(cards),Err(e)=>eprintln!("[richos] RichCleaner cards: {e}")}}
             items.sort_by_key(|i| i["createdAt"].as_u64().unwrap_or(0));
@@ -214,7 +213,9 @@ pub fn start(app: AppHandle) {
                 }
                 for card in richos_core::media_moments::all(&state_root) {
                     if seen.insert(card.id.clone()) {
-                        drop(app.emit("rich://rich-file", &card.item()));
+                        let item = card.item();
+                        drop(app.emit("rich://rich-file", &item));
+                        app.state::<std::sync::Arc<crate::phone::PhoneRuntime>>().question_changed(&item);
                     }
                 }
                 for row in richos_core::rich_files::all(&state_root) {
@@ -264,6 +265,74 @@ mod tests {
         assert!(has_card(&techy["timeline"]["items"]), "Techy Mode's snapshot has the card: {techy}");
         // Another company's conversation never sees it.
         assert_eq!(richos_core::rich_files::items(&root, "beta", &thread).len(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn media_evidence_reaches_the_phone_live_and_on_reopen() {
+        use crate::phone::rows::{reply_for_turn, row_from_item, rows_from_payload};
+        use richos_core::{media_moments, question_tools::Scope, questions::AskScope};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join(format!("richos-media-phone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut spine = Spine::new(Ledger::open(dir.join("ledger.jsonl")).unwrap());
+        let company = EntityId::parse("alpha").unwrap();
+        spine.set_entity_registry(EntityRegistry::new(vec![Entity::new("alpha", "Alpha", &["/fixture/alpha"]).unwrap()]).unwrap());
+        let thread = spine.create_thread("An interview", &company).unwrap();
+        let other = spine.create_thread("Another conversation", &company).unwrap();
+        let root = dir.join("engine-state");
+        let scope = Scope {
+            context: AskScope {
+                root: root.clone(), entity_id: company.to_string(), thread_id: thread.clone(),
+                turn_id: "turn-1".into(), asker: "front_desk".into(), obligation_id: None, session_id: "s".into(),
+                engine: None, entity_root: None, app_run: None,
+            },
+            actions_allowed: true, answer_method: "typed".into(), surface: "mac".into(),
+        };
+        let path = dir.join("private-source.wav");
+        std::fs::write(&path, b"recording").unwrap();
+        let args = |source| json!({
+            "name":"An interview", "source":source, "durationMs":100000,
+            "points":[{"startMs":53280,"label":"Customer focus","quote":"Start with the customer."}]
+        });
+        let local = media_moments::call(&scope, args(json!({"kind":"local","path":path}))).unwrap();
+        let youtube = media_moments::call(&scope, args(json!({"kind":"youtube","video_id":"ab-cDe_F123"}))).unwrap();
+        let view = spine.reader().snapshot();
+        let store = richos_core::questions::Store::new(&root);
+        let mut snapshot = crate::question_host::payload_in(&*view, &store, &root, &thread).unwrap();
+        let desktop = super::with_instruction_cards(&*view, &root, &thread, snapshot.clone());
+        assert_eq!(desktop["items"], snapshot["items"], "the Mac's extra cards never duplicate media evidence");
+        let another = crate::question_host::payload_in(&*view, &store, &root, &other).unwrap();
+        assert!(rows_from_payload(&another).is_empty());
+        assert!(reply_for_turn(&snapshot, "turn-1").is_none(), "evidence alone cannot send a reply notification");
+
+        let items = snapshot["items"].as_array_mut().unwrap();
+        assert_eq!(items.len(), 2);
+        for (record, expected) in [
+            (&local, "Play the recording in RichOS on your Mac."),
+            (&youtube, "https://www.youtube.com/watch?v=ab-cDe_F123&t=53s"),
+        ] {
+            let item = items.iter().find(|item| item["id"] == record["id"]).unwrap();
+            let live = row_from_item(item).unwrap();
+            let text = live["text"].as_str().unwrap();
+            assert_eq!(live["kind"], "text");
+            assert!(text.contains("0:53  Customer focus\nStart with the customer."));
+            assert!(text.contains(expected), "{text}");
+            assert!(!live.to_string().contains("private-source.wav"));
+        }
+        items.push(json!({"kind":"rich_message","id":"reply","threadId":thread,"turnId":"turn-1",
+            "text":"Here is what changed.","createdAt":u64::MAX}));
+        let rows = rows_from_payload(&snapshot);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["id"], "reply");
+        assert_eq!(reply_for_turn(&snapshot, "turn-1").unwrap()["id"], "reply");
+        for (i, row) in rows.iter().skip(1).enumerate() {
+            let item = snapshot["items"].as_array().unwrap().iter().find(|item| item["id"] == row["id"]).unwrap();
+            let mut live = row_from_item(item).unwrap();
+            live["cursor"] = json!(i + 2);
+            assert_eq!(*row, live);
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

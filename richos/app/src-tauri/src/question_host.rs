@@ -40,6 +40,7 @@ pub fn payload_in(view: &dyn SpineView, store: &Store, files_root: &std::path::P
         // one item each, in the turn that attached it. The phone reads this same payload, and
         // Techy Mode's snapshot adds the same rows (`rich_files_host::machinery_with_files`).
         items.extend(crate::rich_files_host::items(files_root, binding.entity_id().as_str(), thread));
+        items.extend(richos_core::media_moments::items(files_root, binding.entity_id().as_str(), thread));
         items.sort_by_key(|i| i["createdAt"].as_u64().unwrap_or(0));
     }
     Ok(payload)

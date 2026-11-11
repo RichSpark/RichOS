@@ -43,6 +43,7 @@
 //! re-projection by construction (`timeline.rs`: *"Re-projecting the same durable inputs after a
 //! restart produces the same id"*).
 
+use richos_core::media_moments::{Moments, Source};
 use serde_json::{json, Value};
 
 /// The rows the phone understands, in order, cursors assigned.
@@ -93,11 +94,10 @@ pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
 /// Select the completed turn's reply without renumbering its conversation cursor.
 pub fn reply_for_turn(payload: &Value, turn: &str) -> Option<Value> {
     let ids: std::collections::HashSet<&str> = payload.get("items")?.as_array()?.iter()
-        .filter(|item| item["turnId"] == turn)
+        .filter(|item| item["kind"] == "rich_message" && item["turnId"] == turn)
         .filter_map(|item| item["id"].as_str()).collect();
     rows_from_payload(payload).into_iter().rev().find(|row|
-        row["role"] == "rich" && row["kind"] != "question" && row["kind"] != "file"
-            && row["id"].as_str().is_some_and(|id| ids.contains(id)))
+        row["id"].as_str().is_some_and(|id| ids.contains(id)))
 }
 
 /// One gated timeline item as a phone row, or `None` when it is not a message.
@@ -130,22 +130,25 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
                 "complete": true,
             }))
         }
-        "rich_message" => Some(json!({
-            "id": id,
-            "thread_id": thread_id,
-            "cursor": 0,
-            "role": "rich",
-            "kind": "text",
-            "text": text,
-            "created_at": iso8601(created_at),
-            "client_id": Value::Null,
-            // Nothing is synthesized until he asks for it (plan §3.4 verb 4), so a projected
-            // row never claims audio is waiting. Slice B is what makes this ever true.
-            "has_audio": false,
-            "from_microphone": false,
-            "state": "complete",
-            "complete": true,
-        })),
+        k if k == "rich_message" || (k == richos_core::rich_files::ITEM_KIND && item["file"]["moments"].is_object()) => {
+            let text = if k == "rich_message" { text } else { media_moments_text(&item["file"], text)? };
+            Some(json!({
+                "id": id,
+                "thread_id": thread_id,
+                "cursor": 0,
+                "role": "rich",
+                "kind": "text",
+                "text": text,
+                "created_at": iso8601(created_at),
+                "client_id": Value::Null,
+                // Nothing is synthesized until he asks for it (plan §3.4 verb 4), so a projected
+                // row never claims audio is waiting. Slice B is what makes this ever true.
+                "has_audio": false,
+                "from_microphone": false,
+                "state": "complete",
+                "complete": true,
+            }))
+        },
         // A FILE RICH PUT IN FRONT OF THE USER (round 36 screen 3): a Rich row of kind `file`,
         // carrying the card's own description (`rich_files::file_value`): an id to ask the Mac
         // for, never a path. The phone fetches the bytes only when the user taps it
@@ -170,6 +173,34 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
         // remembering to skip it.
         _ => None,
     }
+}
+
+/// Existing phone clients show media evidence in the conversation without fetching the file.
+fn media_moments_text(file: &Value, name: String) -> Option<String> {
+    let moments: Moments = serde_json::from_value(file["moments"].clone()).ok()?;
+    let youtube = file["youtubeId"].as_str().map(|video_id| Source::Youtube { video_id: video_id.to_string() });
+    let mut lines = vec![name];
+    if file["source"] == "local" {
+        let message = if file["exists"] == false {
+            "The recording was moved, deleted or changed."
+        } else {
+            "Play the recording in RichOS on your Mac."
+        };
+        lines.push(message.into());
+    }
+    for point in moments.points {
+        let seconds = point.start_ms / 1000;
+        let time = if seconds >= 3600 {
+            format!("{}:{:02}:{:02}", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+        } else {
+            format!("{}:{:02}", seconds / 60, seconds % 60)
+        };
+        lines.push(format!("{time}  {}\n{}", point.label, point.quote));
+        if let Some(url) = youtube.as_ref().and_then(|source| source.youtube_url(point.start_ms)) {
+            lines.push(url);
+        }
+    }
+    Some(lines.join("\n"))
 }
 
 /// **The `client_id` a CEO row carries: the one the phone sent with the message, or `null`.**
