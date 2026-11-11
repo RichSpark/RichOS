@@ -127,9 +127,12 @@ final class BrowserModelTests: XCTestCase {
         XCTAssertEqual(model.searchText, "synthetic browser fixture")
         XCTAssertEqual(Set(model.entries.map(\.name)), ["Notes.md", "Report.TXT"])
 
-        let session = try XCTUnwrap(model.sessionData())
+        try model.saveWorkspace(named: "  Project Documents  ")
+        XCTAssertThrowsError(try model.saveWorkspace(named: "project documents"))
         let restored = BrowserModel(start: projects, defaults: defaults)
-        XCTAssertTrue(restored.restoreSession(session))
+        let savedWorkspace = try XCTUnwrap(restored.namedWorkspaces().first)
+        XCTAssertEqual(savedWorkspace.name, "Project Documents")
+        XCTAssertTrue(restored.restoreSession(savedWorkspace.session))
         try await waitForListing(restored, at: root)
         XCTAssertEqual(restored.tabs.map { $0.folder.path }, [projects.path, root.path])
         XCTAssertEqual(restored.currentTabID, restored.tabs.last?.id)
@@ -141,6 +144,8 @@ final class BrowserModelTests: XCTestCase {
         XCTAssertEqual(restored.selected, [photo.id])
         XCTAssertTrue(restored.canGoBack)
         XCTAssertFalse(restored.restoreSession(Data("corrupt session".utf8)))
+        restored.removeWorkspace(savedWorkspace.id)
+        XCTAssertTrue(model.namedWorkspaces().isEmpty)
 
         model.closeTab(searchTab)
         try await waitForListing(model, at: projects)

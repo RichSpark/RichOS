@@ -628,6 +628,7 @@ struct BrowserView: View {
         Button("Paste") { actions.paste(into: model.folder) }.disabled(actions.busy)
         Button("Copy Current Path") { copyPaths([model.folder]) }
         Button("Expand to Current Folder") { expandToCurrentFolder() }
+        Button("Workspaces…") { sheet = .workspaces }
         Button("Refresh") { _ = perform(.refresh) }
     }
 
@@ -722,6 +723,7 @@ struct BrowserView: View {
         case .refresh: model.refreshVolumes(); model.refresh()
         case .address: editAddress()
         case .revealFolder: expandToCurrentFolder()
+        case .workspaces: sheet = .workspaces
         case .search: focus = .search
         case .grid(let dx, let dy, let extend): return moveGrid(dx: dx, dy: dy, extend: extend)
         }
@@ -991,6 +993,7 @@ struct BrowserView: View {
         case .searchOptions: SearchOptionsSheet(model: model)
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)
         case .connect: ConnectSheet()
+        case .workspaces: WorkspacesSheet(model: model)
         }
     }
 }

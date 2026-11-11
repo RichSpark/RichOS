@@ -19,6 +19,24 @@ struct BrowserPlace: Identifiable {
     var id: URL { url }
 }
 
+struct NamedWorkspace: Identifiable, Codable {
+    let id: UUID
+    let name: String
+    let session: Data
+}
+
+enum WorkspaceSaveError: LocalizedError {
+    case emptyName, nameInUse, cannotSave
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyName: return "Enter a workspace name."
+        case .nameInUse: return "A workspace already uses that name."
+        case .cannotSave: return "RichFiles could not save this workspace."
+        }
+    }
+}
+
 struct FolderTreeReveal: Equatable {
     let id = UUID()
     let root: String
@@ -162,6 +180,8 @@ final class BrowserModel: ObservableObject {
         let tabs: [TabState]
     }
 
+    private static let workspaceKeyPrefix = "browser-workspace-v1."
+
     private enum Navigation {
         case open, back, forward
     }
@@ -280,6 +300,31 @@ final class BrowserModel: ObservableObject {
               let data = try? JSONEncoder().encode(Session(activeTab: index, tabs: states)),
               data.count <= Session.maximumBytes else { return nil }
         return data
+    }
+
+    func namedWorkspaces() -> [NamedWorkspace] {
+        defaults.dictionaryRepresentation().compactMap { key, value in
+            guard key.hasPrefix(Self.workspaceKeyPrefix), let data = value as? Data,
+                  let workspace = try? JSONDecoder().decode(NamedWorkspace.self, from: data),
+                  key == Self.workspaceKeyPrefix + workspace.id.uuidString else { return nil }
+            return workspace
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func saveWorkspace(named draft: String) throws {
+        let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw WorkspaceSaveError.emptyName }
+        guard !namedWorkspaces().contains(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) else {
+            throw WorkspaceSaveError.nameInUse
+        }
+        guard let session = sessionData() else { throw WorkspaceSaveError.cannotSave }
+        let workspace = NamedWorkspace(id: UUID(), name: name, session: session)
+        let data = try JSONEncoder().encode(workspace)
+        defaults.set(data, forKey: Self.workspaceKeyPrefix + workspace.id.uuidString)
+    }
+
+    func removeWorkspace(_ id: UUID) {
+        defaults.removeObject(forKey: Self.workspaceKeyPrefix + id.uuidString)
     }
 
     @discardableResult

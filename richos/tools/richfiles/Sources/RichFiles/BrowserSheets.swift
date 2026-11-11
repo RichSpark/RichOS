@@ -18,7 +18,7 @@ enum BrowserSheet: Identifiable {
     case openWith(FileEntry, WorkspaceApplications)
     case zip(ZipCatalog)
     case createZip([FileReference], URL)
-    case trash, transfers, searchOptions, batch([FileReference]), connect
+    case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces
 
     var id: String {
         switch self {
@@ -33,7 +33,57 @@ enum BrowserSheet: Identifiable {
         case .searchOptions: return "searchOptions"
         case .batch: return "batch"
         case .connect: return "connect"
+        case .workspaces: return "workspaces"
         }
+    }
+}
+
+@MainActor
+struct WorkspacesSheet: View {
+    let model: BrowserModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var workspaces: [NamedWorkspace] = []
+    @State private var selected: UUID?
+    @State private var name = ""
+    @State private var problem = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Workspaces").font(.headline)
+            List(workspaces, selection: $selected) { workspace in
+                Text(workspace.name).tag(workspace.id)
+            }
+            HStack {
+                TextField("Name this set of tabs", text: $name)
+                Button("Save Current Workspace") { save() }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if !problem.isEmpty { Text(problem).font(.callout).foregroundStyle(.secondary) }
+            HStack {
+                Button("Remove Workspace") {
+                    if let selected { model.removeWorkspace(selected) }
+                    selected = nil
+                    workspaces = model.namedWorkspaces()
+                }.disabled(selected == nil)
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Open Here") {
+                    guard let workspace = workspaces.first(where: { $0.id == selected }) else { return }
+                    if model.restoreSession(workspace.session) { dismiss() }
+                    else { problem = "RichFiles could not read that workspace." }
+                }.keyboardShortcut(.defaultAction).disabled(selected == nil)
+            }
+        }.padding(16).frame(width: 470, height: 320)
+            .onAppear { workspaces = model.namedWorkspaces() }
+    }
+
+    private func save() {
+        do {
+            try model.saveWorkspace(named: name)
+            workspaces = model.namedWorkspaces()
+            name = ""
+            problem = ""
+        } catch { problem = error.localizedDescription }
     }
 }
 

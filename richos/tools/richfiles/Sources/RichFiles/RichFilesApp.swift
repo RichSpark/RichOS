@@ -84,7 +84,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
 
 enum BrowserCommand: Equatable {
     case open, rename, trash, preview, address, search, back, forward, up, refresh, revealFolder
-    case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties
+    case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties, workspaces
     case grid(Int, Int, Bool)
 }
 
@@ -129,6 +129,7 @@ struct BrowserCommands: Commands {
             action("Go to Path", .address)
             action("Search Folder", .search)
             action("Expand to Current Folder", .revealFolder)
+            action("Workspaces…", .workspaces)
         }
     }
 
