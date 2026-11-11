@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 public enum FileKind: Equatable, Sendable {
@@ -19,6 +18,7 @@ public struct FileEntry: Sendable, Identifiable {
     public let modified: Date?
     public let created: Date?
     public let isHidden: Bool
+    /// True when Foundation reports an undownloaded iCloud item.
     public let needsDownload: Bool
 
     fileprivate static let resourceKeys: Set<URLResourceKey> = [
@@ -82,9 +82,7 @@ public struct FileQuery: Sendable {
                 return false
             }
         case .wildcard(let pattern):
-            let pattern = pattern.lowercased().precomposedStringWithCanonicalMapping
-            let name = entry.name.lowercased().precomposedStringWithCanonicalMapping
-            guard !pattern.utf8.contains(0), fnmatch(pattern, name, FNM_NOESCAPE) == 0 else {
+            guard wildcardMatches(pattern.lowercased(), entry.name.lowercased()) else {
                 return false
             }
         case nil:
@@ -96,6 +94,34 @@ public struct FileQuery: Sendable {
         if let modified, entry.modified.map(modified.contains) != true { return false }
         return true
     }
+}
+
+/// Match * and ? by characters so one ? can match an accented letter or emoji.
+/// After a mismatch, only the last * needs to try consuming one more character.
+private func wildcardMatches(_ pattern: String, _ name: String) -> Bool {
+    var token = pattern.startIndex
+    var character = name.startIndex
+    var star: (nextToken: String.Index, endOfMatch: String.Index)?
+    while character < name.endIndex {
+        if token < pattern.endIndex && pattern[token] == "*" {
+            pattern.formIndex(after: &token)
+            star = (token, character)
+        } else if token < pattern.endIndex && (pattern[token] == "?" || pattern[token] == name[character]) {
+            pattern.formIndex(after: &token)
+            name.formIndex(after: &character)
+        } else if var previousStar = star {
+            name.formIndex(after: &previousStar.endOfMatch)
+            character = previousStar.endOfMatch
+            token = previousStar.nextToken
+            star = previousStar
+        } else {
+            return false
+        }
+    }
+    while token < pattern.endIndex && pattern[token] == "*" {
+        pattern.formIndex(after: &token)
+    }
+    return token == pattern.endIndex
 }
 
 public struct ScanIssue: Sendable {

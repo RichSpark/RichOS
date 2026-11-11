@@ -81,6 +81,19 @@ final class DirectoryReaderTests: XCTestCase {
         }
     }
 
+    func testWildcardMatchesOneCharacterInUnicodeNames() throws {
+        try fixture { root in
+            for name in ["café.txt", "caf🍵.txt", "cafes.txt", "cafe.md"] {
+                try write(name, in: root)
+            }
+            var entries: [FileEntry] = []
+            _ = try DirectoryReader.scan(root, query: FileQuery(name: .wildcard("*CAF?.TXT"))) {
+                entries.append(contentsOf: $0)
+            }
+            XCTAssertEqual(Set(entries.map(\.name)), ["café.txt", "caf🍵.txt"])
+        }
+    }
+
     func testAddressAndPropertiesUseTheActualFile() throws {
         try fixture { root in
             let sub = root.appendingPathComponent("Research notes", isDirectory: true)
