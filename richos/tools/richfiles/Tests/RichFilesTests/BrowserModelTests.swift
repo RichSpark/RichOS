@@ -44,6 +44,49 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testNamedSplitWorkspaceRestoresBothPanesAndTheActiveTab() async throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .resolvingSymlinksInPath().appendingPathComponent("RichFilesSplit-\(UUID().uuidString)", isDirectory: true)
+        let first = root.appendingPathComponent("First", isDirectory: true)
+        let second = root.appendingPathComponent("Second", isDirectory: true)
+        for folder in [first, second] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let domain = "app.richos.richfiles.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+
+        let window = WindowWorkspace(start: root, defaults: defaults)
+        window.toggleSplit()
+        window.primary.newTab(first)
+        let secondary = try XCTUnwrap(window.secondary)
+        secondary.newTab(second)
+        window.select(.secondary)
+        try await waitForListing(secondary, at: second)
+        try window.primary.saveWorkspace(named: "Project", session: XCTUnwrap(window.sessionData()))
+
+        let reopened = WindowWorkspace(start: root, defaults: defaults)
+        let saved = try XCTUnwrap(reopened.primary.namedWorkspaces().first)
+        XCTAssertTrue(reopened.restoreSession(saved.session))
+        XCTAssertTrue(reopened.isSplit)
+        XCTAssertEqual(reopened.active, .secondary)
+        XCTAssertEqual(reopened.primary.tabs.count, 2)
+        XCTAssertEqual(reopened.primary.folder.path, first.path)
+        XCTAssertEqual(reopened.activeModel.tabs.count, 2)
+        XCTAssertEqual(reopened.activeModel.folder.path, second.path)
+
+        reopened.toggleSplit()
+        XCTAssertTrue(reopened.activeModel === reopened.primary)
+        reopened.toggleSplit()
+        XCTAssertEqual(reopened.secondary?.folder.path, second.path)
+        XCTAssertTrue(reopened.restoreSession(try XCTUnwrap(window.primary.sessionData())))
+        XCTAssertFalse(reopened.isSplit)
+        XCTAssertEqual(reopened.primary.folder.path, first.path)
+    }
+
+    @MainActor
     func testListDefaultNavigationSearchAndPreferences() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)

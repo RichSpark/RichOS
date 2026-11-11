@@ -26,7 +26,7 @@ public struct RichFilesScenes: Scene {
 
     public var body: some Scene {
         WindowGroup("RichFiles", id: "browser") {
-            BrowserView(start: Self.requestedFolder ?? FileManager.default.homeDirectoryForCurrentUser,
+            WindowBrowserView(start: Self.requestedFolder ?? FileManager.default.homeDirectoryForCurrentUser,
                         actions: actions, openRequests: delegate,
                         supportsSessionRestore: Self.requestedFolder == nil)
                 .frame(minWidth: 720, minHeight: 420)
@@ -60,14 +60,14 @@ public struct RichFilesPane: View {
     private let folder: URL
     private let openWindow: (URL) -> Void
     private let acceptsKeyboard: () -> Bool
-    private let returnKeyboardFocus: () -> Void
+    private let returnKeyboardFocus: @MainActor @Sendable () -> Void
 
     public init(
         folder: URL,
         recoveryStore: URL?,
         openWindow: @escaping (URL) -> Void,
         acceptsKeyboard: @escaping () -> Bool,
-        returnKeyboardFocus: @escaping () -> Void = {}
+        returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.folder = folder
         self.openWindow = openWindow
@@ -77,7 +77,7 @@ public struct RichFilesPane: View {
     }
 
     public var body: some View {
-        BrowserView(start: folder, actions: actions, openRequests: openRequests,
+        WindowBrowserView(start: folder, actions: actions, openRequests: openRequests,
                     openWindow: openWindow, acceptsKeyboard: acceptsKeyboard, returnKeyboardFocus: returnKeyboardFocus)
             .defaultAppStorage(RichFilesInstallation.preferences)
     }
@@ -110,7 +110,7 @@ enum BrowserCommand: Codable, Hashable {
     case open, rename, trash, preview, address, search, back, forward, up, refresh, revealFolder
     case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties, workspaces, diskUsage
     case duplicates, checksum, compareFolders
-    case copyPath, actionPalette, addToShelf, fileShelf
+    case copyPath, actionPalette, addToShelf, fileShelf, splitView, switchPane
     case grid(Int, Int, Bool)
 }
 
@@ -139,7 +139,8 @@ struct BrowserAction: Identifiable {
     static let navigation: [Self] = [
         .init("Back", .back), .init("Forward", .forward), .init("Up", .up), .init("Refresh", .refresh),
         .init("Go to Path", .address), .init("Search Folder", .search),
-        .init("Expand to Current Folder", .revealFolder), .init("Workspaces", .workspaces)
+        .init("Expand to Current Folder", .revealFolder), .init("Workspaces", .workspaces),
+        .init("Toggle Split View", .splitView), .init("Switch Pane", .switchPane)
     ]
     static let creation: [Self] = [
         .init("New Tab", .newTab), .init("Close Tab", .closeTab), .init("New Folder", .newFolder)

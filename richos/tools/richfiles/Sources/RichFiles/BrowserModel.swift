@@ -314,13 +314,13 @@ final class BrowserModel: ObservableObject {
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    func saveWorkspace(named draft: String) throws {
+    func saveWorkspace(named draft: String, session snapshot: Data? = nil) throws {
         let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw WorkspaceSaveError.emptyName }
         guard !namedWorkspaces().contains(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) else {
             throw WorkspaceSaveError.nameInUse
         }
-        guard let session = sessionData() else { throw WorkspaceSaveError.cannotSave }
+        guard let session = snapshot ?? sessionData() else { throw WorkspaceSaveError.cannotSave }
         let workspace = NamedWorkspace(id: UUID(), name: name, session: session)
         let data = try JSONEncoder().encode(workspace)
         defaults.set(data, forKey: Self.workspaceKeyPrefix + workspace.id.uuidString)

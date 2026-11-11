@@ -535,7 +535,7 @@ struct DiskUsageSheet: View {
 
 @MainActor
 struct WorkspacesSheet: View {
-    let model: BrowserModel
+    let window: WindowWorkspace
     @Environment(\.dismiss) private var dismiss
     @State private var workspaces: [NamedWorkspace] = []
     @State private var selected: UUID?
@@ -549,33 +549,34 @@ struct WorkspacesSheet: View {
                 Text(workspace.name).tag(workspace.id)
             }
             HStack {
-                TextField("Name this set of tabs", text: $name)
+                TextField("Workspace name", text: $name)
                 Button("Save Current Workspace") { save() }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if !problem.isEmpty { Text(problem).font(.callout).foregroundStyle(.secondary) }
             HStack {
                 Button("Remove Workspace") {
-                    if let selected { model.removeWorkspace(selected) }
+                    if let selected { window.primary.removeWorkspace(selected) }
                     selected = nil
-                    workspaces = model.namedWorkspaces()
+                    workspaces = window.primary.namedWorkspaces()
                 }.disabled(selected == nil)
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Open Here") {
                     guard let workspace = workspaces.first(where: { $0.id == selected }) else { return }
-                    if model.restoreSession(workspace.session) { dismiss() }
+                    if window.restoreSession(workspace.session) { dismiss() }
                     else { problem = "RichFiles could not read that workspace." }
                 }.keyboardShortcut(.defaultAction).disabled(selected == nil)
             }
         }.padding(16).frame(width: 470, height: 320)
-            .onAppear { workspaces = model.namedWorkspaces() }
+            .onAppear { workspaces = window.primary.namedWorkspaces() }
     }
 
     private func save() {
         do {
-            try model.saveWorkspace(named: name)
-            workspaces = model.namedWorkspaces()
+            guard let snapshot = window.sessionData() else { throw WorkspaceSaveError.cannotSave }
+            try window.primary.saveWorkspace(named: name, session: snapshot)
+            workspaces = window.primary.namedWorkspaces()
             name = ""
             problem = ""
         } catch { problem = error.localizedDescription }

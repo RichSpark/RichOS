@@ -5,22 +5,19 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct BrowserView: View {
-    @StateObject private var model: BrowserModel
+    @ObservedObject private var model: BrowserModel
+    @ObservedObject private var workspace: WindowWorkspace
     @ObservedObject private var actions: BrowserActions
-    @ObservedObject private var openRequests: FolderOpenDelegate
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.scenePhase) private var scenePhase
+    private let side: BrowserPaneSide
     private let hostOpenWindow: ((URL) -> Void)?
     private let acceptsKeyboard: () -> Bool
-    private let returnKeyboardFocus: () -> Void
-    private let supportsSessionRestore: Bool
+    private let returnKeyboardFocus: @MainActor @Sendable () -> Void
+    private let sessionChanged: () -> Void
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
-    @AppStorage("richfiles.restoreSession") private var restoreSession = false
-    @AppStorage("richfiles.lastBrowserSession.v1") private var lastBrowserSession = Data()
-    @SceneStorage("richfiles.browserSession.v1") private var savedSession: Data?
     @FocusState private var focus: Field?
     @State private var editingAddress = false
     @State private var address = ""
@@ -40,21 +37,23 @@ struct BrowserView: View {
     @State private var rowFrames: [URL: CGRect] = [:]
     @State private var selectionRectangle: CGRect?
     @State private var folderReveal: FolderTreeReveal?
-    @State private var appeared = false
+    @State private var commandOwner = UUID()
     @State private var paletteChoice: BrowserCommand?
 
     private enum Field: Hashable { case address, search }
 
-    init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate,
-         openWindow: ((URL) -> Void)? = nil, acceptsKeyboard: @escaping () -> Bool = { true },
-         supportsSessionRestore: Bool = false, returnKeyboardFocus: @escaping () -> Void = {}) {
-        _model = StateObject(wrappedValue: BrowserModel(start: start))
+    init(model: BrowserModel, workspace: WindowWorkspace, side: BrowserPaneSide,
+         actions: BrowserActions, openWindow: ((URL) -> Void)? = nil,
+         acceptsKeyboard: @escaping () -> Bool, returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void,
+         sessionChanged: @escaping () -> Void) {
+        self.model = model
+        self.workspace = workspace
+        self.side = side
         self.actions = actions
-        self.openRequests = openRequests
         hostOpenWindow = openWindow
         self.acceptsKeyboard = acceptsKeyboard
         self.returnKeyboardFocus = returnKeyboardFocus
-        self.supportsSessionRestore = supportsSessionRestore
+        self.sessionChanged = sessionChanged
     }
 
     var body: some View {
@@ -63,7 +62,9 @@ struct BrowserView: View {
             if editingAddress && !suggestions.isEmpty { addressSuggestions }
             Divider()
             HSplitView {
-                if sidebarVisible { sidebar.frame(minWidth: 160, idealWidth: 200, maxWidth: 340) }
+                if sidebarVisible && !workspace.isSplit {
+                    sidebar.frame(minWidth: 160, idealWidth: 200, maxWidth: 340)
+                }
                 VStack(spacing: 0) {
                     tabs
                     Divider()
@@ -73,41 +74,30 @@ struct BrowserView: View {
                     Divider()
                     statusBar
                 }
-                .frame(minWidth: 430, maxWidth: .infinity, maxHeight: .infinity)
-                if inspectorVisible {
+                .frame(minWidth: workspace.isSplit ? 355 : 430, maxWidth: .infinity, maxHeight: .infinity)
+                if inspectorVisible && !workspace.isSplit {
                     inspector.frame(minWidth: 190, idealWidth: 260, maxWidth: 410)
                 }
             }
         }
         .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: acceptsKeyboard,
                                    shortcuts: BrowserShortcut.load(shortcutData),
-                                   perform: perform, prefix: selectPrefix)
-            .frame(width: 0, height: 0))
-        .focusedSceneValue(\.browserCommand) { _ = perform($0) }
-        .onAppear {
-            if !appeared {
-                appeared = true
-                if supportsSessionRestore {
-                    let firstWindow = openRequests.claimInitialBrowser()
-                    if restoreSession {
-                        let session = savedSession ?? (firstWindow ? lastBrowserSession : nil)
-                        if let session, !session.isEmpty { model.restoreSession(session) }
-                    }
-                }
+                                   activate: { workspace.select(side) },
+                                   perform: perform, prefix: selectPrefix))
+        .overlay(alignment: .top) {
+            if workspace.isSplit && workspace.active == side {
+                Rectangle().fill(Color.accentColor).frame(height: 2).allowsHitTesting(false)
             }
-            receiveFolderOpen()
         }
-        .onChange(of: model.tabs.map(\.folder)) { _ in saveSession(rememberWindow: true) }
-        .onChange(of: model.currentTabID) { _ in saveSession(rememberWindow: true) }
-        .onChange(of: model.scrollAnchor) { _ in saveSession(rememberWindow: true) }
-        .onChange(of: scenePhase) { if $0 != .active { saveSession() } }
-        .onChange(of: restoreSession) { _ in saveSession(rememberWindow: true) }
-        .onDisappear { saveSession() }
+        .onAppear { workspace.setCommands(for: side, owner: commandOwner, handler: perform) }
+        .onDisappear { workspace.clearCommands(for: side, owner: commandOwner) }
+        .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
+        .onChange(of: model.currentTabID) { _ in sessionChanged() }
+        .onChange(of: model.scrollAnchor) { _ in sessionChanged() }
         .onChange(of: actions.mutationRevision) { _ in model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             actions.refreshClipboard()
         }
-        .onChange(of: openRequests.requestID) { _ in receiveFolderOpen() }
         .onChange(of: model.folder) { _ in
             let returnFocus = editingAddress
             editingAddress = false
@@ -124,12 +114,6 @@ struct BrowserView: View {
         .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in sheetContents(value) }
     }
 
-    private func saveSession(rememberWindow: Bool = false) {
-        guard supportsSessionRestore, appeared else { return }
-        savedSession = restoreSession ? model.sessionData() : nil
-        if rememberWindow || !restoreSession { lastBrowserSession = savedSession ?? Data() }
-    }
-
     private func runPaletteChoice() {
         guard let command = paletteChoice else { return }
         paletteChoice = nil
@@ -138,7 +122,12 @@ struct BrowserView: View {
 
     private var navigationBar: some View {
         HStack(spacing: 8) {
-            control("Sidebar", "sidebar.left") { sidebarVisible.toggle() }
+            if !workspace.isSplit { control("Sidebar", "sidebar.left") { sidebarVisible.toggle() } }
+            if side == .primary {
+                control(workspace.isSplit ? "Close Split View" : "Split View", "rectangle.split.2x1") {
+                    workspace.toggleSplit()
+                }
+            }
             control("Back", "chevron.left") { model.goBack() }.disabled(!model.canGoBack)
             control("Forward", "chevron.right") { model.goForward() }.disabled(!model.canGoForward)
             control("Up", "arrow.up") { model.goUp() }.disabled(model.folder.path == "/")
@@ -182,7 +171,8 @@ struct BrowserView: View {
                 .focused($focus, equals: .search)
                 .accessibilityLabel(model.searchContent ? "Search text contents" : "Search this folder")
                 .accessibilityIdentifier("folder-search")
-                .frame(minWidth: 130, idealWidth: 190, maxWidth: 240)
+                .frame(minWidth: workspace.isSplit ? 90 : 130,
+                       idealWidth: workspace.isSplit ? 125 : 190, maxWidth: 240)
                 .onSubmit { startSearch() }
             if model.searchActive {
                 control("Clear Search", "xmark.circle") { model.clearSearch() }
@@ -376,7 +366,7 @@ struct BrowserView: View {
                 }
             } label: { Image(systemName: "arrow.up.arrow.down") }
                 .accessibilityLabel("Sort and view options")
-            control("Preview Pane", "sidebar.right") { inspectorVisible.toggle() }
+            if !workspace.isSplit { control("Preview Pane", "sidebar.right") { inspectorVisible.toggle() } }
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 8).padding(.vertical, 6)
@@ -865,6 +855,12 @@ struct BrowserView: View {
         case .address: editAddress()
         case .revealFolder: expandToCurrentFolder()
         case .workspaces: sheet = .workspaces
+        case .splitView: workspace.toggleSplit()
+        case .switchPane:
+            guard workspace.isSplit else { return false }
+            workspace.select(side == .primary ? .secondary : .primary)
+            focus = nil
+            returnKeyboardFocus()
         case .addToShelf:
             guard !entries.isEmpty else { return false }
             withReferences(entries) { actions.addToShelf($0) }
@@ -963,13 +959,6 @@ struct BrowserView: View {
         feedback = ""
         model.submitSearch()
         focus = nil
-    }
-
-    private func receiveFolderOpen() {
-        for (index, url) in openRequests.takePending().enumerated() {
-            if index == 0 { model.openFolder(url) }
-            else { model.newTab(url) }
-        }
     }
 
     private func activate(_ entries: [FileEntry]) {
@@ -1177,7 +1166,7 @@ struct BrowserView: View {
         case .searchOptions: SearchOptionsSheet(model: model)
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)
         case .connect: ConnectSheet()
-        case .workspaces: WorkspacesSheet(model: model)
+        case .workspaces: WorkspacesSheet(window: workspace)
         case .fileShelf(let destination):
             FileShelfSheet(actions: actions, destination: destination, readOnly: model.currentVolume?.isReadOnly == true)
         case .actionPalette:
@@ -1208,6 +1197,7 @@ struct BrowserView: View {
         case .redo: return actions.redoName != nil && !actions.busy
         case .paste, .newFolder: return !actions.busy && model.currentVolume?.isReadOnly != true
         case .closeTab: return model.tabs.count > 1 || hostOpenWindow == nil
+        case .switchPane: return workspace.isSplit
         default: return true
         }
     }

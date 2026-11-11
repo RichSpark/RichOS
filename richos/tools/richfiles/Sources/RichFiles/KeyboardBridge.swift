@@ -9,7 +9,7 @@ struct BrowserShortcut: Hashable, Codable {
         ("Control", .control), ("Option", .option), ("Shift", .shift), ("Command", .command)
     ]
     private static let keyCodes: [UInt16: String] = [
-        36: "enter", 76: "enter", 49: "space", 51: "delete", 117: "delete",
+        36: "enter", 76: "enter", 49: "space", 51: "delete", 117: "delete", 48: "tab",
         122: "f1", 120: "f2", 99: "f3", 118: "f4", 96: "f5", 97: "f6",
         98: "f7", 100: "f8", 101: "f9", 109: "f10", 103: "f11", 111: "f12",
         123: "left", 124: "right", 125: "down", 126: "up"
@@ -69,6 +69,7 @@ struct BrowserShortcut: Hashable, Codable {
             Self("right", .option): .forward, Self("up", .option): .up, Self("d", .option): .address,
             Self("n", [primary, .shift]): .newFolder, Self("z", [primary, .shift]): .redo,
             Self("p", [primary, .shift]): .actionPalette,
+            Self("tab", [.control, .shift]): .switchPane,
             Self("a", primary): .selectAll, Self("c", primary): .copy, Self("x", primary): .cut,
             Self("v", primary): .paste, Self("z", primary): .undo, Self("y", primary): .redo,
             Self("l", primary): .address, Self("f", primary): .search, Self("t", primary): .newTab
@@ -118,6 +119,7 @@ struct KeyboardBridge: NSViewRepresentable {
     var windowsKeys: Bool
     var acceptsInput: () -> Bool
     var shortcuts: [BrowserCommand: BrowserShortcut]
+    var activate: () -> Void
     var perform: (BrowserCommand) -> Bool
     var prefix: (String) -> Bool
 
@@ -127,6 +129,7 @@ struct KeyboardBridge: NSViewRepresentable {
         view.windowsKeys = windowsKeys
         view.acceptsInput = acceptsInput
         view.shortcuts = shortcuts
+        view.activate = activate
         view.perform = perform
         view.prefix = prefix
     }
@@ -135,18 +138,28 @@ struct KeyboardBridge: NSViewRepresentable {
         var windowsKeys = true
         var acceptsInput: () -> Bool = { false }
         var shortcuts: [BrowserCommand: BrowserShortcut] = [:]
+        var activate: (() -> Void)?
         var perform: ((BrowserCommand) -> Bool)?
         var prefix: ((String) -> Bool)?
         private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .otherMouseDown, .swipe]) { [weak self] event in
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .swipe]
+            ) { [weak self] event in
                 guard let self, let window = self.window, event.window === window,
-                      window.attachedSheet == nil, self.acceptsInput() else { return event }
+                      window.attachedSheet == nil else { return event }
+                if event.type == .leftMouseDown || event.type == .rightMouseDown {
+                    if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) { self.activate?() }
+                    return event
+                }
+                guard self.acceptsInput() else { return event }
                 if event.type != .keyDown { return self.navigate(event) ? nil : event }
                 let editing = window.firstResponder is NSTextView || window.firstResponder is NSTextField
                 return self.handle(event, editing: editing) ? nil : event
