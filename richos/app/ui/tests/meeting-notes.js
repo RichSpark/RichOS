@@ -134,7 +134,7 @@ async function main() {
     const fallback = page.locator("#mn-calendar-recovery [role=status]").last();
     assert((await fallback.textContent()).includes(authorizationUrl));
     assertEqual(await fallback.evaluate(el => getComputedStyle(el).getPropertyValue("-webkit-user-select")), "text");
-    await fallback.locator("span").dblclick();
+    await fallback.locator("span").click({ clickCount: 3 });
     const selected = await page.evaluate(() => String(window.getSelection()).trim());
     assertEqual(selected, authorizationUrl, "selection copies the address without its explanatory sentence");
     await page.evaluate(notice => window.__RICHOS_MOCK__.meetingSet({ calendarRecovery: [{ ...notice, failed: true }] }), notice);
