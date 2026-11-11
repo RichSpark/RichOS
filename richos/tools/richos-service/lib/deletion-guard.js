@@ -579,6 +579,17 @@ export function adjudicateCandidate(candidate, probe, opts = {}) {
   if (!probe) {
     return { ...base, verdict: 'unprobed', reason: 'no isolated re-decode was performed for this span' };
   }
+  const peak = Number(o.peakDb);
+  const floor = Number.isFinite(peak) ? peak - o.loudBelowPeakDb : null;
+  if (floor != null && (probe.maxDb == null || !(Number(probe.maxDb) >= floor))) {
+    return {
+      ...base,
+      verdict: 'not-speech',
+      reason:
+        `the span measures ${probe.maxDb == null ? 'no level' : `${probe.maxDb} dBFS`} against a channel peak of ` +
+        `${peak} dBFS and falls below the ${o.loudBelowPeakDb} dB speech floor`,
+    };
+  }
   const tight = lexicalText(probe.tight);
   const wide = lexicalText(probe.wide);
   const words = informativeWords(tight).length;
@@ -595,18 +606,6 @@ export function adjudicateCandidate(candidate, probe, opts = {}) {
       reason:
         `the isolated re-decode returned ${words} distinct informative word(s), below the ${o.minProbeWords}-word ` +
         `floor for a >= ${o.minGapSec}s span (laughter, a breath and a repeated backchannel all land here)`,
-    };
-  }
-  const peak = Number(o.peakDb);
-  const floor = Number.isFinite(peak) ? peak - o.loudBelowPeakDb : null;
-  if (floor != null && (probe.maxDb == null || !(Number(probe.maxDb) >= floor))) {
-    return {
-      ...out,
-      verdict: 'not-speech',
-      reason:
-        `the span measures ${probe.maxDb == null ? 'no level' : `${probe.maxDb} dBFS`} against a channel peak of ` +
-        `${peak} dBFS — below the ${o.loudBelowPeakDb} dB speech floor, so the words the model returned there are ` +
-        'a fabrication over near-silence, not recovered speech',
     };
   }
   if (stable < o.minStableWords) {

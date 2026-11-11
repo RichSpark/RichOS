@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -12,8 +13,8 @@ const AUDIO = 'audio-part-00.wav';
 const HEADER_BYTES = 44;
 const FRAME_BYTES = 4;
 const CORE_SECONDS = 24;
-const PADDING_SECONDS = 2;
 const CUT_SEARCH_SECONDS = 3;
+const MAX_WINDOW_SECONDS = 120;
 const CHECKPOINTS = '.live-transcription';
 
 function readHeader(fd) {
@@ -65,7 +66,7 @@ function cutNear(fd, nominal, rate) {
   const pcm = readPcm(fd, start, nominal + radius);
   const block = Math.round(rate / 50);
   const margin = block * 4;
-  let best = nominal;
+  let best = null;
   let bestDistance = Infinity;
   let quietStart = 0;
   for (let frame = 0; frame + block <= radius * 2; frame += block) {
@@ -75,8 +76,7 @@ function cutNear(fd, nominal, rate) {
       left += pcm.readInt16LE(i) ** 2;
       right += pcm.readInt16LE(i + 2) ** 2;
     }
-    // A cut needs quiet on both sides and on both channels. Keep overlap for calls
-    // with continuous speech around the boundary.
+    // A cut needs quiet on both sides and on both channels.
     const end = frame + block;
     if (Math.max(left, right) > block * 64 ** 2) {
       quietStart = end;
@@ -89,7 +89,19 @@ function cutNear(fd, nominal, rate) {
       }
     }
   }
-  return { frame: best, quiet: bestDistance !== Infinity };
+  return best;
+}
+
+function nextQuietCut(fd, from, frames, rate, closed) {
+  const radius = CUT_SEARCH_SECONDS * rate;
+  const bound = from + MAX_WINDOW_SECONDS * rate;
+  const available = Math.min(frames, bound);
+  for (let nominal = from + CORE_SECONDS * rate; nominal + radius <= available; nominal += radius) {
+    const cut = cutNear(fd, nominal, rate);
+    if (cut !== null) return cut;
+  }
+  if (frames > bound) throw new Error('no quiet meeting boundary within two minutes');
+  return closed ? frames : null;
 }
 
 // Whisper can start its first segment at zero even when the channel was quiet
@@ -110,31 +122,25 @@ function firstAudibleMs(wav, channelOffset, rate) {
   return null;
 }
 
-function absoluteSegments(segments, left, right, from, to, rate, firstAudible) {
-  const offset = left * 1_000 / rate;
-  const limit = right * 1_000 / rate;
-  const start = from * 1_000 / rate;
-  const end = to * 1_000 / rate;
-  return segments.flatMap((segment) => {
+function absoluteSegments(segments, from, to, rate, firstAudible) {
+  const offset = from * 1_000 / rate;
+  const limit = to * 1_000 / rate;
+  return segments.map((segment) => {
     const startMs = Math.max(offset, Math.min(limit, segment.startMs + offset));
     const endMs = Math.max(startMs, Math.min(limit, segment.endMs + offset));
-    const center = (startMs + endMs) / 2;
-    // Adjacent chunks hear overlapping context. Each segment belongs to the chunk
-    // whose non-overlapping interval contains its center.
-    if (center < start || center >= end) return [];
     const result = { ...segment, startMs, endMs };
     if (firstAudible !== null) {
       const audibleStartMs = firstAudible + offset;
       if (startMs + 1_000 <= audibleStartMs && audibleStartMs < endMs) {
-        // Use the measured onset for display. Keep Whisper's original times for
-        // segment ownership and the existing transcription guards.
+        // Use the measured onset for display and keep Whisper's original times
+        // for the existing transcription guards.
         result.displayStartMs = audibleStartMs;
       }
     }
     if (segment.wordTimesMs) {
-      result.wordTimesMs = segment.wordTimesMs.map((ms) => ms + offset).filter((ms) => ms <= limit);
+      result.wordTimesMs = segment.wordTimesMs.map((ms) => ms + offset).filter((ms) => ms >= offset && ms <= limit);
     }
-    return [result];
+    return result;
   });
 }
 
@@ -148,10 +154,20 @@ function decodeWindow(cache, wav, options) {
   }
 }
 
-function readCheckpoint(file, key) {
+function validCheckpointRows(rows, fromMs, toMs) {
+  const inWindow = (time) => Number.isFinite(time) && time >= fromMs && time <= toMs;
+  return Array.isArray(rows) && rows.every((row) => row && typeof row.text === 'string'
+    && inWindow(row.startMs) && inWindow(row.endMs) && row.startMs <= row.endMs
+    && (row.displayStartMs === undefined
+      || (inWindow(row.displayStartMs) && row.startMs <= row.displayStartMs && row.displayStartMs <= row.endMs))
+    && (row.wordTimesMs === undefined || (Array.isArray(row.wordTimesMs) && row.wordTimesMs.every(inWindow))));
+}
+
+function readCheckpoint(file, key, fromMs, toMs) {
   try {
     const value = JSON.parse(fs.readFileSync(privateFile(file), 'utf8'));
-    if (value?.key === key && Array.isArray(value.me) && Array.isArray(value.others)) return value;
+    if (value?.key === key && validCheckpointRows(value.me, fromMs, toMs)
+      && validCheckpointRows(value.others, fromMs, toMs)) return value;
   } catch (error) {
     if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error;
   }
@@ -159,41 +175,31 @@ function readCheckpoint(file, key) {
 }
 
 /**
- * One pass over the durable prefix. During recording, leave the last window
- * until it has right-hand context. At close, decode the remaining tail.
+ * Decode contiguous windows ending at quiet points in the durable audio.
+ * Keep listening across a nominal boundary when speech is still in progress.
  */
 export function advanceLiveTranscription(dir, options, {
   closed = false, cursor = 0, decode = decodeWindow,
+  recorderIsRunning = () => true,
   toolchain = checkToolchain(resolveModel(options.model), options.model),
 } = {}) {
   const cache = privateDirectory(path.join(dir, CHECKPOINTS), dir);
   const fd = fs.openSync(privateFile(path.join(dir, AUDIO), dir), 'r');
   try {
     const { header, frames, rate } = readHeader(fd);
-    const step = CORE_SECONDS * rate;
-    const padding = PADDING_SECONDS * rate;
-    const lookahead = padding + CUT_SEARCH_SECONDS * rate;
     const output = { me: [], others: [], model: options.model, toolchain, whisper: toolchain.provenance };
     let reused = 0;
     let decoded = 0;
-    let previousCut;
-    for (; cursor < frames; cursor += step) {
-      if (!closed && cursor + step + lookahead > frames) break;
-      const startCut = previousCut ?? (cursor === 0 ? { frame: 0, quiet: true } : cutNear(fd, cursor, rate));
-      const endCut = cursor + step + lookahead > frames
-        ? { frame: frames, quiet: true }
-        : cutNear(fd, cursor + step, rate);
-      const from = startCut.frame;
-      const to = endCut.frame;
-      const left = startCut.quiet ? from : Math.max(0, from - padding);
-      const right = endCut.quiet ? to : Math.min(frames, to + padding);
-      const wav = readWindow(fd, header, left, right);
+    while (cursor < frames && recorderIsRunning()) {
+      const to = nextQuietCut(fd, cursor, frames, rate, closed);
+      if (to === null) break;
+      const wav = readWindow(fd, header, cursor, to);
       const key = createHash('sha256')
-        .update(JSON.stringify([3, left, from, to, right, options.model, whisperArgs(options), toolchain.provenance]))
+        .update(JSON.stringify([4, cursor, to, options.model, whisperArgs(options), toolchain.provenance]))
         .update(wav)
         .digest('hex');
       const file = path.join(cache, `${cursor}.json`);
-      let result = readCheckpoint(file, key);
+      let result = readCheckpoint(file, key, cursor * 1_000 / rate, to * 1_000 / rate);
       if (result) {
         reused += 1;
       } else {
@@ -203,19 +209,15 @@ export function advanceLiveTranscription(dir, options, {
         }
         result = {
           key,
-          me: absoluteSegments(segments.me, left, right, from, to, rate, firstAudibleMs(wav, 0, rate)),
-          others: absoluteSegments(segments.others, left, right, from, to, rate, firstAudibleMs(wav, 2, rate)),
+          me: absoluteSegments(segments.me, cursor, to, rate, firstAudibleMs(wav, 0, rate)),
+          others: absoluteSegments(segments.others, cursor, to, rate, firstAudibleMs(wav, 2, rate)),
         };
         withPrivateOutputs([file], ([temp]) => writePrivateFile(temp, JSON.stringify(result)));
         decoded += 1;
       }
       output.me.push(...result.me);
       output.others.push(...result.others);
-      previousCut = endCut;
-      if (to === frames) {
-        cursor = frames;
-        break;
-      }
+      cursor = to;
     }
     return { asr: output, cursor, reused, decoded };
   } finally {
@@ -224,8 +226,21 @@ export function advanceLiveTranscription(dir, options, {
 }
 
 export function supportsLiveTranscription(dir, record) {
+  if (record?.capture?.source !== SOURCE) return false;
   const parts = listAudioParts(dir);
-  return record?.capture?.source === SOURCE && parts.length === 1 && parts[0] === AUDIO;
+  return parts.length === 1 && parts[0] === AUDIO;
+}
+
+/** Remove staging left by a worker terminated before its cleanup could run. */
+export function removeLiveTranscriptionScratch(dir) {
+  const candidate = path.join(dir, CHECKPOINTS);
+  if (!fs.lstatSync(candidate, { throwIfNoEntry: false })) return;
+  const cache = privateDirectory(candidate, dir);
+  for (const entry of fs.readdirSync(cache, { withFileTypes: true })) {
+    if (entry.isDirectory() && /^(?:decode-|\.richos-output-)[a-zA-Z0-9]{6}$/.test(entry.name)) {
+      fs.rmSync(path.join(cache, entry.name), { recursive: true, force: true });
+    }
+  }
 }
 
 /** Decode the flushed minute leading up to the request, even when the
@@ -244,11 +259,16 @@ export function recentLiveExcerpt(dir, options, at, decode = decodeWindow) {
     const meAudible = firstAudibleMs(wav, 0, rate);
     const othersAudible = firstAudibleMs(wav, 2, rate);
     if (meAudible === null && othersAudible === null) return null;
-    const cache = privateDirectory(path.join(dir, CHECKPOINTS), dir);
-    const decoded = decode(cache, wav, options);
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-excerpt-'));
+    let decoded;
+    try {
+      decoded = decode(work, wav, options);
+    } finally {
+      fs.rmSync(work, { recursive: true, force: true });
+    }
     const passages = [
-      ...absoluteSegments(meAudible === null ? [] : decoded.me, from, through, from, through, rate, meAudible),
-      ...absoluteSegments(othersAudible === null ? [] : decoded.others, from, through, from, through, rate, othersAudible),
+      ...absoluteSegments(meAudible === null ? [] : decoded.me, from, through, rate, meAudible),
+      ...absoluteSegments(othersAudible === null ? [] : decoded.others, from, through, rate, othersAudible),
     ].map((segment) => ({
       speaker: segment.speaker === 'me' ? 'Me' : 'Them',
       atMs: segment.displayStartMs ?? segment.startMs,
@@ -267,7 +287,7 @@ export async function watchLiveTranscription(dir, options, recorderIsRunning, on
     const record = JSON.parse(fs.readFileSync(privateFile(path.join(dir, 'session.json'), dir), 'utf8'));
     if (record.status !== 'open' || !supportsLiveTranscription(dir, record)) return;
     const start = performance.now();
-    const result = advanceLiveTranscription(dir, options, { cursor, toolchain });
+    const result = advanceLiveTranscription(dir, options, { cursor, toolchain, recorderIsRunning });
     cursor = result.cursor;
     if (result.decoded || result.reused) {
       onChunk({ decoded: result.decoded, reused: result.reused, elapsedMs: Math.round(performance.now() - start) });

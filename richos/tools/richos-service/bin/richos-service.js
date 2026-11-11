@@ -6,6 +6,7 @@
  *   richos-service run <sessionId|dir>   # run the pipeline over one session
  *   richos-service live-transcribe <id> --recorder-pid <pid> # predecode the growing native WAV
  *   richos-service live-excerpt <id> --at <epoch-ms> # return flushed speech up to the request
+ *   richos-service clear-live-staging <id> # remove abandoned live decoder staging
  *   richos-service retranscribe <id> [--model large-v3]   # re-run stages 2-6 on retained audio
  *   richos-service reconcile             # report-only sweep (never transcribes) — the anomaly audit
  *   richos-service claim ...             # coordination (§5.4): own this call or stand down (no double)
@@ -33,7 +34,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runPipeline } from '../lib/pipeline.js';
-import { recentLiveExcerpt, watchLiveTranscription } from '../lib/live-transcription.js';
+import { recentLiveExcerpt, removeLiveTranscriptionScratch, watchLiveTranscription } from '../lib/live-transcription.js';
 import { assertPrivateTree } from '../lib/private-files.js';
 import { scanZone, watch } from '../lib/watcher.js';
 import { decideClaimOnDisk, findPromotableOnDisk, markSuperseded } from '../lib/coordination.js';
@@ -136,6 +137,13 @@ function main() {
       }, (timing) => log.info('live transcription checkpoint', timing)).catch(() => {
         fail('live transcription stopped; retained audio can still be decoded');
       });
+      break;
+    }
+
+    case 'clear-live-staging': {
+      const dir = resolveSessionDir(process.argv[3], zone);
+      if (!dir || !fs.existsSync(dir)) fail('clear-live-staging requires an existing session');
+      removeLiveTranscriptionScratch(assertEvidenceOutsideProductRepo(dir, REPO_ROOT, 'live transcription staging'));
       break;
     }
 
@@ -788,6 +796,7 @@ function main() {
           '  richos-service run <sessionId|dir> [--zone dir] [--tier name | --model id] [--live-checkpoints]',
           '  richos-service live-transcribe <sessionId|dir> --recorder-pid <pid>',
           '  richos-service live-excerpt <sessionId|dir> --at <epoch-ms>',
+          '  richos-service clear-live-staging <sessionId|dir>',
           '  richos-service retranscribe <sessionId|dir> [--tier max | --model id]',
           '  richos-service tiers',
           '  richos-service reconcile [--zone dir]',
