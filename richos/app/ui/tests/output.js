@@ -380,6 +380,10 @@ async function main() {
       const note = document.createElement("div");
       note.id = "fixture-meeting-source";
       document.getElementById("conversation").appendChild(note);
+      const before = document.createElement("div");
+      before.id = "fixture-before-output";
+      document.getElementById("conversation").appendChild(before);
+      window.RichTimeline.renderMarkdownInto(before, "Approve the pilot. `meeting-source 2026-11-11T11-00-00Z--system--call 123 02:04`");
       window.RichTimeline.renderMarkdownInto(note,
         "Approve the pilot. `meeting-source 2026-11-11T11-00-00Z--system--call 123 02:04` " +
         "`meeting-source 2026-11-11T11-00-00Z--system--call 123 02:05` " +
@@ -387,8 +391,9 @@ async function main() {
         window.RichOutput.links);
     });
     const note = sourcePage.locator("#fixture-meeting-source");
+    assertEqual(await sourcePage.locator("#fixture-before-output").innerText(), "Approve the pilot. Source 02:04");
     assertEqual(await note.getByRole("button").allTextContents(), ["Source 02:04", "Source 02:05"]);
-    assertEqual(await note.locator("code").count(), 1, "unwitnessed transcript is plain text");
+    assertEqual(await note.locator("code").count(), 0, "unwitnessed transcript is a readable source time");
     await note.getByRole("button", { name: "Source 02:04" }).click();
     const passage = sourcePage.locator('#op-viewer [data-source-passage="123"]');
     await passage.waitFor();

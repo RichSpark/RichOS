@@ -1093,12 +1093,12 @@
     forText(text) {
       const t = String(text || "").trim();
       if (!t || !state.list) return null;
-      const source = /^meeting-source ([a-zA-Z0-9._:-]{1,160}) ([1-9]\d{0,6}) ((?:\d{1,2}:)?\d{2}:\d{2})$/.exec(t);
+      const source = window.RichTimeline?.meetingSource(t);
       if (source) {
-        const suffix = "/" + source[1] + "/transcript.md";
+        const suffix = "/" + source.session + "/transcript.md";
         const files = state.list.files.filter((f) => f.kind === "md" && ("/" + f.path).endsWith(suffix));
         return files.length === 1 ? {
-          ...files[0], sourcePassage: { line: Number(source[2]), stamp: source[3] }, sourceLabel: "Source " + source[3],
+          ...files[0], sourcePassage: { line: source.line, stamp: source.stamp },
         } : null;
       }
       let byName = null;

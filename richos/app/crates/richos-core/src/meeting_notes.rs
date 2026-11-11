@@ -130,7 +130,7 @@ pub fn brief_sources(transcripts: &[PathBuf]) -> std::io::Result<(String, BTreeM
     for (part, path) in transcripts.iter().enumerate() {
         let raw = std::fs::read_to_string(path)?;
         let session = path.parent().and_then(Path::file_name).and_then(|name| name.to_str())
-            .filter(|s| s.len() <= 160 && s.bytes().all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c)));
+            .filter(|s| is_source_session(s));
         let mut annotated = String::new();
         for (index, line) in raw.lines().enumerate() {
             if let Some((session, stamp)) = session.zip(transcript_stamp(line)) {
@@ -150,15 +150,46 @@ pub fn brief_sources(transcripts: &[PathBuf]) -> std::io::Result<(String, BTreeM
 
 fn transcript_stamp(line: &str) -> Option<&str> {
     let (stamp, _) = line.strip_prefix("**[")?.split_once("] ")?;
+    is_source_stamp(stamp).then_some(stamp)
+}
+
+fn is_source_session(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 160 && s.bytes().all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
+}
+
+fn is_source_stamp(stamp: &str) -> bool {
     let mut parts = stamp.rsplit(':');
     let pair = |s: &str| s.len() == 2 && s.bytes().all(|c| c.is_ascii_digit());
-    if !pair(parts.next()?) || !pair(parts.next()?) { return None; }
-    if let Some(hours) = parts.next() {
-        if hours.is_empty() || hours.len() > 2 || !hours.bytes().all(|c| c.is_ascii_digit()) || parts.next().is_some() {
-            return None;
+    parts.next().is_some_and(pair) && parts.next().is_some_and(pair)
+        && parts.next().is_none_or(|hours| !hours.is_empty() && hours.len() <= 2 && hours.bytes().all(|c| c.is_ascii_digit()))
+        && parts.next().is_none()
+}
+
+/// Keep source times legible on surfaces that do not open transcript passages.
+pub fn plain_brief_sources(text: &str) -> String {
+    const MARKER: &str = "`meeting-source ";
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some((before, after)) = rest.split_once(MARKER) {
+        let Some((source, tail)) = after.split_once('`') else { break };
+        plain.push_str(before);
+        let fields: Vec<_> = source.split(' ').collect();
+        match fields.as_slice() {
+            [session, line, stamp] if is_source_session(session) && (1..=7).contains(&line.len())
+                && !line.starts_with('0') && line.bytes().all(|c| c.is_ascii_digit()) && is_source_stamp(stamp) => {
+                plain.push_str("Source ");
+                plain.push_str(stamp);
+            }
+            _ => {
+                plain.push_str(MARKER);
+                plain.push_str(source);
+                plain.push('`');
+            }
         }
+        rest = tail;
     }
-    Some(stamp)
+    plain.push_str(rest);
+    plain
 }
 
 /// Turn only cataloged tags into links. Unknown tags provide no source.

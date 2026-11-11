@@ -1926,6 +1926,11 @@
     return window.RichOxford ? window.RichOxford.display(text) : text;
   }
 
+  function meetingSource(text) {
+    const match = /^meeting-source ([a-zA-Z0-9._:-]{1,160}) ([1-9]\d{0,6}) ((?:\d{1,2}:)?\d{2}:\d{2})$/.exec(text.trim());
+    return match && { session: match[1], line: Number(match[2]), stamp: match[3] };
+  }
+
   function markdownInline(text, into, links, doc) {
     let plain = "";
     const flush = () => {
@@ -1961,7 +1966,11 @@
           flush();
           const code = text.slice(i + 1, end);
           const hit = links && links.forText ? links.forText(code) : null;
-          into.appendChild(hit ? fileLink(hit, hit.sourceLabel || code) : elem("code", "tl-md-code", code));
+          const source = meetingSource(code);
+          const label = source ? "Source " + source.stamp : code;
+          if (hit) into.appendChild(fileLink(hit, label));
+          else if (source) into.appendChild(document.createTextNode(label));
+          else into.appendChild(elem("code", "tl-md-code", code));
           i = end + 1;
           continue;
         }
@@ -3500,6 +3509,7 @@
     ENDED_EXPLANATION,
     render,
     renderMarkdownInto,
+    meetingSource,
     updateProse,
     updateTimers,
   };
