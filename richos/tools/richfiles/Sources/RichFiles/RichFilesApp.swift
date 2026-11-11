@@ -82,11 +82,45 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     }
 }
 
-enum BrowserCommand: Equatable {
+enum BrowserCommand: Hashable {
     case open, rename, trash, preview, address, search, back, forward, up, refresh, revealFolder
     case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties, workspaces, diskUsage
     case duplicates, checksum, compareFolders
+    case copyPath, actionPalette
     case grid(Int, Int, Bool)
+}
+
+struct BrowserAction: Identifiable {
+    let title: String
+    let command: BrowserCommand
+    var id: BrowserCommand { command }
+
+    init(_ title: String, _ command: BrowserCommand) {
+        self.title = title
+        self.command = command
+    }
+
+    static let fileActions: [Self] = [
+        .init("Open", .open), .init("Rename", .rename), .init("Move to Trash", .trash),
+        .init("Quick Look", .preview), .init("Properties", .properties)
+    ]
+    static let clipboard: [Self] = [
+        .init("Cut Files", .cut), .init("Copy Files", .copy), .init("Paste Files", .paste),
+        .init("Copy Path", .copyPath), .init("Undo File Action", .undo), .init("Redo File Action", .redo)
+    ]
+    static let tools: [Self] = [
+        .init("Disk Usage", .diskUsage), .init("Find Duplicate Files", .duplicates),
+        .init("Verify Checksum", .checksum), .init("Compare Folders", .compareFolders)
+    ]
+    static let navigation: [Self] = [
+        .init("Back", .back), .init("Forward", .forward), .init("Up", .up), .init("Refresh", .refresh),
+        .init("Go to Path", .address), .init("Search Folder", .search),
+        .init("Expand to Current Folder", .revealFolder), .init("Workspaces", .workspaces)
+    ]
+    static let creation: [Self] = [
+        .init("New Tab", .newTab), .init("Close Tab", .closeTab), .init("New Folder", .newFolder)
+    ]
+    static let all = fileActions + clipboard + tools + navigation + creation + [.init("Select All", .selectAll)]
 }
 
 struct BrowserCommandKey: FocusedValueKey {
@@ -105,36 +139,18 @@ struct BrowserCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
-            action("New Tab", .newTab)
-            action("Close Tab", .closeTab)
-            action("New Folder", .newFolder)
+            ForEach(BrowserAction.creation) { action($0.title, $0.command) }
         }
         CommandMenu("Files") {
-            action("Open", .open)
-            action("Rename", .rename)
-            action("Move to Trash", .trash)
-            action("Quick Look", .preview)
-            action("Properties", .properties)
+            ForEach(BrowserAction.fileActions) { action($0.title, $0.command) }
             Divider()
-            action("Cut Files", .cut)
-            action("Copy Files", .copy)
-            action("Paste Files", .paste)
-            action("Undo File Action", .undo)
-            action("Redo File Action", .redo)
-            action("Disk Usage…", .diskUsage)
-            action("Find Duplicate Files…", .duplicates)
-            action("Verify Checksum…", .checksum)
-            action("Compare Folders…", .compareFolders)
+            ForEach(BrowserAction.clipboard) { action($0.title, $0.command) }
+            Divider()
+            ForEach(BrowserAction.tools) { action($0.title + "…", $0.command) }
+            action("File Actions…", .actionPalette)
         }
         CommandMenu("Go") {
-            action("Back", .back)
-            action("Forward", .forward)
-            action("Up", .up)
-            action("Refresh", .refresh)
-            action("Go to Path", .address)
-            action("Search Folder", .search)
-            action("Expand to Current Folder", .revealFolder)
-            action("Workspaces…", .workspaces)
+            ForEach(BrowserAction.navigation) { action($0.title + ($0.command == .workspaces ? "…" : ""), $0.command) }
         }
     }
 

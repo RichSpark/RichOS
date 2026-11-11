@@ -38,6 +38,7 @@ struct BrowserView: View {
     @State private var selectionRectangle: CGRect?
     @State private var folderReveal: FolderTreeReveal?
     @State private var appeared = false
+    @State private var paletteChoice: BrowserCommand?
 
     private enum Field: Hashable { case address, search }
 
@@ -106,12 +107,18 @@ struct BrowserView: View {
             selectionCursor = nil
         }
         .task(id: model.selected) { await captureSelection() }
-        .sheet(item: $sheet) { value in sheetContents(value) }
+        .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in sheetContents(value) }
     }
 
     private func saveSession() {
         guard supportsSessionRestore, appeared else { return }
         savedSession = restoreSession ? model.sessionData() : nil
+    }
+
+    private func runPaletteChoice() {
+        guard let command = paletteChoice else { return }
+        paletteChoice = nil
+        _ = perform(command)
     }
 
     private var navigationBar: some View {
@@ -710,6 +717,7 @@ struct BrowserView: View {
         case .copy, .cut:
             guard !entries.isEmpty else { return false }
             withReferences(entries) { actions.copy($0, cut: command == .cut) }
+        case .copyPath: copyPaths(entries.isEmpty ? [model.folder] : entries.map(\.url))
         case .paste: actions.paste(into: model.folder)
         case .undo: actions.undo()
         case .redo: actions.redo()
@@ -736,6 +744,7 @@ struct BrowserView: View {
         case .checksum:
             guard entries.count == 1, let file = entries.first, file.kind == .regularFile else { return false }
             checksum(file)
+        case .actionPalette: sheet = .actionPalette
         case .search: focus = .search
         case .grid(let dx, let dy, let extend): return moveGrid(dx: dx, dy: dy, extend: extend)
         }
@@ -912,6 +921,7 @@ struct BrowserView: View {
     private func copyPaths(_ urls: [URL]) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
+        actions.refreshClipboard()
         feedback = urls.count == 1 ? "Path copied." : "Paths copied."
     }
 
@@ -1016,6 +1026,26 @@ struct BrowserView: View {
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)
         case .connect: ConnectSheet()
         case .workspaces: WorkspacesSheet(model: model)
+        case .actionPalette:
+            ActionPaletteSheet(commands: BrowserAction.all.filter { isAvailable($0.command) }) { paletteChoice = $0 }
+        }
+    }
+
+    private func isAvailable(_ command: BrowserCommand) -> Bool {
+        let entries = model.selectedEntries
+        switch command {
+        case .open, .properties, .copy: return !entries.isEmpty
+        case .cut, .trash, .rename: return !entries.isEmpty && !actions.busy
+        case .preview: return entries.count == 1
+        case .checksum: return entries.count == 1 && entries.first?.kind == .regularFile
+        case .back: return model.canGoBack
+        case .forward: return model.canGoForward
+        case .up: return model.folder.path != "/"
+        case .undo: return actions.undoName != nil && !actions.busy
+        case .redo: return actions.redoName != nil && !actions.busy
+        case .paste, .newFolder: return !actions.busy && model.currentVolume?.isReadOnly != true
+        case .closeTab: return model.tabs.count > 1 || hostOpenWindow == nil
+        default: return true
         }
     }
 }

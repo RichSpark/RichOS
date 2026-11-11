@@ -99,6 +99,7 @@ struct KeyboardBridge: NSViewRepresentable {
             if modifiers == [shortcut, .shift] {
                 if key == "n" { return perform?(.newFolder) == true }
                 if key == "z" { return perform?(.redo) == true }
+                if key == "p" { return perform?(.actionPalette) == true }
             }
             if modifiers == shortcut {
                 switch key {

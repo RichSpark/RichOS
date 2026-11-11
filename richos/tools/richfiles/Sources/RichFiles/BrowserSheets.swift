@@ -22,7 +22,7 @@ enum BrowserSheet: Identifiable {
     case checksum(FileReference)
     case duplicates(URL)
     case compare(URL)
-    case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces
+    case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces, actionPalette
 
     var id: String {
         switch self {
@@ -42,7 +42,62 @@ enum BrowserSheet: Identifiable {
         case .batch: return "batch"
         case .connect: return "connect"
         case .workspaces: return "workspaces"
+        case .actionPalette: return "actionPalette"
         }
+    }
+}
+
+@MainActor
+struct ActionPaletteSheet: View {
+    let commands: [BrowserAction]
+    let run: (BrowserCommand) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var selection: BrowserCommand?
+    @FocusState private var searchFocused: Bool
+
+    private var results: [BrowserAction] {
+        let words = query.split(whereSeparator: \.isWhitespace)
+        return commands.filter { entry in
+            words.allSatisfy { entry.title.localizedStandardContains(String($0)) }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Find a file action", text: $query).focused($searchFocused)
+                .onSubmit(runSelection)
+            List(results, selection: $selection) { action in
+                Text(action.title).tag(action.id)
+                    .onTapGesture(count: 2) { activate(action.command) }
+            }.accessibilityLabel("File actions")
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Run", action: runSelection).keyboardShortcut(.defaultAction).disabled(results.isEmpty)
+            }
+        }.padding(14).frame(width: 440, height: 335)
+            .onAppear { searchFocused = true; selection = results.first?.id }
+            .onChange(of: query) { _ in selection = results.first?.id }
+            .onMoveCommand { direction in
+                guard direction == .up || direction == .down,
+                      let first = results.first else { return }
+                guard let index = results.firstIndex(where: { $0.id == selection }) else {
+                    selection = first.id
+                    return
+                }
+                let next = min(max(0, index + (direction == .down ? 1 : -1)), results.count - 1)
+                selection = results[next].id
+            }
+    }
+
+    private func runSelection() {
+        if let selected = selection ?? results.first?.id { activate(selected) }
+    }
+
+    private func activate(_ action: BrowserCommand) {
+        run(action)
+        dismiss()
     }
 }
 
