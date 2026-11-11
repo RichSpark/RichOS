@@ -46,14 +46,21 @@ pub const MAX_ATTEMPTS: u32 = 3;
 /// The pipeline's own record of the transcript (`pipeline.js` ARTIFACTS.verification).
 pub const VERIFICATION_FILE: &str = "verification.json";
 
-/// Current-call audio is supplied only for an explicit reference to the call.
-pub(crate) fn live_meeting_request_at(turn: &crate::ledger::Turn) -> Option<u64> {
+#[derive(Clone, Copy)]
+pub struct LiveMeetingRequest {
+    pub at: u64,
+    pub names_current_call: bool,
+}
+
+/// Use only the CEO's own words to decide whether the request needs current audio.
+pub(crate) fn live_meeting_request(turn: &crate::ledger::Turn) -> Option<LiveMeetingRequest> {
     use crate::ledger::Source;
     if turn.pressed || !matches!(turn.source, Source::Text | Source::Jam) {
         return None;
     }
     let text = authored_prefix(&turn.user_text, turn.authored_bytes, turn.authored_ranges.as_deref())?;
-    asks_about_the_live_meeting(text).then_some(turn.created_at)
+    let names_current_call = current_call_reference(text)?;
+    Some(LiveMeetingRequest { at: turn.created_at, names_current_call })
 }
 
 fn authored_prefix<'a>(text: &'a str, bytes: Option<usize>, ranges: Option<&[(usize, usize)]>) -> Option<&'a str> {
@@ -71,7 +78,7 @@ fn authored_prefix<'a>(text: &'a str, bytes: Option<usize>, ranges: Option<&[(us
     text.get(..end)
 }
 
-fn asks_about_the_live_meeting(text: &str) -> bool {
+fn current_call_reference(text: &str) -> Option<bool> {
     let lower = text.to_ascii_lowercase();
     let words: Vec<_> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
     let request = words.strip_prefix(&["rich"]).unwrap_or(&words);
@@ -80,9 +87,9 @@ fn asks_about_the_live_meeting(text: &str) -> bool {
     let work = from_call.unwrap_or(request);
     let is_request = matches!(work, ["put", "together", ..] | ["get", "started", "on", ..]
         | ["draft" | "prepare" | "write" | "make" | "compare", ..]);
-    is_request && (from_call.is_some()
-        || work.windows(2).any(|w| matches!(w, ["this", "call" | "meeting"]))
-        || work.windows(3).any(|w| matches!(w, ["we", "just", "discussed" | "agreed"])))
+    let names_current_call = from_call.is_some() || work.windows(2).any(|w| matches!(w, ["this", "call" | "meeting"]));
+    let refers_to_discussion = work.windows(3).any(|w| matches!(w, ["we", "just", "discussed" | "agreed"]));
+    (is_request && (names_current_call || refers_to_discussion)).then_some(names_current_call)
 }
 
 /// The transcription's own warnings: `verification.json`'s `warnings` (a span of speech missing
@@ -559,22 +566,22 @@ mod tests {
 
     #[test]
     fn only_explicit_work_requests_use_the_live_meeting_excerpt() {
-        assert!(asks_about_the_live_meeting("Rich, get started on that from this call."));
-        assert!(asks_about_the_live_meeting("Put together the options we just discussed. Use the project plan."));
-        assert!(asks_about_the_live_meeting("From this call, draft a comparison."));
-        assert!(asks_about_the_live_meeting("Rich please draft a comparison from this call."));
-        assert!(asks_about_the_live_meeting("Rich get started on that from this call."));
-        assert!(!asks_about_the_live_meeting("Don't send anything from this call."));
-        assert!(!asks_about_the_live_meeting("We just discussed the pilot."));
-        assert!(!asks_about_the_live_meeting("Draft the agenda for our next board meeting."));
-        assert!(!asks_about_the_live_meeting("Rich, get started on that."));
-        assert!(!asks_about_the_live_meeting("Draft a reply about this callback."));
+        assert_eq!(current_call_reference("Rich, get started on that from this call."), Some(true));
+        assert_eq!(current_call_reference("Put together the options we just discussed. Use the project plan."), Some(false));
+        assert_eq!(current_call_reference("From this call, draft a comparison."), Some(true));
+        assert_eq!(current_call_reference("Rich please draft a comparison from this call."), Some(true));
+        assert_eq!(current_call_reference("Rich get started on that from this call."), Some(true));
+        assert_eq!(current_call_reference("Don't send anything from this call."), None);
+        assert_eq!(current_call_reference("We just discussed the pilot."), None);
+        assert_eq!(current_call_reference("Draft the agenda for our next board meeting."), None);
+        assert_eq!(current_call_reference("Rich, get started on that."), None);
+        assert_eq!(current_call_reference("Draft a reply about this callback."), None);
         let text = "Draft a reply.\n\nAttached file: this meeting notes.md";
         let end = "Draft a reply.".len();
         let prefix = authored_prefix(text, Some(end), None).unwrap();
-        assert!(!asks_about_the_live_meeting(prefix));
+        assert_eq!(current_call_reference(prefix), None);
         let prefix = authored_prefix(text, None, Some(&[(0, 5), (5, end), (end + 2, text.len())])).unwrap();
-        assert!(!asks_about_the_live_meeting(prefix));
+        assert_eq!(current_call_reference(prefix), None);
     }
 
     #[test]

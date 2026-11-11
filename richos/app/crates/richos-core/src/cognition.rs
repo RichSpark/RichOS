@@ -258,7 +258,7 @@ pub(crate) fn user_settings_changed(factory:Option<&dyn LeaseFactory>,lease:&dyn
 pub struct WorkTurnInput<'a> {
     pub source: crate::ledger::Source,
     pub text: &'a str,
-    pub live_meeting_at: Option<u64>,
+    pub live_meeting: Option<crate::meeting_notes::LiveMeetingRequest>,
 }
 
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.

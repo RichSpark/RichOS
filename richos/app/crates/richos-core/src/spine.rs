@@ -437,7 +437,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
     }
     let prepared=prepare_connection(state,plan,&delivery.lease,&delivery.turn_id).and_then(|_| {
         if stopped() {return Ok(())}
-        let (original,source,conversation,channel,app_messages,first_words,live_meeting_at)=state.state(|s| {
+        let (original,source,conversation,channel,app_messages,first_words,live_meeting)=state.state(|s| {
             let mut successor=delivery.turn_id.as_str();let mut seen=std::collections::HashSet::new();
             while let Some(previous)=s.ledger.turns().iter().find(|t|t.superseded_by.as_deref()==Some(successor)&&t.thread_id==plan.binding.thread_id()&&seen.insert(t.id.clone())) {
                 successor=&previous.id;
@@ -461,8 +461,8 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
                 .map(|turn|(turn.id.clone(),turn.assistant_text.clone())).collect();
             app_messages.extend(s.ledger.actions().iter().filter(|action|action.kind=="settings_change"&&action.turn_id.as_deref().is_some_and(current))
                 .map(|action|(action.id.clone(),action.detail.clone())));
-            let live_meeting_at = if original == turn.id { crate::meeting_notes::live_meeting_request_at(turn) } else { None };
-            Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel,app_messages,first_words,live_meeting_at))
+            let live_meeting = if original == turn.id { crate::meeting_notes::live_meeting_request(turn) } else { None };
+            Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel,app_messages,first_words,live_meeting))
         })?;
         let mut slot=delivery.lease.lock().unwrap();
         let lease=slot.as_mut().ok_or(SpineError::NoLease)?;
@@ -475,7 +475,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
         let company=state.state(|s|s.company_block(&plan.binding));
         lease.set_company_context(company.as_deref())?;
         lease.prepare_work_turn(&plan.binding,&delivery.turn_id,&original,
-            crate::cognition::WorkTurnInput { source, text: &delivery.text, live_meeting_at }, &mut |item|retain_preparation_item(state,&plan.binding,Some(&delivery.turn_id),item))?;
+            crate::cognition::WorkTurnInput { source, text: &delivery.text, live_meeting }, &mut |item|retain_preparation_item(state,&plan.binding,Some(&delivery.turn_id),item))?;
         lease.set_conversation_context(&conversation);
         lease.set_app_messages(app_messages);
         lease.set_input_channel(channel.as_deref())?;
