@@ -779,12 +779,14 @@ mod tests {
         // Direct session reads are read-only; peer send has a separate host-bound contract.
         let listed = tools();
         let listed = listed["tools"].as_array().unwrap();
-        assert_eq!(listed.len(), 7);
-        for name in [crate::system_resources::TOOL, LOOK_TOOL_NAME, "sessions", "transcript"] {
+        let read_only = [crate::system_resources::TOOL, LOOK_TOOL_NAME, LIVE_MEETING_TOOL, "sessions", "transcript"];
+        let peer_tools = ["send", "delegate", crate::codex_bridge::TOOL];
+        assert_eq!(listed.len(), read_only.len() + peer_tools.len());
+        for name in read_only {
             let tool=listed.iter().find(|tool|tool["name"]==name).unwrap();
             assert_eq!(tool["annotations"]["readOnlyHint"],true,"{name}");
         }
-        for name in ["send", "delegate", crate::codex_bridge::TOOL] {
+        for name in peer_tools {
             assert!(listed.iter().any(|tool|tool["name"]==name),"{name}");
         }
         let channel=listed.iter().find(|tool|tool["name"]==crate::codex_bridge::TOOL).unwrap();
