@@ -22,6 +22,7 @@ enum BrowserSheet: Identifiable {
     case checksum(FileReference)
     case duplicates(URL)
     case compare(URL)
+    case fileShelf(BrowserTransferDestination)
     case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces, actionPalette
 
     var id: String {
@@ -36,6 +37,7 @@ enum BrowserSheet: Identifiable {
         case .checksum: return "checksum"
         case .duplicates: return "duplicates"
         case .compare: return "compare"
+        case .fileShelf: return "fileShelf"
         case .trash: return "trash"
         case .transfers: return "transfers"
         case .searchOptions: return "searchOptions"
@@ -105,6 +107,54 @@ struct ActionPaletteSheet: View {
 
     private func activate(_ action: BrowserCommand) {
         run(action)
+        dismiss()
+    }
+}
+
+@MainActor
+struct FileShelfSheet: View {
+    @ObservedObject var actions: BrowserActions
+    let destination: BrowserTransferDestination
+    let readOnly: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("File Shelf").font(.headline)
+            if actions.shelf.isEmpty {
+                Text("Use Add to File Shelf on files you want to collect.").foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(actions.shelf, id: \.url) { item in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.url.lastPathComponent)
+                            Text(item.url.deletingLastPathComponent().path)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.head).textSelection(.enabled)
+                        }
+                        Spacer()
+                        Button("Remove") { actions.removeFromShelf(item) }
+                            .accessibilityLabel("Remove \(item.url.lastPathComponent) from File Shelf")
+                    }
+                }.accessibilityLabel("Collected files")
+            }
+            LabeledContent("Destination", value: destination.url.path)
+                .lineLimit(1).truncationMode(.head)
+            HStack {
+                Button("Clear Shelf") { actions.clearShelf() }.disabled(actions.shelf.isEmpty)
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Copy Here") { transfer(move: false) }.disabled(transferDisabled)
+                Button("Move Here") { transfer(move: true) }.disabled(transferDisabled)
+            }
+        }.padding(16).frame(width: 560, height: 365)
+    }
+
+    private var transferDisabled: Bool { actions.shelf.isEmpty || actions.busy || readOnly }
+
+    private func transfer(move: Bool) {
+        actions.transferShelf(to: destination, move: move)
         dismiss()
     }
 }

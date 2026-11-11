@@ -594,6 +594,7 @@ struct BrowserView: View {
                 withReferences(entries) { sheet = .createZip($0, destination) }
             }.disabled(actions.busy)
             Button("Copy Path") { copyPaths(entries.map(\.url)) }
+            Button("Add to File Shelf") { withReferences(entries) { actions.addToShelf($0) } }
             ShareLink(items: entries.map(\.url)) { Label("Share…", systemImage: "square.and.arrow.up") }
             if entries.count == 1, first.kind == .regularFile,
                UTType(filenameExtension: first.url.pathExtension)?.conforms(to: .image) == true {
@@ -662,6 +663,7 @@ struct BrowserView: View {
         Button("Copy Current Path") { copyPaths([model.folder]) }
         Button("Expand to Current Folder") { expandToCurrentFolder() }
         Button("Workspaces…") { sheet = .workspaces }
+        Button("File Shelf…") { _ = perform(.fileShelf) }
         Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
         Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
         Button("Compare Folders…") { sheet = .compare(model.folder) }
@@ -761,6 +763,18 @@ struct BrowserView: View {
         case .address: editAddress()
         case .revealFolder: expandToCurrentFolder()
         case .workspaces: sheet = .workspaces
+        case .addToShelf:
+            guard !entries.isEmpty else { return false }
+            withReferences(entries) { actions.addToShelf($0) }
+        case .fileShelf:
+            let folder = model.folder
+            Task {
+                do {
+                    let destination = try await Task.detached { try BrowserTransferDestination(folder: folder) }.value
+                    guard model.folder == folder, sheet == nil else { return }
+                    sheet = .fileShelf(destination)
+                } catch { feedback = error.localizedDescription }
+            }
         case .diskUsage: sheet = .diskUsage(model.folder)
         case .duplicates: sheet = .duplicates(model.folder)
         case .compareFolders: sheet = .compare(model.folder)
@@ -1049,6 +1063,8 @@ struct BrowserView: View {
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)
         case .connect: ConnectSheet()
         case .workspaces: WorkspacesSheet(model: model)
+        case .fileShelf(let destination):
+            FileShelfSheet(actions: actions, destination: destination, readOnly: model.currentVolume?.isReadOnly == true)
         case .actionPalette:
             ActionPaletteSheet(commands: BrowserAction.all.filter { isAvailable($0.command) },
                                shortcutLabels: shortcutLabels()) { paletteChoice = $0 }
@@ -1066,7 +1082,7 @@ struct BrowserView: View {
     private func isAvailable(_ command: BrowserCommand) -> Bool {
         let entries = model.selectedEntries
         switch command {
-        case .open, .properties, .copy: return !entries.isEmpty
+        case .open, .properties, .copy, .addToShelf: return !entries.isEmpty
         case .cut, .trash, .rename: return !entries.isEmpty && !actions.busy
         case .preview: return entries.count == 1
         case .checksum: return entries.count == 1 && entries.first?.kind == .regularFile

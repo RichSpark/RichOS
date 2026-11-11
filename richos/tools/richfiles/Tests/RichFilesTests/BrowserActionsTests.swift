@@ -87,6 +87,36 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testShelfCollectsAcrossFoldersAndKeepsUnmovedItems() async throws {
+        try await withFixture { root, destination, board in
+            let secondFolder = root.appendingPathComponent("Second", isDirectory: true)
+            try FileManager.default.createDirectory(at: secondFolder, withIntermediateDirectories: false)
+            let first = try write("first", named: "One.txt", in: root)
+            let second = try write("second", named: "Two.txt", in: secondFolder)
+            let actions = BrowserActions(pasteboard: board)
+            actions.addToShelf([first, first])
+            actions.addToShelf([second])
+            XCTAssertEqual(Set(actions.shelf.map(\.url)), [first.url, second.url])
+            board.clearContents()
+            XCTAssertTrue(board.setString("keep clipboard", forType: .string))
+
+            _ = try FileOperations.rename(first, to: "Original.txt")
+            let replacement = try write("replacement", named: "One.txt", in: root)
+            let target = try BrowserTransferDestination(folder: destination)
+            try await perform(actions) { actions.transferShelf(to: target, move: true) }
+            XCTAssertEqual(actions.shelf, [first])
+            XCTAssertEqual(try contents(replacement.url), "replacement")
+            XCTAssertEqual(try contents(destination.appendingPathComponent("Two.txt")), "second")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("One.txt").path))
+            XCTAssertEqual(board.string(forType: .string), "keep clipboard")
+
+            actions.clearShelf()
+            XCTAssertTrue(actions.shelf.isEmpty)
+            XCTAssertEqual(try contents(replacement.url), "replacement")
+        }
+    }
+
+    @MainActor
     func testCutSkipKeepBothAndUndoPreserveTheExistingItem() async throws {
         try await withFixture { root, destination, board in
             let source = try write("selected", named: "Report.txt", in: root)

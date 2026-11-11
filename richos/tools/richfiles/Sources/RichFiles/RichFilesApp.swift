@@ -93,7 +93,7 @@ enum BrowserCommand: Codable, Hashable {
     case open, rename, trash, preview, address, search, back, forward, up, refresh, revealFolder
     case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties, workspaces, diskUsage
     case duplicates, checksum, compareFolders
-    case copyPath, actionPalette
+    case copyPath, actionPalette, addToShelf, fileShelf
     case grid(Int, Int, Bool)
 }
 
@@ -109,7 +109,7 @@ struct BrowserAction: Identifiable {
 
     static let fileActions: [Self] = [
         .init("Open", .open), .init("Rename", .rename), .init("Move to Trash", .trash),
-        .init("Quick Look", .preview), .init("Properties", .properties)
+        .init("Quick Look", .preview), .init("Properties", .properties), .init("Add to File Shelf", .addToShelf)
     ]
     static let clipboard: [Self] = [
         .init("Cut Files", .cut), .init("Copy Files", .copy), .init("Paste Files", .paste),
@@ -117,7 +117,7 @@ struct BrowserAction: Identifiable {
     ]
     static let tools: [Self] = [
         .init("Disk Usage", .diskUsage), .init("Find Duplicate Files", .duplicates),
-        .init("Verify Checksum", .checksum), .init("Compare Folders", .compareFolders)
+        .init("Verify Checksum", .checksum), .init("Compare Folders", .compareFolders), .init("File Shelf", .fileShelf)
     ]
     static let navigation: [Self] = [
         .init("Back", .back), .init("Forward", .forward), .init("Up", .up), .init("Refresh", .refresh),

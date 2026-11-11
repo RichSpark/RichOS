@@ -25,6 +25,7 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var transfer: BrowserTransfer?
     @Published private(set) var canRetryTransfer = false
+    @Published private(set) var shelf: [FileReference] = []
     @Published private(set) var cutURLs: Set<URL> = []
     @Published private(set) var trashItems: [BrowserTrashItem] = []
     @Published private(set) var undoName: String?
@@ -140,6 +141,26 @@ final class BrowserActions: ObservableObject {
         ))
     }
 
+    func addToShelf(_ sources: [FileReference]) {
+        shelf = unique(sources + shelf)
+        status = "\(itemCount(shelf.count)) on the file shelf."
+    }
+
+    func removeFromShelf(_ source: FileReference) {
+        shelf.removeAll { $0 == source }
+    }
+
+    func clearShelf() {
+        shelf.removeAll()
+    }
+
+    func transferShelf(to destination: BrowserTransferDestination, move: Bool) {
+        startTransfer(BrowserTransferRequest(
+            sources: shelf.map(BrowserTransferSource.captured), folder: destination.url,
+            move: move, conflict: .skip, clipboardGeneration: nil, destination: destination
+        ))
+    }
+
     func cancelTransfer() {
         guard transfer?.running == true else { return }
         status = "Cancelling transfer…"
@@ -230,6 +251,10 @@ final class BrowserActions: ObservableObject {
         transfer = result.progress
         busy = false
         let changed = result.moves.filter { $0.original.url.absoluteString != $0.moved.url.absoluteString }
+        if !changed.isEmpty, !shelf.isEmpty {
+            let originals = Dictionary(uniqueKeysWithValues: changed.map { ($0.original.url.path, $0.original) })
+            shelf.removeAll { originals[$0.url.path] == $0 }
+        }
         let generation = consumeCut(request.clipboardGeneration, moves: result.moves)
         if !result.retry.isEmpty, let destination = result.destination {
             retryRequest = BrowserTransferRequest(
