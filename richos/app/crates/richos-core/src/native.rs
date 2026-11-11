@@ -5910,6 +5910,7 @@ for prompt,expected in cases:
         let mut profile = fixture_profile(root);
         let status_path = root.join("status-scope.json");
         cognition.status_scope = Some(status_path.clone());
+        cognition.client.action_grants.push(ActionGrant::Continuity(scope_path.clone()));
         profile.set_live_meeting_reader(|binding, at| {
             (binding.thread_id() == "thread-context" && matches!(at, 42 | 43)).then(|| crate::meeting_notes::LiveMeetingSource {
                 dir: "/corpus/meetings/session".into(), zone: "/corpus/meetings".into(),
