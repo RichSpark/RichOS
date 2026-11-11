@@ -50,6 +50,7 @@ enum BrowserSheet: Identifiable {
 @MainActor
 struct ActionPaletteSheet: View {
     let commands: [BrowserAction]
+    let shortcutLabels: [BrowserCommand: String]
     let run: (BrowserCommand) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -66,9 +67,16 @@ struct ActionPaletteSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Find a file action", text: $query).focused($searchFocused)
+                .accessibilityLabel("Find a file action")
                 .onSubmit(runSelection)
             List(results, selection: $selection) { action in
-                Text(action.title).tag(action.id)
+                HStack {
+                    Text(action.title)
+                    Spacer()
+                    if let label = shortcutLabels[action.command] {
+                        Text(label).font(.caption).foregroundStyle(.secondary)
+                    }
+                }.tag(action.id)
                     .onTapGesture(count: 2) { activate(action.command) }
             }.accessibilityLabel("File actions")
             HStack {

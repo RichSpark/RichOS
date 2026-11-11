@@ -14,6 +14,7 @@ struct BrowserView: View {
     private let acceptsKeyboard: () -> Bool
     private let supportsSessionRestore: Bool
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
+    @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
@@ -76,6 +77,7 @@ struct BrowserView: View {
             }
         }
         .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: acceptsKeyboard,
+                                   shortcuts: BrowserShortcut.load(shortcutData),
                                    perform: perform, prefix: selectPrefix)
             .frame(width: 0, height: 0))
         .focusedSceneValue(\.browserCommand) { _ = perform($0) }
@@ -1027,8 +1029,17 @@ struct BrowserView: View {
         case .connect: ConnectSheet()
         case .workspaces: WorkspacesSheet(model: model)
         case .actionPalette:
-            ActionPaletteSheet(commands: BrowserAction.all.filter { isAvailable($0.command) }) { paletteChoice = $0 }
+            ActionPaletteSheet(commands: BrowserAction.all.filter { isAvailable($0.command) },
+                               shortcutLabels: shortcutLabels()) { paletteChoice = $0 }
         }
+    }
+
+    private func shortcutLabels() -> [BrowserCommand: String] {
+        let configured = BrowserShortcut.load(shortcutData)
+        let preset = Dictionary(grouping: BrowserShortcut.preset(windowsKeys), by: { $0.value })
+        var labels = preset.mapValues { $0.map { $0.key.label }.sorted().joined(separator: " / ") }
+        for (action, chord) in configured { labels[action] = chord.label }
+        return labels
     }
 
     private func isAvailable(_ command: BrowserCommand) -> Bool {

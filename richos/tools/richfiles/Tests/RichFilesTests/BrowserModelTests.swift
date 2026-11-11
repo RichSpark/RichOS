@@ -4,6 +4,18 @@ import XCTest
 @testable import RichFiles
 
 final class BrowserModelTests: XCTestCase {
+    func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {
+        XCTAssertEqual(BrowserShortcut("Ctrl+L").flatMap { BrowserShortcut.preset(true)[$0] }, .address)
+        XCTAssertEqual(BrowserShortcut("Command+L").flatMap { BrowserShortcut.preset(false)[$0] }, .address)
+        XCTAssertThrowsError(try BrowserShortcut.assign("Command+Q", to: .copyPath, in: [:]))
+        XCTAssertThrowsError(try BrowserShortcut.assign("Ctrl+C", to: .copyPath, in: [:]))
+        XCTAssertThrowsError(try BrowserShortcut.assign("J", to: .copyPath, in: [:]))
+        let mapped = try BrowserShortcut.assign("Shift+Control+j", to: .copyPath, in: [:])
+        XCTAssertEqual(mapped[.copyPath]?.label, "Control+Shift+J")
+        XCTAssertEqual(try BrowserShortcut.load(JSONEncoder().encode(mapped)), mapped)
+        XCTAssertThrowsError(try BrowserShortcut.assign("Ctrl+Shift+J", to: .compareFolders, in: mapped))
+    }
+
     func testFolderRevealChoosesNearestRootAndIncludesOnlyTheNeededHiddenChild() async throws {
         let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("RichFilesTree-\(UUID().uuidString)", isDirectory: true)

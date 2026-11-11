@@ -82,7 +82,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     }
 }
 
-enum BrowserCommand: Hashable {
+enum BrowserCommand: Codable, Hashable {
     case open, rename, trash, preview, address, search, back, forward, up, refresh, revealFolder
     case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties, workspaces, diskUsage
     case duplicates, checksum, compareFolders
@@ -162,10 +162,14 @@ struct BrowserCommands: Commands {
 struct RichFilesSettings: View {
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
+    @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
     @AppStorage("richfiles.previousFolderHandler") private var previousHandler = ""
     @State private var currentHandler: URL?
     @State private var updating = false
     @State private var status = ""
+    @State private var shortcutAction = BrowserCommand.copyPath
+    @State private var shortcutText = ""
+    @State private var shortcutProblem = ""
 
     private var appURL: URL { Bundle.main.bundleURL.resolvingSymlinksInPath() }
     private var installedBundle: Bool { appURL.pathExtension == "app" }
@@ -181,6 +185,20 @@ struct RichFilesSettings: View {
                 }
                 Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
                     .foregroundStyle(.secondary)
+            }
+            Section("Custom Shortcuts") {
+                Picker("File Action", selection: $shortcutAction) {
+                    ForEach(BrowserAction.all + [.init("File Actions", .actionPalette)]) {
+                        Text($0.title).tag($0.command)
+                    }
+                }
+                TextField("Shortcut", text: $shortcutText, prompt: Text("Control+Shift+J"))
+                HStack {
+                    Button("Save Shortcut") { saveShortcut() }
+                    Button("Use Default") { resetShortcut() }
+                        .disabled(BrowserShortcut.load(shortcutData)[shortcutAction] == nil)
+                }
+                if !shortcutProblem.isEmpty { Text(shortcutProblem).foregroundStyle(.secondary) }
             }
             Section("Folder association") {
                 LabeledContent("Current app", value: currentHandler.map {
@@ -199,7 +217,30 @@ struct RichFilesSettings: View {
         }
         .padding(20)
         .frame(width: 520)
-        .onAppear { readHandler() }
+        .onAppear { readHandler(); readShortcut() }
+        .onChange(of: shortcutAction) { _ in readShortcut() }
+    }
+
+    private func readShortcut() {
+        shortcutText = BrowserShortcut.load(shortcutData)[shortcutAction]?.label ?? ""
+        shortcutProblem = ""
+    }
+
+    private func saveShortcut() {
+        do {
+            let updated = try BrowserShortcut.assign(shortcutText, to: shortcutAction, in: BrowserShortcut.load(shortcutData))
+            shortcutData = try JSONEncoder().encode(updated)
+            readShortcut()
+        } catch { shortcutProblem = error.localizedDescription }
+    }
+
+    private func resetShortcut() {
+        var updated = BrowserShortcut.load(shortcutData)
+        updated.removeValue(forKey: shortcutAction)
+        do {
+            shortcutData = try JSONEncoder().encode(updated)
+            readShortcut()
+        } catch { shortcutProblem = error.localizedDescription }
     }
 
     private func readHandler() {
