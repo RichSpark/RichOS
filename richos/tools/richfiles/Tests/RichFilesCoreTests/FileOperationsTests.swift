@@ -198,6 +198,33 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testStreamCopyReportsBytesAndStopsBetweenWrites() throws {
+        try withFixture { root in
+            let source = root.appendingPathComponent("Large.bin")
+            let destination = root.appendingPathComponent("Staged.bin")
+            let data = Data(repeating: 0x5a, count: 8 * 1024 * 1024)
+            try data.write(to: source, options: .withoutOverwriting)
+            let input = open(source.path, O_RDONLY | O_CLOEXEC)
+            XCTAssertGreaterThanOrEqual(input, 0)
+            defer { _ = close(input) }
+            let output = open(destination.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+            XCTAssertGreaterThanOrEqual(output, 0)
+            defer { _ = close(output) }
+
+            var reported: Int64 = 0
+            XCTAssertThrowsError(try FileOperations.copyFileDescriptors(
+                input, output, to: destination, size: Int64(data.count),
+                isCancelled: { reported > 0 }, onProgress: { written, total in
+                    XCTAssertEqual(total, Int64(data.count))
+                    reported = written
+                }
+            )) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+            XCTAssertGreaterThan(reported, 0)
+            XCTAssertLessThan(reported, Int64(data.count))
+            XCTAssertEqual(try Data(contentsOf: source), data)
+        }
+    }
+
     func testCopyRefusesAnItemThatArrivesBeforePublication() throws {
         try withFixture { root in
             let source = try write("source", named: "item.txt", in: root)
