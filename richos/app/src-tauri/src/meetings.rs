@@ -460,11 +460,9 @@ pub fn start(app: &AppHandle) {
             let mut known = BTreeMap::new();
             let mut instances = BTreeMap::new();
             loop {
-                let next_refresh = Instant::now() + Duration::from_millis(meeting_calendar::REFRESH_MS);
+                let started = Instant::now();
                 calendar.refresh_calendar(&mut known, &mut instances);
-                // Time spent syncing counts toward the refresh interval. A slow pass never
-                // overlaps another one and can still service a queued reconnect first.
-                match calendar_replies.recv_timeout(next_refresh.saturating_duration_since(Instant::now())) {
+                match calendar_replies.recv_timeout(meeting_calendar::refresh_delay(started.elapsed())) {
                     Ok(account) => calendar.reconnect_calendar(account),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
