@@ -522,10 +522,7 @@ impl Meetings {
         } else if !vendors.is_empty() {
             eprintln!("[richos] meeting notes: no calendar sync in this build; keeping the last known calendar status");
         }
-        let current = meeting_calendar::meetings(&zone, |vendor, instance| {
-            // Before the first status report, retain the existing offline calendar cache.
-            vendors.contains(&vendor) && instances.get(vendor).is_none_or(|ids| ids.iter().any(|id| id == instance))
-        });
+        let current = meeting_calendar::cached_meetings(&zone, &vendors, instances);
         let gone = meeting_calendar::withdrawn(known, &current);
         *known = current.iter().map(|m| (m.event_id.clone(), m.starts_at)).collect();
         let (actions, recovery_changed) = {

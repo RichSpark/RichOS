@@ -68,8 +68,20 @@ impl CalendarMeeting {
     }
 }
 
-/// Every meeting in the zone from an eligible source instance, earliest first.
-pub fn meetings(zone: &Path, eligible: impl Fn(&str, &str) -> bool) -> Vec<CalendarMeeting> {
+/// Cached meetings for connected vendors, earliest first. A vendor without a sync report
+/// can use its cache. A report with no eligible accounts suppresses that vendor's prompts.
+pub fn cached_meetings(
+    zone: &Path,
+    connected: &[&str],
+    reported_instances: &BTreeMap<String, Vec<String>>,
+) -> Vec<CalendarMeeting> {
+    meetings(zone, |vendor, instance| {
+        connected.contains(&vendor)
+            && reported_instances.get(vendor).is_none_or(|ids| ids.iter().any(|id| id == instance))
+    })
+}
+
+fn meetings(zone: &Path, eligible: impl Fn(&str, &str) -> bool) -> Vec<CalendarMeeting> {
     let mut latest: BTreeMap<PathBuf, (u64, serde_json::Value, PathBuf)> = BTreeMap::new();
     for (vendor, _) in VENDORS {
         let Ok(events) = std::fs::read_dir(zone.join(vendor).join("calendar")) else { continue };
@@ -249,9 +261,16 @@ mod tests {
         z.revision("google", "a", "rev-1", event("google:calendar:expired:a", "Canceled while disconnected"));
         z.revision("google", "b", "rev-1", event("google:calendar:expired:b", "Shared invite"));
         z.revision("google", "c", "rev-1", event("google:calendar:healthy:c", "Shared invite"));
-        let found = meetings(&z.0, |vendor, instance| vendor == "google" && instance == "healthy");
+        let mut reports = BTreeMap::new();
+        let found = cached_meetings(&z.0, &["google"], &reports);
+        assert_eq!(found.len(), 2, "a connected vendor can prompt before its first report");
+        assert!(cached_meetings(&z.0, &[], &reports).is_empty(), "a removed vendor cannot prompt");
+
+        reports.insert("google".to_string(), vec!["healthy".to_string()]);
+        let found = cached_meetings(&z.0, &["google"], &reports);
         assert_eq!(found.iter().map(|m| m.event_id.as_str()).collect::<Vec<_>>(), ["google:calendar:healthy:c"]);
-        assert!(meetings(&z.0, |_, _| false).is_empty());
+        reports.insert("google".to_string(), vec![]);
+        assert!(cached_meetings(&z.0, &["google"], &reports).is_empty(), "a report with no eligible accounts suppresses prompts");
     }
 
     #[test]
