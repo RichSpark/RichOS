@@ -2390,8 +2390,13 @@ fn main() {
             // and the front desk's answer carries the screen as it is right now beside the
             // work that is waiting for it. A short-lived child of the GUI session reads the
             // same session dictionary the app does.
-            .and_then(|scope| richos_core::status_tools::run_stdio(Path::new(&scope), &screen::MacScreen)
-                .map_err(|e| e.to_string()));
+            .and_then(|scope| {
+                #[cfg(target_os = "macos")]
+                let result = richos_core::status_tools::run_stdio_with_meeting(Path::new(&scope), &screen::MacScreen, meetings::read_live_excerpt);
+                #[cfg(not(target_os = "macos"))]
+                let result = richos_core::status_tools::run_stdio(Path::new(&scope), &screen::MacScreen);
+                result.map_err(|e| e.to_string())
+            });
         if let Err(error) = result {
             startup_alert::cannot_start(
                 &format!("status tool server: {error}"),

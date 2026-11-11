@@ -124,7 +124,7 @@ pub fn user_work_guards(engine: &Path) -> Result<Vec<String>, RuntimeError> {
     Ok(guards)
 }
 
-type LiveMeetingRead = dyn Fn(&crate::entity::ThreadBinding, u64) -> Option<serde_json::Value> + Send + Sync;
+type LiveMeetingRead = dyn Fn(&crate::entity::ThreadBinding, u64) -> Option<crate::meeting_notes::LiveMeetingSource> + Send + Sync;
 
 #[derive(Clone)]
 pub(crate) struct LiveMeetingReader(std::sync::Arc<LiveMeetingRead>);
@@ -738,12 +738,12 @@ impl EngineProfile {
     /// The app may provide the current recording for this exact conversation.
     pub fn set_live_meeting_reader(
         &mut self,
-        read: impl Fn(&crate::entity::ThreadBinding, u64) -> Option<serde_json::Value> + Send + Sync + 'static,
+        read: impl Fn(&crate::entity::ThreadBinding, u64) -> Option<crate::meeting_notes::LiveMeetingSource> + Send + Sync + 'static,
     ) {
         self.live_meeting_reader = Some(LiveMeetingReader(std::sync::Arc::new(read)));
     }
 
-    pub(crate) fn read_live_meeting(&self, binding: &crate::entity::ThreadBinding, request_at: u64) -> Option<serde_json::Value> {
+    pub(crate) fn read_live_meeting(&self, binding: &crate::entity::ThreadBinding, request_at: u64) -> Option<crate::meeting_notes::LiveMeetingSource> {
         self.live_meeting_reader.as_ref().and_then(|reader| (reader.0)(binding, request_at))
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which

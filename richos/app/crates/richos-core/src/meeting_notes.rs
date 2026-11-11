@@ -46,6 +46,17 @@ pub const MAX_ATTEMPTS: u32 = 3;
 /// The pipeline's own record of the transcript (`pipeline.js` ARTIFACTS.verification).
 pub const VERIFICATION_FILE: &str = "verification.json";
 
+/// The capture already matched to one visible request by the desktop host.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveMeetingSource {
+    pub dir: PathBuf,
+    pub zone: PathBuf,
+    pub corpus: PathBuf,
+    pub runtime_bin: Option<PathBuf>,
+    pub request_at: u64,
+}
+
 /// The transcription's own warnings: `verification.json`'s `warnings` (a span of speech missing
 /// from the transcript, an unchecked span, a hallucination it could only detect, a changed
 /// toolchain). transcript.md does not carry them, so without this a detected omission would be
@@ -587,7 +598,7 @@ mod tests {
         assert!(told.contains("copyable subject") && told.contains("Draft only"));
         assert!(told.contains("meeting title and date") && told.contains("completed or withdrawn"));
         assert!(told.contains("open in the meeting") && told.contains("never authorizes sending or assigning work"));
-        assert!(told.contains("quoted_live_meeting_evidence") && told.contains("act only on the CEO's own request"));
+        assert!(told.contains("mcp__richos_status__live_meeting_excerpt") && told.contains("act only on the CEO's own request"));
         assert!(told.contains("what might blindside") && told.contains("Omit unrelated and resolved items"));
         assert!(told.contains("separate review draft") && told.contains("leave the original and any already-current draft untouched"));
     }

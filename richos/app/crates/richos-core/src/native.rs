@@ -4354,7 +4354,7 @@ type ScopePreparation = Box<dyn FnOnce() -> Result<Option<PreparedContext>, Cogn
 struct PreparedContext {
     continuity: String,
     records: String,
-    live_meeting: Option<Value>,
+    current_recording: bool,
 }
 
 // One input's existing scope metadata, consumed only by its native prompt hook.
@@ -4429,7 +4429,7 @@ impl NativeTurnScope {
             binding: scope.clone(),
             seat: seat.clone(),
         };
-        crate::ecs::write_scope(path, &crate::ecs::ToolScope {  version:1, actions_allowed:false, bridge:bridge.clone(), binding:scope,
+        crate::ecs::write_scope(path, &crate::ecs::ToolScope {  version:1, actions_allowed:false, bridge:bridge.clone(), binding:scope.clone(),
             user_instruction:user_instruction.clone(),
             background_work_allowed: false,
             closed: crate::ecs::GrantClosed::now(crate::ecs::closed_by::NOT_STARTED),
@@ -4456,11 +4456,19 @@ impl NativeTurnScope {
             })
             .map_err(CognitionError::Io)?;
         } else if let Some(path)=&self.assignments_scope {let _=std::fs::remove_file(path);}
-        if let (Some(path), Some(state_root)) = (&self.status_scope, &profile_state) {
-            let scope=crate::status_tools::StatusToolScope {version:1,state_root:state_root.clone(),
+        let mut current_recording = false;
+        if let (Some(status_path), Some(state_root)) = (&self.status_scope, &profile_state) {
+            let status=crate::status_tools::StatusToolScope {version:1,state_root:state_root.clone(),
                 entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
-            crate::status_tools::write_scope(path,&scope).map_err(CognitionError::Io)?;
-            crate::session_tools::bind_with_assignments(path,&scope,&self.session_id,"rich",user_instruction.clone(),self.assignments_scope.as_deref()).map_err(CognitionError::Io)?;
+            crate::status_tools::write_scope(status_path,&status).map_err(CognitionError::Io)?;
+            crate::session_tools::bind_with_assignments(status_path,&status,&self.session_id,"rich",user_instruction.clone(),self.assignments_scope.as_deref()).map_err(CognitionError::Io)?;
+            drop(std::fs::remove_file(crate::status_tools::live_meeting_path(status_path)));
+            let source = if self.role == LeaseRole::Conversation && matches!(source, crate::ledger::Source::Text | crate::ledger::Source::Jam) {
+                live_meeting_at.and_then(|at| self.engine_profile.as_ref().and_then(|profile| profile.read_live_meeting(binding, at)))
+            } else { None };
+            if let Some(source) = source {
+                current_recording = crate::status_tools::write_live_meeting(status_path, path, &scope, source).is_ok();
+            }
         }
         if let Some(path)=&self.question_scope {
             let scope=crate::question_tools::read_scope(path).map_err(CognitionError::Io)?;
@@ -4468,13 +4476,7 @@ impl NativeTurnScope {
                 .map_err(CognitionError::Io)?.into_iter().filter(|q|q.state==crate::questions::State::Open || !q.delivered).map(|q|q.public_value()).collect();
             if !questions.is_empty() { records.push_str(&json!({"event":"question_records","questions":questions}).to_string()); }
         }
-        let live_meeting = if self.role == LeaseRole::Conversation
-            && matches!(source, crate::ledger::Source::Text | crate::ledger::Source::Jam)
-        {
-            live_meeting_at.and_then(|at| self.engine_profile.as_ref()
-                .and_then(|profile| profile.read_live_meeting(binding, at)))
-        } else { None };
-        Ok(Some(PreparedContext { continuity: brief, records, live_meeting }))
+        Ok(Some(PreparedContext { continuity: brief, records, current_recording }))
     }
 }
 
@@ -4820,7 +4822,10 @@ impl Drop for NativeCognition {
         if let Some(profile) = &self.engine_profile { profile.remove_session_files(); }
         if let Some((_, path)) = &self.continuity { let _ = std::fs::remove_file(path); }
         if let Some(path) = &self.assignments_scope { let _ = std::fs::remove_file(path); }
-        if let Some(path) = &self.status_scope { let _ = std::fs::remove_file(path); }
+        if let Some(path) = &self.status_scope {
+            drop(std::fs::remove_file(crate::status_tools::live_meeting_path(path)));
+            drop(std::fs::remove_file(path));
+        }
         if let Some(path) = &self.onboarding_scope {
             let _ = std::fs::remove_file(path);
         }
@@ -5098,9 +5103,9 @@ impl Cognition for NativeCognition {
                 if let Some(company)=&company { context.push_str(&state.given_context.when_changed("company material from the host",company)); }
                 context
             };
-            let current_recording = prepared.live_meeting.is_some();
-            if let Some(excerpt) = prepared.live_meeting {
-                context_data.push_str(&format!("\n{}", json!({ "quoted_live_meeting_evidence": excerpt })));
+            let current_recording = prepared.current_recording;
+            if current_recording {
+                context_data.push_str("\n{\"current_recording\":true}");
             }
             let (classifier, path, continuity, session, context) = routing;
             let routing = match route_visible_request(classifier, path, continuity, session, context, current_recording, operation) {
@@ -5866,7 +5871,7 @@ send({"type":"result","stop_reason":"end_turn"})
     }
 
     #[test]
-    fn only_an_active_scoped_recording_adds_meeting_context() {
+    fn a_live_recording_adds_only_an_availability_flag_to_the_turn() {
         let script = write_script("current-call-context", r#"
 exec python3 -u -c '
 import json,sys
@@ -5875,10 +5880,10 @@ def send(frame): print(json.dumps(frame),flush=True)
 read()
 send({"type":"control_response","response":{"subtype":"success","request_id":"req_init","response":{}}})
 cases = [
-    ("How do the two options stack up?", "available"),
-    ("Rich, please draft the comparison from this call.", "unavailable"),
-    ("Draft the follow-up to this meeting.", None),
-    ("Prepare the agenda.", None),
+    ("Thanks.", True),
+    ("Rich, please draft the comparison from this call.", True),
+    ("Draft the follow-up to this meeting.", False),
+    ("Prepare the agenda.", False),
 ]
 for prompt,expected in cases:
     command=read()
@@ -5888,12 +5893,8 @@ for prompt,expected in cases:
     response=read()["response"]["response"]
     context=response.get("hookSpecificOutput",{}).get("additionalContext","")
     assert "execution_routing" in context, context
-    if expected:
-        live=next(json.loads(line)["quoted_live_meeting_evidence"] for line in context.splitlines() if line.startswith("{\"quoted_live_meeting_evidence\""))
-        assert live["status"]==expected, live
-        assert ("Three customers" in json.dumps(live))==(expected=="available"), live
-    else:
-        assert "quoted_live_meeting_evidence" not in context, context
+    assert ("current_recording" in context)==expected, context
+    assert "quoted_live_meeting_evidence" not in context and "Three customers" not in context, context
     send({"type":"assistant","message":{"content":[{"type":"text","text":"Context checked."}]}})
     send({"type":"result","stop_reason":"end_turn"})
 '
@@ -5907,13 +5908,13 @@ for prompt,expected in cases:
         let scope_path = root.join("app-scope.json");
         cognition.continuity = Some((bridge, scope_path.clone()));
         let mut profile = fixture_profile(root);
+        let status_path = root.join("status-scope.json");
+        cognition.status_scope = Some(status_path.clone());
         profile.set_live_meeting_reader(|binding, at| {
-            if binding.thread_id() != "thread-context" { return None; }
-            match at {
-                42 => Some(json!({ "status": "available", "excerpt": { "passages": ["Three customers"] } })),
-                43 => Some(json!({ "status": "unavailable" })),
-                _ => None,
-            }
+            (binding.thread_id() == "thread-context" && matches!(at, 42 | 43)).then(|| crate::meeting_notes::LiveMeetingSource {
+                dir: "/corpus/meetings/session".into(), zone: "/corpus/meetings".into(),
+                corpus: "/corpus".into(), runtime_bin: None, request_at: at,
+            })
         });
         cognition.classifier = Some(Arc::new(Mutex::new(crate::request_classifier::RequestClassifier::new(
             Path::new("/usr/bin/false"), &profile, &skills_fixture(),
@@ -5923,7 +5924,7 @@ for prompt,expected in cases:
             crate::entity::EntityId::parse("depot").unwrap(), "thread-context", 1);
         use crate::ledger::Source;
         for (id, prompt, source, live_meeting_at) in [
-            ("typed", "How do the two options stack up?", Source::Text, Some(42)),
+            ("typed", "Thanks.", Source::Text, Some(42)),
             ("spoken", "Rich, please draft the comparison from this call.", Source::Jam, Some(43)),
             ("chat", "Draft the follow-up to this meeting.", Source::Text, Some(44)),
             ("unrelated", "Prepare the agenda.", Source::Text, Some(44)),
@@ -5934,6 +5935,7 @@ for prompt,expected in cases:
                 if let TurnItem::Text { text, .. } = item { answer.push_str(text); }
             }).unwrap(), "end_turn");
             assert_eq!(answer, "Context checked.");
+            assert_eq!(crate::status_tools::live_meeting_path(&status_path).is_file(), matches!(live_meeting_at, Some(42 | 43)));
             let scope: crate::ecs::ToolScope = serde_json::from_slice(&std::fs::read(&scope_path).unwrap()).unwrap();
             assert_eq!(scope.user_instruction.unwrap().text.as_deref(), Some(prompt));
         }

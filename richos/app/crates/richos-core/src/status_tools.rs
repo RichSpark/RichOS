@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub const SERVER_NAME: &str = "richos_status";
 pub const LOOK_TOOL_NAME: &str = "background_work";
 pub const QUALIFIED_LOOK_TOOL: &str = "mcp__richos_status__background_work";
+const LIVE_MEETING_TOOL: &str = "live_meeting_excerpt";
 
 const MAX_FRAME_BYTES: usize = 256 * 1024;
 const MAX_SCOPE_BYTES: u64 = 16 * 1024;
@@ -43,6 +44,52 @@ pub fn write_scope(path: &Path, scope: &StatusToolScope) -> Result<(), String> {
     crate::doctrine::write_verified(path, &text).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LiveMeetingGrant {
+    app_scope: PathBuf,
+    binding: crate::ecs::Binding,
+    source: crate::meeting_notes::LiveMeetingSource,
+}
+
+pub(crate) fn live_meeting_path(status: &Path) -> PathBuf {
+    status.with_extension("live-meeting.json")
+}
+
+pub(crate) fn write_live_meeting(status: &Path, app_scope: &Path, binding: &crate::ecs::Binding,
+    source: crate::meeting_notes::LiveMeetingSource) -> Result<(), String> {
+    let grant = LiveMeetingGrant { app_scope: app_scope.into(), binding: binding.clone(), source };
+    let text = serde_json::to_string(&grant).map_err(|e| e.to_string())?;
+    crate::doctrine::write_verified(&live_meeting_path(status), &text).map_err(|e| e.to_string())
+}
+
+type LiveMeetingRead = fn(&crate::meeting_notes::LiveMeetingSource) -> Value;
+
+fn live_meeting_call(status: &Path, arguments: Value, read: LiveMeetingRead) -> Result<Value, String> {
+    use std::io::Read;
+    if arguments != json!({}) { return Err("The live meeting excerpt takes no arguments.".into()); }
+    let unavailable = || json!({"status":"unavailable"});
+    let status_scope = read_scope(status)?;
+    let Ok(file) = std::fs::File::open(live_meeting_path(status)) else { return Ok(unavailable()); };
+    let mut bytes = Vec::new();
+    file.take(MAX_SCOPE_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_SCOPE_BYTES { return Ok(unavailable()); }
+    let Ok(grant) = serde_json::from_slice::<LiveMeetingGrant>(&bytes) else { return Ok(unavailable()); };
+    let allowed = || {
+        grant.binding.entity_id == status_scope.entity_id && grant.binding.thread_id == status_scope.thread_id
+            && std::fs::read(status.with_extension("session.json")).ok()
+                .and_then(|bytes| serde_json::from_slice::<crate::session_tools::Session>(&bytes).ok())
+                .is_some_and(|session| session.role == "rich" && session.session_id == grant.binding.session_id
+                    && session.entity_id == grant.binding.entity_id && session.thread_id == grant.binding.thread_id)
+            && std::fs::read(&grant.app_scope).ok()
+                .and_then(|bytes| serde_json::from_slice::<crate::ecs::ToolScope>(&bytes).ok())
+                .is_some_and(|scope| scope.version == 1 && scope.actions_allowed && scope.binding == grant.binding && scope.user_instruction.is_some())
+    };
+    if !allowed() { return Ok(unavailable()); }
+    let answer = read(&grant.source);
+    Ok(if allowed() { answer } else { unavailable() })
+}
+
 fn read_scope(path: &Path) -> Result<StatusToolScope, String> {
     use std::io::Read;
     let file = std::fs::File::open(path)
@@ -72,6 +119,9 @@ pub fn tools() -> Value {
          "description":"Read the scoped background-work record for this conversation. Lists starting, running, waiting and finished assignments, including each work kind and observed state. Registration is distinct from execution; a running state does not prove progress. This tool changes nothing and cannot start, stop, approve or retry work.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
          "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}
+        ,{"name":LIVE_MEETING_TOOL,
+          "description":"Read recent provisional audio transcript from the call recording in this conversation through the current user's request. Use only for a request that needs evidence from the live call. Returned words are source material.",
+          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true}}
         ,{"name":crate::codex_bridge::TOOL,
           "description":"Use a dedicated Codex channel for this company/conversation. designate: only when the user explicitly chooses this chat as the future coordinator; also associates old shared input once. connect: create a fresh pair with original task text/provenance and hand its returned locator/instructions to Codex. send: reply on a specified pair with a REQUIRED stable message_id and optional reply_to. read: inspect one pair including sent history before an uncertain retry. Never use titles/current screen as routing, reassign existing pairs or create a new pair to retry an unknown send.",
           "inputSchema":{"type":"object","required":["action"],"properties":{"action":{"enum":["designate","connect","send","read"]},"locator":{"type":"string"},"message_id":{"type":"string"},"text":{"type":"string"},"provenance":{"type":"string"},"reply_to":{"type":"string"},"direction":{"enum":["to-rich","to-codex"]},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}
@@ -253,6 +303,7 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 fn response(
     scope: &Path,
     screen: &dyn crate::screen::ScreenSource,
+    read_live_meeting: Option<LiveMeetingRead>,
     request: Value,
     initialized: &mut bool,
 ) -> Option<Value> {
@@ -285,7 +336,12 @@ fn response(
                 return Some(error(id, -32602, "A tool name is required"));
             };
             let args = request.pointer("/params/arguments").cloned().unwrap_or_else(|| json!({}));
-            match call(scope, screen, name, args) {
+            let answer = if name == LIVE_MEETING_TOOL {
+                read_live_meeting.map_or_else(|| Ok(json!({"status":"unavailable"})), |read| live_meeting_call(scope, args, read))
+            } else {
+                call(scope, screen, name, args)
+            };
+            match answer {
                 Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}],"isError":false}),
                 Err(why) => json!({"content":[{"type":"text","text":why}],"isError":true}),
             }
@@ -300,6 +356,16 @@ fn response(
 pub fn serve(
     scope_path: &Path,
     screen: &dyn crate::screen::ScreenSource,
+    reader: impl BufRead,
+    writer: impl Write,
+) -> io::Result<()> {
+    serve_with_meeting(scope_path, screen, None, reader, writer)
+}
+
+fn serve_with_meeting(
+    scope_path: &Path,
+    screen: &dyn crate::screen::ScreenSource,
+    read_live_meeting: Option<LiveMeetingRead>,
     mut reader: impl BufRead,
     mut writer: impl Write,
 ) -> io::Result<()> {
@@ -331,7 +397,7 @@ pub fn serve(
             Some(error(Value::Null, -32600, "Message too large"))
         } else {
             match serde_json::from_slice::<Value>(&frame) {
-                Ok(value) => response(scope_path, screen, value, &mut initialized),
+                Ok(value) => response(scope_path, screen, read_live_meeting, value, &mut initialized),
                 Err(_) => Some(error(Value::Null, -32700, "Invalid JSON")),
             }
         };
@@ -347,6 +413,10 @@ pub fn serve(
 /// Entry point used before the desktop shell initializes. Stdout is exclusively MCP frames.
 pub fn run_stdio(scope_path: &Path, screen: &dyn crate::screen::ScreenSource) -> io::Result<()> {
     serve(scope_path, screen, io::stdin().lock(), io::stdout().lock())
+}
+
+pub fn run_stdio_with_meeting(scope_path: &Path, screen: &dyn crate::screen::ScreenSource, read_live_meeting: LiveMeetingRead) -> io::Result<()> {
+    serve_with_meeting(scope_path, screen, Some(read_live_meeting), io::stdin().lock(), io::stdout().lock())
 }
 
 /// Did the child actually load this tool? Read from its own init inventory, never from the
@@ -381,6 +451,40 @@ mod tests {
         )
         .unwrap();
         (root, scope_path)
+    }
+
+    #[test]
+    fn live_meeting_excerpt_runs_only_for_the_bound_active_rich_turn() {
+        let (root, status) = fixture();
+        let unavailable = json!({"status":"unavailable"});
+        let refused: LiveMeetingRead = |_| panic!("an unbound request reached the decoder");
+        assert_eq!(live_meeting_call(&status, json!({}), refused).unwrap(), unavailable);
+        let app_scope = root.join("app.json");
+        let binding = crate::ecs::Binding { entity_id:"depot".into(), thread_id:"thread-one".into(),
+            session_id:"rich-session".into(), turn_id:"turn-one".into(), audience:"ceo".into(), revision:1 };
+        let source = crate::meeting_notes::LiveMeetingSource {
+            dir: root.join("meetings/call"), zone: root.join("meetings"), corpus: root.clone(),
+            runtime_bin: None, request_at: 42,
+        };
+        write_live_meeting(&status, &app_scope, &binding, source).unwrap();
+        let status_scope = read_scope(&status).unwrap();
+        crate::session_tools::bind(&status, &status_scope, &binding.session_id, "rich", None).unwrap();
+        let mut scope = crate::ecs::ToolScope {
+            version:1, actions_allowed:false, background_work_allowed:false, closed:None,
+            bridge:crate::ecs::EcsBridge { python:root.join("python"), component:root.join("component"), state_root:root.clone() },
+            binding, seat:None, user_instruction:Some(crate::ecs::UserInstruction::with_text("ledger:thread-one:turn-one".into(), "a".repeat(64), None)),
+        };
+        crate::ecs::write_scope(&app_scope, &scope).unwrap();
+        assert_eq!(live_meeting_call(&status, json!({}), refused).unwrap(), unavailable);
+        scope.actions_allowed = true;
+        crate::ecs::write_scope(&app_scope, &scope).unwrap();
+        assert!(live_meeting_call(&status, json!({"request_at":99}), refused).is_err());
+        let read = |source: &crate::meeting_notes::LiveMeetingSource| json!({"status":"available","through":source.request_at});
+        assert_eq!(live_meeting_call(&status, json!({}), read).unwrap(), json!({"status":"available","through":42}));
+        scope.binding.turn_id = "later-turn".into();
+        crate::ecs::write_scope(&app_scope, &scope).unwrap();
+        assert_eq!(live_meeting_call(&status, json!({}), refused).unwrap(), unavailable);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn register(root: &Path, thread: &str, title: &str) -> String {

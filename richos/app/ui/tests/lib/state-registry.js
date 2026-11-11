@@ -6241,6 +6241,7 @@ module.exports = [
   {"s": "is disconnected, so meetings on this account won’t prompt from the calendar.", "c": "ACTIONABLE", "control": "#mn-calendar-recovery button", "why": "The same card names the provider and opens sign-in for that account. The meeting-notes suite drives it."},
   {"s": "the command took too long", "c": "NOT-RENDERED", "why": "Calendar and meeting excerpt callers translate the bounded process timeout into their existing status."},
   {"s": "reaping the bounded command", "c": "NOT-RENDERED", "why": "Process cleanup diagnostic written to stderr by the meeting host."},
+  {"s": "removing the live meeting excerpt scratch", "c": "NOT-RENDERED", "why": "Temporary audio cleanup diagnostic written to stderr by the meeting host."},
   {"s": "stopping the bounded command", "c": "NOT-RENDERED", "why": "Process cleanup diagnostic written to stderr by the meeting host."},
   {"s": "the installed calendar service is unavailable", "c": "NOT-RENDERED", "why": "The calendar worker logs why it could not start. The notice uses the general reconnect failure copy."},
   {"s": "the meeting folder could not be created: {e}", "c": "ACTIONABLE", "control": "[data-act=\"retry\"]", "fixture": null, "why": "The capture failure panel shows this reason with Try again in the same window. Its action is rendered by meeting-panel.js and dispatches the retry answer."},

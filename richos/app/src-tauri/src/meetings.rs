@@ -1450,41 +1450,12 @@ impl Meetings {
         Err("the call transcription model is not installed yet".into())
     }
 
-    fn transcription_command(&self, action: &str, dir: &Path, zone: &Path, model: &Path) -> Result<Command, String> {
-        let service = service_cli().ok_or("this build has no transcription service installed")?;
-        let mut command = Command::new(node_bin());
-        command
-            .arg(&service)
-            .arg(action)
-            .arg(dir)
-            .env("RICHOS_DROP_ZONE", zone)
-            .env("LORO_CORPUS", self.corpus_root())
-            .env("RICHOS_WHISPER_MODEL", model)
-            .stdin(Stdio::null());
-        installed_paths(&mut command);
-        if let Ok(whisper) = richos_voice::stt::resolve_whisper_bin() {
-            command.env("RICHOS_WHISPER_BIN", whisper);
-        }
-        Ok(command)
-    }
-
-    fn live_context(&self, binding: &richos_core::entity::ThreadBinding, request_at: u64) -> Option<serde_json::Value> {
+    fn live_context(&self, binding: &richos_core::entity::ThreadBinding, request_at: u64) -> Option<meeting_notes::LiveMeetingSource> {
         let (dir, zone) = self.inner.lock().ok()?.capture.as_ref()?
             .live_scope(binding.entity_id().as_str(), binding.thread_id(), request_at)?;
-        let started = Instant::now();
-        let result = (|| {
-            let model = richos_voice::stt::resolve_model(CALL_MODEL).ok()?;
-            let mut command = self.transcription_command("live-excerpt", &dir, &zone, &model).ok()?;
-            command.arg("--at").arg(request_at.to_string()).stdout(Stdio::piped()).stderr(Stdio::null());
-            let (status, bytes) = run_bounded_line(command, LIVE_EXCERPT_DEADLINE, |_| {}).ok()?;
-            if !status.success() { return None; }
-            serde_json::from_slice::<serde_json::Value>(&bytes).ok()
-                .filter(|value| value["passages"].as_array().is_some_and(|rows| !rows.is_empty()))
-        })();
-        eprintln!("[richos] meeting notes: live excerpt available={} elapsed_ms={}", result.is_some(), started.elapsed().as_millis());
-        Some(match result {
-            Some(excerpt) => serde_json::json!({ "status": "available", "excerpt": excerpt }),
-            None => serde_json::json!({ "status": "unavailable" }),
+        Some(meeting_notes::LiveMeetingSource {
+            dir, zone, request_at, corpus: self.corpus_root(),
+            runtime_bin: richos_voice::stt::delivered_runtime_bin_dir(),
         })
     }
 
@@ -1494,7 +1465,7 @@ impl Meetings {
             eprintln!("[richos] meeting notes: live transcription skipped because the model is unavailable");
             return None;
         };
-        let command = self.transcription_command("live-transcribe", dir, zone, &model);
+        let command = transcription_command("live-transcribe", dir, zone, &model, &self.corpus_root());
         let result = command.and_then(|mut command| {
             command.arg("--recorder-pid").arg(recorder_pid.to_string())
                 .process_group(0)
@@ -1515,7 +1486,7 @@ impl Meetings {
     /// The final pipeline writes its detailed output to `pipeline.log` beside the session.
     fn transcribe(&self, dir: &Path, zone: &Path, facts: &MeetingFacts) -> Result<(), String> {
         let model = self.call_model()?;
-        let mut command = self.transcription_command("run", dir, zone, &model)?;
+        let mut command = transcription_command("run", dir, zone, &model, &self.corpus_root())?;
         let log = std::fs::File::create(dir.join("pipeline.log")).map_err(|e| e.to_string())?;
         command.stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log);
         if std::fs::read_dir(dir.join(".live-transcription")).is_ok_and(|mut files| {
@@ -1651,8 +1622,47 @@ pub fn service_cli() -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-pub fn live_context(app: &AppHandle, binding: &richos_core::entity::ThreadBinding, request_at: u64) -> Option<serde_json::Value> {
+pub fn live_context(app: &AppHandle, binding: &richos_core::entity::ThreadBinding, request_at: u64) -> Option<meeting_notes::LiveMeetingSource> {
     app.try_state::<Arc<Meetings>>()?.live_context(binding, request_at)
+}
+
+fn transcription_command(action: &str, dir: &Path, zone: &Path, model: &Path, corpus: &Path) -> Result<Command, String> {
+    let service = service_cli().ok_or("this build has no transcription service installed")?;
+    let mut command = Command::new(node_bin());
+    command.arg(service).arg(action).arg(dir).env("RICHOS_DROP_ZONE", zone)
+        .env("LORO_CORPUS", corpus).env("RICHOS_WHISPER_MODEL", model).stdin(Stdio::null());
+    installed_paths(&mut command);
+    if let Ok(whisper) = richos_voice::stt::resolve_whisper_bin() {
+        command.env("RICHOS_WHISPER_BIN", whisper);
+    }
+    Ok(command)
+}
+
+/// Runs in the status MCP process only when Rich asks for current-call evidence.
+pub fn read_live_excerpt(source: &meeting_notes::LiveMeetingSource) -> serde_json::Value {
+    use std::os::unix::fs::DirBuilderExt;
+    let started = Instant::now();
+    richos_voice::stt::set_delivered_runtime_bin(source.runtime_bin.clone());
+    let result = (|| {
+        let model = richos_voice::stt::resolve_model(CALL_MODEL).ok()?;
+        let mut command = transcription_command("live-excerpt", &source.dir, &source.zone, &model, &source.corpus).ok()?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+        let scratch = std::env::temp_dir().join(format!("richbrief-live-tool-{}-{now}", std::process::id()));
+        std::fs::DirBuilder::new().mode(0o700).create(&scratch).ok()?;
+        command.arg("--at").arg(source.request_at.to_string()).env("TMPDIR", &scratch)
+            .stdout(Stdio::piped()).stderr(Stdio::null());
+        let result = run_bounded_line(command, LIVE_EXCERPT_DEADLINE, |_| {});
+        logged("removing the live meeting excerpt scratch", std::fs::remove_dir_all(scratch));
+        let (status, bytes) = result.ok()?;
+        if !status.success() { return None; }
+        serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+            .filter(|value| value["passages"].as_array().is_some_and(|rows| !rows.is_empty()))
+    })();
+    eprintln!("[richos] meeting notes: live excerpt available={} elapsed_ms={}", result.is_some(), started.elapsed().as_millis());
+    match result {
+        Some(excerpt) => serde_json::json!({ "status": "available", "excerpt": excerpt }),
+        None => serde_json::json!({ "status": "unavailable" }),
+    }
 }
 
 /// The running transcription's pid, beside its session while it runs.
