@@ -51,8 +51,8 @@ use serde_json::{json, Value};
 /// **A file Rich attached goes under his words** (round 36 screen 3): the tool is called while
 /// he works, so its item can sort before the reply it belongs to. Each `rich_file` item is
 /// moved to just after the last `rich_message` of its own turn; a file with no reply in its
-/// turn (one Stu attached for a job) keeps its own place. Media evidence keeps its live
-/// position so a reply arriving later cannot take a cursor the phone already acknowledged.
+/// turn (one Stu attached for a job) keeps its own place. A turn with media evidence keeps
+/// its chronological order so a reply arriving later cannot take an acknowledged cursor.
 pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
     let empty: Vec<Value> = Vec::new();
     let items = payload.get("items").and_then(|v| v.as_array()).unwrap_or(&empty);
@@ -62,12 +62,17 @@ pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
         .filter(|(_, i)| i["kind"] == "rich_message")
         .filter_map(|(at, i)| Some((i["turnId"].as_str()?, at)))
         .collect();
+    let media_turns: std::collections::HashSet<&str> = items
+        .iter()
+        .filter(|i| i["kind"] == richos_core::rich_files::ITEM_KIND && i["file"]["moments"].is_object())
+        .filter_map(|i| i["turnId"].as_str())
+        .collect();
     let mut ordered: Vec<&Value> = Vec::with_capacity(items.len());
     let mut held: Vec<(usize, &Value)> = Vec::new();
     for (at, item) in items.iter().enumerate() {
-        let after = (item["kind"] == richos_core::rich_files::ITEM_KIND && !item["file"]["moments"].is_object())
-            .then(|| item["turnId"].as_str().and_then(|t| last_reply.get(t)).copied())
-            .flatten()
+        let after = item["turnId"].as_str()
+            .filter(|turn| item["kind"] == richos_core::rich_files::ITEM_KIND && !media_turns.contains(turn))
+            .and_then(|turn| last_reply.get(turn).copied())
             .filter(|reply| *reply > at);
         match after {
             Some(reply) => held.push((reply, item)),
@@ -454,6 +459,27 @@ mod tests {
                   "entityId": "femcboost", "bindingRevision": 1 }
             ]
         })
+    }
+
+    #[test]
+    fn an_ordinary_file_in_a_media_turn_does_not_reuse_an_acknowledged_cursor() {
+        let file = |id, turn, at| json!({"kind":"rich_file","id":id,"turnId":turn,"createdAt":at,
+            "threadId":"t","text":"Transcript","file":{"id":id,"name":"Transcript.txt","exists":true}});
+        let mut media = file("media", "mixed", 2);
+        media["file"]["moments"] = json!({"durationMs":2000,
+            "points":[{"startMs":1000,"label":"The point","quote":"The words."}]});
+        let mut items = vec![file("earlier", "mixed", 1), media, file("later", "mixed", 3)];
+        let seen = rows_from_payload(&json!({"items":items}));
+        let reply = |id, turn, at| json!({"kind":"rich_message","id":id,"turnId":turn,"createdAt":at,
+            "threadId":"t","text":"Here is what I found."});
+        items.extend([reply("mixed-reply", "mixed", 4), file("normal-file", "ordinary", 5), reply("normal-reply", "ordinary", 6)]);
+        let snapshot = json!({"items":items});
+        let rows = rows_from_payload(&snapshot);
+        assert_eq!(rows[..seen.len()], seen);
+        let last_seen = seen.last().unwrap()["cursor"].as_u64().unwrap();
+        assert!(reply_for_turn(&snapshot, "mixed").unwrap()["cursor"].as_u64().unwrap() > last_seen);
+        assert_eq!(rows[4]["id"], "normal-reply");
+        assert_eq!(rows[5]["id"], "normal-file");
     }
 
     #[test]
