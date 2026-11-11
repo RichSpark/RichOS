@@ -148,3 +148,37 @@ fn writing_inside_a_selected_folder_does_not_include_its_staging_output() -> Res
     );
     verify_no_stage(&project)
 }
+
+#[test]
+fn tar_with_a_link_stops_before_creating_the_destination() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let root = fixture.path();
+    setup(root)?;
+    symlink("Photo.png", root.join("Project/Alias.png"))?;
+    let archive = root.join("Package.tar");
+    let status = std::process::Command::new("/usr/bin/tar")
+        .env("COPYFILE_DISABLE", "1")
+        .args([
+            OsStr::new("-cf"),
+            archive.as_os_str(),
+            OsStr::new("Project"),
+        ])
+        .current_dir(root)
+        .status()?;
+    assert!(status.success());
+
+    let destination = root.join("Unpacked");
+    let result = run(&[
+        OsStr::new("extract"),
+        archive.as_os_str(),
+        root.as_os_str(),
+        OsStr::new("Unpacked"),
+    ]);
+    assert!(result.unwrap_err().to_string().contains("link"));
+    assert!(!destination.exists());
+    assert_eq!(
+        fs::read(root.join("Project/Photo.png"))?,
+        b"synthetic photo bytes"
+    );
+    verify_no_stage(root)
+}

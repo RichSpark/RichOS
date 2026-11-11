@@ -3,7 +3,7 @@ import Foundation
 import RichFilesCore
 import SwiftUI
 
-struct ZipItem: Decodable, Identifiable, Sendable {
+struct ArchiveItem: Decodable, Identifiable, Sendable {
     let index: Int
     let path: String
     let isDirectory: Bool
@@ -11,11 +11,11 @@ struct ZipItem: Decodable, Identifiable, Sendable {
     var id: Int { index }
 }
 
-struct ZipCatalog: Sendable {
+struct ArchiveCatalog: Sendable {
     let archive: FileReference
     let modified: Date?
     let size: Int64?
-    let items: [ZipItem]
+    let items: [ArchiveItem]
 
     func verify() throws {
         let entry = try FileEntry(url: URL(fileURLWithPath: archive.url.path))
@@ -26,29 +26,44 @@ struct ZipCatalog: Sendable {
     }
 }
 
-private enum ZipToolError: LocalizedError {
+private enum ArchiveToolError: LocalizedError {
     case helperUnavailable
     case failed(String)
 
     var errorDescription: String? {
         switch self {
-        case .helperUnavailable: return "The ZIP helper is missing from this RichFiles build."
-        case .failed(let message): return message.isEmpty ? "The ZIP operation failed." : message
+        case .helperUnavailable: return "The archive helper is missing from this RichFiles build."
+        case .failed(let message): return message.isEmpty ? "The archive operation failed." : message
         }
     }
 }
 
 enum ArchiveTools {
+    private static let suffixes = [".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz", ".tbz2",
+                                   ".txz", ".tar", ".7z", ".rar", ".zip"]
+
+    static func supports(_ url: URL) -> Bool {
+        let name = url.lastPathComponent.lowercased()
+        return suffixes.contains(where: name.hasSuffix)
+    }
+
+    static func extractionName(_ url: URL) -> String {
+        let name = url.lastPathComponent
+        let suffix = suffixes.first(where: name.lowercased().hasSuffix)
+        let basename = suffix.map { String(name.dropLast($0.count)) } ?? name
+        return basename.isEmpty ? "Extracted Files" : basename
+    }
+
     private struct PublishedItem: Decodable { let path: String }
 
-    static func list(_ entry: FileEntry) async throws -> ZipCatalog {
+    static func list(_ entry: FileEntry) async throws -> ArchiveCatalog {
         let reference = try FileReference(url: entry.url)
-        let snapshot = ZipCatalog(archive: reference, modified: entry.modified, size: entry.size, items: [])
+        let snapshot = ArchiveCatalog(archive: reference, modified: entry.modified, size: entry.size, items: [])
         try snapshot.verify()
         let data = try await run(["list", entry.url.path])
         try snapshot.verify()
-        return ZipCatalog(archive: reference, modified: entry.modified, size: entry.size,
-                          items: try JSONDecoder().decode([ZipItem].self, from: data))
+        return ArchiveCatalog(archive: reference, modified: entry.modified, size: entry.size,
+                          items: try JSONDecoder().decode([ArchiveItem].self, from: data))
     }
 
     static func create(_ sources: [FileReference], in destination: URL, named name: String) async throws -> URL {
@@ -63,7 +78,7 @@ enum ArchiveTools {
         return try publishedURL(data)
     }
 
-    static func extract(_ catalog: ZipCatalog, indices: [Int]?, in destination: URL, named name: String) async throws -> URL {
+    static func extract(_ catalog: ArchiveCatalog, indices: [Int]?, in destination: URL, named name: String) async throws -> URL {
         try FileOperations.validateName(name)
         try catalog.verify()
         var arguments = ["extract", catalog.archive.url.path, destination.path, name]
@@ -81,9 +96,9 @@ enum ArchiveTools {
     private static func run(_ arguments: [String]) async throws -> Data {
         guard let executable = Bundle.main.executableURL?.deletingLastPathComponent()
             .appendingPathComponent("richfiles-archive"), FileManager.default.isExecutableFile(atPath: executable.path) else {
-            throw ZipToolError.helperUnavailable
+            throw ArchiveToolError.helperUnavailable
         }
-        let runner = ZipProcess()
+        let runner = ArchiveProcess()
         let worker = Task.detached(priority: .userInitiated) { try runner.run(executable, arguments: arguments) }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -93,7 +108,7 @@ enum ArchiveTools {
     }
 }
 
-private final class ZipProcess: @unchecked Sendable {
+private final class ArchiveProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false
@@ -107,7 +122,7 @@ private final class ZipProcess: @unchecked Sendable {
 
     func run(_ executable: URL, arguments: [String]) throws -> Data {
         let manager = FileManager.default
-        let directory = manager.temporaryDirectory.appendingPathComponent("RichFiles-ZIP-\(UUID().uuidString)", isDirectory: true)
+        let directory = manager.temporaryDirectory.appendingPathComponent("RichFiles-Archive-\(UUID().uuidString)", isDirectory: true)
         try manager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? manager.removeItem(at: directory) }
         let outputURL = directory.appendingPathComponent("out")
@@ -133,7 +148,7 @@ private final class ZipProcess: @unchecked Sendable {
             let details = try FileHandle(forReadingFrom: errorURL)
             defer { try? details.close() }
             let message = String(decoding: (try details.read(upToCount: 4096)) ?? Data(), as: UTF8.self)
-            throw ZipToolError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines))
+            throw ArchiveToolError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         let result = try FileHandle(forReadingFrom: outputURL)
         defer { try? result.close() }
@@ -152,8 +167,8 @@ private final class ZipProcess: @unchecked Sendable {
     }
 }
 
-struct ZipBrowserSheet: View {
-    let catalog: ZipCatalog
+struct ArchiveBrowserSheet: View {
+    let catalog: ArchiveCatalog
     let changed: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<Int> = []
@@ -162,11 +177,11 @@ struct ZipBrowserSheet: View {
     @State private var task: Task<Void, Never>?
     @State private var status = ""
 
-    init(catalog: ZipCatalog, changed: @escaping () -> Void) {
+    init(catalog: ArchiveCatalog, changed: @escaping () -> Void) {
         self.catalog = catalog
         self.changed = changed
         _destination = State(initialValue: catalog.archive.url.deletingLastPathComponent())
-        _name = State(initialValue: catalog.archive.url.deletingPathExtension().lastPathComponent)
+        _name = State(initialValue: ArchiveTools.extractionName(catalog.archive.url))
     }
 
     var body: some View {

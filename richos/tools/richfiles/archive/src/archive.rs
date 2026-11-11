@@ -9,9 +9,9 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use crate::native::{self, Destination};
 use crate::{Result, check_cancelled, invalid};
 
-const MAX_ENTRIES: usize = 20_000;
+pub(super) const MAX_ENTRIES: usize = 20_000;
 const MAX_CONTENT: u64 = 16 * 1024 * 1024 * 1024;
-const MAX_ARCHIVE: u64 = MAX_CONTENT + 128 * 1024 * 1024;
+pub(super) const MAX_ARCHIVE: u64 = MAX_CONTENT + 128 * 1024 * 1024;
 const MAX_CATALOG: u64 = 32 * 1024 * 1024;
 const MAX_PATH: usize = 1024;
 const MAX_DEPTH: usize = 64;
@@ -90,22 +90,9 @@ pub fn extract(
     for index in indices {
         check_cancelled()?;
         let entry = &snapshot.entries[index];
-        let path = Path::new(&entry.path);
-        let parent = if entry.is_directory {
-            path
-        } else {
-            path.parent()
-                .ok_or_else(|| invalid("A ZIP entry has no parent path."))?
-        };
-        make_directories(stage.path(), parent, &mut created_directories)?;
-        if entry.is_directory {
+        let Some(mut output) = open_output(stage.path(), entry, &mut created_directories)? else {
             continue;
-        }
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(stage.path().join(path))?;
+        };
         let mut input = snapshot.archive.by_index(index)?;
         copy_exact(&mut input, &mut output, entry.size)?;
         output.sync_all()?;
@@ -117,24 +104,24 @@ pub fn extract(
 }
 
 #[derive(Default)]
-struct ManifestBudget {
+pub(super) struct ManifestBudget {
     paths: HashSet<String>,
     bytes: u64,
 }
 
 impl ManifestBudget {
-    fn add(&mut self, path: &str, size: u64) -> Result<()> {
+    pub(super) fn add(&mut self, path: &str, size: u64) -> Result<()> {
         if self.paths.len() == MAX_ENTRIES {
-            return Err(invalid("This ZIP has too many entries."));
+            return Err(invalid("This archive has too many entries."));
         }
         if !self.paths.insert(path.to_owned()) {
-            return Err(invalid("This ZIP would contain duplicate paths."));
+            return Err(invalid("This archive contains duplicate paths."));
         }
         self.bytes = self
             .bytes
             .checked_add(size)
             .filter(|bytes| *bytes <= MAX_CONTENT)
-            .ok_or_else(|| invalid("This ZIP exceeds the 16 GiB uncompressed limit."))?;
+            .ok_or_else(|| invalid("This archive exceeds the 16 GiB uncompressed limit."))?;
         Ok(())
     }
 }
@@ -189,7 +176,11 @@ fn add_entry(
     Ok(())
 }
 
-fn copy_exact(input: &mut impl Read, output: &mut impl Write, expected: u64) -> Result<()> {
+pub(super) fn copy_exact(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    expected: u64,
+) -> Result<()> {
     let mut buffer = [0; 64 * 1024];
     let mut remaining = expected;
     loop {
@@ -309,13 +300,13 @@ impl ArchiveSnapshot {
     }
 }
 
-fn chosen_entries(entries: &[Entry], selected: &[usize]) -> Result<Vec<usize>> {
+pub(super) fn chosen_entries(entries: &[Entry], selected: &[usize]) -> Result<Vec<usize>> {
     if selected.is_empty() {
         return Ok((0..entries.len()).collect());
     }
     let chosen: HashSet<usize> = selected.iter().copied().collect();
     if chosen.iter().any(|index| *index >= entries.len()) {
-        return Err(invalid("A selected ZIP entry is no longer available."));
+        return Err(invalid("A selected archive entry is no longer available."));
     }
     let folders: HashSet<&Path> = chosen
         .iter()
@@ -337,6 +328,30 @@ fn chosen_entries(entries: &[Entry], selected: &[usize]) -> Result<Vec<usize>> {
         .collect())
 }
 
+pub(super) fn open_output(
+    root: &Path,
+    entry: &Entry,
+    directories: &mut HashSet<PathBuf>,
+) -> Result<Option<File>> {
+    let path = Path::new(&entry.path);
+    let parent = if entry.is_directory {
+        path
+    } else {
+        path.parent()
+            .ok_or_else(|| invalid("An archive entry has no parent path."))?
+    };
+    make_directories(root, parent, directories)?;
+    if entry.is_directory {
+        return Ok(None);
+    }
+    let output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(root.join(path))?;
+    Ok(Some(output))
+}
+
 fn make_directories(root: &Path, relative: &Path, created: &mut HashSet<PathBuf>) -> Result<()> {
     let mut path = PathBuf::new();
     for component in relative.components() {
@@ -350,7 +365,7 @@ fn make_directories(root: &Path, relative: &Path, created: &mut HashSet<PathBuf>
     Ok(())
 }
 
-fn validate_component(value: &str) -> Result<()> {
+pub(super) fn validate_component(value: &str) -> Result<()> {
     if value.is_empty()
         || value == "."
         || value == ".."
@@ -359,15 +374,15 @@ fn validate_component(value: &str) -> Result<()> {
         || value.chars().any(char::is_control)
     {
         return Err(invalid(
-            "The ZIP contains an unsupported file or folder name.",
+            "The archive contains an unsupported file or folder name.",
         ));
     }
     Ok(())
 }
 
-fn validate_path(path: &str) -> Result<()> {
+pub(super) fn validate_path(path: &str) -> Result<()> {
     if path.len() > MAX_PATH || path.split('/').count() > MAX_DEPTH {
-        return Err(invalid("A ZIP path is too long or too deeply nested."));
+        return Err(invalid("An archive path is too long or too deeply nested."));
     }
     for component in path.split('/') {
         validate_component(component)?;

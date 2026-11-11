@@ -1,5 +1,6 @@
 mod archive;
 mod native;
+mod stream;
 
 use std::error::Error;
 use std::ffi::OsStr;
@@ -20,7 +21,7 @@ extern "C" fn request_stop(_: libc::c_int) {
 
 fn check_cancelled() -> Result<()> {
     if STOP.load(Ordering::Relaxed) {
-        Err(io::Error::new(io::ErrorKind::Interrupted, "ZIP operation cancelled.").into())
+        Err(io::Error::new(io::ErrorKind::Interrupted, "Archive operation cancelled.").into())
     } else {
         Ok(())
     }
@@ -40,10 +41,29 @@ fn published(path: PathBuf) -> Result<Value> {
     Ok(json!({"path": name(path.as_os_str())?}))
 }
 
+fn is_zip(source: &Path) -> bool {
+    source
+        .extension()
+        .is_some_and(|value| value.eq_ignore_ascii_case("zip"))
+}
+
+fn extract(source: &Path, destination: &Path, folder: &str, selected: &[usize]) -> Result<PathBuf> {
+    if is_zip(source) {
+        archive::extract(source, destination, folder, selected)
+    } else {
+        stream::extract(source, destination, folder, selected)
+    }
+}
+
 fn command(arguments: &[&OsStr]) -> Result<Value> {
     match arguments {
         [mode, source] if *mode == "list" => {
-            let entries = archive::list(Path::new(source))?;
+            let source = Path::new(source);
+            let entries = if is_zip(source) {
+                archive::list(source)?
+            } else {
+                stream::list(source)?
+            };
             Ok(Value::Array(
                 entries
                     .into_iter()
@@ -68,7 +88,7 @@ fn command(arguments: &[&OsStr]) -> Result<Value> {
                 &sources,
             )?)
         }
-        [mode, source, destination, folder] if *mode == "extract" => published(archive::extract(
+        [mode, source, destination, folder] if *mode == "extract" => published(extract(
             Path::new(source),
             Path::new(destination),
             name(folder)?,
@@ -82,10 +102,10 @@ fn command(arguments: &[&OsStr]) -> Result<Value> {
                 .map(|index| {
                     name(index)?
                         .parse::<usize>()
-                        .map_err(|_| invalid("A selected ZIP index is invalid."))
+                        .map_err(|_| invalid("A selected archive index is invalid."))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            published(archive::extract(
+            published(extract(
                 Path::new(source),
                 Path::new(destination),
                 name(folder)?,
@@ -93,7 +113,7 @@ fn command(arguments: &[&OsStr]) -> Result<Value> {
             )?)
         }
         _ => Err(invalid(
-            "Usage: richfiles-archive list ZIP | create DEST NAME.zip -- SOURCE... | extract ZIP DEST FOLDER [-- INDEX...]",
+            "Usage: richfiles-archive list ARCHIVE | create DEST NAME.zip -- SOURCE... | extract ARCHIVE DEST FOLDER [-- INDEX...]",
         )),
     }
 }

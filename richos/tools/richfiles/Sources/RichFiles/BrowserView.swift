@@ -863,9 +863,9 @@ struct BrowserView: View {
             model.openFolder(first.url)
             return
         }
-        if entries.count == 1 && first.kind == .regularFile && first.url.pathExtension.lowercased() == "zip" {
+        if entries.count == 1 && first.kind == .regularFile && ArchiveTools.supports(first.url) {
             Task {
-                do { sheet = .zip(try await ArchiveTools.list(first)) }
+                do { sheet = .archive(try await ArchiveTools.list(first)) }
                 catch { feedback = error.localizedDescription }
             }
             return
@@ -1050,7 +1050,7 @@ struct BrowserView: View {
         case .properties(let entry): PropertiesSheet(entry: entry)
         case .preview(let entry): PreviewSheet(entry: entry)
         case .openWith(let entry, let apps): OpenWithSheet(entry: entry, apps: apps)
-        case .zip(let catalog): ZipBrowserSheet(catalog: catalog, changed: model.refresh)
+        case .archive(let catalog): ArchiveBrowserSheet(catalog: catalog, changed: model.refresh)
         case .createZip(let sources, let destination):
             ZipCreateSheet(sources: sources, destination: destination, changed: model.refresh)
         case .diskUsage(let folder): DiskUsageSheet(folder: folder, openFolder: model.openFolder)

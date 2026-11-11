@@ -16,7 +16,7 @@ enum BrowserSheet: Identifiable {
     case properties(FileEntry)
     case preview(FileEntry)
     case openWith(FileEntry, WorkspaceApplications)
-    case zip(ZipCatalog)
+    case archive(ArchiveCatalog)
     case createZip([FileReference], URL)
     case diskUsage(URL)
     case checksum(FileReference)
@@ -31,7 +31,7 @@ enum BrowserSheet: Identifiable {
         case .properties: return "properties"
         case .preview: return "preview"
         case .openWith: return "openWith"
-        case .zip: return "zip"
+        case .archive: return "zip"
         case .createZip: return "createZip"
         case .diskUsage: return "diskUsage"
         case .checksum: return "checksum"
