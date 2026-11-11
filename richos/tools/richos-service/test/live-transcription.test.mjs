@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { advanceLiveTranscription, supportsLiveTranscription } from '../lib/live-transcription.js';
+import { advanceLiveTranscription, removeLiveTranscriptionScratch, supportsLiveTranscription } from '../lib/live-transcription.js';
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
 import { assertPrivateTree } from '../lib/private-files.js';
 
@@ -148,6 +148,9 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
 
   pcm.fill(Buffer.from([0, 8]));
   flush(121);
+  assert.equal(advance({
+    recorderIsRunning: () => false, decode: () => assert.fail('the recorder had already exited'),
+  }).decoded, 0);
   assert.throws(() => advance({
     closed: true, decode: () => assert.fail('unbounded audio was decoded as a chunk'),
   }), /no quiet meeting boundary/);
@@ -168,4 +171,18 @@ test('private session validation tolerates a live worker removing its staging', 
   fs.writeFileSync(retained, '');
   fs.symlinkSync(retained, path.join(dir, 'alias.wav'));
   assert.throws(() => assertPrivateTree(dir), /regular unlinked file/);
+});
+
+test('finalization clears abandoned live decoder copies and keeps checkpoints', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-drain-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const cache = path.join(dir, '.live-transcription');
+  for (const name of ['decode-A1b2c3', '.richos-output-d4E5f6', 'excerpt-Abcd12']) {
+    const staging = path.join(cache, name);
+    fs.mkdirSync(staging, { recursive: true });
+    fs.writeFileSync(path.join(staging, 'audio-part-00.wav'), 'audio');
+  }
+  fs.writeFileSync(path.join(cache, '0.json'), '{}');
+  removeLiveTranscriptionScratch(dir);
+  assert.deepEqual(fs.readdirSync(cache).sort(), ['0.json', 'excerpt-Abcd12']);
 });

@@ -179,6 +179,7 @@ function readCheckpoint(file, key, fromMs, toMs) {
  */
 export function advanceLiveTranscription(dir, options, {
   closed = false, cursor = 0, decode = decodeWindow,
+  recorderIsRunning = () => true,
   toolchain = checkToolchain(resolveModel(options.model), options.model),
 } = {}) {
   const cache = privateDirectory(path.join(dir, CHECKPOINTS), dir);
@@ -188,7 +189,7 @@ export function advanceLiveTranscription(dir, options, {
     const output = { me: [], others: [], model: options.model, toolchain, whisper: toolchain.provenance };
     let reused = 0;
     let decoded = 0;
-    while (cursor < frames) {
+    while (cursor < frames && recorderIsRunning()) {
       const to = nextQuietCut(fd, cursor, frames, rate, closed);
       if (to === null) break;
       const wav = readWindow(fd, header, cursor, to);
@@ -224,8 +225,21 @@ export function advanceLiveTranscription(dir, options, {
 }
 
 export function supportsLiveTranscription(dir, record) {
+  if (record?.capture?.source !== SOURCE) return false;
   const parts = listAudioParts(dir);
-  return record?.capture?.source === SOURCE && parts.length === 1 && parts[0] === AUDIO;
+  return parts.length === 1 && parts[0] === AUDIO;
+}
+
+/** Remove staging left by a worker terminated before its cleanup could run. */
+export function removeLiveTranscriptionScratch(dir) {
+  const candidate = path.join(dir, CHECKPOINTS);
+  if (!fs.lstatSync(candidate, { throwIfNoEntry: false })) return;
+  const cache = privateDirectory(candidate, dir);
+  for (const entry of fs.readdirSync(cache, { withFileTypes: true })) {
+    if (entry.isDirectory() && /^(?:decode-|\.richos-output-)[a-zA-Z0-9]{6}$/.test(entry.name)) {
+      fs.rmSync(path.join(cache, entry.name), { recursive: true, force: true });
+    }
+  }
 }
 
 export async function watchLiveTranscription(dir, options, recorderIsRunning, onChunk) {
@@ -235,7 +249,7 @@ export async function watchLiveTranscription(dir, options, recorderIsRunning, on
     const record = JSON.parse(fs.readFileSync(privateFile(path.join(dir, 'session.json'), dir), 'utf8'));
     if (record.status !== 'open' || !supportsLiveTranscription(dir, record)) return;
     const start = performance.now();
-    const result = advanceLiveTranscription(dir, options, { cursor, toolchain });
+    const result = advanceLiveTranscription(dir, options, { cursor, toolchain, recorderIsRunning });
     cursor = result.cursor;
     if (result.decoded || result.reused) {
       onChunk({ decoded: result.decoded, reused: result.reused, elapsedMs: Math.round(performance.now() - start) });

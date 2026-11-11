@@ -34,7 +34,7 @@ import {
   CHANNEL_FILES,
 } from './normalize.js';
 import { transcribeSession, transcribeClips, transcribeStyled, whisperVersion } from './transcribe.js';
-import { advanceLiveTranscription, supportsLiveTranscription } from './live-transcription.js';
+import { advanceLiveTranscription, removeLiveTranscriptionScratch, supportsLiveTranscription } from './live-transcription.js';
 import { restyleChannel, restyleWarnings } from './restyle.js';
 import { mergeTranscript, renderMarkdown, verify, wordCount } from './merge.js';
 import { correct } from './correct.js';
@@ -140,6 +140,14 @@ export function runPipeline(sessionDir, opts = {}) {
   }
 
   record = upgradeRecord(record);
+  const nativeLive = supportsLiveTranscription(sessionDir, record);
+  if (record.status === 'closed' && nativeLive) {
+    try {
+      removeLiveTranscriptionScratch(sessionDir);
+    } catch {
+      log.warn('live transcription staging could not be cleared');
+    }
+  }
 
   // Idempotency: a ready transcript is only re-made on explicit retranscribe.
   if (hasTranscript && record.pipeline.status === PIPELINE_STATUS.ready && !opts.retranscribe) {
@@ -194,7 +202,7 @@ export function runPipeline(sessionDir, opts = {}) {
     }
     const decodeOptions = { model, outDir: sessionDir, extraArgs: decodeArgs };
     let asr;
-    if (opts.liveCheckpoints && !opts.retranscribe && supportsLiveTranscription(sessionDir, record)) {
+    if (opts.liveCheckpoints && !opts.retranscribe && nativeLive) {
       try {
         const start = performance.now();
         const result = advanceLiveTranscription(sessionDir, decodeOptions, { closed: true });
