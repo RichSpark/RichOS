@@ -1,0 +1,289 @@
+import Darwin
+import Foundation
+import XCTest
+@testable import RichFilesCore
+
+final class FileOperationsTests: XCTestCase {
+    func testExclusiveCreationPreservesExistingItems() throws {
+        try withFixture { root in
+            let folder = try FileOperations.createFolder(in: root, named: "Notes")
+            let empty = try FileOperations.createEmptyFile(in: folder.url, named: "first.md")
+            XCTAssertEqual(try Data(contentsOf: empty.url), Data())
+            try Data("keep this".utf8).write(to: empty.url)
+
+            assertCollision(try FileOperations.createEmptyFile(in: folder.url, named: "first.md"))
+            assertCollision(try FileOperations.createFolder(in: root, named: "Notes"))
+            XCTAssertEqual(try String(contentsOf: empty.url, encoding: .utf8), "keep this")
+            for name in ["", ".", "..", "bad/path", "bad\0name"] {
+                XCTAssertThrowsError(try FileOperations.createEmptyFile(in: root, named: name)) {
+                    guard case FileOperationError.invalidName = $0 else {
+                        return XCTFail("Expected a name error, got \($0)")
+                    }
+                }
+            }
+        }
+    }
+
+    func testMoveAndUndoPreserveIdentityAndRefuseOccupiedNames() throws {
+        try withFixture { root in
+            let source = try write("original", named: "plan.txt", in: root)
+            let target = try FileOperations.createFolder(in: root, named: "Target")
+            let occupant = try write("existing", named: "plan.txt", in: target.url)
+            assertCollision(try FileOperations.move(source, into: target.url))
+            XCTAssertEqual(try contents(source), "original")
+            XCTAssertEqual(try contents(occupant), "existing")
+
+            let receipt = try FileOperations.move(source, into: target.url, named: "moved.txt")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: source.url.path))
+            XCTAssertEqual(receipt.moved.identity, source.identity)
+            let newOccupant = try write("new file", named: "plan.txt", in: root)
+            assertCollision(try FileOperations.undo(receipt))
+            XCTAssertEqual(try contents(receipt.moved), "original")
+            XCTAssertEqual(try contents(newOccupant), "new file")
+
+            try FileManager.default.removeItem(at: newOccupant.url)
+            let restored = try FileOperations.undo(receipt)
+            XCTAssertEqual(restored.url, source.url)
+            XCTAssertEqual(restored.identity, source.identity)
+            XCTAssertEqual(try contents(restored), "original")
+        }
+    }
+
+    func testUndoAndRenameRefuseAReplacementAtTheSelectedPath() throws {
+        try withFixture { root in
+            let source = try write("original", named: "item.txt", in: root)
+            let receipt = try FileOperations.rename(source, to: "renamed.txt")
+            let parked = try FileOperations.rename(receipt.moved, to: "parked.txt")
+            let replacement = try write("replacement", named: "renamed.txt", in: root)
+            for operation in [
+                { try FileOperations.undo(receipt) },
+                { try FileOperations.rename(receipt.moved, to: "another.txt").moved }
+            ] {
+                XCTAssertThrowsError(try operation()) {
+                    guard case FileOperationError.sourceChanged = $0 else {
+                        return XCTFail("Expected stale source, got \($0)")
+                    }
+                }
+            }
+            XCTAssertEqual(try contents(replacement), "replacement")
+            XCTAssertEqual(try contents(parked.moved), "original")
+        }
+    }
+
+    func testUndoRefusesAReplacementOfTheOriginalFolder() throws {
+        try withFixture { root in
+            let origin = try FileOperations.createFolder(in: root, named: "Origin")
+            let destination = try FileOperations.createFolder(in: root, named: "Destination")
+            let source = try write("original", named: "item.txt", in: origin.url)
+            let receipt = try FileOperations.move(source, into: destination.url)
+            _ = try FileOperations.rename(origin, to: "Parked")
+            let replacement = try FileOperations.createFolder(in: root, named: "Origin")
+            XCTAssertThrowsError(try FileOperations.undo(receipt)) {
+                guard case FileOperationError.folderChanged = $0 else {
+                    return XCTFail("Expected a changed folder, got \($0)")
+                }
+            }
+            XCTAssertEqual(try contents(receipt.moved), "original")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: replacement.url.path), [])
+        }
+    }
+
+    func testCaseOnlyRenameAndAnOccupiedHardLink() throws {
+        try withFixture { root in
+            let source = try write("original", named: "plan.txt", in: root)
+            let renamed = try FileOperations.rename(source, to: "Plan.txt")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["Plan.txt"])
+            XCTAssertEqual(renamed.moved.identity, source.identity)
+
+            let hardLink = root.appendingPathComponent("alias.txt")
+            try FileManager.default.linkItem(at: renamed.moved.url, to: hardLink)
+            assertCollision(try FileOperations.rename(renamed.moved, to: "alias.txt"))
+            XCTAssertEqual(
+                Set(try FileManager.default.contentsOfDirectory(atPath: root.path)),
+                ["Plan.txt", "alias.txt"]
+            )
+        }
+    }
+
+    func testSymlinksAreCopiedAndMovedAsEntries() throws {
+        try withFixture { root in
+            let link = root.appendingPathComponent("Missing item link")
+            let target = "unavailable-item.txt"
+            try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target)
+            let reference = try FileReference(url: link)
+            let directory = try FileOperations.createFolder(in: root, named: "Destination")
+            let copy = try FileOperations.copy(reference, into: directory.url)
+            XCTAssertNil(copy.remainingStagingFolder)
+            XCTAssertEqual(
+                try FileManager.default.destinationOfSymbolicLink(atPath: copy.copied.url.path), target
+            )
+            let moved = try FileOperations.move(reference, into: directory.url, named: "Moved link")
+            XCTAssertEqual(moved.moved.identity, reference.identity)
+            XCTAssertEqual(
+                try FileManager.default.destinationOfSymbolicLink(atPath: moved.moved.url.path), target
+            )
+            XCTAssertThrowsError(try FileReference(url: link))
+        }
+    }
+
+    func testCopyPreservesFileDataPermissionsAndExtendedAttribute() throws {
+        try withFixture { root in
+            let sourceURL = root.appendingPathComponent("plan.txt")
+            try Data("bytes".utf8).write(to: sourceURL, options: .withoutOverwriting)
+            let folder = try FileOperations.createFolder(in: root, named: "Destination")
+            let modified = Date(timeIntervalSince1970: 1_600_000_000)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o640, .modificationDate: modified], ofItemAtPath: sourceURL.path
+            )
+            let attribute = "com.richfiles.fixture"
+            let bytes: [UInt8] = [0x66, 0x69, 0x6C, 0x65]
+            let wrote = bytes.withUnsafeBytes { value in
+                setxattr(sourceURL.path, attribute, value.baseAddress, value.count, 0, XATTR_NOFOLLOW)
+            }
+            XCTAssertEqual(wrote, 0)
+
+            // Setting an earlier modification date on APFS can also change the birth time.
+            let source = try FileReference(url: sourceURL)
+            let copy = try FileOperations.copy(source, into: folder.url)
+            XCTAssertNil(copy.remainingStagingFolder)
+            XCTAssertNotEqual(copy.copied.identity, source.identity)
+            XCTAssertEqual(try contents(copy.copied), "bytes")
+            XCTAssertEqual(try contents(source), "bytes")
+            let attrs = try FileManager.default.attributesOfItem(atPath: copy.copied.url.path)
+            XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o640)
+            XCTAssertEqual(attrs[.modificationDate] as? Date, modified)
+            var read = [UInt8](repeating: 0, count: bytes.count)
+            let count = read.withUnsafeMutableBytes { value in
+                getxattr(copy.copied.url.path, attribute, value.baseAddress, value.count, 0, XATTR_NOFOLLOW)
+            }
+            XCTAssertEqual(count, bytes.count)
+            XCTAssertEqual(read, bytes)
+        }
+    }
+
+    func testFolderCannotBeMovedOrCopiedIntoAChildViaASymlink() throws {
+        try withFixture { root in
+            let tree = try FileOperations.createFolder(in: root, named: "Tree")
+            let child = try FileOperations.createFolder(in: tree.url, named: "Child")
+            let alias = root.appendingPathComponent("Shortcut")
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: child.url)
+            XCTAssertThrowsError(try FileOperations.copy(tree, into: alias)) {
+                guard case FileOperationError.destinationInsideSource = $0 else {
+                    return XCTFail("Expected descendant refusal, got \($0)")
+                }
+            }
+            XCTAssertThrowsError(try FileOperations.move(tree, into: alias)) {
+                guard case FileOperationError.destinationInsideSource = $0 else {
+                    return XCTFail("Expected descendant refusal, got \($0)")
+                }
+            }
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tree.url.path), ["Child"])
+        }
+    }
+
+    func testCancellationAfterStagingLeavesNoPublishedCopy() throws {
+        try withFixture { root in
+            let source = try write("source", named: "item.txt", in: root)
+            let target = try FileOperations.createFolder(in: root, named: "Destination")
+            var checks = 0
+            XCTAssertThrowsError(try FileOperations.copy(source, into: target.url, isCancelled: {
+                checks += 1
+                return checks == 2
+            })) {
+                XCTAssertTrue($0 is CancellationError)
+            }
+            XCTAssertEqual(checks, 2)
+            XCTAssertEqual(try contents(source), "source")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: target.url.path), [])
+        }
+    }
+
+    func testCopyRefusesAnItemThatArrivesBeforePublication() throws {
+        try withFixture { root in
+            let source = try write("source", named: "item.txt", in: root)
+            let target = try FileOperations.createFolder(in: root, named: "Destination")
+            let occupiedURL = target.url.appendingPathComponent(source.url.lastPathComponent)
+            var checks = 0
+            var arrivalError: Error?
+            assertCollision(try FileOperations.copy(source, into: target.url, isCancelled: {
+                checks += 1
+                if checks == 2 {
+                    do {
+                        try Data("arrival".utf8).write(to: occupiedURL, options: .withoutOverwriting)
+                    } catch {
+                        arrivalError = error
+                    }
+                }
+                return false
+            }))
+            XCTAssertNil(arrivalError)
+            XCTAssertEqual(try String(contentsOf: occupiedURL, encoding: .utf8), "arrival")
+            XCTAssertEqual(try contents(source), "source")
+        }
+    }
+
+    func testRestoreUsesOriginalNameAndAnExplicitAlternateFolder() throws {
+        try withFixture { root in
+            let source = try write("original", named: "plan.txt", in: root)
+            let holding = try FileOperations.createFolder(in: root, named: "Synthetic Trash")
+            let moved = try FileOperations.move(source, into: holding.url, named: "plan 1.txt").moved
+            let receipt = TrashReceipt(
+                original: source, trashedAt: Date(), trashLocation: moved.url, trashed: moved
+            )
+            _ = try write("occupant", named: "plan.txt", in: root)
+            assertCollision(try FileOperations.restore(receipt))
+            let alternative = try FileOperations.createFolder(in: root, named: "Alternative")
+            let restored = try FileOperations.restore(receipt, into: alternative.url)
+            XCTAssertEqual(restored.url.lastPathComponent, "plan.txt")
+            XCTAssertEqual(restored.identity, source.identity)
+            XCTAssertEqual(try contents(restored), "original")
+        }
+    }
+
+    func testKeepBothFindsAFreeNameWithoutReplacingAnOccupant() throws {
+        try withFixture { root in
+            let source = try write("source", named: "plan.txt", in: root)
+            let folder = try FileOperations.createFolder(in: root, named: "Destination")
+            let first = try write("first", named: "plan.txt", in: folder.url)
+            let second = try write("second", named: "plan (2).txt", in: folder.url)
+
+            let copy = try FileOperations.copy(source, into: folder.url, conflictPolicy: .keepBoth)
+            XCTAssertEqual(copy.copied.url.lastPathComponent, "plan (3).txt")
+            XCTAssertEqual(try contents(copy.copied), "source")
+            XCTAssertEqual(try contents(source), "source")
+            XCTAssertEqual(try contents(first), "first")
+            XCTAssertEqual(try contents(second), "second")
+        }
+    }
+
+    private func withFixture(_ test: (URL) throws -> Void) throws {
+        let base = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let folder = URL(fileURLWithPath: base, isDirectory: true)
+            .appendingPathComponent("richfiles-operations-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try test(folder)
+    }
+
+    private func write(_ text: String, named name: String, in folder: URL) throws -> FileReference {
+        let url = folder.appendingPathComponent(name)
+        try Data(text.utf8).write(to: url, options: .withoutOverwriting)
+        return try FileReference(url: url)
+    }
+
+    private func contents(_ reference: FileReference) throws -> String {
+        try String(contentsOf: reference.url, encoding: .utf8)
+    }
+
+    private func assertCollision<T>(
+        _ action: @autoclosure () throws -> T,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertThrowsError(try action(), file: file, line: line) {
+            guard case FileOperationError.destinationExists = $0 else {
+                return XCTFail("Expected a collision, got \($0)", file: file, line: line)
+            }
+        }
+    }
+}

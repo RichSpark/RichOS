@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-tests: no-host-screen: Swift tests use synthetic files in disposable scratch
 # run-tests: inputs richos/app/scripts/richfiles.test.sh richos/tools/richfiles richos/engine/scripts/lib/native-work.py richos/engine/scripts/lib/machine-settings.sh richos/engine/scripts/lib/machine_settings.py
-# run-tests: covers richos/tools/richfiles/Package.swift richos/tools/richfiles/Sources/RichFilesCore/DirectoryReader.swift richos/tools/richfiles/Sources/RichFilesCore/Locations.swift richos/tools/richfiles/Tests/RichFilesCoreTests/DirectoryReaderTests.swift
+# run-tests: covers richos/tools/richfiles/Package.swift richos/tools/richfiles/Sources/RichFilesCore/DirectoryReader.swift richos/tools/richfiles/Sources/RichFilesCore/Locations.swift richos/tools/richfiles/Tests/RichFilesCoreTests/DirectoryReaderTests.swift richos/tools/richfiles/Sources/RichFilesCore/FileOperations.swift richos/tools/richfiles/Tests/RichFilesCoreTests/FileOperationsTests.swift
 set -euo pipefail
 
 if [ "$(uname -s)" != Darwin ]; then
@@ -30,7 +30,9 @@ TMPDIR="$scratch" python3 "$machine_lib/native-work.py" -- swift test \
     exit 1
   }
 cat "$scratch/swift-test.log"
-if ! awk '/Executed [1-9][0-9]* tests?, with 0 failures/ { found = 1 } END { exit !found }' "$scratch/swift-test.log"; then
+count="$(awk '/Executed [1-9][0-9]* tests?, with 0 failures/ { count = $2 } END { print count + 0 }' "$scratch/swift-test.log")"
+if [ "$count" -eq 0 ]; then
   echo '  FAIL  richfiles: Swift did not report any passing XCTest cases' >&2
   exit 1
 fi
+printf '  ok  richfiles: %s XCTest cases passed\n' "$count"
