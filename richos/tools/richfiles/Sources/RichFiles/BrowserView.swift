@@ -9,6 +9,8 @@ struct BrowserView: View {
     @ObservedObject private var actions: BrowserActions
     @ObservedObject private var openRequests: FolderOpenDelegate
     @Environment(\.openWindow) private var openWindow
+    private let hostOpenWindow: (() -> Void)?
+    private let acceptsKeyboard: () -> Bool
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
@@ -34,10 +36,13 @@ struct BrowserView: View {
 
     private enum Field: Hashable { case address, search }
 
-    init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate) {
+    init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate,
+         openWindow: (() -> Void)? = nil, acceptsKeyboard: @escaping () -> Bool = { true }) {
         _model = StateObject(wrappedValue: BrowserModel(start: start))
         self.actions = actions
         self.openRequests = openRequests
+        hostOpenWindow = openWindow
+        self.acceptsKeyboard = acceptsKeyboard
     }
 
     var body: some View {
@@ -62,7 +67,8 @@ struct BrowserView: View {
                 }
             }
         }
-        .background(KeyboardBridge(windowsKeys: windowsKeys, perform: perform, prefix: selectPrefix)
+        .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: acceptsKeyboard,
+                                   perform: perform, prefix: selectPrefix)
             .frame(width: 0, height: 0))
         .focusedSceneValue(\.browserCommand) { _ = perform($0) }
         .onAppear { receiveFolderOpen() }
@@ -260,7 +266,10 @@ struct BrowserView: View {
                 }
             }
             control("New Tab", "plus") { model.newTab() }
-            control("New Window", "macwindow.badge.plus") { openWindow(id: "browser") }
+            control("New Window", "macwindow.badge.plus") {
+                if let hostOpenWindow { hostOpenWindow() }
+                else { openWindow(id: "browser") }
+            }
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
     }
@@ -676,7 +685,7 @@ struct BrowserView: View {
         case .newTab: model.newTab()
         case .closeTab:
             if model.tabs.count > 1 { model.closeTab(model.currentTabID) }
-            else { NSApp.keyWindow?.performClose(nil) }
+            else if hostOpenWindow == nil { NSApp.keyWindow?.performClose(nil) }
         case .selectAll: model.selectAll()
         case .back:
             guard model.canGoBack else { return false }

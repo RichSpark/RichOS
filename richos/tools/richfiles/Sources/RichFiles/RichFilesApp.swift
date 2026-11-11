@@ -3,12 +3,16 @@ import RichFilesCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-@main
-struct RichFilesApp: App {
-    @NSApplicationDelegateAdaptor(FolderOpenDelegate.self) private var delegate
+@MainActor
+public struct RichFilesScenes: Scene {
+    private let delegate: FolderOpenDelegate
     @StateObject private var actions = BrowserActions(recoveryURL: BrowserActions.recoveryLocation)
 
-    var body: some Scene {
+    public init(delegate: FolderOpenDelegate) {
+        self.delegate = delegate
+    }
+
+    public var body: some Scene {
         WindowGroup("RichFiles", id: "browser") {
             BrowserView(start: Self.startingFolder, actions: actions, openRequests: delegate)
                 .frame(minWidth: 720, minHeight: 420)
@@ -33,12 +37,39 @@ struct RichFilesApp: App {
     }
 }
 
+/// The complete browser for a host that already owns its application window.
 @MainActor
-final class FolderOpenDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+public struct RichFilesPane: View {
+    @StateObject private var actions: BrowserActions
+    @StateObject private var openRequests = FolderOpenDelegate()
+    private let folder: URL
+    private let openWindow: () -> Void
+    private let acceptsKeyboard: () -> Bool
+
+    public init(
+        folder: URL,
+        recoveryStore: URL?,
+        openWindow: @escaping () -> Void,
+        acceptsKeyboard: @escaping () -> Bool
+    ) {
+        self.folder = folder
+        self.openWindow = openWindow
+        self.acceptsKeyboard = acceptsKeyboard
+        _actions = StateObject(wrappedValue: BrowserActions(recoveryURL: recoveryStore))
+    }
+
+    public var body: some View {
+        BrowserView(start: folder, actions: actions, openRequests: openRequests,
+                    openWindow: openWindow, acceptsKeyboard: acceptsKeyboard)
+    }
+}
+
+@MainActor
+public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var requestID = UUID()
     private var pending: [URL] = []
 
-    func application(_ application: NSApplication, open urls: [URL]) {
+    public func application(_ application: NSApplication, open urls: [URL]) {
         pending.append(contentsOf: urls.filter(\.isFileURL))
         requestID = UUID()
     }

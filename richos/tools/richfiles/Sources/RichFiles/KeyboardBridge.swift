@@ -3,6 +3,7 @@ import SwiftUI
 
 struct KeyboardBridge: NSViewRepresentable {
     var windowsKeys: Bool
+    var acceptsInput: () -> Bool
     var perform: (BrowserCommand) -> Bool
     var prefix: (String) -> Bool
 
@@ -10,12 +11,14 @@ struct KeyboardBridge: NSViewRepresentable {
 
     func updateNSView(_ view: KeyView, context: Context) {
         view.windowsKeys = windowsKeys
+        view.acceptsInput = acceptsInput
         view.perform = perform
         view.prefix = prefix
     }
 
     final class KeyView: NSView {
         var windowsKeys = true
+        var acceptsInput: () -> Bool = { false }
         var perform: ((BrowserCommand) -> Bool)?
         var prefix: ((String) -> Bool)?
         private var monitor: Any?
@@ -27,7 +30,7 @@ struct KeyboardBridge: NSViewRepresentable {
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .otherMouseDown, .swipe]) { [weak self] event in
                 guard let self, let window = self.window, event.window === window,
-                      window.attachedSheet == nil else { return event }
+                      window.attachedSheet == nil, self.acceptsInput() else { return event }
                 if event.type != .keyDown { return self.navigate(event) ? nil : event }
                 let editing = window.firstResponder is NSTextView || window.firstResponder is NSTextField
                 return self.handle(event, editing: editing) ? nil : event

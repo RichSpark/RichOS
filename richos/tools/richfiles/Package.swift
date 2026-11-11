@@ -6,11 +6,13 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "RichFilesCore", targets: ["RichFilesCore"]),
-        .executable(name: "RichFiles", targets: ["RichFiles"])
+        .library(name: "RichFilesBrowser", targets: ["RichFiles"]),
+        .executable(name: "RichFiles", targets: ["RichFilesApp"])
     ],
     targets: [
         .target(name: "RichFilesCore"),
-        .executableTarget(name: "RichFiles", dependencies: ["RichFilesCore"]),
+        .target(name: "RichFiles", dependencies: ["RichFilesCore"]),
+        .executableTarget(name: "RichFilesApp", dependencies: ["RichFiles"]),
         .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"]),
         .testTarget(name: "RichFilesTests", dependencies: ["RichFiles", "RichFilesCore"])
     ]
