@@ -1907,7 +1907,7 @@
     b.appendChild(fileGlyph());
     b.appendChild(elem("span", null, label));
     b.addEventListener("click", () => {
-      if (outputLinks && outputLinks.openFile) outputLinks.openFile(entry.id, b);
+      if (outputLinks && outputLinks.openFile) outputLinks.openFile(entry.id, b, entry.sourcePassage);
     });
     return b;
   }
@@ -1961,7 +1961,7 @@
           flush();
           const code = text.slice(i + 1, end);
           const hit = links && links.forText ? links.forText(code) : null;
-          into.appendChild(hit ? fileLink(hit, code) : elem("code", "tl-md-code", code));
+          into.appendChild(hit ? fileLink(hit, hit.sourceLabel || code) : elem("code", "tl-md-code", code));
           i = end + 1;
           continue;
         }
@@ -2058,6 +2058,7 @@
 
       const para = elem("div", "tl-md-p");
       const buf = [];
+      const firstLine = i + 1;
       while (
         i < lines.length &&
         lines[i].trim() &&
@@ -2070,6 +2071,9 @@
         i += 1;
       }
       markdownInline(buf.join("\n"), para, links, doc);
+      if (doc && opts.sourceLine >= firstLine && opts.sourceLine <= i) {
+        para.dataset.sourcePassage = String(opts.sourceLine);
+      }
       root.appendChild(para);
     }
   }

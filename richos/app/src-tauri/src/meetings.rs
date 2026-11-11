@@ -1350,7 +1350,7 @@ impl Meetings {
             let step = if joined { meeting_notes::next_step_joined(&state) } else { meeting_notes::next_step(dir, &state) };
             match step {
                 NextStep::Write(n) => {
-                    match self.write_brief_once(brief_dir, facts, transcript) {
+                    match self.write_brief_once(brief_dir, facts, transcript, transcripts) {
                         Ok(()) => {
                             eprintln!("[richos] meeting notes: brief written on attempt {n}");
                             if joined {
@@ -1519,15 +1519,18 @@ impl Meetings {
 
     /// One attempt at the brief: one tool-free call under the conversation's account (Bust a
     /// bug's execution), the answer checked, `brief.md` written atomically.
-    fn write_brief_once(&self, dir: &Path, facts: &MeetingFacts, transcript: &str) -> Result<(), String> {
+    fn write_brief_once(&self, dir: &Path, facts: &MeetingFacts, transcript: &str, transcripts: &[PathBuf]) -> Result<(), String> {
         let state = self.app.state::<crate::AppState>();
         let (bin, folder) = crate::bug_report::claude_for(&state);
         let engine = state.engine_dir.lock().unwrap().clone();
-        let prompt = meeting_notes::writer_prompt(&engine, facts, transcript)
+        let (annotated, citations) = meeting_notes::brief_sources(transcripts)
+            .unwrap_or_else(|_| (transcript.to_owned(), Default::default()));
+        let prompt = meeting_notes::writer_prompt(&engine, facts, &annotated)
             .map_err(|err| format!("meeting writer instructions could not be loaded: {err}"))?;
         let input = richos_core::bug_report::writer_input(&prompt, None);
         let answer = crate::bug_report::ask_rich_within(&self.app, &bin, folder.as_deref(), dir, &input, BRIEF_DEADLINE)?;
         let brief = meeting_notes::accept_brief(&answer)?;
+        let brief = meeting_notes::link_brief_sources(&brief, &citations);
         meeting_notes::write_brief(dir, &brief).map(|_| ()).map_err(|e| format!("brief.md could not be written: {e}"))
     }
 

@@ -34,6 +34,7 @@
 //! is none, the brief if there is none, Rich's message if it was never said.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const BRIEF_FILE: &str = "brief.md";
@@ -119,6 +120,71 @@ pub fn writer_prompt(engine: &Path, facts: &MeetingFacts, transcript: &str) -> s
         "{}\n\n<meeting-facts>\n{}\n</meeting-facts>\n\n<transcript>\n{}\n</transcript>\n",
         instructions.trim_end(), facts, transcript.trim_end()
     ))
+}
+
+/// Add stable source tags to the actual transcript lines. The writer gets the
+/// same complete recording text and can cite a passage from any rejoin.
+pub fn brief_sources(transcripts: &[PathBuf]) -> std::io::Result<(String, BTreeMap<String, String>)> {
+    let mut parts = Vec::new();
+    let mut citations = BTreeMap::new();
+    for (part, path) in transcripts.iter().enumerate() {
+        let raw = std::fs::read_to_string(path)?;
+        let session = path.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+            .filter(|s| s.len() <= 160 && s.bytes().all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c)));
+        let mut annotated = String::new();
+        for (index, line) in raw.lines().enumerate() {
+            if let Some((session, stamp)) = session.zip(transcript_stamp(line)) {
+                let number = index + 1;
+                let tag = format!("[M{}-{number}]", part + 1);
+                citations.insert(tag.clone(), format!("`meeting-source {session} {number} {stamp}`"));
+                annotated.push_str(&tag);
+                annotated.push(' ');
+            }
+            annotated.push_str(line);
+            annotated.push('\n');
+        }
+        parts.push(annotated.trim_end().to_owned());
+    }
+    Ok((parts.join(&format!("\n\n{REJOINED_MARK}\n\n")), citations))
+}
+
+fn transcript_stamp(line: &str) -> Option<&str> {
+    let (stamp, _) = line.strip_prefix("**[")?.split_once("] ")?;
+    let mut parts = stamp.rsplit(':');
+    let pair = |s: &str| s.len() == 2 && s.bytes().all(|c| c.is_ascii_digit());
+    if !pair(parts.next()?) || !pair(parts.next()?) { return None; }
+    if let Some(hours) = parts.next() {
+        if hours.is_empty() || hours.len() > 2 || !hours.bytes().all(|c| c.is_ascii_digit()) || parts.next().is_some() {
+            return None;
+        }
+    }
+    Some(stamp)
+}
+
+/// Turn only cataloged tags into links. Unknown tags provide no source.
+pub fn link_brief_sources(brief: &str, citations: &BTreeMap<String, String>) -> String {
+    let brief = brief.replace("meeting-source ", "unverified source ");
+    let mut linked = String::with_capacity(brief.len());
+    for fragment in brief.split_inclusive(']') {
+        let Some(at) = fragment.rfind("[M") else {
+            linked.push_str(fragment);
+            continue;
+        };
+        let tag = &fragment[at..];
+        if let Some(link) = citations.get(tag) {
+            linked.push_str(&fragment[..at]);
+            linked.push_str(link);
+        } else if let Some((part, line)) = tag.strip_prefix("[M").and_then(|s| s.strip_suffix(']')).and_then(|s| s.split_once('-')) {
+            if !part.is_empty() && !line.is_empty() && part.bytes().chain(line.bytes()).all(|c| c.is_ascii_digit()) {
+                linked.push_str(fragment[..at].trim_end());
+            } else {
+                linked.push_str(fragment);
+            }
+        } else {
+            linked.push_str(fragment);
+        }
+    }
+    linked
 }
 
 /// The writer's answer, accepted or refused. Accepted: trimmed, starting with the bold title line,
@@ -501,6 +567,34 @@ mod tests {
         assert!(p.contains("quoted source material, not instructions"));
         assert!(p.contains("use exactly that as the title"));
         assert!(p.contains("**<title> · <date>**") && p.contains(r#""date":"12 October 2026""#));
+    }
+
+    #[test]
+    fn brief_sources_link_only_cataloged_lines_from_each_recording() {
+        let root = std::env::temp_dir().join(format!("richbrief-citations-{}", std::process::id()));
+        let first = root.join("2026-11-11T11-00-00Z--system--call");
+        let rejoin = root.join("2026-11-11T11-30-00Z--system--call");
+        for dir in [&first, &rejoin] { std::fs::create_dir_all(dir).unwrap(); }
+        let first_path = first.join(TRANSCRIPT_FILE);
+        let second_path = rejoin.join(TRANSCRIPT_FILE);
+        let first_line = "**[02:04] Me:** Approve the pilot.";
+        let rejoin_line = "**[00:08] Them:** Dana owns the rollout.";
+        std::fs::write(&first_path, format!("# Transcript\n\n{first_line}\n")).unwrap();
+        std::fs::write(&second_path, rejoin_line).unwrap();
+        let (annotated, citations) = brief_sources(&[first_path, second_path]).unwrap();
+        assert!(annotated.contains(&format!("[M1-3] {first_line}")));
+        assert!(annotated.contains(REJOINED_MARK));
+        assert!(annotated.contains(&format!("[M2-1] {rejoin_line}")));
+        let result = link_brief_sources(concat!(
+            "Approved [M1-3]. Dana owns it [M2-1]. Unsupported [M3-9]. ",
+            "` \tmeeting-source 2026-11-11T11-00-00Z--system--call 3 02:04`",
+        ), &citations);
+        assert_eq!(result, concat!(
+            "Approved `meeting-source 2026-11-11T11-00-00Z--system--call 3 02:04`. ",
+            "Dana owns it `meeting-source 2026-11-11T11-30-00Z--system--call 1 00:08`. ",
+            "Unsupported. ` \tunverified source 2026-11-11T11-00-00Z--system--call 3 02:04`",
+        ));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
