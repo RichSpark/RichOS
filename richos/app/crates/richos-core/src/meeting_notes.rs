@@ -46,52 +46,6 @@ pub const MAX_ATTEMPTS: u32 = 3;
 /// The pipeline's own record of the transcript (`pipeline.js` ARTIFACTS.verification).
 pub const VERIFICATION_FILE: &str = "verification.json";
 
-#[derive(Clone, Copy)]
-pub struct LiveMeetingRequest {
-    pub at: u64,
-    pub names_current_call: bool,
-}
-
-/// Use only the CEO's own words to decide whether the request needs current audio.
-pub(crate) fn live_meeting_request(turn: &crate::ledger::Turn) -> Option<LiveMeetingRequest> {
-    use crate::ledger::Source;
-    if turn.pressed || !matches!(turn.source, Source::Text | Source::Jam) {
-        return None;
-    }
-    let text = authored_prefix(&turn.user_text, turn.authored_bytes, turn.authored_ranges.as_deref())?;
-    let names_current_call = current_call_reference(text)?;
-    Some(LiveMeetingRequest { at: turn.created_at, names_current_call })
-}
-
-fn authored_prefix<'a>(text: &'a str, bytes: Option<usize>, ranges: Option<&[(usize, usize)]>) -> Option<&'a str> {
-    let end = match ranges {
-        None => bytes?,
-        Some(ranges) => {
-            let mut end = 0;
-            for &(start, next) in ranges {
-                if start != end || next < start { break; }
-                end = next;
-            }
-            end
-        }
-    };
-    text.get(..end)
-}
-
-fn current_call_reference(text: &str) -> Option<bool> {
-    let lower = text.to_ascii_lowercase();
-    let words: Vec<_> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    let request = words.strip_prefix(&["rich"]).unwrap_or(&words);
-    let request = request.strip_prefix(&["please"]).unwrap_or(request);
-    let from_call = request.strip_prefix(&["from", "this", "call"]);
-    let work = from_call.unwrap_or(request);
-    let is_request = matches!(work, ["put", "together", ..] | ["get", "started", "on", ..]
-        | ["draft" | "prepare" | "write" | "make" | "compare", ..]);
-    let names_current_call = from_call.is_some() || work.windows(2).any(|w| matches!(w, ["this", "call" | "meeting"]));
-    let refers_to_discussion = work.windows(3).any(|w| matches!(w, ["we", "just", "discussed" | "agreed"]));
-    (is_request && (names_current_call || refers_to_discussion)).then_some(names_current_call)
-}
-
 /// The transcription's own warnings: `verification.json`'s `warnings` (a span of speech missing
 /// from the transcript, an unchecked span, a hallucination it could only detect, a changed
 /// toolchain). transcript.md does not carry them, so without this a detected omission would be
@@ -563,26 +517,6 @@ mod tests {
         MeetingFacts { title: Some("Acme pricing review".into()), date_line: "12 October 2026".into(), ..Default::default() }
     }
     const GOOD: &str = "**Acme pricing review · 12 October 2026**\n\nWe agreed to test the annual plan.\n\n**Decisions:** Keep monthly pricing unchanged.\n\n**Your actions:** Approve the pilot budget by Friday.\n\n**Other commitments:** Maya will prepare the customer list.\n\n**Open questions:** Who owns onboarding?";
-
-    #[test]
-    fn only_explicit_work_requests_use_the_live_meeting_excerpt() {
-        assert_eq!(current_call_reference("Rich, get started on that from this call."), Some(true));
-        assert_eq!(current_call_reference("Put together the options we just discussed. Use the project plan."), Some(false));
-        assert_eq!(current_call_reference("From this call, draft a comparison."), Some(true));
-        assert_eq!(current_call_reference("Rich please draft a comparison from this call."), Some(true));
-        assert_eq!(current_call_reference("Rich get started on that from this call."), Some(true));
-        assert_eq!(current_call_reference("Don't send anything from this call."), None);
-        assert_eq!(current_call_reference("We just discussed the pilot."), None);
-        assert_eq!(current_call_reference("Draft the agenda for our next board meeting."), None);
-        assert_eq!(current_call_reference("Rich, get started on that."), None);
-        assert_eq!(current_call_reference("Draft a reply about this callback."), None);
-        let text = "Draft a reply.\n\nAttached file: this meeting notes.md";
-        let end = "Draft a reply.".len();
-        let prefix = authored_prefix(text, Some(end), None).unwrap();
-        assert_eq!(current_call_reference(prefix), None);
-        let prefix = authored_prefix(text, None, Some(&[(0, 5), (5, end), (end + 2, text.len())])).unwrap();
-        assert_eq!(current_call_reference(prefix), None);
-    }
 
     #[test]
     fn the_transcriptions_own_warnings_reach_the_writer() {
