@@ -1732,7 +1732,12 @@ fn write_words(recording: Recording, duration_ms: u64, chosen: &str, data_dir: &
             Problem::CouldNotWrite
         })?;
         recognizer.transcribe_bounded_until(&samples, scratch.path(), bound, stop).map_err(|e| {
-            log::line(&format!("whisper-cli did not write the words (bound {} s): {e}", bound.as_secs()));
+            let elapsed = started.elapsed();
+            let reason = super::timings::decoder_failure_reason(&e);
+            log::line(&format!("whisper-cli did not write the words (bound {} s): {reason}", bound.as_secs()));
+            if let Some(t) = timings {
+                t.event("recognition_failed", super::timings::recognition_failure_detail(id, elapsed, bound, &e));
+            }
             Problem::CouldNotWrite
         })?
         // `scratch` is dropped here: the recording and the words on disk are removed, on a

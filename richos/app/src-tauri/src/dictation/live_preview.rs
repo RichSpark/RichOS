@@ -1,7 +1,7 @@
 //! One bounded provisional decoder. No microphone, insertion capability, queue,
 //! transcript stitching, carried prompt or final-text authority.
 
-use super::scratch::Scratch;
+use super::{scratch::Scratch, timings::decoder_failure_reason};
 use richos_voice::{dictation::{judge_transcript, Recording, FASTER}, stt::Recognizer, vad::SAMPLE_RATE, voiced::VoiceEvidence};
 use std::{path::Path, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::{Duration, Instant}};
 
@@ -69,14 +69,7 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         if stop.load(Ordering::Acquire) { return; }
         let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch|
             recognizer.transcribe_bounded_until(&samples, scratch.path(), Duration::from_millis(1800), stop)
-                .map_err(|error| match error {
-                    // Exact errors constructed by our bounded decoder, not a
-                    // guess from arbitrary decoder stderr or elapsed time.
-                    richos_voice::stt::SttError::Io(message) if message == "decoder deadline" => "decoder_deadline",
-                    richos_voice::stt::SttError::Io(message) if message == "decoder stopped by its owner" => "decoder_stopped",
-                    richos_voice::stt::SttError::Io(message) if message == "decoder output limit" => "decoder_output_limit",
-                    _ => "decoder_failed",
-                }));
+                .map_err(|error| decoder_failure_reason(&error)));
         if stop.load(Ordering::Acquire) { return; }
         match result {
             Ok((text, decode_ms)) if sampled_at.elapsed() <= Duration::from_secs(2) => {

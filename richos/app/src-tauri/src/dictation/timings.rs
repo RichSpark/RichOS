@@ -1,8 +1,25 @@
 //! Numeric local milestones for one recording, including preview cleanup before
 //! final recognition. No speech, target names, corpus or model output enters here.
 use super::log;
+use richos_voice::stt::SttError;
 use serde_json::{json, Value};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+pub(super) fn decoder_failure_reason(error: &SttError) -> &'static str {
+    match error {
+        // These messages originate in the bounded decoder, not in its stderr.
+        SttError::Io(message) if message == "decoder deadline" => "decoder_deadline",
+        SttError::Io(message) if message == "decoder stopped by its owner" => "decoder_stopped",
+        SttError::Io(message) if message == "decoder output limit" => "decoder_output_limit",
+        SttError::Io(_) => "decoder_io",
+        _ => "decoder_failed",
+    }
+}
+
+pub(super) fn recognition_failure_detail(model: &str, elapsed: Duration, bound: Duration, error: &SttError) -> Value {
+    json!({"model":model,"recognition_ms":elapsed.as_millis(),"deadline_ms":bound.as_millis(),
+        "reason":decoder_failure_reason(error)})
+}
 
 pub struct Timings {
     seq: u64,
@@ -102,8 +119,11 @@ mod tests {
         let entry = t.entry("recognition_completed", 4010, Some(420), json!({"model":"small.en","recognition_ms":300}));
         t.preview_quiet();
         let finish = t.entry("finish_received", 3590, Some(0), t.finish_detail());
+        let timeout = recognition_failure_detail("small.en", Duration::from_millis(69012),
+            Duration::from_secs(69), &SttError::Io("decoder deadline".into()));
+        let failure = t.entry("recognition_failed", 73000, Some(69012), timeout);
         let stamp = richdoctor_core::util::utc_stamp(at);
-        std::fs::write(data.join("dictation.log"), format!("{stamp} dictation timing {entry}\n{stamp} dictation timing {finish}\n")).unwrap();
+        std::fs::write(data.join("dictation.log"), format!("{stamp} dictation timing {entry}\n{stamp} dictation timing {finish}\n{stamp} dictation timing {failure}\n")).unwrap();
         let scope = Scope { home: home.clone(), window: Window::around(at), claude_bin: None, diagnostics: true };
         let collected = collect(Category::Richscribe, &scope, &Context::default(), 0);
         assert_eq!(collected[0].status, Status::Collected);
@@ -119,9 +139,24 @@ mod tests {
         let finish = records.next().unwrap();
         assert_eq!(finish["detail"]["preview_quiet_ticks"], 1);
         assert_eq!(finish["detail"]["updates"], 0);
+        let failure = records.next().unwrap();
+        assert_eq!(failure["stage"], "recognition_failed");
+        assert_eq!(failure["detail"]["reason"], "decoder_deadline");
+        assert_eq!(failure["detail"]["recognition_ms"], 69012);
+        assert_eq!(failure["detail"]["deadline_ms"], 69000);
         assert_eq!(record["preview_enabled"], true);
         t.complete = true;
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn decoder_failure_detail_never_includes_untrusted_error_content() {
+        let error = SttError::Failed { status: "exit status: 1".into(), stderr: "decoder deadline: private text".into() };
+        let detail = recognition_failure_detail("small.en", Duration::from_millis(27), Duration::from_secs(69), &error);
+        assert_eq!(detail, json!({"model":"small.en","recognition_ms":27,"deadline_ms":69000,"reason":"decoder_failed"}));
+        assert_eq!(decoder_failure_reason(&SttError::Io("private file path".into())), "decoder_io");
+        assert_eq!(decoder_failure_reason(&SttError::Io("decoder stopped by its owner".into())), "decoder_stopped");
+        assert_eq!(decoder_failure_reason(&SttError::Io("decoder output limit".into())), "decoder_output_limit");
     }
 
     #[test]
