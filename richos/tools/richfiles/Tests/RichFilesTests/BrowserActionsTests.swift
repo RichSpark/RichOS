@@ -5,6 +5,34 @@ import XCTest
 
 final class BrowserActionsTests: XCTestCase {
     @MainActor
+    func testRichCleanerReceivesOnlyTheSelectedPathsOnAnIsolatedPasteboard() async throws {
+        try await withFixture { root, _, board in
+            let first = try write("first", named: "Report one.txt", in: root)
+            let second = try write("second", named: "Report two.txt", in: root)
+            let accepted = try await RichOSServices.addSpokenNote(to: [first, second]) { service, sent in
+                XCTAssertEqual(service, "Add spoken note with RichCleaner")
+                XCTAssertNotEqual(sent.name, NSPasteboard.general.name)
+                XCTAssertNotEqual(sent.name, board.name)
+                XCTAssertEqual(sent.propertyList(forType: RichOSServices.filenamesType) as? [String],
+                               [first.url.path, second.url.path])
+                return true
+            }
+            XCTAssertTrue(accepted)
+            _ = try FileOperations.rename(second, to: "Moved.txt")
+            _ = try write("replacement", named: "Report two.txt", in: root)
+            do {
+                _ = try await RichOSServices.addSpokenNote(to: [second]) { _, _ in
+                    XCTFail("The changed path was handed to RichCleaner.")
+                    return true
+                }
+                XCTFail("The changed path should have been refused.")
+            } catch FileOperationError.sourceChanged(let path) {
+                XCTAssertEqual(path, second.url)
+            }
+        }
+    }
+
+    @MainActor
     func testCompletedRenameCanBeUndoneAfterReopeningTheRecoveryStore() async throws {
         try await withFixture { root, _, board in
             let source = try write("original", named: "Original.txt", in: root)

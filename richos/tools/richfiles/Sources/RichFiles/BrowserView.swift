@@ -544,11 +544,37 @@ struct BrowserView: View {
             if model.searchActive {
                 Button("Open Containing Folder") { model.openFolder(first.url.deletingLastPathComponent()) }
             }
+            if canSendToRichCleaner(entries) {
+                Button(RichOSServices.cleanerTitle) { addSpokenNote(entries) }.disabled(actions.busy)
+            }
             Button("Move to Trash", role: .destructive) {
                 withReferences(entries) { actions.trash($0) }
             }.disabled(actions.busy)
         } else {
             folderMenu
+        }
+    }
+
+    private func canSendToRichCleaner(_ entries: [FileEntry]) -> Bool {
+        guard let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first?.path else {
+            return false
+        }
+        return !entries.isEmpty && entries.allSatisfy {
+            $0.kind == .regularFile && $0.url.deletingLastPathComponent().standardizedFileURL.path == desktop
+        }
+    }
+
+    private func addSpokenNote(_ entries: [FileEntry]) {
+        withReferences(entries) { references in
+            Task {
+                do {
+                    if try await RichOSServices.addSpokenNote(to: references) {
+                        feedback = "Selection sent to RichCleaner."
+                    } else {
+                        feedback = "RichCleaner could not start. Check RichCleaner and RichScribe in RichOS Settings."
+                    }
+                } catch { feedback = error.localizedDescription }
+            }
         }
     }
 
