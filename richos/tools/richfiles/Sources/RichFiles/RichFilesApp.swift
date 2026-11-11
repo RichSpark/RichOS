@@ -70,6 +70,7 @@ public struct RichFilesPane: View {
 public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var requestID = UUID()
     private var pending: [URL] = []
+    private var openedInitialBrowser = false
 
     public func application(_ application: NSApplication, open urls: [URL]) {
         pending.append(contentsOf: urls.filter(\.isFileURL))
@@ -79,6 +80,12 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     func takePending() -> [URL] {
         defer { pending.removeAll() }
         return pending
+    }
+
+    func claimInitialBrowser() -> Bool {
+        guard !openedInitialBrowser else { return false }
+        openedInitialBrowser = true
+        return true
     }
 }
 

@@ -18,6 +18,7 @@ struct BrowserView: View {
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
+    @AppStorage("richfiles.lastBrowserSession.v1") private var lastBrowserSession = Data()
     @SceneStorage("richfiles.browserSession.v1") private var savedSession: Data?
     @FocusState private var focus: Field?
     @State private var editingAddress = false
@@ -84,16 +85,21 @@ struct BrowserView: View {
         .onAppear {
             if !appeared {
                 appeared = true
-                if supportsSessionRestore, restoreSession, let savedSession {
-                    model.restoreSession(savedSession)
+                if supportsSessionRestore {
+                    let firstWindow = openRequests.claimInitialBrowser()
+                    if restoreSession {
+                        let session = savedSession ?? (firstWindow ? lastBrowserSession : nil)
+                        if let session, !session.isEmpty { model.restoreSession(session) }
+                    }
                 }
             }
             receiveFolderOpen()
         }
-        .onChange(of: model.tabs.map(\.folder)) { _ in saveSession() }
-        .onChange(of: model.currentTabID) { _ in saveSession() }
+        .onChange(of: model.tabs.map(\.folder)) { _ in saveSession(rememberWindow: true) }
+        .onChange(of: model.currentTabID) { _ in saveSession(rememberWindow: true) }
+        .onChange(of: model.scrollAnchor) { _ in saveSession(rememberWindow: true) }
         .onChange(of: scenePhase) { if $0 != .active { saveSession() } }
-        .onChange(of: restoreSession) { _ in saveSession() }
+        .onChange(of: restoreSession) { _ in saveSession(rememberWindow: true) }
         .onDisappear { saveSession() }
         .onChange(of: actions.mutationRevision) { _ in model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -112,9 +118,10 @@ struct BrowserView: View {
         .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in sheetContents(value) }
     }
 
-    private func saveSession() {
+    private func saveSession(rememberWindow: Bool = false) {
         guard supportsSessionRestore, appeared else { return }
         savedSession = restoreSession ? model.sessionData() : nil
+        if rememberWindow || !restoreSession { lastBrowserSession = savedSession ?? Data() }
     }
 
     private func runPaletteChoice() {
