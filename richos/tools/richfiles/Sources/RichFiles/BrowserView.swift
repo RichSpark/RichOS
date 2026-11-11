@@ -629,6 +629,7 @@ struct BrowserView: View {
         Button("Copy Current Path") { copyPaths([model.folder]) }
         Button("Expand to Current Folder") { expandToCurrentFolder() }
         Button("Workspaces…") { sheet = .workspaces }
+        Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
         Button("Refresh") { _ = perform(.refresh) }
     }
 
@@ -724,6 +725,7 @@ struct BrowserView: View {
         case .address: editAddress()
         case .revealFolder: expandToCurrentFolder()
         case .workspaces: sheet = .workspaces
+        case .diskUsage: sheet = .diskUsage(model.folder)
         case .search: focus = .search
         case .grid(let dx, let dy, let extend): return moveGrid(dx: dx, dy: dy, extend: extend)
         }
@@ -988,6 +990,7 @@ struct BrowserView: View {
         case .zip(let catalog): ZipBrowserSheet(catalog: catalog, changed: model.refresh)
         case .createZip(let sources, let destination):
             ZipCreateSheet(sources: sources, destination: destination, changed: model.refresh)
+        case .diskUsage(let folder): DiskUsageSheet(folder: folder, openFolder: model.openFolder)
         case .trash: TrashSheet(actions: actions)
         case .transfers: TransferSheet(actions: actions)
         case .searchOptions: SearchOptionsSheet(model: model)

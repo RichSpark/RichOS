@@ -18,6 +18,7 @@ enum BrowserSheet: Identifiable {
     case openWith(FileEntry, WorkspaceApplications)
     case zip(ZipCatalog)
     case createZip([FileReference], URL)
+    case diskUsage(URL)
     case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces
 
     var id: String {
@@ -28,6 +29,7 @@ enum BrowserSheet: Identifiable {
         case .openWith: return "openWith"
         case .zip: return "zip"
         case .createZip: return "createZip"
+        case .diskUsage: return "diskUsage"
         case .trash: return "trash"
         case .transfers: return "transfers"
         case .searchOptions: return "searchOptions"
@@ -35,6 +37,80 @@ enum BrowserSheet: Identifiable {
         case .connect: return "connect"
         case .workspaces: return "workspaces"
         }
+    }
+}
+
+@MainActor
+struct DiskUsageSheet: View {
+    let root: URL
+    let openFolder: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var folder: URL
+    @State private var report: DiskUsageReport?
+    @State private var problem = ""
+
+    init(folder: URL, openFolder: @escaping (URL) -> Void) {
+        root = folder
+        self.openFolder = openFolder
+        _folder = State(initialValue: folder)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Disk Usage").font(.headline)
+            Text(folder.path).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+            if let report {
+                Text("\(formattedBytes(report.allocatedBytes)) allocated")
+                List(report.rows) { row in
+                    HStack {
+                        if row.isFolder {
+                            Button { folder = row.url } label: {
+                                Label(row.url.lastPathComponent, systemImage: "folder").lineLimit(1)
+                            }.buttonStyle(.plain)
+                        } else {
+                            Label(row.url.lastPathComponent, systemImage: "doc").lineLimit(1)
+                        }
+                        Spacer(minLength: 10)
+                        Text(formattedBytes(row.allocatedBytes)).monospacedDigit()
+                            .help("\(formattedBytes(row.logicalBytes)) of file contents")
+                    }
+                }.accessibilityLabel("Items sorted by allocated size")
+                if report.unavailable > 0 || report.otherVolumes > 0 {
+                    Text("\(report.unavailable) items unavailable. \(report.otherVolumes) other mounts skipped.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Files that share disk blocks may count toward more than one folder.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !problem.isEmpty {
+                Text(problem).foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                ProgressView("Measuring files…")
+                Spacer()
+            }
+            HStack {
+                Button("Parent Folder") { folder = folder.deletingLastPathComponent() }
+                    .disabled(folder.path == root.path)
+                Button("Open in Browser") { openFolder(folder); dismiss() }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }.padding(16).frame(width: 570, height: 420)
+            .task(id: folder) {
+                let requested = folder
+                report = nil
+                problem = ""
+                let worker = Task.detached(priority: .utility) {
+                    try StorageAnalysis.diskUsage(in: requested, isCancelled: { Task.isCancelled })
+                }
+                do {
+                    let result = try await withTaskCancellationHandler { try await worker.value }
+                        onCancel: { worker.cancel() }
+                    if !Task.isCancelled { report = result }
+                } catch {
+                    if !Task.isCancelled { problem = error.localizedDescription }
+                }
+            }
     }
 }
 

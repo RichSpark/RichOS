@@ -16,6 +16,30 @@ final class DirectoryReaderTests: XCTestCase {
         try Data(text.utf8).write(to: root.appendingPathComponent(path))
     }
 
+    func testDiskUsageCountsNestedFilesAndHiddenItemsWithoutFollowingLinks() throws {
+        try fixture { root in
+            let folder = root.appendingPathComponent("Measure", isDirectory: true)
+            let nested = folder.appendingPathComponent("Example.app/Contents", isDirectory: true)
+            let outside = root.appendingPathComponent("Outside", isDirectory: true)
+            try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+            try write("code", in: nested, text: "twelve bytes")
+            try write(".hidden", in: folder, text: "hidden")
+            try write("other", in: outside, text: "outside the selected folder")
+            try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("Link"), withDestinationURL: outside)
+
+            let report = try StorageAnalysis.diskUsage(in: folder)
+            XCTAssertEqual(report.unavailable, 0)
+            XCTAssertEqual(report.otherVolumes, 0)
+            XCTAssertEqual(report.allocatedBytes, report.rows.reduce(0) { $0 + $1.allocatedBytes })
+            let sizes = Dictionary(uniqueKeysWithValues: report.rows.map { ($0.url.lastPathComponent, $0.logicalBytes) })
+            XCTAssertEqual(sizes, ["Example.app": 12, ".hidden": 6, "Link": 0])
+            XCTAssertThrowsError(try StorageAnalysis.diskUsage(in: folder, isCancelled: { true })) {
+                XCTAssertTrue($0 is CancellationError)
+            }
+        }
+    }
+
     func testFolderAndRecursiveSearchKeepExplicitScope() throws {
         try fixture { root in
             let manager = FileManager.default
