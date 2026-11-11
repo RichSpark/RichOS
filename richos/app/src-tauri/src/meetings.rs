@@ -37,7 +37,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// The floating panel's window label, and the events its page and the main window listen to.
@@ -460,8 +460,11 @@ pub fn start(app: &AppHandle) {
             let mut known = BTreeMap::new();
             let mut instances = BTreeMap::new();
             loop {
+                let next_refresh = Instant::now() + Duration::from_millis(meeting_calendar::REFRESH_MS);
                 calendar.refresh_calendar(&mut known, &mut instances);
-                match calendar_replies.recv_timeout(Duration::from_millis(meeting_calendar::REFRESH_MS)) {
+                // Time spent syncing counts toward the refresh interval. A slow pass never
+                // overlaps another one and can still service a queued reconnect first.
+                match calendar_replies.recv_timeout(next_refresh.saturating_duration_since(Instant::now())) {
                     Ok(account) => calendar.reconnect_calendar(account),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
