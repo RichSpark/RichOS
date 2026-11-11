@@ -64,8 +64,11 @@ enum BrowserViewMode: String, Codable, CaseIterable, Identifiable {
     case details = "Details"
     case list = "List"
     case icons = "Icons"
+    case columns = "Columns"
+    case gallery = "Gallery"
 
     var id: Self { self }
+    var title: String { self == .icons ? "Thumbnails" : rawValue }
 }
 
 @MainActor

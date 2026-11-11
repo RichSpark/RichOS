@@ -113,6 +113,8 @@ struct BrowserView: View {
             feedback = ""
             rangeAnchor = nil
             selectionCursor = nil
+            prefixText = ""
+            prefixTime = 0
         }
         .task(id: model.selected) { await captureSelection() }
         .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in sheetContents(value) }
@@ -339,13 +341,13 @@ struct BrowserView: View {
             }
             Spacer(minLength: 4)
             Picker("View", selection: $model.viewMode) {
-                Text("List").tag(BrowserViewMode.list)
-                Text("Details").tag(BrowserViewMode.details)
-                Text("Thumbnails").tag(BrowserViewMode.icons)
+                ForEach([BrowserViewMode.list, .details, .icons, .columns, .gallery]) { mode in
+                    Text(mode.title).tag(mode)
+                }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
             .labelsHidden()
-            .frame(width: 204)
+            .frame(width: 112)
             .accessibilityLabel("File view")
             Menu {
                 sortButton("Name", .name)
@@ -385,18 +387,17 @@ struct BrowserView: View {
     private var itemPane: some View {
         ZStack(alignment: .top) {
             Group {
-                if model.entries.isEmpty && !model.busy {
-                    VStack(spacing: 8) {
-                        Image(systemName: model.searchActive ? "magnifyingglass" : "folder").font(.system(size: 32))
-                        Text(model.searchActive ? "No matching files" : "No items to show")
-                        if !model.status.isEmpty { Text(model.status).font(.callout).multilineTextAlignment(.center) }
-                    }.foregroundStyle(.secondary).padding(28)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if model.viewMode == .columns {
+                    columnBrowser
+                } else if model.entries.isEmpty && !model.busy {
+                    emptyItems
                 } else {
                     switch model.viewMode {
                     case .details: details
                     case .list: compactList
                     case .icons: thumbnailGrid
+                    case .gallery: gallery
+                    case .columns: EmptyView()
                     }
                 }
             }
@@ -422,7 +423,7 @@ struct BrowserView: View {
         .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
         .simultaneousGesture(DragGesture(minimumDistance: 5, coordinateSpace: .named("richfiles-items"))
             .onChanged { change in
-                guard model.viewMode != .details,
+                guard model.viewMode != .details, model.viewMode != .columns,
                       !rowFrames.values.contains(where: { $0.contains(change.startLocation) }) else { return }
                 let rect = CGRect(
                     x: min(change.startLocation.x, change.location.x),
@@ -436,6 +437,103 @@ struct BrowserView: View {
             .onEnded { _ in selectionRectangle = nil })
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTarget, perform: receiveDrop)
         .contextMenu { folderMenu }
+    }
+
+    private var emptyItems: some View {
+        VStack(spacing: 8) {
+            Image(systemName: model.searchActive ? "magnifyingglass" : "folder").font(.system(size: 32))
+            Text(model.searchActive ? "No matching files" : "No items to show")
+            if !model.status.isEmpty { Text(model.status).font(.callout).multilineTextAlignment(.center) }
+        }.foregroundStyle(.secondary).padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var columnBrowser: some View {
+        GeometryReader { geometry in
+            let path = model.breadcrumbs
+            let currentWidth = max(240, min(350, geometry.size.width - (path.count > 1 ? 186 : 0)))
+            ScrollViewReader { columns in
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 0) {
+                        ForEach(Array(zip(path.dropLast(), path.dropFirst())), id: \.0) { folder, child in
+                            AncestorColumn(folder: folder, child: child, showHidden: model.showHidden,
+                                           revision: actions.mutationRevision, open: model.openFolder)
+                                .frame(width: 185).id(folder)
+                            Divider()
+                        }
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(model.folder.lastPathComponent).font(.headline).lineLimit(1).padding(8)
+                            Divider()
+                            if model.entries.isEmpty && !model.busy {
+                                emptyItems
+                            } else {
+                                ScrollViewReader { items in
+                                    ScrollView {
+                                        LazyVStack(alignment: .leading, spacing: 1) {
+                                            ForEach(model.entries) { entry in
+                                                selectable(entry) {
+                                                    HStack {
+                                                        nameLabel(entry)
+                                                        Spacer(minLength: 4)
+                                                        if entry.kind == .directory {
+                                                            Image(systemName: "chevron.right").font(.caption)
+                                                                .foregroundStyle(.secondary)
+                                                        }
+                                                    }.frame(minHeight: 23)
+                                                }
+                                            }
+                                        }.padding(4)
+                                    }.onAppear { restoreScroll(items) }
+                                        .onChange(of: selectionCursor) { if let url = $0 { items.scrollTo(url) } }
+                                        .onChange(of: model.busy) { if !$0 { restoreScroll(items) } }
+                                }
+                            }
+                        }
+                        .frame(width: currentWidth)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .id(model.folder)
+                        Spacer(minLength: 0)
+                    }.frame(minWidth: geometry.size.width, maxHeight: .infinity)
+                }
+                .onAppear { columns.scrollTo(model.folder, anchor: .trailing) }
+                .onChange(of: model.folder) { columns.scrollTo($0, anchor: .trailing) }
+            }
+        }.accessibilityLabel("Column view").accessibilityIdentifier("file-columns")
+    }
+
+    private var gallery: some View {
+        VStack(spacing: 0) {
+            Group {
+                if model.selected.count == 1, let entry = model.selectedEntries.first {
+                    VStack(spacing: 6) {
+                        NativePreview(entry: entry).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        Text(entry.name).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                    }.padding(10)
+                } else {
+                    Text("Select one item to preview it.").foregroundStyle(.secondary)
+                }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("Gallery preview")
+            Divider()
+            ScrollViewReader { scroll in
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 4) {
+                        ForEach(model.entries) { entry in
+                            selectable(entry) {
+                                VStack(spacing: 4) {
+                                    FileThumbnail(entry: entry, side: 62)
+                                    Text(entry.name).font(.caption).lineLimit(1).truncationMode(.middle)
+                                }.frame(width: 106).padding(3)
+                            }
+                        }
+                    }.padding(6)
+                }.frame(height: 109)
+                    .accessibilityLabel("Gallery thumbnails")
+                    .onAppear { restoreScroll(scroll) }
+                    .onChange(of: selectionCursor) { if let url = $0 { scroll.scrollTo(url) } }
+                    .onChange(of: model.busy) { if !$0 { restoreScroll(scroll) } }
+            }
+        }.accessibilityIdentifier("file-gallery")
     }
 
     private var details: some View {
@@ -808,7 +906,20 @@ struct BrowserView: View {
     private func moveGrid(dx: Int, dy: Int, extend: Bool) -> Bool {
         guard model.viewMode != .details, !model.entries.isEmpty else { return false }
         let current = selectionCursor.flatMap { url in model.entries.firstIndex(where: { $0.url == url }) }
-        let step = model.viewMode == .list ? dx * listRows + dy : dx + dy * iconColumns
+        let step: Int
+        switch model.viewMode {
+        case .list: step = dx * listRows + dy
+        case .icons: step = dx + dy * iconColumns
+        case .gallery: step = dx + dy
+        case .columns:
+            if dx != 0, !extend {
+                if dx < 0 { model.goUp() }
+                else if let entry = model.selectedEntries.first, entry.kind == .directory { model.openFolder(entry.url) }
+                return true
+            }
+            step = dy
+        case .details: return false
+        }
         let index = current.map { max(0, min(model.entries.count - 1, $0 + step)) } ?? 0
         select(model.entries[index], modifiers: extend ? .shift : [])
         return true
@@ -1095,6 +1206,71 @@ struct BrowserView: View {
         case .closeTab: return model.tabs.count > 1 || hostOpenWindow == nil
         default: return true
         }
+    }
+}
+
+@MainActor
+private struct AncestorColumn: View {
+    let folder: URL
+    let child: URL
+    let showHidden: Bool
+    let revision: UUID
+    let open: (URL) -> Void
+
+    @State private var children: [FileEntry] = []
+    @State private var loading = true
+    @State private var problem = ""
+
+    private struct Request: Hashable {
+        let folder: URL
+        let child: URL
+        let showHidden: Bool
+        let revision: UUID
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(folder.path == "/" ? "Computer" : folder.lastPathComponent) { open(folder) }
+                .buttonStyle(.plain).font(.headline).lineLimit(1).padding(8)
+                .accessibilityLabel("Open \(folder.path)")
+            Divider()
+            ScrollViewReader { scroll in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(children) { entry in
+                            let current = entry.url.path == child.path
+                            Button { open(entry.url) } label: {
+                                HStack(spacing: 5) {
+                                    Label(entry.name, systemImage: "folder").lineLimit(1).truncationMode(.middle)
+                                    Spacer(minLength: 3)
+                                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                                }.padding(5).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .background(current ? Color.accentColor.opacity(0.25) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 4))
+                            .accessibilityAddTraits(current ? .isSelected : [])
+                            .id(entry.url.path)
+                        }
+                        if loading { ProgressView().controlSize(.mini).accessibilityLabel("Reading folders") }
+                        if !problem.isEmpty { Text(problem).font(.caption).foregroundStyle(.secondary) }
+                    }.padding(4)
+                }.onChange(of: children.map(\.url)) { _ in scroll.scrollTo(child.path) }
+                    .onChange(of: child) { scroll.scrollTo($0.path) }
+            }
+        }.frame(maxHeight: .infinity, alignment: .top)
+            .task(id: Request(folder: folder, child: child, showHidden: showHidden, revision: revision)) {
+                loading = true
+                problem = ""
+                do {
+                    let result = try await BrowserModel.folderChildren(
+                        of: folder, showHidden: showHidden, revealing: child.lastPathComponent
+                    )
+                    if !Task.isCancelled { children = result; loading = false }
+                } catch {
+                    if !Task.isCancelled { children = []; problem = error.localizedDescription; loading = false }
+                }
+            }
     }
 }
 
