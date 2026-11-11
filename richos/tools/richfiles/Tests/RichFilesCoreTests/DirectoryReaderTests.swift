@@ -103,6 +103,51 @@ final class DirectoryReaderTests: XCTestCase {
         }
     }
 
+    func testFolderSyncRechecksBothFoldersAndKeepsConflictsUnlessExplicitlyReviewed() throws {
+        try fixture { root in
+            let left = root.appendingPathComponent("First", isDirectory: true)
+            let right = root.appendingPathComponent("Second", isDirectory: true)
+            for path in [left.appendingPathComponent("Project/Subfolder"), right] {
+                try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+            }
+            try write("Project/Subfolder/Photo.png", in: left, text: "new contents")
+            try write("changed.txt", in: left, text: "first")
+            try write("changed.txt", in: right, text: "second")
+            try write("extra.txt", in: right, text: "keep")
+            try FileManager.default.createDirectory(at: left.appendingPathComponent("type-conflict"), withIntermediateDirectories: false)
+            try write("type-conflict/inside.txt", in: left)
+            try write("type-conflict", in: right, text: "existing file")
+            let defaultOptions = FolderSyncPlan.Options()
+            let initial = try FolderSyncPlan.preview(from: left, to: right, options: defaultOptions)
+            XCTAssertTrue(initial.canApply)
+            XCTAssertEqual(initial.changeCount, 3)
+            XCTAssertEqual(initial.rows.first(where: { $0.path == "type-conflict/inside.txt" })?.action, .conflict)
+
+            try write("late.txt", in: right)
+            XCTAssertThrowsError(try initial.apply())
+            XCTAssertFalse(FileManager.default.fileExists(atPath: right.appendingPathComponent("Project").path))
+
+            let fresh = try FolderSyncPlan.preview(from: left, to: right, options: defaultOptions)
+            let result = try fresh.apply()
+            XCTAssertNil(result.problem)
+            XCTAssertEqual(result.changes.count, 3)
+            XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent("Project/Subfolder/Photo.png")),
+                           Data("new contents".utf8))
+            XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent("changed.txt")), Data("second".utf8))
+            XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent("extra.txt")), Data("keep".utf8))
+            XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent("type-conflict")), Data("existing file".utf8))
+
+            let withChanges = try FolderSyncPlan.preview(
+                from: left, to: right, options: .init(replaceDifferentFiles: true, trashDestinationExtras: true)
+            )
+            let actions = Dictionary(uniqueKeysWithValues: withChanges.rows.map { ($0.path, $0.action) })
+            XCTAssertEqual(actions["changed.txt"], .replace)
+            XCTAssertEqual(actions["extra.txt"], .trash)
+            XCTAssertEqual(actions["type-conflict"], .conflict)
+            XCTAssertThrowsError(try FolderSyncPlan.preview(from: left, to: left, options: defaultOptions))
+        }
+    }
+
     func testFolderAndRecursiveSearchKeepExplicitScope() throws {
         try fixture { root in
             let manager = FileManager.default

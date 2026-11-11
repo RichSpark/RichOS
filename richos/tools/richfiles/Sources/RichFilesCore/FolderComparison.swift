@@ -30,18 +30,49 @@ public struct FolderComparisonReport: Sendable {
     public let otherVolumes: Int
 }
 
+struct FolderInventorySnapshot {
+    let folder: URL
+    let identity: FileIdentity
+    let entries: [String: FileInventory.Entry]
+    let coverage: FileInventory.Report
+
+    init(_ location: URL, includePackages: Bool = true, isCancelled: () -> Bool) throws {
+        let root = try OpenFolder(location)
+        var items: [String: FileInventory.Entry] = [:]
+        coverage = try FileInventory.walk(root.url, includePackages: includePackages, isCancelled: isCancelled) {
+            guard items.updateValue($0, forKey: $0.relativePath) == nil else {
+                throw CocoaError(.fileReadInvalidFileName)
+            }
+        }
+        try root.verifyLocation()
+        folder = root.url
+        identity = root.identity
+        entries = items
+    }
+}
+
 public extension StorageAnalysis {
     static func compareFolders(
         _ first: URL, _ second: URL, mode: FolderComparisonMode,
         isCancelled: () -> Bool = { false }
     ) throws -> FolderComparisonReport {
-        var left: [String: FileInventory.Entry] = [:]
-        var right: [String: FileInventory.Entry] = [:]
-        let firstScan = try FileInventory.walk(first, isCancelled: isCancelled) { left[$0.relativePath] = $0 }
-        let secondScan = try FileInventory.walk(second, isCancelled: isCancelled) { right[$0.relativePath] = $0 }
-        let paths = Set(left.keys).union(right.keys).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        let left = try FolderInventorySnapshot(first, isCancelled: isCancelled)
+        let right = try FolderInventorySnapshot(second, isCancelled: isCancelled)
+        return try compare(left, right, mode: mode, isCancelled: isCancelled)
+    }
 
-        var unavailable = firstScan.unavailable + secondScan.unavailable
+    internal static func compare(
+        _ first: FolderInventorySnapshot, _ second: FolderInventorySnapshot,
+        mode: FolderComparisonMode, isCancelled: () -> Bool
+    ) throws -> FolderComparisonReport {
+        let left = first.entries
+        let right = second.entries
+        let paths = Set(left.keys).union(right.keys).sorted {
+            let order = $0.localizedStandardCompare($1)
+            if order == .orderedSame { return $0.utf8.lexicographicallyPrecedes($1.utf8) }
+            return order == .orderedAscending
+        }
+        var unavailable = first.coverage.unavailable + second.coverage.unavailable
         var matches = 0
         var differences: [FolderDifference] = []
         for path in paths {
@@ -68,7 +99,7 @@ public extension StorageAnalysis {
             }
         }
         return FolderComparisonReport(differences: differences, matchingItems: matches, unavailable: unavailable,
-                                      otherVolumes: firstScan.otherVolumes + secondScan.otherVolumes)
+                                      otherVolumes: first.coverage.otherVolumes + second.coverage.otherVolumes)
     }
 
     private static func compare(

@@ -121,6 +121,7 @@ public enum FileOperationError: LocalizedError {
     case invalidName
     case sourceChanged(URL)
     case folderChanged(URL)
+    case folderNotEmpty(URL)
     case destinationExists(URL)
     case noAvailableCopyName(URL)
     case moveNeedsReview(source: URL, destination: URL)
@@ -141,6 +142,7 @@ public enum FileOperationError: LocalizedError {
             return "Enter a single filename or folder name."
         case .sourceChanged(let url):
             return "The selected item changed at \(url.path). Select it again."
+        case .folderNotEmpty(let url): return "The folder is no longer empty. Left it in place at \(url.path)."
         case .folderChanged(let url):
             return "The folder changed at \(url.path). Open it again."
         case .destinationExists(let url):
@@ -194,8 +196,12 @@ public enum FileOperations {
     }
 
     public static func createFolder(in folder: URL, named name: String) throws -> FileReference {
+        try createFolder(in: OpenFolder(folder), named: name)
+    }
+
+    static func createFolder(in parent: OpenFolder, named name: String) throws -> FileReference {
         try validateName(name)
-        let parent = try OpenFolder(folder)
+        try parent.verifyLocation()
         guard mkdirat(parent.descriptor, name, 0o777) == 0 else {
             throw destinationError("Could not create the folder", parent.childURL(name), errno)
         }
@@ -319,11 +325,21 @@ public enum FileOperations {
         onProgress: (Int64, Int64) -> Void = { _, _ in }
     ) throws -> CopyReceipt {
         if isCancelled() { throw CancellationError() }
+        return try copy(source, into: OpenFolder(folder), named: name, conflictPolicy: conflictPolicy,
+                        isCancelled: isCancelled, onProgress: onProgress)
+    }
+
+    static func copy(
+        _ source: FileReference, into destination: OpenFolder, named name: String? = nil,
+        conflictPolicy: CopyConflictPolicy = .refuse, expected: FileVersion? = nil,
+        isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void = { _, _ in }
+    ) throws -> CopyReceipt {
+        if isCancelled() { throw CancellationError() }
         let name = name ?? source.name
         try validateName(name)
         let sourceFolder = try OpenFolder(source.parent)
         let initial = try sourceFolder.verifiedStatus(of: source)
-        let destination = try OpenFolder(folder)
+        if let expected, FileVersion(initial) != expected { throw FileOperationError.sourceChanged(source.url) }
         let kind = initial.st_mode & S_IFMT
         guard kind == S_IFREG || kind == S_IFDIR || kind == S_IFLNK else {
             throw FileOperationError.unsupportedCopySource(source.url)
@@ -579,9 +595,14 @@ public enum FileOperations {
     }
 
     public static func trash(_ source: FileReference) throws -> TrashReceipt {
+        try trash(source, expected: nil)
+    }
+
+    static func trash(_ source: FileReference, expected: FileVersion?) throws -> TrashReceipt {
         let parent = try OpenFolder(source.parent)
         try parent.verifyLocation()
-        _ = try parent.verifiedStatus(of: source)
+        let status = try parent.verifiedStatus(of: source)
+        if let expected, FileVersion(status) != expected { throw FileOperationError.sourceChanged(source.url) }
         var resultingURL: NSURL?
         try FileManager.default.trashItem(at: source.url, resultingItemURL: &resultingURL)
         let location = resultingURL as URL?
@@ -590,6 +611,18 @@ public enum FileOperations {
             original: source, trashedAt: Date(), trashLocation: location,
             trashed: reference?.identity == source.identity ? reference : nil
         )
+    }
+
+    public static func trashEmptyFolder(_ source: FileReference) throws -> TrashReceipt {
+        let parent = try OpenFolder(source.parent)
+        let before = try parent.verifiedStatus(of: source)
+        guard before.st_mode & S_IFMT == S_IFDIR else { throw FileOperationError.sourceChanged(source.url) }
+        let folder = try OpenFolder(source.url)
+        try folder.requireIdentity(source.identity)
+        guard try FileManager.default.contentsOfDirectory(atPath: folder.url.path).isEmpty else {
+            throw FileOperationError.folderNotEmpty(source.url)
+        }
+        return try trash(source, expected: FileVersion(before))
     }
 
     /// Restores to the original folder identity, or to an alternate folder explicitly supplied

@@ -1166,7 +1166,7 @@ struct BrowserView: View {
             ZipCreateSheet(sources: sources, destination: destination, changed: model.refresh)
         case .diskUsage(let folder): DiskUsageSheet(folder: folder, openFolder: model.openFolder)
         case .duplicates(let folder): DuplicateSheet(folder: folder, openFolder: model.openFolder)
-        case .compare(let folder): CompareFoldersSheet(first: folder, openFolder: model.openFolder)
+        case .compare(let folder): CompareFoldersSheet(first: folder, actions: actions, openFolder: model.openFolder)
         case .checksum(let reference): ChecksumSheet(file: reference)
         case .trash: TrashSheet(actions: actions)
         case .transfers: TransferSheet(actions: actions)

@@ -162,6 +162,7 @@ struct FileShelfSheet: View {
 @MainActor
 struct CompareFoldersSheet: View {
     let first: URL
+    @ObservedObject var actions: BrowserActions
     let openFolder: (URL) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var second: URL?
@@ -169,11 +170,18 @@ struct CompareFoldersSheet: View {
     @State private var request: Request?
     @State private var report: FolderComparisonReport?
     @State private var problem = ""
+    @State private var showSyncOptions = false
+    @State private var syncOptions = FolderSyncPlan.Options()
+    @State private var plan: FolderSyncPlan?
+    @State private var confirmSync = false
+    @State private var applying: Task<Void, Never>?
+    @State private var applied = false
 
     private struct Request: Hashable {
         let id = UUID()
         let folder: URL
         let mode: FolderComparisonMode
+        let sync: FolderSyncPlan.Options?
     }
 
     var body: some View {
@@ -184,20 +192,36 @@ struct CompareFoldersSheet: View {
             HStack {
                 LabeledContent("Second Folder", value: second?.path ?? "Choose a folder")
                     .lineLimit(1).truncationMode(.middle)
-                Button("Choose…") { chooseFolder() }
+                Button("Choose…") { chooseFolder() }.disabled(applying != nil)
             }
             HStack {
                 Picker("Compare by", selection: $mode) {
                     ForEach(FolderComparisonMode.allCases) { Text($0.rawValue).tag($0) }
                 }
-                Button("Compare") {
-                    guard let second else { return }
-                    report = nil
-                    problem = ""
-                    request = Request(folder: second, mode: mode)
-                }.disabled(second == nil || second?.path == first.path)
-            }
-            if let report {
+                Button("Compare") { preview(sync: nil) }.disabled(!canPreview)
+            }.disabled(applying != nil)
+            DisclosureGroup("Sync First Folder to Second", isExpanded: $showSyncOptions) {
+                HStack {
+                    Toggle("Replace differing files", isOn: $syncOptions.replaceDifferentFiles)
+                    Toggle("Trash destination extras", isOn: $syncOptions.trashDestinationExtras)
+                    Spacer()
+                    Button("Preview Sync") { preview(sync: syncOptions) }.disabled(!canPreview)
+                }.padding(.vertical, 3)
+            }.disabled(applying != nil)
+            if let plan {
+                Text("\(plan.changeCount) proposed changes in the second folder")
+                List(plan.rows) { row in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(row.path).lineLimit(1).truncationMode(.middle).help(row.path)
+                        Text(row.action.rawValue).font(.caption).foregroundStyle(.secondary)
+                        if !row.detail.isEmpty { Text(row.detail).font(.caption).foregroundStyle(.secondary) }
+                    }
+                }.accessibilityLabel("Reviewed sync changes")
+                if plan.unavailable > 0 || plan.otherVolumes > 0 {
+                    Text("\(plan.unavailable) unavailable. \(plan.otherVolumes) other mounts skipped. Choose folders with full coverage to apply.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else if let report {
                 Text("\(report.differences.count) differences · \(report.matchingItems) match")
                 List(report.differences) { item in
                     VStack(alignment: .leading, spacing: 4) {
@@ -214,36 +238,87 @@ struct CompareFoldersSheet: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
-                if !problem.isEmpty { Text(problem).foregroundStyle(.secondary) }
-                else if request != nil { ProgressView("Comparing…") }
+                if applied {
+                    Text(actions.status)
+                    ForEach(actions.issues, id: \.self) { Text($0).foregroundStyle(.secondary).textSelection(.enabled) }
+                } else if !problem.isEmpty {
+                    Text(problem).foregroundStyle(.secondary)
+                } else if let request {
+                    ProgressView(request.sync == nil ? "Comparing…" : "Reviewing sync…")
+                }
                 Spacer()
             }
             HStack {
-                if request != nil && report == nil && problem.isEmpty {
+                if let applying {
+                    ProgressView().controlSize(.small).accessibilityLabel("Applying folder sync")
+                    Button("Stop") { applying.cancel() }
+                } else if request != nil && report == nil && plan == nil && problem.isEmpty {
                     Button("Stop") { request = nil }
                 }
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                if let plan, plan.canApply {
+                    Button("Apply \(plan.changeCount) Changes…") { confirmSync = true }.disabled(actions.busy)
+                }
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(applying != nil)
             }
-        }.padding(16).frame(width: 680, height: 465)
-            .onChange(of: mode) { _ in
-                request = nil
-                report = nil
-                problem = ""
+        }.padding(16).frame(width: 715, height: 515)
+            .alert("Apply the reviewed sync?", isPresented: $confirmSync) {
+                Button("Cancel", role: .cancel) {}
+                Button("Apply Sync") { applySync() }
+            } message: {
+                Text("Apply the listed changes to the second folder. Replaced or removed items go to Trash.")
             }
+            .onChange(of: mode) { _ in reset() }
+            .onChange(of: syncOptions) { _ in reset() }
+            .onDisappear { applying?.cancel() }
             .task(id: request) {
                 guard let requested = request else { return }
                 let root = first
                 do {
-                    let result = try await readStorage {
-                        try StorageAnalysis.compareFolders(root, requested.folder, mode: requested.mode,
-                                                           isCancelled: { Task.isCancelled })
+                    if let options = requested.sync {
+                        let result = try await readStorage {
+                            try FolderSyncPlan.preview(from: root, to: requested.folder, options: options,
+                                                       isCancelled: { Task.isCancelled })
+                        }
+                        if !Task.isCancelled { plan = result }
+                    } else {
+                        let result = try await readStorage {
+                            try StorageAnalysis.compareFolders(root, requested.folder, mode: requested.mode,
+                                                               isCancelled: { Task.isCancelled })
+                        }
+                        if !Task.isCancelled { report = result }
                     }
-                    if !Task.isCancelled { report = result }
                 } catch {
                     if !Task.isCancelled { problem = error.localizedDescription }
                 }
             }
+    }
+
+    private var canPreview: Bool { second != nil && second?.path != first.path && applying == nil }
+
+    private func reset() {
+        request = nil
+        report = nil
+        plan = nil
+        problem = ""
+        applied = false
+    }
+
+    private func preview(sync: FolderSyncPlan.Options?) {
+        guard let second else { return }
+        reset()
+        request = Request(folder: second, mode: mode, sync: sync)
+    }
+
+    private func applySync() {
+        guard let plan, let task = actions.applySync(plan) else { return }
+        applying = task
+        Task {
+            await task.value
+            applying = nil
+            reset()
+            applied = true
+        }
     }
 
     private func chooseFolder() {
@@ -256,9 +331,7 @@ struct CompareFoldersSheet: View {
         panel.begin { result in
             if result == .OK, let folder = panel.url {
                 second = folder
-                request = nil
-                report = nil
-                problem = ""
+                reset()
             }
         }
     }

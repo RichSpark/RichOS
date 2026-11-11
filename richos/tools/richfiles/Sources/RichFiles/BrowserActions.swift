@@ -407,20 +407,52 @@ final class BrowserActions: ObservableObject {
         }
     }
 
+    func applySync(_ plan: FolderSyncPlan) -> Task<Void, Never>? {
+        runMutation(title: "Folder Sync") {
+            let result = try plan.apply(isCancelled: { Task.isCancelled })
+            var undo: [HistoryStep] = []
+            var changes: [TrashChange] = []
+            var issues = result.problem.map { [$0] } ?? []
+            for action in result.changes {
+                switch action {
+                case .copied(let copy):
+                    undo.append(.trash(copy.copied))
+                    if let stage = copy.remainingStagingFolder { issues.append("Temporary cleanup failed at \(stage.path).") }
+                case .createdFolder(let folder):
+                    undo.append(.trashEmpty(folder))
+                case .replaced(let receipt):
+                    let previous = BrowserTrashItem(receipt: receipt.previous)
+                    changes.append(.add(previous))
+                    undo.append(.replacement(receipt.installed, previous))
+                    if let stage = receipt.remainingStagingFolder { issues.append("Temporary cleanup failed at \(stage.path).") }
+                case .trashed(let receipt, let emptyFolder):
+                    let item = BrowserTrashItem(receipt: receipt)
+                    changes.append(.add(item))
+                    if item.canRestore { undo.append(emptyFolder ? .restoreEmpty(item) : .restore(item)) }
+                    else { issues.append("Moved to Trash. Open macOS Trash to find \(item.originalURL.path).") }
+                }
+            }
+            let heading = result.cancelled ? "Sync stopped." : result.problem != nil ? "Sync paused on an issue." : "Sync finished."
+            return MutationResult(message: heading + " Applied \(result.changes.count) of \(plan.changeCount) changes.",
+                                  issues: issues, changed: !result.changes.isEmpty,
+                                  undo: Array(undo.reversed()), trashChanges: changes)
+        }
+    }
+
     func undo() { replay(undo: true) }
     func redo() { replay(undo: false) }
 
+    @discardableResult
     private func runMutation(
         title: String, onSuccess: (() -> Void)? = nil, _ operation: @escaping @Sendable () throws -> MutationResult
-    ) {
-        guard !busy else { return }
+    ) -> Task<Void, Never>? {
+        guard !busy else { return nil }
         busy = true
         issues = []
         status = title + "…"
-        Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                Result { try operation() }
-            }.value
+        let worker = Task.detached(priority: .userInitiated) { Result { try operation() } }
+        return Task {
+            let result = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
             busy = false
             switch result {
             case .success(let mutation):
@@ -446,7 +478,7 @@ final class BrowserActions: ObservableObject {
                 undoHistory = undoHistory.compactMap { group in
                     let remaining = group.steps.filter { step in
                         switch step {
-                        case .restore(let item), .replacement(_, let item), .crossVolumeMove(_, let item):
+                        case .restore(let item), .restoreEmpty(let item), .replacement(_, let item), .crossVolumeMove(_, let item):
                             return !restoredIDs.contains(item.id)
                         default: return true
                         }
@@ -555,6 +587,8 @@ private enum HistoryStep: Codable, Sendable {
     case rename(FileReference, String)
     case restore(BrowserTrashItem)
     case trash(FileReference)
+    case trashEmpty(FileReference)
+    case restoreEmpty(BrowserTrashItem)
     case replacement(ReviewedFile, BrowserTrashItem)
     case crossVolumeMove(CrossVolumeMoveReceipt, BrowserTrashItem)
 
@@ -572,6 +606,12 @@ private enum HistoryStep: Codable, Sendable {
         case .trash(let source):
             let item = BrowserTrashItem(receipt: try FileOperations.trash(source))
             return (item.canRestore ? .restore(item) : nil, [.add(item)])
+        case .trashEmpty(let source):
+            let item = BrowserTrashItem(receipt: try FileOperations.trashEmptyFolder(source))
+            return (item.canRestore ? .restoreEmpty(item) : nil, [.add(item)])
+        case .restoreEmpty(let item):
+            let restored = try FileOperations.restore(item.receipt)
+            return (.trashEmpty(restored), [.remove(item.id)])
         case .replacement(let installed, let displaced):
             let restored = try FileOperations.restoreReplacedFile(displaced.receipt, replacing: installed)
             let previous = BrowserTrashItem(receipt: restored.previous)
