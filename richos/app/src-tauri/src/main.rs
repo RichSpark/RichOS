@@ -4202,6 +4202,8 @@ fn main() {
             cleaner_host::cleaner_capture_control,
             #[cfg(target_os = "macos")]
             cleaner_host::cleaner_action,
+            #[cfg(target_os = "macos")]
+            cleaner_service::finder_take_service_query,
             rich_files_host::rich_file_open,
             rich_files_host::rich_file_reveal,
             // --- Terminal setup and your name in Git (round 41) — appended ---

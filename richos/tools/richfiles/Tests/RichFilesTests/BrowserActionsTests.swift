@@ -5,6 +5,19 @@ import XCTest
 
 final class BrowserActionsTests: XCTestCase {
     @MainActor
+    func testRichFinderReceivesQueryTextWithoutTakingTheSystemClipboard() {
+        let text = "builder's quote for the kitchen"
+        let accepted = RichOSServices.search(text) { service, board in
+            XCTAssertEqual(service, "Search with RichFinder")
+            XCTAssertNotEqual(board.name, NSPasteboard.general.name)
+            XCTAssertEqual(board.string(forType: .string), text)
+            XCTAssertNil(board.propertyList(forType: RichOSServices.filenamesType))
+            return true
+        }
+        XCTAssertTrue(accepted)
+    }
+
+    @MainActor
     func testRichCleanerReceivesOnlyTheSelectedPathsOnAnIsolatedPasteboard() async throws {
         try await withFixture { root, _, board in
             let first = try write("first", named: "Report one.txt", in: root)

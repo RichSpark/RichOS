@@ -36,6 +36,12 @@
       <key>NSPortName</key><string>RichOS</string>
       <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string></array>
       <key>NSReturnTypes</key><array/>
+    </dict><dict>
+      <key>NSMenuItem</key><dict><key>default</key><string>Search with RichFinder</string></dict>
+      <key>NSMessage</key><string>richFinderSearch</string>
+      <key>NSPortName</key><string>RichOS</string>
+      <key>NSSendTypes</key><array><string>public.utf8-plain-text</string></array>
+      <key>NSReturnTypes</key><array/>
     </dict></array>
     <key>NSDesktopFolderUsageDescription</key>
     <string>RichOS uses your Desktop for file tasks such as saving output, organizing files and protecting RichPass.html.</string>

@@ -459,6 +459,7 @@ struct SearchOptionsSheet: View {
     @State private var byDate = false
     @State private var from = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var through = Date()
+    @State private var finderUnavailable = false
 
     private var valid: Bool {
         let low = minimum.isEmpty ? 0 : (Int64(minimum) ?? -1)
@@ -488,7 +489,16 @@ struct SearchOptionsSheet: View {
                     DatePicker("Through", selection: $through, displayedComponents: .date)
                 }
             }.formStyle(.grouped)
+            if finderUnavailable {
+                Text("RichFinder could not open. Check that RichOS is installed and try again.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             HStack {
+                Button(RichOSServices.finderTitle) {
+                    if RichOSServices.search(queryText) { dismiss() }
+                    else { finderUnavailable = true }
+                }
+                .help("Search the sources configured in RichFinder.")
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Search") {
