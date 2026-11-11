@@ -169,6 +169,7 @@ mod search_rerank;
 /// **A file Rich puts in front of the user** (§138, item 12): the cards' items, open and Show in
 /// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
 mod rich_files_host;
+mod richfiles_pane;
 #[cfg(target_os = "macos")]
 mod cleaner_native;
 #[cfg(target_os = "macos")]
@@ -3899,6 +3900,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             system_resources,
+            richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
             claude_quota_activity,

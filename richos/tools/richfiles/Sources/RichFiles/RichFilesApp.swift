@@ -3,6 +3,18 @@ import RichFilesCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+public enum RichFilesInstallation {
+    static let preferences = UserDefaults(suiteName: "app.richos.richfiles") ?? .standard
+
+    public static var embeddedApplication: URL {
+        Bundle.main.bundleURL.appendingPathComponent("Contents/Applications/RichFiles.app", isDirectory: true)
+    }
+
+    @MainActor public static var dockedRecoveryStore: URL? {
+        BrowserActions.recoveryLocation?.deletingLastPathComponent().appendingPathComponent("DockedRecovery.json")
+    }
+}
+
 @MainActor
 public struct RichFilesScenes: Scene {
     private let delegate: FolderOpenDelegate
@@ -18,6 +30,7 @@ public struct RichFilesScenes: Scene {
                         actions: actions, openRequests: delegate,
                         supportsSessionRestore: Self.requestedFolder == nil)
                 .frame(minWidth: 720, minHeight: 420)
+                .defaultAppStorage(RichFilesInstallation.preferences)
         }
         .defaultSize(width: 1120, height: 700)
         .commands {
@@ -25,7 +38,7 @@ public struct RichFilesScenes: Scene {
         }
 
         Settings {
-            RichFilesSettings()
+            RichFilesSettings().defaultAppStorage(RichFilesInstallation.preferences)
         }
     }
 
@@ -45,24 +58,28 @@ public struct RichFilesPane: View {
     @StateObject private var actions: BrowserActions
     @StateObject private var openRequests = FolderOpenDelegate()
     private let folder: URL
-    private let openWindow: () -> Void
+    private let openWindow: (URL) -> Void
     private let acceptsKeyboard: () -> Bool
+    private let returnKeyboardFocus: () -> Void
 
     public init(
         folder: URL,
         recoveryStore: URL?,
-        openWindow: @escaping () -> Void,
-        acceptsKeyboard: @escaping () -> Bool
+        openWindow: @escaping (URL) -> Void,
+        acceptsKeyboard: @escaping () -> Bool,
+        returnKeyboardFocus: @escaping () -> Void = {}
     ) {
         self.folder = folder
         self.openWindow = openWindow
         self.acceptsKeyboard = acceptsKeyboard
+        self.returnKeyboardFocus = returnKeyboardFocus
         _actions = StateObject(wrappedValue: BrowserActions(recoveryURL: recoveryStore))
     }
 
     public var body: some View {
         BrowserView(start: folder, actions: actions, openRequests: openRequests,
-                    openWindow: openWindow, acceptsKeyboard: acceptsKeyboard)
+                    openWindow: openWindow, acceptsKeyboard: acceptsKeyboard, returnKeyboardFocus: returnKeyboardFocus)
+            .defaultAppStorage(RichFilesInstallation.preferences)
     }
 }
 

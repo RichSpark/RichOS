@@ -94,10 +94,11 @@ enum ArchiveTools {
     }
 
     private static func run(_ arguments: [String]) async throws -> Data {
-        guard let executable = Bundle.main.executableURL?.deletingLastPathComponent()
-            .appendingPathComponent("richfiles-archive"), FileManager.default.isExecutableFile(atPath: executable.path) else {
-            throw ArchiveToolError.helperUnavailable
-        }
+        let local = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("richfiles-archive")
+        let embedded = RichFilesInstallation.embeddedApplication.appendingPathComponent("Contents/MacOS/richfiles-archive")
+        guard let executable = [local, embedded].compactMap({ $0 }).first(where: {
+            FileManager.default.isExecutableFile(atPath: $0.path)
+        }) else { throw ArchiveToolError.helperUnavailable }
         let runner = ArchiveProcess()
         let worker = Task.detached(priority: .userInitiated) { try runner.run(executable, arguments: arguments) }
         return try await withTaskCancellationHandler {

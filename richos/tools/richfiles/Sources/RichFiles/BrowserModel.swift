@@ -206,7 +206,7 @@ final class BrowserModel: ObservableObject {
     private let defaults: UserDefaults
     private var preferences: BrowserPreferences
 
-    init(start: URL, defaults: UserDefaults = UserDefaults(suiteName: "app.richos.richfiles") ?? .standard) {
+    init(start: URL, defaults: UserDefaults = RichFilesInstallation.preferences) {
         let id = UUID()
         let location = start.standardizedFileURL
         let preferences = BrowserPreferences.load(from: defaults)

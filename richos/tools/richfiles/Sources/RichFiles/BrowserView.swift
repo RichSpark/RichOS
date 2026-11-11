@@ -10,8 +10,9 @@ struct BrowserView: View {
     @ObservedObject private var openRequests: FolderOpenDelegate
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
-    private let hostOpenWindow: (() -> Void)?
+    private let hostOpenWindow: ((URL) -> Void)?
     private let acceptsKeyboard: () -> Bool
+    private let returnKeyboardFocus: () -> Void
     private let supportsSessionRestore: Bool
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
@@ -45,13 +46,14 @@ struct BrowserView: View {
     private enum Field: Hashable { case address, search }
 
     init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate,
-         openWindow: (() -> Void)? = nil, acceptsKeyboard: @escaping () -> Bool = { true },
-         supportsSessionRestore: Bool = false) {
+         openWindow: ((URL) -> Void)? = nil, acceptsKeyboard: @escaping () -> Bool = { true },
+         supportsSessionRestore: Bool = false, returnKeyboardFocus: @escaping () -> Void = {}) {
         _model = StateObject(wrappedValue: BrowserModel(start: start))
         self.actions = actions
         self.openRequests = openRequests
         hostOpenWindow = openWindow
         self.acceptsKeyboard = acceptsKeyboard
+        self.returnKeyboardFocus = returnKeyboardFocus
         self.supportsSessionRestore = supportsSessionRestore
     }
 
@@ -107,8 +109,10 @@ struct BrowserView: View {
         }
         .onChange(of: openRequests.requestID) { _ in receiveFolderOpen() }
         .onChange(of: model.folder) { _ in
+            let returnFocus = editingAddress
             editingAddress = false
             focus = nil
+            if returnFocus { DispatchQueue.main.async(execute: returnKeyboardFocus) }
             suggestions = []
             feedback = ""
             rangeAnchor = nil
@@ -310,7 +314,7 @@ struct BrowserView: View {
             }
             control("New Tab", "plus") { model.newTab() }
             control("New Window", "macwindow.badge.plus") {
-                if let hostOpenWindow { hostOpenWindow() }
+                if let hostOpenWindow { hostOpenWindow(model.folder) }
                 else { openWindow(id: "browser") }
             }
         }
