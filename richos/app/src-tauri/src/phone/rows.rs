@@ -114,6 +114,7 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
             // `source` is the ledger's own word for how the input arrived. `jam` is a spoken
             // turn, which the phone shows with its microphone marker; anything else is typed.
             let spoken = item.get("source").and_then(|v| v.as_str()) == Some("jam");
+            let text = crate::mac_attachments::phone_recording_summary(&text).unwrap_or(text);
             Some(json!({
                 "id": id,
                 "thread_id": thread_id,
@@ -271,6 +272,8 @@ pub fn event_from_live(name: &str, payload: &Value, cursor: u64) -> Option<(&'st
             // The same rule `row_from_item` applies to a projected user message, in the same
             // words: `jam` is a spoken turn, anything else is typed.
             let spoken = payload.get("source").and_then(|v| v.as_str()) == Some("jam");
+            let text = payload["text"].as_str().unwrap_or("");
+            let summary = crate::mac_attachments::phone_recording_summary(text);
             Some((
                 "message",
                 json!({
@@ -281,7 +284,7 @@ pub fn event_from_live(name: &str, payload: &Value, cursor: u64) -> Option<(&'st
                     // **THE ROW THAT CAN BEAT THE RECEIPT**, so a voice note is a voice row here
                     // already — see [`message_kind`].
                     "kind": message_kind(spoken, payload),
-                    "text": payload.get("text").and_then(|v| v.as_str()).unwrap_or(""),
+                    "text": summary.as_deref().unwrap_or(text),
                     // The TURN's instant, not this event's: the projected row carries the same
                     // one, and two timestamps for one message is two orderings for one thread.
                     "created_at": iso8601(payload.get("createdAt").and_then(|v| v.as_u64()).unwrap_or(at)),

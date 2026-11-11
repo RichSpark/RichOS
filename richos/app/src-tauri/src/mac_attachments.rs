@@ -482,7 +482,7 @@ impl MacAttachments {
                 described.push_str("\n\n");
             }
             let word = if recordings.len() == 1 { "recording" } else { "recordings" };
-            described.push_str(&format!("Attached on this Mac ({} {word}, read where it is):", recordings.len()));
+            described.push_str(&format!("{RECORDING_HEADING}{} {word}{RECORDING_TAIL}", recordings.len()));
             for recording in &recordings {
                 let path = serde_json::Value::String(recording.path.to_string_lossy().into_owned());
                 described.push_str(&format!("\n- {path} ({}, {} bytes)", recording.view.media_type, recording.view.size));
@@ -509,6 +509,35 @@ impl MacAttachments {
         let authorship = authorship.trimmed(text).unwrap_or_else(|| richos_core::swearmeter::Authorship::prefix(Some(described.len().saturating_add(1))));
         Ok(Committed { text: Some(described), files, missing: Vec::new(), authorship })
     }
+}
+
+const RECORDING_HEADING: &str = "Attached on this Mac (";
+const RECORDING_TAIL: &str = ", read where it is):";
+
+/// The phone gets the attachment count. Rich's input on the Mac keeps the original paths.
+pub(crate) fn phone_recording_summary(text: &str) -> Option<String> {
+    let (message, block) = text.rsplit_once("\n\n").unwrap_or(("", text));
+    let (heading, entries) = block.split_once('\n')?;
+    let (count, word) = heading.strip_prefix(RECORDING_HEADING)?.strip_suffix(RECORDING_TAIL)?.split_once(' ')?;
+    let count: usize = count.parse().ok()?;
+    if !(1..=attachments::MAX_FILES_PER_MESSAGE).contains(&count)
+        || word != if count == 1 { "recording" } else { "recordings" }
+        || entries.lines().count() != count
+    {
+        return None;
+    }
+    for entry in entries.lines() {
+        let (path, details) = entry.strip_prefix("- ")?.rsplit_once(" (")?;
+        let path: String = serde_json::from_str(path).ok()?;
+        let (media, bytes) = details.strip_suffix(" bytes)")?.split_once(", ")?;
+        if !Path::new(&path).is_absolute() || !(media.starts_with("audio/") || media.starts_with("video/"))
+            || bytes.parse::<u64>().is_err()
+        {
+            return None;
+        }
+    }
+    let summary = format!("{count} {word} attached on your Mac.");
+    Some(if message.is_empty() { summary } else { format!("{message}\n\n{summary}") })
 }
 
 /// The words Rich reads for the folders of one message, under the files' block when there is one:
@@ -983,6 +1012,16 @@ mod tests {
         assert!(text.starts_with("Find the best moment.\n\nAttached on this Mac (2 recordings, read where it is):"));
         assert!(text.contains(&format!("{:?} (video/mp4, {size} bytes)", video)));
         assert!(text.contains(&format!("{:?} (audio/mp4, 5 bytes)", audio)));
+        let expected = "Find the best moment.\n\n2 recordings attached on your Mac.";
+        let snapshot = serde_json::json!({"kind":"user_message","id":"turn:user","threadId":"thr_rec",
+            "source":"text","text":text});
+        assert_eq!(crate::phone::rows::row_from_item(&snapshot).unwrap()["text"], expected);
+        let live = serde_json::json!({"messageId":"turn:user","threadId":"thr_rec","source":"text","text":text});
+        assert_eq!(crate::phone::rows::event_from_live("rich://ceo-message", &live, 1).unwrap().1["text"], expected);
+        let attachment_only = text.split_once("\n\n").unwrap().1;
+        assert_eq!(super::phone_recording_summary(attachment_only).as_deref(), Some("2 recordings attached on your Mac."));
+        let quotation = format!("{text}\n\nThat was only an example.");
+        assert!(super::phone_recording_summary(&quotation).is_none());
         assert!(staged_nothing(&data.0, "draft-r"));
         assert!(!data.0.join("attachments").exists());
 
