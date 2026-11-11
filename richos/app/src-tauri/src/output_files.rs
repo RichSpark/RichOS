@@ -63,10 +63,11 @@
 //! - A file whose path did not exist when it was witnessed has no recorded canonical form, so
 //!   step 3 has nothing to compare and is skipped for it; steps 2 and 5 still hold.
 
+use richos_core::media_moments::{self, FileVersion};
 use richos_core::output::{entry_id, kind_of, Entry, OutputList, OutputStore, Sources};
 use richos_core::read_view::{SpineReader, SpineView};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -435,7 +436,7 @@ pub fn check(located: &Located) -> Result<Checked, Problem> {
 fn open_nofollow(path: &Path) -> Result<std::fs::File, Problem> {
     std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)
         .map_err(|e| match e.raw_os_error() {
             Some(libc::ELOOP) => Problem::Link,
@@ -446,7 +447,17 @@ fn open_nofollow(path: &Path) -> Result<std::fs::File, Problem> {
 
 /// At most `limit` bytes from `start`, through [`open_nofollow`].
 fn read_part(path: &Path, start: u64, limit: u64) -> Result<Vec<u8>, Problem> {
+    read_part_at_version(path, start, limit, None)
+}
+
+fn read_part_at_version(path: &Path, start: u64, limit: u64, version: Option<&FileVersion>) -> Result<Vec<u8>, Problem> {
     let mut file = open_nofollow(path)?;
+    if let Some(version) = version {
+        let meta = file.metadata().map_err(|e| Problem::Unreadable(read_failed(&e)))?;
+        if !version.matches(&meta) {
+            return Err(Problem::Swapped);
+        }
+    }
     file.seek(SeekFrom::Start(start)).map_err(|e| Problem::Unreadable(read_failed(&e)))?;
     let mut out = Vec::new();
     file.take(limit).read_to_end(&mut out).map_err(|e| Problem::Unreadable(read_failed(&e)))?;
@@ -629,6 +640,32 @@ impl OutputFiles {
         })
     }
 
+    fn media_record(&self, id: &str) -> Option<media_moments::Row> {
+        let source = self.converge.as_ref()?;
+        let view = source.reader.snapshot();
+        let binding = view.active_binding()?;
+        media_moments::locate(&source.engine_state, binding.entity_id().as_str(), binding.thread_id(), id)
+    }
+
+    fn preview_location(&self, id: &str) -> Result<(Located, Option<FileVersion>), String> {
+        if !id.starts_with("mm_") {
+            return self.locate(id).map(|located| (located, None));
+        }
+        let row = self.media_record(id).ok_or("This conversation does not have those moments.")?;
+        let media_moments::Source::Local { path, version } = row.source else {
+            return Err("Open this moment on YouTube.".into());
+        };
+        let located = Located { id: row.id, thread_id: row.thread_id, canonical: Some(path.clone()), path };
+        Ok((located, Some(version)))
+    }
+
+    fn open_media_moment(&self, id: &str, index: usize) -> Result<(), String> {
+        let row = self.media_record(id).ok_or("This conversation does not have those moments.")?;
+        let point = row.moments.points.get(index).ok_or("That moment is no longer here.")?;
+        let url = row.source.youtube_url(point.start_ms).ok_or("This moment can be played in RichOS.")?;
+        if (self.runner)(&[url]) { Ok(()) } else { Err("This Mac could not open the moment on YouTube.".into()) }
+    }
+
     /// `list_output(thread_id)`: converge with the sources, then project and re-stat (§4.6,
     /// §4.7, §5.4).
     pub fn list(&self, thread_id: &str) -> Result<OutputList, String> {
@@ -690,11 +727,14 @@ impl OutputFiles {
 
     /// `output_preview(output_id)` (§5.4, §7).
     pub fn preview(&self, output_id: &str) -> Result<Preview, String> {
-        let located = self.locate(output_id)?;
+        let (located, version) = self.preview_location(output_id)?;
         let checked = match check(&located) {
             Ok(checked) => checked,
             Err(problem) => return Ok(Preview::None { why: problem.why(), reason: problem.sentence() }),
         };
+        if version.as_ref().is_some_and(|v| !std::fs::symlink_metadata(&checked.path).is_ok_and(|m| v.matches(&m))) {
+            return Ok(Preview::None { why: "refused", reason: "The recording changed. Ask Rich to find the moments again.".into() });
+        }
         let kind = kind_of(&located.path.to_string_lossy());
         let url = format!("{SCHEME}://{output_id}?v={}", checked.modified_ms);
         let bytes = checked.bytes;
@@ -889,13 +929,19 @@ impl OutputFiles {
             return empty(StatusCode::METHOD_NOT_ALLOWED);
         };
         let Some(id) = request.uri().host() else { return empty(StatusCode::NOT_FOUND) };
-        let Ok(located) = self.locate(id) else { return empty(StatusCode::NOT_FOUND) };
+        let Ok((located, version)) = self.preview_location(id) else { return empty(StatusCode::NOT_FOUND) };
         let checked = match check(&located) {
             Ok(checked) => checked,
             Err(Problem::Link | Problem::Swapped | Problem::NotAFile) => return empty(StatusCode::FORBIDDEN),
             Err(_) => return empty(StatusCode::NOT_FOUND),
         };
+        if version.as_ref().is_some_and(|v| !std::fs::symlink_metadata(&checked.path).is_ok_and(|m| v.matches(&m))) {
+            return empty(StatusCode::FORBIDDEN);
+        }
         let kind = kind_of(&located.path.to_string_lossy());
+        if version.is_some() && !matches!(kind, "mp4" | "audio") {
+            return empty(StatusCode::NOT_FOUND);
+        }
         let (source, mime, cap): (PathBuf, &str, Option<u64>) = match plan(kind) {
             ("image" | "pdf" | "video" | "audio", cap) => (checked.path.clone(), mime_of(&checked.path), cap),
             ("rendition", _) => {
@@ -941,10 +987,10 @@ impl OutputFiles {
         let body = if head || length == 0 {
             Vec::new()
         } else {
-            match read_part(&source, start, length) {
+            match read_part_at_version(&source, start, length, version.as_ref()) {
                 Ok(bytes) if bytes.len() as u64 == length => bytes,
                 Ok(_) => return empty(StatusCode::NOT_FOUND),
-                Err(Problem::Link) => return empty(StatusCode::FORBIDDEN),
+                Err(Problem::Link | Problem::Swapped) => return empty(StatusCode::FORBIDDEN),
                 Err(_) => return empty(StatusCode::NOT_FOUND),
             }
         };
@@ -1434,7 +1480,61 @@ pub fn output_file(files: State<'_, OutputFiles>, output_id: String) -> Result<E
 
 #[richos_command::command]
 pub fn output_preview(files: State<'_, OutputFiles>, output_id: String) -> Result<Preview, String> {
-    files.preview(&output_id)
+    let start = Instant::now();
+    let result = files.preview(&output_id);
+    if output_id.starts_with("mm_") {
+        let outcome = match &result {
+            Ok(Preview::Video { .. } | Preview::Audio { .. }) => "ready",
+            Ok(Preview::None { why: "missing", .. }) => "missing",
+            Ok(Preview::None { why: "refused", .. }) => "changed",
+            _ => "unavailable",
+        };
+        record_media_diagnostic("local preview", outcome, start.elapsed().as_millis());
+    }
+    result
+}
+
+#[richos_command::command]
+pub fn media_moment_open(files: State<'_, OutputFiles>, file_id: String, moment_index: usize) -> Result<(), String> {
+    let start = Instant::now();
+    let result = files.open_media_moment(&file_id, moment_index);
+    record_media_diagnostic("browser launch", if result.is_ok() { "opened" } else { "unavailable" }, start.elapsed().as_millis());
+    result
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaPlayback {
+    Seeked,
+    OutsideRecording,
+    CouldNotPlay,
+}
+
+#[richos_command::command]
+pub fn media_moment_playback(outcome: MediaPlayback, elapsed_ms: u32) {
+    let outcome = match outcome {
+        MediaPlayback::Seeked => "seeked",
+        MediaPlayback::OutsideRecording => "outside recording",
+        MediaPlayback::CouldNotPlay => "could not play",
+    };
+    record_media_diagnostic("player", outcome, u128::from(elapsed_ms));
+}
+
+static MEDIA_DIAGNOSTICS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+
+fn record_media_diagnostic(stage: &'static str, outcome: &'static str, elapsed_ms: u128) {
+    if let Ok(mut records) = MEDIA_DIAGNOSTICS.lock() {
+        if records.len() == 12 {
+            records.pop_front();
+        }
+        let build = option_env!("RICHOS_SOURCE_SHA").unwrap_or(env!("CARGO_PKG_VERSION"));
+        records.push_back(format!("{build} · {stage} · {outcome} · {elapsed_ms} ms"));
+    }
+}
+
+pub(crate) fn recent_media_diagnostics() -> Option<String> {
+    let records = MEDIA_DIAGNOSTICS.lock().ok()?;
+    (!records.is_empty()).then(|| records.iter().cloned().collect::<Vec<_>>().join("\n"))
 }
 
 #[richos_command::command]
@@ -1543,6 +1643,74 @@ mod tests {
 
     const THREAD: &str = "thr_s3";
     const PNG_1280_800: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x05\x00\0\0\x03\x20\x08\x06\0\0\0";
+
+    #[test]
+    fn media_moments_preview_the_active_conversations_recording_and_nothing_else() {
+        use richos_core::entity::{Entity, EntityId, EntityRegistry};
+        use richos_core::{ledger::Ledger, question_tools, questions::AskScope, rich_files, spine::Spine};
+        use serde_json::json;
+        let dir = Dir::new("media");
+        let recording = dir.file("interview.mp4", b"test recording bytes");
+        let root = dir.0.join("engine-state");
+        let mut spine = Spine::new(Ledger::open(dir.0.join("ledger.jsonl")).unwrap());
+        let entity = EntityId::parse("acme").unwrap();
+        spine.set_entity_registry(EntityRegistry::new(vec![
+            Entity::new("acme", "Acme", &["/fixture/acme"]).unwrap()
+        ]).unwrap());
+        let thread = spine.create_thread("The interview", &entity).unwrap();
+        let other = spine.create_thread("Another chat", &entity).unwrap();
+        let scope = dir.0.join("questions.json");
+        question_tools::write_scope(&scope, &question_tools::Scope {
+            context: AskScope { root, entity_id: entity.to_string(), thread_id: thread.clone(),
+                turn_id: "turn-1".into(), asker: "front_desk".into(), obligation_id: None,
+                session_id: "fixture".into(), engine: None, entity_root: None, app_run: None },
+            actions_allowed: true, answer_method: "typed".into(), surface: "mac".into(),
+        }).unwrap();
+        let record = |source| {
+            rich_files::call(&scope, media_moments::TOOL, json!({
+                "name":"Interview", "durationMs":90000, "source":source,
+                "points":[{"startMs":53280,"label":"Customer focus","quote":"The evidence."}]
+            })).unwrap()["id"].as_str().unwrap().to_string()
+        };
+        let local = record(json!({"kind":"local","path":recording}));
+        let online = record(json!({"kind":"youtube","video_id":"ab-cDe_F123"}));
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let calls = ran.clone();
+        let files = OutputFiles::for_app(OutputStore::for_data_dir(&dir.0), spine.reader(), &dir.0, &dir.0)
+            .with_lister(no_apps).with_runner(Arc::new(move |args| {
+                calls.lock().unwrap().push(args.to_vec());
+                true
+            }));
+        let Preview::Video { url, .. } = files.preview(&local).unwrap() else { panic!("expected a video preview") };
+        let request = || Request::builder().uri(&url).header(header::RANGE, "bytes=5-13").body(Vec::new()).unwrap();
+        let response = files.serve(&request());
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.body(), b"recording");
+        assert!(files.open_media_moment(&online, 1).is_err());
+        assert!(files.open_media_moment(&local, 0).is_err());
+        files.open_media_moment(&online, 0).unwrap();
+        assert_eq!(*ran.lock().unwrap(), vec![vec!["https://www.youtube.com/watch?v=ab-cDe_F123&t=53s"]]);
+        assert!(files.list(&thread).unwrap().files.is_empty(), "a source is not a written output");
+
+        spine.switch_thread(&other).unwrap();
+        assert!(files.preview(&local).is_err());
+        assert_eq!(files.serve(&request()).status(), StatusCode::NOT_FOUND);
+        assert!(files.open_media_moment(&online, 0).is_err());
+        spine.switch_thread(&thread).unwrap();
+        std::fs::write(&recording, b"replacement file").unwrap();
+        assert!(matches!(files.preview(&local).unwrap(), Preview::None { why: "refused", .. }));
+        assert_eq!(files.serve(&request()).status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn media_moment_diagnostics_give_bug_reports_only_bounded_outcomes() {
+        for _ in 0..14 {
+            media_moment_playback(MediaPlayback::Seeked, 24);
+        }
+        let excerpt = recent_media_diagnostics().unwrap();
+        assert_eq!(excerpt.lines().count(), 12);
+        assert!(excerpt.lines().all(|line| line.ends_with("player · seeked · 24 ms")));
+    }
 
     fn fixed_apps(_: &Path) -> Apps {
         settle(

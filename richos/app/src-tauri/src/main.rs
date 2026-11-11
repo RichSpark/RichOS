@@ -4074,6 +4074,8 @@ fn main() {
             output_files::list_output,
             output_files::output_file,
             output_files::output_preview,
+            output_files::media_moment_open,
+            output_files::media_moment_playback,
             output_files::output_open,
             output_files::output_reveal,
             output_files::output_save_copy,

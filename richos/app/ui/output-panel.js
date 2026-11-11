@@ -252,7 +252,7 @@
       if (ctx.announce) ctx.announce(filesWord(state.list.count) + " from this thread");
     }
     if (ctx.onLinksChanged) ctx.onLinksChanged();
-    if (!state.open) return;
+    if (!state.open || state.view === "media") return;
     // Redrawn under him: focus stays on the same control of the same file (D6's re-read can land
     // a few milliseconds after the panel put focus on its first row).
     const anchor = focusAnchor();
@@ -852,6 +852,7 @@
         player.addEventListener("error", () => {
           if (!box.querySelector(".of-none")) player.after(couldNotShow(a.app));
         });
+        seekToMoment(player, f, box);
         player.src = a.url;
         box.appendChild(player);
         box.appendChild(
@@ -871,6 +872,7 @@
         player.addEventListener("error", () => {
           if (!box.querySelector(".of-none")) player.after(couldNotShow(a.app));
         });
+        seekToMoment(player, f, box);
         player.src = a.url;
         box.appendChild(player);
         box.appendChild(factsLine([typeof a.durationMs === "number" ? clock(a.durationMs) : null, KIND_WORD.audio, size]));
@@ -900,6 +902,54 @@
         // tooLarge or noViewer — the shell's §6.7 sentence, verbatim.
         box.appendChild(node("p", "of-none", a.reason || ""));
     }
+  }
+
+  function seekToMoment(player, file, box) {
+    if (!Number.isSafeInteger(file.startMs)) return;
+    const started = performance.now();
+    let reported = false;
+    function report(outcome) {
+      if (reported || !box.isConnected) return;
+      reported = true;
+      const elapsedMs = Math.round(performance.now() - started);
+      bridge.invoke("media_moment_playback", { outcome, elapsedMs }).catch(() => {});
+    }
+    player.addEventListener("error", () => report("couldNotPlay"), { once: true });
+    player.addEventListener("loadedmetadata", () => {
+      if (!box.isConnected) return;
+      const time = file.startMs / 1000;
+      if (Number.isFinite(player.duration) && time < player.duration) {
+        try {
+          if (player.currentTime === time) report("seeked");
+          else {
+            player.addEventListener("seeked", () => report("seeked"), { once: true });
+            player.currentTime = time;
+          }
+        } catch {
+          report("couldNotPlay");
+          player.after(node("p", "of-none", "This Mac could not jump to that moment."));
+        }
+      } else {
+        report("outsideRecording");
+        player.after(node("p", "of-none", "That moment is outside this recording."));
+      }
+    }, { once: true });
+  }
+
+  function showMedia(file) {
+    state.view = "media";
+    state.file = null;
+    const body = el("op-body");
+    body.dataset.view = "media";
+    body.scrollTop = 0;
+    setHead("Output", file.name, file.label);
+    const view = node("div", "op-view");
+    const box = node("div", "of-view");
+    box.id = "op-viewer";
+    view.appendChild(box);
+    body.replaceChildren(view);
+    viewPreview(file, box);
+    el("op-close")?.focus({ preventScroll: true });
   }
 
   /// Preview | Source, for Markdown and plain text (§6.4, §11 row 11), in the file view's tools
@@ -974,7 +1024,8 @@
       panel.classList.add("is-opening");
     }
     paintButtons();
-    if (opts.file) showFile(opts.file, opts);
+    if (opts.media) showMedia(opts.media);
+    else if (opts.file) showFile(opts.file, opts);
     else showList(opts);
     // OPENING READS THE DISK AGAIN (§4.6: "every read re-stats … never cached across calls").
     // The list it holds is only as fresh as the last `rich://output`: a file deleted, moved or
@@ -995,6 +1046,7 @@
     // Closing brings the WHOLE conversation back and clears *open completely* (§9.4), before
     // the panel hides: the composer goes home first, so focus can return to it.
     pullReset();
+    if (state.view === "media") el("op-body").replaceChildren();
     state.open = false;
     state.view = "list";
     state.file = null;
@@ -1105,6 +1157,7 @@
       paintButtons();
       return;
     }
+    if (state.view === "media") el("op-body").replaceChildren();
     state.thread = next;
     // The pill names the thread the panel now shows (§9.4).
     if (next) pullPaintPill();
@@ -2209,6 +2262,11 @@
     init,
     setThread,
     open,
+    openMoment(threadId, file, from) {
+      if (!state.thread || state.thread !== threadId) return false;
+      open({ media: file, returnTo: from });
+      return true;
+    },
     close,
     toggle,
     escape,

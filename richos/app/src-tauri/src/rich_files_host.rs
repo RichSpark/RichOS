@@ -37,6 +37,7 @@ pub fn machinery_with_files(view: &dyn SpineView, files_root: &Path, thread_id: 
     if let Ok(binding) = view.ledger().thread_binding(thread_id) {
         if let Some(items) = payload["timeline"]["items"].as_array_mut() {
             items.extend(self::items(files_root, binding.entity_id().as_str(), thread_id));
+            items.extend(richos_core::media_moments::items(files_root, binding.entity_id().as_str(), thread_id));
             #[cfg(target_os="macos")]
             if let Some(data)=files_root.parent(){items.extend(crate::cleaner_host::cards(data,Some(binding.entity_id().as_str()),Some(thread_id))?);}
             items.extend(richos_core::your_instructions::items(files_root, binding.entity_id().as_str(), thread_id));
@@ -53,6 +54,7 @@ pub fn with_instruction_cards(view: &dyn SpineView, files_root: &Path, thread_id
     if let Ok(binding) = view.ledger().thread_binding(thread_id) {
         if let Some(items) = payload["items"].as_array_mut() {
             items.extend(richos_core::your_instructions::items(files_root, binding.entity_id().as_str(), thread_id));
+            items.extend(richos_core::media_moments::items(files_root, binding.entity_id().as_str(), thread_id));
             #[cfg(target_os="macos")]
             if let Some(data)=files_root.parent(){match crate::cleaner_host::cards(data,Some(binding.entity_id().as_str()),Some(thread_id)){Ok(cards)=>items.extend(cards),Err(e)=>eprintln!("[richos] RichCleaner cards: {e}")}}
             items.sort_by_key(|i| i["createdAt"].as_u64().unwrap_or(0));
@@ -200,6 +202,7 @@ pub fn start(app: AppHandle) {
             // A save of the user's instructions (`your_instructions.rs`) is written to this same
             // folder, so its card shows at once too: the window only, never the phone's stream.
             seen.extend(richos_core::your_instructions::all(&state_root).into_iter().map(|card| card.id));
+            seen.extend(richos_core::media_moments::all(&state_root).map(|card| card.id));
             for () in events {
                 #[cfg(target_os="macos")]
                 if let Some(data)=state_root.parent(){match crate::cleaner_host::cards(data,None,None){Ok(cards)=>{for card in cards{if let Some(id)=card["id"].as_str(){if seen.insert(id.to_string()){if let Err(e)=app.emit("rich://rich-file",&card){eprintln!("[richos] RichCleaner card: {e}");}}}}},Err(e)=>eprintln!("[richos] RichCleaner cards: {e}")}}
@@ -207,6 +210,11 @@ pub fn start(app: AppHandle) {
                 for card in richos_core::your_instructions::all(&state_root) {
                     if seen.insert(card.id.clone()) {
                         drop(app.emit("rich://rich-file", &richos_core::your_instructions::item(&card)));
+                    }
+                }
+                for card in richos_core::media_moments::all(&state_root) {
+                    if seen.insert(card.id.clone()) {
+                        drop(app.emit("rich://rich-file", &card.item()));
                     }
                 }
                 for row in richos_core::rich_files::all(&state_root) {

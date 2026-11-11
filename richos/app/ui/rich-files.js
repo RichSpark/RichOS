@@ -75,6 +75,7 @@
 
   function card(item, opts) {
     const f = item.file || {};
+    if (f.moments) return mediaCard(item, f);
     const name = f.name || item.text || "File";
     const app = f.app || "";
     const openLabel = app ? "Open in " + app : "Open";
@@ -142,10 +143,82 @@
     return el;
   }
 
+  function mediaClock(ms) {
+    const total = Math.floor(ms / 1000);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor(total / 60) % 60;
+    const seconds = String(total % 60).padStart(2, "0");
+    return hours ? hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds : minutes + ":" + seconds;
+  }
+
+  function mediaCard(item, file) {
+    const el = node("div", "tl-media");
+    el.setAttribute("role", "listitem");
+    el.dataset.fileId = file.id;
+    const { durationMs, points, waveform } = file.moments;
+    const head = node("div", "tl-media-head");
+    head.append(node("strong", null, file.name), node("span", null, mediaClock(durationMs)));
+    const track = node("div", "tl-media-track");
+    track.setAttribute("aria-hidden", "true");
+    if (typeof waveform === "string" && /^[0-9]{96}$/.test(waveform)) {
+      const wave = node("div", "tl-media-wave");
+      for (const level of waveform) {
+        const bar = node("i");
+        bar.style.height = (6 + Number(level) * 10) + "%";
+        wave.appendChild(bar);
+      }
+      track.appendChild(wave);
+    }
+    const list = node("div", "tl-media-points");
+    const status = node("p", "tl-media-status");
+    status.setAttribute("role", "status");
+    const available = file.exists !== false;
+    if (!available) status.textContent = "The recording was moved, deleted or changed. Ask Rich to find the moments again.";
+    points.forEach((point, momentIndex) => {
+      const dot = node("i", "tl-media-mark");
+      dot.style.left = (100 * point.startMs / durationMs) + "%";
+      track.appendChild(dot);
+      const time = mediaClock(point.startMs);
+      const button = node("button", "tl-media-moment");
+      button.type = "button";
+      button.setAttribute("aria-label", time + " " + point.label);
+      button.disabled = !available;
+      const body = node("span", "tl-media-copy");
+      const excerpt = node("span", null, point.quote);
+      excerpt.id = file.id + "-excerpt-" + momentIndex;
+      button.setAttribute("aria-describedby", excerpt.id);
+      body.append(node("strong", null, point.label), excerpt);
+      button.append(node("span", "tl-media-time", time), body);
+      button.addEventListener("click", async () => {
+        status.textContent = "";
+        if (file.source === "youtube") {
+          button.disabled = true;
+          try {
+            await window.RichBridge.invoke("media_moment_open", { fileId: file.id, momentIndex });
+          } catch (error) {
+            status.textContent = String(error?.message || error);
+          } finally {
+            button.disabled = false;
+          }
+        } else if (!window.RichOutput?.openMoment(item.threadId, {
+          id: file.id, name: file.name, startMs: point.startMs, label: time + " · " + point.label,
+        }, button)) {
+          status.textContent = "Reopen this conversation to play the recording.";
+        }
+      });
+      dot.addEventListener("click", () => button.click());
+      list.appendChild(button);
+    });
+    el.append(head, track, list, status);
+    return el;
+  }
+
   function render(items, opts) {
     const list = node("div", "tl-rfiles");
     list.setAttribute("role", "list");
-    list.setAttribute("aria-label", items.length === 1 ? "1 file from Rich" : items.length + " files from Rich");
+    list.setAttribute("aria-label", items.some(item => item.file?.moments)
+      ? "Files and recordings from Rich"
+      : items.length === 1 ? "1 file from Rich" : items.length + " files from Rich");
     for (const item of items) list.appendChild(card(item, opts));
     return list;
   }

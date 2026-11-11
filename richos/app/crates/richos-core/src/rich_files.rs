@@ -341,7 +341,7 @@ pub fn tools() -> Value {
         "name": TOOL,
         "description": "Put a file from this Mac in front of the user. It appears as a card under your reply in this conversation, on the Mac and on the phone and the user opens it with one click or tap. Give the absolute path of one existing regular file; call once per file. Use it whenever the user asks you to send, show or give them a file and whenever a file is the answer.",
         "inputSchema": {"type":"object","properties":{"path":{"type":"string","description":"Absolute path of the file, starting with /."}},"required":["path"],"additionalProperties":false}
-    }]});
+    }, crate::media_moments::definition()]});
     // Clients discover tools before a user's turn opens its scope, then cache
     // that list. Advertise capabilities consistently; authorize every call
     // against the current scope below, including phone and background refusals.
@@ -359,12 +359,15 @@ pub fn call(scope_path: &Path, name: &str, args: Value) -> Result<Value, String>
     #[cfg(target_os="macos")]
     if matches!(name,"library_search"|"library_show"){let scope=question_tools::read_scope(scope_path)?;return crate::cleaner::tools::call(&scope,name,&args);}
 
-    if name != TOOL {
+    if name != TOOL && name != crate::media_moments::TOOL {
         return Err("Unknown file tool.".into());
     }
     let scope = question_tools::read_scope(scope_path).map_err(|_| "This turn is not open for files.".to_string())?;
     if !scope.actions_allowed {
         return Err("Files can be attached only while you are answering the user or working on their request.".into());
+    }
+    if name == crate::media_moments::TOOL {
+        return crate::media_moments::call(&scope, args);
     }
     let keys = args.as_object().ok_or("Tool arguments must be an object.")?;
     if keys.keys().any(|key| key != "path") {
@@ -509,6 +512,61 @@ mod tests {
         let gone = &super::items(&root, "acme", "t1")[0];
         assert_eq!(gone["file"]["exists"], false);
         assert_eq!(gone["file"]["meta"], "PDF");
+    }
+
+    #[test]
+    fn media_moments_keep_their_verified_source_and_turn() {
+        use crate::media_moments as media;
+        let dir = Dir::new("moments");
+        let file = dir.0.join("sample.wav");
+        std::fs::write(&file, b"recording").unwrap();
+        let root = dir.0.join("engine-state");
+        let args = json!({
+            "name": "Interview", "durationMs": 8000,
+            "source": {"kind":"local","path":file},
+            "points":[{"startMs":5330,"label":"The answer","quote":"We looked at the source."},
+                      {"startMs":1000,"label":"The context","quote":"Here is what changed."}],
+            "waveform":"1234567890".repeat(10).chars().take(96).collect::<String>()
+        });
+        let closed = scope(&dir, "stu", false, Some("job"));
+        assert!(call(&closed, media::TOOL, args.clone()).is_err());
+        let open = scope(&dir, "stu", true, Some("job"));
+        let out = call(&open, media::TOOL, args.clone()).unwrap();
+        assert_eq!(call(&open, media::TOOL, args.clone()).unwrap()["id"], out["id"]);
+        let cards = media::items(&root, "acme", "t1");
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0]["turnId"], "job");
+        assert_eq!(cards[0]["file"]["moments"]["points"][0]["startMs"], 1000);
+        assert_eq!(cards[0]["file"]["exists"], true);
+        assert!(cards[0]["file"].get("path").is_none());
+        assert!(media::items(&root, "other", "t1").is_empty());
+        assert!(media::items(&root, "acme", "t2").is_empty());
+        std::fs::write(&file, b"updated recording").unwrap();
+        assert_eq!(media::items(&root, "acme", "t1")[0]["file"]["exists"], false);
+        let mut outside = args;
+        outside["points"][0]["startMs"] = json!(8000);
+        assert!(call(&open, media::TOOL, outside).is_err());
+    }
+
+    #[test]
+    fn media_moments_build_only_the_original_youtube_watch_url() {
+        use crate::media_moments as media;
+        let dir = Dir::new("moment-url");
+        let open = scope(&dir, "front_desk", true, None);
+        let args = json!({
+            "name": "A sample", "durationMs": 99000,
+            "source": {"kind":"youtube","video_id":"ab-cDe_F123"},
+            "points":[{"startMs":53280,"label":"A moment","quote":"The evidence."}]
+        });
+        let id = call(&open, media::TOOL, args.clone()).unwrap()["id"].as_str().unwrap().to_string();
+        let root = dir.0.join("engine-state");
+        let row = media::locate(&root, "acme", "t1", &id).unwrap();
+        assert_eq!(row.source.youtube_url(row.moments.points[0].start_ms).as_deref(),
+            Some("https://www.youtube.com/watch?v=ab-cDe_F123&t=53s"));
+        assert!(media::locate(&root, "acme", "t2", &id).is_none());
+        let mut bad = args;
+        bad["source"]["video_id"] = json!("x&autoplay=");
+        assert!(call(&open, media::TOOL, bad).is_err());
     }
 
     #[test]

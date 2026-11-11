@@ -97,6 +97,7 @@ pub mod machinery;
 /// yt-dlp on the user's Mac, installed into the app's tools folder and kept at the newest
 /// `nightly` release (media-tools plan slice 2).
 pub mod media_tools;
+pub mod media_moments;
 // Meeting notes (Granola PRD V4): the one prompt/capture state, pure, clock injected.
 pub mod meeting;
 // Meeting notes after the recording: the one brief per transcript (prompt, check, atomic write,

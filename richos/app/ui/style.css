@@ -10949,6 +10949,93 @@ body.bp-narrow #out-bottom .out-word {
    its hover tint), the card edge against the chat 4.57 / 3.35 and on hover (gold) 7.68 / 3.15.
    DECLARED 14px, SKIPPABLE: the file type printed inside the page glyph ("PDF"); the type
    repeats at 16px in the line beside it (`--ink` on the glyph 14.78 dark, 15.58 light). ---- */
+.tl-media {
+  padding: 14px 16px;
+  border: 1px solid var(--line-control);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  max-width: 42rem;
+  overflow-wrap: anywhere;
+}
+.tl-media-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.tl-media-head > span, .tl-media-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tl-media-track {
+  position: relative;
+  height: 44px;
+  margin: 7px 4px;
+}
+.tl-media-track::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto;
+  border-top: 1px solid var(--ink);
+  opacity: .24;
+}
+.tl-media-wave {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(96, minmax(0, 1fr));
+  align-items: center;
+  gap: 1px;
+}
+.tl-media-wave > i {
+  border-radius: 2px;
+  background: var(--ink);
+  opacity: .24;
+}
+.tl-media-mark {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 7px;
+  height: 19px;
+  border-radius: 5px;
+  background: var(--attention);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--attention), transparent 50%);
+}
+.tl-media-mark::after { content: ""; position: absolute; inset: -5px; }
+.tl-media-points {
+  display: grid;
+  gap: 5px;
+}
+.tl-media-moment {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.tl-media-moment:not(:disabled):hover, .tl-media-moment:focus-visible {
+  border-color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 9%, var(--surface));
+}
+.tl-media-moment:disabled { opacity: .7; }
+.tl-media-time {
+  padding: 1px 5px;
+  align-self: start;
+  border: 1px solid var(--attention);
+  border-radius: 4px;
+}
+.tl-media-copy { display: grid; gap: 2px; }
+.tl-media-status { margin: 6px 0 0; }
+.tl-media-status:empty { display: none; }
+
 .tl-rfiles {
   display: grid;
   gap: 8px;
