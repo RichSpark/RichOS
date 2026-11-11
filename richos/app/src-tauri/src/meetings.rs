@@ -34,8 +34,9 @@ use richos_voice::dictation_bar::Rect;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -54,6 +55,8 @@ const CALENDAR_RECONNECT_DEADLINE: Duration = Duration::from_secs(6 * 60);
 /// A meeting's transcription is bounded (whisper on Apple silicon measured 249 s for a 92-minute
 /// channel, `config.js`; two channels of an hour stay well inside this).
 const TRANSCRIBE_DEADLINE: Duration = Duration::from_secs(60 * 60);
+/// Let a nearly complete live chunk finish. The final pass recovers anything still missing.
+const LIVE_TRANSCRIPTION_DRAIN: Duration = Duration::from_secs(3);
 /// Keep the saved recording waiting for setup for a bounded time.
 const MODEL_WAIT: Duration = Duration::from_secs(5 * 60);
 /// One brief attempt (a bug report's is 90 s; an hour of transcript needs longer).
@@ -932,26 +935,31 @@ impl Meetings {
         std::thread::Builder::new()
             .name("meeting-capture".into())
             .spawn(move || {
+                let mut live = None;
                 if let Some(out) = stdout {
                     for line in BufReader::new(out).lines() {
                         let Ok(line) = line else { break };
-                        me.capture_line(pid, &line);
+                        if let Some((dir, zone)) = me.capture_line(pid, &line) {
+                            if live.is_none() {
+                                live = me.start_live_transcription(pid, &dir, &zone);
+                            }
+                        }
                     }
                 }
                 let status = child.wait();
-                me.capture_exited(pid, status.ok().and_then(|s| s.code()));
+                me.capture_exited(pid, status.ok().and_then(|s| s.code()), live);
             })
             .ok();
     }
 
-    fn capture_line(&self, pid: u32, line: &str) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return };
+    fn capture_line(&self, pid: u32, line: &str) -> Option<(PathBuf, PathBuf)> {
+        let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
         let kind = v["type"].as_str().unwrap_or("");
         let mut inner = self.inner.lock().unwrap();
         let grant_known = inner.system_audio_seen;
         let current = inner.capture.as_ref().is_some_and(|c| c.pid == pid);
         let run = if current { inner.capture.as_mut() } else { inner.draining.iter_mut().find(|r| r.pid == pid) };
-        let Some(run) = run else { return };
+        let run = run?;
         match kind {
             // A stopped recorder finishing its files: what it reports is logged; the panel and the
             // monitor now belong to whatever came next.
@@ -969,6 +977,7 @@ impl Meetings {
                 }
                 // A calendar meeting's first recording: a rejoin's goes where this one went.
                 let first = run.continued();
+                let recording = run.dir.clone().map(|dir| (dir, run.zone.clone()));
                 let view = PanelView::Recording { started_at: run.started_at, note: None };
                 if let Some((e, first)) = first {
                     inner.continued.entry(e).or_insert(first);
@@ -976,6 +985,7 @@ impl Meetings {
                 drop(inner);
                 self.show(view);
                 self.publish_state();
+                return recording;
             }
             "closed" => {
                 run.dir = v["dir"].as_str().map(PathBuf::from).or(run.dir.take());
@@ -1013,15 +1023,20 @@ impl Meetings {
             }
             _ => {}
         }
+        None
     }
 
     /// The capture process ended. After a stop this is the normal end; otherwise the recording
     /// ended by itself, and the monitor is told so the call does not prompt again.
-    fn capture_exited(&self, pid: u32, code: Option<i32>) {
+    fn capture_exited(&self, pid: u32, code: Option<i32>, live: Option<Child>) {
         let (finished, current) = {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
-            let Some((run, current)) = take_run(&mut inner.capture, &mut inner.draining, pid) else { return };
+            let Some((run, current)) = take_run(&mut inner.capture, &mut inner.draining, pid) else {
+                drop(guard);
+                finish_live_transcription(live);
+                return;
+            };
             if run.stop.is_none() {
                 inner.monitor.input(Input::CaptureEnded);
             }
@@ -1047,12 +1062,13 @@ impl Meetings {
             }
         }
         if code == Some(0) && finished.recording {
-            self.recording_closed(finished);
-        } else if let Some(dir) = finished.dir.as_deref().filter(|_| finished.recording) {
-            // A recorder that failed (said beside the call): its session stays as it always has,
-            // without notes, and the meeting.json written at its start must not make the next
-            // launch present it as a meeting RichOS was closed during.
-            logged("removing the failed recording's meeting.json", std::fs::remove_file(dir.join(meeting_notes::MEETING_FILE)));
+            self.recording_closed(finished, live);
+        } else {
+            finish_live_transcription(live);
+            if let Some(dir) = finished.dir.as_deref().filter(|_| finished.recording) {
+                // The failure was already shown. Don't resume this session as a normal quit.
+                logged("removing the failed recording's meeting.json", std::fs::remove_file(dir.join(meeting_notes::MEETING_FILE)));
+            }
         }
         self.publish_state();
     }
@@ -1099,8 +1115,9 @@ impl Meetings {
 
     /// A recording is closed on disk: write down what the app knows about it (`meeting.json`),
     /// say "Preparing your meeting notes…", and turn it into notes on a thread of its own.
-    fn recording_closed(&self, run: CaptureRun) {
+    fn recording_closed(&self, run: CaptureRun, live: Option<Child>) {
         let Some(dir) = run.dir.clone() else {
+            finish_live_transcription(live);
             eprintln!("[richos] meeting notes: the recorder closed without naming its session");
             return;
         };
@@ -1118,7 +1135,10 @@ impl Meetings {
         let me = self.app.state::<Arc<Meetings>>().inner().clone();
         std::thread::Builder::new()
             .name("meeting-notes".into())
-            .spawn(move || me.prepare_notes(&dir, &zone, facts))
+            .spawn(move || {
+                finish_live_transcription(live);
+                me.prepare_notes(&dir, &zone, facts);
+            })
             .ok();
     }
 
@@ -1411,30 +1431,64 @@ impl Meetings {
         Err("the call transcription model is not installed yet".into())
     }
 
-    /// The pipeline (`richos-service run <session>`): the runtime's own node, ffmpeg and
-    /// whisper-cli, the corpus and company of the meeting, bounded. Its output goes to
-    /// `pipeline.log` in the session.
-    fn transcribe(&self, dir: &Path, zone: &Path, facts: &MeetingFacts) -> Result<(), String> {
+    fn transcription_command(&self, action: &str, dir: &Path, zone: &Path, model: &Path) -> Result<Command, String> {
         let service = service_cli().ok_or("this build has no transcription service installed")?;
-        let log = std::fs::File::create(dir.join("pipeline.log")).map_err(|e| e.to_string())?;
         let mut command = Command::new(node_bin());
         command
             .arg(&service)
-            .arg("run")
+            .arg(action)
             .arg(dir)
             .env("RICHOS_DROP_ZONE", zone)
             .env("LORO_CORPUS", self.corpus_root())
-            .stdin(Stdio::null())
-            .stdout(log.try_clone().map_err(|e| e.to_string())?)
-            .stderr(log);
+            .env("RICHOS_WHISPER_MODEL", model)
+            .stdin(Stdio::null());
         installed_paths(&mut command);
         if let Ok(whisper) = richos_voice::stt::resolve_whisper_bin() {
             command.env("RICHOS_WHISPER_BIN", whisper);
         }
-        // The selected call model, named outright: setup fetches it into RichOS's own model
-        // folder (`setup_view.rs`, both models), which the service's own search does not visit.
+        Ok(command)
+    }
+
+    /// Enable this candidate on the physical lab Mac before enabling it in normal launches.
+    fn start_live_transcription(&self, recorder_pid: u32, dir: &Path, zone: &Path) -> Option<Child> {
+        if std::env::var("RICHOS_RICHBRIEF_LIVE_TRANSCRIPTION").as_deref() != Ok("1") {
+            return None;
+        }
+        let Ok(model) = richos_voice::stt::resolve_model(CALL_MODEL) else {
+            eprintln!("[richos] meeting notes: live transcription skipped because the model is unavailable");
+            return None;
+        };
+        let command = self.transcription_command("live-transcribe", dir, zone, &model);
+        let result = command.and_then(|mut command| {
+            command.arg("--recorder-pid").arg(recorder_pid.to_string())
+                .process_group(0)
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .map_err(|e| e.to_string())
+        });
+        match result {
+            Ok(child) => Some(child),
+            Err(e) => {
+                eprintln!("[richos] meeting notes: live transcription could not start: {e}");
+                None
+            }
+        }
+    }
+
+    /// The final pipeline writes its detailed output to `pipeline.log` beside the session.
+    fn transcribe(&self, dir: &Path, zone: &Path, facts: &MeetingFacts) -> Result<(), String> {
         let model = self.call_model()?;
-        command.env("RICHOS_WHISPER_MODEL", model);
+        let mut command = self.transcription_command("run", dir, zone, &model)?;
+        let log = std::fs::File::create(dir.join("pipeline.log")).map_err(|e| e.to_string())?;
+        command.stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log);
+        if std::env::var("RICHOS_RICHBRIEF_LIVE_TRANSCRIPTION").as_deref() == Ok("1")
+            && std::fs::read_dir(dir.join(".live-transcription")).is_ok_and(|mut files| {
+                files.any(|entry| entry.is_ok_and(|entry| entry.path().extension().is_some_and(|ext| ext == "json")))
+            })
+        {
+            command.arg("--live-checkpoints");
+        }
         match &facts.entity {
             Some(e) => command.env("RICHOS_ACTIVE_COMPANY", e),
             None => command.env_remove("RICHOS_ACTIVE_COMPANY"),
@@ -1509,6 +1563,30 @@ impl Meetings {
         let state = self.app.state::<crate::AppState>();
         let install = state.loro_install.lock().unwrap();
         crate::meetings_corpus_root(install.as_ref())
+    }
+}
+
+fn finish_live_transcription(live: Option<Child>) {
+    let Some(mut child) = live else { return };
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                eprintln!("[richos] meeting notes: live transcription ended with {status}");
+                return;
+            }
+            Ok(None) if start.elapsed() < LIVE_TRANSCRIPTION_DRAIN => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            _ => {
+                // This child is the leader of a group created for this recording only. End
+                // its decoder too, so the final pass can take over the missing chunk.
+                unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                logged("reaping live transcription", child.wait());
+                eprintln!("[richos] meeting notes: live transcription did not drain; finishing from retained audio");
+                return;
+            }
+        }
     }
 }
 

@@ -77,7 +77,7 @@ function decodeWindow(cache, wav, options) {
   const work = fs.mkdtempSync(path.join(cache, 'decode-'));
   try {
     writePrivateFile(path.join(work, AUDIO), wav, work);
-    return transcribeSession(normalizeSession(work), { ...options, outDir: work, timeoutMs: 90_000 });
+    return transcribeSession(normalizeSession(work), { ...options, outDir: work, timeoutMs: 90_000, quiet: true });
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
@@ -86,7 +86,7 @@ function decodeWindow(cache, wav, options) {
 function readCheckpoint(file, key) {
   try {
     const value = JSON.parse(fs.readFileSync(privateFile(file), 'utf8'));
-    if (value.key === key && Array.isArray(value.me) && Array.isArray(value.others)) return value;
+    if (value?.key === key && Array.isArray(value.me) && Array.isArray(value.others)) return value;
   } catch (error) {
     if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error;
   }
