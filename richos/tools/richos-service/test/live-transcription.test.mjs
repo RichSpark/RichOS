@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { advanceLiveTranscription, supportsLiveTranscription } from '../lib/live-transcription.js';
+import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
 
 test('live transcription checkpoints the flushed prefix and only decodes the tail after close', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-live-'));
@@ -95,4 +96,21 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   });
   assert.equal(quiet.decoded, 2);
   assert.deepEqual(cutLengths, [22.92, 7.08]);
+
+  pcm.fill(0);
+  pcm.fill(Buffer.from([0, 8, 0, 0]), 4 * bytesPerSecond, 5 * bytesPerSecond);
+  pcm.fill(Buffer.from([0, 0, 0, 8]), 16 * bytesPerSecond, 17 * bytesPerSecond);
+  flush(20);
+  const timed = advance({
+    closed: true,
+    decode: () => ({
+      me: [segment('Local phrase.', 0, 5_000)],
+      others: [segment('Remote phrase.', 0, 17_000)],
+      toolchain,
+    }),
+  }).asr;
+  assert.equal(timed.me[0].startMs, 0);
+  assert.deepEqual(timed.me[0].wordTimesMs, [0]);
+  const transcript = renderMarkdown(mergeTranscript(timed));
+  assert.match(transcript, /\[00:04\] Me:[\s\S]*\[00:16\] Them:/);
 });

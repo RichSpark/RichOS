@@ -92,7 +92,25 @@ function cutNear(fd, nominal, rate) {
   return { frame: best, quiet: bestDistance !== Infinity };
 }
 
-function absoluteSegments(segments, left, right, from, to, rate) {
+// Whisper can start its first segment at zero even when the channel was quiet
+// for seconds. Find the first sustained audible block on that channel.
+function firstAudibleMs(wav, channelOffset, rate) {
+  const block = Math.round(rate / 50);
+  const bytes = block * FRAME_BYTES;
+  let previousAudible = false;
+  for (let from = HEADER_BYTES; from + bytes <= wav.length; from += bytes) {
+    let power = 0;
+    for (let i = from + channelOffset; i < from + bytes; i += FRAME_BYTES) {
+      power += wav.readInt16LE(i) ** 2;
+    }
+    const audible = power > block * 64 ** 2;
+    if (audible && previousAudible) return (from - HEADER_BYTES - bytes) * 1_000 / (rate * FRAME_BYTES);
+    previousAudible = audible;
+  }
+  return null;
+}
+
+function absoluteSegments(segments, left, right, from, to, rate, firstAudible) {
   const offset = left * 1_000 / rate;
   const limit = right * 1_000 / rate;
   const start = from * 1_000 / rate;
@@ -105,6 +123,14 @@ function absoluteSegments(segments, left, right, from, to, rate) {
     // whose non-overlapping interval contains its center.
     if (center < start || center >= end) return [];
     const result = { ...segment, startMs, endMs };
+    if (firstAudible !== null) {
+      const audibleStartMs = firstAudible + offset;
+      if (startMs + 1_000 <= audibleStartMs && audibleStartMs < endMs) {
+        // Use the measured onset for display. Keep Whisper's original times for
+        // segment ownership and the existing transcription guards.
+        result.displayStartMs = audibleStartMs;
+      }
+    }
     if (segment.wordTimesMs) {
       result.wordTimesMs = segment.wordTimesMs.map((ms) => ms + offset).filter((ms) => ms <= limit);
     }
@@ -163,7 +189,7 @@ export function advanceLiveTranscription(dir, options, {
       const right = endCut.quiet ? to : Math.min(frames, to + padding);
       const wav = readWindow(fd, header, left, right);
       const key = createHash('sha256')
-        .update(JSON.stringify([2, left, from, to, right, options.model, whisperArgs(options), toolchain.provenance]))
+        .update(JSON.stringify([3, left, from, to, right, options.model, whisperArgs(options), toolchain.provenance]))
         .update(wav)
         .digest('hex');
       const file = path.join(cache, `${cursor}.json`);
@@ -177,8 +203,8 @@ export function advanceLiveTranscription(dir, options, {
         }
         result = {
           key,
-          me: absoluteSegments(segments.me, left, right, from, to, rate),
-          others: absoluteSegments(segments.others, left, right, from, to, rate),
+          me: absoluteSegments(segments.me, left, right, from, to, rate, firstAudibleMs(wav, 0, rate)),
+          others: absoluteSegments(segments.others, left, right, from, to, rate, firstAudibleMs(wav, 2, rate)),
         };
         withPrivateOutputs([file], ([temp]) => writePrivateFile(temp, JSON.stringify(result)));
         decoded += 1;
