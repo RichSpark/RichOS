@@ -15,6 +15,7 @@
 use crate::meeting::{MeetingApp, Scheduled};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The calendar vendors the service syncs, each with the client file `workspace connect` writes in
 /// the zone (`config.js` `workspaceClientConfigPath`).
@@ -25,6 +26,12 @@ pub const PROMPT_LEAD_MS: u64 = 60_000;
 
 /// How often the app pulls the calendar (PRD V4: at launch and every five minutes).
 pub const REFRESH_MS: u64 = 5 * 60_000;
+
+/// Wait for the next poll tick after the one just finished. Skip ticks that elapsed during sync.
+pub fn refresh_delay(elapsed: Duration) -> Duration {
+    let elapsed_in_interval = elapsed.as_millis() % u128::from(REFRESH_MS);
+    Duration::from_millis(REFRESH_MS - elapsed_in_interval as u64)
+}
 
 /// The Google adapter's stored key for a canceled event, spelled as the service writes it.
 const GOOGLE_CANCELED_KEY: &str = "cancelled"; // dialect-exempt: the service's stored JSON key
@@ -180,6 +187,13 @@ pub fn withdrawn(previous: &BTreeMap<String, u64>, current: &[CalendarMeeting]) 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn calendar_polling_skips_ticks_while_a_pass_is_running() {
+        assert_eq!(refresh_delay(Duration::from_secs(90)), Duration::from_secs(210));
+        assert_eq!(refresh_delay(Duration::from_secs(300)), Duration::from_secs(300));
+        assert_eq!(refresh_delay(Duration::from_secs(360)), Duration::from_secs(240));
+    }
 
     struct Zone(PathBuf);
     impl Zone {
