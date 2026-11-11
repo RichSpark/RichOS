@@ -306,6 +306,7 @@ mod tests {
         let another = crate::question_host::payload_in(&*view, &store, &root, &other).unwrap();
         assert!(rows_from_payload(&another).is_empty());
         assert!(reply_for_turn(&snapshot, "turn-1").is_none(), "evidence alone cannot send a reply notification");
+        let before_reply = rows_from_payload(&snapshot);
 
         let items = snapshot["items"].as_array_mut().unwrap();
         assert_eq!(items.len(), 2);
@@ -325,12 +326,14 @@ mod tests {
             "text":"Here is what changed.","createdAt":u64::MAX}));
         let rows = rows_from_payload(&snapshot);
         assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0]["id"], "reply");
-        assert_eq!(reply_for_turn(&snapshot, "turn-1").unwrap()["id"], "reply");
-        for (i, row) in rows.iter().skip(1).enumerate() {
+        assert_eq!(rows[..2], before_reply, "reopening after a reply keeps the seen evidence at the same cursors");
+        let reply = reply_for_turn(&snapshot, "turn-1").unwrap();
+        assert_eq!(reply["id"], "reply");
+        assert_eq!(reply["cursor"], 3, "the new reply has a cursor beyond the evidence the phone already saw");
+        for (i, row) in rows[..2].iter().enumerate() {
             let item = snapshot["items"].as_array().unwrap().iter().find(|item| item["id"] == row["id"]).unwrap();
             let mut live = row_from_item(item).unwrap();
-            live["cursor"] = json!(i + 2);
+            live["cursor"] = json!(i + 1);
             assert_eq!(*row, live);
         }
         std::fs::remove_dir_all(&dir).unwrap();

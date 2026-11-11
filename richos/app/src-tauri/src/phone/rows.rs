@@ -51,7 +51,8 @@ use serde_json::{json, Value};
 /// **A file Rich attached goes under his words** (round 36 screen 3): the tool is called while
 /// he works, so its item can sort before the reply it belongs to. Each `rich_file` item is
 /// moved to just after the last `rich_message` of its own turn; a file with no reply in its
-/// turn (one Stu attached for a job) keeps its own place.
+/// turn (one Stu attached for a job) keeps its own place. Media evidence keeps its live
+/// position so a reply arriving later cannot take a cursor the phone already acknowledged.
 pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
     let empty: Vec<Value> = Vec::new();
     let items = payload.get("items").and_then(|v| v.as_array()).unwrap_or(&empty);
@@ -64,7 +65,7 @@ pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
     let mut ordered: Vec<&Value> = Vec::with_capacity(items.len());
     let mut held: Vec<(usize, &Value)> = Vec::new();
     for (at, item) in items.iter().enumerate() {
-        let after = (item["kind"] == richos_core::rich_files::ITEM_KIND)
+        let after = (item["kind"] == richos_core::rich_files::ITEM_KIND && !item["file"]["moments"].is_object())
             .then(|| item["turnId"].as_str().and_then(|t| last_reply.get(t)).copied())
             .flatten()
             .filter(|reply| *reply > at);
