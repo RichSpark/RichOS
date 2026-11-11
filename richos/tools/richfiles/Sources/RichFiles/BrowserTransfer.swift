@@ -58,6 +58,7 @@ struct BrowserTransfer: Sendable {
     var succeeded = 0
     var currentSource: URL?
     var copyProgress: CopyProgress?
+    var verifyingCopy = false
     var issues: [BrowserTransferIssue] = []
     var running = true
     var cancelled = false
@@ -97,6 +98,7 @@ struct BrowserTransferRequest: Sendable {
 struct BrowserTransferDestination: Sendable {
     let url: URL
     private let reference: FileReference?
+    var identity: FileIdentity? { reference?.identity }
 
     init(folder: URL) throws {
         url = try DirectoryReader.directoryURL(folder)
@@ -113,9 +115,28 @@ struct BrowserTransferDestination: Sendable {
     }
 }
 
+enum BrowserCompletedMove: Sendable {
+    case sameVolume(MoveReceipt)
+    case crossVolume(CrossVolumeMoveReceipt)
+
+    var original: FileReference {
+        switch self {
+        case .sameVolume(let move): return move.original
+        case .crossVolume(let move): return move.original
+        }
+    }
+
+    var moved: FileReference {
+        switch self {
+        case .sameVolume(let move): return move.moved
+        case .crossVolume(let move): return move.installed.reference
+        }
+    }
+}
+
 struct BrowserTransferResult: Sendable {
     var progress: BrowserTransfer
-    var moves: [MoveReceipt] = []
+    var moves: [BrowserCompletedMove] = []
     var retry: [BrowserTransferSource] = []
     var destination: BrowserTransferDestination?
 }
@@ -159,6 +180,7 @@ enum BrowserTransferJob {
             let name = input.url.lastPathComponent
             result.progress.currentSource = input.url
             result.progress.copyProgress = nil
+            result.progress.verifyingCopy = false
             result.progress.revision += 1
             await publish(result.progress)
             if Task.isCancelled {
@@ -172,26 +194,45 @@ enum BrowserTransferJob {
                 try destination.verify()
                 let source = try input.reference()
                 retrySource = .captured(source)
+                let copyStarted = ProcessInfo.processInfo.systemUptime
+                var lastSample: TimeInterval = 0
+                func showBytes(_ written: Int64, _ total: Int64) {
+                    let elapsed = ProcessInfo.processInfo.systemUptime - copyStarted
+                    guard total > 0, elapsed - lastSample >= 0.15 else { return }
+                    lastSample = elapsed
+                    result.progress.copyProgress = .init(written: min(written, total), total: total, elapsed: elapsed)
+                    result.progress.revision += 1
+                    let snapshot = result.progress
+                    Task { await publish(snapshot) }
+                }
                 if request.move {
-                    let receipt = try move(source, into: destination, conflict: request.conflict)
-                    result.moves.append(receipt)
+                    do {
+                        let receipt = try move(source, into: destination, conflict: request.conflict)
+                        result.moves.append(.sameVolume(receipt))
+                    } catch FileOperationError.crossVolumeMove {
+                        let moved = try FileOperations.moveAcrossVolumes(
+                            source, into: destination.url, expectedFolder: destination.identity,
+                            conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
+                            isCancelled: { Task.isCancelled }, onProgress: showBytes, onVerify: {
+                                result.progress.verifyingCopy = true
+                                result.progress.copyProgress = nil
+                                result.progress.revision += 1
+                                let snapshot = result.progress
+                                Task { await publish(snapshot) }
+                            }
+                        )
+                        result.moves.append(.crossVolume(moved.receipt))
+                        if let staging = moved.remainingStagingFolder {
+                            result.progress.issues.append(BrowserTransferIssue(name: name,
+                                message: "Moved. Temporary cleanup failed at \(staging.path).", kind: .warning))
+                        }
+                    }
                 } else {
-                    let copyStarted = ProcessInfo.processInfo.systemUptime
-                    var lastSample: TimeInterval = 0
                     let receipt = try FileOperations.copy(
                         source,
                         into: destination.url,
                         conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
-                        isCancelled: { Task.isCancelled },
-                        onProgress: { written, total in
-                            let elapsed = ProcessInfo.processInfo.systemUptime - copyStarted
-                            guard total > 0, elapsed - lastSample >= 0.15 else { return }
-                            lastSample = elapsed
-                            result.progress.copyProgress = .init(written: min(written, total), total: total, elapsed: elapsed)
-                            result.progress.revision += 1
-                            let snapshot = result.progress
-                            Task { await publish(snapshot) }
-                        }
+                        isCancelled: { Task.isCancelled }, onProgress: showBytes
                     )
                     if let staging = receipt.remainingStagingFolder {
                         result.progress.issues.append(BrowserTransferIssue(
@@ -225,11 +266,13 @@ enum BrowserTransferJob {
             }
             result.progress.completed += 1
             result.progress.copyProgress = nil
+            result.progress.verifyingCopy = false
             result.progress.revision += 1
             await publish(result.progress)
         }
         result.progress.currentSource = nil
         result.progress.copyProgress = nil
+        result.progress.verifyingCopy = false
         result.progress.running = false
         return result
     }
@@ -254,7 +297,7 @@ enum BrowserTransferJob {
     private static func isRetryable(_ error: Error) -> Bool {
         guard let error = error as? FileOperationError else { return true }
         switch error {
-        case .moveNeedsReview, .replacementNeedsReview, .sourceChanged, .folderChanged, .crossVolumeMove,
+        case .moveNeedsReview, .replacementNeedsReview, .sourceChanged, .folderChanged, .crossVolumeMove, .crossVolumeMoveNeedsReview,
              .destinationInsideSource, .stagingCleanupFailed:
             return false
         default:

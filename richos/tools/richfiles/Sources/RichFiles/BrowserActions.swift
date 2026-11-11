@@ -244,15 +244,26 @@ final class BrowserActions: ObservableObject {
         let noMove = unchanged > 0 ? " \(itemCount(unchanged)) already in the destination." : ""
         let operation = request.move ? "Moved" : "Copied"
         let lead = result.progress.cancelled ? "Transfer cancelled. " : ""
+        var recovered: [TrashChange] = []
+        let undo = changed.reversed().map { move -> HistoryStep in
+            switch move {
+            case .sameVolume(let receipt): return .undoMove(receipt, canRedoRename: false)
+            case .crossVolume(let receipt):
+                let item = BrowserTrashItem(receipt: receipt.backup)
+                recovered.append(.add(item))
+                return .crossVolumeMove(receipt, item)
+            }
+        }
+        let backupNote = recovered.isEmpty ? "" : " The cross-volume originals are in Trash for undo."
         finishMutation(MutationResult(
-            message: lead + "\(operation) \(succeeded) of \(request.sources.count) items." + noMove,
+            message: lead + "\(operation) \(succeeded) of \(request.sources.count) items." + noMove + backupNote,
             issues: errors,
             changed: request.move ? !changed.isEmpty : succeeded > 0,
-            undo: changed.reversed().map { .undoMove($0, canRedoRename: false) }
+            undo: undo, trashChanges: recovered
         ), title: "Move")
     }
 
-    private func consumeCut(_ generation: Int?, moves: [MoveReceipt]) -> Int? {
+    private func consumeCut(_ generation: Int?, moves: [BrowserCompletedMove]) -> Int? {
         refreshClipboard()
         guard let generation, let clipboard,
               clipboard.cut, clipboard.generation == generation else { return nil }
@@ -409,7 +420,8 @@ final class BrowserActions: ObservableObject {
                 undoHistory = undoHistory.compactMap { group in
                     let remaining = group.steps.filter { step in
                         switch step {
-                        case .restore(let item), .replacement(_, let item): return !restoredIDs.contains(item.id)
+                        case .restore(let item), .replacement(_, let item), .crossVolumeMove(_, let item):
+                            return !restoredIDs.contains(item.id)
                         default: return true
                         }
                     }
@@ -518,6 +530,7 @@ private enum HistoryStep: Codable, Sendable {
     case restore(BrowserTrashItem)
     case trash(FileReference)
     case replacement(ReviewedFile, BrowserTrashItem)
+    case crossVolumeMove(CrossVolumeMoveReceipt, BrowserTrashItem)
 
     func perform() throws -> (inverse: HistoryStep?, trashChanges: [TrashChange]) {
         switch self {
@@ -537,6 +550,10 @@ private enum HistoryStep: Codable, Sendable {
             let restored = try FileOperations.restoreReplacedFile(displaced.receipt, replacing: installed)
             let previous = BrowserTrashItem(receipt: restored.previous)
             return (.replacement(restored.installed, previous), [.remove(displaced.id), .add(previous)])
+        case .crossVolumeMove(let move, let archived):
+            let reversed = try FileOperations.reverse(move)
+            let previous = BrowserTrashItem(receipt: reversed.backup)
+            return (.crossVolumeMove(reversed, previous), [.remove(archived.id), .add(previous)])
         }
     }
 }
@@ -564,7 +581,7 @@ private struct HistoryGroup: Codable, Sendable {
             } catch {
                 result.issue = error.localizedDescription
                 switch error as? FileOperationError {
-                case .moveNeedsReview, .replacementNeedsReview:
+                case .moveNeedsReview, .replacementNeedsReview, .crossVolumeMoveNeedsReview:
                     result.remaining = Array(steps.dropFirst(index + 1))
                 default:
                     result.remaining = Array(steps.dropFirst(index))

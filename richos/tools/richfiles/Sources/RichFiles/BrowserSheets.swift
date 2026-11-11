@@ -859,6 +859,7 @@ struct TransferSheet: View {
                         }
                     }.font(.caption).foregroundStyle(.secondary)
                 }
+                if transfer.verifyingCopy { ProgressView("Verifying the copied file…").controlSize(.small) }
                 if transfer.cancelled { Text("Transfer cancelled.") }
                 List(transfer.issues) { issue in
                     VStack(alignment: .leading, spacing: 5) {

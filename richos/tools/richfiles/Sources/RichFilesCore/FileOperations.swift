@@ -106,6 +106,17 @@ public struct ReplaceReceipt: Sendable {
     public let remainingStagingFolder: URL?
 }
 
+public struct CrossVolumeMoveReceipt: Codable, Sendable {
+    public let installed: ReviewedFile
+    public let backup: TrashReceipt
+    public var original: FileReference { backup.original }
+}
+
+public struct CrossVolumeMoveResult: Sendable {
+    public let receipt: CrossVolumeMoveReceipt
+    public let remainingStagingFolder: URL?
+}
+
 public enum FileOperationError: LocalizedError {
     case invalidName
     case sourceChanged(URL)
@@ -114,6 +125,8 @@ public enum FileOperationError: LocalizedError {
     case noAvailableCopyName(URL)
     case moveNeedsReview(source: URL, destination: URL)
     case crossVolumeMove
+    case crossVolumeMoveNeedsReview(source: URL, destination: URL)
+    case copyVerificationFailed(URL)
     case destinationInsideSource
     case unsupportedCopySource(URL)
     case trashLocationUnknown
@@ -137,7 +150,11 @@ public enum FileOperationError: LocalizedError {
         case .moveNeedsReview(let source, let destination):
             return "The system accepted the move, but RichFiles could not verify the result. Check \(source.path) and \(destination.path) before retrying."
         case .crossVolumeMove:
-            return "Moving between volumes is unavailable. Choose Copy to keep the source."
+            return "This item cannot be moved between volumes. Choose Copy to keep the source."
+        case .crossVolumeMoveNeedsReview(let source, let destination):
+            return "A verified file was placed at \(destination.path). Check \(source.path) and Trash before retrying the move."
+        case .copyVerificationFailed(let url):
+            return "The copy of \(url.path) did not match. The original stays where it was."
         case .destinationInsideSource:
             return "Choose a destination outside the source folder."
         case .unsupportedCopySource(let url):
@@ -209,6 +226,79 @@ public enum FileOperations {
 
     public static func undo(_ receipt: MoveReceipt) throws -> FileReference {
         try reverse(receipt).moved
+    }
+
+    /// A cross-volume move publishes a verified copy first and keeps the original
+    /// in native Trash for undo. Ordinary directories still use the Copy action.
+    public static func moveAcrossVolumes(
+        _ source: FileReference, into folder: URL,
+        expectedFolder: FileIdentity? = nil,
+        conflictPolicy: CopyConflictPolicy = .refuse,
+        isCancelled: () -> Bool = { false },
+        onProgress: (Int64, Int64) -> Void = { _, _ in },
+        onVerify: () -> Void = {}
+    ) throws -> CrossVolumeMoveResult {
+        if isCancelled() { throw CancellationError() }
+        let parent = try OpenFolder(source.parent)
+        let original = try parent.verifiedStatus(of: source)
+        let destination = try OpenFolder(folder)
+        if let expectedFolder { try destination.requireIdentity(expectedFolder) }
+        guard original.st_mode & S_IFMT == S_IFREG, parent.identity.device != destination.identity.device else {
+            throw FileOperationError.crossVolumeMove
+        }
+        if conflictPolicy == .refuse { try destination.requireFree(source.name) }
+
+        let version = FileVersion(original)
+        let (installed, remaining) = try stageCopy(
+            source, from: parent, initial: original, into: destination, isCancelled: isCancelled, onProgress: onProgress
+        ) { staged in
+            onVerify()
+            let sourceDigest = try StorageAnalysis.digest(source.url, expected: version, isCancelled: isCancelled)
+            let stageFolder = try OpenFolder(staged.parent)
+            let stageVersion = FileVersion(try stageFolder.verifiedStatus(of: staged))
+            let copiedDigest = try StorageAnalysis.digest(staged.url, expected: stageVersion, isCancelled: isCancelled)
+            guard stageVersion.size == version.size, sourceDigest == copiedDigest else {
+                throw FileOperationError.copyVerificationFailed(source.url)
+            }
+            try parent.verifyLocation()
+            guard FileVersion(try parent.verifiedStatus(of: source)) == version else {
+                throw FileOperationError.sourceChanged(source.url)
+            }
+            return try publishCopy(staged, into: destination, named: source.name, policy: conflictPolicy,
+                                   isCancelled: isCancelled)
+        }
+
+        // Once published, finish the move or report both locations for review.
+        // Never remove a published file after a source-retirement failure.
+        do {
+            let reviewed = try ReviewedFile(installed)
+            try destination.verifyLocation()
+            guard FileVersion(try parent.verifiedStatus(of: source)) == version else {
+                throw FileOperationError.sourceChanged(source.url)
+            }
+            let backup = try trash(source)
+            guard backup.trashed != nil else { throw FileOperationError.trashLocationUnknown }
+            return CrossVolumeMoveResult(receipt: CrossVolumeMoveReceipt(installed: reviewed, backup: backup),
+                                         remainingStagingFolder: remaining)
+        } catch {
+            throw FileOperationError.crossVolumeMoveNeedsReview(source: source.url, destination: installed.url)
+        }
+    }
+
+    public static func reverse(_ receipt: CrossVolumeMoveReceipt) throws -> CrossVolumeMoveReceipt {
+        let current = receipt.installed.reference
+        let folder = try OpenFolder(current.parent)
+        try validateReviewed(receipt.installed, in: folder)
+        let restored = try restore(receipt.backup)
+        do {
+            let original = try ReviewedFile(restored)
+            try validateReviewed(receipt.installed, in: folder)
+            let backup = try trash(current)
+            guard backup.trashed != nil else { throw FileOperationError.trashLocationUnknown }
+            return CrossVolumeMoveReceipt(installed: original, backup: backup)
+        } catch {
+            throw FileOperationError.crossVolumeMoveNeedsReview(source: current.url, destination: restored.url)
+        }
     }
 
     /// Returns the verified inverse receipt so the operation can safely be replayed.
@@ -422,6 +512,9 @@ public enum FileOperations {
         defer { _ = close(output) }
         try copyFileDescriptors(input, output, to: stagedURL, size: size,
                                 isCancelled: isCancelled, onProgress: onProgress)
+        if parent.identity.device != staging.identity.device, fsync(output) != 0 {
+            throw FileOperationError.system(operation: "Could not flush the copy", location: stagedURL, code: errno)
+        }
     }
 
     static func copyFileDescriptors(
