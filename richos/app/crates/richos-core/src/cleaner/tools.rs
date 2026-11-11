@@ -27,8 +27,8 @@ pub fn allowed(scope: &Scope) -> bool {
 }
 pub fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"library_search","description":"Search RichCleaner notes, names and folder labels using ordinary words. Empty query lists saved metadata. A file noteTruncated preview retains its full note through library_show. If a file has several saved sets, use batchFor with its file id instead of query to list the sets and their original shared notes. Respect total counts and follow next offsets before claiming nothing exists. Never reads file contents or moves files.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"batchFor":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
-        json!({"name":"library_show","description":"Show the original for a file id returned by library_search. For an explicitly requested set, use includeBatch when the file belongs to exactly one set. For several sets, list them with library_search batchFor and give the file id plus the matching batchId. Cards resolve the original on the Mac using its id. No paths accepted. Does not move files.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"includeBatch":{"type":"boolean"},"batchId":{"type":"string"}},"required":["id"],"additionalProperties":false}}),
+        json!({"name":"library_search","description":"Search RichCleaner notes, names and folder labels using ordinary words. Empty query lists saved metadata. A file noteTruncated preview retains its full note through library_show. For a requested set, use batchFor with a matching file id instead of query to see the sets and match their original shared notes to the request. Respect total counts and follow next offsets before claiming nothing exists. Never reads file contents or moves files.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"batchFor":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
+        json!({"name":"library_show","description":"Show the original for a file id returned by library_search. For a requested set, check its original shared note with library_search batchFor and give the file id plus the matching batchId. includeBatch also works after confirming the match when the file belongs to exactly one set. Cards resolve the original on the Mac using its id. No paths accepted. Does not move files.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"includeBatch":{"type":"boolean"},"batchId":{"type":"string"}},"required":["id"],"additionalProperties":false}}),
     ]
 }
 pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
@@ -73,8 +73,11 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
                 let mut item = json!({"id":e.id,"name":e.path.file_name().map(|v|v.to_string_lossy()),"note":note,"folder":e.folder,"aliases":e.labels,"inbox":e.inbox,"sorting":e.pending_sort});
                 if note.len() < e.note.len() { item["noteTruncated"] = json!(true); }
                 if let Some(batch) = e.batch_id {
-                    item["batchId"] = json!(batch);
-                    item["batchCount"] = json!(db.batch_count(&e.id)?);
+                    let count = db.batch_count(&e.id)?;
+                    item["batchCount"] = json!(count);
+                    if count == 1 {
+                        item["batchId"] = json!(batch);
+                    }
                 }
                 let size = serde_json::to_vec(&item).map_err(|e| e.to_string())?.len();
                 if bytes + size > 64 * 1024 {
@@ -265,7 +268,7 @@ mod tests {
         let found = call(&scope, "library_search", &json!({"query":"board slides acquisition"})).unwrap();
         assert_eq!(found["totalMatches"], 1);
         assert_eq!(found["entries"][0]["id"], set[0].id);
-        assert_eq!(found["entries"][0]["batchId"], later_id);
+        assert!(found["entries"][0].get("batchId").is_none());
         assert_eq!(found["entries"][0]["batchCount"], 2);
 
         let history = call(&scope, "library_search", &json!({"batchFor":set[0].id})).unwrap();
