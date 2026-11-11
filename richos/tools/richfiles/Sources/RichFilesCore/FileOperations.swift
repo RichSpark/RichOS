@@ -80,6 +80,32 @@ public struct TrashReceipt: Codable, Sendable {
     public let trashed: FileReference?
 }
 
+public struct ReviewedFile: Codable, Sendable {
+    public let reference: FileReference
+    public let size: Int64
+    public let modified: Date
+    fileprivate let version: FileVersion
+
+    public init(_ reference: FileReference) throws {
+        let parent = try OpenFolder(reference.parent)
+        let status = try parent.verifiedStatus(of: reference)
+        guard status.st_mode & S_IFMT == S_IFREG else {
+            throw FileOperationError.replacementRequiresFiles
+        }
+        self.reference = reference
+        size = status.st_size
+        modified = Date(timeIntervalSince1970: Double(status.st_mtimespec.tv_sec)
+                        + Double(status.st_mtimespec.tv_nsec) / 1_000_000_000)
+        version = FileVersion(status)
+    }
+}
+
+public struct ReplaceReceipt: Sendable {
+    public let installed: ReviewedFile
+    public let previous: TrashReceipt
+    public let remainingStagingFolder: URL?
+}
+
 public enum FileOperationError: LocalizedError {
     case invalidName
     case sourceChanged(URL)
@@ -91,6 +117,8 @@ public enum FileOperationError: LocalizedError {
     case destinationInsideSource
     case unsupportedCopySource(URL)
     case trashLocationUnknown
+    case replacementRequiresFiles
+    case replacementNeedsReview(URL)
     case system(operation: String, location: URL, code: Int32)
     case stagingCleanupFailed(folder: URL, originalError: Error, cleanupError: Error)
 
@@ -116,6 +144,10 @@ public enum FileOperationError: LocalizedError {
             return "This type of item cannot be copied from \(url.path)."
         case .trashLocationUnknown:
             return "The system did not provide a verifiable location in Trash."
+        case .replacementRequiresFiles:
+            return "Choose two different regular files to replace one with the other."
+        case .replacementNeedsReview(let url):
+            return "RichFiles could not finish replacing \(url.path). Check that folder and Trash before retrying."
         case .system(let operation, let location, let code):
             return "\(operation) at \(location.path): \(String(cString: strerror(code)))"
         case .stagingCleanupFailed(let folder, let originalError, let cleanupError):
@@ -209,13 +241,114 @@ public enum FileOperations {
         try checkAncestry(source: initial, destination: destination)
         if conflictPolicy == .refuse { try destination.requireFree(name) }
 
+        let (copied, remaining) = try stageCopy(
+            source, from: sourceFolder, initial: initial, into: destination, isCancelled: isCancelled, onProgress: onProgress
+        ) { staged in
+            try publishCopy(staged, into: destination, named: name, policy: conflictPolicy, isCancelled: isCancelled)
+        }
+        return CopyReceipt(copied: copied, remainingStagingFolder: remaining)
+    }
+
+    /// The incoming file is staged first. Keep the previous file in native Trash
+    /// and publish exclusively, so a file arriving late keeps its place.
+    public static func replaceCopy(
+        _ source: ReviewedFile, replacing target: ReviewedFile,
+        isCancelled: () -> Bool = { false }
+    ) throws -> ReplaceReceipt {
+        try replaceCopy(source, replacing: target, isCancelled: isCancelled, sendToTrash: trash)
+    }
+
+    static func replaceCopy(
+        _ source: ReviewedFile, replacing target: ReviewedFile,
+        isCancelled: () -> Bool, sendToTrash: (FileReference) throws -> TrashReceipt
+    ) throws -> ReplaceReceipt {
+        if isCancelled() { throw CancellationError() }
+        let input = source.reference
+        let occupant = target.reference
+        guard input.identity != occupant.identity else { throw FileOperationError.replacementRequiresFiles }
+        let parent = try OpenFolder(input.parent)
+        let initial = try parent.verifiedStatus(of: input)
+        let destination = try OpenFolder(occupant.parent)
+        guard FileVersion(initial) == source.version else { throw FileOperationError.sourceChanged(input.url) }
+        try validateReviewed(target, in: destination)
+
+        let ((installed, previous), remaining) = try stageCopy(
+            input, from: parent, initial: initial, into: destination, isCancelled: isCancelled, onProgress: { _, _ in }
+        ) { staged in
+            if isCancelled() { throw CancellationError() }
+            return try replaceKeepingBackup(target, in: destination, sendToTrash: sendToTrash) {
+                try relocate(staged, into: destination, named: occupant.name).moved
+            }
+        }
+        return ReplaceReceipt(installed: installed, previous: previous, remainingStagingFolder: remaining)
+    }
+
+    public static func restoreReplacedFile(_ displaced: TrashReceipt, replacing installed: ReviewedFile) throws -> ReplaceReceipt {
+        try restoreReplacedFile(displaced, replacing: installed, sendToTrash: trash)
+    }
+
+    static func restoreReplacedFile(
+        _ displaced: TrashReceipt, replacing installed: ReviewedFile,
+        sendToTrash: (FileReference) throws -> TrashReceipt
+    ) throws -> ReplaceReceipt {
+        let path = displaced.original.url.path
+        guard path == installed.reference.url.path, let archived = displaced.trashed else {
+            throw FileOperationError.trashLocationUnknown
+        }
+        let trashFolder = try OpenFolder(archived.parent)
+        _ = try trashFolder.verifiedStatus(of: archived)
+        let destination = try OpenFolder(displaced.original.parent)
+        let (restored, backup) = try replaceKeepingBackup(installed, in: destination, sendToTrash: sendToTrash) {
+            try restore(displaced)
+        }
+        return ReplaceReceipt(installed: restored, previous: backup, remainingStagingFolder: nil)
+    }
+
+    private static func replaceKeepingBackup(
+        _ target: ReviewedFile, in destination: OpenFolder,
+        sendToTrash: (FileReference) throws -> TrashReceipt, publish: () throws -> FileReference
+    ) throws -> (ReviewedFile, TrashReceipt) {
+        try validateReviewed(target, in: destination)
+        let occupant = target.reference
+        let previous = try sendToTrash(occupant)
+        guard previous.trashed?.identity == occupant.identity else {
+            throw FileOperationError.replacementNeedsReview(occupant.url)
+        }
+        let installed: FileReference
+        do {
+            installed = try publish()
+        } catch FileOperationError.moveNeedsReview {
+            throw FileOperationError.replacementNeedsReview(occupant.url)
+        } catch {
+            let publicationError = error
+            do { _ = try restore(previous) }
+            catch { throw FileOperationError.replacementNeedsReview(occupant.url) }
+            throw publicationError
+        }
+        guard let verified = try? ReviewedFile(installed) else {
+            throw FileOperationError.replacementNeedsReview(occupant.url)
+        }
+        return (verified, previous)
+    }
+
+    private static func validateReviewed(_ file: ReviewedFile, in parent: OpenFolder) throws {
+        try parent.verifyLocation()
+        let current = try parent.verifiedStatus(of: file.reference)
+        guard FileVersion(current) == file.version else { throw FileOperationError.sourceChanged(file.reference.url) }
+    }
+
+    private static func stageCopy<Result>(
+        _ source: FileReference, from sourceFolder: OpenFolder, initial: stat, into destination: OpenFolder,
+        isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void, publish: (FileReference) throws -> Result
+    ) throws -> (Result, URL?) {
+
         let manager = FileManager.default
         let stagingURL = try manager.url(
             for: .itemReplacementDirectory, in: .userDomainMask,
             appropriateFor: destination.url, create: true
         )
         let staging = try OpenFolder(stagingURL)
-        let copied: FileReference
+        let result: Result
         do {
             guard staging.identity.device == destination.identity.device else {
                 throw FileOperationError.system(
@@ -230,7 +363,7 @@ public enum FileOperations {
                 )
             }
             try sourceFolder.verifyLocation()
-            if kind == S_IFREG {
+            if initial.st_mode & S_IFMT == S_IFREG {
                 try copyRegularFile(source, from: sourceFolder, into: staging, size: initial.st_size,
                                     isCancelled: isCancelled, onProgress: onProgress)
             } else {
@@ -240,16 +373,10 @@ public enum FileOperations {
             if isCancelled() { throw CancellationError() }
             try sourceFolder.verifyLocation()
             let current = try sourceFolder.verifiedStatus(of: source)
-            guard current.st_size == initial.st_size,
-                  current.st_mtimespec.tv_sec == initial.st_mtimespec.tv_sec,
-                  current.st_mtimespec.tv_nsec == initial.st_mtimespec.tv_nsec,
-                  current.st_ctimespec.tv_sec == initial.st_ctimespec.tv_sec,
-                  current.st_ctimespec.tv_nsec == initial.st_ctimespec.tv_nsec else {
+            guard FileVersion(current) == FileVersion(initial) else {
                 throw FileOperationError.sourceChanged(source.url)
             }
-            copied = try publishCopy(
-                staged, into: destination, named: name, policy: conflictPolicy, isCancelled: isCancelled
-            )
+            result = try publish(staged)
         } catch {
             let originalError = error
             do {
@@ -263,9 +390,9 @@ public enum FileOperations {
         }
         do {
             try removeStagingFolder(staging)
-            return CopyReceipt(copied: copied, remainingStagingFolder: nil)
+            return (result, nil)
         } catch {
-            return CopyReceipt(copied: copied, remainingStagingFolder: staging.url)
+            return (result, staging.url)
         }
     }
 

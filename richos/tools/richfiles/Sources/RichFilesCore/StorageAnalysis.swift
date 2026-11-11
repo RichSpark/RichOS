@@ -165,7 +165,7 @@ public enum StorageAnalysis {
     }
 }
 
-struct FileVersion: Equatable, Sendable {
+struct FileVersion: Codable, Equatable, Sendable {
     let identity: FileIdentity
     let size: Int64
     private let modified: Int

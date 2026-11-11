@@ -225,6 +225,64 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testReviewedReplacementRetainsBothVersionsAndCanBeUndone() throws {
+        try withFixture { root in
+            let targetFolder = try FileOperations.createFolder(in: root, named: "Destination")
+            let trash = try FileOperations.createFolder(in: root, named: "Test Trash")
+            let source = try write("new contents", named: "Report.txt", in: root)
+            let target = try write("prior contents", named: "Report.txt", in: targetFolder.url)
+            func sendToTrash(_ file: FileReference) throws -> TrashReceipt {
+                let moved = try FileOperations.move(file, into: trash.url, named: UUID().uuidString).moved
+                return TrashReceipt(original: file, trashedAt: Date(), trashLocation: moved.url, trashed: moved)
+            }
+
+            let replaced = try FileOperations.replaceCopy(ReviewedFile(source), replacing: ReviewedFile(target),
+                                                         isCancelled: { false }, sendToTrash: sendToTrash)
+            XCTAssertEqual(try contents(replaced.installed.reference), "new contents")
+            XCTAssertEqual(try contents(XCTUnwrap(replaced.previous.trashed)), "prior contents")
+            XCTAssertEqual(try contents(source), "new contents")
+
+            let undone = try FileOperations.restoreReplacedFile(replaced.previous, replacing: replaced.installed,
+                                                              sendToTrash: sendToTrash)
+            XCTAssertEqual(undone.installed.reference.identity, target.identity)
+            XCTAssertEqual(try contents(undone.installed.reference), "prior contents")
+            XCTAssertEqual(try contents(XCTUnwrap(undone.previous.trashed)), "new contents")
+        }
+    }
+
+    func testReviewedReplacementRejectsEditsAndKeepsALateArrival() throws {
+        try withFixture { root in
+            let targetFolder = try FileOperations.createFolder(in: root, named: "Destination")
+            let trash = try FileOperations.createFolder(in: root, named: "Test Trash")
+            let source = try write("new contents", named: "Report.txt", in: root)
+            let target = try write("prior contents", named: "Report.txt", in: targetFolder.url)
+            let stale = try ReviewedFile(target)
+            try Data("edited after review".utf8).write(to: target.url)
+            XCTAssertThrowsError(try FileOperations.replaceCopy(ReviewedFile(source), replacing: stale,
+                                                                isCancelled: { false }, sendToTrash: { _ in
+                XCTFail("The edited target must not go to Trash.")
+                throw CancellationError()
+            })) { error in
+                guard case FileOperationError.sourceChanged = error else { return XCTFail("\(error)") }
+            }
+
+            let current = try ReviewedFile(FileReference(url: target.url))
+            var backup: FileReference?
+            XCTAssertThrowsError(try FileOperations.replaceCopy(ReviewedFile(source), replacing: current,
+                                                                isCancelled: { false }, sendToTrash: { file in
+                let moved = try FileOperations.move(file, into: trash.url).moved
+                backup = moved
+                _ = try write("arrived late", named: "Report.txt", in: targetFolder.url)
+                return TrashReceipt(original: file, trashedAt: Date(), trashLocation: moved.url, trashed: moved)
+            })) { error in
+                guard case FileOperationError.replacementNeedsReview = error else { return XCTFail("\(error)") }
+            }
+            XCTAssertEqual(try contents(try XCTUnwrap(backup)), "edited after review")
+            XCTAssertEqual(try contents(FileReference(url: target.url)), "arrived late")
+            XCTAssertEqual(try contents(source), "new contents")
+        }
+    }
+
     func testCopyRefusesAnItemThatArrivesBeforePublication() throws {
         try withFixture { root in
             let source = try write("source", named: "item.txt", in: root)
