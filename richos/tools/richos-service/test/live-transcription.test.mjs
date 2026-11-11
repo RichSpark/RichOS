@@ -174,7 +174,7 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
       me: [{ ...segment('The new decision.', 58_000, 59_000), speaker: 'me' }],
       others: [{ ...segment('An earlier fact.', 6_000, 7_000), speaker: 'others' }],
     };
-  });
+  }, toolchain);
   assert.deepEqual(fresh, {
     fromMs: 10_000, throughMs: 70_000,
     passages: [
@@ -183,6 +183,17 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
     ],
   });
   assert(!fs.existsSync(excerptScratch), 'a completed excerpt keeps no audio copy');
+  let windows = 0;
+  advance({ decode: () => ({
+    me: [],
+    others: windows++ === 0 ? [segment('An earlier fact.', 16_000, 17_000)] : [],
+    toolchain,
+  }) });
+  const reused = recentLiveExcerpt(dir, options, requestedAt, (_scratch, wav) => {
+    assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 22);
+    return { me: [segment('The new decision.', 20_000, 21_000)], others: [] };
+  }, toolchain);
+  assert.deepEqual(reused, fresh, 'cached text and a newly decoded tail respect the same cutoff');
   assert.equal(recentLiveExcerpt(dir, options, startedAt - 1, () => assert.fail('future recording decoded')), null);
   fs.writeFileSync(record, JSON.stringify({ status: 'closed', capture, startedAt }));
   assert.equal(recentLiveExcerpt(dir, options, requestedAt, () => assert.fail('closed recording decoded')), null);

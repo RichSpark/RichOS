@@ -57,7 +57,7 @@ const CALENDAR_RECONNECT_DEADLINE: Duration = Duration::from_secs(6 * 60);
 const TRANSCRIBE_DEADLINE: Duration = Duration::from_secs(60 * 60);
 /// Let a nearly complete live chunk finish. The final pass recovers anything still missing.
 const LIVE_TRANSCRIPTION_DRAIN: Duration = Duration::from_secs(3);
-const LIVE_EXCERPT_DEADLINE: Duration = Duration::from_secs(18);
+const LIVE_EXCERPT_DEADLINE: Duration = Duration::from_secs(30);
 /// Keep the saved recording waiting for setup for a bounded time.
 const MODEL_WAIT: Duration = Duration::from_secs(5 * 60);
 /// One brief attempt (a bug report's is 90 s; an hour of transcript needs longer).
