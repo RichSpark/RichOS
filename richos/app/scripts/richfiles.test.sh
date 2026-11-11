@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-tests: no-host-screen: Swift tests use synthetic files in disposable scratch
 # run-tests: inputs richos/app/scripts/richfiles.test.sh richos/tools/richfiles richos/engine/scripts/lib/native-work.py richos/engine/scripts/lib/machine-settings.sh richos/engine/scripts/lib/machine_settings.py
-# run-tests: covers richos/tools/richfiles/Package.swift richos/tools/richfiles/Sources/RichFilesCore/DirectoryReader.swift richos/tools/richfiles/Sources/RichFilesCore/Locations.swift richos/tools/richfiles/Tests/RichFilesCoreTests/DirectoryReaderTests.swift richos/tools/richfiles/Sources/RichFilesCore/FileOperations.swift richos/tools/richfiles/Tests/RichFilesCoreTests/FileOperationsTests.swift
+# run-tests: covers richos/tools/richfiles/Package.swift richos/tools/richfiles/Sources/RichFilesCore/DirectoryReader.swift richos/tools/richfiles/Sources/RichFilesCore/Locations.swift richos/tools/richfiles/Tests/RichFilesCoreTests/DirectoryReaderTests.swift richos/tools/richfiles/Sources/RichFilesCore/FileOperations.swift richos/tools/richfiles/Tests/RichFilesCoreTests/FileOperationsTests.swift richos/tools/richfiles/Sources/RichFilesCore/BatchRename.swift richos/tools/richfiles/Tests/RichFilesCoreTests/BatchRenameTests.swift
 set -euo pipefail
 
 if [ "$(uname -s)" != Darwin ]; then
