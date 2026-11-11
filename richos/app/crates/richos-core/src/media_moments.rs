@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 pub const TOOL: &str = "show_media_moments";
 const RECORD: &str = "media-moments.jsonl";
 const POINT_LIMIT: usize = 8;
+const QUOTE_LIMIT: usize = 420;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileVersion {
@@ -185,7 +186,9 @@ pub fn definition() -> Value {
                 "points": {"type":"array", "minItems":1,"maxItems": POINT_LIMIT, "items":{
                     "type":"object","additionalProperties":false,"required":["startMs","label","quote"],
                     "properties":{"startMs":{"type":"integer","minimum":0},
-                                  "label":{"type":"string","maxLength":72},"quote":{"type":"string","maxLength":420}}
+                                  "label":{"type":"string","maxLength":72},
+                                  "quote":{"type":"string","description":
+                                      "A source excerpt of up to 420 characters after spaces, tabs and line breaks are collapsed. Other control characters are refused."}}
                 }}
             }
         }
@@ -196,9 +199,17 @@ pub fn call(scope: &question_tools::Scope, args: Value) -> Result<Value, String>
     let Input { name, source, duration_ms, mut points, waveform } =
         serde_json::from_value(args).map_err(|_| "Give the source, duration and its timestamped moments.".to_string())?;
     if !text(&name, 120) || points.is_empty() || points.len() > POINT_LIMIT
-        || points.iter().any(|p| p.start_ms >= duration_ms || !text(&p.label, 72) || !text(&p.quote, 420))
+        || points.iter().any(|p| p.start_ms >= duration_ms || !text(&p.label, 72))
     {
-        return Err("Give one to eight moments with short labels, source excerpts and times inside the recording.".into());
+        return Err("Give a recording name and one to eight moments with short labels and times inside the recording.".into());
+    }
+    for (index, point) in points.iter_mut().enumerate() {
+        let unsupported = point.quote.chars().any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'));
+        let quote = point.quote.split_whitespace().collect::<Vec<_>>().join(" ");
+        if unsupported || !text(&quote, QUOTE_LIMIT) {
+            return Err(format!("Moment {} needs a source excerpt of 1 to {QUOTE_LIMIT} characters after whitespace is collapsed. Tabs and line breaks are allowed. Remove other control characters.", index + 1));
+        }
+        point.quote = quote;
     }
     points.sort_by_key(|point| point.start_ms);
     if points.windows(2).any(|pair| pair[0].start_ms == pair[1].start_ms) {

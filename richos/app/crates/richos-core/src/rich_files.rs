@@ -524,7 +524,7 @@ mod tests {
         let args = json!({
             "name": "Interview", "durationMs": 8000,
             "source": {"kind":"local","path":file},
-            "points":[{"startMs":5330,"label":"The answer","quote":"We looked at the source."},
+            "points":[{"startMs":5330,"label":"The answer","quote":"We looked at\r\nthe source."},
                       {"startMs":1000,"label":"The context","quote":"Here is what changed."}],
             "waveform":"1234567890".repeat(10).chars().take(96).collect::<String>()
         });
@@ -537,6 +537,14 @@ mod tests {
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0]["turnId"], "job");
         assert_eq!(cards[0]["file"]["moments"]["points"][0]["startMs"], 1000);
+        assert_eq!(cards[0]["file"]["moments"]["points"][1]["quote"], "We looked at the source.");
+        let mut one_line = args.clone();
+        one_line["points"][0]["quote"] = json!("We looked at the source.");
+        assert_eq!(call(&open, media::TOOL, one_line).unwrap()["id"], out["id"]);
+        let mut unsupported = args.clone();
+        unsupported["points"][0]["quote"] = json!("A\0B");
+        let error = call(&open, media::TOOL, unsupported).unwrap_err();
+        assert!(error.contains("Moment 1") && error.contains("control characters"), "{error}");
         assert_eq!(cards[0]["file"]["exists"], true);
         assert!(cards[0]["file"].get("path").is_none());
         assert!(media::items(&root, "other", "t1").is_empty());
