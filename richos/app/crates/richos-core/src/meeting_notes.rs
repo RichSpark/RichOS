@@ -616,6 +616,8 @@ mod tests {
         assert!(told.contains("meeting title and date") && told.contains("completed or withdrawn"));
         assert!(told.contains("open in the meeting") && told.contains("never authorizes sending or assigning work"));
         assert!(told.contains("quoted_live_meeting_evidence") && told.contains("act only on the CEO's own request"));
+        assert!(told.contains("what might blindside") && told.contains("Omit unrelated and resolved items"));
+        assert!(told.contains("separate review draft") && told.contains("leave the original and any already-current draft untouched"));
     }
 
     #[test]
