@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { advanceLiveTranscription, supportsLiveTranscription } from '../lib/live-transcription.js';
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
+import { assertPrivateTree } from '../lib/private-files.js';
 
 test('live transcription checkpoints the flushed prefix and only decodes the tail after close', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-live-'));
@@ -113,4 +114,21 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   assert.deepEqual(timed.me[0].wordTimesMs, [0]);
   const transcript = renderMarkdown(mergeTranscript(timed));
   assert.match(transcript, /\[00:04\] Me:[\s\S]*\[00:16\] Them:/);
+});
+
+test('private session validation tolerates a live worker removing its staging', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-resume-')));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const staging = path.join(dir, '.live-transcription', 'decode-finished');
+  fs.mkdirSync(staging, { recursive: true });
+  const read = fs.readdirSync;
+  t.mock.method(fs, 'readdirSync', (file, ...args) => {
+    if (file === staging) fs.rmdirSync(staging);
+    return read(file, ...args);
+  });
+  assert.equal(assertPrivateTree(dir), dir);
+  const retained = path.join(dir, 'recording.wav');
+  fs.writeFileSync(retained, '');
+  fs.symlinkSync(retained, path.join(dir, 'alias.wav'));
+  assert.throws(() => assertPrivateTree(dir), /regular unlinked file/);
 });

@@ -60,9 +60,21 @@ export function assertPrivateTree(root) {
   function visit(current) {
     for (const name of fs.readdirSync(current)) {
       const file = path.join(current, name);
-      const entry = fs.lstatSync(file);
-      if (entry.isDirectory()) visit(privateDirectory(file, dir));
-      else privateFile(file, dir);
+      try {
+        const entry = fs.lstatSync(file);
+        if (entry.isDirectory()) {
+          if (fs.realpathSync.native(file) !== file) {
+            throw new Error('storage boundary: child directory must not be a link');
+          }
+          visit(file);
+        } else if (!entry.isFile() || entry.nlink !== 1) {
+          throw new Error('storage boundary: output must be a regular unlinked file');
+        }
+      } catch (error) {
+        // A previous live worker can finish and remove its staging directory
+        // while a new launch checks the retained recording.
+        if (error.code !== 'ENOENT') throw error;
+      }
     }
   }
   visit(dir);
