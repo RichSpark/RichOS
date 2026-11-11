@@ -21,6 +21,7 @@ enum BrowserSheet: Identifiable {
     case diskUsage(URL)
     case checksum(FileReference)
     case duplicates(URL)
+    case compare(URL)
     case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces
 
     var id: String {
@@ -34,6 +35,7 @@ enum BrowserSheet: Identifiable {
         case .diskUsage: return "diskUsage"
         case .checksum: return "checksum"
         case .duplicates: return "duplicates"
+        case .compare: return "compare"
         case .trash: return "trash"
         case .transfers: return "transfers"
         case .searchOptions: return "searchOptions"
@@ -41,6 +43,118 @@ enum BrowserSheet: Identifiable {
         case .connect: return "connect"
         case .workspaces: return "workspaces"
         }
+    }
+}
+
+@MainActor
+struct CompareFoldersSheet: View {
+    let first: URL
+    let openFolder: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var second: URL?
+    @State private var mode = FolderComparisonMode.metadata
+    @State private var request: Request?
+    @State private var report: FolderComparisonReport?
+    @State private var problem = ""
+
+    private struct Request: Hashable {
+        let id = UUID()
+        let folder: URL
+        let mode: FolderComparisonMode
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Compare Folders").font(.headline)
+            LabeledContent("First Folder", value: first.path)
+                .lineLimit(1).truncationMode(.middle)
+            HStack {
+                LabeledContent("Second Folder", value: second?.path ?? "Choose a folder")
+                    .lineLimit(1).truncationMode(.middle)
+                Button("Choose…") { chooseFolder() }
+            }
+            HStack {
+                Picker("Compare by", selection: $mode) {
+                    ForEach(FolderComparisonMode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Button("Compare") {
+                    guard let second else { return }
+                    report = nil
+                    problem = ""
+                    request = Request(folder: second, mode: mode)
+                }.disabled(second == nil || second?.path == first.path)
+            }
+            if let report {
+                Text("\(report.differences.count) differences · \(report.matchingItems) match")
+                List(report.differences) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.relativePath).lineLimit(1).truncationMode(.middle).help(item.relativePath)
+                        Text(item.kind.rawValue).font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            if let first = item.first { openButton("Show First", item: first) }
+                            if let second = item.second { openButton("Show Second", item: second) }
+                        }
+                    }.padding(.vertical, 2)
+                }
+                if report.unavailable > 0 || report.otherVolumes > 0 {
+                    Text("\(report.unavailable) items unavailable. \(report.otherVolumes) other mounts skipped.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                if !problem.isEmpty { Text(problem).foregroundStyle(.secondary) }
+                else if request != nil { ProgressView("Comparing…") }
+                Spacer()
+            }
+            HStack {
+                if request != nil && report == nil && problem.isEmpty {
+                    Button("Stop") { request = nil }
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }.padding(16).frame(width: 680, height: 465)
+            .onChange(of: mode) { _ in
+                request = nil
+                report = nil
+                problem = ""
+            }
+            .task(id: request) {
+                guard let requested = request else { return }
+                let root = first
+                do {
+                    let result = try await readStorage {
+                        try StorageAnalysis.compareFolders(root, requested.folder, mode: requested.mode,
+                                                           isCancelled: { Task.isCancelled })
+                    }
+                    if !Task.isCancelled { report = result }
+                } catch {
+                    if !Task.isCancelled { problem = error.localizedDescription }
+                }
+            }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = second ?? first.deletingLastPathComponent()
+        panel.prompt = "Compare With"
+        panel.begin { result in
+            if result == .OK, let folder = panel.url {
+                second = folder
+                request = nil
+                report = nil
+                problem = ""
+            }
+        }
+    }
+
+    private func openButton(_ title: String, item: URL) -> some View {
+        Button(title) {
+            openFolder(item.deletingLastPathComponent())
+            dismiss()
+        }.buttonStyle(.borderless)
     }
 }
 

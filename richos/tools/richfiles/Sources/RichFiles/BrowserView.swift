@@ -634,6 +634,7 @@ struct BrowserView: View {
         Button("Workspaces…") { sheet = .workspaces }
         Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
         Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
+        Button("Compare Folders…") { sheet = .compare(model.folder) }
         Button("Refresh") { _ = perform(.refresh) }
     }
 
@@ -731,6 +732,7 @@ struct BrowserView: View {
         case .workspaces: sheet = .workspaces
         case .diskUsage: sheet = .diskUsage(model.folder)
         case .duplicates: sheet = .duplicates(model.folder)
+        case .compareFolders: sheet = .compare(model.folder)
         case .checksum:
             guard entries.count == 1, let file = entries.first, file.kind == .regularFile else { return false }
             checksum(file)
@@ -1006,6 +1008,7 @@ struct BrowserView: View {
             ZipCreateSheet(sources: sources, destination: destination, changed: model.refresh)
         case .diskUsage(let folder): DiskUsageSheet(folder: folder, openFolder: model.openFolder)
         case .duplicates(let folder): DuplicateSheet(folder: folder, openFolder: model.openFolder)
+        case .compare(let folder): CompareFoldersSheet(first: folder, openFolder: model.openFolder)
         case .checksum(let reference): ChecksumSheet(file: reference)
         case .trash: TrashSheet(actions: actions)
         case .transfers: TransferSheet(actions: actions)

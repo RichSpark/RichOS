@@ -70,6 +70,39 @@ final class DirectoryReaderTests: XCTestCase {
         }
     }
 
+    func testFolderComparisonCanDetectDifferentBytesWithTheSameSizeAndDate() throws {
+        try fixture { root in
+            let left = root.appendingPathComponent("First", isDirectory: true)
+            let right = root.appendingPathComponent("Second", isDirectory: true)
+            for side in [left, right] {
+                try FileManager.default.createDirectory(at: side, withIntermediateDirectories: true)
+                try write("equal.txt", in: side, text: "identical")
+            }
+            try write("same-metadata.txt", in: left, text: "abc")
+            try write("same-metadata.txt", in: right, text: "xyz")
+            let time = Date(timeIntervalSince1970: 1_600_000_000)
+            for side in [left, right] {
+                for name in ["same-metadata.txt", "equal.txt"] {
+                    try FileManager.default.setAttributes([.modificationDate: time],
+                                                          ofItemAtPath: side.appendingPathComponent(name).path)
+                }
+            }
+            try write("only-first.txt", in: left)
+            try write("only-second.txt", in: right)
+            try FileManager.default.createDirectory(at: left.appendingPathComponent("kind"),
+                                                    withIntermediateDirectories: false)
+            try write("kind", in: right)
+            let metadata = try StorageAnalysis.compareFolders(left, right, mode: .metadata)
+            let content = try StorageAnalysis.compareFolders(left, right, mode: .contents)
+            XCTAssertEqual(metadata.matchingItems, 2)
+            XCTAssertEqual(content.matchingItems, 1)
+            XCTAssertEqual(content.unavailable, 0)
+            XCTAssertEqual(Dictionary(uniqueKeysWithValues: content.differences.map { ($0.relativePath, $0.kind) }),
+                           ["only-first.txt": .leftOnly, "only-second.txt": .rightOnly,
+                            "kind": .differentType, "same-metadata.txt": .changed])
+        }
+    }
+
     func testFolderAndRecursiveSearchKeepExplicitScope() throws {
         try fixture { root in
             let manager = FileManager.default

@@ -85,7 +85,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
 enum BrowserCommand: Equatable {
     case open, rename, trash, preview, address, search, back, forward, up, refresh, revealFolder
     case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties, workspaces, diskUsage
-    case duplicates, checksum
+    case duplicates, checksum, compareFolders
     case grid(Int, Int, Bool)
 }
 
@@ -124,6 +124,7 @@ struct BrowserCommands: Commands {
             action("Disk Usage…", .diskUsage)
             action("Find Duplicate Files…", .duplicates)
             action("Verify Checksum…", .checksum)
+            action("Compare Folders…", .compareFolders)
         }
         CommandMenu("Go") {
             action("Back", .back)

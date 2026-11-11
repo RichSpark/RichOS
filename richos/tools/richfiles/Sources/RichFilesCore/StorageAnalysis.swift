@@ -181,6 +181,10 @@ struct FileVersion: Equatable, Sendable {
         changed = status.st_ctimespec.tv_sec
         changedNanoseconds = status.st_ctimespec.tv_nsec
     }
+
+    func hasSameModifiedDate(as other: Self) -> Bool {
+        modified == other.modified && modifiedNanoseconds == other.modifiedNanoseconds
+    }
 }
 
 enum FileInventory {
