@@ -1064,8 +1064,12 @@ impl Meetings {
         if code == Some(0) && finished.recording {
             self.recording_closed(finished, live);
         } else {
+            let had_live_worker = live.is_some();
             finish_live_transcription(live);
             if let Some(dir) = finished.dir.as_deref().filter(|_| finished.recording) {
+                if had_live_worker {
+                    clear_live_staging(dir, &finished.zone);
+                }
                 // The failure was already shown. Don't resume this session as a normal quit.
                 logged("removing the failed recording's meeting.json", std::fs::remove_file(dir.join(meeting_notes::MEETING_FILE)));
             }
@@ -1582,6 +1586,16 @@ fn finish_live_transcription(live: Option<Child>) {
                 return;
             }
         }
+    }
+}
+
+fn clear_live_staging(dir: &Path, zone: &Path) {
+    let Some(service) = service_cli() else { return };
+    let mut command = Command::new(node_bin());
+    command.arg(service).arg("clear-live-staging").arg(dir).arg("--zone").arg(zone).stdin(Stdio::null());
+    installed_paths(&mut command);
+    if !command.status().is_ok_and(|status| status.success()) {
+        eprintln!("[richos] meeting notes: live transcription staging could not be cleared after capture failed");
     }
 }
 
