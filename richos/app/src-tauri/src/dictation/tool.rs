@@ -882,7 +882,10 @@ impl Tool {
                             self.live_words = None;
                             self.live_preview_paused = false;
                         }
-                        super::live_preview::Update::Quiet => self.live_words = None,
+                        super::live_preview::Update::Quiet => {
+                            if let Some(t) = &mut self.timings { t.preview_quiet(); }
+                            self.live_words = None;
+                        }
                     }
                     bar::preview(&self.app, self.bar.sequence(), self.live_words.as_deref(), self.live_preview_paused);
                 }

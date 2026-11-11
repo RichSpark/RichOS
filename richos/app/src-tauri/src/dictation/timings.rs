@@ -12,6 +12,7 @@ pub struct Timings {
     began: Instant,
     stopped: Option<Instant>,
     updates: u64,
+    quiet_ticks: u64,
     first_ms: Option<u64>,
     max_decode_ms: u64,
     max_window_ms: u64,
@@ -23,7 +24,7 @@ impl Timings {
     pub fn new(seq: u64, model: &str, preview: bool, version: &str) -> Self {
         let model = match model { "small.en" => "small.en", "large-v3-turbo-q5_0" => "large-v3-turbo-q5_0", _ => "other" };
         let value = Self { seq, version: version.chars().take(80).collect(), model, preview, began: Instant::now(), stopped: None,
-            updates: 0, first_ms: None, max_decode_ms: 0, max_window_ms: 0, complete: false, cpu_at_start: cpu_usage() };
+            updates: 0, quiet_ticks: 0, first_ms: None, max_decode_ms: 0, max_window_ms: 0, complete: false, cpu_at_start: cpu_usage() };
         value.event("capture_ready", json!({}));
         value
     }
@@ -48,8 +49,15 @@ impl Timings {
     }
     pub fn stop(&mut self) {
         self.stopped = Some(Instant::now());
-        self.event("finish_received", json!({"updates":self.updates,"first_result_ms":self.first_ms,
-            "max_decode_ms":self.max_decode_ms,"max_sampled_window_ms":self.max_window_ms}));
+        self.event("finish_received", self.finish_detail());
+    }
+    fn finish_detail(&self) -> Value {
+        json!({"updates":self.updates,"first_result_ms":self.first_ms,
+            "max_decode_ms":self.max_decode_ms,"max_sampled_window_ms":self.max_window_ms,
+            "preview_quiet_ticks":self.quiet_ticks})
+    }
+    pub fn preview_quiet(&mut self) {
+        self.quiet_ticks += 1;
     }
     pub fn finished(&mut self, outcome: &'static str) {
         let current = cpu_usage();
@@ -92,17 +100,25 @@ mod tests {
         let mut t = Timings::new(7, "large-v3-turbo-q5_0", true, "1.2.9-dev.fixture");
         let at = 1_798_784_000_000;
         let entry = t.entry("recognition_completed", 4010, Some(420), json!({"model":"small.en","recognition_ms":300}));
-        std::fs::write(data.join("dictation.log"), format!("{} dictation timing {entry}\n", richdoctor_core::util::utc_stamp(at))).unwrap();
+        t.preview_quiet();
+        let finish = t.entry("finish_received", 3590, Some(0), t.finish_detail());
+        let stamp = richdoctor_core::util::utc_stamp(at);
+        std::fs::write(data.join("dictation.log"), format!("{stamp} dictation timing {entry}\n{stamp} dictation timing {finish}\n")).unwrap();
         let scope = Scope { home: home.clone(), window: Window::around(at), claude_bin: None, diagnostics: true };
         let collected = collect(Category::Richscribe, &scope, &Context::default(), 0);
         assert_eq!(collected[0].status, Status::Collected);
-        let raw = collected[0].text.split_once("dictation timing ").unwrap().1;
-        let record: Value = serde_json::from_str(raw).unwrap();
+        let mut records = collected[0].text.lines()
+            .filter_map(|line| line.split_once("dictation timing "))
+            .map(|(_, raw)| serde_json::from_str::<Value>(raw).unwrap());
+        let record = records.next().unwrap();
         assert_eq!(record["version"], "1.2.9-dev.fixture");
         assert_eq!(record["selected_model"], "large-v3-turbo-q5_0");
         assert_eq!(record["detail"]["model"], "small.en", "fallback must not masquerade as the selected model");
         assert_eq!(record["since_finish_ms"], 420);
         assert_eq!(record["detail"]["recognition_ms"], 300);
+        let finish = records.next().unwrap();
+        assert_eq!(finish["detail"]["preview_quiet_ticks"], 1);
+        assert_eq!(finish["detail"]["updates"], 0);
         assert_eq!(record["preview_enabled"], true);
         t.complete = true;
         std::fs::remove_dir_all(home).unwrap();

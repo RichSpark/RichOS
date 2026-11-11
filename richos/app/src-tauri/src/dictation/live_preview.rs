@@ -2,7 +2,7 @@
 //! transcript stitching, carried prompt or final-text authority.
 
 use super::scratch::Scratch;
-use richos_voice::{dictation::{judge_transcript, Recording, FASTER}, stt::Recognizer, voiced::VoiceEvidence};
+use richos_voice::{dictation::{judge_transcript, Recording, FASTER}, stt::Recognizer, vad::SAMPLE_RATE, voiced::VoiceEvidence};
 use std::{path::Path, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::{Duration, Instant}};
 
 pub enum Update {
@@ -14,6 +14,14 @@ pub enum Update {
 
 // One fixed recent-text allowance; no accumulating provisional transcript.
 const PREVIEW_CHARACTER_LIMIT: usize = 200;
+
+// A short overlap keeps enough audio to recognize speech across adjacent ticks.
+// Older words may provide decoder context, but cannot trigger a new decode.
+const SPEECH_CHECK_OVERLAP: usize = SAMPLE_RATE as usize / 4;
+
+fn new_speech_audio(samples: &[f32], new_samples: usize) -> &[f32] {
+    &samples[samples.len().saturating_sub(new_samples.saturating_add(SPEECH_CHECK_OVERLAP))..]
+}
 
 pub fn recent_text(text: &str) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -43,16 +51,21 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         }
         due += Duration::from_secs(2);
         let sampled_at = Instant::now();
-        let samples = {
+        let (samples, new_samples) = {
             // No wait for a busy capture callback, and no decoding/files/UI while
             // holding this lock. There is only the latest window, never backlog.
             let Ok(held) = recording.try_lock() else { continue };
             let Some(recording) = held.as_ref() else { return };
-            if recording.samples().len() == last_samples { continue; }
-            last_samples = recording.samples().len();
-            recording.preview_samples().to_vec()
+            let len = recording.samples().len();
+            let new_samples = len.saturating_sub(last_samples);
+            if new_samples == 0 { continue; }
+            last_samples = len;
+            (recording.preview_samples().to_vec(), new_samples)
         };
-        if !VoiceEvidence::measure(&samples).carried_speech() { send(Update::Quiet); continue; }
+        if !VoiceEvidence::measure(new_speech_audio(&samples, new_samples)).carried_speech() {
+            send(Update::Quiet);
+            continue;
+        }
         if stop.load(Ordering::Acquire) { return; }
         let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch|
             recognizer.transcribe_bounded_until(&samples, scratch.path(), Duration::from_millis(1800), stop)
@@ -83,6 +96,28 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_speech_cannot_trigger_a_decode_during_a_pause() {
+        let mut samples = vec![0.0; SPEECH_CHECK_OVERLAP + 12_000];
+        let mut phase = 0.0;
+        for (i, sample) in samples[..8_000].iter_mut().enumerate() {
+            phase += std::f32::consts::TAU * (115.0 + i as f32 / 140.0) / SAMPLE_RATE as f32;
+            *sample = 0.1 * phase.sin();
+        }
+        assert!(VoiceEvidence::measure(&samples).carried_speech());
+        assert!(!VoiceEvidence::measure(new_speech_audio(&samples, 4_000)).carried_speech());
+        assert!(VoiceEvidence::measure(new_speech_audio(&samples, samples.len())).carried_speech());
+    }
+
+    #[test]
+    fn speech_at_a_tick_boundary_keeps_its_overlap() {
+        let samples = [0.0, 1.0, 2.0].repeat(SPEECH_CHECK_OVERLAP);
+        let new_samples = 32;
+        assert_eq!(new_speech_audio(&samples, new_samples),
+            &samples[samples.len() - SPEECH_CHECK_OVERLAP - new_samples..]);
+        assert_eq!(new_speech_audio(&samples, samples.len() * 2), &samples);
+    }
 
     #[test]
     fn preview_keeps_two_hundred_recent_characters_without_changing_final_text() {
