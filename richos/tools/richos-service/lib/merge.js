@@ -87,6 +87,10 @@ export function mergeTranscript({ me, others, captions = [], startedAt = 0, meLa
 
 const SENTENCE_END = /[.?!…]["'’)\]]*$/;
 
+function displayedStart(segment) {
+  return segment.displayStartMs ?? segment.startMs;
+}
+
 /** Past this many words a paragraph closes at its next sentence end, even inside a segment. */
 export const PARAGRAPH_SOFT_WORDS = 80;
 
@@ -114,12 +118,14 @@ export function paragraphs(segments) {
     const times = Array.isArray(seg.wordTimesMs) && seg.wordTimesMs.length === words.length ? seg.wordTimesMs : null;
     let last = out[out.length - 1];
     if (!last || last.label !== seg.label || SENTENCE_END.test(last.text)) {
-      last = { startMs: seg.startMs, endMs: seg.endMs, label: seg.label, text: '', words: 0 };
+      last = { startMs: displayedStart(seg), endMs: seg.endMs, label: seg.label, text: '', words: 0 };
       out.push(last);
     }
     words.forEach((w, k) => {
       if (last.words >= PARAGRAPH_SOFT_WORDS && SENTENCE_END.test(last.text)) {
-        last = { startMs: times ? times[k] : seg.startMs, endMs: seg.endMs, label: seg.label, text: '', words: 0 };
+        const wordStart = times ? times[k] : seg.startMs;
+        const startMs = seg.displayStartMs === undefined ? wordStart : Math.max(wordStart, seg.displayStartMs);
+        last = { startMs, endMs: seg.endMs, label: seg.label, text: '', words: 0 };
         out.push(last);
       }
       last.text = last.text ? `${last.text} ${w}` : w;
@@ -167,7 +173,10 @@ export function renderMarkdown(merged, record) {
   if (merged.segments.length === 0) {
     lines.push('_(no speech transcribed)_');
   } else {
-    for (const seg of paragraphs(merged.segments)) {
+    const ordered = merged.segments.some((segment) => segment.displayStartMs !== undefined)
+      ? [...merged.segments].sort((a, b) => displayedStart(a) - displayedStart(b))
+      : merged.segments;
+    for (const seg of paragraphs(ordered)) {
       lines.push(`**[${stamp(seg.startMs)}] ${seg.label}:** ${seg.text}`);
       lines.push('');
     }

@@ -2713,6 +2713,9 @@ test('condition 3 — near-silence with a fabricated "Thank you." over it is NOT
   );
   assert.equal(v.verdict, 'not-speech');
   assert.match(v.reason, /speech floor/);
+  const levelOnly = adjudicateCandidate(CAND(), PROBE({ tight: '', wide: '', maxDb: -51.3 }), { peakDb: -0.9 });
+  assert.equal(levelOnly.verdict, v.verdict);
+  assert.equal(levelOnly.reason, v.reason);
 });
 
 test('condition 3 is CHANNEL-RELATIVE — the same dBFS passes on a quieter channel', () => {
