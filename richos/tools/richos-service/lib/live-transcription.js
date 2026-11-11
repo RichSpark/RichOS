@@ -261,7 +261,9 @@ function reuseExcerptCheckpoints(dir, options, fd, { header, frames, rate }, fro
   if (startIndex < 0) return cached;
   const toolchain = knownToolchain ?? checkToolchain(resolveModel(options.model), options.model);
   let cursor = starts[startIndex];
-  const withinExcerpt = (row) => (row.displayStartMs ?? row.startMs) >= from * 1_000 / rate;
+  const fromMs = from * 1_000 / rate;
+  const withinExcerpt = (row) => (row.displayStartMs ?? row.startMs) >= fromMs;
+  const crossesStart = (row) => !withinExcerpt(row) && row.endMs > fromMs;
   for (const start of starts.slice(startIndex)) {
     if (start < cursor) continue;
     if (start > cursor) break;
@@ -271,8 +273,12 @@ function reuseExcerptCheckpoints(dir, options, fd, { header, frames, rate }, fro
     const saved = readCheckpoint(path.join(cache, `${start}.json`), checkpointKey(wav, start, to, options, toolchain),
       start * 1_000 / rate, to * 1_000 / rate);
     if (!saved) break;
-    if (firstAudibleMs(wav, 0, rate) !== null) cached.me.push(...saved.me.filter(withinExcerpt));
-    if (firstAudibleMs(wav, 2, rate) !== null) cached.others.push(...saved.others.filter(withinExcerpt));
+    const me = firstAudibleMs(wav, 0, rate) === null ? [] : saved.me;
+    const others = firstAudibleMs(wav, 2, rate) === null ? [] : saved.others;
+    // A whole checkpoint cannot give us only the words after a cut through speech.
+    if (me.some(crossesStart) || others.some(crossesStart)) break;
+    cached.me.push(...me.filter(withinExcerpt));
+    cached.others.push(...others.filter(withinExcerpt));
     cached.through = Math.max(from, to);
     cursor = to;
   }

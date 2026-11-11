@@ -194,6 +194,14 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
     return { me: [segment('The new decision.', 20_000, 21_000)], others: [] };
   }, toolchain);
   assert.deepEqual(reused, fresh, 'cached text and a newly decoded tail respect the same cutoff');
+  const crossing = JSON.parse(fs.readFileSync(checkpoint, 'utf8'));
+  crossing.others = [segment('Words that continue after the cutoff.', 8_000, 12_000)];
+  fs.writeFileSync(checkpoint, JSON.stringify(crossing));
+  const clipped = recentLiveExcerpt(dir, options, requestedAt, (_scratch, wav) => {
+    assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 60);
+    return { me: [], others: [segment('After the cutoff.', 100, 300)] };
+  }, toolchain);
+  assert.equal(clipped.passages[0].text, 'After the cutoff.', 'a cut through a sentence decodes the leading continuation');
   assert.equal(recentLiveExcerpt(dir, options, startedAt - 1, () => assert.fail('future recording decoded')), null);
   fs.writeFileSync(record, JSON.stringify({ status: 'closed', capture, startedAt }));
   assert.equal(recentLiveExcerpt(dir, options, requestedAt, () => assert.fail('closed recording decoded')), null);
