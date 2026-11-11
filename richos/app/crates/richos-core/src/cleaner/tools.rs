@@ -27,8 +27,8 @@ pub fn allowed(scope: &Scope) -> bool {
 }
 pub fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"library_search","description":"Search the user's RichCleaner notes, names and folder labels. Use ordinary search words, never FTS syntax. Empty query lists saved metadata for meaning-based inspection when lexical matches are weak. A noteTruncated preview retains its full note through library_show. A result with batchId belongs to an explicitly saved set. Each answer names total matches, total saved and continuation; inspect remaining pages before claiming that no file exists. Never reads file contents or moves files.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
-        json!({"name":"library_show","description":"Show the original for an id returned by library_search as a RichCleaner file card. When the user asks for the saved set and the result has a batchId, give that result's id and set includeBatch to true to show every remaining member. Opening resolves the current original on the host; no model-supplied file path is accepted. Does not move files.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"includeBatch":{"type":"boolean"}},"required":["id"],"additionalProperties":false}}),
+        json!({"name":"library_search","description":"Search RichCleaner notes, names and folder labels using ordinary words. Empty query lists saved metadata. A file noteTruncated preview retains its full note through library_show. If a file has several saved sets, use batchFor with its file id instead of query to list the sets and their original shared notes. Respect total counts and follow next offsets before claiming nothing exists. Never reads file contents or moves files.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"batchFor":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
+        json!({"name":"library_show","description":"Show the original for a file id returned by library_search. For an explicitly requested set, use includeBatch when the file belongs to exactly one set. For several sets, list them with library_search batchFor and give the file id plus the matching batchId. Cards resolve the original on the Mac using its id. No paths accepted. Does not move files.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"includeBatch":{"type":"boolean"},"batchId":{"type":"string"}},"required":["id"],"additionalProperties":false}}),
     ]
 }
 pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
@@ -42,19 +42,25 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
     let keys = args.as_object().ok_or("Expected library arguments")?;
     match name {
         "library_search" => {
-            if keys.keys().any(|k| k != "query" && k != "offset") {
+            if keys.keys().any(|k| k != "query" && k != "offset" && k != "batchFor") {
                 return Err("Unknown search argument".into());
+            }
+            let offset = args
+                .get("offset")
+                .map(|v| v.as_u64().ok_or("Offset must be a nonnegative integer"))
+                .transpose()?
+                .unwrap_or(0);
+            if let Some(member) = args.get("batchFor") {
+                if keys.contains_key("query") {
+                    return Err("Use either query or batchFor".into());
+                }
+                return batch_history(&db, member.as_str().ok_or("batchFor must be a saved file id")?, offset);
             }
             let query = args
                 .get("query")
                 .map(|v| v.as_str().ok_or("Search text must be a string"))
                 .transpose()?
                 .unwrap_or_default();
-            let offset = args
-                .get("offset")
-                .map(|v| v.as_u64().ok_or("Offset must be a nonnegative integer"))
-                .transpose()?
-                .unwrap_or(0);
             let page = db.search(query, offset, 512 * 1024)?;
             let total = db.search("", 0, 512 * 1024)?.total;
             let mut entries = vec![];
@@ -63,12 +69,12 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
                 // Search carries a bounded preview. A valid maximum-length note can
                 // exceed the entire response budget after JSON escaping; returning no
                 // items with the same continuation would hide it and every later item.
-                let mut end = e.note.len().min(16 * 1024);
-                while !e.note.is_char_boundary(end) { end -= 1; }
-                let mut item = json!({"id":e.id,"name":e.path.file_name().map(|v|v.to_string_lossy()),"note":&e.note[..end],"folder":e.folder,"aliases":e.labels,"inbox":e.inbox,"sorting":e.pending_sort});
-                if end < e.note.len() { item["noteTruncated"] = json!(true); }
+                let note = note_preview(&e.note);
+                let mut item = json!({"id":e.id,"name":e.path.file_name().map(|v|v.to_string_lossy()),"note":note,"folder":e.folder,"aliases":e.labels,"inbox":e.inbox,"sorting":e.pending_sort});
+                if note.len() < e.note.len() { item["noteTruncated"] = json!(true); }
                 if let Some(batch) = e.batch_id {
                     item["batchId"] = json!(batch);
+                    item["batchCount"] = json!(db.batch_count(&e.id)?);
                 }
                 let size = serde_json::to_vec(&item).map_err(|e| e.to_string())?.len();
                 if bytes + size > 64 * 1024 {
@@ -83,8 +89,8 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
             )
         }
         "library_show" => {
-            if keys.keys().any(|k| k != "id" && k != "includeBatch") {
-                return Err("Give the saved file id and optionally includeBatch".into());
+            if keys.keys().any(|k| k != "id" && k != "includeBatch" && k != "batchId") {
+                return Err("Give the saved file id and optionally includeBatch or batchId".into());
             }
             let id = args["id"].as_str().ok_or("Give a saved file id")?;
             let include_batch = args
@@ -92,10 +98,13 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
                 .map(|v| v.as_bool().ok_or("includeBatch must be true or false"))
                 .transpose()?
                 .unwrap_or(false);
+            let batch_id = args.get("batchId")
+                .map(|v| v.as_str().ok_or("batchId must be a saved batch id"))
+                .transpose()?;
             let s = &scope.context;
-            if include_batch {
+            if include_batch || batch_id.is_some() {
                 let cards = db
-                    .show_batch(&s.entity_id, &s.thread_id, &s.turn_id, id)?
+                    .show_batch(&s.entity_id, &s.thread_id, &s.turn_id, id, batch_id)?
                     .into_iter()
                     .map(|(id, card)| json!({"id":id,"cardId":card}))
                     .collect::<Vec<_>>();
@@ -110,6 +119,36 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
         _ => Err("Unknown library tool".into()),
     }
 }
+
+fn note_preview(note: &str) -> &str {
+    let mut end = note.len().min(16 * 1024);
+    while !note.is_char_boundary(end) {
+        end -= 1;
+    }
+    &note[..end]
+}
+
+fn batch_history(db: &Catalog, member: &str, offset: u64) -> Result<Value> {
+    let (page, total) = db.batch_page(member, offset)?;
+    let mut batches = Vec::new();
+    let mut bytes = 1024;
+    for batch in page {
+        let note = batch.note.as_deref().map(note_preview);
+        let mut item = json!({"batchId":batch.id,"note":note,"createdAt":batch.created_at,"fileCount":batch.file_count});
+        if batch.note.as_deref() != note {
+            item["noteTruncated"] = json!(true);
+        }
+        let size = serde_json::to_vec(&item).map_err(|e| e.to_string())?.len() + 1;
+        if bytes + size > 64 * 1024 {
+            break;
+        }
+        bytes += size;
+        batches.push(item);
+    }
+    let end = offset + batches.len() as u64;
+    Ok(json!({"batches":batches,"batchFor":member,"totalBatches":total,"next":(end < total).then_some(end)}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,7 +185,7 @@ mod tests {
         use super::super::{capture_id, Entry, Identity};
 
         let root = std::env::temp_dir().join(format!("richcleaner-batch-{}", capture_id()));
-        let scope: Scope = serde_json::from_value(json!({
+        let mut scope: Scope = serde_json::from_value(json!({
             "context": {
                 "root": root.join("engine-state"),
                 "entity_id": "company",
@@ -179,20 +218,21 @@ mod tests {
         let other = make_entry("another review.pdf", 1);
         db.save(&other).unwrap();
         let batch_id = capture_id();
-        let mut set = [
+        let files = [
             make_entry("board slides.pdf", 2),
             make_entry("model.xlsx", 3),
             make_entry("legal memo.pdf", 4),
-        ];
-        for e in &mut set {
-            e.batch_id = Some(batch_id.clone());
-        }
-        db.save_batch_drafts(&set).unwrap();
+        ]
+        .into_iter()
+        .map(|e| (e.path, e.identity))
+        .collect();
+        let set = db.enroll_batch(&batch_id, files, "Acquisition review").unwrap();
 
         let found = call(&scope, "library_search", &json!({"query":"board slides"})).unwrap();
         assert_eq!(found["totalMatches"], 1);
         assert_eq!(found["entries"][0]["id"], set[0].id);
         assert_eq!(found["entries"][0]["batchId"], batch_id);
+        assert_eq!(found["entries"][0]["batchCount"], 1);
 
         call(&scope, "library_show", &json!({"id":set[0].id})).unwrap();
         assert_eq!(db.cards().unwrap().len(), 1);
@@ -211,6 +251,40 @@ mod tests {
         db.remove(&set[1].id).unwrap();
         let shown = call(&scope, "library_show", &request).unwrap();
         assert_eq!(shown["cards"].as_array().unwrap().len(), 2);
+
+        let later_id = capture_id();
+        let later_file = make_entry("forecast.xlsx", 5);
+        let later_set = db.enroll_batch(
+            &later_id,
+            vec![
+                (set[0].path.clone(), set[0].identity.clone()),
+                (later_file.path, later_file.identity),
+            ],
+            "Summer budget",
+        ).unwrap();
+        let found = call(&scope, "library_search", &json!({"query":"board slides acquisition"})).unwrap();
+        assert_eq!(found["totalMatches"], 1);
+        assert_eq!(found["entries"][0]["id"], set[0].id);
+        assert_eq!(found["entries"][0]["batchId"], later_id);
+        assert_eq!(found["entries"][0]["batchCount"], 2);
+
+        let history = call(&scope, "library_search", &json!({"batchFor":set[0].id})).unwrap();
+        assert_eq!(history["totalBatches"], 2);
+        assert_eq!(history["next"], Value::Null);
+        let notes = history["batches"].as_array().unwrap();
+        assert!(notes.iter().any(|b| b["batchId"] == batch_id && b["note"] == "Acquisition review"));
+        assert!(notes.iter().any(|b| b["batchId"] == later_id && b["note"] == "Summer budget"));
+
+        scope.context.turn_id = "recall earlier set".into();
+        assert!(call(&scope, "library_show", &request).unwrap_err().contains("batchFor"));
+        assert!(call(&scope, "library_show", &json!({"id":set[2].id,"batchId":later_id})).is_err());
+        assert!(db.cards().unwrap().iter().all(|card| card.turn != scope.context.turn_id));
+        let shown = call(&scope, "library_show", &json!({"id":set[0].id,"batchId":batch_id})).unwrap();
+        let cards = shown["cards"].as_array().unwrap();
+        assert_eq!(cards.len(), 2);
+        assert!(cards.iter().any(|card| card["id"] == set[0].id));
+        assert!(cards.iter().any(|card| card["id"] == set[2].id));
+        assert!(!cards.iter().any(|card| card["id"] == later_set[1].id));
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

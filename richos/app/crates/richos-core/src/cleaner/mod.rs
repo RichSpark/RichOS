@@ -103,14 +103,7 @@ pub struct Entry {
 }
 impl Entry {
     pub fn new(path: PathBuf, identity: Identity, note: String) -> Result<Self> {
-        if note.trim().is_empty()
-            || note.len() > 32 * 1024
-            || note
-                .chars()
-                .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-        {
-            return Err("The note is empty or too long".into());
-        }
+        validate_note(&note)?;
         Ok(Self {
             id: uuid::Uuid::new_v4().to_string(),
             batch_id: None,
@@ -133,6 +126,31 @@ impl Entry {
             pending_sort: false,
         })
     }
+
+    pub fn check_batch_eligibility(&self) -> Result<()> {
+        if !matches!(self.phase, Phase::Draft | Phase::Filed)
+            || self.staged.is_some()
+            || self.intended.is_some()
+            || self.intended_folder.is_some()
+            || self.return_phase.is_some()
+            || self.pending_sort
+        {
+            return Err("A selected file has unfinished RichCleaner work. Open Recent files to finish or recover it, then try again".into());
+        }
+        Ok(())
+    }
+}
+
+fn validate_note(note: &str) -> Result<()> {
+    if note.trim().is_empty()
+        || note.len() > 32 * 1024
+        || note
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err("The note is empty or too long".into());
+    }
+    Ok(())
 }
 pub fn folder_parts(value: &str) -> Result<Vec<String>> {
     if value.is_empty() || value.len() > 512 {
@@ -339,14 +357,7 @@ pub fn cancel_sort(db: &mut Catalog, id: &str) -> Result<Entry> {
     Ok(entry)
 }
 pub fn edit(db: &mut Catalog, fs: &impl Files, id: &str, note: String) -> Result<Entry> {
-    if note.trim().is_empty()
-        || note.len() > 32 * 1024
-        || note
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-    {
-        return Err("The note is empty or too long".into());
-    }
+    validate_note(&note)?;
     let mut e = db.get(id)?;
     if !matches!(e.phase, Phase::Draft | Phase::Filed) {
         return Err("Recover this file operation before editing its note".into());
@@ -642,38 +653,56 @@ mod tests {
         assert_eq!(db.search("", 0, 65536).unwrap().total, 0);
     }
     #[test]
-    fn batch_note_and_search_rows_commit_together_without_replacing_existing_records() {
+    fn batch_note_and_search_rows_roll_back_on_duplicate_unsettled_or_oversized_member() {
         let f = Fixture::new();
         let mut db = f.db();
-        let prior = entry("prior.png", "keep prior note", 2);
+        let mut prior = entry("/Library/prior.png", "keep prior note", 1);
+        prior.phase = Phase::Filed;
         db.save(&prior).unwrap();
-        let batch_id = capture_id();
-        let mut entries = [
-            entry("board-pack.png", "acquisition review", 1),
-            entry("model.png", "acquisition review", 2),
-        ];
-        for e in &mut entries {
-            e.batch_id = Some(batch_id.clone());
+        let long = entry("long.png", &"A".repeat(32 * 1024), 2);
+        db.save(&long).unwrap();
+        let mut pending = entry("moving.png", "keep the moving note", 3);
+        pending.phase = Phase::Moving;
+        db.save(&pending).unwrap();
+        let watcher = Catalog::watch_filed_context(&f.0.join("library.sqlite"));
+        let selected = (PathBuf::from("/Desktop/prior.png"), prior.identity.clone());
+        let fresh = entry("/Desktop/model.png", "unused fixture note", 4);
+        let new_file = (fresh.path, fresh.identity);
+
+        for rejected in [selected.clone(), (long.path, long.identity), (pending.path, pending.identity)] {
+            assert!(db
+                .enroll_batch(
+                    &capture_id(),
+                    vec![selected.clone(), new_file.clone(), rejected],
+                    "acquisition review",
+                )
+                .is_err());
+            assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 0);
+            assert!(db.by_identity(1, 4).unwrap().is_none());
+            let unchanged = db.get(&prior.id).unwrap();
+            assert_eq!(unchanged.note, prior.note);
+            assert_eq!(unchanged.path, prior.path);
+            assert_eq!(unchanged.phase, Phase::Filed);
+            assert!(watcher.try_recv().is_err());
         }
-        assert!(db.save_batch_drafts(&entries).is_err());
-        assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 0);
-        assert_eq!(db.get(&prior.id).unwrap().note, prior.note);
-        assert!(db.get(&entries[0].id).is_err());
 
-        entries[1].identity.object = entries[0].identity.object;
-        assert!(db.save_batch_drafts(&entries).is_err());
-        assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 0);
-
-        entries[1].identity.object = 3;
-        db.save_batch_drafts(&entries).unwrap();
-        assert!(db.save_batch_drafts(&entries).is_err());
+        let batch_id = capture_id();
+        let files = vec![selected, new_file];
+        let enrolled = db
+            .enroll_batch(&batch_id, files.clone(), "acquisition review")
+            .unwrap();
+        assert!(db.enroll_batch(&batch_id, files, "acquisition review").is_err());
+        assert_eq!(watcher.try_recv().unwrap(), [prior.path]);
         drop(db);
         let db = f.db();
         assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 2);
-        for e in entries {
+        assert_eq!(enrolled[0].id, prior.id);
+        assert_eq!(enrolled[0].note, "keep prior note\n\nacquisition review");
+        assert_eq!(enrolled[1].note, "acquisition review");
+        for e in enrolled {
             let saved = db.get(&e.id).unwrap();
             assert_eq!(saved.batch_id.as_deref(), Some(batch_id.as_str()));
-            assert_eq!(saved.note, "acquisition review");
+            assert_eq!(saved.note, e.note);
             assert_eq!(saved.phase, Phase::Draft);
         }
     }
@@ -700,7 +729,11 @@ mod tests {
         drop(db);
         rusqlite::Connection::open(f.0.join("library.sqlite"))
             .unwrap()
-            .execute_batch("DROP INDEX files_batch; PRAGMA user_version=2")
+            .execute_batch(
+                "DROP TABLE cleaner_batch_members;
+                 DROP TABLE cleaner_batches;
+                 PRAGMA user_version=2;",
+            )
             .unwrap();
 
         let db = f.db();
@@ -709,6 +742,53 @@ mod tests {
         assert_eq!(saved.batch_id, None);
         assert_eq!(db.search("existing", 0, 65536).unwrap().total, 1);
         assert_eq!(db.cards().unwrap()[0].id, card);
+    }
+    #[test]
+    fn v3_catalogue_recovers_latest_batch_memberships_without_inventing_a_capture_time() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let batch_id = capture_id();
+        let mut first = entry("slides.pdf", "Acquisition review", 1);
+        first.batch_id = Some(batch_id.clone());
+        db.save(&first).unwrap();
+        let mut second = entry("model.xlsx", "Acquisition review", 2);
+        second.batch_id = Some(batch_id.clone());
+        db.save(&second).unwrap();
+        let card = db.show("company", "chat", "turn", &first.id).unwrap();
+        drop(db);
+        let path = f.0.join("library.sqlite");
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE cleaner_batch_members;
+                 DROP TABLE cleaner_batches;
+                 CREATE INDEX files_batch ON files(json_extract(record,'$.batchId'))
+                 WHERE json_extract(record,'$.batchId') IS NOT NULL;
+                 PRAGMA user_version=3;",
+            )
+            .unwrap();
+
+        let mut db = f.db();
+        let (batches, total) = db.batch_page(&first.id, 0).unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(batches[0].id, batch_id);
+        assert_eq!(batches[0].note.as_deref(), Some("Acquisition review"));
+        assert_eq!(batches[0].created_at, None);
+        assert_eq!(batches[0].file_count, 2);
+        assert_eq!(db.cards().unwrap()[0].id, card);
+        assert_eq!(db.search("Acquisition", 0, 65536).unwrap().total, 2);
+        let shown = db.show_batch("company", "chat", "turn", &first.id, None).unwrap();
+        assert!(shown.contains(&(first.id.clone(), card)));
+        assert!(shown.iter().any(|(id, _)| id == &second.id));
+
+        db.remove(&first.id).unwrap();
+        assert_eq!(db.batch_page(&second.id, 0).unwrap().0[0].file_count, 1);
+        db.remove(&second.id).unwrap();
+        let headers: u64 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT count(*) FROM cleaner_batches", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(headers, 0);
     }
     #[test]
     fn folder_output_cannot_escape_or_create_sentence_trees() {
@@ -915,6 +995,70 @@ mod tests {
         }
     }
     #[test]
+    fn an_undone_original_can_join_a_batch_and_keep_its_embedded_note_history() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let desktop = f.0.join("Desktop");
+        let folder = f.0.join("Library");
+        std::fs::create_dir(&desktop).unwrap();
+        let source = desktop.join("board.pdf");
+        let other = desktop.join("model.xlsx");
+        std::fs::write(&source, "board document").unwrap();
+        std::fs::write(&other, "financial model").unwrap();
+        let mut fs = DiskFiles {
+            db: f.0.join("library.sqlite"),
+            id: String::new(),
+            interrupt: false,
+        };
+        let old = Entry::new(
+            source.clone(),
+            fs.inspect(&source).unwrap(),
+            "Board's initial notes".into(),
+        )
+        .unwrap();
+        fs.id = old.id.clone();
+        db.save(&old).unwrap();
+        let mut filed = file(&mut db, &fs, &old.id, &folder, "Board", vec![], false).unwrap();
+        filed.projection = Projection {
+            mode: "embedded".into(),
+            reason: String::new(),
+            previous: "Existing metadata".into(),
+            written: "Existing metadata\n\nBoard's initial notes".into(),
+        };
+        db.save(&filed).unwrap();
+        std::fs::write(&source, "new file at the original path").unwrap();
+        let restored = undo(&mut db, &fs, &old.id).unwrap();
+        assert_ne!(restored.path, source);
+        let files = vec![
+            (restored.path.clone(), fs.inspect(&restored.path).unwrap()),
+            (other.clone(), fs.inspect(&other).unwrap()),
+        ];
+        let first = db
+            .enroll_batch(&capture_id(), files.clone(), "Friday's acquisition review")
+            .unwrap();
+        let latest_batch = capture_id();
+        let repeated = db
+            .enroll_batch(&latest_batch, files, "Friday's acquisition review")
+            .unwrap();
+        let now = &repeated[0];
+        assert_eq!(now.id, old.id);
+        assert_eq!(now.original, source);
+        assert_eq!(now.path, restored.path);
+        assert_eq!(now.identity, fs.inspect(&restored.path).unwrap());
+        assert_eq!(now.phase, Phase::Draft);
+        assert_eq!(now.batch_id.as_deref(), Some(latest_batch.as_str()));
+        assert!(now.undo.is_none());
+        assert_eq!(now.note, "Board's initial notes\n\nFriday's acquisition review");
+        assert_eq!(now.note, first[0].note);
+        assert_eq!(now.projection.mode, "older");
+        assert_eq!(now.projection.previous, filed.projection.previous);
+        assert_eq!(now.projection.written, filed.projection.written);
+        assert_eq!(repeated[1].id, first[1].id);
+        assert_eq!(repeated[1].note, "Friday's acquisition review");
+        assert_eq!(std::fs::read_to_string(&restored.path).unwrap(), "board document");
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "new file at the original path");
+    }
+    #[test]
     fn inbox_first_is_searchable_then_sorted_and_undo_still_targets_desktop() {
         let f = Fixture::new();
         let desktop = f.0.join("Desktop");
@@ -1020,15 +1164,14 @@ mod tests {
     fn recovering_one_batch_file_keeps_its_sibling_pending_sort() {
         let f = Fixture::new();
         let mut db = f.db();
-        let batch_id = capture_id();
-        let mut entries = [
+        let files = [
             entry("/Desktop/first.txt", "shared note", 1),
             entry("/Desktop/second.txt", "shared note", 2),
-        ];
-        for e in &mut entries {
-            e.batch_id = Some(batch_id.clone());
-        }
-        db.save_batch_drafts(&entries).unwrap();
+        ]
+        .into_iter()
+        .map(|e| (e.path, e.identity))
+        .collect();
+        let mut entries = db.enroll_batch(&capture_id(), files, "shared note").unwrap();
         for e in &mut entries {
             e.undo = Some(e.path.clone());
             e.path = Path::new("/Library/Inbox").join(e.path.file_name().unwrap());

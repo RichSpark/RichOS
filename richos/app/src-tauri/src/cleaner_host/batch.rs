@@ -2,7 +2,7 @@
 //! Each member uses the existing recoverable single-file move and Undo.
 use super::{catalog, finish, host, settings, stage, start_target, Host};
 use crate::{cleaner_native::Native, AppState};
-use richos_core::cleaner::{self, Catalog, Entry, Files, Identity, Phase};
+use richos_core::cleaner::{self, Catalog, Files, Identity, Phase};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -63,11 +63,8 @@ pub(super) fn begin(app: &AppHandle, id: &str, payload: Value) -> Result<(), Str
     let db = catalog(app)?;
     let mut names = Vec::with_capacity(targets.len());
     for file in &targets {
-        if db
-            .by_identity(file.identity.volume, file.identity.object)?
-            .is_some()
-        {
-            return Err("A selected file already has a saved note. Use File again in Recent files for that file or remove it from the selection".into());
+        if let Some(entry) = db.by_identity(file.identity.volume, file.identity.object)? {
+            entry.check_batch_eligibility()?;
         }
         let name = file
             .path
@@ -124,6 +121,10 @@ pub(super) fn accept(
     let began = Instant::now();
     let files = targets(payload)?;
     let h = host(app);
+    let mutation = h
+        .mutation
+        .lock()
+        .map_err(|_| "File operations unavailable")?;
     let mut active = h.active.lock().map_err(|_| "Capture state unavailable")?;
     let Some(current) = active
         .as_mut()
@@ -134,14 +135,15 @@ pub(super) fn accept(
     if current.cancel.load(Ordering::Acquire) {
         return Ok(());
     }
-    let mut entries = Vec::with_capacity(files.len());
-    for file in files {
-        let mut entry = Entry::new(file.path, file.identity, note.clone())?;
-        entry.batch_id = Some(id.into());
-        entries.push(entry);
-    }
     let mut db = catalog(app)?;
-    db.save_batch_drafts(&entries)?;
+    let entries = db.enroll_batch(
+        id,
+        files
+            .into_iter()
+            .map(|file| (file.path, file.identity))
+            .collect(),
+        &note,
+    )?;
     let entry_ids: Vec<_> = entries.iter().map(|entry| entry.id.clone()).collect();
     current.batch = Some(ActiveBatch {
         pending: entry_ids.iter().cloned().collect(),
@@ -150,6 +152,7 @@ pub(super) fn accept(
     let chooser = current.chooser.clone();
     let cancel = current.cancel.clone();
     drop(active);
+    drop(mutation);
     let total = entries.len();
     let state = app.state::<AppState>();
     let fast = state
@@ -210,7 +213,7 @@ pub(super) fn accept(
                 .iter()
                 .map(|entry| {
                     entry
-                        .original
+                        .path
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
