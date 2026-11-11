@@ -71,11 +71,21 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   assert.deepEqual(finished.asr.me, [segment('First', 23_000, 24_000), segment('Next', 24_000, 25_000)]);
   assert.deepEqual(requests, [26, 8]);
 
-  fs.writeFileSync(path.join(dir, '.live-transcription', '0.json'), 'truncated');
+  const checkpoint = path.join(dir, '.live-transcription', '0.json');
+  fs.writeFileSync(checkpoint, 'truncated');
   const recovered = advance({ closed: true });
   assert.equal(recovered.reused, 1);
   assert.equal(recovered.decoded, 1);
   assert.deepEqual(recovered.asr.me, finished.asr.me);
+
+  const saved = JSON.parse(fs.readFileSync(checkpoint, 'utf8'));
+  for (const me of [[null], [{ ...saved.me[0], startMs: 4_000_000 }], [{ ...saved.me[0], wordTimesMs: [null] }]]) {
+    fs.writeFileSync(checkpoint, JSON.stringify({ ...saved, me }));
+    const repaired = advance({ closed: true });
+    assert.equal(repaired.reused, 1);
+    assert.equal(repaired.decoded, 1);
+    assert.deepEqual(repaired.asr.me, finished.asr.me);
+  }
 
   assert.throws(
     () => advance({ closed: true, toolchain: { provenance: 'different-decoder' } }),

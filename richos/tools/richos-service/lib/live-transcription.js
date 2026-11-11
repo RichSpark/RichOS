@@ -132,7 +132,7 @@ function absoluteSegments(segments, left, right, from, to, rate, firstAudible) {
       }
     }
     if (segment.wordTimesMs) {
-      result.wordTimesMs = segment.wordTimesMs.map((ms) => ms + offset).filter((ms) => ms <= limit);
+      result.wordTimesMs = segment.wordTimesMs.map((ms) => ms + offset).filter((ms) => ms >= offset && ms <= limit);
     }
     return [result];
   });
@@ -148,10 +148,20 @@ function decodeWindow(cache, wav, options) {
   }
 }
 
-function readCheckpoint(file, key) {
+function validCheckpointRows(rows, fromMs, toMs) {
+  const inWindow = (time) => Number.isFinite(time) && time >= fromMs && time <= toMs;
+  return Array.isArray(rows) && rows.every((row) => row && typeof row.text === 'string'
+    && inWindow(row.startMs) && inWindow(row.endMs) && row.startMs <= row.endMs
+    && (row.displayStartMs === undefined
+      || (inWindow(row.displayStartMs) && row.startMs <= row.displayStartMs && row.displayStartMs <= row.endMs))
+    && (row.wordTimesMs === undefined || (Array.isArray(row.wordTimesMs) && row.wordTimesMs.every(inWindow))));
+}
+
+function readCheckpoint(file, key, fromMs, toMs) {
   try {
     const value = JSON.parse(fs.readFileSync(privateFile(file), 'utf8'));
-    if (value?.key === key && Array.isArray(value.me) && Array.isArray(value.others)) return value;
+    if (value?.key === key && validCheckpointRows(value.me, fromMs, toMs)
+      && validCheckpointRows(value.others, fromMs, toMs)) return value;
   } catch (error) {
     if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error;
   }
@@ -193,7 +203,7 @@ export function advanceLiveTranscription(dir, options, {
         .update(wav)
         .digest('hex');
       const file = path.join(cache, `${cursor}.json`);
-      let result = readCheckpoint(file, key);
+      let result = readCheckpoint(file, key, left * 1_000 / rate, right * 1_000 / rate);
       if (result) {
         reused += 1;
       } else {
