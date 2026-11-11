@@ -151,7 +151,17 @@ impl Bridge for PhoneBridge {
     fn files_available(&self) -> bool { true }
     fn rich_file(&self, thread: &str, id: &str) -> Result<(String, Vec<u8>), richos_core::rich_files::Fetch> {
         let root = crate::rich_files_host::root(&self.app.state::<AppState>());
-        richos_core::rich_files::read_for_phone(&root, thread, id).map(|(row, body)| (row.name, body))
+        richos_core::rich_files::read_for_phone(&root, thread, id).map(|(row, body)| {
+            let body = if row.name == richos_core::meeting_notes::BRIEF_FILE {
+                match String::from_utf8(body) {
+                    Ok(brief) => richos_core::meeting_notes::plain_brief_sources(&brief).into_bytes(),
+                    Err(error) => error.into_bytes(),
+                }
+            } else {
+                body
+            };
+            (row.name, body)
+        })
     }
 
     fn submit_text(&self, thread_id: Option<&str>, text: &str, client_id: &str) -> Result<Accepted, String> {self.submit_words(thread_id,text,"phone_typed",client_id,false)}

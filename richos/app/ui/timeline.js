@@ -1907,7 +1907,7 @@
     b.appendChild(fileGlyph());
     b.appendChild(elem("span", null, label));
     b.addEventListener("click", () => {
-      if (outputLinks && outputLinks.openFile) outputLinks.openFile(entry.id, b);
+      if (outputLinks && outputLinks.openFile) outputLinks.openFile(entry.id, b, entry.sourcePassage);
     });
     return b;
   }
@@ -1924,6 +1924,11 @@
   /// filters nothing, so the app's own lines and a file in the Output panel are drawn as written.
   function said(text) {
     return window.RichOxford ? window.RichOxford.display(text) : text;
+  }
+
+  function meetingSource(text) {
+    const match = /^meeting-source ([a-zA-Z0-9._:-]{1,160}) ([1-9]\d{0,6}) ((?:\d{1,2}:)?\d{2}:\d{2})$/.exec(text.trim());
+    return match && { session: match[1], line: Number(match[2]), stamp: match[3] };
   }
 
   function markdownInline(text, into, links, doc) {
@@ -1961,7 +1966,11 @@
           flush();
           const code = text.slice(i + 1, end);
           const hit = links && links.forText ? links.forText(code) : null;
-          into.appendChild(hit ? fileLink(hit, code) : elem("code", "tl-md-code", code));
+          const source = meetingSource(code);
+          const label = source ? "Source " + source.stamp : code;
+          if (hit) into.appendChild(fileLink(hit, label));
+          else if (source) into.appendChild(document.createTextNode(label));
+          else into.appendChild(elem("code", "tl-md-code", code));
           i = end + 1;
           continue;
         }
@@ -2058,6 +2067,7 @@
 
       const para = elem("div", "tl-md-p");
       const buf = [];
+      const firstLine = i + 1;
       while (
         i < lines.length &&
         lines[i].trim() &&
@@ -2070,6 +2080,9 @@
         i += 1;
       }
       markdownInline(buf.join("\n"), para, links, doc);
+      if (doc && opts.sourceLine >= firstLine && opts.sourceLine <= i) {
+        para.dataset.sourcePassage = String(opts.sourceLine);
+      }
       root.appendChild(para);
     }
   }
@@ -3496,6 +3509,7 @@
     ENDED_EXPLANATION,
     render,
     renderMarkdownInto,
+    meetingSource,
     updateProse,
     updateTimers,
   };

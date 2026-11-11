@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -173,6 +174,13 @@ function readCheckpoint(file, key, fromMs, toMs) {
   return null;
 }
 
+function checkpointKey(wav, from, to, options, toolchain) {
+  return createHash('sha256')
+    .update(JSON.stringify([4, from, to, options.model, whisperArgs(options), toolchain.provenance]))
+    .update(wav)
+    .digest('hex');
+}
+
 /**
  * Decode contiguous windows ending at quiet points in the durable audio.
  * Keep listening across a nominal boundary when speech is still in progress.
@@ -193,10 +201,7 @@ export function advanceLiveTranscription(dir, options, {
       const to = nextQuietCut(fd, cursor, frames, rate, closed);
       if (to === null) break;
       const wav = readWindow(fd, header, cursor, to);
-      const key = createHash('sha256')
-        .update(JSON.stringify([4, cursor, to, options.model, whisperArgs(options), toolchain.provenance]))
-        .update(wav)
-        .digest('hex');
+      const key = checkpointKey(wav, cursor, to, options, toolchain);
       const file = path.join(cache, `${cursor}.json`);
       let result = readCheckpoint(file, key, cursor * 1_000 / rate, to * 1_000 / rate);
       if (result) {
@@ -239,6 +244,87 @@ export function removeLiveTranscriptionScratch(dir) {
     if (entry.isDirectory() && /^(?:decode-|\.richos-output-)[a-zA-Z0-9]{6}$/.test(entry.name)) {
       fs.rmSync(path.join(cache, entry.name), { recursive: true, force: true });
     }
+  }
+}
+
+function reuseExcerptCheckpoints(dir, options, fd, { header, frames, rate }, from, through, knownToolchain) {
+  const cached = { through: from, me: [], others: [] };
+  const candidate = path.join(dir, CHECKPOINTS);
+  if (!fs.lstatSync(candidate, { throwIfNoEntry: false })) return cached;
+  const cache = privateDirectory(candidate, dir);
+  const starts = fs.readdirSync(cache)
+    .filter((name) => /^\d+\.json$/.test(name))
+    .map((name) => Number.parseInt(name, 10))
+    .filter((start) => start < through)
+    .sort((a, b) => a - b);
+  const startIndex = starts.findLastIndex((start) => start <= from);
+  if (startIndex < 0) return cached;
+  const toolchain = knownToolchain ?? checkToolchain(resolveModel(options.model), options.model);
+  let cursor = starts[startIndex];
+  const fromMs = from * 1_000 / rate;
+  const withinExcerpt = (row) => (row.displayStartMs ?? row.startMs) >= fromMs;
+  const crossesStart = (row) => !withinExcerpt(row) && row.endMs > fromMs;
+  for (const start of starts.slice(startIndex)) {
+    if (start < cursor) continue;
+    if (start > cursor) break;
+    const to = nextQuietCut(fd, start, frames, rate, false);
+    if (to === null || to > through) break;
+    const wav = readWindow(fd, header, start, to);
+    const saved = readCheckpoint(path.join(cache, `${start}.json`), checkpointKey(wav, start, to, options, toolchain),
+      start * 1_000 / rate, to * 1_000 / rate);
+    if (!saved) break;
+    const me = firstAudibleMs(wav, 0, rate) === null ? [] : saved.me;
+    const others = firstAudibleMs(wav, 2, rate) === null ? [] : saved.others;
+    // A whole checkpoint cannot give us only the words after a cut through speech.
+    if (me.some(crossesStart) || others.some(crossesStart)) break;
+    cached.me.push(...me.filter(withinExcerpt));
+    cached.others.push(...others.filter(withinExcerpt));
+    cached.through = Math.max(from, to);
+    cursor = to;
+  }
+  return cached;
+}
+
+/** Reuse verified checkpoints in the flushed minute leading up to the request
+ * and decode only audio the live worker has yet to reach. */
+export function recentLiveExcerpt(dir, options, at, decode = decodeWindow, knownToolchain) {
+  const record = JSON.parse(fs.readFileSync(privateFile(path.join(dir, 'session.json'), dir), 'utf8'));
+  if (record.status !== 'open' || !supportsLiveTranscription(dir, record)
+    || !Number.isSafeInteger(at) || !Number.isSafeInteger(record.startedAt) || at <= record.startedAt) return null;
+  const fd = fs.openSync(privateFile(path.join(dir, AUDIO), dir), 'r');
+  try {
+    const audio = readHeader(fd);
+    const { header, frames, rate } = audio;
+    const through = Math.min(frames, Math.floor((at - record.startedAt) * rate / 1_000));
+    if (!through) return null;
+    const from = Math.max(0, through - 60 * rate);
+    const cached = reuseExcerptCheckpoints(dir, options, fd, audio, from, through, knownToolchain);
+    if (cached.through < through) {
+      const wav = readWindow(fd, header, cached.through, through);
+      const meAudible = firstAudibleMs(wav, 0, rate);
+      const othersAudible = firstAudibleMs(wav, 2, rate);
+      if (meAudible !== null || othersAudible !== null) {
+        const work = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-excerpt-'));
+        try {
+          const decoded = decode(work, wav, options);
+          if (meAudible !== null) cached.me.push(...absoluteSegments(decoded.me, cached.through, through, rate, meAudible));
+          if (othersAudible !== null) cached.others.push(...absoluteSegments(decoded.others, cached.through, through, rate, othersAudible));
+        } finally {
+          fs.rmSync(work, { recursive: true, force: true });
+        }
+      }
+    }
+    const passage = (segment, speaker) => ({
+      speaker,
+      atMs: segment.displayStartMs ?? segment.startMs,
+      text: segment.text,
+    });
+    const passages = [...cached.me.map((row) => passage(row, 'Me')), ...cached.others.map((row) => passage(row, 'Them'))]
+      .sort((a, b) => a.atMs - b.atMs);
+    if (!passages.length) return null;
+    return { fromMs: from * 1_000 / rate, throughMs: through * 1_000 / rate, passages };
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
