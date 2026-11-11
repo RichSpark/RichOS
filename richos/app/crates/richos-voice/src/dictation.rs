@@ -336,7 +336,7 @@ impl Recording {
     /// A borrowed bounded preview window. The full recording remains untouched
     /// for final recognition; the owner makes at most one short-lived copy.
     pub fn preview_samples(&self) -> &[f32] {
-        &self.samples[self.samples.len().saturating_sub(16 * SAMPLE_RATE as usize)..]
+        &self.samples[self.samples.len().saturating_sub(14 * SAMPLE_RATE as usize)..]
     }
 
     pub fn into_samples(self) -> Vec<f32> {
@@ -705,11 +705,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preview_reads_the_latest_sixteen_seconds_without_shortening_the_final_recording() {
+    fn preview_reads_the_latest_fourteen_seconds_without_shortening_the_final_recording() {
         let mut recording = Recording::new();
         let samples: Vec<f32> = (0..(18 * SAMPLE_RATE)).map(|n| n as f32).collect();
         recording.push(&samples);
-        assert_eq!(recording.preview_samples(), &samples[2 * SAMPLE_RATE as usize..]);
+        assert_eq!(recording.preview_samples(), &samples[4 * SAMPLE_RATE as usize..]);
         assert_eq!(recording.into_samples(), samples);
     }
 
