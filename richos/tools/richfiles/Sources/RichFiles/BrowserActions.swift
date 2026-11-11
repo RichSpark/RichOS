@@ -284,6 +284,15 @@ final class BrowserActions: ObservableObject {
         }
     }
 
+    func createImageCopy(_ action: ImageQuickAction, of source: FileReference, in folder: URL) {
+        runMutation(title: "Save Image Copy") {
+            let copy = try action.apply(to: source, in: folder)
+            let warnings = copy.remainingStagingFolder.map { ["Temporary cleanup failed at \($0.path)."] } ?? []
+            return MutationResult(message: "Saved \(copy.copied.url.lastPathComponent).", issues: warnings,
+                                  changed: true, createdURL: copy.copied.url)
+        }
+    }
+
     func rename(_ source: FileReference, to name: String) {
         runMutation(title: "Rename") {
             let receipt = try FileOperations.rename(source, to: name)

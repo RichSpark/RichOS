@@ -5,6 +5,31 @@ import UniformTypeIdentifiers
 import XCTest
 
 final class WorkspaceServicesTests: XCTestCase {
+    func testImageActionsPublishSeparateRotatedAndConvertedFiles() throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let folder = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("RichFilesImages-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let sourceURL = folder.appendingPathComponent("Screenshot.png")
+        try writePNG(to: sourceURL)
+        let original = try Data(contentsOf: sourceURL)
+        let source = try FileReference(url: sourceURL)
+        let rotation = try ImageQuickAction.rotateLeft.apply(to: source, in: folder)
+        let rotated = try XCTUnwrap(CGImageSourceCreateWithURL(rotation.copied.url as CFURL, nil))
+        let pixels = try XCTUnwrap(CGImageSourceCreateImageAtIndex(rotated, 0, nil))
+        XCTAssertEqual(pixels.width, 24)
+        XCTAssertEqual(pixels.height, 32)
+
+        let conversion = try ImageQuickAction.jpeg.apply(to: source, in: folder)
+        let jpeg = try XCTUnwrap(CGImageSourceCreateWithURL(conversion.copied.url as CFURL, nil))
+        XCTAssertEqual(CGImageSourceGetType(jpeg) as String?, UTType.jpeg.identifier)
+        let repeatConversion = try ImageQuickAction.jpeg.apply(to: source, in: folder)
+        XCTAssertNotEqual(repeatConversion.copied.url, conversion.copied.url)
+        XCTAssertEqual(try Data(contentsOf: sourceURL), original)
+    }
+
     func testReadsFileAssociationAndRendersAnActualPNGThumbnail() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let folder = URL(fileURLWithPath: temporary, isDirectory: true)
@@ -21,6 +46,13 @@ final class WorkspaceServicesTests: XCTestCase {
         XCTAssertFalse(alternatives.contains(preferred.url.resolvingSymlinksInPath()))
 
         let png = folder.appendingPathComponent("fixture.png")
+        try writePNG(to: png)
+        let thumbnail = try await WorkspaceServices.thumbnail(for: png, size: CGSize(width: 32, height: 32))
+        XCTAssertGreaterThan(thumbnail.width, 0)
+        XCTAssertGreaterThan(thumbnail.height, 0)
+    }
+
+    private func writePNG(to png: URL) throws {
         let context = try XCTUnwrap(CGContext(
             data: nil, width: 32, height: 24, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
@@ -31,9 +63,5 @@ final class WorkspaceServicesTests: XCTestCase {
         let output = try XCTUnwrap(CGImageDestinationCreateWithURL(png as CFURL, UTType.png.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(output, image, nil)
         XCTAssertTrue(CGImageDestinationFinalize(output))
-
-        let thumbnail = try await WorkspaceServices.thumbnail(for: png, size: CGSize(width: 32, height: 32))
-        XCTAssertGreaterThan(thumbnail.width, 0)
-        XCTAssertGreaterThan(thumbnail.height, 0)
     }
 }

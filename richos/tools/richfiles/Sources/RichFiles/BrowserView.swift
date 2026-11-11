@@ -594,6 +594,20 @@ struct BrowserView: View {
                 withReferences(entries) { sheet = .createZip($0, destination) }
             }.disabled(actions.busy)
             Button("Copy Path") { copyPaths(entries.map(\.url)) }
+            ShareLink(items: entries.map(\.url)) { Label("Share…", systemImage: "square.and.arrow.up") }
+            if entries.count == 1, first.kind == .regularFile,
+               UTType(filenameExtension: first.url.pathExtension)?.conforms(to: .image) == true {
+                Menu("Quick Actions") {
+                    ForEach(ImageQuickAction.allCases) { action in
+                        Button(action.rawValue) {
+                            let destination = model.folder
+                            withReferences([first]) { files in
+                                if let source = files.first { actions.createImageCopy(action, of: source, in: destination) }
+                            }
+                        }
+                    }
+                }.disabled(actions.busy || model.currentVolume?.isReadOnly == true)
+            }
             if model.searchActive {
                 Button("Open Containing Folder") { model.openFolder(first.url.deletingLastPathComponent()) }
             }
