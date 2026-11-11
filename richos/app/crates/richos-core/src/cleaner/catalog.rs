@@ -1,4 +1,4 @@
-use super::{Entry, Phase, Result};
+use super::{Entry, Phase, Result, MAX_BATCH_FILES};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -80,20 +80,28 @@ impl Catalog {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        if version > 2 {
+        if version > 3 {
             return Err("This library needs a newer RichOS".into());
         }
-        if version < 2 {
+        if version < 3 {
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(|e|e.to_string())?;
             // Another connection may have initialized while this one waited.
             // Decide only while holding the migration transaction's write lock.
             let current:i64 = tx.query_row("PRAGMA user_version",[],|r|r.get(0)).map_err(|e|e.to_string())?;
             match current {
-                0 => tx.execute_batch("CREATE TABLE files(id TEXT PRIMARY KEY,volume TEXT NOT NULL,object TEXT NOT NULL,phase TEXT NOT NULL,updated INTEGER NOT NULL,record TEXT NOT NULL,UNIQUE(volume,object)); CREATE VIRTUAL TABLE search USING fts5(id UNINDEXED,name,note,labels,tokenize='unicode61 remove_diacritics 2'); CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file)); PRAGMA user_version=2;").map_err(|e|e.to_string())?,
-                1 => tx.execute_batch("CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file)); PRAGMA user_version=2;").map_err(|e|e.to_string())?,
-                2 => {},
+                0 => tx.execute_batch("CREATE TABLE files(id TEXT PRIMARY KEY,volume TEXT NOT NULL,object TEXT NOT NULL,phase TEXT NOT NULL,updated INTEGER NOT NULL,record TEXT NOT NULL,UNIQUE(volume,object)); CREATE VIRTUAL TABLE search USING fts5(id UNINDEXED,name,note,labels,tokenize='unicode61 remove_diacritics 2'); CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file));").map_err(|e|e.to_string())?,
+                1 => tx.execute_batch("CREATE TABLE cards(id TEXT PRIMARY KEY,entity TEXT NOT NULL,thread TEXT NOT NULL,turn TEXT NOT NULL,file TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,at INTEGER NOT NULL,UNIQUE(entity,thread,turn,file));").map_err(|e|e.to_string())?,
+                2 | 3 => {},
                 _ => return Err("This library needs a newer RichOS".into()),
+            }
+            if current < 3 {
+                tx.execute_batch(
+                    "CREATE INDEX files_batch ON files(json_extract(record,'$.batchId'))
+                     WHERE json_extract(record,'$.batchId') IS NOT NULL;
+                     PRAGMA user_version=3;",
+                )
+                .map_err(|e| e.to_string())?;
             }
             tx.commit().map_err(|e|e.to_string())?;
         }
@@ -109,12 +117,7 @@ impl Catalog {
         receiver
     }
     pub fn get(&self, id: &str) -> Result<Entry> {
-        let text: String = self
-            .db
-            .query_row("SELECT record FROM files WHERE id=?1", [id], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
-        serde_json::from_str(&text)
-            .map_err(|e| format!("The saved file record could not be read: {e}"))
+        get_entry(&self.db, id)
     }
     pub fn by_identity(&self, volume: u64, object: u64) -> Result<Option<Entry>> {
         let id: Option<String> = self
@@ -155,20 +158,7 @@ impl Catalog {
         } else {
             None
         };
-        let record = serde_json::to_string(e).map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO files VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET volume=excluded.volume,object=excluded.object,phase=excluded.phase,updated=excluded.updated,record=excluded.record",params![e.id,e.identity.volume.to_string(),e.identity.object.to_string(),serde_json::to_string(&e.phase).map_err(|e|e.to_string())?,e.updated,record]).map_err(|e|e.to_string())?;
-        tx.execute("DELETE FROM search WHERE id=?1", [&e.id])
-            .map_err(|e| e.to_string())?;
-        tx.execute(
-            "INSERT INTO search VALUES(?1,?2,?3,?4)",
-            params![
-                e.id,
-                e.path.file_name().unwrap_or_default().to_string_lossy(),
-                e.note,
-                format!("{} {}", e.folder, e.labels.join(" "))
-            ],
-        )
-        .map_err(|e| e.to_string())?;
+        save_record(&tx, e)?;
         tx.commit().map_err(|e| e.to_string())?;
         if observed {
             let old = before.as_ref().filter(|old| old.phase == Phase::Filed);
@@ -193,6 +183,52 @@ impl Catalog {
             }
         }
         Ok(())
+    }
+
+    /// Commit every accepted note and search row before any original can move.
+    pub fn save_batch_drafts(&mut self, entries: &[Entry]) -> Result<()> {
+        if !(2..=MAX_BATCH_FILES).contains(&entries.len()) {
+            return Err(format!("Select between 2 and {MAX_BATCH_FILES} files for one note"));
+        }
+        let batch = entries[0]
+            .batch_id
+            .as_deref()
+            .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+            .ok_or("The selected files have no shared batch ID")?;
+        let note = &entries[0].note;
+        if entries.iter().any(|e| {
+            e.batch_id.as_deref() != Some(batch) || e.phase != Phase::Draft || &e.note != note
+        }) {
+            return Err("A batch must start with one shared note and new drafts".into());
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let known_batch: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE json_extract(record,'$.batchId')=?1)",
+                [batch],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if known_batch {
+            return Err("This batch is already saved".into());
+        }
+        for e in entries {
+            let known_file: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM files WHERE id=?1 OR (volume=?2 AND object=?3))",
+                    params![e.id, e.identity.volume.to_string(), e.identity.object.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if known_file {
+                return Err("A selected original is already in RichCleaner or appears twice".into());
+            }
+            save_record(&tx, e)?;
+        }
+        tx.commit().map_err(|e| e.to_string())
     }
     pub fn remove(&mut self, id: &str) -> Result<()> {
         let e = self.get(id)?;
@@ -225,20 +261,41 @@ impl Catalog {
     }
     pub fn show(&self, entity: &str, thread: &str, turn: &str, file: &str) -> Result<String> {
         self.get(file)?;
-        let id = format!("cleaner-{}", uuid::Uuid::new_v4());
-        self.db
-            .execute(
-                "INSERT OR IGNORE INTO cards VALUES(?1,?2,?3,?4,?5,?6)",
-                params![id, entity, thread, turn, file, crate::util::now_millis()],
-            )
+        save_card(&self.db, entity, thread, turn, file)
+    }
+
+    pub(super) fn show_batch(
+        &mut self,
+        entity: &str,
+        thread: &str,
+        turn: &str,
+        file: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let tx = self
+            .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        self.db
-            .query_row(
-                "SELECT id FROM cards WHERE entity=?1 AND thread=?2 AND turn=?3 AND file=?4",
-                params![entity, thread, turn, file],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())
+        let entry = get_entry(&tx, file)?;
+        let batch = entry.batch_id.ok_or("This original was saved individually")?;
+        let members = {
+            let mut query = tx
+                .prepare("SELECT id FROM files WHERE json_extract(record,'$.batchId')=?1 LIMIT ?2")
+                .map_err(|e| e.to_string())?;
+            let rows = query
+                .query_map(params![batch, (MAX_BATCH_FILES + 1) as i64], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?
+        };
+        if members.len() > MAX_BATCH_FILES {
+            return Err("The saved batch exceeds the file limit".into());
+        }
+        let mut cards = Vec::with_capacity(members.len());
+        for member in members {
+            let card = save_card(&tx, entity, thread, turn, &member)?;
+            cards.push((member, card));
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(cards)
     }
     pub fn cards(&self) -> Result<Vec<super::tools::Card>> {
         let mut query = self
@@ -325,4 +382,44 @@ impl Catalog {
             next: (end < total).then_some(end),
         })
     }
+}
+
+fn get_entry(db: &Connection, id: &str) -> Result<Entry> {
+    let text: String = db
+        .query_row("SELECT record FROM files WHERE id=?1", [id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| format!("The saved file record could not be read: {e}"))
+}
+
+fn save_record(db: &Connection, e: &Entry) -> Result<()> {
+    let record = serde_json::to_string(e).map_err(|e| e.to_string())?;
+    db.execute("INSERT INTO files VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET volume=excluded.volume,object=excluded.object,phase=excluded.phase,updated=excluded.updated,record=excluded.record",params![e.id,e.identity.volume.to_string(),e.identity.object.to_string(),serde_json::to_string(&e.phase).map_err(|e|e.to_string())?,e.updated,record]).map_err(|e|e.to_string())?;
+    db.execute("DELETE FROM search WHERE id=?1", [&e.id])
+        .map_err(|e| e.to_string())?;
+    db.execute(
+        "INSERT INTO search VALUES(?1,?2,?3,?4)",
+        params![
+            e.id,
+            e.path.file_name().unwrap_or_default().to_string_lossy(),
+            e.note,
+            format!("{} {}", e.folder, e.labels.join(" "))
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn save_card(db: &Connection, entity: &str, thread: &str, turn: &str, file: &str) -> Result<String> {
+    let id = format!("cleaner-{}", uuid::Uuid::new_v4());
+    db.execute(
+        "INSERT OR IGNORE INTO cards VALUES(?1,?2,?3,?4,?5,?6)",
+        params![id, entity, thread, turn, file, crate::util::now_millis()],
+    )
+    .map_err(|e| e.to_string())?;
+    db.query_row(
+        "SELECT id FROM cards WHERE entity=?1 AND thread=?2 AND turn=?3 AND file=?4",
+        params![entity, thread, turn, file],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
 }

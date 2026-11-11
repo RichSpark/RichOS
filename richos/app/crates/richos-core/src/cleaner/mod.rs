@@ -10,6 +10,7 @@ pub type Result<T> = std::result::Result<T, String>;
 pub fn capture_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
+pub const MAX_BATCH_FILES: usize = 20;
 pub const EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "heif", "avif", "psd", "pdf", "docx",
     "xlsx", "pptx", "odt", "ods", "odp", "svg", "mp3", "flac", "ogg", "m4a", "mp4", "m4v", "mov",
@@ -77,6 +78,8 @@ pub struct Staged {
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
     pub original: PathBuf,
     pub path: PathBuf,
     pub identity: Identity,
@@ -110,6 +113,7 @@ impl Entry {
         }
         Ok(Self {
             id: uuid::Uuid::new_v4().to_string(),
+            batch_id: None,
             original: path.clone(),
             path,
             identity,
@@ -196,7 +200,7 @@ pub fn file(
     } else {
         fs.destination(root, &parts, e.path.file_name().ok_or("Missing filename")?)?
     };
-    if !e.pending_sort {
+    if !e.pending_sort && (!e.inbox || e.undo.is_none()) {
         e.undo = Some(e.path.clone());
     }
     e.intended = Some(destination);
@@ -444,7 +448,11 @@ pub fn undo(db: &mut Catalog, fs: &impl Files, id: &str) -> Result<Entry> {
     db.save(&e)?;
     Ok(e)
 }
-fn recover_entries(db: &mut Catalog, fs: &impl Files, entries: Vec<Entry>) -> Result<()> {
+fn recover_entries(
+    db: &mut Catalog,
+    fs: &impl Files,
+    entries: impl IntoIterator<Item = Entry>,
+) -> Result<()> {
     for mut e in entries {
         if matches!(e.phase, Phase::Filed | Phase::Draft) && e.intended.is_none() {
             if let Some(staged) = e.staged.take() {
@@ -501,19 +509,25 @@ fn recover_entries(db: &mut Catalog, fs: &impl Files, entries: Vec<Entry>) -> Re
                 if let Some(staged) = staged {
                     e.projection = staged.projection.clone();
                 }
+                let failed_inbox_store = e.pending_sort
+                    && !e.inbox
+                    && e.phase == Phase::Moving
+                    && e.return_phase.is_none();
                 e.identity = actual;
                 e.phase = e.return_phase.take().unwrap_or(Phase::Draft);
                 e.intended = None;
                 e.intended_folder = None;
                 e.problem = Some("Your note is saved. The file was not filed".into());
                 if e.pending_sort {
-                    e.phase = Phase::Filed;
-                    e.folder = "Inbox".into();
-                    e.inbox = true;
                     e.pending_sort = false;
-                    e.problem = Some(
-                        "Sorting was interrupted. Your file is in Inbox; use File again".into(),
-                    );
+                    if e.inbox {
+                        e.phase = Phase::Filed;
+                        e.problem = Some(
+                            "Sorting was interrupted. Your file is in Inbox; use File again".into(),
+                        );
+                    } else if failed_inbox_store {
+                        e.undo = None;
+                    }
                 }
                 db.save(&e)?;
                 if let Some(staged) = e.staged.take() {
@@ -532,12 +546,33 @@ fn recover_entries(db: &mut Catalog, fs: &impl Files, entries: Vec<Entry>) -> Re
 pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
     let pending = db.pending()?;
     recover_entries(db, fs, pending)?;
-    for mut e in db.interrupted_inbox()? {
-        e.pending_sort = false;
-        e.problem=Some("Sorting was interrupted. Your file is stored in Inbox; use File again to finish sorting".into());
-        db.save(&e)?;
+    for e in db.interrupted_inbox()? {
+        settle_interrupted_inbox(db, e)?;
     }
     Ok(())
+}
+
+/// Reconcile a failed mutation without settling other active files in its batch.
+pub fn recover_entry(db: &mut Catalog, fs: &impl Files, id: &str) -> Result<()> {
+    let mut e = db.get(id)?;
+    if !matches!(e.phase, Phase::Filed | Phase::Draft) || e.staged.is_some() {
+        recover_entries(db, fs, [e])?;
+        e = db.get(id)?;
+    }
+    if e.phase == Phase::Filed && e.pending_sort {
+        settle_interrupted_inbox(db, e)?;
+    }
+    Ok(())
+}
+
+fn settle_interrupted_inbox(db: &mut Catalog, mut e: Entry) -> Result<()> {
+    e.pending_sort = false;
+    e.problem = Some(if e.inbox {
+        "Sorting was interrupted. Your file is stored in Inbox; use File again to finish sorting"
+    } else {
+        "Sorting was interrupted. Your file is at its saved location; use File again to sort it"
+    }.into());
+    db.save(&e)
 }
 
 #[cfg(test)]
@@ -607,6 +642,42 @@ mod tests {
         assert_eq!(db.search("", 0, 65536).unwrap().total, 0);
     }
     #[test]
+    fn batch_note_and_search_rows_commit_together_without_replacing_existing_records() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let prior = entry("prior.png", "keep prior note", 2);
+        db.save(&prior).unwrap();
+        let batch_id = capture_id();
+        let mut entries = [
+            entry("board-pack.png", "acquisition review", 1),
+            entry("model.png", "acquisition review", 2),
+        ];
+        for e in &mut entries {
+            e.batch_id = Some(batch_id.clone());
+        }
+        assert!(db.save_batch_drafts(&entries).is_err());
+        assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 0);
+        assert_eq!(db.get(&prior.id).unwrap().note, prior.note);
+        assert!(db.get(&entries[0].id).is_err());
+
+        entries[1].identity.object = entries[0].identity.object;
+        assert!(db.save_batch_drafts(&entries).is_err());
+        assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 0);
+
+        entries[1].identity.object = 3;
+        db.save_batch_drafts(&entries).unwrap();
+        assert!(db.save_batch_drafts(&entries).is_err());
+        drop(db);
+        let db = f.db();
+        assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 2);
+        for e in entries {
+            let saved = db.get(&e.id).unwrap();
+            assert_eq!(saved.batch_id.as_deref(), Some(batch_id.as_str()));
+            assert_eq!(saved.note, "acquisition review");
+            assert_eq!(saved.phase, Phase::Draft);
+        }
+    }
+    #[test]
     fn corruption_is_not_replaced_and_newer_schema_is_not_downgraded() {
         let f = Fixture::new();
         let path = f.0.join("broken.sqlite");
@@ -618,6 +689,26 @@ mod tests {
         db.db_for_test_version(99);
         drop(db);
         assert!(Catalog::open(&f.0.join("library.sqlite")).is_err());
+    }
+    #[test]
+    fn v2_catalogue_keeps_existing_notes_search_rows_and_cards() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let prior = entry("ordinary.txt", "existing note", 2);
+        db.save(&prior).unwrap();
+        let card = db.show("company", "chat", "turn", &prior.id).unwrap();
+        drop(db);
+        rusqlite::Connection::open(f.0.join("library.sqlite"))
+            .unwrap()
+            .execute_batch("DROP INDEX files_batch; PRAGMA user_version=2")
+            .unwrap();
+
+        let db = f.db();
+        let saved = db.get(&prior.id).unwrap();
+        assert_eq!(saved.note, "existing note");
+        assert_eq!(saved.batch_id, None);
+        assert_eq!(db.search("existing", 0, 65536).unwrap().total, 1);
+        assert_eq!(db.cards().unwrap()[0].id, card);
     }
     #[test]
     fn folder_output_cannot_escape_or_create_sentence_trees() {
@@ -884,6 +975,14 @@ mod tests {
         assert_eq!(settled.path, pending.path);
         assert_eq!(settled.undo, Some(restored.path));
         assert_eq!(settled.note, "A correction while stored in Inbox");
+        let before_retry = settled.undo.clone();
+        drop(db);
+        let mut db = f.db();
+        let retried = file(&mut db, &fs, &e.id, &root, "Home/Kitchen", vec![], false).unwrap();
+        assert_eq!(retried.undo, before_retry);
+        assert!(retried.path.starts_with(root.join("Home/Kitchen")));
+        let undone = undo(&mut db, &fs, &e.id).unwrap();
+        assert_eq!(Some(undone.path), before_retry);
     }
     #[test]
     fn interrupted_inbox_move_recovers_its_original_and_settles_sorting_honestly() {
@@ -916,6 +1015,84 @@ mod tests {
         assert_eq!(saved.note, e.note);
         assert_eq!(std::fs::read(saved.path).unwrap(), b"one original");
         assert!(!saved.pending_sort);
+    }
+    #[test]
+    fn recovering_one_batch_file_keeps_its_sibling_pending_sort() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let batch_id = capture_id();
+        let mut entries = [
+            entry("/Desktop/first.txt", "shared note", 1),
+            entry("/Desktop/second.txt", "shared note", 2),
+        ];
+        for e in &mut entries {
+            e.batch_id = Some(batch_id.clone());
+        }
+        db.save_batch_drafts(&entries).unwrap();
+        for e in &mut entries {
+            e.undo = Some(e.path.clone());
+            e.path = Path::new("/Library/Inbox").join(e.path.file_name().unwrap());
+            e.folder = "Inbox".into();
+            e.phase = Phase::Filed;
+            e.inbox = true;
+            e.pending_sort = true;
+            db.save(e).unwrap();
+        }
+        let fs = Moved {
+            path: entries[0].path.clone(),
+            identity: entries[0].identity.clone(),
+        };
+        recover_entry(&mut db, &fs, &entries[0].id).unwrap();
+        let recovered = db.get(&entries[0].id).unwrap();
+        assert!(!recovered.pending_sort);
+        assert_eq!(recovered.path, entries[0].path);
+        assert_eq!(recovered.undo, entries[0].undo);
+        assert!(recovered.problem.is_some());
+        assert!(db.get(&entries[1].id).unwrap().pending_sort);
+    }
+    #[test]
+    fn failed_initial_inbox_move_leaves_a_draft_at_the_source() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let mut saved = entry("/Desktop/first.txt", "shared note", 1);
+        saved.undo = Some(saved.path.clone());
+        saved.intended = Some(PathBuf::from("/Library/Inbox/first.txt"));
+        saved.intended_folder = Some("Inbox".into());
+        saved.phase = Phase::Moving;
+        saved.pending_sort = true;
+        db.save(&saved).unwrap();
+        let fs = Moved { path: saved.path.clone(), identity: saved.identity.clone() };
+        recover_entry(&mut db, &fs, &saved.id).unwrap();
+        let recovered = db.get(&saved.id).unwrap();
+        assert_eq!(recovered.path, saved.path);
+        assert_eq!(recovered.phase, Phase::Draft);
+        assert_eq!(recovered.note, saved.note);
+        assert!(!recovered.inbox);
+        assert!(!recovered.pending_sort);
+        assert!(recovered.undo.is_none());
+    }
+    #[test]
+    fn failed_undo_keeps_the_desktop_restore_path_after_an_external_move() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let mut saved = entry("/Library/Board/first.txt", "shared note", 1);
+        let desktop = PathBuf::from("/Desktop/first.txt");
+        saved.folder = "Board".into();
+        saved.undo = Some(desktop.clone());
+        saved.intended = Some(desktop.clone());
+        saved.phase = Phase::Restoring;
+        saved.return_phase = Some(Phase::Filed);
+        saved.pending_sort = true;
+        db.save(&saved).unwrap();
+        let fs = Moved { path: saved.path.clone(), identity: saved.identity.clone() };
+        recover_entry(&mut db, &fs, &saved.id).unwrap();
+        let recovered = db.get(&saved.id).unwrap();
+        assert_eq!(recovered.phase, Phase::Filed);
+        assert_eq!(recovered.path, saved.path);
+        assert_eq!(recovered.folder, "Board");
+        assert_eq!(recovered.undo, Some(desktop));
+        assert!(!recovered.inbox);
+        assert!(!recovered.pending_sort);
     }
     #[test]
     fn library_cards_reference_the_catalog_and_disappear_without_deleting_originals() {

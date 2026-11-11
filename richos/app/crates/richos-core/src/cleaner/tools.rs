@@ -27,8 +27,8 @@ pub fn allowed(scope: &Scope) -> bool {
 }
 pub fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"library_search","description":"Search the user's RichCleaner notes, names and folder labels. Use ordinary search words, never FTS syntax. Empty query lists saved metadata for meaning-based inspection when lexical matches are weak. A noteTruncated preview retains its full note through library_show. Each answer names total matches, total saved and continuation; inspect remaining batches before claiming that no file exists. Never reads file contents or moves files.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
-        json!({"name":"library_show","description":"Put one actual saved original in front of the user as a RichCleaner file card. Give an id returned by library_search. Opening resolves the current original on the host; no model-supplied file path is accepted. Does not move the file.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}}),
+        json!({"name":"library_search","description":"Search the user's RichCleaner notes, names and folder labels. Use ordinary search words, never FTS syntax. Empty query lists saved metadata for meaning-based inspection when lexical matches are weak. A noteTruncated preview retains its full note through library_show. A result with batchId belongs to an explicitly saved set. Each answer names total matches, total saved and continuation; inspect remaining pages before claiming that no file exists. Never reads file contents or moves files.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}}),
+        json!({"name":"library_show","description":"Show the original for an id returned by library_search as a RichCleaner file card. When the user asks for the saved set and the result has a batchId, give that result's id and set includeBatch to true to show every remaining member. Opening resolves the current original on the host; no model-supplied file path is accepted. Does not move files.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"includeBatch":{"type":"boolean"}},"required":["id"],"additionalProperties":false}}),
     ]
 }
 pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
@@ -38,7 +38,7 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
                 .into(),
         );
     }
-    let db = Catalog::open(&catalog_path(&scope.context.root)?)?;
+    let mut db = Catalog::open(&catalog_path(&scope.context.root)?)?;
     let keys = args.as_object().ok_or("Expected library arguments")?;
     match name {
         "library_search" => {
@@ -67,6 +67,9 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
                 while !e.note.is_char_boundary(end) { end -= 1; }
                 let mut item = json!({"id":e.id,"name":e.path.file_name().map(|v|v.to_string_lossy()),"note":&e.note[..end],"folder":e.folder,"aliases":e.labels,"inbox":e.inbox,"sorting":e.pending_sort});
                 if end < e.note.len() { item["noteTruncated"] = json!(true); }
+                if let Some(batch) = e.batch_id {
+                    item["batchId"] = json!(batch);
+                }
                 let size = serde_json::to_vec(&item).map_err(|e| e.to_string())?.len();
                 if bytes + size > 64 * 1024 {
                     break;
@@ -80,12 +83,25 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
             )
         }
         "library_show" => {
-            if keys.keys().any(|k| k != "id") {
-                return Err("Give only the saved file id".into());
+            if keys.keys().any(|k| k != "id" && k != "includeBatch") {
+                return Err("Give the saved file id and optionally includeBatch".into());
             }
             let id = args["id"].as_str().ok_or("Give a saved file id")?;
-            let entry = db.get(id)?;
+            let include_batch = args
+                .get("includeBatch")
+                .map(|v| v.as_bool().ok_or("includeBatch must be true or false"))
+                .transpose()?
+                .unwrap_or(false);
             let s = &scope.context;
+            if include_batch {
+                let cards = db
+                    .show_batch(&s.entity_id, &s.thread_id, &s.turn_id, id)?
+                    .into_iter()
+                    .map(|(id, card)| json!({"id":id,"cardId":card}))
+                    .collect::<Vec<_>>();
+                return Ok(json!({"shown":true,"cards":cards}));
+            }
+            let entry = db.get(id)?;
             let card = db.show(&s.entity_id, &s.thread_id, &s.turn_id, id)?;
             Ok(
                 json!({"shown":true,"cardId":card,"id":id,"name":entry.path.file_name().map(|v|v.to_string_lossy()),"folder":entry.folder,"note":entry.note}),
@@ -122,6 +138,79 @@ mod tests {
         assert!(serde_json::to_vec(&page).unwrap().len() <= 64 * 1024);
         assert_eq!(call(&scope,"library_show",&json!({"id":entry.id})).unwrap()["note"],note);
         assert_eq!(db.get(&entry.id).unwrap().note,note);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn matching_one_batch_member_shows_only_that_explicit_set_when_requested() {
+        use super::super::{capture_id, Entry, Identity};
+
+        let root = std::env::temp_dir().join(format!("richcleaner-batch-{}", capture_id()));
+        let scope: Scope = serde_json::from_value(json!({
+            "context": {
+                "root": root.join("engine-state"),
+                "entity_id": "company",
+                "thread_id": "thread",
+                "turn_id": "turn",
+                "asker": "front_desk",
+                "session_id": "session"
+            },
+            "actions_allowed": true,
+            "answer_method": "typed",
+            "surface": "mac"
+        }))
+        .unwrap();
+        let mut db = Catalog::open(&catalog_path(&scope.context.root).unwrap()).unwrap();
+        let make_entry = |name, object| {
+            Entry::new(
+                root.join(name),
+                Identity {
+                    volume: 1,
+                    object,
+                    size: 12,
+                    modified: "1".into(),
+                    changed: "1".into(),
+                    bookmark: "private-bookmark".into(),
+                },
+                "Acquisition review".into(),
+            )
+            .unwrap()
+        };
+        let other = make_entry("another review.pdf", 1);
+        db.save(&other).unwrap();
+        let batch_id = capture_id();
+        let mut set = [
+            make_entry("board slides.pdf", 2),
+            make_entry("model.xlsx", 3),
+            make_entry("legal memo.pdf", 4),
+        ];
+        for e in &mut set {
+            e.batch_id = Some(batch_id.clone());
+        }
+        db.save_batch_drafts(&set).unwrap();
+
+        let found = call(&scope, "library_search", &json!({"query":"board slides"})).unwrap();
+        assert_eq!(found["totalMatches"], 1);
+        assert_eq!(found["entries"][0]["id"], set[0].id);
+        assert_eq!(found["entries"][0]["batchId"], batch_id);
+
+        call(&scope, "library_show", &json!({"id":set[0].id})).unwrap();
+        assert_eq!(db.cards().unwrap().len(), 1);
+        let request = json!({"id":set[0].id,"includeBatch":true});
+        let shown = call(&scope, "library_show", &request).unwrap();
+        let cards = shown["cards"].as_array().unwrap();
+        assert_eq!(cards.len(), set.len());
+        for e in &set {
+            assert!(cards.iter().any(|card| card["id"] == e.id));
+        }
+        assert_eq!(call(&scope, "library_show", &request).unwrap(), shown);
+        assert_eq!(db.cards().unwrap().len(), set.len());
+        assert!(!serde_json::to_string(&shown).unwrap().contains("private-bookmark"));
+        assert!(call(&scope, "library_show", &json!({"id":other.id,"includeBatch":true})).is_err());
+
+        db.remove(&set[1].id).unwrap();
+        let shown = call(&scope, "library_show", &request).unwrap();
+        assert_eq!(shown["cards"].as_array().unwrap().len(), 2);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
