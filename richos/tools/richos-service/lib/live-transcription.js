@@ -126,6 +126,9 @@ export function advanceLiveTranscription(dir, options, {
         reused += 1;
       } else {
         const segments = decode(cache, wav, options);
+        if (segments.toolchain?.provenance !== toolchain.provenance) {
+          throw new Error('native decoder changed while transcribing a chunk');
+        }
         result = {
           key,
           me: absoluteSegments(segments.me, left, right, cursor, to, rate),
@@ -154,10 +157,12 @@ export async function watchLiveTranscription(dir, options, recorderIsRunning, on
   while (recorderIsRunning()) {
     const record = JSON.parse(fs.readFileSync(privateFile(path.join(dir, 'session.json'), dir), 'utf8'));
     if (record.status !== 'open' || !supportsLiveTranscription(dir, record)) return;
-    const start = Date.now();
+    const start = performance.now();
     const result = advanceLiveTranscription(dir, options, { cursor, toolchain });
     cursor = result.cursor;
-    if (result.decoded || result.reused) onChunk({ decoded: result.decoded, reused: result.reused, elapsedMs: Date.now() - start });
+    if (result.decoded || result.reused) {
+      onChunk({ decoded: result.decoded, reused: result.reused, elapsedMs: Math.round(performance.now() - start) });
+    }
     await delay(1_000);
   }
 }

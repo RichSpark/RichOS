@@ -196,9 +196,11 @@ export function runPipeline(sessionDir, opts = {}) {
     let asr;
     if (opts.liveCheckpoints && !opts.retranscribe && supportsLiveTranscription(sessionDir, record)) {
       try {
-        const start = Date.now();
+        const start = performance.now();
         const result = advanceLiveTranscription(sessionDir, decodeOptions, { closed: true });
-        log.info('live transcription finalized', { reused: result.reused, decoded: result.decoded, elapsedMs: Date.now() - start });
+        log.info('live transcription finalized', {
+          reused: result.reused, decoded: result.decoded, elapsedMs: Math.round(performance.now() - start),
+        });
         asr = result.asr;
       } catch {
         log.warn('live transcription could not finish; decoding retained audio');
