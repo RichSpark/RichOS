@@ -14,12 +14,14 @@ use std::{
     },
 };
 use tauri::{AppHandle, Emitter, Manager};
+mod batch;
 const EVENT: &str = "rich://cleaner";
 const PANEL: &str = "cleaner-panel";
 struct Active {
     id: String,
     target: Option<Value>,
     entry: Option<String>,
+    batch: Option<batch::ActiveBatch>,
     stage: String,
     cancel: Arc<AtomicBool>,
     chooser: Option<Arc<Prepared>>,
@@ -115,13 +117,8 @@ fn show(app: &AppHandle, mut value: Value) {
 }
 fn stage(app: &AppHandle, id: &str, name: &str, extra: Value) {
     let h = host(app);
-    if id != "recovery"
-        && h.active
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-            .is_none_or(|a| a.id != id)
-    {
+    let active = h.active.lock().unwrap_or_else(|p| p.into_inner());
+    if id != "recovery" && active.as_ref().is_none_or(|a| a.id != id) {
         return;
     }
     let mut value = h.view.lock().unwrap_or_else(|p| p.into_inner()).clone();
@@ -136,29 +133,19 @@ fn stage(app: &AppHandle, id: &str, name: &str, extra: Value) {
 }
 fn finish(app: &AppHandle, id: &str, value: Value) {
     let h = host(app);
-    {
-        let current = h.active.lock().unwrap_or_else(|p| p.into_inner());
-        if current.as_ref().is_some_and(|a| a.id != id)
-            || current.is_none() && h.view.lock().unwrap_or_else(|p| p.into_inner())["id"] != id
-        {
-            return;
-        }
-    }
-    {
-        let mut active = h.active.lock().unwrap_or_else(|p| p.into_inner());
-        if active.as_ref().is_some_and(|a| a.id == id) {
-            if let Some(a) = active.take() {
-                a.cancel.store(true, Ordering::Release);
-                if let Some(chooser) = a.chooser {
-                    chooser.cancel();
-                }
-            }
-        }
+    let mut active = h.active.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(done) = active.take_if(|op| op.id == id) else {
+        return;
+    };
+    done.cancel.store(true, Ordering::Release);
+    if let Some(chooser) = &done.chooser {
+        chooser.cancel();
     }
     if let Err(e) = link(app, id, "release", json!({})) {
         eprintln!("[richos] RichCleaner release: {e}");
     }
     show(app, value);
+    drop(active);
 }
 fn error(app: &AppHandle, id: &str, message: String) {
     let h = host(app);
@@ -166,7 +153,9 @@ fn error(app: &AppHandle, id: &str, message: String) {
     finish(
         app,
         id,
-        json!({"id":id,"stage":"error","message":message,"file":value["file"],"noteSaved":value["noteSaved"],"entry":value["entry"]}),
+        json!({"id":id,"stage":"error","message":message,"file":value["file"],
+            "noteSaved":value["noteSaved"],"entry":value["entry"],"batch":value["batch"],
+            "batchNote":value["batchNote"],"force":value["batch"].is_object()}),
     );
 }
 fn located(app: &AppHandle, entry: &mut Entry, path: PathBuf) {
@@ -237,13 +226,14 @@ fn folders(root: &Path) -> Result<Vec<String>, String> {
     Ok(labels)
 }
 pub fn start(app: &AppHandle) -> Result<(), String> {
+    crate::dictation::log::init(&app.state::<AppState>().data_dir);
     app.manage(Arc::new(Host::default()));
     if settings(app)?.0 {
         build_panel(app)?;
         let app = app.clone();
         std::thread::spawn(move || {
             if let Err(e) = Native::bundled().and_then(|native| {
-                catalog(&app).and_then(|mut db| cleaner::recover(&mut db, &native))
+                catalog(&app).and_then(|mut db| recover_idle(&app, &mut db, &native))
             }) {
                 stage(
                     &app,
@@ -253,6 +243,15 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
                 );
             }
         });
+    }
+    Ok(())
+}
+fn recover_idle(app: &AppHandle, db: &mut Catalog, native: &Native) -> Result<(), String> {
+    let h = host(app);
+    let _mutation = h.mutation.lock().map_err(|_| "File operations unavailable")?;
+    let active = h.active.lock().map_err(|_| "Operation state unavailable")?;
+    if active.is_none() {
+        cleaner::recover(db, native)?;
     }
     Ok(())
 }
@@ -403,6 +402,7 @@ pub fn on_message(app: &AppHandle, message: Option<&ToolMessage>) {
                 id: id.clone(),
                 target: None,
                 entry: None,
+                batch: None,
                 stage: "checking".into(),
                 cancel: Arc::new(AtomicBool::new(false)),
                 chooser: None,
@@ -414,6 +414,9 @@ pub fn on_message(app: &AppHandle, message: Option<&ToolMessage>) {
             );
         }
         "target" => {
+            if !target_is_pending(&host(app), id) {
+                return;
+            }
             let app = app.clone();
             let id = id.clone();
             let payload = payload.clone();
@@ -426,7 +429,7 @@ pub fn on_message(app: &AppHandle, message: Option<&ToolMessage>) {
         "listening" | "writing" => {
             let h = host(app);
             let mut active = h.active.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(a) = active.as_mut().filter(|a| a.id == *id) {
+            if let Some(a) = active.as_mut().filter(|a| a.id == *id && !a.cancel.load(Ordering::Acquire)) {
                 a.stage = action.clone();
                 drop(active);
                 stage(
@@ -473,7 +476,14 @@ pub fn on_message(app: &AppHandle, message: Option<&ToolMessage>) {
         _ => {}
     }
 }
+fn target_is_pending(h: &Host, id: &str) -> bool {
+    h.active.lock().unwrap_or_else(|error| error.into_inner()).as_ref()
+        .is_some_and(|op| op.id == id && !op.cancel.load(Ordering::Acquire))
+}
 fn begin_target(app: &AppHandle, id: &str, target: Value) -> Result<(), String> {
+    if target.get("targets").is_some() {
+        return batch::begin(app, id, target);
+    }
     let native = Native::bundled()?;
     let path = PathBuf::from(target["path"].as_str().ok_or("No file was selected")?);
     let identity: Identity =
@@ -511,6 +521,9 @@ fn begin_target(app: &AppHandle, id: &str, target: Value) -> Result<(), String> 
         }
         return Err("This file has an operation to recover first".into());
     }
+    start_target(app, id, target, json!({"file":{"name":path.file_name().map(|v|v.to_string_lossy()),"path":path}}))
+}
+fn start_target(app: &AppHandle, id: &str, target: Value, preview: Value) -> Result<(), String> {
     let chooser = profile(app)
         .map(|(bin, profile)| Arc::new(Prepared::start(&bin, &profile)))
         .ok();
@@ -518,18 +531,13 @@ fn begin_target(app: &AppHandle, id: &str, target: Value) -> Result<(), String> 
     let mut active = h.active.lock().map_err(|_| "The capture was canceled")?;
     let a = active
         .as_mut()
-        .filter(|a| a.id == id)
+        .filter(|a| a.id == id && !a.cancel.load(Ordering::Acquire))
         .ok_or("The capture was canceled")?;
-    a.target = Some(target.clone());
+    a.target = Some(target);
     a.chooser = chooser;
     a.stage = "starting".into();
     drop(active);
-    stage(
-        app,
-        id,
-        "checking",
-        json!({"file":{"name":path.file_name().map(|v|v.to_string_lossy()),"path":path}}),
-    );
+    stage(app, id, "checking", preview);
     link(app, id, "record", json!({}))
 }
 fn accept(app: &AppHandle, id: &str, note: String) -> Result<(), String> {
@@ -545,6 +553,10 @@ fn accept(app: &AppHandle, id: &str, note: String) -> Result<(), String> {
         return Ok(());
     }
     let target = a.target.clone().ok_or("The recording has no target")?;
+    if target.get("targets").is_some() {
+        drop(active);
+        return batch::accept(app, id, &target, note);
+    }
     let path = PathBuf::from(target["path"].as_str().ok_or("Missing target")?);
     let identity = serde_json::from_value(target["identity"].clone()).map_err(|e| e.to_string())?;
     let mut db = catalog(app)?;
@@ -645,20 +657,7 @@ fn file_saved(
     if cancel.load(Ordering::Acquire) {
         return settle_canceled(app, id, &mut db, entry_id);
     }
-    let (folder, labels, inbox, reason) = match choice {
-        Ok(choice) if choice.clear && choice.folder != "Inbox" => {
-            let mut labels = choice.keywords;
-            labels.extend(choice.aliases);
-            (choice.folder, labels, false, String::new())
-        }
-        Ok(_) => (
-            "Inbox".into(),
-            vec![],
-            true,
-            "The note did not make the right folder clear".into(),
-        ),
-        Err(reason) => ("Inbox".into(), vec![], true, reason),
-    };
+    let (folder, labels, inbox, reason) = folder_outcome(choice);
     {
         let mut active = h.active.lock().map_err(|_| "Operation state unavailable")?;
         let a = active
@@ -691,6 +690,24 @@ fn file_saved(
     }
     Ok(())
 }
+fn folder_outcome(
+    choice: Result<cleaner::choice::Choice, String>,
+) -> (String, Vec<String>, bool, String) {
+    match choice {
+        Ok(choice) if choice.clear && choice.folder != "Inbox" => {
+            let mut labels = choice.keywords;
+            labels.extend(choice.aliases);
+            (choice.folder, labels, false, String::new())
+        }
+        Ok(_) => (
+            "Inbox".into(),
+            vec![],
+            true,
+            "The note did not make the right folder clear".into(),
+        ),
+        Err(reason) => ("Inbox".into(), vec![], true, reason),
+    }
+}
 fn canceled(app: &AppHandle, id: &str) {
     let h = host(app);
     let (entry, chooser) = {
@@ -702,13 +719,13 @@ fn canceled(app: &AppHandle, id: &str) {
             return;
         }
         a.cancel.store(true, Ordering::Release);
-        (a.entry.clone(), a.chooser.clone())
+        (a.entry.is_some() || a.batch.is_some(), a.chooser.clone())
     };
     if let Some(chooser) = chooser {
         chooser.cancel();
     }
     // The choice worker owns settling an accepted draft. Before acceptance nothing was saved.
-    if entry.is_none() {
+    if !entry {
         finish(
             app,
             id,
@@ -756,7 +773,7 @@ pub fn cleaner_set_enabled(app: AppHandle, enabled: bool) -> Result<Value, Strin
         });
         native.request(json!({"action":"root","path":root}))?;
         let mut db = catalog(&app)?;
-        cleaner::recover(&mut db, &native)?;
+        recover_idle(&app, &mut db, &native)?;
         Some(root.to_string_lossy().to_string())
     } else {
         None
@@ -824,16 +841,22 @@ pub fn cleaner_capture_control(app: AppHandle, id: String, action: String) -> Re
         if a.stage == "filing" {
             return Ok(());
         }
-        if a.stage == "choosing" {
-            a.cancel.store(true, Ordering::Release);
-            if let Some(chooser) = &a.chooser {
-                chooser.cancel();
-            }
-            return Ok(());
+        a.cancel.store(true, Ordering::Release);
+        if let Some(chooser) = &a.chooser {
+            chooser.cancel();
         }
+        let note_accepted = a.entry.is_some() || a.batch.is_some();
+        drop(active);
+        if !note_accepted {
+            if let Err(error) = link(&app, &id, "cancel", json!({})) {
+                eprintln!("[richos] RichCleaner cancel before note acceptance: {error}");
+            }
+            canceled(&app, &id);
+        }
+        return Ok(());
     }
     match action.as_str() {
-        "finish" | "cancel" => link(&app, &id, &action, json!({})),
+        "finish" => link(&app, &id, &action, json!({})),
         _ => Err("Unknown capture action".into()),
     }
 }
@@ -883,10 +906,13 @@ pub fn cleaner_action(
                 if !entry.identity.same_object(&actual) {
                     return Err("This is a different file. Select the original; its saved note has not changed".into());
                 }
-                entry.path = path;
+                located(&app, &mut entry, path);
                 entry.identity = actual;
                 entry.problem = None;
                 db.save(&entry)?;
+                if batch::skip(&h, &id) {
+                    entry = cleaner::cancel_sort(&mut db, &id)?;
+                }
             }
         }
         "undo" => {
@@ -902,6 +928,7 @@ pub fn cleaner_action(
             }
             drop(active);
             entry = cleaner::undo(&mut db, &native, &id)?;
+            batch::skip(&h, &id);
         }
         "edit" => {
             {
@@ -918,13 +945,16 @@ pub fn cleaner_action(
                 }
             }
             entry = cleaner::edit(&mut db, &native, &id, note.ok_or("Missing note")?)?;
+            if batch::skip(&h, &id) {
+                entry = cleaner::cancel_sort(&mut db, &id)?;
+            }
         }
         "remove" => {
             if h.active
                 .lock()
                 .map_err(|_| "Operation state unavailable")?
                 .as_ref()
-                .is_some_and(|a| a.entry.as_deref() == Some(id.as_str()))
+                .is_some_and(|a| a.entry.as_deref() == Some(id.as_str()) || a.batch.as_ref().is_some_and(|batch| batch.contains(&id)))
             {
                 return Err("Finish or undo this filing before removing its saved note".into());
             }
@@ -986,6 +1016,7 @@ pub fn cleaner_action(
                 id: request.clone(),
                 target: None,
                 entry: Some(id.clone()),
+                batch: None,
                 stage: "choosing".into(),
                 cancel: cancel.clone(),
                 chooser: chooser.clone(),
@@ -1044,20 +1075,24 @@ pub fn cleaner_panel_size(app: AppHandle, w: f64, h: f64) -> Result<(), String> 
 }
 #[richos_command::command]
 pub fn cleaner_details(app: AppHandle, id: String) -> Result<Value, String> {
+    let h = host(&app);
+    let _mutation = h.mutation.lock().map_err(|_| "File operations unavailable")?;
     let mut db = catalog(&app)?;
     let mut e = db.get(&id)?;
     let native = Native::bundled()?;
     match native.resolve(&e.path, &e.identity) {
         Ok(path) => {
-            located(&app, &mut e, path);
-            db.save(&e)?;
+            if path != e.path {
+                located(&app, &mut e, path);
+                db.save(&e)?;
+            }
             Ok(json!({"entry":e,"available":true}))
         }
         Err(message) => Ok(json!({"entry":e,"available":false,"message":message})),
     }
 }
 /// Explicit URL entry, also available when the global key cannot be watched.
-pub fn service(app: AppHandle, path: PathBuf) -> Result<(), String> {
+pub fn service(app: AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
     if !settings(&app)?.0 {
         return Err("Turn on RichCleaner in RichOS Settings first".into());
     }
@@ -1086,22 +1121,13 @@ pub fn service(app: AppHandle, path: PathBuf) -> Result<(), String> {
     std::thread::spawn(move || {
         let result = (|| -> Result<(), String> {
             let native = Native::bundled()?;
-            let directories = native.request(json!({"action":"directories"}))?;
-            let desktop = PathBuf::from(
-                directories["desktop"]
-                    .as_str()
-                    .ok_or("The Desktop is unavailable")?,
-            );
-            if path.parent() != Some(desktop.as_path()) {
-                return Err("Select one file directly on your Desktop".into());
+            let target = native.request(json!({"action":"service-context","paths":paths}))?;
+            let h = host(&app);
+            let active = h.active.lock().map_err(|_| "Capture state unavailable")?;
+            if active.as_ref().is_some_and(|op| op.id == id && !op.cancel.load(Ordering::Acquire)) {
+                link(&app, &id, "service-target", target)?;
             }
-            let identity = native.inspect(&path)?;
-            link(
-                &app,
-                &id,
-                "service-target",
-                json!({"route":"file","path":path,"identity":identity,"service":true}),
-            )
+            Ok(())
         })();
         if let Err(e) = result {
             error(&app, &id, e);

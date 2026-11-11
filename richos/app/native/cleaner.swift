@@ -72,16 +72,71 @@ func flushFolder(_ folder:URL)throws {
 func ax(_ element:AXUIElement,_ key:String)->CFTypeRef? {var value:CFTypeRef?;guard AXUIElementCopyAttributeValue(element,key as CFString,&value) == .success else {return nil};return value}
 func axString(_ e:AXUIElement,_ key:String)->String? {ax(e,key) as? String}
 func front()->Int32? {NSWorkspace.shared.frontmostApplication?.processIdentifier}
+
+// Keep this bound in step with the macOS Service's Rust entry point.
+let maxSelection = 20
+
+func selectedItems(_ focused: AXUIElement) -> [AXUIElement] {
+    if let items = ax(focused, kAXSelectedChildrenAttribute) as? [AXUIElement], !items.isEmpty {
+        return items
+    }
+    // When Finder focuses an icon, obtain its container's entire selection.
+    // A selected focused icon alone doesn't tell us which other icons are selected.
+    guard ax(focused, kAXSelectedAttribute) as? Bool == true,
+          let parent = ax(focused, kAXParentAttribute),
+          let items = ax(unsafeBitCast(parent, to: AXUIElement.self), kAXSelectedChildrenAttribute) as? [AXUIElement],
+          items.contains(where: { CFEqual($0, focused) }) else { return [] }
+    return items
+}
+
+func selectedURL(_ item: AXUIElement) throws -> URL {
+    guard let raw = ax(item, kAXURLAttribute) else {
+        try fail("macOS did not provide the selected file URL. Use Services")
+    }
+    if let target = raw as? URL, target.isFileURL { return target }
+    if let text = raw as? String, let target = URL(string: text), target.isFileURL { return target }
+    try fail("The selected file URL is unavailable. Use Services")
+}
+
+func selectionPayload(_ urls: [URL]) throws -> [String: Any] {
+    guard !urls.isEmpty else { try fail("Select files on your Desktop, or use Services") }
+    guard urls.count <= maxSelection else { try fail("Select up to \(maxSelection) Desktop files") }
+    let desktop = try canonical(fm.url(for: .desktopDirectory, in: .userDomainMask, appropriateFor: nil, create: false))
+    let paths = try urls.map(canonical).sorted { $0.path.utf8.lexicographicallyPrecedes($1.path.utf8) }
+    var objects = Set<[UInt64]>()
+    var targets = [[String: Any]]()
+    for target in paths {
+        guard target.deletingLastPathComponent() == desktop else {
+            try fail("Select files directly on your Desktop")
+        }
+        let id = try identity(target)
+        guard let volume = id["volume"] as? UInt64, let object = id["object"] as? UInt64,
+              objects.insert([volume, object]).inserted else {
+            try fail("The selection includes two names for the same file")
+        }
+        targets.append(["path": target.path, "identity": id])
+    }
+    if targets.count == 1 {
+        var single = targets[0]
+        single["route"] = "file"
+        return single
+    }
+    return ["route": "file", "targets": targets]
+}
+
 func context()throws->[String:Any] {
     guard let app=NSWorkspace.shared.frontmostApplication else {try fail("The focused application is unavailable")}
-    guard app.bundleIdentifier=="com.apple.finder" else {return ["route":"text"]}
+    guard app.bundleIdentifier=="com.apple.finder" else {try fail("Focus changed. Select the files and try again")}
     guard AXIsProcessTrusted() else {try fail("Allow Accessibility in RichScribe settings, or use Services")}
     let finder=AXUIElementCreateApplication(app.processIdentifier)
     AXUIElementSetMessagingTimeout(finder,0.15)
-    guard let value=ax(finder,kAXFocusedUIElementAttribute) else {try fail("Select one file on your Desktop, or use Services")}
+    guard let value=ax(finder,kAXFocusedUIElementAttribute) else {try fail("Select files on your Desktop, or use Services")}
     let focused=unsafeBitCast(value,to:AXUIElement.self)
     let role=axString(focused,kAXRoleAttribute) ?? ""
-    if [kAXTextFieldRole,kAXTextAreaRole,kAXComboBoxRole].contains(role) {return ["route":"text"]}
+    if [kAXTextFieldRole,kAXTextAreaRole,kAXComboBoxRole].contains(role) {
+        guard front()==app.processIdentifier else {try fail("Focus changed. Try again")}
+        return ["route":"text"]
+    }
     // Read only the current focused file area, never Finder's retained global selection.
     // A Desktop icon has no ordinary Finder document window. The URL must also be directly
     // under the OS-provided Desktop, so another window's selected file cannot qualify.
@@ -89,27 +144,33 @@ func context()throws->[String:Any] {
         let window=unsafeBitCast(w,to:AXUIElement.self)
         if axString(window,kAXSubroleAttribute)==kAXStandardWindowSubrole {try fail("Select a file on your Desktop, or use Services")}
     }
-    var selected=ax(focused,kAXSelectedChildrenAttribute) as? [AXUIElement] ?? []
-    if selected.isEmpty, ax(focused,kAXSelectedAttribute) as? Bool == true {selected=[focused]}
-    guard selected.count==1 else {try fail(selected.count>1 ? "One file at a time" : "Select one file on your Desktop, or use Services")}
-    let item=selected[0]
-    guard let raw=ax(item,kAXURLAttribute) else {try fail("macOS did not provide the selected file URL. Use Services")}
-    let target:URL
-    if let u=raw as? URL {target=u} else if let text=raw as? String,let u=URL(string:text),u.isFileURL {target=u} else {try fail("The selected file URL is unavailable. Use Services")}
-    let desktop=try fm.url(for:.desktopDirectory,in:.userDomainMask,appropriateFor:nil,create:false)
-    guard try canonical(target).deletingLastPathComponent()==canonical(desktop) else {try fail("Select one file directly on your Desktop")}
-    let id=try identity(target)
-    guard front()==app.processIdentifier else {try fail("Focus changed. Select the file and try again")}
-    // Repeat the focused area and selected URL before returning. The owner checks again before
-    // opening capture and discards replies from canceled lookup IDs.
+    let selected = selectedItems(focused)
+    guard selected.count <= maxSelection else { try fail("Select up to \(maxSelection) Desktop files") }
+    var payload = try selectionPayload(selected.map(selectedURL))
+    // Repeat the focused area and every selected element before returning. The owner
+    // resolves all URLs and versions again immediately before opening the microphone.
+    guard front()==app.processIdentifier else {try fail("Focus changed. Select the files and try again")}
     guard let again=ax(finder,kAXFocusedUIElementAttribute),CFEqual(value,again) else {try fail("Focus changed. Try again")}
-    let selectedAgain=ax(focused,kAXSelectedChildrenAttribute) as? [AXUIElement] ?? []
-    if !selectedAgain.isEmpty {guard selectedAgain.count==1,CFEqual(selectedAgain[0],item) else {try fail("The selection changed. Try again")}}
-    return ["route":"file","path":target.path,"identity":id,"pid":app.processIdentifier]
+    let selectedAgain = selectedItems(focused)
+    guard selectedAgain.count == selected.count,
+          selected.allSatisfy({ item in selectedAgain.contains(where: { CFEqual($0, item) }) }),
+          front() == app.processIdentifier else {
+        try fail("The selection changed. Try again")
+    }
+    payload["pid"] = app.processIdentifier
+    return payload
 }
 func main(_ r:[String:Any])throws->[String:Any] {
     switch try string(r,"action") {
     case "context":return try context()
+    case "service-context":
+        guard let paths = r["paths"] as? [String],
+              paths.allSatisfy({ $0.hasPrefix("/") && !$0.utf8.contains(0) }) else {
+            try fail("macOS did not supply valid file URLs")
+        }
+        var payload = try selectionPayload(paths.map(url))
+        payload["service"] = true
+        return payload
     case "directories":
         return ["desktop":try fm.url(for:.desktopDirectory,in:.userDomainMask,appropriateFor:nil,create:false).path,"documents":try fm.url(for:.documentDirectory,in:.userDomainMask,appropriateFor:nil,create:false).path]
     case "root", "validate-root":
