@@ -9,11 +9,15 @@ struct BrowserView: View {
     @ObservedObject private var actions: BrowserActions
     @ObservedObject private var openRequests: FolderOpenDelegate
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.scenePhase) private var scenePhase
     private let hostOpenWindow: (() -> Void)?
     private let acceptsKeyboard: () -> Bool
+    private let supportsSessionRestore: Bool
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
+    @AppStorage("richfiles.restoreSession") private var restoreSession = false
+    @SceneStorage("richfiles.browserSession.v1") private var savedSession: Data?
     @FocusState private var focus: Field?
     @State private var editingAddress = false
     @State private var address = ""
@@ -33,16 +37,19 @@ struct BrowserView: View {
     @State private var rowFrames: [URL: CGRect] = [:]
     @State private var selectionRectangle: CGRect?
     @State private var folderReveal: FolderTreeReveal?
+    @State private var appeared = false
 
     private enum Field: Hashable { case address, search }
 
     init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate,
-         openWindow: (() -> Void)? = nil, acceptsKeyboard: @escaping () -> Bool = { true }) {
+         openWindow: (() -> Void)? = nil, acceptsKeyboard: @escaping () -> Bool = { true },
+         supportsSessionRestore: Bool = false) {
         _model = StateObject(wrappedValue: BrowserModel(start: start))
         self.actions = actions
         self.openRequests = openRequests
         hostOpenWindow = openWindow
         self.acceptsKeyboard = acceptsKeyboard
+        self.supportsSessionRestore = supportsSessionRestore
     }
 
     var body: some View {
@@ -71,7 +78,20 @@ struct BrowserView: View {
                                    perform: perform, prefix: selectPrefix)
             .frame(width: 0, height: 0))
         .focusedSceneValue(\.browserCommand) { _ = perform($0) }
-        .onAppear { receiveFolderOpen() }
+        .onAppear {
+            if !appeared {
+                appeared = true
+                if supportsSessionRestore, restoreSession, let savedSession {
+                    model.restoreSession(savedSession)
+                }
+            }
+            receiveFolderOpen()
+        }
+        .onChange(of: model.tabs.map(\.folder)) { _ in saveSession() }
+        .onChange(of: model.currentTabID) { _ in saveSession() }
+        .onChange(of: scenePhase) { if $0 != .active { saveSession() } }
+        .onChange(of: restoreSession) { _ in saveSession() }
+        .onDisappear { saveSession() }
         .onChange(of: actions.mutationRevision) { _ in model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             actions.refreshClipboard()
@@ -87,6 +107,11 @@ struct BrowserView: View {
         }
         .task(id: model.selected) { await captureSelection() }
         .sheet(item: $sheet) { value in sheetContents(value) }
+    }
+
+    private func saveSession() {
+        guard supportsSessionRestore, appeared else { return }
+        savedSession = restoreSession ? model.sessionData() : nil
     }
 
     private var navigationBar: some View {

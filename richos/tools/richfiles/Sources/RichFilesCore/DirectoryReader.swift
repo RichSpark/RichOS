@@ -49,8 +49,8 @@ public struct FileEntry: Sendable, Identifiable {
     }
 }
 
-public struct FileQuery: Sendable {
-    public enum Name: Sendable {
+public struct FileQuery: Codable, Sendable {
+    public enum Name: Codable, Sendable {
         case contains(String)
         case wildcard(String)
     }

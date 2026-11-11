@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-public struct TextContentQuery: Sendable {
+public struct TextContentQuery: Codable, Sendable {
     public static let maximumFileBytes = 1 << 20
     public static let maximumSearchBytes = 128 * maximumFileBytes
     public static let coverageDescription = "Searches UTF-8 text such as TXT, Markdown, CSV, logs and source files on the selected local volume. Reads up to 1 MiB per file and 128 MiB per search. Cloud placeholders, packages and links are skipped."
@@ -18,6 +18,17 @@ public struct TextContentQuery: Sendable {
         guard !text.isEmpty, byteBudget > 0 else { return nil }
         self.phrase = text
         self.byteBudget = byteBudget
+    }
+
+    private enum CodingKeys: String, CodingKey { case phrase }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let text = try values.decode(String.self, forKey: .phrase)
+        guard let query = Self(phrase: text) else {
+            throw DecodingError.dataCorruptedError(forKey: .phrase, in: values, debugDescription: "Empty search phrase")
+        }
+        self = query
     }
 }
 

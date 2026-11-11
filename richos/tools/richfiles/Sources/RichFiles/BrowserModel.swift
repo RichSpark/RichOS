@@ -131,7 +131,7 @@ final class BrowserModel: ObservableObject {
         return Array(result.reversed())
     }
 
-    private struct SearchState: Sendable {
+    private struct SearchState: Codable, Sendable {
         var text = ""
         var extensions = ""
         var minimumBytes: Int64?
@@ -143,17 +143,23 @@ final class BrowserModel: ObservableObject {
         var content: TextContentQuery?
     }
 
-    private struct Visit: Sendable {
+    private struct Visit: Codable, Sendable {
         let folder: URL
         var selection: Set<URL> = []
         var anchor: URL?
         var search = SearchState()
     }
 
-    private struct TabState {
+    private struct TabState: Codable {
         let visit: Visit
         var back: [Visit] = []
         var forward: [Visit] = []
+    }
+
+    private struct Session: Codable {
+        static let maximumBytes = 256 * 1024
+        let activeTab: Int
+        let tabs: [TabState]
     }
 
     private enum Navigation {
@@ -264,6 +270,46 @@ final class BrowserModel: ObservableObject {
         }
         tabs.remove(at: index)
         savedTabs.removeValue(forKey: id)
+    }
+
+    func sessionData() -> Data? {
+        guard let index = tabs.firstIndex(where: { $0.id == currentTabID }) else { return nil }
+        let current = TabState(visit: captureVisit(), back: back, forward: forward)
+        let states = tabs.compactMap { $0.id == currentTabID ? current : savedTabs[$0.id] }
+        guard states.count == tabs.count,
+              let data = try? JSONEncoder().encode(Session(activeTab: index, tabs: states)),
+              data.count <= Session.maximumBytes else { return nil }
+        return data
+    }
+
+    @discardableResult
+    func restoreSession(_ data: Data) -> Bool {
+        guard data.count <= Session.maximumBytes,
+              let session = try? JSONDecoder().decode(Session.self, from: data),
+              session.tabs.indices.contains(session.activeTab), session.tabs.allSatisfy({ state in
+                  ([state.visit] + state.back + state.forward).allSatisfy { visit in
+                      Self.isSessionURL(visit.folder) && visit.selection.allSatisfy(Self.isSessionURL)
+                          && (visit.anchor.map(Self.isSessionURL) ?? true)
+                  }
+              }) else { return false }
+
+        cancelNavigation()
+        let restoredTabs = session.tabs.map { BrowserTab(id: UUID(), folder: $0.visit.folder) }
+        let current = session.tabs[session.activeTab]
+        tabs = restoredTabs
+        currentTabID = restoredTabs[session.activeTab].id
+        savedTabs = Dictionary(uniqueKeysWithValues: zip(restoredTabs, session.tabs).compactMap { tab, state in
+            tab.id == currentTabID ? nil : (tab.id, state)
+        })
+        back = current.back
+        forward = current.forward
+        restore(current.visit)
+        return true
+    }
+
+    private static func isSessionURL(_ url: URL) -> Bool {
+        url.isFileURL && (url.host == nil || url.host == "" || url.host == "localhost")
+            && url.path.hasPrefix("/") && !url.path.utf8.contains(0)
     }
 
     func selectAll() {

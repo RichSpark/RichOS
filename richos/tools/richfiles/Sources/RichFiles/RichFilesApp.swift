@@ -14,7 +14,9 @@ public struct RichFilesScenes: Scene {
 
     public var body: some Scene {
         WindowGroup("RichFiles", id: "browser") {
-            BrowserView(start: Self.startingFolder, actions: actions, openRequests: delegate)
+            BrowserView(start: Self.requestedFolder ?? FileManager.default.homeDirectoryForCurrentUser,
+                        actions: actions, openRequests: delegate,
+                        supportsSessionRestore: Self.requestedFolder == nil)
                 .frame(minWidth: 720, minHeight: 420)
         }
         .defaultSize(width: 1120, height: 700)
@@ -27,13 +29,13 @@ public struct RichFilesScenes: Scene {
         }
     }
 
-    private static var startingFolder: URL {
+    private static var requestedFolder: URL? {
         let arguments = CommandLine.arguments
         if let index = arguments.firstIndex(of: "--folder"),
            arguments.indices.contains(index + 1), arguments[index + 1].hasPrefix("/") {
             return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
         }
-        return FileManager.default.homeDirectoryForCurrentUser
+        return nil
     }
 }
 
@@ -137,6 +139,7 @@ struct BrowserCommands: Commands {
 
 struct RichFilesSettings: View {
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
+    @AppStorage("richfiles.restoreSession") private var restoreSession = false
     @AppStorage("richfiles.previousFolderHandler") private var previousHandler = ""
     @State private var currentHandler: URL?
     @State private var updating = false
@@ -148,6 +151,7 @@ struct RichFilesSettings: View {
 
     var body: some View {
         Form {
+            Toggle("Restore tabs when RichFiles reopens", isOn: $restoreSession)
             Section("Keyboard") {
                 Picker("Shortcuts", selection: $windowsKeys) {
                     Text("Windows (Control)").tag(true)
