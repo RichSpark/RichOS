@@ -76,6 +76,20 @@ final class BrowserActionsTests: XCTestCase {
             XCTAssertEqual(try contents(source.url), "selected")
             XCTAssertEqual(try contents(occupant.url), "already here")
             XCTAssertFalse(FileManager.default.fileExists(atPath: movedURL.path))
+
+            XCTAssertEqual(actions.redoName, "Move")
+            let lateOccupant = try write("arrived after undo", named: "Report (2).txt", in: destination)
+            try await perform(actions) { actions.redo() }
+            XCTAssertEqual(try contents(source.url), "selected")
+            XCTAssertEqual(try contents(lateOccupant.url), "arrived after undo")
+            XCTAssertEqual(actions.redoName, "Move")
+            _ = try FileOperations.rename(lateOccupant, to: "Arrived Later.txt")
+
+            try await perform(actions) { actions.redo() }
+            XCTAssertEqual(try FileReference(url: movedURL).identity, source.identity)
+            XCTAssertEqual(try contents(movedURL), "selected")
+            XCTAssertEqual(try contents(occupant.url), "already here")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: source.url.path))
         }
     }
 

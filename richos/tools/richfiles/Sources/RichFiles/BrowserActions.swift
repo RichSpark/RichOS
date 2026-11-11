@@ -465,6 +465,7 @@ private enum TrashChange: Sendable {
 }
 
 private enum HistoryStep: Codable, Sendable {
+    // Keep the serialized fields so earlier recovery snapshots still open.
     case undoMove(MoveReceipt, canRedoRename: Bool)
     case rename(FileReference, String)
     case restore(BrowserTrashItem)
@@ -473,8 +474,8 @@ private enum HistoryStep: Codable, Sendable {
     func perform() throws -> (inverse: HistoryStep?, trashChange: TrashChange?) {
         switch self {
         case .undoMove(let receipt, let canRedoRename):
-            let restored = try FileOperations.undo(receipt)
-            return (canRedoRename ? .rename(restored, receipt.moved.url.lastPathComponent) : nil, nil)
+            let inverse = try FileOperations.reverse(receipt)
+            return (.undoMove(inverse, canRedoRename: canRedoRename), nil)
         case .rename(let source, let name):
             let receipt = try FileOperations.rename(source, to: name)
             return (.undoMove(receipt, canRedoRename: true), nil)

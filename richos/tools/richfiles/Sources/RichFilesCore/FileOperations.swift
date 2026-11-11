@@ -176,9 +176,14 @@ public enum FileOperations {
     }
 
     public static func undo(_ receipt: MoveReceipt) throws -> FileReference {
+        try reverse(receipt).moved
+    }
+
+    /// Returns the verified inverse receipt so the operation can safely be replayed.
+    public static func reverse(_ receipt: MoveReceipt) throws -> MoveReceipt {
         let originalFolder = try OpenFolder(receipt.original.parent)
         try originalFolder.requireIdentity(receipt.original.parentIdentity)
-        return try relocate(receipt.moved, into: originalFolder, named: receipt.original.name).moved
+        return try relocate(receipt.moved, into: originalFolder, named: receipt.original.name)
     }
 
     /// Call on a worker. Cancellation is checked before copying and before publishing the
