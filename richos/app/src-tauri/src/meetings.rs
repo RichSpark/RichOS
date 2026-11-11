@@ -1967,13 +1967,17 @@ mod tests {
         // and must wait for a transcription the killed launch left running on the same session.
         let dir = std::env::temp_dir().join(format!("richos-orphan-{}", std::process::id()));
         let other = std::env::temp_dir().join(format!("richos-orphan-other-{}", std::process::id()));
-        // `sh -c CMD NAME`: NAME is on its command line, as `richos-service run <session>` is.
-        let mut child = Command::new("/bin/sh").args(["-c", "sleep 30"]).arg(&dir).spawn().unwrap();
+        // Keep the session argument on a process that waits for input. A shell can replace
+        // itself with sleep and lose the argument before ps reads it.
+        let mut child = Command::new("/bin/cat").arg("-").arg(&dir)
+            .stdin(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
         let pid = child.id();
-        assert!(transcription_running(pid, &dir));
-        assert!(!transcription_running(pid, &other), "another session's run is not this one");
+        let is_current = transcription_running(pid, &dir);
+        let is_other = transcription_running(pid, &other);
         child.kill().unwrap();
         child.wait().unwrap();
+        assert!(is_current);
+        assert!(!is_other, "another session's run is not this one");
         assert!(!transcription_running(pid, &dir), "an ended run is not waited for");
         // No pid beside the session, or the pid of a run that has ended: it returns (a wait here
         // would hang the test, not pass it).
