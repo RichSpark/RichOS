@@ -13,6 +13,7 @@ const HEADER_BYTES = 44;
 const FRAME_BYTES = 4;
 const CORE_SECONDS = 24;
 const PADDING_SECONDS = 2;
+const CUT_SEARCH_SECONDS = 3;
 const CHECKPOINTS = '.live-transcription';
 
 function readHeader(fd) {
@@ -39,7 +40,7 @@ function readHeader(fd) {
   return { header, rate, frames: bytes / FRAME_BYTES };
 }
 
-function readWindow(fd, header, from, to) {
+function readPcm(fd, from, to) {
   const pcm = Buffer.allocUnsafe((to - from) * FRAME_BYTES);
   let read = 0;
   while (read < pcm.length) {
@@ -47,10 +48,48 @@ function readWindow(fd, header, from, to) {
     if (n === 0) throw new Error('native audio changed while reading a chunk');
     read += n;
   }
+  return pcm;
+}
+
+function readWindow(fd, header, from, to) {
+  const pcm = readPcm(fd, from, to);
   const wav = Buffer.from(header);
   wav.writeUInt32LE(HEADER_BYTES - 8 + pcm.length, 4);
   wav.writeUInt32LE(pcm.length, 40);
   return Buffer.concat([wav, pcm]);
+}
+
+function cutNear(fd, nominal, rate) {
+  const radius = CUT_SEARCH_SECONDS * rate;
+  const start = nominal - radius;
+  const pcm = readPcm(fd, start, nominal + radius);
+  const block = Math.round(rate / 50);
+  const margin = block * 4;
+  let best = nominal;
+  let bestDistance = Infinity;
+  let quietStart = 0;
+  for (let frame = 0; frame + block <= radius * 2; frame += block) {
+    let left = 0;
+    let right = 0;
+    for (let i = frame * FRAME_BYTES; i < (frame + block) * FRAME_BYTES; i += FRAME_BYTES) {
+      left += pcm.readInt16LE(i) ** 2;
+      right += pcm.readInt16LE(i + 2) ** 2;
+    }
+    // A cut needs quiet on both sides and on both channels. Keep overlap for calls
+    // with continuous speech around the boundary.
+    const end = frame + block;
+    if (Math.max(left, right) > block * 64 ** 2) {
+      quietStart = end;
+    } else if (end - quietStart >= margin * 2) {
+      const candidate = Math.max(start + quietStart + margin, Math.min(nominal, start + end - margin));
+      const distance = Math.abs(candidate - nominal);
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+  }
+  return { frame: best, quiet: bestDistance !== Infinity };
 }
 
 function absoluteSegments(segments, left, right, from, to, rate) {
@@ -107,17 +146,24 @@ export function advanceLiveTranscription(dir, options, {
     const { header, frames, rate } = readHeader(fd);
     const step = CORE_SECONDS * rate;
     const padding = PADDING_SECONDS * rate;
+    const lookahead = padding + CUT_SEARCH_SECONDS * rate;
     const output = { me: [], others: [], model: options.model, toolchain, whisper: toolchain.provenance };
     let reused = 0;
     let decoded = 0;
+    let previousCut;
     for (; cursor < frames; cursor += step) {
-      if (!closed && cursor + step + padding > frames) break;
-      const to = Math.min(cursor + step, frames);
-      const left = Math.max(0, cursor - padding);
-      const right = Math.min(frames, to + padding);
+      if (!closed && cursor + step + lookahead > frames) break;
+      const startCut = previousCut ?? (cursor === 0 ? { frame: 0, quiet: true } : cutNear(fd, cursor, rate));
+      const endCut = cursor + step + lookahead > frames
+        ? { frame: frames, quiet: true }
+        : cutNear(fd, cursor + step, rate);
+      const from = startCut.frame;
+      const to = endCut.frame;
+      const left = startCut.quiet ? from : Math.max(0, from - padding);
+      const right = endCut.quiet ? to : Math.min(frames, to + padding);
       const wav = readWindow(fd, header, left, right);
       const key = createHash('sha256')
-        .update(JSON.stringify([1, left, cursor, to, right, options.model, whisperArgs(options), toolchain.provenance]))
+        .update(JSON.stringify([2, left, from, to, right, options.model, whisperArgs(options), toolchain.provenance]))
         .update(wav)
         .digest('hex');
       const file = path.join(cache, `${cursor}.json`);
@@ -131,14 +177,19 @@ export function advanceLiveTranscription(dir, options, {
         }
         result = {
           key,
-          me: absoluteSegments(segments.me, left, right, cursor, to, rate),
-          others: absoluteSegments(segments.others, left, right, cursor, to, rate),
+          me: absoluteSegments(segments.me, left, right, from, to, rate),
+          others: absoluteSegments(segments.others, left, right, from, to, rate),
         };
         withPrivateOutputs([file], ([temp]) => writePrivateFile(temp, JSON.stringify(result)));
         decoded += 1;
       }
       output.me.push(...result.me);
       output.others.push(...result.others);
+      previousCut = endCut;
+      if (to === frames) {
+        cursor = frames;
+        break;
+      }
     }
     return { asr: output, cursor, reused, decoded };
   } finally {

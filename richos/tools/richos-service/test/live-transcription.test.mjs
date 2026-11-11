@@ -23,6 +23,7 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   header.writeUInt16LE(16, 34);
   header.write('data', 36);
   const pcm = Buffer.alloc(30 * bytesPerSecond);
+  pcm.fill(Buffer.from([0, 8]), 21 * bytesPerSecond, 27 * bytesPerSecond);
   pcm.writeInt16LE(17, 24 * bytesPerSecond);
   pcm.writeInt16LE(-31, 24 * bytesPerSecond + 2);
   const flush = (seconds) => {
@@ -50,11 +51,11 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   const options = { model: 'large-v3-turbo-q5_0' };
   const advance = (state) => advanceLiveTranscription(dir, options, { decode, toolchain, ...state });
 
-  flush(25);
+  flush(28);
   assert.equal(supportsLiveTranscription(dir, { capture: { source: 'desktop-companion-macos' } }), true);
   assert.equal(supportsLiveTranscription(dir, { capture: { source: 'chrome' } }), false);
   assert.equal(advance().decoded, 0, 'Unflushed bytes cannot fill the overlap');
-  flush(26);
+  flush(29);
   const live = advance();
   assert.equal(live.decoded, 1);
   assert.equal(live.asr.me[0].text, 'First');
@@ -79,4 +80,19 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
     /decoder changed/,
   );
   assert.equal(advance({ closed: true }).reused, 2, 'A mismatched decoder cannot replace valid checkpoints');
+
+  // A jointly quiet gap moves the cut out of a sentence and requires no overlap.
+  pcm.fill(0);
+  pcm.fill(Buffer.from([0, 8, 0, 0]), 23 * bytesPerSecond, 25 * bytesPerSecond);
+  flush(30);
+  const cutLengths = [];
+  const quiet = advance({
+    closed: true,
+    decode: (_cache, wav) => {
+      cutLengths.push(wav.readUInt32LE(40) / bytesPerSecond);
+      return { me: [], others: [], toolchain };
+    },
+  });
+  assert.equal(quiet.decoded, 2);
+  assert.deepEqual(cutLengths, [22.92, 7.08]);
 });
