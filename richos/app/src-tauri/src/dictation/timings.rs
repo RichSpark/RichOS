@@ -21,6 +21,10 @@ pub(super) fn recognition_failure_detail(model: &str, elapsed: Duration, bound: 
         "reason":decoder_failure_reason(error)})
 }
 
+fn preview_pause_detail(reason: &'static str, input_ms: Option<u64>) -> Value {
+    json!({"reason":reason,"input_ms":input_ms})
+}
+
 pub struct Timings {
     seq: u64,
     version: String,
@@ -76,6 +80,9 @@ impl Timings {
     pub fn preview_quiet(&mut self) {
         self.quiet_ticks += 1;
     }
+    pub fn preview_paused(&self, reason: &'static str, input_ms: Option<u64>) {
+        self.event("preview_paused", preview_pause_detail(reason, input_ms));
+    }
     pub fn finished(&mut self, outcome: &'static str) {
         let current = cpu_usage();
         self.event("operation_completed", json!({"outcome":outcome,
@@ -122,8 +129,9 @@ mod tests {
         let timeout = recognition_failure_detail("small.en", Duration::from_millis(69012),
             Duration::from_secs(69), &SttError::Io("decoder deadline".into()));
         let failure = t.entry("recognition_failed", 73000, Some(69012), timeout);
+        let pause = t.entry("preview_paused", 3200, None, preview_pause_detail("decoder_deadline", Some(16000)));
         let stamp = richdoctor_core::util::utc_stamp(at);
-        std::fs::write(data.join("dictation.log"), format!("{stamp} dictation timing {entry}\n{stamp} dictation timing {finish}\n{stamp} dictation timing {failure}\n")).unwrap();
+        std::fs::write(data.join("dictation.log"), format!("{stamp} dictation timing {entry}\n{stamp} dictation timing {finish}\n{stamp} dictation timing {failure}\n{stamp} dictation timing {pause}\n")).unwrap();
         let scope = Scope { home: home.clone(), window: Window::around(at), claude_bin: None, diagnostics: true };
         let collected = collect(Category::Richscribe, &scope, &Context::default(), 0);
         assert_eq!(collected[0].status, Status::Collected);
@@ -144,6 +152,9 @@ mod tests {
         assert_eq!(failure["detail"]["reason"], "decoder_deadline");
         assert_eq!(failure["detail"]["recognition_ms"], 69012);
         assert_eq!(failure["detail"]["deadline_ms"], 69000);
+        let pause = records.next().unwrap();
+        assert_eq!(pause["stage"], "preview_paused");
+        assert_eq!(pause["detail"], json!({"reason":"decoder_deadline","input_ms":16000}));
         assert_eq!(record["preview_enabled"], true);
         t.complete = true;
         std::fs::remove_dir_all(home).unwrap();

@@ -870,8 +870,8 @@ impl Tool {
                                 log::line(&format!("preview decoded in {decode_ms} ms; recent window age {} ms", sampled_at.elapsed().as_millis()));
                             }
                         }
-                        super::live_preview::Update::Paused { reason } => {
-                            if let Some(t) = &self.timings { t.event("preview_paused", serde_json::json!({"reason":reason})); }
+                        super::live_preview::Update::Paused { reason, input_ms } => {
+                            if let Some(t) = &self.timings { t.preview_paused(reason, input_ms); }
                             self.stop_live_preview();
                             self.live_preview_paused = true;
                             log::line("preview paused for this recording; capture and final recognition continue");
@@ -1534,7 +1534,7 @@ impl Tool {
                                 |update| { sender.send(Control::LivePreview { seq: capture_seq, update }).ok(); });
                         }));
                         if result.is_err() && !flag.load(Ordering::Acquire) {
-                            sender.send(Control::LivePreview { seq: capture_seq, update: super::live_preview::Update::Paused { reason: "worker_panicked" } }).ok();
+                            sender.send(Control::LivePreview { seq: capture_seq, update: super::live_preview::Update::Paused { reason: "worker_panicked", input_ms: None } }).ok();
                         }
                     }) {
                         Ok(join) => self.live_preview = Some(Writing { stop, join }),

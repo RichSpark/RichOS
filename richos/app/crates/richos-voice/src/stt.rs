@@ -922,20 +922,27 @@ impl Recognizer {
     /// Transcribe one utterance (16 kHz mono f32). Returns the text and the MEASURED
     /// wall-clock recognition latency.
     pub fn transcribe(&self, samples: &[f32], scratch_dir: &Path) -> Result<(String, u64), SttError> {
-        self.transcribe_inner(samples,scratch_dir,None,None)
+        self.transcribe_inner(samples,scratch_dir,None,None,&[])
     }
     /// HTTP callers can bound their owned decoder without changing the desktop loop.
     pub fn transcribe_bounded(&self,samples:&[f32],scratch_dir:&Path,timeout:std::time::Duration)->Result<(String,u64),SttError> {
-        self.transcribe_inner(samples,scratch_dir,Some(timeout),None)
+        self.transcribe_inner(samples,scratch_dir,Some(timeout),None,&[])
     }
     /// [`Self::transcribe_bounded`] that also ends early when `stop` is set: the decoder is
     /// killed and reaped, and the error is `Interrupted`. The dictation tool's writing worker
     /// uses it so an ordinary quit of the tool joins the worker instead of orphaning whisper-cli
     /// and leaving the recording on disk (review finding 1, 2026-10-08).
     pub fn transcribe_bounded_until(&self,samples:&[f32],scratch_dir:&Path,timeout:std::time::Duration,stop:&std::sync::atomic::AtomicBool)->Result<(String,u64),SttError> {
-        self.transcribe_inner(samples,scratch_dir,Some(timeout),Some(stop))
+        self.transcribe_inner(samples,scratch_dir,Some(timeout),Some(stop),&[])
     }
-    fn transcribe_inner(&self,samples:&[f32],scratch_dir:&Path,timeout:Option<std::time::Duration>,stop:Option<&std::sync::atomic::AtomicBool>)->Result<(String,u64),SttError> {
+    /// Provisional words use a smaller beam. A matched Faster-model probe under
+    /// concurrent RichBrief decoding preserved the test passage while taking
+    /// less time in the token decoder. Final recognition uses its usual search.
+    pub fn transcribe_preview_until(&self, samples: &[f32], scratch_dir: &Path, timeout: std::time::Duration,
+                                   stop: &std::sync::atomic::AtomicBool) -> Result<(String, u64), SttError> {
+        self.transcribe_inner(samples, scratch_dir, Some(timeout), Some(stop), &["-bs", "3"])
+    }
+    fn transcribe_inner(&self,samples:&[f32],scratch_dir:&Path,timeout:Option<std::time::Duration>,stop:Option<&std::sync::atomic::AtomicBool>,extra_args:&[&str])->Result<(String,u64),SttError> {
         std::fs::create_dir_all(scratch_dir).map_err(|e| SttError::Io(e.to_string()))?;
         let wav_path = scratch_dir.join(format!("utt-{}.wav", std::process::id()));
         wav::write_pcm16_mono(&wav_path, samples, SAMPLE_RATE).map_err(|e| SttError::Io(e.to_string()))?;
@@ -943,7 +950,7 @@ impl Recognizer {
         let started = Instant::now();
         let mut cmd = decoder_command(&self.bin);
         cmd.arg("-m").arg(&self.model).arg("-f").arg(&wav_path);
-        cmd.args(decode_args(self.prompt.as_deref()));
+        cmd.args(decode_args(self.prompt.as_deref())).args(extra_args);
         let out = match timeout {
             Some(timeout)=>bounded_decoder_until(&mut cmd,scratch_dir,timeout,stop),
             None=>tethered_output(&mut cmd),
@@ -1133,6 +1140,35 @@ pub(crate) fn strip_annotations(s: &str) -> String {
 mod tests {
     use super::*;
 
+    fn test_recognizer(root: &Path, bin: PathBuf) -> Recognizer {
+        Recognizer {
+            bin, model: root.join("model"), model_id: "small.en".into(), prompt: None,
+            toolchain: crate::toolchain::Report { findings: Vec::new(), strict: false,
+                provenance: "recognizer fixture".into(), bin_sha256: format!("test-{}", root.display()),
+                bin_version: None, model_sha256: Some("first".into()), model_pinned: true,
+                model_hash_cached: false, first_run: true },
+            resolution: chosen("small.en".into(), crate::hardware::Machine::read()),
+        }
+    }
+
+    #[test]
+    fn preview_search_width_does_not_change_the_final_decoder() {
+        use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicBool, time::Duration};
+        let root = std::env::temp_dir().join(format!("richos-preview-search-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let bin = root.join("decoder");
+        std::fs::write(&bin, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let recognizer = test_recognizer(&root, bin);
+        let stop = AtomicBool::new(false);
+        let bound = Duration::from_secs(5);
+        let (preview, _) = recognizer.transcribe_preview_until(&[0.0; 256], &root.join("preview"), bound, &stop).unwrap();
+        let (final_words, _) = recognizer.transcribe_bounded_until(&[0.0; 256], &root.join("final"), bound, &stop).unwrap();
+        assert!(preview.ends_with("-l en -t 4 -fa -np -nt -mc 0 -bs 3"));
+        assert!(final_words.ends_with("-l en -t 4 -fa -np -nt -mc 0"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn decoder_warmup_is_silent_once_per_identity_and_a_failure_is_not_cached() {
         use std::os::unix::fs::PermissionsExt;
@@ -1143,14 +1179,7 @@ mod tests {
         let fail = root.join("fail");
         std::fs::write(&bin, format!("#!/bin/sh\nprintf 'call\\n' >> '{}'\n[ ! -f '{}' ] || exit 7\nprintf 'discard these warmup words\\n'\n", calls.display(), fail.display())).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut recognizer = Recognizer {
-            bin, model: root.join("model"), model_id: "small.en".into(), prompt: None,
-            toolchain: crate::toolchain::Report { findings: Vec::new(), strict: false,
-                provenance: "warmup test".into(), bin_sha256: format!("test-{}", root.display()),
-                bin_version: None, model_sha256: Some("first".into()), model_pinned: true,
-                model_hash_cached: false, first_run: true },
-            resolution: chosen("small.en".into(), crate::hardware::Machine::read()),
-        };
+        let mut recognizer = test_recognizer(&root, bin);
         std::fs::write(&fail, "fail").unwrap();
         assert!(recognizer.warm(&root).is_err());
         std::fs::remove_file(&fail).unwrap();

@@ -7,7 +7,7 @@ use std::{path::Path, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::
 
 pub enum Update {
     Words { text: String, sampled_at: Instant, decode_ms: u64 },
-    Paused { reason: &'static str },
+    Paused { reason: &'static str, input_ms: Option<u64> },
     Unavailable,
     Quiet,
 }
@@ -67,19 +67,21 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
             continue;
         }
         if stop.load(Ordering::Acquire) { return; }
+        let input_ms = samples.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
+        let paused = |reason| Update::Paused { reason, input_ms: Some(input_ms) };
         let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch|
-            recognizer.transcribe_bounded_until(&samples, scratch.path(), Duration::from_millis(1800), stop)
+            recognizer.transcribe_preview_until(&samples, scratch.path(), Duration::from_millis(1800), stop)
                 .map_err(|error| decoder_failure_reason(&error)));
         if stop.load(Ordering::Acquire) { return; }
         match result {
             Ok((text, decode_ms)) if sampled_at.elapsed() <= Duration::from_secs(2) => {
                 match judge_transcript(&text) {
                     Ok(text) => send(Update::Words { text: recent_text(&text), sampled_at, decode_ms }),
-                    Err(_) => { send(Update::Paused { reason: "transcript_rejected" }); return; }
+                    Err(_) => { send(paused("transcript_rejected")); return; }
                 }
             }
-            Ok(_) => { send(Update::Paused { reason: "stale_result" }); return; }
-            Err(reason) => { send(Update::Paused { reason }); return; }
+            Ok(_) => { send(paused("stale_result")); return; }
+            Err(reason) => { send(paused(reason)); return; }
         }
         // A slow startup/tick never causes a burst of catch-up decodes.
         if due < Instant::now() { due = Instant::now() + Duration::from_secs(2); }
@@ -180,7 +182,7 @@ mod tests {
                         "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms,
                         "characters":text.chars().count(), "words":text.split_whitespace().count()}),
                     Update::Quiet => serde_json::json!({"kind":"quiet","at_ms":began.elapsed().as_millis()}),
-                    Update::Paused { reason } => serde_json::json!({"kind":"paused","reason":reason,"at_ms":began.elapsed().as_millis()}),
+                    Update::Paused { reason, input_ms } => serde_json::json!({"kind":"paused","reason":reason,"input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
                     Update::Unavailable => serde_json::json!({"kind":"unavailable","at_ms":began.elapsed().as_millis()}),
                 };
                 updates.lock().unwrap().push(entry);
