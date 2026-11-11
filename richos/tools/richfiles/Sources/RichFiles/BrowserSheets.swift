@@ -1060,44 +1060,108 @@ struct BatchRenameSheet: View {
     let folder: URL
     @ObservedObject var actions: BrowserActions
     @Environment(\.dismiss) private var dismiss
-    @State private var input = Input()
+    @AppStorage("richfiles.batchRenamePresets.v1") private var savedRules = Data()
+    @State private var operations = [Operation()]
+    @State private var selectedOperation: UUID?
     @State private var plan: BatchRenamePlan?
     @State private var problem = ""
-    @State private var reading = false
+    @State private var presetName = ""
+    @State private var previewTask: Task<Void, Never>?
 
-    private enum Method: String, CaseIterable, Identifiable {
+    private enum Method: String, CaseIterable, Identifiable, Codable {
         case number = "Number", prefix = "Prefix", suffix = "Suffix", replace = "Replace"
+        case regex = "Regular Expression", metadata = "File Metadata"
         var id: Self { self }
     }
-    private struct Input: Equatable {
+
+    private struct Operation: Identifiable, Equatable, Codable {
+        let id: UUID
         var method = Method.number
         var text = ""
         var replacement = ""
         var start = 1
         var digits = 3
+
+        init(method: Method = .number) {
+            id = UUID()
+            self.method = method
+        }
+
         var rule: BatchRenameRule {
             switch method {
             case .number: return .number(prefix: text, start: start, minimumDigits: digits)
             case .prefix: return .prefix(text)
             case .suffix: return .suffix(text)
             case .replace: return .replace(search: text, replacement: replacement)
+            case .regex: return .regex(pattern: text, replacement: replacement)
+            case .metadata: return .metadata(template: text)
             }
         }
+    }
+
+    private struct Preset: Identifiable, Codable {
+        let name: String
+        let operations: [Operation]
+        var id: String { name }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Batch Rename").font(.headline)
-            Picker("Method", selection: $input.method) {
-                ForEach(Method.allCases) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented)
-            TextField(input.method == .replace ? "Find text" : "Text", text: $input.text)
-            if input.method == .replace { TextField("Replacement", text: $input.replacement) }
-            if input.method == .number {
-                HStack {
-                    TextField("Start at", value: $input.start, format: .number)
-                    TextField("Minimum digits", value: $input.digits, format: .number)
-                }
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    List(operations, selection: $selectedOperation) { operation in
+                        Text(operation.method.rawValue).tag(operation.id)
+                    }.frame(height: 96).accessibilityLabel("Rename operations in order")
+                    HStack {
+                        Button("Add Operation") {
+                            let item = Operation(method: .suffix)
+                            operations.append(item)
+                            selectedOperation = item.id
+                        }.disabled(operations.count >= 12)
+                        Button { reorder(-1) } label: { Image(systemName: "arrow.up") }
+                            .accessibilityLabel("Move rename operation up")
+                            .disabled(selectedIndex.map { $0 == 0 } ?? true)
+                        Button { reorder(1) } label: { Image(systemName: "arrow.down") }
+                            .accessibilityLabel("Move rename operation down")
+                            .disabled(selectedIndex.map { $0 == operations.count - 1 } ?? true)
+                        Button {
+                            guard let index = selectedIndex else { return }
+                            operations.remove(at: index)
+                            selectedOperation = operations[min(index, operations.count - 1)].id
+                        } label: { Image(systemName: "minus") }
+                            .accessibilityLabel("Remove rename operation")
+                            .disabled(operations.count < 2 || selectedIndex == nil)
+                    }
+                }.frame(width: 220)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach($operations) { $operation in
+                        if operation.id == selectedOperation {
+                            editor($operation)
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                Menu("Saved Rules") {
+                    ForEach(presets) { preset in
+                        Button(preset.name) {
+                            operations = preset.operations
+                            selectedOperation = operations.first?.id
+                        }
+                    }
+                    if !presets.isEmpty {
+                        Divider()
+                        Menu("Remove Saved Rule") {
+                            ForEach(presets) { preset in
+                                Button(preset.name) { writePresets(presets.filter { $0.id != preset.id }) }
+                            }
+                        }
+                    }
+                }.disabled(presets.isEmpty)
+                TextField("Name for this rule", text: $presetName)
+                Button("Save Rule") { savePreset() }
+                    .disabled(plan == nil || presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             List {
                 if let plan {
@@ -1113,29 +1177,98 @@ struct BatchRenameSheet: View {
                 } else {
                     Text("Preview names and conflicts before applying.").foregroundStyle(.secondary)
                 }
-            }
+            }.accessibilityLabel("Proposed names")
             if !problem.isEmpty { Text(problem).foregroundStyle(.secondary) }
             HStack {
-                Button("Preview") { preview() }.disabled(reading)
+                Button("Preview") { preview() }.disabled(previewTask != nil)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Apply") {
                     if let plan { actions.apply(plan); dismiss() }
-                }.disabled(plan?.canApply != true || reading || actions.busy)
+                }.disabled(plan?.canApply != true || previewTask != nil || actions.busy)
             }
-        }.padding(16).frame(width: 650, height: 430)
-            .onChange(of: input) { _ in plan = nil; problem = "" }
+        }.padding(16).frame(width: 675, height: 490)
+            .onAppear { selectedOperation = operations.first?.id }
+            .onDisappear { previewTask?.cancel() }
+            .onChange(of: operations) { _ in
+                previewTask?.cancel()
+                plan = nil
+                problem = ""
+            }
+    }
+
+    @ViewBuilder
+    private func editor(_ operation: Binding<Operation>) -> some View {
+        let method = operation.wrappedValue.method
+        Picker("Operation", selection: operation.method) {
+            ForEach(Method.allCases) { Text($0.rawValue).tag($0) }
+        }
+        switch method {
+        case .regex, .replace:
+            TextField(method == .regex ? "Pattern" : "Find text", text: operation.text)
+            TextField("Replacement", text: operation.replacement)
+        case .metadata:
+            TextField("Name template", text: operation.text, prompt: Text("{modified} {name}"))
+            Text("{name}, {created}, {modified}, {number}").font(.caption).foregroundStyle(.secondary)
+        case .number:
+            TextField("Prefix", text: operation.text)
+            HStack {
+                TextField("Start at", value: operation.start, format: .number)
+                TextField("Minimum digits", value: operation.digits, format: .number)
+            }
+        case .prefix, .suffix:
+            TextField("Text", text: operation.text)
+        }
+    }
+
+    private var selectedIndex: Int? { operations.firstIndex { $0.id == selectedOperation } }
+
+    private func reorder(_ direction: Int) {
+        guard let index = selectedIndex, operations.indices.contains(index + direction) else { return }
+        operations.swapAt(index, index + direction)
+    }
+
+    private var presets: [Preset] {
+        guard savedRules.count <= 256 * 1024 else { return [] }
+        return ((try? JSONDecoder().decode([Preset].self, from: savedRules)) ?? []).filter {
+            (1...12).contains($0.operations.count) && Set($0.operations.map(\.id)).count == $0.operations.count
+        }
+    }
+
+    private func savePreset() {
+        let name = presetName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 80 else { problem = "Enter a rule name up to 80 characters."; return }
+        let current = presets
+        guard !current.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+            problem = "A saved rule already has that name."
+            return
+        }
+        if writePresets(current + [Preset(name: name, operations: operations)]) {
+            presetName = ""
+            problem = ""
+        }
+    }
+
+    @discardableResult
+    private func writePresets(_ presets: [Preset]) -> Bool {
+        guard let data = try? JSONEncoder().encode(presets), data.count <= 256 * 1024 else {
+            problem = "Remove an unused saved rule before adding another."
+            return false
+        }
+        savedRules = data
+        return true
     }
 
     private func preview() {
-        let proposedInput = input
-        reading = true
-        Task {
-            defer { reading = false }
+        let proposedOperations = operations
+        previewTask = Task {
+            defer { previewTask = nil }
             do {
-                let result = try await actions.previewBatch(sources, in: folder, rule: proposedInput.rule)
-                if input == proposedInput { plan = result; problem = "" }
-            } catch { if input == proposedInput { problem = error.localizedDescription } }
+                let result = try await actions.previewBatch(sources, in: folder, rules: proposedOperations.map(\.rule))
+                if !Task.isCancelled, operations == proposedOperations { plan = result; problem = "" }
+            } catch {
+                if !Task.isCancelled, operations == proposedOperations { problem = error.localizedDescription }
+            }
         }
     }
 

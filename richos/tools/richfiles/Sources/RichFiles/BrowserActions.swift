@@ -380,11 +380,12 @@ final class BrowserActions: ObservableObject {
     }
 
     func previewBatch(
-        _ sources: [FileReference], in folder: URL, rule: BatchRenameRule
+        _ sources: [FileReference], in folder: URL, rules: [BatchRenameRule]
     ) async throws -> BatchRenamePlan {
-        try await Task.detached(priority: .userInitiated) {
-            try BatchRenamePlan.preview(sources, in: folder, rule: rule)
-        }.value
+        let work = Task.detached(priority: .userInitiated) {
+            try BatchRenamePlan.preview(sources, in: folder, rules: rules)
+        }
+        return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
 
     func apply(_ plan: BatchRenamePlan) {

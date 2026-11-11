@@ -40,6 +40,30 @@ final class BatchRenameTests: XCTestCase {
         }
     }
 
+    func testCombinesRegexAndFileMetadataWhileKeepingExtensions() throws {
+        try fixture { root, files in
+            let knownDate = try XCTUnwrap(Calendar(identifier: .gregorian).date(
+                from: DateComponents(year: 2024, month: 2, day: 8, hour: 12)
+            ))
+            for file in files {
+                try FileManager.default.setAttributes([.modificationDate: knownDate], ofItemAtPath: file.url.path)
+            }
+            // APFS can update the birth time when the modification date moves back.
+            let selected = try files.map { try FileReference(url: $0.url) }
+            let plan = try BatchRenamePlan.preview(selected, in: root, rules: [
+                .regex(pattern: "^([ab])$", replacement: "scan-$1"),
+                .metadata(template: "{modified} {name} {number}"),
+                .suffix(" final")
+            ])
+            XCTAssertEqual(plan.proposals.map(\.name),
+                           ["2024-02-08 scan-a 1 final.txt", "2024-02-08 scan-b 2 final.txt"])
+            XCTAssertTrue(plan.canApply)
+            try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: files[1].url.path)
+            XCTAssertThrowsError(try plan.apply())
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted(), ["a.txt", "b.txt"])
+        }
+    }
+
     func testPreviewCannotOverwriteAnExistingName() throws {
         try fixture { root, files in
             let plan = try BatchRenamePlan.preview(files, in: root, rule: .replace(search: "a", replacement: "b"))
