@@ -1449,11 +1449,8 @@ impl Meetings {
         Ok(command)
     }
 
-    /// Enable this candidate on the physical lab Mac before enabling it in normal launches.
+    /// Start the live pass when the bundled decoder is already available.
     fn start_live_transcription(&self, recorder_pid: u32, dir: &Path, zone: &Path) -> Option<Child> {
-        if std::env::var("RICHOS_RICHBRIEF_LIVE_TRANSCRIPTION").as_deref() != Ok("1") {
-            return None;
-        }
         let Ok(model) = richos_voice::stt::resolve_model(CALL_MODEL) else {
             eprintln!("[richos] meeting notes: live transcription skipped because the model is unavailable");
             return None;
@@ -1482,11 +1479,9 @@ impl Meetings {
         let mut command = self.transcription_command("run", dir, zone, &model)?;
         let log = std::fs::File::create(dir.join("pipeline.log")).map_err(|e| e.to_string())?;
         command.stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log);
-        if std::env::var("RICHOS_RICHBRIEF_LIVE_TRANSCRIPTION").as_deref() == Ok("1")
-            && std::fs::read_dir(dir.join(".live-transcription")).is_ok_and(|mut files| {
-                files.any(|entry| entry.is_ok_and(|entry| entry.path().extension().is_some_and(|ext| ext == "json")))
-            })
-        {
+        if std::fs::read_dir(dir.join(".live-transcription")).is_ok_and(|mut files| {
+            files.any(|entry| entry.is_ok_and(|entry| entry.path().extension().is_some_and(|ext| ext == "json")))
+        }) {
             command.arg("--live-checkpoints");
         }
         match &facts.entity {
