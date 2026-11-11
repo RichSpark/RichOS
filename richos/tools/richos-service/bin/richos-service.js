@@ -5,6 +5,7 @@
  *   richos-service watch                 # run the drop-zone watcher (pipeline trigger + reconcile net)
  *   richos-service run <sessionId|dir>   # run the pipeline over one session
  *   richos-service live-transcribe <id> --recorder-pid <pid> # predecode the growing native WAV
+ *   richos-service live-excerpt <id> --at <epoch-ms> # return flushed speech up to the request
  *   richos-service retranscribe <id> [--model large-v3]   # re-run stages 2-6 on retained audio
  *   richos-service reconcile             # report-only sweep (never transcribes) — the anomaly audit
  *   richos-service claim ...             # coordination (§5.4): own this call or stand down (no double)
@@ -32,7 +33,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runPipeline } from '../lib/pipeline.js';
-import { watchLiveTranscription } from '../lib/live-transcription.js';
+import { recentLiveExcerpt, watchLiveTranscription } from '../lib/live-transcription.js';
 import { assertPrivateTree } from '../lib/private-files.js';
 import { scanZone, watch } from '../lib/watcher.js';
 import { decideClaimOnDisk, findPromotableOnDisk, markSuperseded } from '../lib/coordination.js';
@@ -135,6 +136,22 @@ function main() {
       }, (timing) => log.info('live transcription checkpoint', timing)).catch(() => {
         fail('live transcription stopped; retained audio can still be decoded');
       });
+      break;
+    }
+
+    case 'live-excerpt': {
+      const dir = resolveSessionDir(process.argv[3], zone);
+      const at = Number(flag('at', NaN));
+      if (!dir || !fs.existsSync(dir) || !Number.isSafeInteger(at) || at <= 0) {
+        fail('live-excerpt requires an existing session and a request time');
+      }
+      const { model: selected, decodeArgs } = resolveTierForHost(tier || model);
+      try {
+        const result = recentLiveExcerpt(dir, { model: selected, extraArgs: decodeArgs }, at);
+        process.stdout.write(JSON.stringify(result) + '\n');
+      } catch {
+        fail('the recent live transcript could not be read');
+      }
       break;
     }
 
@@ -770,6 +787,7 @@ function main() {
           `  richos-service watch [--zone dir] [--tier ${Object.keys(MODEL_TIERS).map((n) => (n === DEFAULT_TIER ? `${n}*` : n)).join('|')}]   (* = default)`,
           '  richos-service run <sessionId|dir> [--zone dir] [--tier name | --model id] [--live-checkpoints]',
           '  richos-service live-transcribe <sessionId|dir> --recorder-pid <pid>',
+          '  richos-service live-excerpt <sessionId|dir> --at <epoch-ms>',
           '  richos-service retranscribe <sessionId|dir> [--tier max | --model id]',
           '  richos-service tiers',
           '  richos-service reconcile [--zone dir]',

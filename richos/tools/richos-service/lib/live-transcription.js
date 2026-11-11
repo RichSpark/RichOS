@@ -228,6 +228,38 @@ export function supportsLiveTranscription(dir, record) {
   return record?.capture?.source === SOURCE && parts.length === 1 && parts[0] === AUDIO;
 }
 
+/** Decode the flushed minute leading up to the request, even when the
+ * ordinary live checkpoint for that passage is still pending. */
+export function recentLiveExcerpt(dir, options, at, decode = decodeWindow) {
+  const record = JSON.parse(fs.readFileSync(privateFile(path.join(dir, 'session.json'), dir), 'utf8'));
+  if (record.status !== 'open' || !supportsLiveTranscription(dir, record)
+    || !Number.isSafeInteger(at) || !Number.isSafeInteger(record.startedAt) || at <= record.startedAt) return null;
+  const fd = fs.openSync(privateFile(path.join(dir, AUDIO), dir), 'r');
+  try {
+    const { header, frames, rate } = readHeader(fd);
+    const through = Math.min(frames, Math.floor((at - record.startedAt) * rate / 1_000));
+    if (!through) return null;
+    const from = Math.max(0, through - 60 * rate);
+    const wav = readWindow(fd, header, from, through);
+    const meAudible = firstAudibleMs(wav, 0, rate);
+    const othersAudible = firstAudibleMs(wav, 2, rate);
+    if (meAudible === null && othersAudible === null) return null;
+    const cache = privateDirectory(path.join(dir, CHECKPOINTS), dir);
+    const decoded = decode(cache, wav, options);
+    const passages = [
+      ...absoluteSegments(meAudible === null ? [] : decoded.me, from, through, from, through, rate, meAudible),
+      ...absoluteSegments(othersAudible === null ? [] : decoded.others, from, through, from, through, rate, othersAudible),
+    ].map((segment) => ({
+      speaker: segment.speaker === 'me' ? 'Me' : 'Them',
+      atMs: segment.displayStartMs ?? segment.startMs,
+      text: segment.text,
+    })).sort((a, b) => a.atMs - b.atMs);
+    return { fromMs: from * 1_000 / rate, throughMs: through * 1_000 / rate, passages };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export async function watchLiveTranscription(dir, options, recorderIsRunning, onChunk) {
   let cursor = 0;
   const toolchain = checkToolchain(resolveModel(options.model), options.model);

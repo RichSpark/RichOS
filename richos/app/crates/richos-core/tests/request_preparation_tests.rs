@@ -401,8 +401,7 @@ impl Cognition for GateConnection {
         _: &richos_core::entity::ThreadBinding,
         _: &str,
         _: &str,
-        _: Source,
-        _: &str,
+        _: richos_core::cognition::WorkTurnInput<'_>,
         _: &mut dyn FnMut(TurnItem),
     ) -> Result<(), CognitionError> {
         if matches!(self.stage, PreparationGate::Scope) {

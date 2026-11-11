@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { advanceLiveTranscription, supportsLiveTranscription } from '../lib/live-transcription.js';
+import { advanceLiveTranscription, recentLiveExcerpt, supportsLiveTranscription } from '../lib/live-transcription.js';
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
 
 test('live transcription checkpoints the flushed prefix and only decodes the tail after close', (t) => {
@@ -23,7 +23,7 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   header.writeUInt16LE(4, 32);
   header.writeUInt16LE(16, 34);
   header.write('data', 36);
-  const pcm = Buffer.alloc(30 * bytesPerSecond);
+  const pcm = Buffer.alloc(75 * bytesPerSecond);
   pcm.fill(Buffer.from([0, 8]), 21 * bytesPerSecond, 27 * bytesPerSecond);
   pcm.writeInt16LE(17, 24 * bytesPerSecond);
   pcm.writeInt16LE(-31, 24 * bytesPerSecond + 2);
@@ -113,4 +113,31 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   assert.deepEqual(timed.me[0].wordTimesMs, [0]);
   const transcript = renderMarkdown(mergeTranscript(timed));
   assert.match(transcript, /\[00:04\] Me:[\s\S]*\[00:16\] Them:/);
+
+  // A handoff may arrive before the worker checkpoints the sentence just spoken.
+  pcm.fill(Buffer.from([0, 8, 0, 0]), 68 * bytesPerSecond, 69 * bytesPerSecond);
+  pcm.fill(Buffer.from([0, 8, 0, 0]), 72 * bytesPerSecond, 73 * bytesPerSecond);
+  flush(75);
+  const record = path.join(dir, 'session.json');
+  const capture = { source: 'desktop-companion-macos' };
+  const startedAt = 1_000_000;
+  const requestedAt = startedAt + 70_000;
+  fs.writeFileSync(record, JSON.stringify({ status: 'open', capture, startedAt }));
+  const fresh = recentLiveExcerpt(dir, options, requestedAt, (_cache, wav) => {
+    assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 60);
+    return {
+      me: [{ ...segment('The new decision.', 58_000, 59_000), speaker: 'me' }],
+      others: [{ ...segment('An earlier fact.', 6_000, 7_000), speaker: 'others' }],
+    };
+  });
+  assert.deepEqual(fresh, {
+    fromMs: 10_000, throughMs: 70_000,
+    passages: [
+      { speaker: 'Them', atMs: 16_000, text: 'An earlier fact.' },
+      { speaker: 'Me', atMs: 68_000, text: 'The new decision.' },
+    ],
+  });
+  assert.equal(recentLiveExcerpt(dir, options, startedAt - 1, () => assert.fail('future recording decoded')), null);
+  fs.writeFileSync(record, JSON.stringify({ status: 'closed', capture, startedAt }));
+  assert.equal(recentLiveExcerpt(dir, options, requestedAt, () => assert.fail('closed recording decoded')), null);
 });

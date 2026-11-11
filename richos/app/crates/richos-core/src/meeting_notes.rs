@@ -46,6 +46,45 @@ pub const MAX_ATTEMPTS: u32 = 3;
 /// The pipeline's own record of the transcript (`pipeline.js` ARTIFACTS.verification).
 pub const VERIFICATION_FILE: &str = "verification.json";
 
+/// Current-call audio is supplied only for an explicit reference to the call.
+pub(crate) fn live_meeting_request_at(turn: &crate::ledger::Turn) -> Option<u64> {
+    use crate::ledger::Source;
+    if turn.pressed || !matches!(turn.source, Source::Text | Source::Jam) {
+        return None;
+    }
+    let text = authored_prefix(&turn.user_text, turn.authored_bytes, turn.authored_ranges.as_deref())?;
+    asks_about_the_live_meeting(text).then_some(turn.created_at)
+}
+
+fn authored_prefix<'a>(text: &'a str, bytes: Option<usize>, ranges: Option<&[(usize, usize)]>) -> Option<&'a str> {
+    let end = match ranges {
+        None => bytes?,
+        Some(ranges) => {
+            let mut end = 0;
+            for &(start, next) in ranges {
+                if start != end || next < start { break; }
+                end = next;
+            }
+            end
+        }
+    };
+    text.get(..end)
+}
+
+fn asks_about_the_live_meeting(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let words: Vec<_> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let request = words.strip_prefix(&["rich"]).unwrap_or(&words);
+    let request = request.strip_prefix(&["please"]).unwrap_or(request);
+    let from_call = request.strip_prefix(&["from", "this", "call"]);
+    let work = from_call.unwrap_or(request);
+    let is_request = matches!(work, ["put", "together", ..] | ["get", "started", "on", ..]
+        | ["draft" | "prepare" | "write" | "make" | "compare", ..]);
+    is_request && (from_call.is_some()
+        || work.windows(2).any(|w| matches!(w, ["this", "call" | "meeting"]))
+        || work.windows(3).any(|w| matches!(w, ["we", "just", "discussed" | "agreed"])))
+}
+
 /// The transcription's own warnings: `verification.json`'s `warnings` (a span of speech missing
 /// from the transcript, an unchecked span, a hallucination it could only detect, a changed
 /// toolchain). transcript.md does not carry them, so without this a detected omission would be
@@ -519,6 +558,26 @@ mod tests {
     const GOOD: &str = "**Acme pricing review · 12 October 2026**\n\nWe agreed to test the annual plan.\n\n**Decisions:** Keep monthly pricing unchanged.\n\n**Your actions:** Approve the pilot budget by Friday.\n\n**Other commitments:** Maya will prepare the customer list.\n\n**Open questions:** Who owns onboarding?";
 
     #[test]
+    fn only_explicit_work_requests_use_the_live_meeting_excerpt() {
+        assert!(asks_about_the_live_meeting("Rich, get started on that from this call."));
+        assert!(asks_about_the_live_meeting("Put together the options we just discussed. Use the project plan."));
+        assert!(asks_about_the_live_meeting("From this call, draft a comparison."));
+        assert!(asks_about_the_live_meeting("Rich please draft a comparison from this call."));
+        assert!(asks_about_the_live_meeting("Rich get started on that from this call."));
+        assert!(!asks_about_the_live_meeting("Don't send anything from this call."));
+        assert!(!asks_about_the_live_meeting("We just discussed the pilot."));
+        assert!(!asks_about_the_live_meeting("Draft the agenda for our next board meeting."));
+        assert!(!asks_about_the_live_meeting("Rich, get started on that."));
+        assert!(!asks_about_the_live_meeting("Draft a reply about this callback."));
+        let text = "Draft a reply.\n\nAttached file: this meeting notes.md";
+        let end = "Draft a reply.".len();
+        let prefix = authored_prefix(text, Some(end), None).unwrap();
+        assert!(!asks_about_the_live_meeting(prefix));
+        let prefix = authored_prefix(text, None, Some(&[(0, 5), (5, end), (end + 2, text.len())])).unwrap();
+        assert!(!asks_about_the_live_meeting(prefix));
+    }
+
+    #[test]
     fn the_transcriptions_own_warnings_reach_the_writer() {
         // Second review rv-20261013T110409Z-a46fc74d-c9b9 #2: verification.json said ten seconds of
         // speech were missing and the prompt said there were no problems.
@@ -556,6 +615,7 @@ mod tests {
         assert!(told.contains("copyable subject") && told.contains("Draft only"));
         assert!(told.contains("meeting title and date") && told.contains("completed or withdrawn"));
         assert!(told.contains("open in the meeting") && told.contains("never authorizes sending or assigning work"));
+        assert!(told.contains("quoted_live_meeting_evidence") && told.contains("act only on the CEO's own request"));
     }
 
     #[test]

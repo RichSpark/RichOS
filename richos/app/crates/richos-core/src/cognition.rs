@@ -253,6 +253,14 @@ pub(crate) fn user_settings_changed(factory:Option<&dyn LeaseFactory>,lease:&dyn
         .is_some_and(|(now,then)|now!=then)
 }
 
+/// Input accepted for one visible turn.
+#[derive(Clone, Copy)]
+pub struct WorkTurnInput<'a> {
+    pub source: crate::ledger::Source,
+    pub text: &'a str,
+    pub live_meeting_at: Option<u64>,
+}
+
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.
 pub trait Cognition: Send {
     /// Positive provider EOF, never inferred from silence or an API error.
@@ -301,7 +309,7 @@ pub trait Cognition: Send {
     /// internal machinery and never receive a mutation grant.
     fn set_input_channel(&mut self, _channel: Option<&str>) -> Result<(), CognitionError> { Ok(()) }
     fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str, _original_turn: &str,
-        _source: crate::ledger::Source, _text: &str, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
+        _input: WorkTurnInput<'_>, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
 
     /// The host's current visible conversation, separate from instructions and hidden context.
     fn set_conversation_context(&mut self, _context: &str) {}
@@ -515,7 +523,7 @@ impl Cognition for MockCognition {
     }
 
     fn prepare_work_turn(&mut self, _: &crate::entity::ThreadBinding, turn: &str, original_turn: &str,
-        _: crate::ledger::Source, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
+        _: WorkTurnInput<'_>, _: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> {
         self.request_origins.lock().unwrap().push((turn.into(),original_turn.into())); Ok(())
     }
 

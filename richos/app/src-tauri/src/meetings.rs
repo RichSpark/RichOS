@@ -57,6 +57,7 @@ const CALENDAR_RECONNECT_DEADLINE: Duration = Duration::from_secs(6 * 60);
 const TRANSCRIBE_DEADLINE: Duration = Duration::from_secs(60 * 60);
 /// Let a nearly complete live chunk finish. The final pass recovers anything still missing.
 const LIVE_TRANSCRIPTION_DRAIN: Duration = Duration::from_secs(3);
+const LIVE_EXCERPT_DEADLINE: Duration = Duration::from_secs(18);
 /// Keep the saved recording waiting for setup for a bounded time.
 const MODEL_WAIT: Duration = Duration::from_secs(5 * 60);
 /// One brief attempt (a bug report's is 90 s; an hour of transcript needs longer).
@@ -161,12 +162,13 @@ fn calendar_sign_in_address(vendor: &str, line: &[u8]) -> Option<String> {
     trusted.then_some(report.authorization_url)
 }
 
-/// Read one bounded status line as soon as the child writes it. Stdin ties its life to the app.
-fn run_calendar(
+/// Read one bounded line as soon as the child writes it.
+fn run_bounded_line(
     mut command: Command,
     deadline: Duration,
     on_status: impl FnOnce(&[u8]) + Send + 'static,
 ) -> Result<(ExitStatus, Vec<u8>), String> {
+    command.process_group(0);
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let output = child.stdout.take().map(|stdout| std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -179,18 +181,21 @@ fn run_calendar(
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) if started.elapsed() < deadline => std::thread::sleep(Duration::from_millis(250)),
-            other => {
-                logged("stopping the calendar process", child.kill());
-                logged("reaping the calendar process", child.wait());
-                break Err(match other {
-                    Err(e) => e.to_string(),
-                    _ => "the calendar process took too long".into(),
-                });
+            Ok(None) => {
+                // The command owns this group, including any local decoder.
+                unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                logged("reaping the bounded command", child.wait());
+                break Err("the command took too long".into());
+            }
+            Err(e) => {
+                logged("stopping the bounded command", child.kill());
+                logged("reaping the bounded command", child.wait());
+                break Err(e.to_string());
             }
         }
     };
     let bytes = match output {
-        Some(reader) => reader.join().map_err(|_| "calendar status reader stopped".to_string())?
+        Some(reader) => reader.join().map_err(|_| "command output reader stopped".to_string())?
             .map_err(|e| e.to_string())?,
         None => Vec::new(),
     };
@@ -224,6 +229,16 @@ struct CaptureRun {
 }
 
 impl CaptureRun {
+    fn live_scope(&self, entity: &str, thread: &str, request_at: u64) -> Option<(PathBuf, PathBuf)> {
+        if self.recording && self.stop.is_none() && request_at >= self.started_at
+            && self.entity.as_deref() == Some(entity) && self.thread.as_deref() == Some(thread)
+        {
+            self.dir.clone().map(|dir| (dir, self.zone.clone()))
+        } else {
+            None
+        }
+    }
+
     /// The first microphone audio clears the initial access suspicion. An actual gap in channel
     /// delivery stays in the record even if that channel later recovers.
     fn update_capture_warning(&mut self, event: &serde_json::Value, message: &str) -> bool {
@@ -501,7 +516,7 @@ impl Meetings {
                 let mut command = self.calendar_command(&service);
                 command.args(["workspace", "sync", vendor, "--once", "--source", "calendar", "--desktop-calendar"])
                     .stdout(Stdio::piped());
-                match run_calendar(command, CALENDAR_SYNC_DEADLINE, |_| {}) {
+                match run_bounded_line(command, CALENDAR_SYNC_DEADLINE, |_| {}) {
                     Ok((status, output)) => {
                         let report = serde_json::from_slice::<CalendarSyncStatus>(&output);
                         match report {
@@ -569,7 +584,7 @@ impl Meetings {
                     .stdout(Stdio::piped());
                 let meetings = self.clone();
                 let vendor = account.vendor.clone();
-                let (status, _) = run_calendar(command, CALENDAR_RECONNECT_DEADLINE, move |line| {
+                let (status, _) = run_bounded_line(command, CALENDAR_RECONNECT_DEADLINE, move |line| {
                     if let Some(address) = calendar_sign_in_address(&vendor, line) {
                         eprintln!("[richos] meeting notes: calendar reconnect ({vendor}) browser did not open");
                         meetings.inner.lock().unwrap().calendar_sign_in_address = Some(address);
@@ -1449,6 +1464,26 @@ impl Meetings {
         Ok(command)
     }
 
+    fn live_context(&self, binding: &richos_core::entity::ThreadBinding, request_at: u64) -> Option<serde_json::Value> {
+        let (dir, zone) = self.inner.lock().ok()?.capture.as_ref()?
+            .live_scope(binding.entity_id().as_str(), binding.thread_id(), request_at)?;
+        let started = Instant::now();
+        let result = (|| {
+            let model = richos_voice::stt::resolve_model(CALL_MODEL).ok()?;
+            let mut command = self.transcription_command("live-excerpt", &dir, &zone, &model).ok()?;
+            command.arg("--at").arg(request_at.to_string()).stdout(Stdio::piped()).stderr(Stdio::null());
+            let (status, bytes) = run_bounded_line(command, LIVE_EXCERPT_DEADLINE, |_| {}).ok()?;
+            if !status.success() { return None; }
+            serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+                .filter(|value| value["passages"].as_array().is_some_and(|rows| !rows.is_empty()))
+        })();
+        eprintln!("[richos] meeting notes: live excerpt available={} elapsed_ms={}", result.is_some(), started.elapsed().as_millis());
+        Some(match result {
+            Some(excerpt) => serde_json::json!({ "status": "available", "excerpt": excerpt }),
+            None => serde_json::json!({ "status": "unavailable" }),
+        })
+    }
+
     /// Enable this candidate on the physical lab Mac before enabling it in normal launches.
     fn start_live_transcription(&self, recorder_pid: u32, dir: &Path, zone: &Path) -> Option<Child> {
         if std::env::var("RICHOS_RICHBRIEF_LIVE_TRANSCRIPTION").as_deref() != Ok("1") {
@@ -1605,6 +1640,10 @@ pub fn service_cli() -> Option<PathBuf> {
     let engine = richos_voice::stt::delivered_runtime_bin_dir()?.parent()?.parent()?.to_path_buf();
     let p = engine.join(SERVICE_ENTRY);
     p.is_file().then_some(p)
+}
+
+pub fn live_context(app: &AppHandle, binding: &richos_core::entity::ThreadBinding, request_at: u64) -> Option<serde_json::Value> {
+    app.try_state::<Arc<Meetings>>()?.live_context(binding, request_at)
 }
 
 /// The running transcription's pid, beside its session while it runs.
@@ -1926,6 +1965,23 @@ mod tests {
         assert!(capture.update_capture_warning(&recovered, "The microphone is sending audio again."));
         assert_eq!(capture.facts(0).warnings, [gap]);
         assert!(!capture.update_capture_warning(&recovered, "The microphone is sending audio again."));
+    }
+
+    #[test]
+    fn live_excerpt_is_bound_to_the_current_recordings_company_and_thread() {
+        let mut capture = run(9);
+        capture.entity = Some("acme".into());
+        capture.thread = Some("original-thread".into());
+        capture.started_at = 100;
+        capture.zone = PathBuf::from("/corpus/acme/evidence/meetings");
+        let dir = capture.zone.join("this-call");
+        capture.dir = Some(dir.clone());
+        assert_eq!(capture.live_scope("acme", "original-thread", 101), Some((dir, capture.zone.clone())));
+        assert!(capture.live_scope("other", "original-thread", 101).is_none());
+        assert!(capture.live_scope("acme", "other-thread", 101).is_none());
+        assert!(capture.live_scope("acme", "original-thread", 99).is_none());
+        capture.stop = Some(EndReason::CallEnded);
+        assert!(capture.live_scope("acme", "original-thread", 101).is_none());
     }
 
     #[test]

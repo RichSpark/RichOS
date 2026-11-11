@@ -535,6 +535,8 @@ fn meetings_corpus_root(install: Option<&richos_core::loro::LoroInstall>) -> Pat
 }
 
 struct EngineLeaseFactory {
+    #[cfg(target_os = "macos")]
+    app: AppHandle,
     quota: Arc<richos_core::quota::Service>,
     claude_bin: Arc<Mutex<PathBuf>>,
     engine_dir: Arc<Mutex<PathBuf>>,
@@ -753,6 +755,11 @@ impl EngineLeaseFactory {
             }
         }
         profile.meetings_corpus = Some(corpus);
+        #[cfg(target_os = "macos")]
+        {
+            let app = self.app.clone();
+            profile.set_live_meeting_reader(move |binding, at| meetings::live_context(&app, binding, at));
+        }
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
@@ -3310,6 +3317,8 @@ fn main() {
                 Some(engine::EngineSource::EnvEngineDir) | Some(engine::EngineSource::EnvEngineRoot)
             );
             let lease_factory = || EngineLeaseFactory {
+                #[cfg(target_os = "macos")]
+                app: app.handle().clone(),
                 quota: quota.clone(),
 
                 claude_bin: Arc::clone(&claude_bin_cell),
