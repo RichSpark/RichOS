@@ -42,7 +42,7 @@ import { loadEntityMemory } from './entities.js';
 import { appendLedger } from './ledger.js';
 import { MIN_TRANSCRIPT_WORDS, resolveTier, resolveTierForHost, whisperArgs } from './config.js';
 import { guardTranscription, guardWarnings } from './repetition-guard.js';
-import { guardDeletions, deletionWarnings, DELETION_GUARD_DEFAULTS } from './deletion-guard.js';
+import { guardDeletions, deletionWarnings, informativeWords, lexicalText, DELETION_GUARD_DEFAULTS } from './deletion-guard.js';
 import { guardSubstitution, substitutionWarnings, SUBSTITUTION_GUARD_DEFAULTS } from './substitution-guard.js';
 import { diarizeOthers } from './diarize.js';
 import { log } from './log.js';
@@ -314,37 +314,51 @@ export function runPipeline(sessionDir, opts = {}) {
      * Cut + level + isolated re-decode for one channel's suspect spans. The impure half, and it is
      * ONE function for stages 3.5, 3.7 and 3.8 on purpose: three detectors that cut, measured or
      * decoded their evidence differently would eventually disagree about the same span, and the
-     * pipeline would have no way to say which of them was looking at the audio wrong. Only the
-     * paddings and the clip tag are parameters, and all three stages ship the same two paddings.
+     * pipeline would have no way to say which of them was looking at the audio wrong.
      *
-     * Defined HERE, above stage 3.5, because the insertion class now needs it too. It costs
-     * nothing until a stage actually calls it, and every stage that does gets the same cut.
+     * Deletion and density checks already require a minimum peak. Measure the unpadded span
+     * first and skip re-decoding where that existing condition cannot pass.
      */
-    const makeProbe = (channel, pads = DELETION_GUARD_DEFAULTS, tag = 'del') => (spans) => {
+    const makeProbe = (channel, pads, tag, minPeak = -Infinity) => (spans) => {
+      const started = performance.now();
       const wavPath = channelPaths[channel];
       privateDirectory(probeDir, sessionDir);
-      const tightPaths = [];
-      const widePaths = [];
-      const levels = [];
-      spans.forEach((s, i) => {
-        tightPaths.push(
-          cutSpan(wavPath, s, path.join(probeDir, `${tag}-${channel}-${i}-t.wav`), { padSec: pads.probePadSec }),
-        );
-        widePaths.push(
-          cutSpan(wavPath, s, path.join(probeDir, `${tag}-${channel}-${i}-w.wav`), { padSec: pads.probeWidePadSec }),
-        );
-        levels.push(measureSpanVolume(wavPath, s));
-      });
-      // One invocation for BOTH paddings of every span: the model loads once for the whole channel.
-      const texts = transcribeClips([...tightPaths, ...widePaths], { model, extraArgs: decodeArgs });
       const finite = (x) => (Number.isFinite(x) ? x : null);
-      return spans.map((s, i) => ({
-        tight: texts[i] || '',
-        wide: texts[spans.length + i] || '',
-        maxDb: finite(levels[i].maxDb),
-        meanDb: finite(levels[i].meanDb),
-      }));
+      const rows = spans.map((s) => {
+        const level = measureSpanVolume(wavPath, s);
+        return { tight: '', wide: '', maxDb: finite(level.maxDb), meanDb: finite(level.meanDb) };
+      });
+      const selected = rows.flatMap((row, i) =>
+        minPeak === -Infinity || (row.maxDb != null && row.maxDb >= minPeak) ? [i] : []);
+      const clips = (indices, suffix, padSec) => indices.map((i) =>
+        cutSpan(wavPath, spans[i], path.join(probeDir, `${tag}-${channel}-${i}-${suffix}.wav`), { padSec }));
+      const decode = (paths) => transcribeClips(paths, { model, extraArgs: decodeArgs });
+      const tightPaths = clips(selected, 't', pads.probePadSec);
+      let wide = selected;
+      if (tag === 'del') {
+        const tight = decode(tightPaths);
+        for (const [offset, i] of selected.entries()) rows[i].tight = tight[offset] || '';
+        // A deletion needs enough words in the tight decode before a wider
+        // decode can establish that those words survive a different cut.
+        wide = selected.filter((i) => informativeWords(lexicalText(rows[i].tight)).length >= pads.minProbeWords);
+        const texts = decode(clips(wide, 'w', pads.probeWidePadSec));
+        for (const [offset, i] of wide.entries()) rows[i].wide = texts[offset] || '';
+      } else {
+        const texts = decode([...tightPaths, ...clips(wide, 'w', pads.probeWidePadSec)]);
+        for (const [offset, i] of selected.entries()) {
+          rows[i].tight = texts[offset] || '';
+          rows[i].wide = texts[selected.length + offset] || '';
+        }
+      }
+      log.info('acoustic probe finished', {
+        stage: tag, channel, candidates: spans.length, tight: selected.length, wide: wide.length,
+        elapsedMs: Math.round(performance.now() - started),
+      });
+      return rows;
     };
+    const probeFloor = (channel, opts) => Number.isFinite(silence[channel].maxDb)
+      ? silence[channel].maxDb - opts.loudBelowPeakDb
+      : -Infinity;
     if (tier.repetitionGuard !== false) {
       // The insertion class's probe. Costs NOTHING unless that class's four detection conditions
       // fire, which they have done on exactly one artifact ever — and when they do, this is what
@@ -512,7 +526,8 @@ export function runPipeline(sessionDir, opts = {}) {
           {
             speechBursts,
             peaks: { me: silence.me.maxDb, others: silence.others.maxDb },
-            probe: (spans, channel) => makeProbe(channel)(spans),
+            probe: (spans, channel) => makeProbe(channel, DELETION_GUARD_DEFAULTS, 'del',
+              probeFloor(channel, DELETION_GUARD_DEFAULTS))(spans),
           },
         );
         deletionReport = { ...del.report, enabled: true, elapsedMs: Date.now() - t0 };
@@ -603,7 +618,8 @@ export function runPipeline(sessionDir, opts = {}) {
             speechBursts,
             peaks: { me: silence.me.maxDb, others: silence.others.maxDb },
             excludeSpans,
-            probe: (spans, channel) => makeProbe(channel, SUBSTITUTION_GUARD_DEFAULTS)(spans),
+            probe: (spans, channel) => makeProbe(channel, SUBSTITUTION_GUARD_DEFAULTS, 'density',
+              probeFloor(channel, SUBSTITUTION_GUARD_DEFAULTS))(spans),
           },
         );
         substitutionReport = { ...sub.report, enabled: true, elapsedMs: Date.now() - t0 };
