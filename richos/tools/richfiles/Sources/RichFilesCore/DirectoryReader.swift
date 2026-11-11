@@ -134,6 +134,7 @@ public struct ScanReport: Sendable {
     public fileprivate(set) var matched = 0
     public fileprivate(set) var inaccessible = 0
     public fileprivate(set) var issues: [ScanIssue] = []
+    public fileprivate(set) var contentCoverage: TextContentCoverage?
 }
 
 public enum DirectoryReader {
@@ -149,11 +150,17 @@ public enum DirectoryReader {
         scope: Scope = .folder,
         showHidden: Bool = false,
         query: FileQuery = FileQuery(),
+        content: TextContentQuery? = nil,
         isCancelled: () -> Bool = { false },
         receive: ([FileEntry]) -> Void
     ) throws -> ScanReport {
         if isCancelled() { throw CancellationError() }
+        let previousIOPolicy = try content.map { _ in try TextContentReader.disableDatalessMaterialization() }
+        defer {
+            if let previousIOPolicy { TextContentReader.restoreDatalessMaterialization(previousIOPolicy) }
+        }
         let folder = try directoryURL(location)
+        let contentReader = try content.map { try TextContentReader(folder: folder, query: $0) }
         var report = ScanReport()
         var rootError: Error?
         func record(_ url: URL, _ error: Error) {
@@ -192,18 +199,37 @@ public enum DirectoryReader {
             do {
                 entry = try FileEntry(url: value)
             } catch {
-                enumerator.skipDescendants()
                 record(value, error)
                 continue
             }
-            if entry.kind == .package || entry.kind == .symbolicLink {
-                enumerator.skipDescendants()
-            }
+            // Foundation already excludes package contents and does not follow links.
+            // Calling skipDescendants on a leaf can skip the next folder instead.
             if !showHidden && entry.isHidden {
-                enumerator.skipDescendants()
+                if scope == .descendants && entry.kind == .directory { enumerator.skipDescendants() }
+                continue
+            }
+            if let contentReader, entry.kind == .directory {
+                if scope == .descendants {
+                    do {
+                        if try !contentReader.mayDescend(into: entry) { enumerator.skipDescendants() }
+                    } catch {
+                        enumerator.skipDescendants()
+                        record(value, error)
+                    }
+                }
                 continue
             }
             guard query.matches(entry) else { continue }
+            if let contentReader {
+                do {
+                    guard try contentReader.matches(entry, isCancelled: isCancelled) else { continue }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    record(value, error)
+                    continue
+                }
+            }
             report.matched += 1
             batch.append(entry)
             if batch.count == 128 {
@@ -215,6 +241,7 @@ public enum DirectoryReader {
         if let rootError { throw rootError }
         if isCancelled() { throw CancellationError() }
         if !batch.isEmpty { receive(batch) }
+        report.contentCoverage = contentReader?.coverage
         return report
     }
 

@@ -4,9 +4,14 @@ import PackageDescription
 let package = Package(
     name: "RichFiles",
     platforms: [.macOS(.v13)],
-    products: [.library(name: "RichFilesCore", targets: ["RichFilesCore"])],
+    products: [
+        .library(name: "RichFilesCore", targets: ["RichFilesCore"]),
+        .executable(name: "RichFiles", targets: ["RichFiles"])
+    ],
     targets: [
         .target(name: "RichFilesCore"),
-        .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"])
+        .executableTarget(name: "RichFiles", dependencies: ["RichFilesCore"]),
+        .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"]),
+        .testTarget(name: "RichFilesTests", dependencies: ["RichFiles", "RichFilesCore"])
     ]
 )

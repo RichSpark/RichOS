@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-public struct FileIdentity: Hashable, Sendable {
+public struct FileIdentity: Hashable, Codable, Sendable {
     public let device: Int32
     public let inode: UInt64
     private let birthSeconds: Int
@@ -17,12 +17,16 @@ public struct FileIdentity: Hashable, Sendable {
 
 /// The entry selected by the caller, including the identity of its parent folder.
 /// A symbolic link has its own identity and never stands for the item it points to.
-public struct FileReference: Equatable, Sendable {
+public struct FileReference: Equatable, Codable, Sendable {
     public let url: URL
     public let identity: FileIdentity
-    fileprivate let parent: URL
     let parentIdentity: FileIdentity
-    fileprivate let name: String
+    fileprivate var parent: URL { url.deletingLastPathComponent() }
+    fileprivate var name: String { url.lastPathComponent }
+
+    private enum CodingKeys: String, CodingKey {
+        case url, identity, parentIdentity
+    }
 
     public init(url: URL) throws {
         try requireLocalFileURL(url)
@@ -35,13 +39,24 @@ public struct FileReference: Equatable, Sendable {
     fileprivate init(folder: OpenFolder, name: String, status: stat) {
         url = folder.childURL(name)
         identity = FileIdentity(status)
-        parent = folder.url
         parentIdentity = folder.identity
-        self.name = name
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let location = try values.decode(URL.self, forKey: .url)
+        try requireLocalFileURL(location)
+        try FileOperations.validateName(location.lastPathComponent)
+        guard location.path == location.standardizedFileURL.path else {
+            throw CocoaError(.fileReadInvalidFileName)
+        }
+        url = location
+        identity = try values.decode(FileIdentity.self, forKey: .identity)
+        parentIdentity = try values.decode(FileIdentity.self, forKey: .parentIdentity)
     }
 }
 
-public struct MoveReceipt: Sendable {
+public struct MoveReceipt: Codable, Sendable {
     public let original: FileReference
     public let moved: FileReference
 }
@@ -57,7 +72,7 @@ public enum CopyConflictPolicy: Sendable {
     case keepBoth
 }
 
-public struct TrashReceipt: Sendable {
+public struct TrashReceipt: Codable, Sendable {
     public let original: FileReference
     public let trashedAt: Date
     public let trashLocation: URL?

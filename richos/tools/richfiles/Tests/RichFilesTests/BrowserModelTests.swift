@@ -1,0 +1,152 @@
+import Combine
+import Foundation
+import XCTest
+@testable import RichFiles
+
+final class BrowserModelTests: XCTestCase {
+    @MainActor
+    func testListDefaultNavigationSearchAndPreferences() async throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .resolvingSymlinksInPath()
+            .appendingPathComponent("RichFilesBrowser-\(UUID().uuidString)", isDirectory: true)
+        let projects = root.appendingPathComponent("Projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for url in [
+            root.appendingPathComponent("Report.TXT"),
+            projects.appendingPathComponent("Photo.PNG"),
+            projects.appendingPathComponent(".hidden.png"),
+            projects.appendingPathComponent("Notes.md")
+        ] {
+            try Data("synthetic browser fixture".utf8).write(to: url)
+        }
+
+        let domain = "app.richos.richfiles.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let model = BrowserModel(start: root, defaults: defaults)
+        let firstTab = model.currentTabID
+        try await waitForListing(model, at: root)
+        XCTAssertEqual(model.viewMode, .list)
+        XCTAssertFalse(model.showHidden)
+        XCTAssertEqual(Set(model.entries.map(\.name)), ["Projects", "Report.TXT"])
+        let report = try XCTUnwrap(model.entries.first { $0.name == "Report.TXT" })
+        model.selected = [report.id]
+        model.scrollAnchor = report.id
+
+        let suggestions = try await BrowserModel.addressSuggestions("Pro", relativeTo: root)
+        XCTAssertEqual(suggestions.map(\.path), [projects.path])
+        let children = try await BrowserModel.folderChildren(of: root)
+        XCTAssertEqual(children.map(\.name), ["Projects"])
+        model.openAddress("Projects")
+        try await waitForListing(model, at: projects)
+        XCTAssertTrue(model.canGoBack)
+        XCTAssertTrue(model.selected.isEmpty)
+        XCTAssertEqual(Set(model.entries.map(\.name)), ["Notes.md", "Photo.PNG"])
+        let photo = try XCTUnwrap(model.entries.first { $0.name == "Photo.PNG" })
+        model.selected = [photo.id]
+
+        model.goBack()
+        try await waitForListing(model, at: root)
+        XCTAssertTrue(model.canGoForward)
+        XCTAssertEqual(model.selected, [report.id])
+        XCTAssertEqual(model.scrollAnchor, report.id)
+        model.goForward()
+        try await waitForListing(model, at: projects)
+        XCTAssertEqual(model.selected, [photo.id])
+
+        model.newTab(root)
+        let searchTab = model.currentTabID
+        XCTAssertNotEqual(searchTab, firstTab)
+        XCTAssertEqual(model.tabs.count, 2)
+        try await waitForListing(model, at: root)
+        XCTAssertFalse(model.canGoBack)
+        model.searchRecursively = false
+        model.searchText = "*.png"
+        model.submitSearch()
+        try await waitForListing(model, at: root)
+        XCTAssertTrue(model.searchActive)
+        XCTAssertTrue(model.entries.isEmpty)
+        model.searchRecursively = true
+        try await waitForListing(model, at: root)
+        XCTAssertEqual(model.entries.map(\.name), ["Photo.PNG"])
+        model.showHidden = true
+        try await waitForListing(model, at: root)
+        XCTAssertEqual(Set(model.entries.map(\.name)), [".hidden.png", "Photo.PNG"])
+        model.searchContent = true
+        model.searchText = "synthetic browser fixture"
+        model.submitSearch()
+        try await waitForListing(model, at: root)
+        XCTAssertEqual(Set(model.entries.map(\.name)), ["Notes.md", "Report.TXT"])
+        XCTAssertEqual(model.scanReport?.contentCoverage?.searchedFiles, 2)
+        XCTAssertEqual(model.scanReport?.contentCoverage?.skippedItems, 2)
+
+        model.switchTab(firstTab)
+        try await waitForListing(model, at: projects)
+        XCTAssertEqual(model.selected, [photo.id])
+        XCTAssertFalse(model.searchActive)
+        XCTAssertFalse(model.searchContent)
+        model.setFolderViewOverride(true)
+        model.viewMode = .icons
+        model.iconSize = 96
+        model.addFavorite(projects)
+
+        model.switchTab(searchTab)
+        try await waitForListing(model, at: root)
+        XCTAssertEqual(model.viewMode, .list)
+        XCTAssertTrue(model.searchActive)
+        XCTAssertTrue(model.searchContent)
+        XCTAssertEqual(model.searchText, "synthetic browser fixture")
+        XCTAssertEqual(Set(model.entries.map(\.name)), ["Notes.md", "Report.TXT"])
+        model.closeTab(searchTab)
+        try await waitForListing(model, at: projects)
+        XCTAssertEqual(model.tabs.count, 1)
+        XCTAssertEqual(model.currentTabID, firstTab)
+        XCTAssertEqual(model.viewMode, .icons)
+
+        let reopened = BrowserModel(start: projects, defaults: defaults)
+        try await waitForListing(reopened, at: projects)
+        XCTAssertTrue(reopened.remembersFolderView)
+        XCTAssertEqual(reopened.viewMode, .icons)
+        XCTAssertEqual(reopened.iconSize, 96)
+        XCTAssertTrue(reopened.showHidden)
+        XCTAssertEqual(reopened.favorites.map(\.path), [projects.path])
+        reopened.goUp()
+        try await waitForListing(reopened, at: root)
+        XCTAssertFalse(reopened.remembersFolderView)
+        XCTAssertEqual(reopened.viewMode, .list)
+    }
+
+    @MainActor
+    private func waitForListing(
+        _ model: BrowserModel,
+        at folder: URL,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        func complete() -> Bool {
+            model.folder.path == folder.path && !model.busy && model.scanReport != nil
+        }
+        if complete() { return }
+
+        // A published scan report proves completion. The deadline only stops a hung fixture.
+        let finished = expectation(description: "Listing finished for \(folder.lastPathComponent)")
+        var reached = false
+        let observation = model.objectWillChange.sink { _ in
+            Task { @MainActor in
+                guard !reached, complete() else { return }
+                reached = true
+                finished.fulfill()
+            }
+        }
+        defer { observation.cancel() }
+        await fulfillment(of: [finished], timeout: 10)
+        guard reached else {
+            XCTFail("Listing did not finish. Browser status was \(model.status).", file: file, line: line)
+            throw ListingTimeout()
+        }
+    }
+
+    private struct ListingTimeout: Error {}
+}
